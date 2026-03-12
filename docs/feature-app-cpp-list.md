@@ -119,7 +119,7 @@ GET /api/asc/cpps/${cppId}
     - Screenshots nhóm theo device type (thumbnails)
     - App Previews nhóm theo device type (thumbnail + play icon overlay)
 
-> **Lưu ý:** Deep Link lấy từ `data.versions[0]?.attributes?.deepLink` — phải dùng `?.` ở cả hai chỗ để tránh TypeError khi `versions` rỗng.
+> **Lưu ý quan trọng:** `data.versions` là `VersionWithLocalizations[]` (shape: `{ version, localizations }`), không phải `AppCustomProductPageVersion[]`. Phải truy cập `data.versions[0]?.version?.attributes?.deepLink` — không phải `data.versions[0]?.attributes?.deepLink` (sẽ luôn `undefined`). Đây là nguồn gốc bug "No deep link" dù CPP có deepLink thực.
 
 ### Thumbnail URLs
 ```typescript
