@@ -2,7 +2,7 @@
 
 > **Đây là file đọc đầu tiên** khi bắt đầu session mới. Cung cấp toàn cảnh dự án, features đã làm và chưa làm.
 >
-> Last updated: 2026-03-12 (session 5)
+> Last updated: 2026-03-12 (session 6)
 
 ---
 
@@ -30,6 +30,8 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 | Manual Asset Upload (screenshot + preview) | `components/cpp/LocalizationManager.tsx` | `docs/feature-cpp-editor.md` |
 | **Bulk Import** (folder → multi-locale upload) | `components/cpp/BulkImportDialog.tsx` | `docs/bulk-import-design.md` |
 | **CPP Bulk Import** (tạo nhiều CPP cùng lúc từ folder) | `components/cpp/CppBulkImportDialog.tsx` | `docs/feature-cpp-bulk-import-design.md` |
+| CPP URL column + Export CSV | `components/cpp/CppList.tsx` | `docs/feature-cpp-url-export.md` |
+| **CPP Bulk Import — Excel metadata** (`metadata.xlsx`) | `lib/parseMetadataXlsx.ts` + `CppBulkImportDialog.tsx` | `docs/feature-cpp-bulk-import-xlsx.md` |
 
 ---
 
@@ -163,8 +165,10 @@ NEXTAUTH_URL=
     - `CppDetailPanel`: phần General (dưới URL, trên Localizations) — luôn hiển thị, fallback "No deep link"
     - `CppEditor`: tab Details — input field optional
     - `BulkImportDialog`: step preview — input field optional
-    - `CppBulkImportDialog`: đọc từ `deeplink.txt` trong mỗi CPP folder, hiển thị trong review UI
+    - `CppBulkImportDialog`: đọc từ `metadata.xlsx` (nếu có) hoặc fallback `deeplink.txt` trong CPP folder
 
 12. **Deep Link optional chaining** — Khi truy cập `data.versions[0]?.attributes?.deepLink`, phải dùng `?.` ở CẢ HAI chỗ: `versions[0]?.attributes?.deepLink`. Nếu dùng `versions[0]?.attributes.deepLink`, sẽ throw TypeError khi `versions` rỗng vì `undefined?.attributes` = `undefined` nhưng `undefined.deepLink` throw.
 
 13. **`VersionWithLocalizations` vs `AppCustomProductPageVersion` — type confusion bug** — `CppDetailPanel` nhận `data.versions: VersionWithLocalizations[]` từ `/api/asc/cpps/[cppId]`. Mỗi phần tử có shape `{ version: AppCustomProductPageVersion, localizations: [...] }`. Phải truy cập `data.versions[0]?.version?.attributes?.deepLink`, **không phải** `data.versions[0]?.attributes?.deepLink` (attributes không tồn tại trực tiếp trên `VersionWithLocalizations`). Ngược lại, `CppEditor` nhận `versions: AppCustomProductPageVersion[]` trực tiếp nên dùng `versions[0]?.attributes.deepLink` là đúng. Đây là lý do Deep Link luôn hiển thị "No deep link" trong Detail Panel dù CppEditor hiển thị đúng.
+
+14. **metadata.xlsx (CPP Bulk Import)** — `metadata.xlsx` optional đặt trong root folder của batch. Khi có: Excel thắng toàn bộ (bỏ qua `deeplink.txt` + `promo.txt`). Columns: `CPP Name` (bắt buộc, case sensitive) | `Deep Link` (bắt buộc) | `<Locale Name>` (user-friendly, dynamic). Parse client-side: `lib/parseMetadataXlsx.ts` dùng SheetJS dynamic import, 5MB limit, formula disabled. CPP không khớp tên → warning badge `⚠ no metadata`. Template tại `public/metadata-template.xlsx` (41 columns, Vietnamese + English (U.S.) ưu tiên đầu). Xem `docs/feature-cpp-bulk-import-xlsx.md`.

@@ -16,6 +16,8 @@ export interface ParsedCppFolder {
 export interface ParsedCppStructure {
   /** Root-level primary-locale.txt — shared primary locale for all new CPPs */
   primaryLocaleFile: File | null;
+  /** Root-level metadata.xlsx — optional Excel file with deepLink + promoText per CPP */
+  metadataFile: File | null;
   cpps: ParsedCppFolder[];
 }
 
@@ -59,6 +61,7 @@ function resolveLocale(folderName: string): string | undefined {
  */
 export function parseCppFolderStructure(files: File[]): ParsedCppStructure {
   let primaryLocaleFile: File | null = null;
+  let metadataFile: File | null = null;
 
   // Map: CPP name → (resolved locale code → data)
   const cppMap = new Map<
@@ -95,6 +98,12 @@ export function parseCppFolderStructure(files: File[]): ParsedCppStructure {
     // ── Root-level primary-locale.txt: <root>/primary-locale.txt ──────────
     if (parts.length === 2 && parts[1].toLowerCase() === "primary-locale.txt") {
       primaryLocaleFile = file;
+      continue;
+    }
+
+    // ── Root-level metadata.xlsx: <root>/metadata.xlsx ─────────────────────
+    if (parts.length === 2 && parts[1].toLowerCase() === "metadata.xlsx") {
+      metadataFile = file;
       continue;
     }
 
@@ -169,5 +178,5 @@ export function parseCppFolderStructure(files: File[]): ParsedCppStructure {
     cpps.push({ cppName, deepLinkFile, locales });
   }
 
-  return { primaryLocaleFile, cpps };
+  return { primaryLocaleFile, metadataFile, cpps };
 }

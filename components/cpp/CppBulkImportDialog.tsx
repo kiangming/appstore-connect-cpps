@@ -20,6 +20,8 @@ import type {
   PreviewType,
 } from "@/types/asc";
 import { parseCppFolderStructure } from "@/lib/parseCppFolderStructure";
+import { parseMetadataXlsx } from "@/lib/parseMetadataXlsx";
+import type { ExcelMetadata } from "@/lib/parseMetadataXlsx";
 import { localeNameFromCode } from "@/lib/locale-utils";
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
@@ -54,6 +56,10 @@ interface CppImportPlan {
   deepLink: string | null;
   locales: LocaleCppImportPlan[];
   excluded: boolean;
+  /** Source of deepLink + promoText data */
+  metadataSource: "excel" | "files" | "none";
+  /** true when metadata.xlsx exists but has no row matching this CPP name */
+  metadataWarning: boolean;
 }
 
 interface LocaleProgress {
@@ -136,6 +142,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
   const [dragging, setDragging] = useState(false);
   const [expandedCpps, setExpandedCpps] = useState<Set<string>>(new Set());
   const [expandedLocales, setExpandedLocales] = useState<Set<string>>(new Set()); // "cppName::locale"
+  const [excelError, setExcelError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // ── Progress helpers ────────────────────────────────────────────────────────
@@ -167,8 +174,22 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
   // ── Parse & Validate ────────────────────────────────────────────────────────
   async function processFiles(files: FileList | File[]) {
     setStep("validating");
+    setExcelError(null);
     const fileArr = Array.from(files);
-    const { primaryLocaleFile, cpps: parsedCpps } = parseCppFolderStructure(fileArr);
+    const { primaryLocaleFile, metadataFile, cpps: parsedCpps } = parseCppFolderStructure(fileArr);
+
+    // ── Parse metadata.xlsx (if present) ─────────────────────────────────────
+    let excelMetadata: ExcelMetadata | null = null;
+    if (metadataFile) {
+      try {
+        excelMetadata = await parseMetadataXlsx(metadataFile);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Failed to parse metadata.xlsx";
+        setExcelError(msg);
+        setStep("drop");
+        return;
+      }
+    }
 
     // Read root-level primary-locale.txt once — shared for ALL new CPPs
     let rootPrimaryLocale = "";
@@ -226,6 +247,13 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
         const cppStatus: CppImportStatus = existingCpp ? "existing" : "new";
         const existingCppId = existingCpp?.id ?? null;
 
+        // ── Resolve Excel metadata for this CPP (case-sensitive name match) ─
+        const excelRow = excelMetadata?.byName.get(cppData.cppName) ?? null;
+        const metadataSource: CppImportPlan["metadataSource"] = excelMetadata
+          ? "excel"
+          : "files";
+        const metadataWarning = excelMetadata !== null && excelRow === null;
+
         // If existing, fetch its current localizations to get localizationId per locale
         let existingLocaleMap = new Map<string, string>(); // locale → localizationId
         if (existingCppId) {
@@ -254,7 +282,12 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
         const localePlans: LocaleCppImportPlan[] = await Promise.all(
           cppData.locales.map(async (localeData) => {
             let promoText: string | null = null;
-            if (localeData.promoTextFile) {
+
+            if (excelMetadata) {
+              // Excel mode: get promoText from Excel row (null if no row or empty cell)
+              promoText = excelRow?.promoTexts[localeData.locale] ?? null;
+            } else if (localeData.promoTextFile) {
+              // File mode: read promo.txt
               try {
                 const raw = await localeData.promoTextFile.text();
                 promoText = raw.trim() || null;
@@ -296,9 +329,11 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
           })
         );
 
-        // Read deeplink.txt
+        // Resolve deepLink: Excel wins when metadata.xlsx present
         let deepLink: string | null = null;
-        if (cppData.deepLinkFile) {
+        if (excelMetadata) {
+          deepLink = excelRow?.deepLink ?? null;
+        } else if (cppData.deepLinkFile) {
           try {
             const raw = (await cppData.deepLinkFile.text()).trim();
             deepLink = raw || null;
@@ -321,6 +356,8 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
           deepLink,
           locales: localePlans,
           excluded: finalCppStatus === "skip",
+          metadataSource,
+          metadataWarning,
         };
       })
     );
@@ -755,6 +792,9 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
   const fallbackLocaleCount = plans.filter(
     (p) => !p.excluded && p.primaryLocaleSource === "fallback" && p.status !== "skip"
   ).length;
+  const metadataWarningCount = plans.filter(
+    (p) => !p.excluded && p.metadataWarning && p.status !== "skip"
+  ).length;
   const doneCount = cppProgress.filter((p) => p.status === "done").length;
   const errorCount = cppProgress.filter((p) => p.status === "error").length;
 
@@ -823,17 +863,24 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                   </button>
                 </div>
 
+                {excelError && (
+                  <div className="mt-4 flex items-start gap-2.5 rounded-xl bg-red-50 border border-red-200 px-4 py-3">
+                    <AlertTriangle className="h-4 w-4 text-red-500 flex-shrink-0 mt-0.5" />
+                    <p className="text-xs text-red-700">
+                      <span className="font-semibold">metadata.xlsx error:</span>{" "}
+                      {excelError}
+                    </p>
+                  </div>
+                )}
+
                 <div className="mt-6 rounded-xl border border-slate-100 bg-slate-50 p-4">
                   <p className="text-xs font-semibold text-slate-500 mb-2">Expected folder structure</p>
                   <pre className="text-xs text-slate-500 leading-relaxed font-mono whitespace-pre">{`my-cpps/
 ├── primary-locale.txt   ← "en-US" (shared for all CPPs)
+├── metadata.xlsx        ← optional: deepLink + promoText
 ├── Summer Campaign/
-│   ├── en-US/
-│   │   ├── promo.txt
-│   │   ├── screenshots/iphone/
-│   │   └── previews/iphone/
-│   └── vi/
-│       └── screenshots/iphone/
+│   ├── screenshots/iphone/
+│   └── previews/iphone/
 └── Holiday Sale/
     └── ja/
         └── screenshots/iphone/`}</pre>
@@ -880,6 +927,15 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                     </p>
                   </div>
                 )}
+                {metadataWarningCount > 0 && (
+                  <div className="mx-5 mt-3 mb-1 flex items-start gap-2.5 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">
+                    <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                    <p className="text-xs text-amber-700">
+                      <span className="font-semibold">{metadataWarningCount} CPP{metadataWarningCount !== 1 ? "s" : ""}</span>{" "}
+                      not found in <code className="font-mono bg-amber-100 px-0.5 rounded">metadata.xlsx</code> — they will be imported without deepLink or promoText.
+                    </p>
+                  </div>
+                )}
 
                 {plans.length === 0 ? (
                   <div className="p-8 text-center text-sm text-slate-400">
@@ -907,6 +963,11 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                             {cppPlan.name}
                           </span>
                           <StatusBadge label={cfg.label} className={cfg.className} />
+                          {cppPlan.metadataWarning && cppPlan.status !== "skip" && (
+                            <span className="text-xs text-amber-600 flex-shrink-0" title="CPP name not found in metadata.xlsx — no deepLink or promoText will be applied">
+                              ⚠ no metadata
+                            </span>
+                          )}
                           {cppPlan.primaryLocaleSource === "fallback" && cppPlan.status !== "skip" && (
                             <span className="text-xs text-yellow-600 flex-shrink-0">
                               ⚠ fallback locale
@@ -936,6 +997,16 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                                   <span className="text-yellow-600 ml-1">(fallback)</span>
                                 )}
                               </span>
+                              {cppPlan.metadataSource === "excel" && (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs text-slate-400">metadata:</span>
+                                  {cppPlan.metadataWarning ? (
+                                    <span className="text-xs text-amber-600">⚠ not found in metadata.xlsx</span>
+                                  ) : (
+                                    <span className="text-xs text-green-600">✓ excel</span>
+                                  )}
+                                </div>
+                              )}
                               {cppPlan.deepLink && (
                                 <div className="flex items-center gap-1.5">
                                   <span className="text-xs text-slate-400">deep link:</span>

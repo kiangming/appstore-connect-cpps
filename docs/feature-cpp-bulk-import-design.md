@@ -4,6 +4,9 @@
 **Status:** ✅ Implemented — đang production
 **Scope:** Tạo nhiều CPPs cùng lúc từ folder structure, kế thừa cơ chế từ `BulkImportDialog`
 
+> ✅ **Nâng cấp đã implement:** Đọc deepLink + promoText từ `metadata.xlsx` (optional, đặt trong root folder).
+> Excel thắng toàn bộ khi có file — bỏ qua `deeplink.txt` / `promo.txt`. Xem chi tiết tại [`docs/feature-cpp-bulk-import-xlsx.md`](feature-cpp-bulk-import-xlsx.md)
+
 ---
 
 ## Mục tiêu
