@@ -2,7 +2,7 @@
 
 > **Đây là file đọc đầu tiên** khi bắt đầu session mới. Cung cấp toàn cảnh dự án, features đã làm và chưa làm.
 >
-> Last updated: 2026-03-12
+> Last updated: 2026-03-12 (session 5)
 
 ---
 
@@ -29,6 +29,7 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 | Localization Manager | `components/cpp/LocalizationManager.tsx` | `docs/feature-cpp-editor.md` |
 | Manual Asset Upload (screenshot + preview) | `components/cpp/LocalizationManager.tsx` | `docs/feature-cpp-editor.md` |
 | **Bulk Import** (folder → multi-locale upload) | `components/cpp/BulkImportDialog.tsx` | `docs/bulk-import-design.md` |
+| **CPP Bulk Import** (tạo nhiều CPP cùng lúc từ folder) | `components/cpp/CppBulkImportDialog.tsx` | `docs/feature-cpp-bulk-import-design.md` |
 
 ---
 
@@ -65,6 +66,7 @@ app/
 │   ├── cpps/[cppId]/route.ts       GET + PATCH
 │   ├── cpps/[cppId]/localizations/route.ts  POST
 │   ├── localizations/[id]/route.ts  PATCH (promo text)
+│   ├── versions/[versionId]/route.ts  PATCH (deepLink)   ← MỚI
 │   ├── screenshot-sets/route.ts    GET + POST
 │   ├── preview-sets/route.ts       GET + POST
 │   ├── upload/route.ts             POST (screenshot file)
@@ -78,16 +80,20 @@ components/
     ├── CppDetailPanel.tsx
     ├── CppEditor.tsx
     ├── LocalizationManager.tsx     ← Component lớn nhất (~900 lines)
-    ├── BulkImportDialog.tsx        ← ~763 lines
+    ├── BulkImportDialog.tsx        ← Bulk Import (assets cho 1 CPP)
+    ├── CppBulkImportDialog.tsx     ← CPP Bulk Import (tạo nhiều CPP)
     └── AppStorePreview.tsx         stub
 
 lib/
-├── asc-client.ts       Tất cả ASC API calls (server-side only)
-├── asc-jwt.ts          JWT signing
-├── auth.ts             NextAuth config
-├── parseFolderStructure.ts  Parser cho bulk import
-├── supabase.ts         Supabase client
-└── utils.ts            cn() helper
+├── asc-client.ts               Tất cả ASC API calls (server-side only)
+├── asc-jwt.ts                  JWT signing
+├── auth.ts                     NextAuth config
+├── locale-map.json             39 Apple locales: friendly name → BCP-47 code
+├── locale-utils.ts             localeCodeFromName(), localeNameFromCode(), ALL_APPLE_LOCALES
+├── parseFolderStructure.ts     Parser cho Bulk Import (single CPP)
+├── parseCppFolderStructure.ts  Parser cho CPP Bulk Import (multi-CPP)
+├── supabase.ts                 Supabase client
+└── utils.ts                    cn() helper
 
 types/asc.ts            Tất cả TypeScript types cho ASC API
 ```
@@ -144,3 +150,21 @@ NEXTAUTH_URL=
 5. **Next.js router cache** — Sau khi tạo CPP mới, phải gọi cả `router.push()` lẫn `router.refresh()` để CPP list reload fresh data.
 
 6. **Device type defaults** — Bulk import dùng `APP_IPHONE_65` (6.5"), không phải `APP_IPHONE_67` (6.7"), vì đây là device type thực tế trong ASC data.
+
+7. **Locale display** — Toàn bộ app hiển thị tên locale theo Apple user-friendly format ("Vietnamese", "English (U.S.)"), không phải short-code. Dùng `localeNameFromCode()` từ `lib/locale-utils.ts`. API calls vẫn dùng short-code.
+
+8. **Locale folder names (CPP Bulk Import + Bulk Import)** — Hỗ trợ cả tên user-friendly ("Vietnamese", "English (U.S.)") lẫn BCP-47 short-code ("vi", "en-US") làm tên folder — backward compatible. Mapping qua `lib/locale-map.json`.
+
+9. **primary-locale.txt (CPP Bulk Import)** — Đặt ở **root folder** (cùng cấp với các CPP folders), dùng chung cho tất cả CPPs mới trong batch. Không dùng file riêng lẻ trong từng CPP folder nữa.
+
+10. **CPP creation 409 fix** — Trước khi tạo CPP mới, nếu primaryLocale có status `"not-in-app"` → gọi `POST /api/asc/apps/${appId}/app-info-localizations` để thêm locale vào app trước, rồi mới tạo CPP. Fallback primaryLocale ưu tiên locale đã có trong app.
+
+11. **Deep Link** — Là field per-**version** (`AppCustomProductPageVersionAttributes.deepLink`), không phải per-locale. Được cập nhật qua `PATCH /api/asc/versions/[versionId]` → `updateCppVersion()` trong `asc-client.ts`. Hiển thị trong:
+    - `CppDetailPanel`: phần General (dưới URL, trên Localizations) — luôn hiển thị, fallback "No deep link"
+    - `CppEditor`: tab Details — input field optional
+    - `BulkImportDialog`: step preview — input field optional
+    - `CppBulkImportDialog`: đọc từ `deeplink.txt` trong mỗi CPP folder, hiển thị trong review UI
+
+12. **Deep Link optional chaining** — Khi truy cập `data.versions[0]?.attributes?.deepLink`, phải dùng `?.` ở CẢ HAI chỗ: `versions[0]?.attributes?.deepLink`. Nếu dùng `versions[0]?.attributes.deepLink`, sẽ throw TypeError khi `versions` rỗng vì `undefined?.attributes` = `undefined` nhưng `undefined.deepLink` throw.
+
+13. **`VersionWithLocalizations` vs `AppCustomProductPageVersion` — type confusion bug** — `CppDetailPanel` nhận `data.versions: VersionWithLocalizations[]` từ `/api/asc/cpps/[cppId]`. Mỗi phần tử có shape `{ version: AppCustomProductPageVersion, localizations: [...] }`. Phải truy cập `data.versions[0]?.version?.attributes?.deepLink`, **không phải** `data.versions[0]?.attributes?.deepLink` (attributes không tồn tại trực tiếp trên `VersionWithLocalizations`). Ngược lại, `CppEditor` nhận `versions: AppCustomProductPageVersion[]` trực tiếp nên dùng `versions[0]?.attributes.deepLink` là đúng. Đây là lý do Deep Link luôn hiển thị "No deep link" trong Detail Panel dù CppEditor hiển thị đúng.

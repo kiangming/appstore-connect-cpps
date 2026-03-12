@@ -207,6 +207,7 @@ const DEFAULT_IPAD_PREVIEW      = "IPAD_PRO_3GEN_129";
 | POST | `/api/asc/apps/${appId}/app-info-localizations` | Thêm locale mới vào app store page |
 | POST | `/api/asc/cpps/${cppId}/localizations` | Tạo CPP localization mới |
 | PATCH | `/api/asc/localizations/${localizationId}` | Cập nhật promotional text |
+| PATCH | `/api/asc/versions/${versionId}` | Cập nhật deep link (sau khi upload xong) |
 | GET | `/api/asc/screenshot-sets?localizationId=...` | Lấy existing screenshot sets |
 | POST | `/api/asc/screenshot-sets` | Tạo screenshot set mới |
 | GET | `/api/asc/preview-sets?localizationId=...` | Lấy existing preview sets |
@@ -282,9 +283,10 @@ interface Props {                     // BulkImportDialog props
 - Text: "Parsing folder structure…"
 
 ### Step "preview" — Review trước khi upload
-- Banner amber nếu có locale `not-in-app`: "N locales have locale codes not supported by this app yet. They will be added to the app's store page localizations first, then imported into this CPP."
+- Banner amber nếu có locale `not-in-app`
+- **Deep Link input** (optional) — field text ở trên danh sách locale, user có thể nhập deep link cho CPP. Sau khi tất cả locale upload xong, nếu có giá trị → PATCH `/api/asc/versions/${versionId}`
 - Danh sách locale rows (collapsible):
-  - Locale code | Status badge | promo text preview | số screenshots | số previews | nút Remove
+  - Locale name (friendly) | Status badge | promo text preview | số screenshots | số previews | nút Remove
   - Expand → xem chi tiết file names + note cảnh báo theo status
 - Footer: "X locales to import (Y will be added to app first)" + nút Cancel + nút **Import All**
 

@@ -1,3 +1,5 @@
+import { localeCodeFromName } from "@/lib/locale-utils";
+
 export interface ParsedCppLocaleData {
   locale: string;
   promoTextFile: File | null;
@@ -7,6 +9,7 @@ export interface ParsedCppLocaleData {
 
 export interface ParsedCppFolder {
   cppName: string;
+  deepLinkFile: File | null;
   locales: ParsedCppLocaleData[];
 }
 
@@ -19,40 +22,66 @@ export interface ParsedCppStructure {
 const LOCALE_REGEX = /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/;
 
 /**
+ * Resolve a folder name to a BCP-47 locale short-code.
+ * Accepts user-friendly Apple names ("Vietnamese", "English (U.S.)")
+ * or BCP-47 short-codes directly ("vi", "en-US") for backward compatibility.
+ * Returns undefined if the name cannot be resolved.
+ */
+function resolveLocale(folderName: string): string | undefined {
+  const fromMap = localeCodeFromName(folderName);
+  if (fromMap) return fromMap;
+  if (LOCALE_REGEX.test(folderName)) return folderName;
+  return undefined;
+}
+
+/**
  * Parse a FileList from a webkitdirectory input where the structure is:
  *
  *   <root>/
  *   ├── primary-locale.txt   ← BCP-47 locale code, shared for ALL CPPs (e.g. "en-US")
  *   ├── <CPP Name>/
- *   │   ├── en-US/
+ *   │   ├── deeplink.txt     ← optional deep link URL for this CPP
+ *   │   ├── English (U.S.)/
  *   │   │   ├── promo.txt
  *   │   │   ├── screenshots/iphone/
  *   │   │   ├── screenshots/ipad/
  *   │   │   ├── previews/iphone/
  *   │   │   └── previews/ipad/
- *   │   └── vi/
+ *   │   └── Vietnamese/
  *   │       └── ...
  *   └── <Another CPP>/
  *       └── ...
  *
+ * Locale folder names can be Apple user-friendly names ("Vietnamese", "English (U.S.)")
+ * or BCP-47 short-codes ("vi", "en-US") — both are supported.
  * Folders starting with "_" or "." are skipped.
  * Hidden files/folders (any path segment starting with ".") are also skipped.
  */
 export function parseCppFolderStructure(files: File[]): ParsedCppStructure {
   let primaryLocaleFile: File | null = null;
 
-  // Map: CPP name → locale map
+  // Map: CPP name → (resolved locale code → data)
   const cppMap = new Map<
     string,
-    Map<
-      string,
-      {
-        promoTextFile: File | null;
-        screenshotFiles: { iphone: File[]; ipad: File[] };
-        previewFiles: { iphone: File[]; ipad: File[] };
-      }
-    >
+    {
+      deepLinkFile: File | null;
+      localeMap: Map<
+        string,
+        {
+          promoTextFile: File | null;
+          screenshotFiles: { iphone: File[]; ipad: File[] };
+          previewFiles: { iphone: File[]; ipad: File[] };
+        }
+      >;
+    }
   >();
+
+  function getOrCreateCpp(cppName: string) {
+    if (!cppMap.has(cppName)) {
+      cppMap.set(cppName, { deepLinkFile: null, localeMap: new Map() });
+    }
+    return cppMap.get(cppName)!;
+  }
 
   for (const file of files) {
     const relativePath =
@@ -76,29 +105,35 @@ export function parseCppFolderStructure(files: File[]): ParsedCppStructure {
     const cppName = parts[1];
     if (!cppName || cppName.startsWith("_") || cppName.startsWith(".")) continue;
 
-    if (!cppMap.has(cppName)) {
-      cppMap.set(cppName, new Map());
-    }
-    const localeMap = cppMap.get(cppName)!;
+    const cppEntry = getOrCreateCpp(cppName);
 
-    // parts[2] = locale code or undefined (per-CPP primary-locale.txt no longer used)
+    // parts[2] = locale folder name / deeplink.txt / other
     const segment2 = parts[2];
     if (!segment2) continue;
+
+    // ── CPP-level deeplink.txt: <root>/<cppName>/deeplink.txt ─────────────
+    if (parts.length === 3 && segment2.toLowerCase() === "deeplink.txt") {
+      cppEntry.deepLinkFile = file;
+      continue;
+    }
 
     // ── Locale content: need <root>/<cppName>/<locale>/... ─────────────────
     if (parts.length < 4) continue;
 
-    const locale = segment2;
-    if (!locale || locale.startsWith(".")) continue;
+    if (segment2.startsWith(".")) continue;
 
-    if (!localeMap.has(locale)) {
-      localeMap.set(locale, {
+    // Resolve folder name → BCP-47 short-code
+    const locale = resolveLocale(segment2);
+    if (!locale) continue; // skip unrecognised folder names
+
+    if (!cppEntry.localeMap.has(locale)) {
+      cppEntry.localeMap.set(locale, {
         promoTextFile: null,
         screenshotFiles: { iphone: [], ipad: [] },
         previewFiles: { iphone: [], ipad: [] },
       });
     }
-    const localeData = localeMap.get(locale)!;
+    const localeData = cppEntry.localeMap.get(locale)!;
 
     // sub = parts after <root>/<cppName>/<locale>/
     const sub = parts.slice(3);
@@ -120,10 +155,9 @@ export function parseCppFolderStructure(files: File[]): ParsedCppStructure {
   const sort = (a: File, b: File) => a.name.localeCompare(b.name);
   const cpps: ParsedCppFolder[] = [];
 
-  for (const [cppName, localeMap] of cppMap) {
+  for (const [cppName, { deepLinkFile, localeMap }] of cppMap) {
     const locales: ParsedCppLocaleData[] = [];
     for (const [locale, data] of localeMap) {
-      if (!LOCALE_REGEX.test(locale)) continue; // skip obviously invalid locale dirs
       data.screenshotFiles.iphone.sort(sort);
       data.screenshotFiles.ipad.sort(sort);
       data.previewFiles.iphone.sort(sort);
@@ -132,7 +166,7 @@ export function parseCppFolderStructure(files: File[]): ParsedCppStructure {
     }
     // Sort locales alphabetically for consistent display
     locales.sort((a, b) => a.locale.localeCompare(b.locale));
-    cpps.push({ cppName, locales });
+    cpps.push({ cppName, deepLinkFile, locales });
   }
 
   return { primaryLocaleFile, cpps };

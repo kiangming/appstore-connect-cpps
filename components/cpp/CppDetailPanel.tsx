@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, ExternalLink, ChevronRight } from "lucide-react";
+import { X, ExternalLink, ChevronRight, Link } from "lucide-react";
 import type { AppCustomProductPage, AppScreenshot, AppPreview, CppState, ScreenshotDisplayType, PreviewType } from "@/types/asc";
 import { resolveVisibility } from "@/types/asc";
+import { localeNameFromCode } from "@/lib/locale-utils";
 import type { VersionWithLocalizations, LocalizationWithMedia } from "@/app/api/asc/cpps/[cppId]/route";
 
 interface PanelData {
@@ -106,7 +107,7 @@ function LocalizationRow({ loc }: { loc: LocalizationWithMedia }) {
           className={`h-4 w-4 text-[#0071E3] flex-shrink-0 transition-transform duration-200 ${open ? "rotate-90" : ""}`}
         />
         <span className="font-semibold text-slate-900 text-sm flex-1">
-          {localization.attributes.locale}
+          {localeNameFromCode(localization.attributes.locale)}
         </span>
         <span className="text-xs text-slate-400">
           {totalScreenshots > 0 && `${totalScreenshots} screenshot${totalScreenshots !== 1 ? "s" : ""}`}
@@ -329,6 +330,21 @@ export function CppDetailPanel({ cppId, cppName, onClose }: Props) {
                         </dd>
                       </div>
                     )}
+                    <div className="col-span-2">
+                      <dt className="text-slate-500 text-xs mb-0.5">Deep Link</dt>
+                      <dd>
+                        {data.versions[0]?.version?.attributes?.deepLink ? (
+                          <div className="flex items-center gap-1.5">
+                            <Link className="h-3.5 w-3.5 text-slate-400 flex-shrink-0" />
+                            <span className="text-xs font-mono text-slate-700 break-all">
+                              {data.versions[0].version.attributes.deepLink}
+                            </span>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-400 italic">No deep link</p>
+                        )}
+                      </dd>
+                    </div>
                   </dl>
                 </div>
 
@@ -336,15 +352,17 @@ export function CppDetailPanel({ cppId, cppName, onClose }: Props) {
                 {data.versions.map((versionData) => (
                   <div key={versionData.version.id}>
                     {/* Version header */}
-                    <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50">
-                      <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                        Localizations
-                      </p>
-                      <span
-                        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATE_STYLES[versionData.version.attributes.state]}`}
-                      >
-                        {STATE_LABELS[versionData.version.attributes.state]}
-                      </span>
+                    <div className="px-6 py-4 border-b border-slate-100 bg-slate-50">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                          Localizations
+                        </p>
+                        <span
+                          className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATE_STYLES[versionData.version.attributes.state]}`}
+                        >
+                          {STATE_LABELS[versionData.version.attributes.state]}
+                        </span>
+                      </div>
                     </div>
 
                     {versionData.localizations.length === 0 ? (

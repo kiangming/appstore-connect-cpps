@@ -175,6 +175,23 @@ export async function updateCpp(
   );
 }
 
+export async function updateCppVersion(
+  versionId: string,
+  deepLink: string
+): Promise<AscApiResponse<AppCustomProductPageVersion>> {
+  return ascFetch<AscApiResponse<AppCustomProductPageVersion>>(
+    "PATCH",
+    `/v1/appCustomProductPageVersions/${versionId}`,
+    {
+      data: {
+        type: "appCustomProductPageVersions",
+        id: versionId,
+        attributes: { deepLink },
+      },
+    }
+  );
+}
+
 export async function deleteCpp(cppId: string): Promise<void> {
   return ascFetch<void>("DELETE", `/v1/appCustomProductPages/${cppId}`);
 }

@@ -20,6 +20,7 @@ import type {
   AscApiResponse,
 } from "@/types/asc";
 import { parseFolderStructure } from "@/lib/parseFolderStructure";
+import { localeNameFromCode } from "@/lib/locale-utils";
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 const DEFAULT_IPHONE_SCREENSHOT: ScreenshotDisplayType = "APP_IPHONE_65";
@@ -101,6 +102,7 @@ export function BulkImportDialog({
   const [progress, setProgress] = useState<LocaleProgress[]>([]);
   const [dragging, setDragging] = useState(false);
   const [expandedLocales, setExpandedLocales] = useState<Set<string>>(new Set());
+  const [deepLink, setDeepLink] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   const localeIndex = new Map(
@@ -257,6 +259,20 @@ export function BulkImportDialog({
         setProgress((prev) => prev.map((p) => p.locale === plan.locale ? { ...p, status: "error", currentFile: null, error } : p));
       }
     }
+
+    // Save deep link if provided
+    if (deepLink.trim()) {
+      try {
+        await fetch(`/api/asc/versions/${versionId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deepLink: deepLink.trim() }),
+        });
+      } catch {
+        // Non-fatal: deep link save failure does not block import
+      }
+    }
+
     setStep("done");
   }
 
@@ -550,6 +566,20 @@ export function BulkImportDialog({
             {/* Preview step */}
             {step === "preview" && (
               <div className="divide-y divide-slate-100">
+                {/* Deep Link input */}
+                <div className="px-5 py-4 bg-white">
+                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                    Deep Link <span className="normal-case font-normal text-slate-400">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={deepLink}
+                    onChange={(e) => setDeepLink(e.target.value)}
+                    placeholder="myapp://campaign/summer"
+                    className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition font-mono"
+                  />
+                  <p className="text-xs text-slate-400 mt-1">Nếu để trống — giữ nguyên deep link hiện tại</p>
+                </div>
                 {notInAppCount > 0 && (
                   <div className="mx-5 mt-4 mb-1 flex items-start gap-2.5 rounded-xl bg-amber-50 border border-amber-200 px-4 py-3">
                     <AlertTriangle className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
@@ -581,8 +611,8 @@ export function BulkImportDialog({
                           <button onClick={() => toggleExpand(plan.locale)} className="flex-shrink-0 text-slate-400">
                             <ChevronRight className={`h-4 w-4 transition-transform ${expanded ? "rotate-90" : ""}`} />
                           </button>
-                          <span className="font-mono text-sm font-medium text-slate-800 w-20 flex-shrink-0">
-                            {plan.locale}
+                          <span className="text-sm font-medium text-slate-800 flex-shrink-0">
+                            {localeNameFromCode(plan.locale)}
                           </span>
                           <StatusBadge status={plan.status} />
                           <div className="flex-1 flex items-center gap-3 text-xs text-slate-400 ml-2">
@@ -685,7 +715,7 @@ export function BulkImportDialog({
                       {p.status === "error" && <XCircle className="h-5 w-5 text-red-500" />}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-slate-800 font-mono">{p.locale}</p>
+                      <p className="text-sm font-medium text-slate-800">{localeNameFromCode(p.locale)}</p>
                       {p.currentFile && (
                         <p className="text-xs text-slate-400 truncate">Uploading {p.currentFile}…</p>
                       )}

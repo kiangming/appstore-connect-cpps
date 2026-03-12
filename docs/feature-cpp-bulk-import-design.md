@@ -1,7 +1,7 @@
 # CPP Bulk Import — Design Document
 
 **Date:** 2026-03-12
-**Status:** Design validated — chờ implementation
+**Status:** ✅ Implemented — đang production
 **Scope:** Tạo nhiều CPPs cùng lúc từ folder structure, kế thừa cơ chế từ `BulkImportDialog`
 
 ---
@@ -16,9 +16,10 @@ Cho phép team tạo hàng loạt CPPs với đầy đủ locales + assets chỉ
 
 ```
 <import-root>/
+├── primary-locale.txt            ← BCP-47 code, dùng CHUNG cho tất cả CPPs mới (e.g. "en-US")
 ├── Summer Campaign/              ← tên CPP (tên folder = tên CPP)
-│   ├── primary-locale.txt        ← nội dung: "en-US" (BCP-47)
-│   ├── en-US/
+│   ├── deeplink.txt              ← optional: deep link URL cho CPP này (e.g. "myapp://summer")
+│   ├── English (U.S.)/           ← tên locale user-friendly (hoặc "en-US" — cả hai đều OK)
 │   │   ├── promo.txt
 │   │   ├── screenshots/
 │   │   │   ├── iphone/           ← PNG, sorted lexicographically
@@ -26,21 +27,26 @@ Cho phép team tạo hàng loạt CPPs với đầy đủ locales + assets chỉ
 │   │   └── previews/
 │   │       ├── iphone/           ← MP4
 │   │       └── ipad/
-│   └── vi/
+│   └── Vietnamese/               ← tên user-friendly, được map → "vi"
 │       ├── promo.txt
 │       └── screenshots/iphone/
 ├── Holiday Sale/
-│   ├── primary-locale.txt        ← "ja"
-│   └── ja/
+│   ├── deeplink.txt              ← optional: deep link riêng cho CPP này
+│   └── Japanese/
 │       └── ...
 └── _template/                    ← bắt đầu bằng _ hoặc . → bị bỏ qua (skip)
 ```
 
 **Quy tắc parsing:**
+- `primary-locale.txt` đặt ở **root folder** (cùng cấp các CPP folders), dùng chung cho toàn bộ batch
 - Folder con trực tiếp của `import-root` = CPP folder (tên folder = tên CPP)
 - Folder bắt đầu bằng `_` hoặc `.` bị skip
-- `primary-locale.txt` — required để tạo CPP mới; nếu thiếu/invalid → fallback sang locale đầu tiên (alphabet)
-- Bên trong mỗi CPP folder: cấu trúc locale giống hệt `BulkImportDialog` hiện tại
+- Tên locale folder chấp nhận **cả hai dạng**:
+  - User-friendly Apple name: `"Vietnamese"`, `"English (U.S.)"`, `"Chinese (Simplified)"`
+  - BCP-47 short-code: `"vi"`, `"en-US"`, `"zh-Hans"` (backward compatible)
+  - Mapping qua `lib/locale-map.json` (39 locales)
+- Nếu `primary-locale.txt` thiếu/invalid → fallback: ưu tiên locale đã có trong app → locale đầu alphabet → `"en-US"`
+- **Bug fix:** Trước khi tạo CPP mới, nếu primaryLocale chưa có trong app → tự động thêm vào app trước (`POST app-info-localizations`)
 
 ---
 
@@ -68,6 +74,7 @@ interface CppImportPlan {
   status: CppImportStatus;
   primaryLocale: string;                 // từ primary-locale.txt hoặc fallback
   primaryLocaleSource: "file" | "fallback";
+  deepLink: string | null;               // từ deeplink.txt trong CPP folder (optional)
   existingCppId: string | null;          // null nếu status === "new"
   locales: LocaleCppImportPlan[];
   excluded: boolean;
@@ -185,6 +192,9 @@ Step 1 — Tạo hoặc lấy CPP:
 Step 2 — Lấy versionId:
   → GET /api/asc/cpps/${cppId}
       → versions[0].id = versionId (dùng cho tạo locale mới)
+  → Nếu plan.deepLink có giá trị:
+      PATCH /api/asc/versions/${versionId}  { deepLink }
+      → updateCppVersion() → cập nhật deep link cho CPP version này
 
 Step 3 — Detect CPP-wide device types (kế thừa từ BulkImportDialog):
   → Tìm locale "ready" đầu tiên có localizationId
@@ -243,14 +253,13 @@ async function fetchWithBackoff(fn: () => Promise<Response>, maxRetries = 3): Pr
 | `GET /api/asc/cpps/[cppId]` | ✅ Đã có | Lấy versionId sau khi tạo |
 | `POST /api/asc/cpps/[cppId]/localizations` | ✅ Đã có | Tạo locale mới trong CPP |
 | `PATCH /api/asc/localizations/[id]` | ✅ Đã có | Update promo text |
+| `PATCH /api/asc/versions/[versionId]` | ✅ Đã có | Update deep link sau khi lấy versionId |
 | `GET /api/asc/apps/[appId]/app-info-localizations` | ✅ Đã có | Detect not-in-app |
 | `POST /api/asc/apps/[appId]/app-info-localizations` | ✅ Đã có | Thêm locale vào app |
 | `GET/POST /api/asc/screenshot-sets` | ✅ Đã có | Screenshot sets |
 | `GET/POST /api/asc/preview-sets` | ✅ Đã có | Preview sets |
 | `POST /api/asc/upload` | ✅ Đã có | Upload screenshot |
 | `POST /api/asc/upload-preview` | ✅ Đã có | Upload preview |
-
-**→ Không cần thêm API route mới.**
 
 ---
 
@@ -462,19 +471,23 @@ User                  CppBulkImportDialog      API Routes         ASC API
 
 ---
 
-## Assumptions đã confirmed
+## Assumptions đã confirmed (và thay đổi so với design ban đầu)
 
-| # | Assumption |
-|---|---|
-| A1 | Trigger nằm trên CPP List page (cạnh "+ New CPP") |
-| A2 | CPP "existing" = tên khớp case-insensitive với CPP trong app |
-| A3 | `primary-locale.txt` thiếu/invalid → fallback sang locale đầu tiên (alphabet) + warning |
-| A4 | CPP existing → không tạo lại, chỉ merge locale + assets |
-| A5 | **Concurrency = 2** CPPs song song; từng CPP xử lý locale tuần tự bên trong |
-| A6 | Modal dialog, không navigate away |
-| A7 | Device type defaults: `APP_IPHONE_65` / `APP_IPAD_PRO_3GEN_129` |
-| A8 | Không submit CPP for review — chỉ tạo ở trạng thái `PREPARE_FOR_SUBMISSION` |
-| A9 | Folder bắt đầu bằng `_` hoặc `.` bị skip tự động |
+| # | Assumption | Ghi chú |
+|---|---|---|
+| A1 | Trigger nằm trên CPP List page (cạnh "+ New CPP") | ✅ |
+| A2 | CPP "existing" = tên khớp case-insensitive với CPP trong app | ✅ |
+| A3 | `primary-locale.txt` thiếu/invalid → fallback có thứ tự ưu tiên: in-app locale → đầu alphabet → "en-US" | ✅ Cải thiện so với design ban đầu |
+| A4 | CPP existing → không tạo lại, chỉ merge locale + assets | ✅ |
+| A5 | **Concurrency = 2** CPPs song song; từng CPP xử lý locale tuần tự bên trong | ✅ |
+| A6 | Modal dialog, không navigate away | ✅ |
+| A7 | Device type defaults: `APP_IPHONE_65` / `APP_IPAD_PRO_3GEN_129` | ✅ |
+| A8 | Không submit CPP for review — chỉ tạo ở trạng thái `PREPARE_FOR_SUBMISSION` | ✅ |
+| A9 | Folder bắt đầu bằng `_` hoặc `.` bị skip tự động | ✅ |
+| A10 | **[MỚI]** `primary-locale.txt` đặt ở root folder, không phải trong từng CPP folder | ✅ Thay đổi so với design v1 |
+| A11 | **[MỚI]** Tên locale folder dùng Apple user-friendly name ("Vietnamese") hoặc short-code ("vi") | ✅ Thay đổi so với design v1 |
+| A12 | **[MỚI]** Nếu primaryLocale chưa có trong app → thêm vào app trước khi tạo CPP (fix 409 error) | ✅ Bug fix |
+| A13 | **[MỚI]** `deeplink.txt` optional trong mỗi CPP folder root → đọc content → PATCH version sau khi tạo | ✅ Implemented |
 
 ---
 

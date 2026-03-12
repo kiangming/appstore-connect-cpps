@@ -10,6 +10,7 @@ import type {
 import { resolveVisibility } from "@/types/asc";
 import { AppStorePreview } from "@/components/cpp/AppStorePreview";
 import { LocalizationManager } from "@/components/cpp/LocalizationManager";
+import { localeNameFromCode } from "@/lib/locale-utils";
 
 interface Props {
   cpp: AppCustomProductPage;
@@ -53,6 +54,7 @@ export function CppEditor({ cpp, appId, versions, localizations }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>("Overview");
   const [name, setName] = useState(cpp.attributes.name);
   const [isVisible, setIsVisible] = useState(cpp.attributes.isVisible);
+  const [deepLink, setDeepLink] = useState(versions[0]?.attributes.deepLink ?? "");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const latestVersion = versions[0];
@@ -69,6 +71,18 @@ export function CppEditor({ cpp, appId, versions, localizations }: Props) {
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error ?? "Save failed");
+      }
+      // Save deep link if the version exists and the field has a value
+      if (latestVersion && deepLink.trim()) {
+        const dlRes = await fetch(`/api/asc/versions/${latestVersion.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deepLink: deepLink.trim() }),
+        });
+        if (!dlRes.ok) {
+          const data = await dlRes.json();
+          throw new Error(data.error ?? "Failed to save deep link");
+        }
       }
       setSaveMsg("Saved successfully");
       setTimeout(() => setSaveMsg(null), 3000);
@@ -142,8 +156,8 @@ export function CppEditor({ cpp, appId, versions, localizations }: Props) {
                       className="rounded-lg border border-slate-100 bg-slate-50 px-4 py-3"
                     >
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-mono font-medium text-slate-600 bg-slate-200 px-2 py-0.5 rounded">
-                          {loc.attributes.locale}
+                        <span className="text-xs font-medium text-slate-600 bg-slate-200 px-2 py-0.5 rounded">
+                          {localeNameFromCode(loc.attributes.locale)}
                         </span>
                         <span className="text-xs text-slate-400">{loc.id}</span>
                       </div>
@@ -178,6 +192,20 @@ export function CppEditor({ cpp, appId, versions, localizations }: Props) {
                 onChange={(e) => setName(e.target.value)}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition"
               />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-slate-700">
+                Deep Link <span className="text-slate-400 font-normal">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={deepLink}
+                onChange={(e) => setDeepLink(e.target.value)}
+                placeholder="myapp://campaign/summer"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition font-mono"
+              />
+              <p className="text-xs text-slate-400">Dùng để điều hướng user khi click vào CPP</p>
             </div>
 
             <div className="flex items-center gap-3">

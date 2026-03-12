@@ -14,6 +14,7 @@ import {
   FolderInput,
 } from "lucide-react";
 import { BulkImportDialog } from "@/components/cpp/BulkImportDialog";
+import { localeNameFromCode, ALL_APPLE_LOCALES } from "@/lib/locale-utils";
 import type {
   AppCustomProductPageLocalization,
   AppScreenshotSet,
@@ -25,19 +26,7 @@ import type {
   PreviewType,
 } from "@/types/asc";
 
-const ALL_LOCALES = [
-  { value: "en-US", label: "English (US)" },
-  { value: "en-GB", label: "English (UK)" },
-  { value: "vi", label: "Vietnamese" },
-  { value: "ja", label: "Japanese" },
-  { value: "zh-Hans", label: "Chinese (Simplified)" },
-  { value: "zh-Hant", label: "Chinese (Traditional)" },
-  { value: "ko", label: "Korean" },
-  { value: "fr-FR", label: "French" },
-  { value: "de-DE", label: "German" },
-  { value: "es-ES", label: "Spanish (Spain)" },
-  { value: "pt-BR", label: "Portuguese (Brazil)" },
-];
+const ALL_LOCALES = ALL_APPLE_LOCALES;
 
 const SCREENSHOT_TYPES: { value: ScreenshotDisplayType; label: string }[] = [
   { value: "APP_IPHONE_67", label: 'iPhone 6.7"' },
@@ -625,7 +614,7 @@ function LocalizationRow({ localization, cppId }: LocalizationRowProps) {
           }`}
         />
         <span className="font-semibold text-slate-900 text-sm flex-1">
-          {localization.attributes.locale}
+          {localeNameFromCode(localization.attributes.locale)}
         </span>
         {localization.attributes.promotionalText && (
           <span className="text-xs text-slate-400 max-w-[200px] truncate hidden sm:block">

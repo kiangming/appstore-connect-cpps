@@ -20,6 +20,7 @@ import type {
   PreviewType,
 } from "@/types/asc";
 import { parseCppFolderStructure } from "@/lib/parseCppFolderStructure";
+import { localeNameFromCode } from "@/lib/locale-utils";
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 const DEFAULT_IPHONE_SCREENSHOT: ScreenshotDisplayType = "APP_IPHONE_65";
@@ -50,6 +51,7 @@ interface CppImportPlan {
   primaryLocale: string;
   primaryLocaleSource: "file" | "fallback";
   existingCppId: string | null;
+  deepLink: string | null;
   locales: LocaleCppImportPlan[];
   excluded: boolean;
 }
@@ -294,6 +296,17 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
           })
         );
 
+        // Read deeplink.txt
+        let deepLink: string | null = null;
+        if (cppData.deepLinkFile) {
+          try {
+            const raw = (await cppData.deepLinkFile.text()).trim();
+            deepLink = raw || null;
+          } catch {
+            deepLink = null;
+          }
+        }
+
         // Skip CPP if no locales or all locales are skip
         const hasActiveLocales = localePlans.some((l) => l.status !== "skip");
         const finalCppStatus: CppImportStatus =
@@ -305,6 +318,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
           primaryLocale,
           primaryLocaleSource,
           existingCppId,
+          deepLink,
           locales: localePlans,
           excluded: finalCppStatus === "skip",
         };
@@ -564,6 +578,17 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
 
       const versionId = cppData.versions?.[0]?.version?.id;
       if (!versionId) throw new Error(`No version ID found for CPP "${plan.name}"`);
+
+      // Step 2b: Update deep link if provided
+      if (plan.deepLink) {
+        await fetchWithBackoff(() =>
+          fetch(`/api/asc/versions/${versionId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ deepLink: plan.deepLink }),
+          })
+        );
+      }
 
       // Build updated localizationId map from server (covers locales created with CPP)
       const serverLocIds = new Map<string, string>();
@@ -904,13 +929,21 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                         {cppExpanded && (
                           <div className="pb-2">
                             {/* Primary locale info */}
-                            <div className="px-12 pb-1.5">
+                            <div className="px-12 pb-1.5 space-y-1">
                               <span className="text-xs text-slate-400">
                                 primary: <code className="font-mono bg-slate-100 px-1 rounded">{cppPlan.primaryLocale}</code>
                                 {cppPlan.primaryLocaleSource === "fallback" && (
                                   <span className="text-yellow-600 ml-1">(fallback)</span>
                                 )}
                               </span>
+                              {cppPlan.deepLink && (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-xs text-slate-400">deep link:</span>
+                                  <span className="text-xs font-mono text-slate-600 truncate max-w-[280px]" title={cppPlan.deepLink}>
+                                    {cppPlan.deepLink}
+                                  </span>
+                                </div>
+                              )}
                             </div>
 
                             {cppPlan.locales.map((localePlan) => {
@@ -939,8 +972,8 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                                         className={`h-3.5 w-3.5 transition-transform ${localeExpanded ? "rotate-90" : ""}`}
                                       />
                                     </button>
-                                    <span className="font-mono text-xs font-medium text-slate-700 w-16 flex-shrink-0">
-                                      {localePlan.locale}
+                                    <span className="text-xs font-medium text-slate-700 flex-shrink-0">
+                                      {localeNameFromCode(localePlan.locale)}
                                     </span>
                                     <StatusBadge
                                       label={localeCfg.label}
@@ -1080,7 +1113,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                                 <XCircle className="h-3.5 w-3.5 text-red-500" />
                               )}
                             </div>
-                            <span className="font-mono text-xs text-slate-600">{l.locale}</span>
+                            <span className="text-xs text-slate-600">{localeNameFromCode(l.locale)}</span>
                             {l.currentFile && (
                               <span className="text-xs text-slate-400 truncate">
                                 — {l.currentFile}

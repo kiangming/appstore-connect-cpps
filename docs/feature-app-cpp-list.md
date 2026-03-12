@@ -112,12 +112,14 @@ GET /api/asc/cpps/${cppId}
 - Modal centered với backdrop (không phải slide-over mặc dù tên có "Panel")
 - Fixed header: CPP name + X button
 - Scrollable body:
-  - **General info:** Name, Visibility badge, URL, CPP ID
-  - **Versions:** State badge per version
+  - **General info:** Name, Visibility, URL (nếu có), **Deep Link** (luôn hiển thị — "No deep link" nếu chưa set)
+  - **Versions:** State badge per version (chỉ còn label "Localizations" + state badge, không có Deep Link nữa)
   - **Localizations** (collapsible per locale):
-    - Promotional text (hiển thị hoặc "—")
-    - Screenshots nhóm theo device type (thumbnails 80×160)
+    - Promotional text (hiển thị hoặc "Not set")
+    - Screenshots nhóm theo device type (thumbnails)
     - App Previews nhóm theo device type (thumbnail + play icon overlay)
+
+> **Lưu ý:** Deep Link lấy từ `data.versions[0]?.attributes?.deepLink` — phải dùng `?.` ở cả hai chỗ để tránh TypeError khi `versions` rỗng.
 
 ### Thumbnail URLs
 ```typescript
@@ -183,3 +185,23 @@ GET trả về enriched object (không phải raw ASC response):
 // Fallback nếu relationship data bị thiếu:
 // So sánh screenshot IDs với tất cả screenshots có trong included
 ```
+
+---
+
+## 6. API Route: PATCH /api/asc/versions/[versionId]
+
+**File:** `app/api/asc/versions/[versionId]/route.ts`
+
+Cập nhật Deep Link cho một CPP version:
+```typescript
+PATCH /api/asc/versions/${versionId}
+Body: { deepLink: string }
+→ updateCppVersion(versionId, deepLink) trong asc-client.ts
+→ PATCH /v1/appCustomProductPageVersions/${versionId}
+   body: { data: { type, id, attributes: { deepLink } } }
+```
+
+Được gọi từ:
+- `CppEditor.tsx` — sau khi save nếu `deepLink.trim()` có giá trị
+- `BulkImportDialog.tsx` — sau khi upload tất cả locale, nếu user nhập deep link
+- `CppBulkImportDialog.tsx` — sau khi lấy `versionId`, nếu `plan.deepLink` có giá trị

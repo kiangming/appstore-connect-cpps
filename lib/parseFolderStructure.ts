@@ -1,8 +1,19 @@
+import { localeCodeFromName } from "@/lib/locale-utils";
+
 export interface ParsedLocaleData {
   locale: string;
   promoTextFile: File | null;
   screenshotFiles: { iphone: File[]; ipad: File[] };
   previewFiles: { iphone: File[]; ipad: File[] };
+}
+
+const LOCALE_REGEX = /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/;
+
+function resolveLocale(folderName: string): string | undefined {
+  const fromMap = localeCodeFromName(folderName);
+  if (fromMap) return fromMap;
+  if (LOCALE_REGEX.test(folderName)) return folderName;
+  return undefined;
 }
 
 export function parseFolderStructure(files: File[]): ParsedLocaleData[] {
@@ -19,9 +30,12 @@ export function parseFolderStructure(files: File[]): ParsedLocaleData[] {
     // Expect at least: <root>/<locale>/<something>
     if (parts.length < 3) continue;
 
-    // parts[0] = root folder, parts[1] = locale code
-    const locale = parts[1];
-    if (!locale || locale.startsWith(".")) continue;
+    // parts[0] = root folder, parts[1] = locale folder name (friendly or short-code)
+    const folderName = parts[1];
+    if (!folderName || folderName.startsWith(".")) continue;
+
+    const locale = resolveLocale(folderName);
+    if (!locale) continue;
 
     if (!localeMap.has(locale)) {
       localeMap.set(locale, {

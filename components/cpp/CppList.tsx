@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { FolderInput } from "lucide-react";
+import { FolderInput, Download, Copy, Check } from "lucide-react";
 import type { AppCustomProductPage, CppState } from "@/types/asc";
 import { resolveVisibility } from "@/types/asc";
 import { CppDetailPanel } from "@/components/cpp/CppDetailPanel";
@@ -46,6 +46,34 @@ function StatusBadge({ state }: { state?: CppState }) {
 export function CppList({ cpps, appId, versionStates }: Props) {
   const [viewingCpp, setViewingCpp] = useState<AppCustomProductPage | null>(null);
   const [showBulkImport, setShowBulkImport] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  function handleCopy(cppId: string, url: string) {
+    try {
+      navigator.clipboard.writeText(url);
+      setCopiedId(cppId);
+      setTimeout(() => setCopiedId(null), 1500);
+    } catch {
+      // clipboard unavailable — silent fail
+    }
+  }
+
+  function handleExportCsv() {
+    const header = ["Name", "Status", "URL"];
+    const rows = cpps.map((cpp) => [
+      `"${cpp.attributes.name.replace(/"/g, '""')}"`,
+      `"${STATE_LABELS[versionStates[cpp.id]!] ?? ""}"`,
+      `"${cpp.attributes.url ?? ""}"`,
+    ]);
+    const csv = [header.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `cpps-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   if (cpps.length === 0) {
     return (
@@ -82,8 +110,15 @@ export function CppList({ cpps, appId, versionStates }: Props) {
 
   return (
     <>
-      {/* Bulk Import CPPs button — above the table */}
-      <div className="flex justify-end mb-3">
+      {/* Action buttons — above the table */}
+      <div className="flex justify-end gap-2 mb-3">
+        <button
+          onClick={handleExportCsv}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition"
+        >
+          <Download className="h-4 w-4" />
+          Export CSV
+        </button>
         <button
           onClick={() => setShowBulkImport(true)}
           className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition"
@@ -107,6 +142,9 @@ export function CppList({ cpps, appId, versionStates }: Props) {
                 Visibility
               </th>
               <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">
+                CPP URL
+              </th>
+              <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">
                 ID
               </th>
               <th className="px-4 py-3" />
@@ -123,6 +161,34 @@ export function CppList({ cpps, appId, versionStates }: Props) {
                 </td>
                 <td className="px-4 py-3 text-slate-600">
                   {resolveVisibility(cpp.attributes)}
+                </td>
+                <td className="px-4 py-3">
+                  {cpp.attributes.url ? (
+                    <div className="flex items-center gap-1.5">
+                      <a
+                        href={cpp.attributes.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title={cpp.attributes.url}
+                        className="text-xs font-mono text-[#0071E3] hover:underline max-w-[220px] truncate block"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {cpp.attributes.url}
+                      </a>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleCopy(cpp.id, cpp.attributes.url!); }}
+                        className="flex-shrink-0 text-slate-400 hover:text-slate-600 transition-colors"
+                        title="Copy URL"
+                      >
+                        {copiedId === cpp.id
+                          ? <Check className="h-3.5 w-3.5 text-green-500" />
+                          : <Copy className="h-3.5 w-3.5" />
+                        }
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-400">—</span>
+                  )}
                 </td>
                 <td className="px-4 py-3 font-mono text-xs text-slate-400">
                   {cpp.id}
