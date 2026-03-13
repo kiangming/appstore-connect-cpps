@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { FolderInput, Download, Copy, Check, Trash2 } from "lucide-react";
+import { FolderInput, Download, Copy, Check, Trash2, Send } from "lucide-react";
 import type { AppCustomProductPage, CppState } from "@/types/asc";
 import { resolveVisibility } from "@/types/asc";
 import { CppDetailPanel } from "@/components/cpp/CppDetailPanel";
@@ -12,6 +12,8 @@ interface Props {
   cpps: AppCustomProductPage[];
   appId: string;
   versionStates: Record<string, CppState>;
+  versionIds: Record<string, string>;
+  rejectReasons: Record<string, string>;
 }
 
 const STATE_STYLES: Record<CppState, string> = {
@@ -33,9 +35,20 @@ const STATE_LABELS: Record<CppState, string> = {
 };
 
 const DELETABLE_STATES: CppState[] = ["PREPARE_FOR_SUBMISSION", "APPROVED"];
+const SUBMITTABLE_STATES: CppState[] = ["PREPARE_FOR_SUBMISSION"];
 
-function StatusBadge({ state }: { state?: CppState }) {
+function StatusBadge({ state, rejectReason }: { state?: CppState; rejectReason?: string }) {
   if (!state) return <span className="text-xs text-slate-400">—</span>;
+  if (state === "REJECTED") {
+    return (
+      <span
+        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium cursor-help underline decoration-dashed decoration-red-400 underline-offset-2 ${STATE_STYLES[state]}`}
+        title={rejectReason || "Rejected by Apple"}
+      >
+        {STATE_LABELS[state]}
+      </span>
+    );
+  }
   return (
     <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATE_STYLES[state]}`}>
       {STATE_LABELS[state]}
@@ -63,7 +76,7 @@ function NoSelectionDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-// ── Dialog: review selected list ───────────────────────────────────────────────
+// ── Dialog: delete review ──────────────────────────────────────────────────────
 function ReviewDialog({
   selected,
   versionStates,
@@ -109,7 +122,7 @@ function ReviewDialog({
   );
 }
 
-// ── Dialog: final confirmation ─────────────────────────────────────────────────
+// ── Dialog: delete final confirm ───────────────────────────────────────────────
 function FinalConfirmDialog({
   count,
   deleting,
@@ -151,23 +164,27 @@ function FinalConfirmDialog({
   );
 }
 
-// ── Dialog: result summary ─────────────────────────────────────────────────────
+// ── Dialog: result summary (shared by Delete + Submit) ─────────────────────────
 function ResultDialog({
+  title,
   succeeded,
+  succeededVerb,
   failed,
   onClose,
 }: {
+  title: string;
   succeeded: number;
+  succeededVerb: string;
   failed: Array<{ name: string; reason: string }>;
   onClose: () => void;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
       <div className="w-full max-w-md bg-white rounded-xl shadow-xl border border-slate-200 p-6">
-        <h2 className="text-base font-semibold text-slate-900 mb-3">Deletion complete</h2>
+        <h2 className="text-base font-semibold text-slate-900 mb-3">{title}</h2>
         {succeeded > 0 && (
           <p className="text-sm text-green-700 mb-2">
-            ✓ {succeeded} CPP{succeeded > 1 ? "s" : ""} deleted successfully.
+            ✓ {succeeded} CPP{succeeded > 1 ? "s" : ""} {succeededVerb} successfully.
           </p>
         )}
         {failed.length > 0 && (
@@ -196,19 +213,98 @@ function ResultDialog({
   );
 }
 
+// ── Dialog: submit confirm ─────────────────────────────────────────────────────
+function SubmitConfirmDialog({
+  selected,
+  versionStates,
+  submitting,
+  onCancel,
+  onConfirm,
+}: {
+  selected: AppCustomProductPage[];
+  versionStates: Record<string, CppState>;
+  submitting: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const eligibleCount = selected.filter(
+    (cpp) => SUBMITTABLE_STATES.includes(versionStates[cpp.id])
+  ).length;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-md bg-white rounded-xl shadow-xl border border-slate-200 p-6">
+        <h2 className="text-base font-semibold text-slate-900 mb-1">
+          Submit for Review
+        </h2>
+        <p className="text-sm text-slate-500 mb-3">
+          {eligibleCount > 0
+            ? `${eligibleCount} CPP${eligibleCount > 1 ? "s" : ""} will be submitted to Apple Review.`
+            : "No selected CPPs are eligible for submission."}
+        </p>
+        <ul className="max-h-48 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50 divide-y divide-slate-100 mb-5">
+          {selected.map((cpp) => {
+            const state = versionStates[cpp.id];
+            const isSubmittable = SUBMITTABLE_STATES.includes(state);
+            return (
+              <li key={cpp.id} className="flex items-center justify-between px-3 py-2 gap-2">
+                <span className="text-sm text-slate-800 font-medium truncate max-w-[220px]">
+                  {cpp.attributes.name}
+                </span>
+                {isSubmittable ? (
+                  <span className="text-xs text-green-600 flex-shrink-0">✓ Will submit</span>
+                ) : (
+                  <span className="text-xs text-amber-600 flex-shrink-0">
+                    ⚠ Skipped ({STATE_LABELS[state] ?? state})
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            disabled={submitting}
+            className="px-4 py-2 text-sm font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            disabled={eligibleCount === 0 || submitting}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Send className="h-3.5 w-3.5" />
+            {submitting ? "Submitting…" : "Submit"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main CppList ───────────────────────────────────────────────────────────────
-export function CppList({ cpps, appId, versionStates }: Props) {
+export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons }: Props) {
   const [viewingCpp, setViewingCpp] = useState<AppCustomProductPage | null>(null);
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Selection state
+  // Selection state (shared by Delete + Submit)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // Delete dialog state: null | "no-selection" | "review" | "confirm" | "result"
+  // Delete dialog state
   const [deleteStep, setDeleteStep] = useState<"no-selection" | "review" | "confirm" | "result" | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteResult, setDeleteResult] = useState<{
+    succeeded: number;
+    failed: Array<{ name: string; reason: string }>;
+  } | null>(null);
+
+  // Submit dialog state
+  const [submitStep, setSubmitStep] = useState<"confirm" | "result" | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitResult, setSubmitResult] = useState<{
     succeeded: number;
     failed: Array<{ name: string; reason: string }>;
   } | null>(null);
@@ -275,7 +371,7 @@ export function CppList({ cpps, appId, versionStates }: Props) {
     }
   }
 
-  function closeAllDialogs() {
+  function closeDeleteDialogs() {
     setDeleteStep(null);
     setDeleteResult(null);
   }
@@ -313,7 +409,49 @@ export function CppList({ cpps, appId, versionStates }: Props) {
     }
   }
 
+  async function handleSubmit() {
+    const submittable = selectedCpps.filter(
+      (cpp) => SUBMITTABLE_STATES.includes(versionStates[cpp.id])
+    );
+    setSubmitting(true);
+
+    const results = await Promise.allSettled(
+      submittable.map((cpp) =>
+        fetch(`/api/asc/cpps/${cpp.id}/submit`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ versionId: versionIds[cpp.id] }),
+        }).then(async (res) => {
+          if (res.status === 201) return { cpp, ok: true, reason: "" };
+          const body = await res.json().catch(() => ({}));
+          return { cpp, ok: false, reason: body.error ?? `HTTP ${res.status}` };
+        })
+      )
+    );
+
+    const succeeded = results.filter(
+      (r) => r.status === "fulfilled" && r.value.ok
+    ).length;
+    const failed = results
+      .filter((r) => r.status === "fulfilled" && !r.value.ok)
+      .map((r) => ({
+        name: (r as PromiseFulfilledResult<{ cpp: AppCustomProductPage; ok: boolean; reason: string }>).value.cpp.attributes.name,
+        reason: (r as PromiseFulfilledResult<{ cpp: AppCustomProductPage; ok: boolean; reason: string }>).value.reason,
+      }));
+
+    setSubmitting(false);
+    setSubmitResult({ succeeded, failed });
+    setSubmitStep("result");
+
+    if (succeeded > 0) {
+      setSelectedIds(new Set());
+    }
+  }
+
   const selectedCpps = cpps.filter((cpp) => selectedIds.has(cpp.id));
+  const submittableCount = selectedCpps.filter(
+    (cpp) => SUBMITTABLE_STATES.includes(versionStates[cpp.id])
+  ).length;
 
   if (cpps.length === 0) {
     return (
@@ -365,8 +503,19 @@ export function CppList({ cpps, appId, versionStates }: Props) {
           Delete{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}
         </button>
 
-        {/* Right: Export + Bulk Import */}
+        {/* Right: Submit + Export + Bulk Import */}
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setSubmitStep("confirm")}
+            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition ${
+              submittableCount > 0
+                ? "bg-blue-600 hover:bg-blue-700 text-white border-blue-600"
+                : "bg-white text-blue-500 border-blue-200 hover:bg-blue-50"
+            }`}
+          >
+            <Send className="h-4 w-4" />
+            Submit{submittableCount > 0 ? ` (${submittableCount})` : ""}
+          </button>
           <button
             onClick={handleExportCsv}
             className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition"
@@ -422,13 +571,13 @@ export function CppList({ cpps, appId, versionStates }: Props) {
                       checked={isSelected}
                       disabled={!canDelete}
                       onChange={() => toggleSelect(cpp.id)}
-                      title={canDelete ? undefined : `Cannot delete while ${STATE_LABELS[state!] ?? "in review"}`}
+                      title={canDelete ? undefined : `Cannot select while ${STATE_LABELS[state!] ?? "in review"}`}
                       className="rounded border-slate-300 text-red-600 focus:ring-red-500 disabled:opacity-30 disabled:cursor-not-allowed"
                     />
                   </td>
                   <td className="px-4 py-3 font-medium text-slate-900">{cpp.attributes.name}</td>
                   <td className="px-4 py-3">
-                    <StatusBadge state={state} />
+                    <StatusBadge state={state} rejectReason={rejectReasons[cpp.id]} />
                   </td>
                   <td className="px-4 py-3 text-slate-600">{resolveVisibility(cpp.attributes)}</td>
                   <td className="px-4 py-3">
@@ -483,15 +632,15 @@ export function CppList({ cpps, appId, versionStates }: Props) {
         </table>
       </div>
 
-      {/* Dialogs */}
+      {/* Delete dialogs */}
       {deleteStep === "no-selection" && (
-        <NoSelectionDialog onClose={closeAllDialogs} />
+        <NoSelectionDialog onClose={closeDeleteDialogs} />
       )}
       {deleteStep === "review" && (
         <ReviewDialog
           selected={selectedCpps}
           versionStates={versionStates}
-          onCancel={closeAllDialogs}
+          onCancel={closeDeleteDialogs}
           onConfirm={() => setDeleteStep("confirm")}
         />
       )}
@@ -499,17 +648,43 @@ export function CppList({ cpps, appId, versionStates }: Props) {
         <FinalConfirmDialog
           count={selectedIds.size}
           deleting={deleting}
-          onCancel={closeAllDialogs}
+          onCancel={closeDeleteDialogs}
           onDelete={handleFinalDelete}
         />
       )}
       {deleteStep === "result" && deleteResult && (
         <ResultDialog
+          title="Deletion complete"
           succeeded={deleteResult.succeeded}
+          succeededVerb="deleted"
           failed={deleteResult.failed}
           onClose={() => {
-            closeAllDialogs();
+            closeDeleteDialogs();
             if (deleteResult.succeeded > 0) window.location.reload();
+          }}
+        />
+      )}
+
+      {/* Submit dialogs */}
+      {submitStep === "confirm" && (
+        <SubmitConfirmDialog
+          selected={selectedCpps}
+          versionStates={versionStates}
+          submitting={submitting}
+          onCancel={() => setSubmitStep(null)}
+          onConfirm={handleSubmit}
+        />
+      )}
+      {submitStep === "result" && submitResult && (
+        <ResultDialog
+          title="Submit complete"
+          succeeded={submitResult.succeeded}
+          succeededVerb="submitted"
+          failed={submitResult.failed}
+          onClose={() => {
+            setSubmitStep(null);
+            setSubmitResult(null);
+            if (submitResult.succeeded > 0) window.location.reload();
           }}
         />
       )}

@@ -71,6 +71,7 @@ export type AppCustomProductPage = AscResource<
 export interface AppCustomProductPageVersionAttributes {
   state: CppState;
   deepLink?: string;
+  rejectedVersionUserFeedback?: string;
 }
 
 export type AppCustomProductPageVersion = AscResource<

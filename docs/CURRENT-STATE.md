@@ -2,7 +2,7 @@
 
 > **Đây là file đọc đầu tiên** khi bắt đầu session mới. Cung cấp toàn cảnh dự án, features đã làm và chưa làm.
 >
-> Last updated: 2026-03-13 (session 9)
+> Last updated: 2026-03-13 (session 10)
 
 ---
 
@@ -36,6 +36,7 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 | **Google OAuth + Admin Login Control** | `lib/auth.ts` + `components/auth/LoginForm.tsx` | `docs/feature-google-auth.md` |
 | **User Footer + Logout** | `components/layout/UserFooter.tsx` | — |
 | **Delete CPP** (multi-select, 2-step confirm) | `components/cpp/CppList.tsx` + `app/api/asc/cpps/[cppId]/route.ts` | `docs/feature-delete-cpp.md` |
+| **Submit CPP for Review** (multi-select, parallel submit, reject tooltip) | `components/cpp/CppList.tsx` + `app/api/asc/cpps/[cppId]/submit/route.ts` | `docs/feature-submit-cpp.md` |
 
 ---
 
@@ -45,7 +46,6 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 |---|---|
 | Settings page (ASC credentials) | UI stub có, nhưng không có endpoint lưu — accounts khai báo qua `ASC_ACCOUNTS` env var |
 | AppStorePreview tab | Component có nhưng không render gì (empty stub) |
-| Submit CPP for Review | Chưa implement submit flow |
 | Template system | Phase 2 roadmap |
 | Status dashboard / realtime polling | Phase 2 roadmap |
 
@@ -68,7 +68,8 @@ app/
 │   ├── apps/[appId]/route.ts       GET /api/asc/apps/[appId]
 │   ├── apps/[appId]/app-info-localizations/route.ts  GET + POST
 │   ├── cpps/route.ts               GET + POST /api/asc/cpps
-│   ├── cpps/[cppId]/route.ts       GET + PATCH
+│   ├── cpps/[cppId]/route.ts       GET + PATCH + DELETE
+│   ├── cpps/[cppId]/submit/route.ts  POST (submit for review)   ← MỚI
 │   ├── cpps/[cppId]/localizations/route.ts  POST
 │   ├── localizations/[id]/route.ts  PATCH (promo text)
 │   ├── versions/[versionId]/route.ts  PATCH (deepLink)   ← MỚI
@@ -184,3 +185,11 @@ NEXTAUTH_URL=
 13. **`VersionWithLocalizations` vs `AppCustomProductPageVersion` — type confusion bug** — `CppDetailPanel` nhận `data.versions: VersionWithLocalizations[]` từ `/api/asc/cpps/[cppId]`. Mỗi phần tử có shape `{ version: AppCustomProductPageVersion, localizations: [...] }`. Phải truy cập `data.versions[0]?.version?.attributes?.deepLink`, **không phải** `data.versions[0]?.attributes?.deepLink` (attributes không tồn tại trực tiếp trên `VersionWithLocalizations`). Ngược lại, `CppEditor` nhận `versions: AppCustomProductPageVersion[]` trực tiếp nên dùng `versions[0]?.attributes.deepLink` là đúng. Đây là lý do Deep Link luôn hiển thị "No deep link" trong Detail Panel dù CppEditor hiển thị đúng.
 
 14. **metadata.xlsx (CPP Bulk Import)** — `metadata.xlsx` optional đặt trong root folder của batch. Khi có: Excel thắng toàn bộ (bỏ qua `deeplink.txt` + `promo.txt`). Columns: `CPP Name` (bắt buộc, case sensitive) | `Deep Link` (bắt buộc) | `<Locale Name>` (user-friendly, dynamic). Parse client-side: `lib/parseMetadataXlsx.ts` dùng SheetJS dynamic import, 5MB limit, formula disabled. CPP không khớp tên → warning badge `⚠ no metadata`. Template tại `public/metadata-template.xlsx` (41 columns, Vietnamese + English (U.S.) ưu tiên đầu). Xem `docs/feature-cpp-bulk-import-xlsx.md`.
+
+15. **Submit CPP — versionId source** — `versionId` cần cho submit (`POST /v1/appCustomProductPageSubmissions`) lấy từ `included[]` trong response của list API (`GET /v1/apps/{appId}/appCustomProductPages?include=appCustomProductPageVersions`). Page extract thành `versionIds: Record<string, string>` (cppId → versionId) và pass xuống `CppList`. Không cần gọi thêm API.
+
+16. **Submit CPP — no assets check** — Không check assets trước khi submit. Nếu CPP không có assets, ASC trả về 422 và error được hiển thị trong result dialog per-CPP. Đây là design decision (YAGNI — tránh N+1 calls).
+
+17. **CppList Props mở rộng (session 10)** — `CppList` nhận thêm 2 props: `versionIds: Record<string, string>` và `rejectReasons: Record<string, string>`. `rejectReasons` map cppId → `version.attributes.rejectedVersionUserFeedback` (optional field từ ASC). Cả hai được extract trong `cpps/page.tsx` từ `included[]`.
+
+18. **ResultDialog refactor** — Component `ResultDialog` trong `CppList.tsx` được refactor thêm props `title` và `succeededVerb` để dùng chung cho cả Delete và Submit flows.

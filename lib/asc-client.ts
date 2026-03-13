@@ -212,6 +212,19 @@ export async function deleteCpp(creds: AscCredentials, cppId: string): Promise<v
   return ascFetch<void>(creds, "DELETE", `/v1/appCustomProductPages/${cppId}`);
 }
 
+export async function submitCpp(creds: AscCredentials, versionId: string): Promise<void> {
+  await ascFetch<unknown>(creds, "POST", "/v1/appCustomProductPageSubmissions", {
+    data: {
+      type: "appCustomProductPageSubmissions",
+      relationships: {
+        appCustomProductPageVersion: {
+          data: { type: "appCustomProductPageVersions", id: versionId },
+        },
+      },
+    },
+  });
+}
+
 export async function createCppVersion(
   creds: AscCredentials,
   payload: CreateCppVersionPayload

@@ -11,6 +11,8 @@ interface Props {
 export default async function CppsPage({ params }: Props) {
   let cpps;
   let versionStates: Record<string, CppState> = {};
+  let versionIds: Record<string, string> = {};
+  let rejectReasons: Record<string, string> = {};
   let fetchError: string | null = null;
 
   try {
@@ -27,9 +29,15 @@ export default async function CppsPage({ params }: Props) {
       const rels = cpp.relationships as {
         appCustomProductPageVersions?: { data?: Array<{ id: string }> };
       };
-      const versionIds = rels?.appCustomProductPageVersions?.data?.map((d) => d.id) ?? [];
-      const match = versions.find((v) => versionIds.includes(v.id));
-      if (match) versionStates[cpp.id] = match.attributes.state;
+      const versionIdList = rels?.appCustomProductPageVersions?.data?.map((d) => d.id) ?? [];
+      const match = versions.find((v) => versionIdList.includes(v.id));
+      if (match) {
+        versionStates[cpp.id] = match.attributes.state;
+        versionIds[cpp.id] = match.id;
+        if (match.attributes.rejectedVersionUserFeedback) {
+          rejectReasons[cpp.id] = match.attributes.rejectedVersionUserFeedback;
+        }
+      }
     }
   } catch (err) {
     fetchError = err instanceof Error ? err.message : "Failed to load CPPs";
@@ -59,7 +67,7 @@ export default async function CppsPage({ params }: Props) {
           {fetchError}
         </div>
       ) : (
-        <CppList cpps={cpps ?? []} appId={params.appId} versionStates={versionStates} />
+        <CppList cpps={cpps ?? []} appId={params.appId} versionStates={versionStates} versionIds={versionIds} rejectReasons={rejectReasons} />
       )}
     </div>
   );
