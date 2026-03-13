@@ -37,17 +37,20 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 | **User Footer + Logout** | `components/layout/UserFooter.tsx` | — |
 | **Delete CPP** (multi-select, 2-step confirm) | `components/cpp/CppList.tsx` + `app/api/asc/cpps/[cppId]/route.ts` | `docs/feature-delete-cpp.md` |
 | **Submit CPP for Review** (multi-select, parallel submit, reject tooltip) | `components/cpp/CppList.tsx` + `app/api/asc/cpps/[cppId]/submit/route.ts` | `docs/feature-submit-cpp.md` |
+| **Settings — ASC Account Builder** | Admin-only page. Section 1: current accounts (masked). Section 2: form → generate `ASC_ACCOUNTS` string → copy-paste vào `.env`. | `docs/feature-settings-asc-accounts.md` |
 
 ---
 
 ## Features chưa làm / còn là stub ⏳
 
-| Feature | Ghi chú |
-|---|---|
-| Settings page (ASC credentials) | UI stub có, nhưng không có endpoint lưu — accounts khai báo qua `ASC_ACCOUNTS` env var |
-| AppStorePreview tab | Component có nhưng không render gì (empty stub) |
-| Template system | Phase 2 roadmap |
-| Status dashboard / realtime polling | Phase 2 roadmap |
+| Feature | Ghi chú | Doc |
+|---|---|---|
+| 🔴 **API Auth Guard** | 12 API routes không có session check — critical cho Vercel deploy | `docs/feature-security-hardening.md` |
+| 🟡 **Client-side Direct Upload** | File upload đang đi qua Vercel server (double bandwidth) | `docs/feature-client-side-upload.md` |
+| AppStorePreview tab | Component có nhưng không render gì (empty stub) | — |
+| AppStorePreview tab | Component có nhưng không render gì (empty stub) | — |
+| Template system | Phase 2 roadmap | — |
+| Status dashboard / realtime polling | Phase 2 roadmap | — |
 
 ---
 

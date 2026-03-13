@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { reserveScreenshot, confirmScreenshot, uploadAssetToOperations } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
+import { log } from "@/lib/logger";
 
 export async function POST(req: NextRequest) {
   try {
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(confirmed, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
-    console.error("[API] POST /api/asc/upload error:", message);
+    await log("upload", `[API] POST /api/asc/upload error: ${message}`, "ERROR");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

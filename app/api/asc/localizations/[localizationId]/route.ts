@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateLocalization } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
+import { log } from "@/lib/logger";
 
 export async function PATCH(
   req: NextRequest,
@@ -15,7 +16,7 @@ export async function PATCH(
     return NextResponse.json(data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
-    console.error(`[API] PATCH /api/asc/localizations/${params.localizationId} error:`, message);
+    await log("localization", `[API] PATCH /api/asc/localizations/${params.localizationId} error: ${message}`, "ERROR");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

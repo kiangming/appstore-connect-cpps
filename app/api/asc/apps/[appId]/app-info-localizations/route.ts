@@ -5,6 +5,7 @@ import {
   createAppInfoLocalization,
 } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
+import { log } from "@/lib/logger";
 
 export async function GET(
   _req: NextRequest,
@@ -22,7 +23,7 @@ export async function GET(
     return NextResponse.json({ locales, appInfoId });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
-    console.error(`[API] GET /api/asc/apps/${params.appId}/app-info-localizations error:`, message);
+    await log("apps", `[API] GET /api/asc/apps/${params.appId}/app-info-localizations error: ${message}`, "ERROR");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -47,11 +48,11 @@ export async function POST(
     }
 
     const result = await createAppInfoLocalization(creds, appInfoId, locale);
-    console.log(`[API] Created app info localization appId=${params.appId} locale=${locale}`);
+    await log("apps", `[API] Created app info localization appId=${params.appId} locale=${locale}`);
     return NextResponse.json(result, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
-    console.error(`[API] POST /api/asc/apps/${params.appId}/app-info-localizations error:`, message);
+    await log("apps", `[API] POST /api/asc/apps/${params.appId}/app-info-localizations error: ${message}`, "ERROR");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

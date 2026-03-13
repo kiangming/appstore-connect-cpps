@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPreviewSet, getLocalizationPreviewSets } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import type { PreviewType } from "@/types/asc";
+import { log } from "@/lib/logger";
 
 export async function GET(req: NextRequest) {
   const localizationId = req.nextUrl.searchParams.get("localizationId");
@@ -38,7 +39,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(data, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
-    console.error("[API] POST /api/asc/preview-sets error:", message);
+    await log("upload", `[API] POST /api/asc/preview-sets error: ${message}`, "ERROR");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

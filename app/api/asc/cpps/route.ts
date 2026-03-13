@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCpps, createCpp } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
+import { log } from "@/lib/logger";
 
 export async function GET(req: NextRequest) {
   const appId = req.nextUrl.searchParams.get("appId");
@@ -15,7 +16,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
-    console.error("[API] GET /api/asc/cpps error:", message);
+    await log("cpp-list", `[API] GET /api/asc/cpps error: ${message}`, "ERROR");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -31,12 +32,12 @@ export async function POST(req: NextRequest) {
 
     const creds = await getActiveAccount();
     const cpp = await createCpp(creds, { appId, name, locale });
-    console.log(`[API] CPP created id=${cpp.data.id}`);
+    await log("cpp-list", `[API] CPP created id=${cpp.data.id}`);
 
     return NextResponse.json(cpp, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
-    console.error("[API] POST /api/asc/cpps error:", message);
+    await log("cpp-list", `[API] POST /api/asc/cpps error: ${message}`, "ERROR");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

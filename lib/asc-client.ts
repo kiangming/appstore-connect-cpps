@@ -1,5 +1,6 @@
 import { generateAscToken } from "./asc-jwt";
 import type { AscCredentials } from "@/lib/asc-jwt";
+import { log } from "@/lib/logger";
 import type {
   AscApiResponse,
   App,
@@ -33,7 +34,7 @@ async function ascFetch<T>(
   const url = `${ASC_BASE_URL}${endpoint}`;
 
   if (body) {
-    console.log(`[ASC:${creds.keyId}] ${method} ${endpoint} body:`, JSON.stringify(body, null, 2));
+    await log("asc-client", `[${creds.keyId}] ${method} ${endpoint} body: ${JSON.stringify(body)}`);
   }
 
   const res = await fetch(url, {
@@ -45,10 +46,11 @@ async function ascFetch<T>(
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  console.log(`[ASC:${creds.keyId}] ${method} ${endpoint} → ${res.status}`);
+  await log("asc-client", `[${creds.keyId}] ${method} ${endpoint} → ${res.status}`);
 
   if (!res.ok) {
     const errorBody = await res.text();
+    await log("asc-client", `[${creds.keyId}] ${method} ${endpoint} ERROR ${res.status}: ${errorBody}`, "ERROR");
     throw new Error(`ASC API error ${res.status} on ${method} ${endpoint}: ${errorBody}`);
   }
 

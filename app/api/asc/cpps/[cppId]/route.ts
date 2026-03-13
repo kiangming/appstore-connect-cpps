@@ -8,6 +8,7 @@ import {
   deleteCpp,
 } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
+import { log } from "@/lib/logger";
 import type {
   AppCustomProductPageVersion,
   AppCustomProductPageLocalization,
@@ -41,7 +42,7 @@ export async function GET(
   try {
     const creds = await getActiveAccount();
     const cppRes = await getCpp(creds, params.cppId);
-    console.log(`[Detail] cpp.attributes=`, JSON.stringify(cppRes.data.attributes));
+    await log("cpp-detail", `[Detail] cpp.attributes=${JSON.stringify(cppRes.data.attributes)}`);
     const included = cppRes.included ?? [];
 
     const versions = included.filter(
@@ -54,9 +55,9 @@ export async function GET(
           const locRes = await getCppVersionLocalizations(creds, version.id);
           const locs = locRes.data;
 
-          console.log(`[Detail] version=${version.id} locs=${locs.length}`);
+          await log("cpp-detail", `[Detail] version=${version.id} locs=${locs.length}`);
           if (locs[0]) {
-            console.log(`[Detail] first loc attrs=`, JSON.stringify(locs[0].attributes));
+            await log("cpp-detail", `[Detail] first loc attrs=${JSON.stringify(locs[0].attributes)}`);
           }
 
           const localizationsWithMedia: LocalizationWithMedia[] =
@@ -67,12 +68,11 @@ export async function GET(
                 try {
                   const setsRes = await getLocalizationScreenshotSets(creds, loc.id);
 
-                  // Log first set to understand relationship structure
                   if (setsRes.data[0]) {
-                    console.log(`[Detail] screenshotSet[0] rels=`, JSON.stringify(setsRes.data[0].relationships));
+                    void log("cpp-detail", `[Detail] screenshotSet[0] rels=${JSON.stringify(setsRes.data[0].relationships)}`);
                   }
                   if (setsRes.included?.[0]) {
-                    console.log(`[Detail] screenshot included[0] rels=`, JSON.stringify(setsRes.included[0].relationships));
+                    void log("cpp-detail", `[Detail] screenshot included[0] rels=${JSON.stringify(setsRes.included[0].relationships)}`);
                   }
 
                   const allScreenshots = (setsRes.included ?? []).filter(
@@ -97,11 +97,11 @@ export async function GET(
                           return sRels?.appScreenshotSet?.data?.id === set.id;
                         });
 
-                    console.log(`[Detail] set=${set.id} type=${set.attributes.screenshotDisplayType} idsFromSet=${idsFromSet.length} matched=${screenshots.length}`);
+                    void log("cpp-detail", `[Detail] set=${set.id} type=${set.attributes.screenshotDisplayType} idsFromSet=${idsFromSet.length} matched=${screenshots.length}`);
                     return { set, screenshots };
                   });
                 } catch (e) {
-                  console.error(`[Detail] screenshot fetch failed for loc=${loc.id}:`, e);
+                  await log("cpp-detail", `[Detail] screenshot fetch failed for loc=${loc.id}: ${e}`, "ERROR");
                 }
 
                 // ── App Previews (video) ──────────────────────────────────
@@ -148,7 +148,7 @@ export async function GET(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
-    console.error(`[API] GET /api/asc/cpps/${params.cppId} error:`, message);
+    await log("cpp-detail", `GET /api/asc/cpps/${params.cppId} error: ${message}`, "ERROR");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -164,7 +164,7 @@ export async function PATCH(
     return NextResponse.json(data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
-    console.error(`[API] PATCH /api/asc/cpps/${params.cppId} error:`, message);
+    await log("cpp-detail", `PATCH /api/asc/cpps/${params.cppId} error: ${message}`, "ERROR");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -176,11 +176,11 @@ export async function DELETE(
   try {
     const creds = await getActiveAccount();
     await deleteCpp(creds, params.cppId);
-    console.log(`[API] DELETE /api/asc/cpps/${params.cppId} success`);
+    await log("cpp-detail", `DELETE /api/asc/cpps/${params.cppId} success`);
     return new NextResponse(null, { status: 204 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
-    console.error(`[API] DELETE /api/asc/cpps/${params.cppId} error:`, message);
+    await log("cpp-detail", `DELETE /api/asc/cpps/${params.cppId} error: ${message}`, "ERROR");
     // Forward 409 Conflict (in-review) and 403 Forbidden as-is
     const status = message.includes("409") ? 409 : message.includes("403") ? 403 : 500;
     return NextResponse.json({ error: message }, { status });
