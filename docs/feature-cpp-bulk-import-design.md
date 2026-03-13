@@ -519,3 +519,4 @@ User                  CppBulkImportDialog      API Routes         ASC API
 3. **`components/cpp/CppList.tsx`** — thêm "Bulk Import CPPs" button + state dialog
 4. **`app/(dashboard)/apps/[appId]/cpps/page.tsx`** — pass `cpps` data xuống `CppList`
 5. **Test thủ công** với folder có: 1 CPP mới + 1 CPP existing + 1 folder skip
+B

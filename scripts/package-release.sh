@@ -31,8 +31,9 @@ cp -r .next/static/. "${PACKAGE_DIR}/.next/static/"
 # Copy public folder
 cp -r public/. "${PACKAGE_DIR}/public/"
 
-# Copy startup script + env example
+# Copy startup script + env loader + env example
 cp start.command "${PACKAGE_DIR}/start.command"
+cp load-env.cjs "${PACKAGE_DIR}/load-env.cjs"
 cp .env.example "${PACKAGE_DIR}/.env.example"
 chmod +x "${PACKAGE_DIR}/start.command"
 

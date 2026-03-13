@@ -43,13 +43,10 @@ echo ""
 echo "🚀  Đang khởi động CPP Manager trên cổng $PORT..."
 echo ""
 
-# Load env vars từ .env.local
-set -o allexport
-source .env.local
-set +o allexport
-
 # Chạy server trong background
-PORT=$PORT node server.js &
+# load-env.cjs parse .env.local trước rồi mới start server.js
+# (tránh lỗi bash source và Node --env-file với JSON multi-line values)
+PORT=$PORT node load-env.cjs &
 SERVER_PID=$!
 
 # Đợi server sẵn sàng (tối đa 10 giây)
