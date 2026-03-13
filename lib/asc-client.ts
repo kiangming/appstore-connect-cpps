@@ -214,17 +214,64 @@ export async function deleteCpp(creds: AscCredentials, cppId: string): Promise<v
   return ascFetch<void>(creds, "DELETE", `/v1/appCustomProductPages/${cppId}`);
 }
 
-export async function submitCpp(creds: AscCredentials, versionId: string): Promise<void> {
-  await ascFetch<unknown>(creds, "POST", "/v1/appCustomProductPageSubmissions", {
-    data: {
-      type: "appCustomProductPageSubmissions",
-      relationships: {
-        appCustomProductPageVersion: {
-          data: { type: "appCustomProductPageVersions", id: versionId },
+/**
+ * Submit multiple CPP versions in a single Apple Review Submission (API v1.7+).
+ * Flow: POST reviewSubmissions → parallel POST reviewSubmissionItems → PATCH state=SUBMITTED
+ */
+export async function submitCpps(
+  creds: AscCredentials,
+  appId: string,
+  versionIds: string[]
+): Promise<void> {
+  // Step 1: Create one review submission container for the whole batch
+  const submissionRes = await ascFetch<{ data: { id: string } }>(
+    creds,
+    "POST",
+    "/v1/reviewSubmissions",
+    {
+      data: {
+        type: "reviewSubmissions",
+        attributes: { platform: "IOS" },
+        relationships: {
+          app: { data: { type: "apps", id: appId } },
         },
       },
-    },
-  });
+    }
+  );
+  const submissionId = submissionRes.data.id;
+
+  // Step 2: Add all CPP versions to the same submission (parallel)
+  await Promise.all(
+    versionIds.map((versionId) =>
+      ascFetch<unknown>(creds, "POST", "/v1/reviewSubmissionItems", {
+        data: {
+          type: "reviewSubmissionItems",
+          relationships: {
+            reviewSubmission: {
+              data: { type: "reviewSubmissions", id: submissionId },
+            },
+            appCustomProductPageVersion: {
+              data: { type: "appCustomProductPageVersions", id: versionId },
+            },
+          },
+        },
+      })
+    )
+  );
+
+  // Step 3: Submit the whole batch for review
+  await ascFetch<unknown>(
+    creds,
+    "PATCH",
+    `/v1/reviewSubmissions/${submissionId}`,
+    {
+      data: {
+        type: "reviewSubmissions",
+        id: submissionId,
+        attributes: { submitted: true },
+      },
+    }
+  );
 }
 
 export async function createCppVersion(

@@ -8,9 +8,9 @@ export async function POST(
   { params }: { params: { cppId: string } }
 ) {
   try {
-    const { versionId } = await req.json();
+    const { appId, versionId } = await req.json();
     const creds = await getActiveAccount();
-    await submitCpp(creds, versionId);
+    await submitCpp(creds, appId, versionId);
     await log("cpp-submit", `[API] POST /api/asc/cpps/${params.cppId}/submit success`);
     return new NextResponse(null, { status: 201 });
   } catch (err) {

@@ -2,7 +2,7 @@
 
 > **Đây là file đọc đầu tiên** khi bắt đầu session mới. Cung cấp toàn cảnh dự án, features đã làm và chưa làm.
 >
-> Last updated: 2026-03-13 (session 10)
+> Last updated: 2026-03-13 (session 11)
 
 ---
 
@@ -72,7 +72,8 @@ app/
 │   ├── apps/[appId]/app-info-localizations/route.ts  GET + POST
 │   ├── cpps/route.ts               GET + POST /api/asc/cpps
 │   ├── cpps/[cppId]/route.ts       GET + PATCH + DELETE
-│   ├── cpps/[cppId]/submit/route.ts  POST (submit for review)   ← MỚI
+│   ├── cpps/submit/route.ts          POST batch (submit for review) ← MỚI
+│   ├── cpps/[cppId]/submit/route.ts  DEPRECATED — thay bằng cpps/submit
 │   ├── cpps/[cppId]/localizations/route.ts  POST
 │   ├── localizations/[id]/route.ts  PATCH (promo text)
 │   ├── versions/[versionId]/route.ts  PATCH (deepLink)   ← MỚI
@@ -189,7 +190,7 @@ NEXTAUTH_URL=
 
 14. **metadata.xlsx (CPP Bulk Import)** — `metadata.xlsx` optional đặt trong root folder của batch. Khi có: Excel thắng toàn bộ (bỏ qua `deeplink.txt` + `promo.txt`). Columns: `CPP Name` (bắt buộc, case sensitive) | `Deep Link` (bắt buộc) | `<Locale Name>` (user-friendly, dynamic). Parse client-side: `lib/parseMetadataXlsx.ts` dùng SheetJS dynamic import, 5MB limit, formula disabled. CPP không khớp tên → warning badge `⚠ no metadata`. Template tại `public/metadata-template.xlsx` (41 columns, Vietnamese + English (U.S.) ưu tiên đầu). Xem `docs/feature-cpp-bulk-import-xlsx.md`.
 
-15. **Submit CPP — versionId source** — `versionId` cần cho submit (`POST /v1/appCustomProductPageSubmissions`) lấy từ `included[]` trong response của list API (`GET /v1/apps/{appId}/appCustomProductPages?include=appCustomProductPageVersions`). Page extract thành `versionIds: Record<string, string>` (cppId → versionId) và pass xuống `CppList`. Không cần gọi thêm API.
+15. **Submit CPP — batch review submission flow (API v1.7+)** — Endpoint cũ `POST /v1/appCustomProductPageSubmissions` đã bị Apple bỏ (404). Flow đúng: (1) `POST /v1/reviewSubmissions` với `appId` + `platform: "IOS"` → `submissionId`; (2) `Promise.all` nhiều `POST /v1/reviewSubmissionItems` — tất cả CPPs vào cùng 1 submission; (3) `PATCH /v1/reviewSubmissions/{submissionId}` → `submitted: true` (không phải `state: "SUBMITTED"` — sẽ 409). Client gọi 1 request duy nhất `POST /api/asc/cpps/submit` với `{ appId, items: [{cppId, versionId}] }`. Route cũ `/cpps/[cppId]/submit` deprecated.
 
 16. **Submit CPP — no assets check** — Không check assets trước khi submit. Nếu CPP không có assets, ASC trả về 422 và error được hiển thị trong result dialog per-CPP. Đây là design decision (YAGNI — tránh N+1 calls).
 

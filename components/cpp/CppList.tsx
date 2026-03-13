@@ -415,29 +415,30 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
     );
     setSubmitting(true);
 
-    const results = await Promise.allSettled(
-      submittable.map((cpp) =>
-        fetch(`/api/asc/cpps/${cpp.id}/submit`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ versionId: versionIds[cpp.id] }),
-        }).then(async (res) => {
-          if (res.status === 201) return { cpp, ok: true, reason: "" };
-          const body = await res.json().catch(() => ({}));
-          return { cpp, ok: false, reason: body.error ?? `HTTP ${res.status}` };
-        })
-      )
-    );
+    // Submit all CPPs in a single Apple Review Submission (1 reviewSubmissions container)
+    const res = await fetch("/api/asc/cpps/submit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        appId,
+        items: submittable.map((cpp) => ({ cppId: cpp.id, versionId: versionIds[cpp.id] })),
+      }),
+    });
 
-    const succeeded = results.filter(
-      (r) => r.status === "fulfilled" && r.value.ok
-    ).length;
-    const failed = results
-      .filter((r) => r.status === "fulfilled" && !r.value.ok)
-      .map((r) => ({
-        name: (r as PromiseFulfilledResult<{ cpp: AppCustomProductPage; ok: boolean; reason: string }>).value.cpp.attributes.name,
-        reason: (r as PromiseFulfilledResult<{ cpp: AppCustomProductPage; ok: boolean; reason: string }>).value.reason,
+    let succeeded: number;
+    let failed: { name: string; reason: string }[];
+
+    if (res.status === 201) {
+      succeeded = submittable.length;
+      failed = [];
+    } else {
+      const body = await res.json().catch(() => ({}));
+      succeeded = 0;
+      failed = submittable.map((cpp) => ({
+        name: cpp.attributes.name,
+        reason: body.error ?? `HTTP ${res.status}`,
       }));
+    }
 
     setSubmitting(false);
     setSubmitResult({ succeeded, failed });
