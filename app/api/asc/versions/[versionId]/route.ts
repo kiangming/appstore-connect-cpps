@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateCppVersion } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 
 export async function PATCH(
   req: NextRequest,
@@ -11,7 +12,8 @@ export async function PATCH(
       return NextResponse.json({ error: "deepLink is required" }, { status: 400 });
     }
 
-    const result = await updateCppVersion(params.versionId, deepLink);
+    const creds = await getActiveAccount();
+    const result = await updateCppVersion(creds, params.versionId, deepLink);
     console.log(`[API] PATCH /api/asc/versions/${params.versionId} deepLink updated`);
     return NextResponse.json(result);
   } catch (err) {

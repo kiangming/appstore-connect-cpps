@@ -5,7 +5,9 @@ import {
   getLocalizationScreenshotSets,
   getLocalizationPreviewSets,
   updateCpp,
+  deleteCpp,
 } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 import type {
   AppCustomProductPageVersion,
   AppCustomProductPageLocalization,
@@ -37,7 +39,8 @@ export async function GET(
   { params }: { params: { cppId: string } }
 ) {
   try {
-    const cppRes = await getCpp(params.cppId);
+    const creds = await getActiveAccount();
+    const cppRes = await getCpp(creds, params.cppId);
     console.log(`[Detail] cpp.attributes=`, JSON.stringify(cppRes.data.attributes));
     const included = cppRes.included ?? [];
 
@@ -48,7 +51,7 @@ export async function GET(
     const versionsWithLocalizations: VersionWithLocalizations[] =
       await Promise.all(
         versions.map(async (version) => {
-          const locRes = await getCppVersionLocalizations(version.id);
+          const locRes = await getCppVersionLocalizations(creds, version.id);
           const locs = locRes.data;
 
           console.log(`[Detail] version=${version.id} locs=${locs.length}`);
@@ -62,7 +65,7 @@ export async function GET(
                 // ── Screenshots ──────────────────────────────────────────
                 let screenshotSets: LocalizationWithMedia["screenshotSets"] = [];
                 try {
-                  const setsRes = await getLocalizationScreenshotSets(loc.id);
+                  const setsRes = await getLocalizationScreenshotSets(creds, loc.id);
 
                   // Log first set to understand relationship structure
                   if (setsRes.data[0]) {
@@ -104,7 +107,7 @@ export async function GET(
                 // ── App Previews (video) ──────────────────────────────────
                 let previewSets: LocalizationWithMedia["previewSets"] = [];
                 try {
-                  const prevRes = await getLocalizationPreviewSets(loc.id);
+                  const prevRes = await getLocalizationPreviewSets(creds, loc.id);
 
                   const allPreviews = (prevRes.included ?? []).filter(
                     (r) => r.type === "appPreviews"
@@ -156,11 +159,30 @@ export async function PATCH(
 ) {
   try {
     const body = await req.json();
-    const data = await updateCpp(params.cppId, body);
+    const creds = await getActiveAccount();
+    const data = await updateCpp(creds, params.cppId, body);
     return NextResponse.json(data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
     console.error(`[API] PATCH /api/asc/cpps/${params.cppId} error:`, message);
     return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  _req: Request,
+  { params }: { params: { cppId: string } }
+) {
+  try {
+    const creds = await getActiveAccount();
+    await deleteCpp(creds, params.cppId);
+    console.log(`[API] DELETE /api/asc/cpps/${params.cppId} success`);
+    return new NextResponse(null, { status: 204 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Internal server error";
+    console.error(`[API] DELETE /api/asc/cpps/${params.cppId} error:`, message);
+    // Forward 409 Conflict (in-review) and 403 Forbidden as-is
+    const status = message.includes("409") ? 409 : message.includes("403") ? 403 : 500;
+    return NextResponse.json({ error: message }, { status });
   }
 }

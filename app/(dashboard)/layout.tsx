@@ -1,4 +1,6 @@
 import { SidebarNav } from "@/components/layout/SidebarNav";
+import { AccountSwitcher } from "@/components/layout/AccountSwitcher";
+import { UserFooter } from "@/components/layout/UserFooter";
 
 export default function DashboardLayout({
   children,
@@ -12,11 +14,19 @@ export default function DashboardLayout({
           <span className="font-semibold text-slate-900 text-sm">CPP Manager</span>
         </div>
         <SidebarNav />
+        <UserFooter />
       </aside>
 
-      <main className="flex-1 overflow-y-auto">
-        {children}
-      </main>
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Top bar with account switcher */}
+        <header className="h-14 flex items-center justify-end px-6 border-b border-slate-200 bg-white flex-shrink-0">
+          <AccountSwitcher />
+        </header>
+
+        <main className="flex-1 overflow-y-auto">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

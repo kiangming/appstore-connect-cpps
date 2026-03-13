@@ -2,7 +2,7 @@
 
 > **Đây là file đọc đầu tiên** khi bắt đầu session mới. Cung cấp toàn cảnh dự án, features đã làm và chưa làm.
 >
-> Last updated: 2026-03-12 (session 6)
+> Last updated: 2026-03-13 (session 9)
 
 ---
 
@@ -21,7 +21,7 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 |---|---|---|
 | App List + Search | `app/(dashboard)/apps/page.tsx` | `docs/feature-app-cpp-list.md` |
 | Sidebar động (tên app) | `components/layout/SidebarNav.tsx` | `docs/feature-app-cpp-list.md` |
-| Authentication (email/password) | `app/(auth)/login/page.tsx` | `docs/architecture.md` |
+| Authentication (Google OAuth + email/password) | `app/(auth)/login/page.tsx` + `lib/auth.ts` | `docs/feature-google-auth.md` |
 | CPP List + trạng thái | `app/(dashboard)/apps/[appId]/cpps/page.tsx` | `docs/feature-app-cpp-list.md` |
 | CPP Detail Panel (view) | `components/cpp/CppDetailPanel.tsx` | `docs/feature-app-cpp-list.md` |
 | New CPP form | `app/(dashboard)/apps/[appId]/cpps/new/page.tsx` | — |
@@ -32,6 +32,10 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 | **CPP Bulk Import** (tạo nhiều CPP cùng lúc từ folder) | `components/cpp/CppBulkImportDialog.tsx` | `docs/feature-cpp-bulk-import-design.md` |
 | CPP URL column + Export CSV | `components/cpp/CppList.tsx` | `docs/feature-cpp-url-export.md` |
 | **CPP Bulk Import — Excel metadata** (`metadata.xlsx`) | `lib/parseMetadataXlsx.ts` + `CppBulkImportDialog.tsx` | `docs/feature-cpp-bulk-import-xlsx.md` |
+| **Multi-Account ASC** (switch account trên UI) | `components/layout/AccountSwitcher.tsx` + `lib/asc-accounts.ts` | `docs/feature-multi-account.md` |
+| **Google OAuth + Admin Login Control** | `lib/auth.ts` + `components/auth/LoginForm.tsx` | `docs/feature-google-auth.md` |
+| **User Footer + Logout** | `components/layout/UserFooter.tsx` | — |
+| **Delete CPP** (multi-select, 2-step confirm) | `components/cpp/CppList.tsx` + `app/api/asc/cpps/[cppId]/route.ts` | `docs/feature-delete-cpp.md` |
 
 ---
 
@@ -39,10 +43,9 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 
 | Feature | Ghi chú |
 |---|---|
-| Settings page (ASC credentials) | UI stub có, nhưng không có endpoint lưu — env vars được hardcode trong `.env.local` |
+| Settings page (ASC credentials) | UI stub có, nhưng không có endpoint lưu — accounts khai báo qua `ASC_ACCOUNTS` env var |
 | AppStorePreview tab | Component có nhưng không render gì (empty stub) |
 | Submit CPP for Review | Chưa implement submit flow |
-| Delete CPP | Có `deleteCpp()` trong asc-client nhưng không có UI |
 | Template system | Phase 2 roadmap |
 | Status dashboard / realtime polling | Phase 2 roadmap |
 
@@ -52,7 +55,7 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 
 ```
 app/
-├── (auth)/login/page.tsx           Client — form đăng nhập
+├── (auth)/login/page.tsx           Server — wrapper, đọc ADMIN_ENABLE
 ├── (dashboard)/
 │   ├── layout.tsx                  Shell layout (sidebar + main)
 │   ├── apps/page.tsx               Server — App List
@@ -119,11 +122,20 @@ App Store Connect API (api.appstoreconnect.apple.com)
 ## Env vars cần có
 
 ```env
-ASC_KEY_ID=            # Key ID từ App Store Connect
-ASC_ISSUER_ID=         # Issuer ID
-ASC_PRIVATE_KEY=       # Nội dung file .p8 (multiline, không cần quote)
-ADMIN_EMAIL=           # Email đăng nhập dashboard
-ADMIN_PASSWORD=        # Password đăng nhập dashboard
+# Multi-account (recommended) — JSON array, 1 env var duy nhất:
+ASC_ACCOUNTS=[{"id":"acme","name":"Acme Vietnam","keyId":"...","issuerId":"...","privateKey":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"}]
+
+# Single-account (backward compat) — dùng khi không set ASC_ACCOUNTS:
+# ASC_KEY_ID=
+# ASC_ISSUER_ID=
+# ASC_PRIVATE_KEY=
+
+GOOGLE_CLIENT_ID=      # Google OAuth — từ Google Cloud Console
+GOOGLE_CLIENT_SECRET=  # Google OAuth — từ Google Cloud Console
+GOOGLE_ALLOWED_EMAILS= # comma-separated emails được phép login bằng Google
+ADMIN_ENABLE=1         # 1 = hiển thị form email/password | 0 hoặc không set = ẩn
+ADMIN_EMAIL=           # Email đăng nhập dashboard (credentials login)
+ADMIN_PASSWORD=        # Password đăng nhập dashboard (credentials login)
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=

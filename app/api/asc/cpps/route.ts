@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCpps, createCpp } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 
 export async function GET(req: NextRequest) {
   const appId = req.nextUrl.searchParams.get("appId");
@@ -9,7 +10,8 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const data = await getCpps(appId);
+    const creds = await getActiveAccount();
+    const data = await getCpps(creds, appId);
     return NextResponse.json(data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
@@ -27,7 +29,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "appId, name, and locale are required" }, { status: 400 });
     }
 
-    const cpp = await createCpp({ appId, name, locale });
+    const creds = await getActiveAccount();
+    const cpp = await createCpp(creds, { appId, name, locale });
     console.log(`[API] CPP created id=${cpp.data.id}`);
 
     return NextResponse.json(cpp, { status: 201 });

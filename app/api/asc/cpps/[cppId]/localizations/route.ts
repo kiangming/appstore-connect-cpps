@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createLocalization } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 
 export async function POST(
   req: NextRequest,
@@ -20,7 +21,8 @@ export async function POST(
       );
     }
 
-    const data = await createLocalization({ cppVersionId: versionId, locale, promotionalText });
+    const creds = await getActiveAccount();
+    const data = await createLocalization(creds, { cppVersionId: versionId, locale, promotionalText });
     console.log(`[API] Localization created cppId=${params.cppId} locale=${locale}`);
     return NextResponse.json(data, { status: 201 });
   } catch (err) {

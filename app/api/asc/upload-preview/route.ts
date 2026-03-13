@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { reservePreview, confirmPreview, uploadAssetToOperations } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 
 export async function POST(req: NextRequest) {
   try {
@@ -16,9 +17,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const creds = await getActiveAccount();
+
     // Step 1: Reserve an upload slot
     const mimeType = file.type || "video/mp4";
-    const reserved = await reservePreview(previewSetId, file.name, file.size, mimeType);
+    const reserved = await reservePreview(creds, previewSetId, file.name, file.size, mimeType);
     const preview = reserved.data;
     const uploadOperations = preview.attributes.uploadOperations;
 
@@ -33,7 +36,7 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(await file.arrayBuffer());
     const checksum = createHash("md5").update(buffer).digest("hex");
 
-    const confirmed = await confirmPreview(preview.id, checksum);
+    const confirmed = await confirmPreview(creds, preview.id, checksum);
     return NextResponse.json(confirmed, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";

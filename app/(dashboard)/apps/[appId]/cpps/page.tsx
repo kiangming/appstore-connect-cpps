@@ -1,4 +1,5 @@
 import { getCpps } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 import { CppList } from "@/components/cpp/CppList";
 import Link from "next/link";
 import type { AppCustomProductPageVersion, CppState } from "@/types/asc";
@@ -13,7 +14,8 @@ export default async function CppsPage({ params }: Props) {
   let fetchError: string | null = null;
 
   try {
-    const res = await getCpps(params.appId);
+    const creds = await getActiveAccount();
+    const res = await getCpps(creds, params.appId);
     cpps = res.data;
 
     const included = res.included ?? [];

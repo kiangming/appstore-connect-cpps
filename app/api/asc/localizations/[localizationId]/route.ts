@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updateLocalization } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 
 export async function PATCH(
   req: NextRequest,
@@ -9,7 +10,8 @@ export async function PATCH(
     const body = await req.json();
     const { promotionalText } = body as { promotionalText: string };
 
-    const data = await updateLocalization(params.localizationId, promotionalText);
+    const creds = await getActiveAccount();
+    const data = await updateLocalization(creds, params.localizationId, promotionalText);
     return NextResponse.json(data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";

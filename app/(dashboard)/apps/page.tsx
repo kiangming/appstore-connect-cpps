@@ -1,4 +1,5 @@
 import { getApps } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 import AppList from "@/components/apps/AppList";
 
 export default async function AppsPage() {
@@ -6,7 +7,8 @@ export default async function AppsPage() {
   let error: string | null = null;
 
   try {
-    apps = await getApps();
+    const creds = await getActiveAccount();
+    apps = await getApps(creds);
   } catch (e) {
     error = e instanceof Error ? e.message : "Failed to load apps";
   }

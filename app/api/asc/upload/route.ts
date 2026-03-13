@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createHash } from "crypto";
 import { reserveScreenshot, confirmScreenshot, uploadAssetToOperations } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 
 export async function POST(req: NextRequest) {
   try {
@@ -16,8 +17,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const creds = await getActiveAccount();
+
     // Step 1: Reserve an upload slot
-    const reserved = await reserveScreenshot(screenshotSetId, file.name, file.size);
+    const reserved = await reserveScreenshot(creds, screenshotSetId, file.name, file.size);
     const screenshot = reserved.data;
     const uploadOperations = screenshot.attributes.uploadOperations;
 
@@ -32,7 +35,7 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(await file.arrayBuffer());
     const checksum = createHash("md5").update(buffer).digest("hex");
 
-    const confirmed = await confirmScreenshot(screenshot.id, checksum);
+    const confirmed = await confirmScreenshot(creds, screenshot.id, checksum);
     return NextResponse.json(confirmed, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";

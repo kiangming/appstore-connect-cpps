@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { getApps } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 
 export async function GET() {
   try {
-    const data = await getApps();
+    const creds = await getActiveAccount();
+    const data = await getApps(creds);
     return NextResponse.json(data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";

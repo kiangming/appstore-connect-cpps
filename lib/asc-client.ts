@@ -1,4 +1,5 @@
 import { generateAscToken } from "./asc-jwt";
+import type { AscCredentials } from "@/lib/asc-jwt";
 import type {
   AscApiResponse,
   App,
@@ -23,15 +24,16 @@ import type {
 const ASC_BASE_URL = "https://api.appstoreconnect.apple.com";
 
 async function ascFetch<T>(
+  creds: AscCredentials,
   method: string,
   endpoint: string,
   body?: unknown
 ): Promise<T> {
-  const token = await generateAscToken();
+  const token = await generateAscToken(creds);
   const url = `${ASC_BASE_URL}${endpoint}`;
 
   if (body) {
-    console.log(`[ASC] ${method} ${endpoint} body:`, JSON.stringify(body, null, 2));
+    console.log(`[ASC:${creds.keyId}] ${method} ${endpoint} body:`, JSON.stringify(body, null, 2));
   }
 
   const res = await fetch(url, {
@@ -43,7 +45,7 @@ async function ascFetch<T>(
     body: body ? JSON.stringify(body) : undefined,
   });
 
-  console.log(`[ASC] ${method} ${endpoint} → ${res.status}`);
+  console.log(`[ASC:${creds.keyId}] ${method} ${endpoint} → ${res.status}`);
 
   if (!res.ok) {
     const errorBody = await res.text();
@@ -57,36 +59,42 @@ async function ascFetch<T>(
   return res.json() as Promise<T>;
 }
 
-export async function getApps(): Promise<AscApiResponse<App[]>> {
-  return ascFetch<AscApiResponse<App[]>>("GET", "/v1/apps?limit=50");
+export async function getApps(creds: AscCredentials): Promise<AscApiResponse<App[]>> {
+  return ascFetch<AscApiResponse<App[]>>(creds, "GET", "/v1/apps?limit=50");
 }
 
-export async function getApp(appId: string): Promise<AscApiResponse<App>> {
-  return ascFetch<AscApiResponse<App>>("GET", `/v1/apps/${appId}`);
+export async function getApp(creds: AscCredentials, appId: string): Promise<AscApiResponse<App>> {
+  return ascFetch<AscApiResponse<App>>(creds, "GET", `/v1/apps/${appId}`);
 }
 
 export async function getCpps(
+  creds: AscCredentials,
   appId: string
 ): Promise<AscApiResponse<AppCustomProductPage[]>> {
   return ascFetch<AscApiResponse<AppCustomProductPage[]>>(
+    creds,
     "GET",
     `/v1/apps/${appId}/appCustomProductPages?include=appCustomProductPageVersions&limit=50`
   );
 }
 
 export async function getCpp(
+  creds: AscCredentials,
   cppId: string
 ): Promise<AscApiResponse<AppCustomProductPage>> {
   return ascFetch<AscApiResponse<AppCustomProductPage>>(
+    creds,
     "GET",
     `/v1/appCustomProductPages/${cppId}?include=appCustomProductPageVersions`
   );
 }
 
 export async function createCpp(
+  creds: AscCredentials,
   payload: CreateCppPayload
 ): Promise<AscApiResponse<AppCustomProductPage>> {
   return ascFetch<AscApiResponse<AppCustomProductPage>>(
+    creds,
     "POST",
     "/v1/appCustomProductPages",
     {
@@ -124,9 +132,11 @@ export async function createCpp(
 }
 
 export async function getAppStoreVersions(
+  creds: AscCredentials,
   appId: string
 ): Promise<AscApiResponse<AppStoreVersion[]>> {
   return ascFetch<AscApiResponse<AppStoreVersion[]>>(
+    creds,
     "GET",
     `/v1/apps/${appId}/appStoreVersions?filter[platform]=IOS&limit=1`
   );
@@ -134,11 +144,13 @@ export async function getAppStoreVersions(
 
 /** Creates a localization linked directly to a CPP (per Apple's documented 2-step flow). */
 export async function createCppLocalization(
+  creds: AscCredentials,
   cppId: string,
   locale: string,
   promotionalText?: string
 ): Promise<AscApiResponse<AppCustomProductPageLocalization>> {
   return ascFetch<AscApiResponse<AppCustomProductPageLocalization>>(
+    creds,
     "POST",
     `/v1/appCustomProductPageLocalizations`,
     {
@@ -159,10 +171,12 @@ export async function createCppLocalization(
 }
 
 export async function updateCpp(
+  creds: AscCredentials,
   cppId: string,
   attributes: { name?: string; visible?: "VISIBLE" | "HIDDEN" }
 ): Promise<AscApiResponse<AppCustomProductPage>> {
   return ascFetch<AscApiResponse<AppCustomProductPage>>(
+    creds,
     "PATCH",
     `/v1/appCustomProductPages/${cppId}`,
     {
@@ -176,10 +190,12 @@ export async function updateCpp(
 }
 
 export async function updateCppVersion(
+  creds: AscCredentials,
   versionId: string,
   deepLink: string
 ): Promise<AscApiResponse<AppCustomProductPageVersion>> {
   return ascFetch<AscApiResponse<AppCustomProductPageVersion>>(
+    creds,
     "PATCH",
     `/v1/appCustomProductPageVersions/${versionId}`,
     {
@@ -192,14 +208,16 @@ export async function updateCppVersion(
   );
 }
 
-export async function deleteCpp(cppId: string): Promise<void> {
-  return ascFetch<void>("DELETE", `/v1/appCustomProductPages/${cppId}`);
+export async function deleteCpp(creds: AscCredentials, cppId: string): Promise<void> {
+  return ascFetch<void>(creds, "DELETE", `/v1/appCustomProductPages/${cppId}`);
 }
 
 export async function createCppVersion(
+  creds: AscCredentials,
   payload: CreateCppVersionPayload
 ): Promise<AscApiResponse<AppCustomProductPageVersion>> {
   return ascFetch<AscApiResponse<AppCustomProductPageVersion>>(
+    creds,
     "POST",
     `/v1/appCustomProductPageVersions`,
     {
@@ -220,36 +238,44 @@ export async function createCppVersion(
 }
 
 export async function getCppVersionLocalizations(
+  creds: AscCredentials,
   versionId: string
 ): Promise<AscApiResponse<AppCustomProductPageLocalization[]>> {
   return ascFetch<AscApiResponse<AppCustomProductPageLocalization[]>>(
+    creds,
     "GET",
     `/v1/appCustomProductPageVersions/${versionId}/appCustomProductPageLocalizations`
   );
 }
 
 export async function getLocalizationScreenshotSets(
+  creds: AscCredentials,
   localizationId: string
 ): Promise<AscApiResponse<AppScreenshotSet[]>> {
   return ascFetch<AscApiResponse<AppScreenshotSet[]>>(
+    creds,
     "GET",
     `/v1/appCustomProductPageLocalizations/${localizationId}/appScreenshotSets?include=appScreenshots`
   );
 }
 
 export async function getLocalizationPreviewSets(
+  creds: AscCredentials,
   localizationId: string
 ): Promise<AscApiResponse<AppPreviewSet[]>> {
   return ascFetch<AscApiResponse<AppPreviewSet[]>>(
+    creds,
     "GET",
     `/v1/appCustomProductPageLocalizations/${localizationId}/appPreviewSets?include=appPreviews`
   );
 }
 
 export async function createLocalization(
+  creds: AscCredentials,
   payload: CreateLocalizationPayload
 ): Promise<AscApiResponse<AppCustomProductPageLocalization>> {
   return ascFetch<AscApiResponse<AppCustomProductPageLocalization>>(
+    creds,
     "POST",
     `/v1/appCustomProductPageLocalizations`,
     {
@@ -275,10 +301,12 @@ export async function createLocalization(
 }
 
 export async function updateLocalization(
+  creds: AscCredentials,
   localizationId: string,
   promotionalText: string
 ): Promise<AscApiResponse<AppCustomProductPageLocalization>> {
   return ascFetch<AscApiResponse<AppCustomProductPageLocalization>>(
+    creds,
     "PATCH",
     `/v1/appCustomProductPageLocalizations/${localizationId}`,
     {
@@ -292,10 +320,12 @@ export async function updateLocalization(
 }
 
 export async function createScreenshotSet(
+  creds: AscCredentials,
   localizationId: string,
   screenshotDisplayType: ScreenshotDisplayType
 ): Promise<AscApiResponse<AppScreenshotSet>> {
   return ascFetch<AscApiResponse<AppScreenshotSet>>(
+    creds,
     "POST",
     `/v1/appScreenshotSets`,
     {
@@ -316,11 +346,13 @@ export async function createScreenshotSet(
 }
 
 export async function reserveScreenshot(
+  creds: AscCredentials,
   screenshotSetId: string,
   fileName: string,
   fileSize: number
 ): Promise<AscApiResponse<AppScreenshot>> {
   return ascFetch<AscApiResponse<AppScreenshot>>(
+    creds,
     "POST",
     `/v1/appScreenshots`,
     {
@@ -338,10 +370,12 @@ export async function reserveScreenshot(
 }
 
 export async function confirmScreenshot(
+  creds: AscCredentials,
   screenshotId: string,
   sourceFileChecksum: string
 ): Promise<AscApiResponse<AppScreenshot>> {
   return ascFetch<AscApiResponse<AppScreenshot>>(
+    creds,
     "PATCH",
     `/v1/appScreenshots/${screenshotId}`,
     {
@@ -354,6 +388,7 @@ export async function confirmScreenshot(
   );
 }
 
+/** Does NOT need creds — uploads directly to Apple's CDN via presigned operations */
 export async function uploadAssetToOperations(
   uploadOperations: UploadOperation[],
   file: Blob
@@ -378,12 +413,14 @@ export async function uploadAssetToOperations(
 }
 
 export async function reservePreview(
+  creds: AscCredentials,
   previewSetId: string,
   fileName: string,
   fileSize: number,
   mimeType: string
 ): Promise<AscApiResponse<AppPreview>> {
   return ascFetch<AscApiResponse<AppPreview>>(
+    creds,
     "POST",
     `/v1/appPreviews`,
     {
@@ -401,10 +438,12 @@ export async function reservePreview(
 }
 
 export async function confirmPreview(
+  creds: AscCredentials,
   previewId: string,
   sourceFileChecksum: string
 ): Promise<AscApiResponse<AppPreview>> {
   return ascFetch<AscApiResponse<AppPreview>>(
+    creds,
     "PATCH",
     `/v1/appPreviews/${previewId}`,
     {
@@ -418,10 +457,12 @@ export async function confirmPreview(
 }
 
 export async function createPreviewSet(
+  creds: AscCredentials,
   localizationId: string,
   previewType: PreviewType
 ): Promise<AscApiResponse<AppPreviewSet>> {
   return ascFetch<AscApiResponse<AppPreviewSet>>(
+    creds,
     "POST",
     `/v1/appPreviewSets`,
     {
@@ -442,28 +483,34 @@ export async function createPreviewSet(
 }
 
 export async function getAppInfos(
+  creds: AscCredentials,
   appId: string
 ): Promise<AscApiResponse<AppInfo[]>> {
   return ascFetch<AscApiResponse<AppInfo[]>>(
+    creds,
     "GET",
     `/v1/apps/${appId}/appInfos`
   );
 }
 
 export async function getAppInfoLocalizations(
+  creds: AscCredentials,
   appInfoId: string
 ): Promise<AscApiResponse<AppInfoLocalization[]>> {
   return ascFetch<AscApiResponse<AppInfoLocalization[]>>(
+    creds,
     "GET",
     `/v1/appInfos/${appInfoId}/appInfoLocalizations`
   );
 }
 
 export async function createAppInfoLocalization(
+  creds: AscCredentials,
   appInfoId: string,
   locale: string
 ): Promise<AscApiResponse<AppInfoLocalization>> {
   return ascFetch<AscApiResponse<AppInfoLocalization>>(
+    creds,
     "POST",
     `/v1/appInfoLocalizations`,
     {

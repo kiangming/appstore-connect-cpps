@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createPreviewSet, getLocalizationPreviewSets } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 import type { PreviewType } from "@/types/asc";
 
 export async function GET(req: NextRequest) {
@@ -8,7 +9,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "localizationId query param is required" }, { status: 400 });
   }
   try {
-    const data = await getLocalizationPreviewSets(localizationId);
+    const creds = await getActiveAccount();
+    const data = await getLocalizationPreviewSets(creds, localizationId);
     return NextResponse.json(data);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";
@@ -31,7 +33,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const data = await createPreviewSet(localizationId, previewType);
+    const creds = await getActiveAccount();
+    const data = await createPreviewSet(creds, localizationId, previewType);
     return NextResponse.json(data, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Internal server error";

@@ -1,4 +1,5 @@
 import { getCpp, getCppVersionLocalizations } from "@/lib/asc-client";
+import { getActiveAccount } from "@/lib/get-active-account";
 import { CppEditor } from "@/components/cpp/CppEditor";
 import type { AppCustomProductPageVersion, AppCustomProductPageLocalization } from "@/types/asc";
 import Link from "next/link";
@@ -14,7 +15,8 @@ export default async function CppEditorPage({ params }: Props) {
   let fetchError: string | null = null;
 
   try {
-    const res = await getCpp(params.cppId);
+    const creds = await getActiveAccount();
+    const res = await getCpp(creds, params.cppId);
     cpp = res.data;
 
     const included = res.included ?? [];
@@ -23,7 +25,7 @@ export default async function CppEditorPage({ params }: Props) {
     ) as unknown as AppCustomProductPageVersion[];
 
     if (versions.length > 0) {
-      const locRes = await getCppVersionLocalizations(versions[0].id);
+      const locRes = await getCppVersionLocalizations(creds, versions[0].id);
       localizations = locRes.data;
     }
   } catch (err) {
