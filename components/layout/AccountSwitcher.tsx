@@ -74,8 +74,13 @@ export function AccountSwitcher() {
       // Step 2: Update NextAuth session JWT
       await update({ activeAccountId: account.id });
 
-      // Step 3: Full page reload to refresh all data
-      window.location.reload();
+      // Step 3: Redirect to app list (or reload if not on app data routes)
+      const isOnAppData = window.location.pathname.startsWith("/apps");
+      if (isOnAppData) {
+        window.location.href = "/apps";
+      } else {
+        window.location.reload();
+      }
     } catch {
       setSwitching(false);
     }

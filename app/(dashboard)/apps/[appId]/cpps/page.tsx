@@ -1,4 +1,4 @@
-import { getCpps } from "@/lib/asc-client";
+import { getCpps, getApp } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { CppList } from "@/components/cpp/CppList";
 import Link from "next/link";
@@ -10,6 +10,7 @@ interface Props {
 
 export default async function CppsPage({ params }: Props) {
   let cpps;
+  let appName: string | null = null;
   let versionStates: Record<string, CppState> = {};
   let versionIds: Record<string, string> = {};
   let rejectReasons: Record<string, string> = {};
@@ -17,7 +18,11 @@ export default async function CppsPage({ params }: Props) {
 
   try {
     const creds = await getActiveAccount();
-    const res = await getCpps(creds, params.appId);
+    const [res, appRes] = await Promise.all([
+      getCpps(creds, params.appId),
+      getApp(creds, params.appId),
+    ]);
+    appName = appRes.data.attributes.name;
     cpps = res.data;
 
     const included = res.included ?? [];
@@ -51,7 +56,7 @@ export default async function CppsPage({ params }: Props) {
             Custom Product Pages
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
-            Manage CPPs for app <code className="font-mono text-xs bg-slate-100 px-1 rounded">{params.appId}</code>
+            Manage CPPs for app <span className="font-medium text-slate-700">{appName ?? params.appId}</span>
           </p>
         </div>
         <Link

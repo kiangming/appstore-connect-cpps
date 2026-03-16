@@ -28,7 +28,7 @@ const STATE_STYLES: Record<CppState, string> = {
 const STATE_LABELS: Record<CppState, string> = {
   PREPARE_FOR_SUBMISSION: "Draft",
   READY_FOR_REVIEW: "Ready",
-  WAITING_FOR_REVIEW: "Waiting",
+  WAITING_FOR_REVIEW: "Waiting for review",
   IN_REVIEW: "In Review",
   APPROVED: "Approved",
   REJECTED: "Rejected",
