@@ -2,14 +2,14 @@ import { getCpps, getApp } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { CppList } from "@/components/cpp/CppList";
 import Link from "next/link";
-import type { AppCustomProductPageVersion, CppState } from "@/types/asc";
+import type { AppCustomProductPage, AppCustomProductPageVersion, CppState } from "@/types/asc";
 
 interface Props {
   params: { appId: string };
 }
 
 export default async function CppsPage({ params }: Props) {
-  let cpps;
+  let cpps: AppCustomProductPage[] = [];
   let appName: string | null = null;
   let versionStates: Record<string, CppState> = {};
   let versionIds: Record<string, string> = {};
