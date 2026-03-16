@@ -76,7 +76,7 @@ export async function getCpps(
   return ascFetch<AscApiResponse<AppCustomProductPage[]>>(
     creds,
     "GET",
-    `/v1/apps/${appId}/appCustomProductPages?include=appCustomProductPageVersions&limit=50`
+    `/v1/apps/${appId}/appCustomProductPages?include=appCustomProductPageVersions&limit=70`
   );
 }
 

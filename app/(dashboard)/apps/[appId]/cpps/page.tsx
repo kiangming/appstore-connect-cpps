@@ -57,6 +57,7 @@ export default async function CppsPage({ params }: Props) {
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">
             Manage CPPs for app <span className="font-medium text-slate-700">{appName ?? params.appId}</span>
+            <span className="ml-2 text-slate-400">[{cpps?.length ?? 0}/70]</span>
           </p>
         </div>
         <Link

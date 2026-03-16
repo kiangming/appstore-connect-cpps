@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { FolderInput, Download, Copy, Check, Trash2, Send } from "lucide-react";
+import { FolderInput, Download, Copy, Check, Trash2, Send, SlidersHorizontal } from "lucide-react";
 import type { AppCustomProductPage, CppState } from "@/types/asc";
 import { resolveVisibility } from "@/types/asc";
 import { CppDetailPanel } from "@/components/cpp/CppDetailPanel";
@@ -34,6 +34,24 @@ const STATE_LABELS: Record<CppState, string> = {
   REJECTED: "Rejected",
 };
 
+const STATE_DOT_STYLES: Record<CppState, string> = {
+  PREPARE_FOR_SUBMISSION: "bg-slate-400",
+  READY_FOR_REVIEW: "bg-blue-500",
+  WAITING_FOR_REVIEW: "bg-yellow-500",
+  IN_REVIEW: "bg-orange-500",
+  APPROVED: "bg-green-500",
+  REJECTED: "bg-red-500",
+};
+
+const ALL_STATES: CppState[] = [
+  "PREPARE_FOR_SUBMISSION",
+  "READY_FOR_REVIEW",
+  "WAITING_FOR_REVIEW",
+  "IN_REVIEW",
+  "APPROVED",
+  "REJECTED",
+];
+
 const DELETABLE_STATES: CppState[] = ["PREPARE_FOR_SUBMISSION", "APPROVED"];
 const SUBMITTABLE_STATES: CppState[] = ["PREPARE_FOR_SUBMISSION"];
 
@@ -53,6 +71,49 @@ function StatusBadge({ state, rejectReason }: { state?: CppState; rejectReason?:
     <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATE_STYLES[state]}`}>
       {STATE_LABELS[state]}
     </span>
+  );
+}
+
+// ── Status Filter Dropdown ─────────────────────────────────────────────────────
+function StatusFilterDropdown({
+  selectedStatuses,
+  onToggle,
+  onClear,
+}: {
+  selectedStatuses: Set<CppState>;
+  onToggle: (state: CppState) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="w-52 rounded-xl border border-slate-200 bg-white shadow-lg z-50 py-1 overflow-hidden">
+      {ALL_STATES.map((state) => {
+        const checked = selectedStatuses.has(state);
+        return (
+          <button
+            key={state}
+            onClick={() => onToggle(state)}
+            className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-slate-50 transition-colors"
+          >
+            <span className={`h-2 w-2 rounded-full flex-shrink-0 ${STATE_DOT_STYLES[state]}`} />
+            <span className={`text-sm flex-1 ${checked ? "font-medium text-slate-900" : "text-slate-600"}`}>
+              {STATE_LABELS[state]}
+            </span>
+            {checked && <Check className="h-3.5 w-3.5 text-[#0071E3] flex-shrink-0" />}
+          </button>
+        );
+      })}
+      {selectedStatuses.size > 0 && (
+        <>
+          <div className="border-t border-slate-100 mt-1" />
+          <button
+            onClick={onClear}
+            className="w-full px-3 py-2 text-left text-sm text-slate-500 hover:text-slate-800 hover:bg-slate-50 transition-colors"
+          >
+            Clear filter
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -309,7 +370,31 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
     failed: Array<{ name: string; reason: string }>;
   } | null>(null);
 
-  const eligibleIds = cpps
+  // Filter state
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<CppState>>(new Set());
+  const [filterOpen, setFilterOpen] = useState(false);
+  const filterRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (filterRef.current && !filterRef.current.contains(e.target as Node)) {
+        setFilterOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
+
+  // Visible CPPs based on active filter (empty = show all)
+  const visibleCpps = selectedStatuses.size === 0
+    ? cpps
+    : cpps.filter((cpp) => {
+        const state = versionStates[cpp.id];
+        return state !== undefined && selectedStatuses.has(state);
+      });
+
+  // Eligible = visible CPPs that can be checked (deletable states)
+  const eligibleIds = visibleCpps
     .filter((cpp) => {
       const state = versionStates[cpp.id];
       return !state || DELETABLE_STATES.includes(state);
@@ -321,9 +406,19 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
 
   function toggleSelectAll() {
     if (allEligibleSelected) {
-      setSelectedIds(new Set());
+      // Deselect only the visible eligible ones
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        eligibleIds.forEach((id) => next.delete(id));
+        return next;
+      });
     } else {
-      setSelectedIds(new Set(eligibleIds));
+      // Add all visible eligible ones to existing selection
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        eligibleIds.forEach((id) => next.add(id));
+        return next;
+      });
     }
   }
 
@@ -363,8 +458,14 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
     URL.revokeObjectURL(url);
   }
 
+  // Selected CPPs = only those visible AND selected (actions operate on visible set)
+  const selectedCpps = visibleCpps.filter((cpp) => selectedIds.has(cpp.id));
+  const submittableCount = selectedCpps.filter(
+    (cpp) => SUBMITTABLE_STATES.includes(versionStates[cpp.id])
+  ).length;
+
   function handleDeleteClick() {
-    if (selectedIds.size === 0) {
+    if (selectedCpps.length === 0) {
       setDeleteStep("no-selection");
     } else {
       setDeleteStep("review");
@@ -377,11 +478,10 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
   }
 
   async function handleFinalDelete() {
-    const selected = cpps.filter((cpp) => selectedIds.has(cpp.id));
     setDeleting(true);
 
     const results = await Promise.allSettled(
-      selected.map((cpp) =>
+      selectedCpps.map((cpp) =>
         fetch(`/api/asc/cpps/${cpp.id}`, { method: "DELETE" }).then(async (res) => {
           if (res.status === 204) return { cpp, ok: true, reason: "" };
           const body = await res.json().catch(() => ({}));
@@ -449,11 +549,6 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
     }
   }
 
-  const selectedCpps = cpps.filter((cpp) => selectedIds.has(cpp.id));
-  const submittableCount = selectedCpps.filter(
-    (cpp) => SUBMITTABLE_STATES.includes(versionStates[cpp.id])
-  ).length;
-
   if (cpps.length === 0) {
     return (
       <>
@@ -495,17 +590,48 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
         <button
           onClick={handleDeleteClick}
           className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition ${
-            selectedIds.size > 0
+            selectedCpps.length > 0
               ? "bg-red-600 hover:bg-red-700 text-white border-red-600"
               : "bg-white text-red-500 border-red-200 hover:bg-red-50"
           }`}
         >
           <Trash2 className="h-4 w-4" />
-          Delete{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}
+          Delete{selectedCpps.length > 0 ? ` (${selectedCpps.length})` : ""}
         </button>
 
-        {/* Right: Submit + Export + Bulk Import */}
+        {/* Right: Status filter + Submit + Export + Bulk Import */}
         <div className="flex items-center gap-2">
+          {/* Status filter dropdown */}
+          <div className="relative" ref={filterRef}>
+            <button
+              onClick={() => setFilterOpen((v) => !v)}
+              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition ${
+                selectedStatuses.size > 0
+                  ? "bg-blue-50 text-blue-600 border-blue-300"
+                  : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
+              }`}
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              Status{selectedStatuses.size > 0 ? ` · ${selectedStatuses.size}` : ""}
+            </button>
+            {filterOpen && (
+              <div className="absolute right-0 top-full mt-1.5">
+                <StatusFilterDropdown
+                  selectedStatuses={selectedStatuses}
+                  onToggle={(state) => {
+                    setSelectedStatuses((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(state)) next.delete(state);
+                      else next.add(state);
+                      return next;
+                    });
+                  }}
+                  onClear={() => setSelectedStatuses(new Set())}
+                />
+              </div>
+            )}
+          </div>
+
           <button
             onClick={() => setSubmitStep("confirm")}
             className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition ${
@@ -534,104 +660,116 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
         </div>
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-200 bg-slate-50">
-              <th className="px-4 py-3 w-8">
-                <input
-                  type="checkbox"
-                  checked={allEligibleSelected}
-                  onChange={toggleSelectAll}
-                  className="rounded border-slate-300 text-red-600 focus:ring-red-500"
-                  title="Select all eligible"
-                />
-              </th>
-              <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">Name</th>
-              <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">Status</th>
-              <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">Visibility</th>
-              <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">CPP URL</th>
-              <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">ID</th>
-              <th className="px-4 py-3" />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {cpps.map((cpp) => {
-              const state = versionStates[cpp.id];
-              const canDelete = !state || DELETABLE_STATES.includes(state);
-              const isSelected = selectedIds.has(cpp.id);
+      {visibleCpps.length === 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-white py-12 text-center">
+          <p className="text-sm text-slate-500">No CPPs match the selected filter.</p>
+          <button
+            onClick={() => setSelectedStatuses(new Set())}
+            className="mt-2 text-sm text-[#0071E3] hover:underline"
+          >
+            Clear filter
+          </button>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 bg-slate-50">
+                <th className="px-4 py-3 w-8">
+                  <input
+                    type="checkbox"
+                    checked={allEligibleSelected}
+                    onChange={toggleSelectAll}
+                    className="rounded border-slate-300 text-red-600 focus:ring-red-500"
+                    title="Select all eligible"
+                  />
+                </th>
+                <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">Name</th>
+                <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">Visibility</th>
+                <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">CPP URL</th>
+                <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">ID</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {visibleCpps.map((cpp) => {
+                const state = versionStates[cpp.id];
+                const canDelete = !state || DELETABLE_STATES.includes(state);
+                const isSelected = selectedIds.has(cpp.id);
 
-              return (
-                <tr
-                  key={cpp.id}
-                  className={`hover:bg-slate-50 transition-colors ${isSelected ? "bg-red-50/40" : ""}`}
-                >
-                  <td className="px-4 py-3">
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      disabled={!canDelete}
-                      onChange={() => toggleSelect(cpp.id)}
-                      title={canDelete ? undefined : `Cannot select while ${STATE_LABELS[state!] ?? "in review"}`}
-                      className="rounded border-slate-300 text-red-600 focus:ring-red-500 disabled:opacity-30 disabled:cursor-not-allowed"
-                    />
-                  </td>
-                  <td className="px-4 py-3 font-medium text-slate-900">{cpp.attributes.name}</td>
-                  <td className="px-4 py-3">
-                    <StatusBadge state={state} rejectReason={rejectReasons[cpp.id]} />
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">{resolveVisibility(cpp.attributes)}</td>
-                  <td className="px-4 py-3">
-                    {cpp.attributes.url ? (
-                      <div className="flex items-center gap-1.5">
-                        <a
-                          href={cpp.attributes.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={cpp.attributes.url}
-                          className="text-xs font-mono text-[#0071E3] hover:underline max-w-[220px] truncate block"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {cpp.attributes.url}
-                        </a>
+                return (
+                  <tr
+                    key={cpp.id}
+                    className={`hover:bg-slate-50 transition-colors ${isSelected ? "bg-red-50/40" : ""}`}
+                  >
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        disabled={!canDelete}
+                        onChange={() => toggleSelect(cpp.id)}
+                        title={canDelete ? undefined : `Cannot select while ${STATE_LABELS[state!] ?? "in review"}`}
+                        className="rounded border-slate-300 text-red-600 focus:ring-red-500 disabled:opacity-30 disabled:cursor-not-allowed"
+                      />
+                    </td>
+                    <td className="px-4 py-3 font-medium text-slate-900">{cpp.attributes.name}</td>
+                    <td className="px-4 py-3">
+                      <StatusBadge state={state} rejectReason={rejectReasons[cpp.id]} />
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">{resolveVisibility(cpp.attributes)}</td>
+                    <td className="px-4 py-3">
+                      {cpp.attributes.url ? (
+                        <div className="flex items-center gap-1.5">
+                          <a
+                            href={cpp.attributes.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={cpp.attributes.url}
+                            className="text-xs font-mono text-[#0071E3] hover:underline max-w-[220px] truncate block"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {cpp.attributes.url}
+                          </a>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleCopy(cpp.id, cpp.attributes.url!); }}
+                            className="flex-shrink-0 text-slate-400 hover:text-slate-600 transition-colors"
+                            title="Copy URL"
+                          >
+                            {copiedId === cpp.id
+                              ? <Check className="h-3.5 w-3.5 text-green-500" />
+                              : <Copy className="h-3.5 w-3.5" />
+                            }
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{cpp.id}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-3">
                         <button
-                          onClick={(e) => { e.stopPropagation(); handleCopy(cpp.id, cpp.attributes.url!); }}
-                          className="flex-shrink-0 text-slate-400 hover:text-slate-600 transition-colors"
-                          title="Copy URL"
+                          onClick={() => setViewingCpp(cpp)}
+                          className="text-sm text-slate-500 hover:text-slate-800 transition-colors"
                         >
-                          {copiedId === cpp.id
-                            ? <Check className="h-3.5 w-3.5 text-green-500" />
-                            : <Copy className="h-3.5 w-3.5" />
-                          }
+                          View
                         </button>
+                        <Link
+                          href={`/apps/${appId}/cpps/${cpp.id}`}
+                          className="text-sm font-medium text-[#0071E3] hover:underline"
+                        >
+                          Edit
+                        </Link>
                       </div>
-                    ) : (
-                      <span className="text-xs text-slate-400">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-400">{cpp.id}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-3">
-                      <button
-                        onClick={() => setViewingCpp(cpp)}
-                        className="text-sm text-slate-500 hover:text-slate-800 transition-colors"
-                      >
-                        View
-                      </button>
-                      <Link
-                        href={`/apps/${appId}/cpps/${cpp.id}`}
-                        className="text-sm font-medium text-[#0071E3] hover:underline"
-                      >
-                        Edit
-                      </Link>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Delete dialogs */}
       {deleteStep === "no-selection" && (
@@ -647,7 +785,7 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
       )}
       {deleteStep === "confirm" && (
         <FinalConfirmDialog
-          count={selectedIds.size}
+          count={selectedCpps.length}
           deleting={deleting}
           onCancel={closeDeleteDialogs}
           onDelete={handleFinalDelete}
