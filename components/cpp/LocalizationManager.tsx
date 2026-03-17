@@ -14,6 +14,13 @@ import {
   FolderInput,
 } from "lucide-react";
 import { BulkImportDialog } from "@/components/cpp/BulkImportDialog";
+import {
+  validateScreenshot,
+  validateVideo,
+  validateScreenshotCount,
+  validateVideoCount,
+  type DeviceType,
+} from "@/lib/asset-validator";
 import { localeNameFromCode, ALL_APPLE_LOCALES } from "@/lib/locale-utils";
 import type {
   AppCustomProductPageLocalization,
@@ -130,6 +137,48 @@ function Dropzone({ accept, label, hint, disabled, onStage }: DropzoneProps) {
         <p className="text-xs text-slate-500">{label}</p>
         <p className="text-xs text-slate-400">{hint}</p>
       </div>
+    </div>
+  );
+}
+
+// ── Validation feedback ───────────────────────────────────────────────────────
+function ValidationFeedback({
+  validating,
+  rejections,
+}: {
+  validating: boolean;
+  rejections: Array<{ name: string; errors: string[]; warnings: string[] }>;
+}) {
+  if (!validating && rejections.length === 0) return null;
+  return (
+    <div className="mt-1.5 space-y-1">
+      {validating && (
+        <p className="text-xs text-slate-400 flex items-center gap-1">
+          <Loader2 className="h-3 w-3 animate-spin" /> Validating…
+        </p>
+      )}
+      {rejections.map((r, i) => {
+        if (r.name === "__warnings__") {
+          return (
+            <div key={i} className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2">
+              <p className="text-xs font-medium text-amber-700 mb-0.5">ℹ️ Please verify manually before uploading:</p>
+              {r.warnings.map((w, j) => (
+                <p key={j} className="text-xs text-amber-600">□ {w}</p>
+              ))}
+            </div>
+          );
+        }
+        return (
+          <div key={i} className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-2">
+            {r.name !== "—" && (
+              <p className="text-xs font-medium text-red-700 truncate mb-0.5">❌ {r.name}</p>
+            )}
+            {r.errors.map((e, j) => (
+              <p key={j} className="text-xs text-red-600">{e}</p>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -302,6 +351,20 @@ function LocalizationRow({ localization, cppId }: LocalizationRowProps) {
   const [screenshotUploadMsg, setScreenshotUploadMsg] = useState<string | null>(null);
   const [previewUploadMsg, setPreviewUploadMsg] = useState<string | null>(null);
 
+  // ── Validation state ─────────────────────────────────────────────────────
+  const [validatingByScreenshotType, setValidatingByScreenshotType] = useState<
+    Partial<Record<ScreenshotDisplayType, boolean>>
+  >({});
+  const [validatingByPreviewType, setValidatingByPreviewType] = useState<
+    Partial<Record<PreviewType, boolean>>
+  >({});
+  const [screenshotRejections, setScreenshotRejections] = useState<
+    Partial<Record<ScreenshotDisplayType, Array<{ name: string; errors: string[] }>>>
+  >({});
+  const [previewRejections, setPreviewRejections] = useState<
+    Partial<Record<PreviewType, Array<{ name: string; errors: string[]; warnings: string[] }>>>
+  >({});
+
   // ── Load device sets + existing assets ──────────────────────────────────
   async function loadDeviceSets() {
     setLoadingSets(true);
@@ -455,14 +518,41 @@ function LocalizationRow({ localization, cppId }: LocalizationRowProps) {
   }
 
   // ── Staging ─────────────────────────────────────────────────────────────
-  function stageScreenshots(type: ScreenshotDisplayType, files: File[]) {
-    setStagedByScreenshotType((prev) => ({
-      ...prev,
-      [type]: [
-        ...(prev[type] ?? []),
-        ...files.map((f) => ({ file: f, id: `${f.name}-${Date.now()}-${Math.random()}` })),
-      ],
-    }));
+  async function stageScreenshots(type: ScreenshotDisplayType, files: File[]) {
+    const device: DeviceType = type.includes("IPHONE") ? "iphone" : "ipad";
+    setValidatingByScreenshotType((prev) => ({ ...prev, [type]: true }));
+    setScreenshotRejections((prev) => ({ ...prev, [type]: [] }));
+
+    const rejections: Array<{ name: string; errors: string[] }> = [];
+    const valid: File[] = [];
+
+    await Promise.all(
+      files.map(async (f) => {
+        const result = await validateScreenshot(f, device);
+        if (result.ok) valid.push(f);
+        else rejections.push({ name: f.name, errors: result.errors });
+      })
+    );
+
+    if (valid.length > 0) {
+      const existingCount = screenshotsByType[type]?.length ?? 0;
+      const stagedCount = stagedByScreenshotType[type]?.length ?? 0;
+      const countResult = validateScreenshotCount(device, existingCount + stagedCount, valid.length);
+      if (!countResult.ok) {
+        rejections.push({ name: "—", errors: countResult.errors });
+      } else {
+        setStagedByScreenshotType((prev) => ({
+          ...prev,
+          [type]: [
+            ...(prev[type] ?? []),
+            ...valid.map((f) => ({ file: f, id: `${f.name}-${Date.now()}-${Math.random()}` })),
+          ],
+        }));
+      }
+    }
+
+    setScreenshotRejections((prev) => ({ ...prev, [type]: rejections }));
+    setValidatingByScreenshotType((prev) => ({ ...prev, [type]: false }));
   }
 
   function removeStagedScreenshot(type: ScreenshotDisplayType, id: string) {
@@ -472,14 +562,46 @@ function LocalizationRow({ localization, cppId }: LocalizationRowProps) {
     }));
   }
 
-  function stagePreviews(type: PreviewType, files: File[]) {
-    setStagedByPreviewType((prev) => ({
-      ...prev,
-      [type]: [
-        ...(prev[type] ?? []),
-        ...files.map((f) => ({ file: f, id: `${f.name}-${Date.now()}-${Math.random()}` })),
-      ],
-    }));
+  async function stagePreviews(type: PreviewType, files: File[]) {
+    const device: DeviceType = type.includes("IPHONE") ? "iphone" : "ipad";
+    setValidatingByPreviewType((prev) => ({ ...prev, [type]: true }));
+    setPreviewRejections((prev) => ({ ...prev, [type]: [] }));
+
+    const rejections: Array<{ name: string; errors: string[]; warnings: string[] }> = [];
+    const valid: Array<{ file: File; warnings: string[] }> = [];
+
+    await Promise.all(
+      files.map(async (f) => {
+        const result = await validateVideo(f, device);
+        if (result.ok) valid.push({ file: f, warnings: result.warnings });
+        else rejections.push({ name: f.name, errors: result.errors, warnings: [] });
+      })
+    );
+
+    const allWarnings = [...new Set(valid.flatMap((v) => v.warnings))];
+
+    if (valid.length > 0) {
+      const existingCount = previewsByType[type]?.length ?? 0;
+      const stagedCount = stagedByPreviewType[type]?.length ?? 0;
+      const countResult = validateVideoCount(existingCount + stagedCount, valid.length);
+      if (!countResult.ok) {
+        rejections.push({ name: "—", errors: countResult.errors, warnings: [] });
+      } else {
+        setStagedByPreviewType((prev) => ({
+          ...prev,
+          [type]: [
+            ...(prev[type] ?? []),
+            ...valid.map(({ file }) => ({ file, id: `${file.name}-${Date.now()}-${Math.random()}` })),
+          ],
+        }));
+      }
+    }
+
+    const warningEntry = allWarnings.length > 0
+      ? [{ name: "__warnings__", errors: [], warnings: allWarnings }]
+      : [];
+    setPreviewRejections((prev) => ({ ...prev, [type]: [...rejections, ...warningEntry] }));
+    setValidatingByPreviewType((prev) => ({ ...prev, [type]: false }));
   }
 
   function removeStagedPreview(type: PreviewType, id: string) {
@@ -757,6 +879,10 @@ function LocalizationRow({ localization, cppId }: LocalizationRowProps) {
                         uploading={uploadingScreenshots}
                         onRemove={(id) => removeStagedScreenshot(fallback, id)}
                       />
+                      <ValidationFeedback
+                        validating={validatingByScreenshotType[fallback] ?? false}
+                        rejections={(screenshotRejections[fallback] ?? []).map((r) => ({ ...r, warnings: [] }))}
+                      />
                     </div>
                   );
                 })() : (
@@ -813,6 +939,10 @@ function LocalizationRow({ localization, cppId }: LocalizationRowProps) {
                           icon="image"
                           uploading={uploadingScreenshots}
                           onRemove={(id) => removeStagedScreenshot(t.value, id)}
+                        />
+                        <ValidationFeedback
+                          validating={validatingByScreenshotType[t.value] ?? false}
+                          rejections={(screenshotRejections[t.value] ?? []).map((r) => ({ ...r, warnings: [] }))}
                         />
                       </div>
                     );
@@ -903,6 +1033,10 @@ function LocalizationRow({ localization, cppId }: LocalizationRowProps) {
                         uploading={uploadingPreviews}
                         onRemove={(id) => removeStagedPreview(fallback, id)}
                       />
+                      <ValidationFeedback
+                        validating={validatingByPreviewType[fallback] ?? false}
+                        rejections={previewRejections[fallback] ?? []}
+                      />
                     </div>
                   );
                 })() : (
@@ -965,6 +1099,10 @@ function LocalizationRow({ localization, cppId }: LocalizationRowProps) {
                           icon="video"
                           uploading={uploadingPreviews}
                           onRemove={(id) => removeStagedPreview(t.value, id)}
+                        />
+                        <ValidationFeedback
+                          validating={validatingByPreviewType[t.value] ?? false}
+                          rejections={previewRejections[t.value] ?? []}
                         />
                       </div>
                     );

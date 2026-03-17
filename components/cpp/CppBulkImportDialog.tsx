@@ -23,6 +23,7 @@ import { parseCppFolderStructure } from "@/lib/parseCppFolderStructure";
 import { parseMetadataXlsx } from "@/lib/parseMetadataXlsx";
 import type { ExcelMetadata } from "@/lib/parseMetadataXlsx";
 import { localeNameFromCode } from "@/lib/locale-utils";
+import { validateScreenshot, validateVideo } from "@/lib/asset-validator";
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 const DEFAULT_IPHONE_SCREENSHOT: ScreenshotDisplayType = "APP_IPHONE_65";
@@ -37,6 +38,12 @@ type CppImportStatus = "new" | "existing" | "skip";
 type LocaleStatus = "ready" | "new-locale" | "not-in-app" | "skip";
 type Step = "drop" | "validating" | "preview" | "uploading" | "done";
 
+interface DeviceValidation {
+  screenshotErrors: string[];
+  previewErrors: string[];
+  previewWarnings: string[];
+}
+
 interface LocaleCppImportPlan {
   locale: string;
   status: LocaleStatus;
@@ -45,6 +52,7 @@ interface LocaleCppImportPlan {
   previewFiles: { iphone: File[]; ipad: File[] };
   localizationId: string | null;
   excluded: boolean;
+  validation: { iphone: DeviceValidation; ipad: DeviceValidation } | null;
 }
 
 interface CppImportPlan {
@@ -317,6 +325,40 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
               localeStatus = "new-locale";
             }
 
+            // ── Asset validation ────────────────────────────────────────────
+            let validation: LocaleCppImportPlan["validation"] = null;
+            if (localeStatus !== "skip") {
+              async function validateDevice(
+                device: "iphone" | "ipad"
+              ): Promise<DeviceValidation> {
+                const ssFiles = localeData.screenshotFiles[device];
+                const pvFiles = localeData.previewFiles[device];
+                const screenshotErrors: string[] = [];
+                const previewErrors: string[] = [];
+                const previewWarnings: string[] = [];
+
+                await Promise.all([
+                  ...ssFiles.map(async (f) => {
+                    const r = await validateScreenshot(f, device);
+                    if (!r.ok) screenshotErrors.push(...r.errors.map((e) => `${f.name}: ${e}`));
+                  }),
+                  ...pvFiles.map(async (f) => {
+                    const r = await validateVideo(f, device);
+                    if (!r.ok) previewErrors.push(...r.errors.map((e) => `${f.name}: ${e}`));
+                    else previewWarnings.push(...r.warnings.map((w) => `${f.name}: ${w}`));
+                  }),
+                ]);
+
+                return { screenshotErrors, previewErrors, previewWarnings };
+              }
+
+              const [iphoneVal, ipadVal] = await Promise.all([
+                validateDevice("iphone"),
+                validateDevice("ipad"),
+              ]);
+              validation = { iphone: iphoneVal, ipad: ipadVal };
+            }
+
             return {
               locale: localeData.locale,
               status: localeStatus,
@@ -325,6 +367,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
               previewFiles: localeData.previewFiles,
               localizationId,
               excluded: localeStatus === "skip",
+              validation,
             };
           })
         );
@@ -783,6 +826,21 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
     );
   }
 
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+  function localeHasErrors(l: LocaleCppImportPlan): boolean {
+    if (!l.validation) return false;
+    return (
+      l.validation.iphone.screenshotErrors.length > 0 ||
+      l.validation.iphone.previewErrors.length > 0 ||
+      l.validation.ipad.screenshotErrors.length > 0 ||
+      l.validation.ipad.previewErrors.length > 0
+    );
+  }
+
+  function cppHasErrors(p: CppImportPlan): boolean {
+    return p.locales.some((l) => !l.excluded && localeHasErrors(l));
+  }
+
   // ── Derived ─────────────────────────────────────────────────────────────────
   const activeCppCount = plans.filter((p) => !p.excluded && p.status !== "skip").length;
   const notInAppLocaleCount = plans
@@ -794,6 +852,9 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
   ).length;
   const metadataWarningCount = plans.filter(
     (p) => !p.excluded && p.metadataWarning && p.status !== "skip"
+  ).length;
+  const validationBlockCount = plans.filter(
+    (p) => !p.excluded && p.status !== "skip" && cppHasErrors(p)
   ).length;
   const doneCount = cppProgress.filter((p) => p.status === "done").length;
   const errorCount = cppProgress.filter((p) => p.status === "error").length;
@@ -963,6 +1024,9 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                             {cppPlan.name}
                           </span>
                           <StatusBadge label={cfg.label} className={cfg.className} />
+                          {cppHasErrors(cppPlan) && cppPlan.status !== "skip" && (
+                            <span className="text-xs text-red-600 flex-shrink-0">❌ invalid assets</span>
+                          )}
                           {cppPlan.metadataWarning && cppPlan.status !== "skip" && (
                             <span className="text-xs text-amber-600 flex-shrink-0" title="CPP name not found in metadata.xlsx — no deepLink or promoText will be applied">
                               ⚠ no metadata
@@ -1058,6 +1122,9 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                                       )}
                                       {totalSS > 0 && <span>{totalSS} shot{totalSS !== 1 ? "s" : ""}</span>}
                                       {totalPV > 0 && <span>{totalPV} preview{totalPV !== 1 ? "s" : ""}</span>}
+                                      {localeHasErrors(localePlan) && (
+                                        <span className="text-red-600 font-medium">❌ invalid assets</span>
+                                      )}
                                     </div>
                                     {localePlan.status !== "skip" && (
                                       <button
@@ -1121,6 +1188,35 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                                           <AlertTriangle className="h-3 w-3 flex-shrink-0" />
                                           This locale will be added to the CPP automatically.
                                         </p>
+                                      )}
+                                      {localePlan.validation && (
+                                        <>
+                                          {(["iphone", "ipad"] as const).map((device) => {
+                                            const v = localePlan.validation![device];
+                                            const allErrors = [...v.screenshotErrors, ...v.previewErrors];
+                                            if (allErrors.length === 0 && v.previewWarnings.length === 0) return null;
+                                            return (
+                                              <div key={device}>
+                                                {allErrors.length > 0 && (
+                                                  <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 space-y-0.5">
+                                                    <p className="text-xs font-semibold text-red-700 capitalize">{device} — errors</p>
+                                                    {allErrors.map((e, i) => (
+                                                      <p key={i} className="text-xs text-red-600">{e}</p>
+                                                    ))}
+                                                  </div>
+                                                )}
+                                                {v.previewWarnings.length > 0 && (
+                                                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-0.5">
+                                                    <p className="text-xs font-semibold text-amber-700 capitalize">{device} — warnings</p>
+                                                    {v.previewWarnings.map((w, i) => (
+                                                      <p key={i} className="text-xs text-amber-600">{w}</p>
+                                                    ))}
+                                                  </div>
+                                                )}
+                                              </div>
+                                            );
+                                          })}
+                                        </>
                                       )}
                                     </div>
                                   )}
@@ -1222,10 +1318,15 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                           ({notInAppLocaleCount} locale{notInAppLocaleCount !== 1 ? "s" : ""} will be added to app first)
                         </span>
                       )}
+                      {validationBlockCount > 0 && (
+                        <span className="text-red-600 ml-1">
+                          · {validationBlockCount} CPP{validationBlockCount !== 1 ? "s" : ""} blocked (invalid assets)
+                        </span>
+                      )}
                     </span>
                     <button
                       onClick={startUpload}
-                      disabled={activeCppCount === 0}
+                      disabled={activeCppCount === 0 || validationBlockCount > 0}
                       className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#0071E3] hover:bg-[#0077ED] rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <Upload className="h-4 w-4" />

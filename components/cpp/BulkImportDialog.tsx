@@ -21,6 +21,7 @@ import type {
 } from "@/types/asc";
 import { parseFolderStructure } from "@/lib/parseFolderStructure";
 import { localeNameFromCode } from "@/lib/locale-utils";
+import { validateScreenshot, validateVideo } from "@/lib/asset-validator";
 
 // ── Defaults ────────────────────────────────────────────────────────────────
 const DEFAULT_IPHONE_SCREENSHOT: ScreenshotDisplayType = "APP_IPHONE_65";
@@ -34,6 +35,12 @@ const LOCALE_REGEX = /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/;
 type LocaleStatus = "ready" | "new-locale" | "not-in-app" | "skip";
 type Step = "drop" | "validating" | "preview" | "uploading" | "done";
 
+interface DeviceValidation {
+  screenshotErrors: string[];
+  previewErrors: string[];
+  previewWarnings: string[];
+}
+
 interface ImportPlan {
   locale: string;
   status: LocaleStatus;
@@ -42,6 +49,7 @@ interface ImportPlan {
   previewFiles: { iphone: File[]; ipad: File[] };
   localizationId: string | null;
   excluded: boolean;
+  validation: { iphone: DeviceValidation; ipad: DeviceValidation };
 }
 
 interface LocaleProgress {
@@ -165,6 +173,38 @@ export function BulkImportDialog({
           status = "new-locale";
         }
 
+        // Validate assets per device
+        async function validateDevice(
+          device: "iphone" | "ipad"
+        ): Promise<DeviceValidation> {
+          const screenshotErrors: string[] = [];
+          const previewErrors: string[] = [];
+          const previewWarnings: string[] = [];
+
+          await Promise.all([
+            ...data.screenshotFiles[device].map(async (f) => {
+              const r = await validateScreenshot(f, device);
+              screenshotErrors.push(...r.errors.map((e) => `${f.name}: ${e}`));
+            }),
+            ...data.previewFiles[device].map(async (f) => {
+              const r = await validateVideo(f, device);
+              previewErrors.push(...r.errors.map((e) => `${f.name}: ${e}`));
+              previewWarnings.push(...r.warnings);
+            }),
+          ]);
+
+          return {
+            screenshotErrors,
+            previewErrors,
+            previewWarnings: [...new Set(previewWarnings)],
+          };
+        }
+
+        const [iphoneVal, ipadVal] = await Promise.all([
+          validateDevice("iphone"),
+          validateDevice("ipad"),
+        ]);
+
         return {
           locale: data.locale,
           status,
@@ -173,6 +213,7 @@ export function BulkImportDialog({
           previewFiles: data.previewFiles,
           localizationId: existing?.id ?? null,
           excluded: status === "skip",
+          validation: { iphone: iphoneVal, ipad: ipadVal },
         };
       })
     );
@@ -455,8 +496,17 @@ export function BulkImportDialog({
   }
 
   // ── Derived ───────────────────────────────────────────────────────────────
+  function planHasErrors(p: ImportPlan) {
+    return (
+      p.validation.iphone.screenshotErrors.length > 0 ||
+      p.validation.iphone.previewErrors.length > 0 ||
+      p.validation.ipad.screenshotErrors.length > 0 ||
+      p.validation.ipad.previewErrors.length > 0
+    );
+  }
   const activePlanCount = plans.filter((p) => !p.excluded && p.status !== "skip").length;
   const notInAppCount = plans.filter((p) => !p.excluded && p.status === "not-in-app").length;
+  const validationBlockCount = plans.filter((p) => !p.excluded && planHasErrors(p)).length;
   const doneCount = progress.filter((p) => p.status === "done").length;
   const errorCount = progress.filter((p) => p.status === "error").length;
 
@@ -615,6 +665,9 @@ export function BulkImportDialog({
                             {localeNameFromCode(plan.locale)}
                           </span>
                           <StatusBadge status={plan.status} />
+                          {planHasErrors(plan) && (
+                            <span className="text-xs text-red-600 flex-shrink-0">❌ invalid assets</span>
+                          )}
                           <div className="flex-1 flex items-center gap-3 text-xs text-slate-400 ml-2">
                             {plan.promoText && (
                               <span className="truncate max-w-[160px]" title={plan.promoText}>
@@ -694,6 +747,28 @@ export function BulkImportDialog({
                                 This locale code is not in the app&apos;s supported localizations — it will be added to the app&apos;s store page automatically before importing.
                               </p>
                             )}
+                            {(["iphone", "ipad"] as const).map((device) => {
+                              const v = plan.validation[device];
+                              const errors = [...v.screenshotErrors, ...v.previewErrors];
+                              if (errors.length === 0 && v.previewWarnings.length === 0) return null;
+                              return (
+                                <div key={device} className="space-y-1">
+                                  {errors.map((e, i) => (
+                                    <p key={i} className="text-xs text-red-600 bg-red-50 rounded-lg px-2.5 py-1.5">
+                                      ❌ {device === "iphone" ? "iPhone" : "iPad"} — {e}
+                                    </p>
+                                  ))}
+                                  {v.previewWarnings.length > 0 && errors.length === 0 && (
+                                    <div className="text-xs bg-amber-50 rounded-lg px-2.5 py-2">
+                                      <p className="font-medium text-amber-700 mb-0.5">ℹ️ {device === "iphone" ? "iPhone" : "iPad"} — verify manually:</p>
+                                      {v.previewWarnings.map((w, i) => (
+                                        <p key={i} className="text-amber-600">□ {w}</p>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
@@ -751,10 +826,16 @@ export function BulkImportDialog({
                           ({notInAppCount} will be added to app first)
                         </span>
                       )}
+                      {validationBlockCount > 0 && (
+                        <span className="text-red-600 ml-1">
+                          — {validationBlockCount} blocked (invalid assets)
+                        </span>
+                      )}
                     </span>
                     <button
                       onClick={startUpload}
-                      disabled={activePlanCount === 0}
+                      disabled={activePlanCount === 0 || validationBlockCount > 0}
+                      title={validationBlockCount > 0 ? `${validationBlockCount} locale(s) have invalid assets — fix before importing` : undefined}
                       className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-[#0071E3] hover:bg-[#0077ED] rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
                     >
                       <Upload className="h-4 w-4" />
