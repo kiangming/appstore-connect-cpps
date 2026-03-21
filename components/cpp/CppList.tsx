@@ -60,15 +60,17 @@ function StatusBadge({ state, rejectReason }: { state?: CppState; rejectReason?:
   if (state === "REJECTED") {
     return (
       <span
-        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium cursor-help underline decoration-dashed decoration-red-400 underline-offset-2 ${STATE_STYLES[state]}`}
+        className={`inline-flex items-center gap-[5px] rounded-full px-[9px] py-[2px] text-xs font-medium cursor-help underline decoration-dashed decoration-red-400 underline-offset-2 ${STATE_STYLES[state]}`}
         title={rejectReason || "Rejected by Apple"}
       >
+        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${STATE_DOT_STYLES[state]}`} />
         {STATE_LABELS[state]}
       </span>
     );
   }
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${STATE_STYLES[state]}`}>
+    <span className={`inline-flex items-center gap-[5px] rounded-full px-[9px] py-[2px] text-xs font-medium ${STATE_STYLES[state]}`}>
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${STATE_DOT_STYLES[state]}`} />
       {STATE_LABELS[state]}
     </span>
   );
@@ -589,13 +591,13 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
         {/* Left: Delete */}
         <button
           onClick={handleDeleteClick}
-          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition ${
+          className={`flex items-center gap-2 px-[14px] py-[7px] text-[13px] font-medium rounded-lg border transition ${
             selectedCpps.length > 0
               ? "bg-red-600 hover:bg-red-700 text-white border-red-600"
               : "bg-white text-red-500 border-red-200 hover:bg-red-50"
           }`}
         >
-          <Trash2 className="h-4 w-4" />
+          <Trash2 className="h-[14px] w-[14px]" />
           Delete{selectedCpps.length > 0 ? ` (${selectedCpps.length})` : ""}
         </button>
 
@@ -605,7 +607,7 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
           <div className="relative" ref={filterRef}>
             <button
               onClick={() => setFilterOpen((v) => !v)}
-              className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition ${
+              className={`flex items-center gap-2 px-[14px] py-[7px] text-[13px] font-medium rounded-lg border transition ${
                 selectedStatuses.size > 0
                   ? "bg-blue-50 text-blue-600 border-blue-300"
                   : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"
@@ -634,7 +636,7 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
 
           <button
             onClick={() => setSubmitStep("confirm")}
-            className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border transition ${
+            className={`flex items-center gap-2 px-[14px] py-[7px] text-[13px] font-medium rounded-lg border transition ${
               submittableCount > 0
                 ? "bg-blue-600 hover:bg-blue-700 text-white border-blue-600"
                 : "bg-white text-blue-500 border-blue-200 hover:bg-blue-50"
@@ -645,16 +647,16 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
           </button>
           <button
             onClick={handleExportCsv}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition"
+            className="flex items-center gap-2 px-[14px] py-[7px] text-[13px] font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition"
           >
-            <Download className="h-4 w-4" />
+            <Download className="h-[14px] w-[14px]" />
             Export CSV
           </button>
           <button
             onClick={() => setShowBulkImport(true)}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition"
+            className="flex items-center gap-2 px-[14px] py-[7px] text-[13px] font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition"
           >
-            <FolderInput className="h-4 w-4" />
+            <FolderInput className="h-[14px] w-[14px]" />
             Bulk Import CPPs
           </button>
         </div>
@@ -684,11 +686,11 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
                     title="Select all eligible"
                   />
                 </th>
-                <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">Name</th>
-                <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">Status</th>
-                <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">Visibility</th>
-                <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">CPP URL</th>
-                <th className="px-4 py-3 text-left font-medium text-slate-500 text-xs uppercase tracking-wider">ID</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-400 text-[11px] uppercase tracking-[0.05em]">Name</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-400 text-[11px] uppercase tracking-[0.05em]">Status</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-400 text-[11px] uppercase tracking-[0.05em]">Visibility</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-400 text-[11px] uppercase tracking-[0.05em]">CPP URL</th>
+                <th className="px-4 py-3 text-left font-semibold text-slate-400 text-[11px] uppercase tracking-[0.05em]">ID</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>

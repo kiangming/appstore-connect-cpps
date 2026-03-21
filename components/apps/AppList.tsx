@@ -1,50 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import { Search } from "lucide-react";
 import type { App } from "@/types/asc";
-
-const AVATAR_COLORS = [
-  "bg-blue-500",
-  "bg-emerald-500",
-  "bg-violet-500",
-  "bg-rose-500",
-  "bg-amber-500",
-  "bg-cyan-500",
-  "bg-indigo-500",
-  "bg-pink-500",
-];
-
-function getAvatarColor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
-}
-
-function getInitials(name: string): string {
-  const words = name.trim().split(/\s+/);
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
-  return (words[0][0] + words[1][0]).toUpperCase();
-}
+import { useAppIcon, getAvatarColor, getInitials } from "@/lib/use-app-icon";
 
 function AppIcon({ name, bundleId }: { name: string; bundleId: string }) {
-  const [iconUrl, setIconUrl] = useState<string | null>(null);
+  const iconUrl = useAppIcon(bundleId);
   const [imgError, setImgError] = useState(false);
-
-  useEffect(() => {
-    fetch(
-      `https://itunes.apple.com/lookup?bundleId=${encodeURIComponent(bundleId)}&country=vn`
-    )
-      .then((r) => r.json())
-      .then((data) => {
-        const url = data.results?.[0]?.artworkUrl512 ?? null;
-        setIconUrl(url);
-      })
-      .catch(() => {});
-  }, [bundleId]);
 
   if (iconUrl && !imgError) {
     return (
@@ -140,7 +104,7 @@ export default function AppList({ apps }: { apps: App[] }) {
       )}
 
       {filtered.length > 0 && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
           {filtered.map((app) => (
             <AppCard key={app.id} app={app} />
           ))}

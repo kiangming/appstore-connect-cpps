@@ -2,7 +2,7 @@
 
 > **Đây là file đọc đầu tiên** khi bắt đầu session mới. Cung cấp toàn cảnh dự án, features đã làm và chưa làm.
 >
-> Last updated: 2026-03-21 (session 13)
+> Last updated: 2026-03-21 (session 14)
 
 ---
 
@@ -19,7 +19,7 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 
 | Feature | Entry point | Doc chi tiết |
 |---|---|---|
-| App List + Search (grid 4 cột, iTunes icon) | `app/(dashboard)/apps/page.tsx` + `components/apps/AppList.tsx` | `docs/feature-app-cpp-list.md` |
+| App List + Search (fluid grid auto-fill, iTunes icon) | `app/(dashboard)/apps/page.tsx` + `components/apps/AppList.tsx` | `docs/feature-app-cpp-list.md` |
 | **Top Nav redesign** (bỏ sidebar, top nav + app sub-nav) | `components/layout/TopNav.tsx` + `components/layout/AppSubNav.tsx` | — |
 | Authentication (Google OAuth + email/password) | `app/(auth)/login/page.tsx` + `lib/auth.ts` | `docs/feature-google-auth.md` |
 | CPP List + trạng thái | `app/(dashboard)/apps/[appId]/cpps/page.tsx` | `docs/feature-app-cpp-list.md` |
@@ -90,7 +90,7 @@ components/
 │   ├── SidebarNav.tsx      ← DEPRECATED (không dùng trong layout nữa)
 │   ├── UserFooter.tsx      ← DEPRECATED (logic chuyển vào TopNav)
 │   └── AccountSwitcher.tsx
-├── apps/AppList.tsx        ← Redesign: grid 4 cột, iTunes icon client-side fetch
+├── apps/AppList.tsx        ← Redesign: fluid grid (auto-fill minmax 200px), iTunes icon via useAppIcon hook
 └── cpp/
     ├── CppList.tsx
     ├── CppDetailPanel.tsx
@@ -104,6 +104,7 @@ lib/
 ├── asc-client.ts               Tất cả ASC API calls (server-side only)
 ├── asc-jwt.ts                  JWT signing
 ├── auth.ts                     NextAuth config
+├── use-app-icon.ts             Hook + helpers: useAppIcon(bundleId), getAvatarColor(), getInitials(), AVATAR_COLORS
 ├── locale-map.json             39 Apple locales: friendly name → BCP-47 code
 ├── locale-utils.ts             localeCodeFromName(), localeNameFromCode(), ALL_APPLE_LOCALES
 ├── parseFolderStructure.ts     Parser cho Bulk Import (single CPP)
@@ -214,3 +215,10 @@ NEXT_PUBLIC_ASSET_VALIDATION_DEEP=true  # true = ffmpeg.wasm deep | false = basi
 21. **UI Redesign — Top Nav (session 13)** — Bỏ hoàn toàn sidebar trái. Layout mới: `TopNav` (h-14, full width) + `AppSubNav` (h-12, chỉ hiện khi trong `/apps/[id]/...`) + main content full width. `TopNav` gồm: logo `C` xanh + "CPP Manager" | tabs Apps/Settings (blue underline indicator khi active) | AccountSwitcher + user email + logout. `AppSubNav` gồm: colored avatar (hash name → 8 colors, 2 initials) + tên app + `[+ New CPP]` button xanh. `SidebarNav.tsx` và `UserFooter.tsx` còn file nhưng không được dùng trong layout nữa.
 
 22. **App icon — iTunes Lookup API (session 13)** — App card trong AppList fetch icon client-side từ `https://itunes.apple.com/lookup?bundleId={bundleId}&country=vn`. API public, CORS ok, không cần auth. Mỗi `AppIcon` component tự fetch bằng `useEffect` → avatar hiển thị ngay, icon swap in sau. Dùng `<img>` thay `<Image>` (tránh Next.js domain restriction với URL client-fetched). Fallback: colored avatar nếu app chưa publish hoặc fetch lỗi. `iconAssetToken` (ASC API) và `appStoreIcon` đều không hoạt động trên `fields[apps]`.
+
+23. **UI Redesign — session 14 (grid + AppSubNav + CppList)**
+    - **App grid:** Bỏ `max-w-6xl` khỏi `apps/page.tsx`. Grid dùng `grid-cols-[repeat(auto-fill,minmax(200px,1fr))]` thay vì hardcode 4 cột — fill full viewport, responsive tự nhiên.
+    - **Shared hook `lib/use-app-icon.ts`:** Export `useAppIcon(bundleId)`, `getAvatarColor(name)`, `getInitials(name)`, `AVATAR_COLORS`. Cả `AppList.tsx` và `AppSubNav.tsx` đều import từ đây — không còn duplicate logic.
+    - **AppSubNav iTunes icon:** Fetch response `/api/asc/apps/${appId}` cũng extract `bundleId`. `useAppIcon(bundleId)` drive icon — hiển thị `<img>` khi loaded, fallback colored avatar. Không tốn thêm request.
+    - **AppSubNav size 2×:** `h-12→h-24`, icon `30px→60px rounded-[16px]`, initials `text-[20px]`, tên app `text-[22px]`, button `px-5 py-3 text-[15px]`, Plus icon `h-5 w-5`.
+    - **CppList styling:** `<th>` → `font-semibold text-slate-400 text-[11px] tracking-[0.05em]`. `StatusBadge` thêm colored dot (6px circle từ `STATE_DOT_STYLES`). Action bar buttons: `px-[14px] py-[7px] text-[13px]`, icon 14px.

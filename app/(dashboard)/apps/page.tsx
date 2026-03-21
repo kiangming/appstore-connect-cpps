@@ -11,7 +11,7 @@ function AppListSkeleton() {
         <div className="h-5 w-8 rounded-full bg-slate-200 animate-pulse" />
       </div>
       <div className="h-10 w-full rounded-xl bg-slate-200 animate-pulse" />
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
         {Array.from({ length: 8 }).map((_, i) => (
           <div
             key={i}
@@ -53,7 +53,7 @@ async function AppsContent() {
 
 export default function AppsPage() {
   return (
-    <div className="p-8 max-w-6xl">
+    <div className="p-8">
       <Suspense fallback={<AppListSkeleton />}>
         <AppsContent />
       </Suspense>

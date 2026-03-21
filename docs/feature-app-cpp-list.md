@@ -19,33 +19,42 @@ Server: getApps() → ASC /v1/apps?limit=50
 
 ### AppList component
 - Search input lọc theo `app.attributes.name` hoặc `app.attributes.bundleId`
-- Card: emoji 📱, tên app, bundleId, "View CPPs →" link
+- Grid: `grid-cols-[repeat(auto-fill,minmax(200px,1fr))]` — fluid, fill full viewport, không max-width
+- Card: icon (iTunes hoặc colored avatar), tên app, bundleId, "View CPPs →" hover link
+- `AppIcon` component dùng `useAppIcon(bundleId)` từ `lib/use-app-icon.ts` — hiển thị avatar ngay, swap in iTunes icon sau khi loaded
 - Empty state nếu search không có kết quả
 
 ---
 
-## 2. Sidebar Navigation
+## 2. App Sub Nav
 
-**File:** `components/layout/SidebarNav.tsx` (Client)
+**File:** `components/layout/AppSubNav.tsx` (Client) — thay thế SidebarNav (deprecated)
 
 ### Logic
 ```typescript
-// Extract appId từ pathname: /apps/[appId]/...
-const match = pathname.match(/\/apps\/([^/]+)/);
-const appId = match?.[1] ?? null;
+// Extract appId từ pathname
+const match = pathname.match(/^\/apps\/([^/]+)/);
 
-// Fetch tên app nếu có appId
+// Fetch tên app + bundleId từ /api/asc/apps/${appId}
 useEffect(() => {
-  if (appId) fetch(`/api/asc/apps/${appId}`) → setAppName(...)
+  fetch(`/api/asc/apps/${appId}`)
+    .then(r => r.json())
+    .then(data => {
+      setAppName(data?.data?.attributes?.name);
+      setBundleId(data?.data?.attributes?.bundleId);  // ← dùng cho iTunes icon
+    });
 }, [appId]);
+
+// Icon: useAppIcon(bundleId) từ lib/use-app-icon.ts
+// Hiển thị <img> nếu iconUrl loaded, fallback colored avatar
 ```
 
-### Nav items
-- **CPP List** → `/apps/[appId]/cpps`
-- **New CPP** → `/apps/[appId]/cpps/new`
-- **Settings** → `/settings` (bottom)
-
-Active link: `text-[#0071E3]` (Apple blue)
+### Sizing (session 14)
+- Bar: `h-24` (96px)
+- Icon: `w-[60px] h-[60px] rounded-[16px]`
+- App name: `text-[22px] font-semibold`
+- New CPP button: `px-5 py-3 text-[15px]`, Plus `h-5 w-5`
+- Returns `null` khi không có appId trong pathname
 
 ---
 
@@ -68,22 +77,22 @@ for (const cpp of cpps) {
 ```
 
 ### CppList component
-- Table: Name | Status badge | Visibility | ID
-- **Status badge colors:**
+- Table: checkbox | Name | Status | Visibility | CPP URL | ID | Actions
+- **`<th>` styling:** `font-semibold text-slate-400 text-[11px] uppercase tracking-[0.05em]`
+- **StatusBadge:** `inline-flex gap-[5px] rounded-full px-[9px] py-[2px]` — có colored dot (6px circle từ `STATE_DOT_STYLES`) trước label text
 
-| State | Màu |
-|---|---|
-| PREPARE_FOR_SUBMISSION | Blue (Draft) |
-| READY_FOR_REVIEW | Yellow |
-| WAITING_FOR_REVIEW | Yellow |
-| IN_REVIEW | Orange |
-| APPROVED | Green |
-| REJECTED | Red |
-| (undefined) | Gray |
+| State | Background | Text | Dot |
+|---|---|---|---|
+| PREPARE_FOR_SUBMISSION (Draft) | slate-100 | slate-600 | slate-400 |
+| READY_FOR_REVIEW | blue-50 | blue-700 | blue-500 |
+| WAITING_FOR_REVIEW | yellow-50 | yellow-700 | yellow-500 |
+| IN_REVIEW | orange-50 | orange-700 | orange-500 |
+| APPROVED | green-50 | green-700 | green-500 |
+| REJECTED | red-50 | red-700 | red-500 |
 
-- **View button** → mở `CppDetailPanel` (slide-over)
+- **Action bar buttons:** `px-[14px] py-[7px] text-[13px]`, icon 14px
+- **View button** → mở `CppDetailPanel`
 - **Edit link** → navigate tới `/apps/[appId]/cpps/[cppId]`
-- "+ New CPP" button → `/apps/[appId]/cpps/new`
 
 ---
 
