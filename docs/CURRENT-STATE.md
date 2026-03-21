@@ -2,7 +2,7 @@
 
 > **Đây là file đọc đầu tiên** khi bắt đầu session mới. Cung cấp toàn cảnh dự án, features đã làm và chưa làm.
 >
-> Last updated: 2026-03-13 (session 11)
+> Last updated: 2026-03-21 (session 13)
 
 ---
 
@@ -19,8 +19,8 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 
 | Feature | Entry point | Doc chi tiết |
 |---|---|---|
-| App List + Search | `app/(dashboard)/apps/page.tsx` | `docs/feature-app-cpp-list.md` |
-| Sidebar động (tên app) | `components/layout/SidebarNav.tsx` | `docs/feature-app-cpp-list.md` |
+| App List + Search (grid 4 cột, iTunes icon) | `app/(dashboard)/apps/page.tsx` + `components/apps/AppList.tsx` | `docs/feature-app-cpp-list.md` |
+| **Top Nav redesign** (bỏ sidebar, top nav + app sub-nav) | `components/layout/TopNav.tsx` + `components/layout/AppSubNav.tsx` | — |
 | Authentication (Google OAuth + email/password) | `app/(auth)/login/page.tsx` + `lib/auth.ts` | `docs/feature-google-auth.md` |
 | CPP List + trạng thái | `app/(dashboard)/apps/[appId]/cpps/page.tsx` | `docs/feature-app-cpp-list.md` |
 | CPP Detail Panel (view) | `components/cpp/CppDetailPanel.tsx` | `docs/feature-app-cpp-list.md` |
@@ -34,10 +34,11 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 | **CPP Bulk Import — Excel metadata** (`metadata.xlsx`) | `lib/parseMetadataXlsx.ts` + `CppBulkImportDialog.tsx` | `docs/feature-cpp-bulk-import-xlsx.md` |
 | **Multi-Account ASC** (switch account trên UI) | `components/layout/AccountSwitcher.tsx` + `lib/asc-accounts.ts` | `docs/feature-multi-account.md` |
 | **Google OAuth + Admin Login Control** | `lib/auth.ts` + `components/auth/LoginForm.tsx` | `docs/feature-google-auth.md` |
-| **User Footer + Logout** | `components/layout/UserFooter.tsx` | — |
+| **User Footer + Logout** | Tích hợp vào `components/layout/TopNav.tsx` (right side) | — |
 | **Delete CPP** (multi-select, 2-step confirm) | `components/cpp/CppList.tsx` + `app/api/asc/cpps/[cppId]/route.ts` | `docs/feature-delete-cpp.md` |
 | **Submit CPP for Review** (multi-select, parallel submit, reject tooltip) | `components/cpp/CppList.tsx` + `app/api/asc/cpps/[cppId]/submit/route.ts` | `docs/feature-submit-cpp.md` |
 | **Settings — ASC Account Builder** | Admin-only page. Section 1: current accounts (masked). Section 2: form → generate `ASC_ACCOUNTS` string → copy-paste vào `.env`. | `docs/feature-settings-asc-accounts.md` |
+| **Asset Validation** (screenshot + video trước upload) | `lib/asset-validator.ts` + `lib/ffmpeg-loader.ts`. Tích hợp vào cả 3 flow upload. Deep mode dùng ffmpeg.wasm. | `docs/feature-asset-validation.md` |
 
 ---
 
@@ -60,10 +61,10 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 app/
 ├── (auth)/login/page.tsx           Server — wrapper, đọc ADMIN_ENABLE
 ├── (dashboard)/
-│   ├── layout.tsx                  Shell layout (sidebar + main)
-│   ├── apps/page.tsx               Server — App List
+│   ├── layout.tsx                  Shell layout (TopNav + AppSubNav + main, không còn sidebar)
+│   ├── apps/page.tsx               Server — App List (grid 4 cột, iTunes icon)
 │   └── apps/[appId]/cpps/
-│       ├── page.tsx                Server — CPP List
+│       ├── page.tsx                Server — CPP List (không có header riêng, dùng AppSubNav)
 │       ├── new/page.tsx            Client — New CPP form
 │       └── [cppId]/page.tsx        Server — CPP Editor page
 ├── api/asc/                        Proxy routes (server-side only)
@@ -72,19 +73,24 @@ app/
 │   ├── apps/[appId]/app-info-localizations/route.ts  GET + POST
 │   ├── cpps/route.ts               GET + POST /api/asc/cpps
 │   ├── cpps/[cppId]/route.ts       GET + PATCH + DELETE
-│   ├── cpps/submit/route.ts          POST batch (submit for review) ← MỚI
+│   ├── cpps/submit/route.ts          POST batch (submit for review)
 │   ├── cpps/[cppId]/submit/route.ts  DEPRECATED — thay bằng cpps/submit
 │   ├── cpps/[cppId]/localizations/route.ts  POST
 │   ├── localizations/[id]/route.ts  PATCH (promo text)
-│   ├── versions/[versionId]/route.ts  PATCH (deepLink)   ← MỚI
+│   ├── versions/[versionId]/route.ts  PATCH (deepLink)
 │   ├── screenshot-sets/route.ts    GET + POST
 │   ├── preview-sets/route.ts       GET + POST
 │   ├── upload/route.ts             POST (screenshot file)
 │   └── upload-preview/route.ts     POST (video file)
 
 components/
-├── layout/SidebarNav.tsx
-├── apps/AppList.tsx
+├── layout/
+│   ├── TopNav.tsx          ← MỚI: Primary nav (Logo + tabs + AccountSwitcher + user/logout)
+│   ├── AppSubNav.tsx       ← MỚI: Sub-nav khi trong app context (icon + tên + New CPP)
+│   ├── SidebarNav.tsx      ← DEPRECATED (không dùng trong layout nữa)
+│   ├── UserFooter.tsx      ← DEPRECATED (logic chuyển vào TopNav)
+│   └── AccountSwitcher.tsx
+├── apps/AppList.tsx        ← Redesign: grid 4 cột, iTunes icon client-side fetch
 └── cpp/
     ├── CppList.tsx
     ├── CppDetailPanel.tsx
@@ -102,6 +108,8 @@ lib/
 ├── locale-utils.ts             localeCodeFromName(), localeNameFromCode(), ALL_APPLE_LOCALES
 ├── parseFolderStructure.ts     Parser cho Bulk Import (single CPP)
 ├── parseCppFolderStructure.ts  Parser cho CPP Bulk Import (multi-CPP)
+├── asset-validator.ts          Validate screenshot/video (resolution, duration, fps, bitrate, audio)
+├── ffmpeg-loader.ts            Lazy load + singleton cache cho ffmpeg.wasm
 ├── supabase.ts                 Supabase client
 └── utils.ts                    cn() helper
 
@@ -146,6 +154,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
 NEXTAUTH_SECRET=
 NEXTAUTH_URL=
+NEXT_PUBLIC_ASSET_VALIDATION_DEEP=true  # true = ffmpeg.wasm deep | false = basic + checklist
 ```
 
 ---
@@ -197,3 +206,11 @@ NEXTAUTH_URL=
 17. **CppList Props mở rộng (session 10)** — `CppList` nhận thêm 2 props: `versionIds: Record<string, string>` và `rejectReasons: Record<string, string>`. `rejectReasons` map cppId → `version.attributes.rejectedVersionUserFeedback` (optional field từ ASC). Cả hai được extract trong `cpps/page.tsx` từ `included[]`.
 
 18. **ResultDialog refactor** — Component `ResultDialog` trong `CppList.tsx` được refactor thêm props `title` và `succeededVerb` để dùng chung cho cả Delete và Submit flows.
+
+19. **Asset Validation — ffmpeg.wasm concurrency mutex** — `validateVideoDeep` dùng module-level promise queue (`ffmpegQueue`) để serialize các calls — Emscripten virtual FS không thread-safe. Bug ban đầu: CPP Bulk Import dùng nested `Promise.all` → nhiều video validate song song → `ErrnoError: FS error` → fallback về basic mode → hiển thị checklist. Fix trong `lib/asset-validator.ts`: acquire queue trước khi gọi ffmpeg, release trong `finally`. Thêm named `logHandler` + `ffmpeg.off()` để tránh listener leak. Screenshots không bị ảnh hưởng (không dùng ffmpeg).
+
+20. **Asset Validation — env var** — `NEXT_PUBLIC_ASSET_VALIDATION_DEEP=true` trong `.env.local`. `true` (default) → ffmpeg.wasm deep validation. `false` → basic only + checklist reminder.
+
+21. **UI Redesign — Top Nav (session 13)** — Bỏ hoàn toàn sidebar trái. Layout mới: `TopNav` (h-14, full width) + `AppSubNav` (h-12, chỉ hiện khi trong `/apps/[id]/...`) + main content full width. `TopNav` gồm: logo `C` xanh + "CPP Manager" | tabs Apps/Settings (blue underline indicator khi active) | AccountSwitcher + user email + logout. `AppSubNav` gồm: colored avatar (hash name → 8 colors, 2 initials) + tên app + `[+ New CPP]` button xanh. `SidebarNav.tsx` và `UserFooter.tsx` còn file nhưng không được dùng trong layout nữa.
+
+22. **App icon — iTunes Lookup API (session 13)** — App card trong AppList fetch icon client-side từ `https://itunes.apple.com/lookup?bundleId={bundleId}&country=vn`. API public, CORS ok, không cần auth. Mỗi `AppIcon` component tự fetch bằng `useEffect` → avatar hiển thị ngay, icon swap in sau. Dùng `<img>` thay `<Image>` (tránh Next.js domain restriction với URL client-fetched). Fallback: colored avatar nếu app chưa publish hoặc fetch lỗi. `iconAssetToken` (ASC API) và `appStoreIcon` đều không hoạt động trên `fields[apps]`.

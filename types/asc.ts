@@ -33,6 +33,16 @@ export interface AppAttributes {
   primaryLocale: string;
 }
 
+export interface BuildAttributes {
+  iconAssetToken?: {
+    templateUrl: string;
+    width: number;
+    height: number;
+  };
+}
+
+export type Build = AscResource<"builds", BuildAttributes>;
+
 export type App = AscResource<"apps", AppAttributes>;
 
 export type CppState =

@@ -248,6 +248,33 @@ Dùng ở: New CPP form, LocalizationManager "Add locale" dropdown.
 
 ---
 
+## UI Layout
+
+### Shell Layout (`app/(dashboard)/layout.tsx`)
+```
+┌──────────────────────────────────────────────────────────────┐
+│  TopNav (h-14)  Logo | Apps · Settings | AccountSwitcher 👤  │
+├──────────────────────────────────────────────────────────────┤
+│  AppSubNav (h-12, chỉ hiện khi /apps/[id]/...)               │
+│  [🎨] App Name                           [+ New CPP]         │
+├──────────────────────────────────────────────────────────────┤
+│  main (flex-1, overflow-y-auto, bg-slate-50)                 │
+│  {children}                                                  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+- **Không còn sidebar** — bỏ hoàn toàn `SidebarNav` + `UserFooter` khỏi layout
+- `TopNav` — client component, dùng `usePathname()` cho active tab highlight
+- `AppSubNav` — client component, extract `appId` từ `usePathname()`, fetch app name từ `/api/asc/apps/${appId}`
+- `AccountSwitcher` — ẩn khi chỉ có 1 account
+
+### App List (`/apps`)
+- Grid 4 cột responsive: `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4`
+- App icon: fetch client-side từ iTunes Lookup API (`itunes.apple.com/lookup?bundleId=...&country=vn`) bằng `useEffect` trong `AppIcon` component
+- Fallback: colored avatar (hash app name → 8 preset colors, 2 initials)
+
+---
+
 ## Conventions
 
 - **Server Components** cho data fetching, **Client Components** cho interactivity

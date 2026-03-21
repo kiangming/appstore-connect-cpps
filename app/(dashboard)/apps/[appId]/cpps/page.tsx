@@ -1,7 +1,6 @@
-import { getCpps, getApp } from "@/lib/asc-client";
+import { getCpps } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { CppList } from "@/components/cpp/CppList";
-import Link from "next/link";
 import type { AppCustomProductPage, AppCustomProductPageVersion, CppState } from "@/types/asc";
 
 interface Props {
@@ -10,7 +9,6 @@ interface Props {
 
 export default async function CppsPage({ params }: Props) {
   let cpps: AppCustomProductPage[] = [];
-  let appName: string | null = null;
   let versionStates: Record<string, CppState> = {};
   let versionIds: Record<string, string> = {};
   let rejectReasons: Record<string, string> = {};
@@ -18,11 +16,7 @@ export default async function CppsPage({ params }: Props) {
 
   try {
     const creds = await getActiveAccount();
-    const [res, appRes] = await Promise.all([
-      getCpps(creds, params.appId),
-      getApp(creds, params.appId),
-    ]);
-    appName = appRes.data.attributes.name;
+    const res = await getCpps(creds, params.appId);
     cpps = res.data;
 
     const included = res.included ?? [];
@@ -50,24 +44,6 @@ export default async function CppsPage({ params }: Props) {
 
   return (
     <div className="p-8">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900">
-            Custom Product Pages
-          </h1>
-          <p className="text-sm text-slate-500 mt-0.5">
-            Manage CPPs for app <span className="font-medium text-slate-700">{appName ?? params.appId}</span>
-            <span className="ml-2 text-slate-400">[{cpps?.length ?? 0}/70]</span>
-          </p>
-        </div>
-        <Link
-          href={`/apps/${params.appId}/cpps/new`}
-          className="inline-flex items-center gap-2 bg-[#0071E3] hover:bg-[#0077ED] text-white font-medium text-sm rounded-lg px-4 py-2 transition"
-        >
-          + New CPP
-        </Link>
-      </div>
-
       {fetchError ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           {fetchError}

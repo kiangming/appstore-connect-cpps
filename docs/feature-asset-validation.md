@@ -1,6 +1,6 @@
 # Feature: Asset Validation trước khi Upload
 
-> Status: 🔲 Designed (2026-03-17) — chưa implement
+> Status: ✅ Implemented (2026-03-17)
 
 ---
 
@@ -115,6 +115,39 @@ export async function getFFmpeg(): Promise<FFmpeg> {
 ```
 
 Load lazy: chỉ khi có video được drop lần đầu.
+
+### ffmpeg.wasm — Concurrency mutex
+
+**Vấn đề:** ffmpeg.wasm dùng singleton + Emscripten virtual filesystem (FS) không thread-safe. Khi CPP Bulk Import validate nhiều video song song (nested `Promise.all`), các `writeFile` + `exec` calls xung đột → `ErrnoError: FS error` → fallback về basic mode → hiển thị checklist thay vì pass/fail.
+
+**Fix (trong `lib/asset-validator.ts`):**
+
+```typescript
+// Module-level promise queue — serializes all validateVideoDeep calls
+let ffmpegQueue: Promise<void> = Promise.resolve();
+
+async function validateVideoDeep(...) {
+  // Acquire slot
+  let releaseQueue!: () => void;
+  const myTurn = ffmpegQueue;
+  ffmpegQueue = new Promise<void>((resolve) => { releaseQueue = resolve; });
+  await myTurn;
+
+  try {
+    // ...ffmpeg operations...
+    // Named handler để off() đúng — tránh listener leak
+    const logHandler = ({ message }: { message: string }) => { ... };
+    ffmpeg.on("log", logHandler);
+    try { await ffmpeg.exec([...]); } catch { /* expected */ }
+    ffmpeg.off("log", logHandler);
+    // ...
+  } finally {
+    releaseQueue(); // Luôn release dù có lỗi
+  }
+}
+```
+
+Screenshots vẫn chạy song song (không dùng ffmpeg), chỉ video bị serialize.
 
 ---
 
