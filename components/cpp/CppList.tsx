@@ -347,6 +347,105 @@ function SubmitConfirmDialog({
   );
 }
 
+// ── Dialog: partial-fail (some items failed in prepare step) ──────────────────
+function PartialFailDialog({
+  items,
+  confirming,
+  rollingBack,
+  confirmError,
+  onProceed,
+  onRollback,
+  onDismissError,
+}: {
+  items: Array<{ cppId: string; cppName: string; status: "success" | "failed"; error?: string }>;
+  confirming: boolean;
+  rollingBack: boolean;
+  confirmError: string | null;
+  onProceed: () => void;
+  onRollback: () => void;
+  onDismissError: () => void;
+}) {
+  const succeeded = items.filter((i) => i.status === "success");
+  const failed = items.filter((i) => i.status === "failed");
+  const busy = confirming || rollingBack;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-md bg-white rounded-xl shadow-xl border border-slate-200 p-6">
+        {confirmError && (
+          <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3">
+            <p className="text-sm font-medium text-red-700 mb-1">Submit failed</p>
+            <p className="text-xs text-red-600">{confirmError}</p>
+            <div className="flex justify-end mt-2">
+              <button
+                onClick={onDismissError}
+                className="px-3 py-1 text-xs font-medium bg-red-100 hover:bg-red-200 text-red-700 rounded transition"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        <h2 className="text-base font-semibold text-slate-900 mb-1">Partial failure</h2>
+        <p className="text-sm text-slate-500 mb-3">
+          {succeeded.length} of {items.length} CPP{items.length > 1 ? "s" : ""} were added to the
+          submission. Choose how to proceed:
+        </p>
+
+        {succeeded.length > 0 && (
+          <div className="mb-3">
+            <p className="text-xs font-semibold text-green-700 uppercase tracking-wide mb-1">
+              Added ({succeeded.length})
+            </p>
+            <ul className="rounded-lg border border-green-100 bg-green-50 divide-y divide-green-100 max-h-32 overflow-y-auto">
+              {succeeded.map((i) => (
+                <li key={i.cppId} className="px-3 py-1.5 text-sm text-slate-800 font-medium truncate">
+                  ✓ {i.cppName}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {failed.length > 0 && (
+          <div className="mb-4">
+            <p className="text-xs font-semibold text-red-600 uppercase tracking-wide mb-1">
+              Failed ({failed.length})
+            </p>
+            <ul className="rounded-lg border border-red-100 bg-red-50 divide-y divide-red-100 max-h-32 overflow-y-auto">
+              {failed.map((i) => (
+                <li key={i.cppId} className="px-3 py-1.5">
+                  <p className="text-sm font-medium text-slate-800 truncate">✗ {i.cppName}</p>
+                  {i.error && <p className="text-xs text-red-600">{i.error}</p>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onRollback}
+            disabled={busy}
+            className="px-4 py-2 text-sm font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition disabled:opacity-50"
+          >
+            {rollingBack ? "Rolling back…" : "Rollback"}
+          </button>
+          <button
+            onClick={onProceed}
+            disabled={busy || succeeded.length === 0}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Send className="h-3.5 w-3.5" />
+            {confirming ? "Submitting…" : `Submit ${succeeded.length} CPP${succeeded.length > 1 ? "s" : ""}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main CppList ───────────────────────────────────────────────────────────────
 export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons }: Props) {
   const [viewingCpp, setViewingCpp] = useState<AppCustomProductPage | null>(null);
@@ -364,13 +463,16 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
     failed: Array<{ name: string; reason: string }>;
   } | null>(null);
 
-  // Submit dialog state
-  const [submitStep, setSubmitStep] = useState<"confirm" | "result" | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [submitResult, setSubmitResult] = useState<{
-    succeeded: number;
-    failed: Array<{ name: string; reason: string }>;
+  // Submit dialog state (v2)
+  type SubmitPhase = null | "confirm" | "preparing" | "partial-fail" | "confirming" | "rolling-back" | "result";
+  const [submitPhase, setSubmitPhase] = useState<SubmitPhase>(null);
+  const [prepareResult, setPrepareResult] = useState<{
+    submissionId: string;
+    items: Array<{ cppId: string; cppName: string; versionId: string; status: "success" | "failed"; error?: string }>;
   } | null>(null);
+  const [confirmError, setConfirmError] = useState<string | null>(null);
+  const [submitSucceeded, setSubmitSucceeded] = useState(0);
+  const [inPartialFailFlow, setInPartialFailFlow] = useState(false);
 
   // Filter state
   const [selectedStatuses, setSelectedStatuses] = useState<Set<CppState>>(new Set());
@@ -511,44 +613,106 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
     }
   }
 
-  async function handleSubmit() {
+  function resetSubmitState() {
+    setSubmitPhase(null);
+    setPrepareResult(null);
+    setConfirmError(null);
+    setSubmitSucceeded(0);
+    setInPartialFailFlow(false);
+  }
+
+  async function doConfirm(submissionId: string) {
+    setSubmitPhase("confirming");
+    const res = await fetch("/api/asc/cpps/submit/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ submissionId }),
+    });
+    if (res.status === 201) {
+      setSubmitPhase("result");
+      setSelectedIds(new Set());
+    } else {
+      const body = await res.json().catch(() => ({}));
+      setConfirmError(body.error ?? `HTTP ${res.status}`);
+      setInPartialFailFlow(true);
+      setSubmitPhase("partial-fail");
+    }
+  }
+
+  async function handlePrepare() {
     const submittable = selectedCpps.filter(
       (cpp) => SUBMITTABLE_STATES.includes(versionStates[cpp.id])
     );
-    setSubmitting(true);
+    setInPartialFailFlow(false);
+    setSubmitPhase("preparing");
 
-    // Submit all CPPs in a single Apple Review Submission (1 reviewSubmissions container)
-    const res = await fetch("/api/asc/cpps/submit", {
+    const res = await fetch("/api/asc/cpps/submit/prepare", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         appId,
-        items: submittable.map((cpp) => ({ cppId: cpp.id, versionId: versionIds[cpp.id] })),
+        items: submittable.map((cpp) => ({
+          cppId: cpp.id,
+          cppName: cpp.attributes.name,
+          versionId: versionIds[cpp.id],
+        })),
       }),
     });
 
-    let succeeded: number;
-    let failed: { name: string; reason: string }[];
-
-    if (res.status === 201) {
-      succeeded = submittable.length;
-      failed = [];
-    } else {
+    if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      succeeded = 0;
-      failed = submittable.map((cpp) => ({
-        name: cpp.attributes.name,
-        reason: body.error ?? `HTTP ${res.status}`,
-      }));
+      // Submission container creation failed entirely — show result with all failed
+      setSubmitSucceeded(0);
+      setSubmitPhase("result");
+      setPrepareResult({
+        submissionId: "",
+        items: submittable.map((cpp) => ({
+          cppId: cpp.id,
+          cppName: cpp.attributes.name,
+          versionId: versionIds[cpp.id],
+          status: "failed" as const,
+          error: body.error ?? `HTTP ${res.status}`,
+        })),
+      });
+      return;
     }
 
-    setSubmitting(false);
-    setSubmitResult({ succeeded, failed });
-    setSubmitStep("result");
+    const data = await res.json() as {
+      submissionId: string;
+      items: Array<{ cppId: string; cppName: string; versionId: string; status: "success" | "failed"; error?: string }>;
+    };
+    setPrepareResult(data);
 
-    if (succeeded > 0) {
-      setSelectedIds(new Set());
+    const successItems = data.items.filter((i) => i.status === "success");
+    setSubmitSucceeded(successItems.length);
+
+    if (successItems.length === data.items.length) {
+      // All succeeded — auto-confirm
+      await doConfirm(data.submissionId);
+    } else {
+      // Partial or total failure — let user decide
+      setInPartialFailFlow(true);
+      setSubmitPhase("partial-fail");
     }
+  }
+
+  async function handleProceedSubmit() {
+    if (!prepareResult) return;
+    await doConfirm(prepareResult.submissionId);
+  }
+
+  async function handleRollbackSubmit() {
+    if (!prepareResult?.submissionId) {
+      resetSubmitState();
+      return;
+    }
+    setSubmitPhase("rolling-back");
+    try {
+      await fetch(`/api/asc/cpps/submit/${prepareResult.submissionId}`, { method: "DELETE" });
+    } catch {
+      // Rollback errors are non-blocking — log silently and close
+    }
+    resetSubmitState();
   }
 
   if (cpps.length === 0) {
@@ -635,7 +799,7 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
           </div>
 
           <button
-            onClick={() => setSubmitStep("confirm")}
+            onClick={() => setSubmitPhase("confirm")}
             className={`flex items-center gap-2 px-[14px] py-[7px] text-[13px] font-medium rounded-lg border transition ${
               submittableCount > 0
                 ? "bg-blue-600 hover:bg-blue-700 text-white border-blue-600"
@@ -807,25 +971,42 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
       )}
 
       {/* Submit dialogs */}
-      {submitStep === "confirm" && (
+      {!inPartialFailFlow && (submitPhase === "confirm" || submitPhase === "preparing" || submitPhase === "confirming") && (
         <SubmitConfirmDialog
           selected={selectedCpps}
           versionStates={versionStates}
-          submitting={submitting}
-          onCancel={() => setSubmitStep(null)}
-          onConfirm={handleSubmit}
+          submitting={submitPhase === "preparing" || submitPhase === "confirming"}
+          onCancel={resetSubmitState}
+          onConfirm={handlePrepare}
         />
       )}
-      {submitStep === "result" && submitResult && (
+      {inPartialFailFlow && prepareResult !== null && (
+        submitPhase === "partial-fail" || submitPhase === "confirming" || submitPhase === "rolling-back"
+      ) && (
+        <PartialFailDialog
+          items={prepareResult.items}
+          confirming={submitPhase === "confirming"}
+          rollingBack={submitPhase === "rolling-back"}
+          confirmError={confirmError}
+          onProceed={handleProceedSubmit}
+          onRollback={handleRollbackSubmit}
+          onDismissError={() => setConfirmError(null)}
+        />
+      )}
+      {submitPhase === "result" && (
         <ResultDialog
           title="Submit complete"
-          succeeded={submitResult.succeeded}
+          succeeded={submitSucceeded}
           succeededVerb="submitted"
-          failed={submitResult.failed}
+          failed={
+            prepareResult?.items
+              .filter((i) => i.status === "failed")
+              .map((i) => ({ name: i.cppName, reason: i.error ?? "Failed" })) ?? []
+          }
           onClose={() => {
-            setSubmitStep(null);
-            setSubmitResult(null);
-            if (submitResult.succeeded > 0) window.location.reload();
+            const didSucceed = submitSucceeded > 0;
+            resetSubmitState();
+            if (didSucceed) window.location.reload();
           }}
         />
       )}

@@ -274,6 +274,132 @@ export async function submitCpps(
   );
 }
 
+// ─── Submit v2: per-item tracking, sequential, retry ─────────────────────────
+
+export interface PrepareItemResult {
+  cppId: string;
+  cppName: string;
+  versionId: string;
+  status: "success" | "failed";
+  error?: string;
+}
+
+export interface PrepareCppSubmissionResult {
+  submissionId: string;
+  items: PrepareItemResult[];
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Step 1+2 of the new submit flow:
+ * - Creates one reviewSubmission container
+ * - Sequentially POSTs reviewSubmissionItems (200ms gap, up to 3 attempts each)
+ * - Returns per-item results so the caller can decide to confirm or rollback
+ */
+export async function prepareCppSubmission(
+  creds: AscCredentials,
+  appId: string,
+  items: Array<{ cppId: string; cppName: string; versionId: string }>
+): Promise<PrepareCppSubmissionResult> {
+  const submissionRes = await ascFetch<{ data: { id: string } }>(
+    creds,
+    "POST",
+    "/v1/reviewSubmissions",
+    {
+      data: {
+        type: "reviewSubmissions",
+        attributes: { platform: "IOS" },
+        relationships: {
+          app: { data: { type: "apps", id: appId } },
+        },
+      },
+    }
+  );
+  const submissionId = submissionRes.data.id;
+
+  const results: PrepareItemResult[] = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const { cppId, cppName, versionId } = items[i];
+    if (i > 0) await sleep(200);
+
+    let lastError: string | undefined;
+    let succeeded = false;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await ascFetch<unknown>(creds, "POST", "/v1/reviewSubmissionItems", {
+          data: {
+            type: "reviewSubmissionItems",
+            relationships: {
+              reviewSubmission: {
+                data: { type: "reviewSubmissions", id: submissionId },
+              },
+              appCustomProductPageVersion: {
+                data: { type: "appCustomProductPageVersions", id: versionId },
+              },
+            },
+          },
+        });
+        succeeded = true;
+        break;
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : "Unknown error";
+      }
+    }
+
+    results.push({
+      cppId,
+      cppName,
+      versionId,
+      status: succeeded ? "success" : "failed",
+      error: succeeded ? undefined : lastError,
+    });
+  }
+
+  return { submissionId, items: results };
+}
+
+/**
+ * Step 3: PATCH the submission to submitted:true
+ */
+export async function confirmCppSubmission(
+  creds: AscCredentials,
+  submissionId: string
+): Promise<void> {
+  await ascFetch<unknown>(
+    creds,
+    "PATCH",
+    `/v1/reviewSubmissions/${submissionId}`,
+    {
+      data: {
+        type: "reviewSubmissions",
+        id: submissionId,
+        attributes: { submitted: true },
+      },
+    }
+  );
+}
+
+/**
+ * Rollback: DELETE the submission container (cancels all added items)
+ */
+export async function rollbackCppSubmission(
+  creds: AscCredentials,
+  submissionId: string
+): Promise<void> {
+  await ascFetch<void>(
+    creds,
+    "DELETE",
+    `/v1/reviewSubmissions/${submissionId}`
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export async function createCppVersion(
   creds: AscCredentials,
   payload: CreateCppVersionPayload
