@@ -1,8 +1,7 @@
 import type { NextAuthOptions } from "next-auth";
-import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 
-// Extend session + JWT types to include activeAccountId
+// Extend session + JWT types
 declare module "next-auth" {
   interface Session {
     user: {
@@ -10,6 +9,7 @@ declare module "next-auth" {
       name?: string | null;
       email?: string | null;
       image?: string | null;
+      role: "admin" | "member";
     };
     activeAccountId: string | null;
   }
@@ -18,8 +18,17 @@ declare module "next-auth" {
 declare module "next-auth/jwt" {
   interface JWT {
     id?: string;
+    role?: "admin" | "member";
     activeAccountId?: string | null;
   }
+}
+
+function isAdminEmail(email: string): boolean {
+  const adminEmails = (process.env.ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim())
+    .filter(Boolean);
+  return adminEmails.includes(email);
 }
 
 export const authOptions: NextAuthOptions = {
@@ -32,29 +41,6 @@ export const authOptions: NextAuthOptions = {
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
     }),
-    CredentialsProvider({
-      name: "Credentials",
-      credentials: {
-        email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" },
-      },
-      async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) return null;
-
-        // Replace with real user lookup from Supabase or environment-based auth
-        const adminEmail = process.env.ADMIN_EMAIL;
-        const adminPassword = process.env.ADMIN_PASSWORD;
-
-        if (
-          credentials.email === adminEmail &&
-          credentials.password === adminPassword
-        ) {
-          return { id: "1", name: "Admin", email: credentials.email };
-        }
-
-        return null;
-      },
-    }),
   ],
   callbacks: {
     async signIn({ account, profile }) {
@@ -65,10 +51,13 @@ export const authOptions: NextAuthOptions = {
           .filter(Boolean);
         return allowed.includes(profile?.email ?? "");
       }
-      return true;
+      return false;
     },
-    async jwt({ token, user, trigger, session }) {
-      if (user) token.id = user.id;
+    async jwt({ token, profile, trigger, session }) {
+      // profile is only present on initial sign-in — set role once
+      if (profile?.email) {
+        token.role = isAdminEmail(profile.email) ? "admin" : "member";
+      }
 
       // Handle session update triggered by useSession().update({ activeAccountId })
       if (trigger === "update" && session?.activeAccountId !== undefined) {
@@ -79,7 +68,8 @@ export const authOptions: NextAuthOptions = {
     },
     async session({ session, token }) {
       if (session.user) {
-        session.user.id = token.id as string;
+        session.user.id = token.sub ?? "";
+        session.user.role = token.role ?? "member";
       }
       session.activeAccountId = token.activeAccountId ?? null;
       return session;

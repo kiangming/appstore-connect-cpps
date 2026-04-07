@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-import { getAscAccountById } from "@/lib/asc-accounts";
+import { findAccountById } from "@/lib/asc-account-repository";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -20,8 +20,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
   }
 
-  // Validate account exists in ASC_ACCOUNTS — prevent session pollution
-  const account = getAscAccountById(accountId);
+  // Validate account exists — prevent session pollution
+  const account = await findAccountById(accountId);
   if (!account) {
     return NextResponse.json({ error: "Invalid account" }, { status: 400 });
   }

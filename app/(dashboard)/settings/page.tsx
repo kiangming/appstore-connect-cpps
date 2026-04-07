@@ -15,7 +15,7 @@ function maskIssuerId(issuerId: string): string {
 
 export default async function Settings() {
   const session = await getServerSession(authOptions);
-  const isAdmin = session?.user?.email === process.env.ADMIN_EMAIL;
+  const isAdmin = session?.user?.role === "admin";
   if (!isAdmin) redirect("/");
 
   let maskedAccounts: { name: string; keyId: string; issuerId: string }[] = [];

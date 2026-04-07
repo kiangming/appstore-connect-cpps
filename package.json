@@ -39,5 +39,9 @@
     "autoprefixer": "^10",
     "postcss": "^8",
     "typescript": "^5"
+  },
+
+  "engines": {
+    "node": ">=20"
   }
 }
