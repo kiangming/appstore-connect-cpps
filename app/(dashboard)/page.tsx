@@ -3,14 +3,11 @@ export const dynamic = "force-dynamic";
 import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { HubPage } from "./HubPage";
 
-export default async function RootPage() {
+export default async function DashboardRoot() {
   const session = await getServerSession(authOptions);
+  if (!session) redirect("/login");
 
-  if (!session) {
-    redirect("/login");
-  }
-
-  // Redirect to apps list — extend once real app IDs are loaded
-  redirect("/apps");
+  return <HubPage />;
 }

@@ -1,5 +1,5 @@
-import { TopNav } from "@/components/layout/TopNav";
-import { AppSubNav } from "@/components/layout/AppSubNav";
+import { AppSidebar } from "@/components/layout/AppSidebar";
+import { DashboardContent } from "./DashboardContent";
 
 export default function DashboardLayout({
   children,
@@ -7,12 +7,13 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-slate-50">
-      <TopNav />
-      <AppSubNav />
-      <main className="flex-1 overflow-y-auto">
-        {children}
-      </main>
+    <div className="flex h-screen overflow-hidden bg-slate-50">
+      <AppSidebar />
+      <div className="flex-1 flex flex-col ml-[56px]">
+        <DashboardContent>
+          {children}
+        </DashboardContent>
+      </div>
     </div>
   );
 }

@@ -1,22 +1,23 @@
-# Feature: Google OAuth + Admin Login Control
+# Feature: Google OAuth + Role-Based Auth
 
-> Status: ✅ Implemented (2026-03-12)
+> Status: ✅ Implemented (v1: 2026-03-12, v2 refactor: 2026-04-07)
 
 ---
 
 ## Tổng quan
 
-Thêm Google OAuth 2.0 login bên cạnh credentials login hiện có. Admin login form được ẩn/hiện bằng env var `ADMIN_ENABLE`.
+- **v1 (2026-03-12):** Thêm Google OAuth bên cạnh CredentialsProvider. `ADMIN_ENABLE` ẩn/hiện form email/password.
+- **v2 (2026-04-07):** Xóa hoàn toàn CredentialsProvider. Google OAuth only. Role-based: `admin` | `member` gán qua `ADMIN_EMAILS` env var.
 
 ---
 
-## Yêu cầu
+## Yêu cầu (v2)
 
-1. Thêm Google OAuth 2.0 login (NextAuth GoogleProvider)
-2. Chỉ cho phép email nằm trong `GOOGLE_ALLOWED_EMAILS` đăng nhập bằng Google
-3. Login page luôn hiển thị nút "Sign in with Google"
-4. Form username/password chỉ hiển thị khi `ADMIN_ENABLE=1`
-5. Không cần file riêng — tất cả config trong `.env.local`
+1. Chỉ Google OAuth — không còn form email/password
+2. Emails trong `GOOGLE_ALLOWED_EMAILS` được phép login
+3. Emails trong `ADMIN_EMAILS` được gán role `"admin"` → truy cập Settings + admin APIs
+4. Emails còn lại được gán role `"member"`
+5. Settings page guard: `session.user.role !== "admin"` → redirect
 
 ---
 
@@ -24,9 +25,9 @@ Thêm Google OAuth 2.0 login bên cạnh credentials login hiện có. Admin log
 
 | File | Thay đổi |
 |---|---|
-| `lib/auth.ts` | Thêm `GoogleProvider` + `signIn` callback allowlist |
-| `components/auth/LoginForm.tsx` | **Tạo mới** — Client Component với Google button + conditional credentials form |
-| `app/(auth)/login/page.tsx` | Đổi thành Server Component wrapper, đọc `ADMIN_ENABLE` từ env |
+| `lib/auth.ts` | Xóa CredentialsProvider. Chỉ GoogleProvider. `jwt` callback gán role từ `ADMIN_EMAILS`. Module augmentation thêm `role` vào Session + JWT types. |
+| `components/auth/LoginForm.tsx` | Rewrite: chỉ còn Google button, không props |
+| `app/(auth)/login/page.tsx` | Simplify: không còn đọc `ADMIN_ENABLE`, render `<LoginForm />` không props |
 
 ---
 
@@ -35,82 +36,82 @@ Thêm Google OAuth 2.0 login bên cạnh credentials login hiện có. Admin log
 ### `lib/auth.ts`
 
 ```typescript
+declare module "next-auth" {
+  interface Session { user: { role: "admin" | "member" } & DefaultSession["user"] }
+}
+declare module "next-auth/jwt" {
+  interface JWT { role: "admin" | "member" }
+}
+
+function isAdminEmail(email: string): boolean {
+  const adminEmails = (process.env.ADMIN_EMAILS ?? "").split(",").map(e => e.trim()).filter(Boolean);
+  return adminEmails.includes(email);
+}
+
 providers: [
   GoogleProvider({
     clientId: process.env.GOOGLE_CLIENT_ID!,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
   }),
-  CredentialsProvider({ ... }), // giữ nguyên
 ],
 callbacks: {
   async signIn({ account, profile }) {
-    if (account?.provider === "google") {
-      const allowed = (process.env.GOOGLE_ALLOWED_EMAILS ?? "")
-        .split(",").map(e => e.trim()).filter(Boolean);
-      return allowed.includes(profile?.email ?? "");
-    }
-    return true; // credentials tự xử lý
+    if (account?.provider !== "google") return false;
+    const allowed = (process.env.GOOGLE_ALLOWED_EMAILS ?? "")
+      .split(",").map(e => e.trim()).filter(Boolean);
+    return allowed.includes(profile?.email ?? "");
   },
-  // jwt + session callbacks giữ nguyên (activeAccountId)
+  async jwt({ token, profile, trigger }) {
+    if (trigger === "signIn" && profile?.email) {
+      token.role = isAdminEmail(profile.email) ? "admin" : "member";
+    }
+    return token;
+  },
+  async session({ session, token }) {
+    session.user.role = token.role ?? "member";
+    return session;
+  },
 }
 ```
 
-### `app/(auth)/login/page.tsx` — Server Component
+### Settings page guard
 
 ```typescript
-export default function LoginPage() {
-  const adminEnabled = process.env.ADMIN_ENABLE === "1";
-  return <LoginForm adminEnabled={adminEnabled} />;
-}
+// app/(dashboard)/settings/page.tsx
+const session = await getServerSession(authOptions);
+if (!session || session.user.role !== "admin") redirect("/");
 ```
-
-Đọc `ADMIN_ENABLE` server-side → không expose env var ra client.
-
-### `components/auth/LoginForm.tsx` — Client Component
-
-- Google button: luôn hiển thị, gọi `signIn("google", { callbackUrl: "/" })`
-- Divider + credentials form: render có điều kiện theo prop `adminEnabled`
 
 ---
 
 ## Env vars
 
 ```env
-# Google OAuth
 GOOGLE_CLIENT_ID=           # từ Google Cloud Console
 GOOGLE_CLIENT_SECRET=       # từ Google Cloud Console
-GOOGLE_ALLOWED_EMAILS=user1@gmail.com,user2@company.com   # comma-separated, không space
+GOOGLE_ALLOWED_EMAILS=user1@gmail.com,user2@company.com  # ai được login
+ADMIN_EMAILS=admin@company.com                           # ai có role admin
 
-# Admin login control
-ADMIN_ENABLE=1              # 1 = hiển thị form email/password | 0 hoặc không set = ẩn
-ADMIN_EMAIL=                # giữ nguyên
-ADMIN_PASSWORD=             # giữ nguyên
+# REMOVED:
+# ADMIN_ENABLE, ADMIN_EMAIL, ADMIN_PASSWORD
 ```
 
-### Setup Google OAuth
+---
+
+## Setup Google OAuth
 
 1. Vào [Google Cloud Console](https://console.cloud.google.com) → APIs & Services → Credentials
 2. Tạo OAuth 2.0 Client ID (Web application)
 3. Thêm Authorized redirect URI: `https://yourdomain.com/api/auth/callback/google`
-4. Copy Client ID + Client Secret vào `.env.local`
-
----
-
-## Security
-
-- Allowlist enforce ở server-side trong `signIn` callback — không phụ thuộc UI
-- `ADMIN_ENABLE` đọc server-side trong Server Component — không expose ra client
-- Private key ASC không liên quan đến flow auth này
-- Google user và admin user có quyền ngang nhau sau khi login
+4. Copy Client ID + Client Secret
 
 ---
 
 ## Decision Log
 
-| Quyết định | Lý do |
-|---|---|
-| `GOOGLE_ALLOWED_EMAILS` env var | Đơn giản, không cần DB, phù hợp team nhỏ |
-| Server Component wrapper cho login page | Đọc `ADMIN_ENABLE` server-side, không cần `NEXT_PUBLIC_` prefix |
-| Tách `LoginForm` thành Client Component | Server Component không dùng hooks/state |
-| `signIn` callback enforce allowlist | Block ở NextAuth level, không phụ thuộc UI |
-| Giữ tất cả trong `.env.local` | Không cần file riêng, đơn giản nhất |
+| Quyết định | Alternatives | Lý do chọn |
+|---|---|---|
+| Xóa CredentialsProvider | Giữ lại với ADMIN_ENABLE | Deploy lên Railway, không cần local fallback, đơn giản hơn |
+| `ADMIN_EMAILS` env var cho role | DB role table, JWT custom claim | Team nhỏ, không thay đổi thường xuyên |
+| Role trong JWT (không query DB mỗi request) | Middleware DB check | Performance, JWT strategy không có DB per-request |
+| `export const dynamic = "force-dynamic"` trên pages dùng getServerSession | Middleware route protection | Fix Railway build failure — Next.js cố pre-render static |

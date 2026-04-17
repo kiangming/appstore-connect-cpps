@@ -2,7 +2,7 @@
 
 > **Đây là file đọc đầu tiên** khi bắt đầu session mới. Cung cấp toàn cảnh dự án, features đã làm và chưa làm.
 >
-> Last updated: 2026-03-21 (session 14)
+> Last updated: 2026-04-07 (session 15)
 
 ---
 
@@ -10,7 +10,7 @@
 
 Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages (CPP) mà không cần vào UI của Apple.
 - **Tech:** Next.js 14 App Router + TypeScript + Tailwind CSS + NextAuth + Supabase
-- **Deploy:** Vercel hoặc Docker
+- **Deploy:** Railway (primary), Docker (self-host option)
 - **Người dùng:** Team nội bộ 2–5 người
 
 ---
@@ -21,7 +21,7 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 |---|---|---|
 | App List + Search (fluid grid auto-fill, iTunes icon) | `app/(dashboard)/apps/page.tsx` + `components/apps/AppList.tsx` | `docs/feature-app-cpp-list.md` |
 | **Top Nav redesign** (bỏ sidebar, top nav + app sub-nav) | `components/layout/TopNav.tsx` + `components/layout/AppSubNav.tsx` | — |
-| Authentication (Google OAuth + email/password) | `app/(auth)/login/page.tsx` + `lib/auth.ts` | `docs/feature-google-auth.md` |
+| **Authentication (Google OAuth only + role-based)** | `app/(auth)/login/page.tsx` + `lib/auth.ts`. Google-only (CredentialsProvider đã xóa). Role `admin`/`member` gán qua `ADMIN_EMAILS` env var. | `docs/feature-google-auth.md` |
 | CPP List + trạng thái | `app/(dashboard)/apps/[appId]/cpps/page.tsx` | `docs/feature-app-cpp-list.md` |
 | CPP Detail Panel (view) | `components/cpp/CppDetailPanel.tsx` | `docs/feature-app-cpp-list.md` |
 | New CPP form | `app/(dashboard)/apps/[appId]/cpps/new/page.tsx` | — |
@@ -33,11 +33,11 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 | CPP URL column + Export CSV | `components/cpp/CppList.tsx` | `docs/feature-cpp-url-export.md` |
 | **CPP Bulk Import — Excel metadata** (`metadata.xlsx`) | `lib/parseMetadataXlsx.ts` + `CppBulkImportDialog.tsx` | `docs/feature-cpp-bulk-import-xlsx.md` |
 | **Multi-Account ASC** (switch account trên UI) | `components/layout/AccountSwitcher.tsx` + `lib/asc-accounts.ts` | `docs/feature-multi-account.md` |
-| **Google OAuth + Admin Login Control** | `lib/auth.ts` + `components/auth/LoginForm.tsx` | `docs/feature-google-auth.md` |
+| **Google OAuth + Role-Based Auth** | `lib/auth.ts` + `components/auth/LoginForm.tsx`. Xem feature row Authentication ở trên. | `docs/feature-google-auth.md` |
 | **User Footer + Logout** | Tích hợp vào `components/layout/TopNav.tsx` (right side) | — |
 | **Delete CPP** (multi-select, 2-step confirm) | `components/cpp/CppList.tsx` + `app/api/asc/cpps/[cppId]/route.ts` | `docs/feature-delete-cpp.md` |
-| **Submit CPP for Review** (multi-select, parallel submit, reject tooltip) | `components/cpp/CppList.tsx` + `app/api/asc/cpps/[cppId]/submit/route.ts` | `docs/feature-submit-cpp.md` |
-| **Settings — ASC Account Builder** | Admin-only page. Section 1: current accounts (masked). Section 2: form → generate `ASC_ACCOUNTS` string → copy-paste vào `.env`. | `docs/feature-settings-asc-accounts.md` |
+| **Submit CPP for Review v2** (sequential + retry + partial fail UX) | `components/cpp/CppList.tsx` + 3 routes: `submit/prepare`, `submit/confirm`, `submit/[submissionId]` DELETE. State machine `SubmitPhase`. PartialFailDialog. | `docs/feature-submit-cpp.md` |
+| **Settings — ASC Accounts (Supabase CRUD)** | Admin-only page. Full CRUD: list/add/edit/delete accounts lưu trong Supabase `asc_accounts` table. Private key mã hóa AES-256-GCM. | `docs/feature-settings-asc-accounts.md` |
 | **Asset Validation** (screenshot + video trước upload) | `lib/asset-validator.ts` + `lib/ffmpeg-loader.ts`. Tích hợp vào cả 3 flow upload. Deep mode dùng ffmpeg.wasm. | `docs/feature-asset-validation.md` |
 
 ---
@@ -59,22 +59,27 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 
 ```
 app/
-├── (auth)/login/page.tsx           Server — wrapper, đọc ADMIN_ENABLE
+├── (auth)/login/page.tsx           Server — wrapper (không còn đọc ADMIN_ENABLE)
 ├── (dashboard)/
-│   ├── layout.tsx                  Shell layout (TopNav + AppSubNav + main, không còn sidebar)
-│   ├── apps/page.tsx               Server — App List (grid 4 cột, iTunes icon)
+│   ├── layout.tsx                  Shell layout (TopNav + AppSubNav + main)
+│   ├── apps/page.tsx               Server — App List + export const dynamic
 │   └── apps/[appId]/cpps/
-│       ├── page.tsx                Server — CPP List (không có header riêng, dùng AppSubNav)
+│       ├── page.tsx                Server — CPP List
 │       ├── new/page.tsx            Client — New CPP form
 │       └── [cppId]/page.tsx        Server — CPP Editor page
 ├── api/asc/                        Proxy routes (server-side only)
 │   ├── apps/route.ts               GET /api/asc/apps
 │   ├── apps/[appId]/route.ts       GET /api/asc/apps/[appId]
 │   ├── apps/[appId]/app-info-localizations/route.ts  GET + POST
+│   ├── accounts/route.ts           GET list (public-masked) + active default
+│   ├── accounts/active/route.ts    GET active account
 │   ├── cpps/route.ts               GET + POST /api/asc/cpps
 │   ├── cpps/[cppId]/route.ts       GET + PATCH + DELETE
-│   ├── cpps/submit/route.ts          POST batch (submit for review)
-│   ├── cpps/[cppId]/submit/route.ts  DEPRECATED — thay bằng cpps/submit
+│   ├── cpps/submit/route.ts        DEPRECATED (giữ lại, không dùng)
+│   ├── cpps/submit/prepare/route.ts   POST — Step 1+2, trả per-item result
+│   ├── cpps/submit/confirm/route.ts   POST — Step 3, PATCH submitted:true
+│   ├── cpps/submit/[submissionId]/route.ts  DELETE — rollback
+│   ├── cpps/[cppId]/submit/route.ts  DEPRECATED
 │   ├── cpps/[cppId]/localizations/route.ts  POST
 │   ├── localizations/[id]/route.ts  PATCH (promo text)
 │   ├── versions/[versionId]/route.ts  PATCH (deepLink)
@@ -82,39 +87,58 @@ app/
 │   ├── preview-sets/route.ts       GET + POST
 │   ├── upload/route.ts             POST (screenshot file)
 │   └── upload-preview/route.ts     POST (video file)
+├── api/admin/
+│   ├── asc-accounts/route.ts       GET list + POST create (admin only)
+│   └── asc-accounts/[id]/route.ts  PATCH update + DELETE (admin only)
+└── page.tsx                        export const dynamic = "force-dynamic" (Railway build fix)
 
 components/
+├── auth/
+│   └── LoginForm.tsx       Google button only (CredentialsProvider đã xóa)
 ├── layout/
-│   ├── TopNav.tsx          ← MỚI: Primary nav (Logo + tabs + AccountSwitcher + user/logout)
-│   ├── AppSubNav.tsx       ← MỚI: Sub-nav khi trong app context (icon + tên + New CPP)
-│   ├── SidebarNav.tsx      ← DEPRECATED (không dùng trong layout nữa)
-│   ├── UserFooter.tsx      ← DEPRECATED (logic chuyển vào TopNav)
+│   ├── TopNav.tsx
+│   ├── AppSubNav.tsx
+│   ├── SidebarNav.tsx      DEPRECATED (không dùng trong layout)
+│   ├── UserFooter.tsx      DEPRECATED
 │   └── AccountSwitcher.tsx
-├── apps/AppList.tsx        ← Redesign: fluid grid (auto-fill minmax 200px), iTunes icon via useAppIcon hook
+├── apps/AppList.tsx
+├── settings/
+│   └── SettingsPage.tsx    Full CRUD UI cho ASC accounts (Supabase), xóa admin page riêng
 └── cpp/
-    ├── CppList.tsx
+    ├── CppList.tsx         Submit v2: SubmitPhase state machine + PartialFailDialog
     ├── CppDetailPanel.tsx
     ├── CppEditor.tsx
-    ├── LocalizationManager.tsx     ← Component lớn nhất (~900 lines)
-    ├── BulkImportDialog.tsx        ← Bulk Import (assets cho 1 CPP)
-    ├── CppBulkImportDialog.tsx     ← CPP Bulk Import (tạo nhiều CPP)
-    └── AppStorePreview.tsx         stub
+    ├── LocalizationManager.tsx
+    ├── BulkImportDialog.tsx
+    ├── CppBulkImportDialog.tsx
+    └── AppStorePreview.tsx  stub
 
 lib/
-├── asc-client.ts               Tất cả ASC API calls (server-side only)
+├── asc-client.ts               Tất cả ASC API calls. Thêm: prepareCppSubmission(), confirmCppSubmission(), rollbackCppSubmission()
 ├── asc-jwt.ts                  JWT signing
-├── auth.ts                     NextAuth config
-├── use-app-icon.ts             Hook + helpers: useAppIcon(bundleId), getAvatarColor(), getInitials(), AVATAR_COLORS
-├── locale-map.json             39 Apple locales: friendly name → BCP-47 code
-├── locale-utils.ts             localeCodeFromName(), localeNameFromCode(), ALL_APPLE_LOCALES
-├── parseFolderStructure.ts     Parser cho Bulk Import (single CPP)
-├── parseCppFolderStructure.ts  Parser cho CPP Bulk Import (multi-CPP)
-├── asset-validator.ts          Validate screenshot/video (resolution, duration, fps, bitrate, audio)
-├── ffmpeg-loader.ts            Lazy load + singleton cache cho ffmpeg.wasm
-├── supabase.ts                 Supabase client
-└── utils.ts                    cn() helper
+├── asc-crypto.ts               AES-256-GCM encrypt/decrypt (ENCRYPTION_KEY env var)
+├── asc-account-repository.ts   CRUD + 5-min cache. Supabase nếu env set, fallback env ASC_ACCOUNTS
+├── auth.ts                     NextAuth: GoogleProvider only, role admin/member via ADMIN_EMAILS
+├── get-active-account.ts       Dùng repository thay vì env trực tiếp
+├── use-app-icon.ts
+├── locale-map.json
+├── locale-utils.ts
+├── parseFolderStructure.ts
+├── parseCppFolderStructure.ts
+├── asset-validator.ts
+├── ffmpeg-loader.ts
+├── supabase.ts
+└── utils.ts
 
-types/asc.ts            Tất cả TypeScript types cho ASC API
+supabase/
+└── migrations/
+    └── 20260407000000_create_asc_accounts.sql  Table asc_accounts, RLS enabled, service_role only
+
+types/asc.ts            TypeScript types cho ASC API
+
+DELETED FILES:
+- app/(dashboard)/admin/asc-accounts/page.tsx  (merged into SettingsPage)
+- components/admin/AscAccountsManager.tsx       (merged into SettingsPage)
 ```
 
 ---
@@ -136,26 +160,35 @@ App Store Connect API (api.appstoreconnect.apple.com)
 ## Env vars cần có
 
 ```env
-# Multi-account (recommended) — JSON array, 1 env var duy nhất:
+# Google OAuth
+GOOGLE_CLIENT_ID=       # từ Google Cloud Console
+GOOGLE_CLIENT_SECRET=   # từ Google Cloud Console
+GOOGLE_ALLOWED_EMAILS=  # comma-separated emails được phép login bằng Google
+
+# Role-based auth
+ADMIN_EMAILS=           # comma-separated emails có role "admin" (Settings page, admin API)
+
+# ASC Accounts (Supabase storage — primary)
+# Accounts lưu trong Supabase asc_accounts table, mã hóa bằng ENCRYPTION_KEY
+ENCRYPTION_KEY=         # 64-char hex (32 bytes). Generate: openssl rand -hex 32
+
+# ASC Accounts (env fallback — dùng khi Supabase chưa set hoặc DB rỗng)
 ASC_ACCOUNTS=[{"id":"acme","name":"Acme Vietnam","keyId":"...","issuerId":"...","privateKey":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"}]
 
-# Single-account (backward compat) — dùng khi không set ASC_ACCOUNTS:
-# ASC_KEY_ID=
-# ASC_ISSUER_ID=
-# ASC_PRIVATE_KEY=
-
-GOOGLE_CLIENT_ID=      # Google OAuth — từ Google Cloud Console
-GOOGLE_CLIENT_SECRET=  # Google OAuth — từ Google Cloud Console
-GOOGLE_ALLOWED_EMAILS= # comma-separated emails được phép login bằng Google
-ADMIN_ENABLE=1         # 1 = hiển thị form email/password | 0 hoặc không set = ẩn
-ADMIN_EMAIL=           # Email đăng nhập dashboard (credentials login)
-ADMIN_PASSWORD=        # Password đăng nhập dashboard (credentials login)
+# Supabase
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
+
+# NextAuth
 NEXTAUTH_SECRET=
 NEXTAUTH_URL=
+
+# Asset validation
 NEXT_PUBLIC_ASSET_VALIDATION_DEEP=true  # true = ffmpeg.wasm deep | false = basic + checklist
+
+# REMOVED env vars (không còn dùng):
+# ADMIN_ENABLE, ADMIN_EMAIL, ADMIN_PASSWORD — CredentialsProvider đã xóa
 ```
 
 ---
@@ -200,7 +233,7 @@ NEXT_PUBLIC_ASSET_VALIDATION_DEEP=true  # true = ffmpeg.wasm deep | false = basi
 
 14. **metadata.xlsx (CPP Bulk Import)** — `metadata.xlsx` optional đặt trong root folder của batch. Khi có: Excel thắng toàn bộ (bỏ qua `deeplink.txt` + `promo.txt`). Columns: `CPP Name` (bắt buộc, case sensitive) | `Deep Link` (bắt buộc) | `<Locale Name>` (user-friendly, dynamic). Parse client-side: `lib/parseMetadataXlsx.ts` dùng SheetJS dynamic import, 5MB limit, formula disabled. CPP không khớp tên → warning badge `⚠ no metadata`. Template tại `public/metadata-template.xlsx` (41 columns, Vietnamese + English (U.S.) ưu tiên đầu). Xem `docs/feature-cpp-bulk-import-xlsx.md`.
 
-15. **Submit CPP — batch review submission flow (API v1.7+)** — Endpoint cũ `POST /v1/appCustomProductPageSubmissions` đã bị Apple bỏ (404). Flow đúng: (1) `POST /v1/reviewSubmissions` với `appId` + `platform: "IOS"` → `submissionId`; (2) `Promise.all` nhiều `POST /v1/reviewSubmissionItems` — tất cả CPPs vào cùng 1 submission; (3) `PATCH /v1/reviewSubmissions/{submissionId}` → `submitted: true` (không phải `state: "SUBMITTED"` — sẽ 409). Client gọi 1 request duy nhất `POST /api/asc/cpps/submit` với `{ appId, items: [{cppId, versionId}] }`. Route cũ `/cpps/[cppId]/submit` deprecated.
+15. **Submit CPP — batch review submission flow v2 (session 15)** — 3 endpoints riêng biệt: `POST /prepare` (Step 1+2 sequential với retry + 200ms sleep), `POST /confirm` (Step 3), `DELETE /[submissionId]` (rollback). Frontend dùng `SubmitPhase` state machine + `inPartialFailFlow` boolean. Auto-confirm khi 0 fail; hiển thị `PartialFailDialog` khi có ít nhất 1 fail. Route cũ `POST /api/asc/cpps/submit` deprecated.
 
 16. **Submit CPP — no assets check** — Không check assets trước khi submit. Nếu CPP không có assets, ASC trả về 422 và error được hiển thị trong result dialog per-CPP. Đây là design decision (YAGNI — tránh N+1 calls).
 
@@ -222,3 +255,9 @@ NEXT_PUBLIC_ASSET_VALIDATION_DEEP=true  # true = ffmpeg.wasm deep | false = basi
     - **AppSubNav iTunes icon:** Fetch response `/api/asc/apps/${appId}` cũng extract `bundleId`. `useAppIcon(bundleId)` drive icon — hiển thị `<img>` khi loaded, fallback colored avatar. Không tốn thêm request.
     - **AppSubNav size 2×:** `h-12→h-24`, icon `30px→60px rounded-[16px]`, initials `text-[20px]`, tên app `text-[22px]`, button `px-5 py-3 text-[15px]`, Plus icon `h-5 w-5`.
     - **CppList styling:** `<th>` → `font-semibold text-slate-400 text-[11px] tracking-[0.05em]`. `StatusBadge` thêm colored dot (6px circle từ `STATE_DOT_STYLES`). Action bar buttons: `px-[14px] py-[7px] text-[13px]`, icon 14px.
+
+24. **Auth refactor — Google only + role-based (session 15)** — Xóa hoàn toàn `CredentialsProvider`. `lib/auth.ts` chỉ còn `GoogleProvider`. Role `"admin"|"member"` được gán trong `jwt` callback dựa trên `ADMIN_EMAILS` env var (comma-separated). Settings page guard: `session.user.role !== "admin"` (trước là `email === ADMIN_EMAIL`). `LoginForm.tsx` chỉ còn Google button (không props). `app/(auth)/login/page.tsx` không còn đọc `ADMIN_ENABLE`.
+
+25. **ASC Accounts — Supabase storage (session 15)** — `lib/asc-crypto.ts` encrypt/decrypt AES-256-GCM. `lib/asc-account-repository.ts` abstraction layer với 5-min in-memory cache; dùng Supabase khi `SUPABASE_URL + SERVICE_ROLE_KEY + ENCRYPTION_KEY` đều set, fallback về `ASC_ACCOUNTS` env var khi DB rỗng hoặc chưa configure. Admin CRUD: `/api/admin/asc-accounts` (GET list + POST create) + `/api/admin/asc-accounts/[id]` (PATCH + DELETE). `SettingsPage.tsx` merged từ `AscAccountsManager` (xóa trang `/admin/asc-accounts` riêng). Supabase table `asc_accounts`: RLS enabled, **không** có row-level policies — chỉ service_role key có quyền.
+
+26. **Railway deployment + build fix (session 15)** — Deploy target chính: Railway. `output: "standalone"` trong `next.config.mjs`. Build fail issue: pages gọi `getServerSession` được Next.js cố gắng pre-render static → fail vì `GoogleProvider` đọc env var. Fix: thêm `export const dynamic = "force-dynamic"` vào `app/page.tsx`, `app/(dashboard)/settings/page.tsx`, bất kỳ page nào dùng `getServerSession` trực tiếp. Railway env vars tương đương `.env.local` — set trong Railway project Settings > Variables.

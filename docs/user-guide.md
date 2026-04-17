@@ -7,15 +7,20 @@
 ## Mục lục
 
 1. [Tổng quan](#1-tổng-quan)
-2. [Tạo CPP mới](#2-tạo-cpp-mới)
-3. [Chỉnh sửa CPP (CPP Editor)](#3-chỉnh-sửa-cpp-cpp-editor)
-4. [Bulk Import CPP Assets (1 CPP)](#4-bulk-import-cpp-assets-1-cpp)
-5. [CPP Bulk Import (nhiều CPP cùng lúc)](#5-cpp-bulk-import-nhiều-cpp-cùng-lúc)
-6. [Xoá CPP](#6-xoá-cpp)
-7. [Export danh sách CPP ra CSV](#7-export-danh-sách-cpp-ra-csv)
+2. [Đăng nhập](#2-đăng-nhập)
+3. [Điều hướng giao diện](#3-điều-hướng-giao-diện)
+4. [Tạo CPP mới](#4-tạo-cpp-mới)
+5. [Chỉnh sửa CPP (CPP Editor)](#5-chỉnh-sửa-cpp-cpp-editor)
+6. [Bulk Import Assets (1 CPP)](#6-bulk-import-assets-1-cpp)
+7. [CPP Bulk Import (nhiều CPP cùng lúc)](#7-cpp-bulk-import-nhiều-cpp-cùng-lúc)
 8. [Submit CPP để Apple Review](#8-submit-cpp-để-apple-review)
-9. [Cấu trúc thư mục chuẩn](#9-cấu-trúc-thư-mục-chuẩn)
-10. [Các file template và file hỗ trợ](#10-các-file-template-và-file-hỗ-trợ)
+9. [Xoá CPP](#9-xoá-cpp)
+10. [Export danh sách CPP ra CSV](#10-export-danh-sách-cpp-ra-csv)
+11. [Switch App Store Connect Account](#11-switch-app-store-connect-account)
+12. [Cấu trúc thư mục chuẩn](#12-cấu-trúc-thư-mục-chuẩn)
+13. [Các file template và file hỗ trợ](#13-các-file-template-và-file-hỗ-trợ)
+14. [Chuẩn bị metadata.xlsx](#14-chuẩn-bị-metadataxlsx)
+15. [Câu hỏi thường gặp](#15-câu-hỏi-thường-gặp)
 
 ---
 
@@ -23,222 +28,206 @@
 
 CPP Manager là công cụ nội bộ giúp team upload và quản lý **Custom Product Pages (CPP)** lên App Store Connect mà không cần đăng nhập trực tiếp vào trang web Apple.
 
-**Màn hình chính:**
-```
-┌──────────────┬──────────────────────────────────────────┐
-│  Sidebar     │  Nội dung chính                          │
-│              │                                          │
-│  📱 Apps     │  Danh sách apps / Danh sách CPP          │
-│  ⚙ Settings │                                          │
-└──────────────┴──────────────────────────────────────────┘
-```
-
-**Luồng cơ bản:**
-1. Chọn app từ danh sách
-2. Vào trang CPP List của app đó
-3. Tạo / chỉnh sửa / upload / submit CPP
+**Luồng làm việc cơ bản:**
+1. Đăng nhập bằng tài khoản Google được cấp phép
+2. Chọn app từ danh sách
+3. Vào CPP List → tạo, chỉnh sửa, upload, submit CPP
+4. Theo dõi trạng thái và quản lý CPP
 
 ---
 
-## 2. Tạo CPP mới
+## 2. Đăng nhập
 
-### Cách tạo
+1. Truy cập địa chỉ CPP Manager (hỏi admin nếu chưa có)
+2. Nhấn **Sign in with Google**
+3. Chọn tài khoản Google của bạn
+4. Nếu tài khoản không được cấp phép, sẽ thấy thông báo từ chối — liên hệ admin để được thêm vào danh sách
 
-1. Vào **CPP List** của app cần tạo CPP
-2. Nhấn nút **+ New CPP** (góc trên phải)
+> **Lưu ý:** Chỉ tài khoản Google nằm trong danh sách được admin cấu hình mới đăng nhập được.
+
+---
+
+## 3. Điều hướng giao diện
+
+### Thanh điều hướng trên cùng (Top Nav)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  C CPP Manager │  Apps   Settings  │     [Account ▼]  user@...  [↩] │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+| Vị trí | Thành phần | Tác dụng |
+|---|---|---|
+| Trái | Logo + "CPP Manager" | Nhấn để về trang chủ |
+| Giữa | Tab **Apps** | Xem danh sách tất cả apps |
+| Giữa | Tab **Settings** | Quản lý ASC accounts (chỉ admin) |
+| Phải | **Account Switcher** | Switch giữa các App Store Connect accounts |
+| Phải | Email | Email đang đăng nhập |
+| Phải | Nút ↩ | Đăng xuất |
+
+### Sub-Nav (khi đang trong 1 app)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  [Icon] Tên App                                        [+ New CPP]  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+Hiện ra phía dưới Top Nav khi bạn đang ở trang CPP List hoặc CPP Editor của một app. Nhấn tên app để quay lại CPP List.
+
+---
+
+## 4. Tạo CPP mới
+
+1. Vào tab **Apps** → nhấn vào app cần tạo CPP
+2. Nhấn nút **+ New CPP** (góc phải Sub-Nav)
 3. Điền thông tin:
-   - **Tên CPP** — tên hiển thị nội bộ (ví dụ: "Summer Campaign 2026")
-   - **Primary Locale** — ngôn ngữ chính của CPP (thường là `English (U.S.)`)
+   - **Tên CPP** — tên nội bộ để quản lý (ví dụ: "Summer Campaign 2026")
+   - **Primary Locale** — ngôn ngữ chính của CPP (thường chọn `English (U.S.)`)
 4. Nhấn **Create**
 
 ### Sau khi tạo
 
 - CPP mới xuất hiện trong danh sách với trạng thái **Draft**
-- Click vào tên CPP để vào **CPP Editor** và bắt đầu thêm nội dung
+- Nhấn vào tên CPP để vào **CPP Editor** và bắt đầu thêm nội dung
 
 ### Lưu ý
 
-- Tên CPP không cần trùng với tên trên App Store — đây là tên nội bộ để quản lý
-- CPP được tạo ở trạng thái **Draft** (chưa gửi Apple review) và không hiển thị với người dùng
+- Tên CPP là tên nội bộ — người dùng App Store không thấy tên này
+- CPP ở trạng thái **Draft** sẽ không hiển thị với người dùng cho đến khi được duyệt
 
 ---
 
-## 3. Chỉnh sửa CPP (CPP Editor)
+## 5. Chỉnh sửa CPP (CPP Editor)
 
-CPP Editor có 3 tab chính:
+Nhấn vào tên CPP trong danh sách để mở CPP Editor. Có 3 tab:
 
 ### Tab Overview — Thông tin chung
-- Xem trạng thái CPP (Draft / In Review / Approved / Rejected)
-- Xem và chỉnh **Deep Link** (URL scheme mở trực tiếp vào phần trong app)
-- Xem **CPP URL** (link Apple tạo tự động)
 
-### Tab Details — Nội dung locale
-- Xem danh sách locale đã có trong CPP
-- Thêm locale mới (nhấn **+ Add Locale**)
-- Chỉnh sửa **Promotional Text** cho từng locale
+- Xem trạng thái hiện tại của CPP (Draft / In Review / Approved / Rejected)
+- Xem **CPP URL** — link App Store tự động tạo (có thể share sau khi approved)
+- Xem và chỉnh **Deep Link** — URL scheme mở thẳng vào màn hình trong app (ví dụ: `myapp://campaign/summer`)
 
-### Tab Assets — Ảnh và video
-Quản lý screenshot và app preview (video) cho từng locale:
+### Tab Details — Locale và Promotional Text
+
+- Xem danh sách locales đã có trong CPP
+- Nhấn **+ Add Locale** để thêm locale mới
+- Nhấn vào locale để chỉnh **Promotional Text** (tối đa 170 ký tự)
+
+### Tab Assets — Ảnh và Video
+
+Quản lý screenshot và app preview (video) cho từng locale.
 
 **Upload thủ công:**
 1. Chọn locale từ dropdown
-2. Kéo thả file ảnh (PNG) vào vùng drop zone của **iPhone** hoặc **iPad**
-3. Kéo thả file video (MP4) vào vùng **App Previews**
-4. File upload theo thứ tự lần lượt
+2. Kéo thả file PNG vào ô **iPhone** hoặc **iPad**
+3. Kéo thả file MP4 vào ô **App Previews**
+4. Mỗi file upload lần lượt, hiển thị tiến trình
 
-**Bulk Import (nhiều file cùng lúc):**
-Xem [Phần 4 — Bulk Import CPP Assets](#4-bulk-import-cpp-assets-1-cpp)
+**Bulk Import — upload nhiều file cùng lúc:**
+Xem [Phần 6 — Bulk Import Assets](#6-bulk-import-assets-1-cpp)
 
 ---
 
-## 4. Bulk Import CPP Assets (1 CPP)
+## 6. Bulk Import Assets (1 CPP)
 
-Dùng khi cần upload **nhiều locale và nhiều file** cho một CPP đã tồn tại.
+Dùng khi cần upload nhiều locale và nhiều file cho **một CPP đã tồn tại**.
 
 ### Bước 1 — Chuẩn bị thư mục
 
-Tạo cấu trúc thư mục theo quy ước sau:
-
 ```
 ten-folder-bat-ky/
-├── en-US/                        ← tên locale (BCP-47 code HOẶC tên Apple)
-│   ├── promo.txt                 ← optional: nội dung promotional text
+├── en-US/                        ← tên locale: BCP-47 code hoặc tên Apple
+│   ├── promo.txt                 ← optional: promotional text
 │   ├── screenshots/
-│   │   ├── iphone/               ← ảnh PNG cho iPhone, đặt tên theo thứ tự
+│   │   ├── iphone/               ← ảnh PNG cho iPhone
 │   │   │   ├── 01_home.png
 │   │   │   ├── 02_detail.png
 │   │   │   └── 03_checkout.png
-│   │   └── ipad/                 ← ảnh PNG cho iPad (nếu app hỗ trợ iPad)
+│   │   └── ipad/                 ← ảnh PNG cho iPad (nếu có)
 │   └── previews/
 │       ├── iphone/               ← video MP4 cho iPhone
 │       └── ipad/                 ← video MP4 cho iPad
-├── vi/                           ← locale tiếng Việt (hoặc dùng "Vietnamese")
+├── Vietnamese/                   ← hoặc dùng "vi"
 │   ├── promo.txt
-│   └── screenshots/
-│       └── iphone/
+│   └── screenshots/iphone/
 └── ja/
-    └── screenshots/
-        └── iphone/
+    └── screenshots/iphone/
 ```
 
-**Quy tắc đặt tên:**
-- Tên thư mục locale: dùng **BCP-47 code** (`en-US`, `vi`, `ja`) hoặc **tên Apple** (`English (U.S.)`, `Vietnamese`, `Japanese`) — cả hai đều được chấp nhận
-- File ảnh trong `iphone/` và `ipad/` được xử lý theo **thứ tự tên file** (lexicographic) — đặt tên có số thứ tự ở đầu để kiểm soát thứ tự
-- Các thư mục `screenshots/`, `previews/`, `iphone/`, `ipad/` là **optional** — không có thì bỏ qua
+**Quy tắc:**
+- Tên folder locale: BCP-47 (`en-US`, `vi`) hoặc tên Apple (`English (U.S.)`, `Vietnamese`) — cả hai đều được
+- File ảnh/video xử lý theo **thứ tự tên file** (a → z) — đặt số ở đầu tên để kiểm soát thứ tự
+- Các thư mục `screenshots/`, `previews/`, `iphone/`, `ipad/` đều optional
 
-### Bước 2 — Import
+### Bước 2 — Tiến hành import
 
-1. Vào **CPP Editor** → tab **Assets**
+1. Vào CPP Editor → tab **Assets**
 2. Nhấn nút **Bulk Import**
-3. Kéo thả thư mục đã chuẩn bị vào vùng drop, hoặc nhấn **Browse folder**
-4. Xem preview: danh sách locale kèm số file và trạng thái
-5. Kiểm tra trạng thái từng locale:
-   - 🟢 **Ready** — locale đã có trong CPP, sẵn sàng upload
-   - 🔵 **New locale** — locale sẽ được thêm tự động vào CPP
-   - 🟡 **Not supported by app** — locale chưa có trong app store page, sẽ được thêm vào app trước
-   - ⚫ **Skip** — tên thư mục không hợp lệ hoặc thư mục rỗng
-6. Nhấn **Import All** để bắt đầu upload
-7. Xem tiến trình theo từng locale và từng file
+3. Kéo thả thư mục vào ô drop, hoặc nhấn **Browse folder**
+4. Xem preview danh sách locale:
+   - 🟢 **Ready** — locale đã có trong CPP
+   - 🔵 **New locale** — sẽ tự động thêm locale vào CPP
+   - 🟡 **Not supported by app** — sẽ thêm locale vào app store page trước
+   - ⚫ **Skip** — tên folder không hợp lệ hoặc rỗng
+5. Nhấn **Remove** trên locale nào muốn bỏ qua
+6. Nhấn **Import All** để bắt đầu
 
-### Lưu ý
+### Trong khi import
 
-- Upload theo thứ tự từng locale (không song song) để tránh rate limit
-- Nếu locale lỗi, các locale còn lại vẫn tiếp tục upload
-- Có thể nhấn **Remove** trên locale nào đó trong bước preview để bỏ qua locale đó
+- Tiến trình hiển thị theo từng locale và từng file
+- Nếu 1 locale lỗi, các locale khác vẫn tiếp tục
 
 ---
 
-## 5. CPP Bulk Import (nhiều CPP cùng lúc)
+## 7. CPP Bulk Import (nhiều CPP cùng lúc)
 
-Dùng khi cần **tạo nhiều CPP mới** hoặc **thêm assets vào nhiều CPP** cùng một lúc.
+Dùng khi cần **tạo nhiều CPP mới** hoặc **thêm assets vào nhiều CPP** cùng lúc.
 
 ### Bước 1 — Chuẩn bị thư mục root
 
 ```
 ten-folder-root/
-├── primary-locale.txt            ← bắt buộc: locale chính dùng chung cho TẤT CẢ CPP mới
-├── metadata.xlsx                 ← optional: file Excel chứa deep link + promo text (khuyến nghị)
+├── primary-locale.txt            ← BẮT BUỘC khi tạo CPP mới
+├── metadata.xlsx                 ← KHUYẾN NGHỊ: deep link + promo text tập trung
 │
-├── Summer Campaign/              ← tên thư mục = tên CPP
-│   ├── deeplink.txt              ← optional: deep link riêng (bỏ qua nếu có metadata.xlsx)
-│   ├── English (U.S.)/           ← thư mục locale (tên Apple hoặc BCP-47)
-│   │   ├── promo.txt             ← optional (bỏ qua nếu có metadata.xlsx)
+├── Summer Campaign/              ← tên folder = tên CPP
+│   ├── deeplink.txt              ← optional (bỏ qua nếu dùng metadata.xlsx)
+│   ├── English (U.S.)/
+│   │   ├── promo.txt             ← optional (bỏ qua nếu dùng metadata.xlsx)
 │   │   ├── screenshots/
 │   │   │   ├── iphone/
 │   │   │   └── ipad/
-│   │   └── previews/
-│   │       └── iphone/
+│   │   └── previews/iphone/
 │   └── Vietnamese/
-│       ├── promo.txt
 │       └── screenshots/iphone/
 │
 ├── Holiday Sale/
-│   ├── deeplink.txt
 │   ├── English (U.S.)/
 │   │   └── screenshots/iphone/
 │   └── Japanese/
 │       └── screenshots/iphone/
 │
-└── _template/                    ← thư mục bắt đầu bằng _ hoặc . sẽ bị bỏ qua tự động
+└── _template/                    ← thư mục bắt đầu _ hoặc . tự động bỏ qua
 ```
 
-### Bước 2 — Import
+### Bước 2 — Tiến hành import
 
 1. Vào trang **CPP List** của app
-2. Nhấn nút **Bulk Import CPPs**
-3. Kéo thả thư mục root vào vùng drop, hoặc nhấn **Browse folder**
-4. Xem preview (3-cấp: CPP → Locale → Files):
-   - 🔵 **New CPP** — tên CPP chưa tồn tại, sẽ được tạo mới
-   - 🟢 **Existing** — tên CPP đã có (so sánh không phân biệt hoa/thường), chỉ thêm locale/assets
+2. Nhấn nút **Bulk Import CPPs** (góc trên phải)
+3. Kéo thả thư mục root, hoặc nhấn **Browse folder**
+4. Xem preview (3 cấp: CPP → Locale → Files):
+   - 🔵 **New CPP** — tên chưa tồn tại, sẽ tạo mới
+   - 🟢 **Existing** — tên đã có (không phân biệt hoa/thường), chỉ thêm assets
    - ⚫ **Skip** — thư mục rỗng hoặc bắt đầu bằng `_`/`.`
 5. Nhấn **Import All**
-6. Theo dõi tiến trình (2 CPP chạy song song, locale trong mỗi CPP chạy tuần tự)
+6. Theo dõi tiến trình (2 CPP chạy song song, locale trong mỗi CPP tuần tự)
 
-### CPP tồn tại hay CPP mới?
+### Hệ thống tự phát hiện CPP tồn tại hay mới
 
-Hệ thống tự động nhận diện:
-- **Tên folder khớp** với CPP đang có (không phân biệt hoa/thường) → merge, không tạo lại
-- **Tên folder mới** → tạo CPP mới
-- Sau khi tạo CPP mới, trạng thái là **Draft**, chưa submit
-
----
-
-## 6. Xoá CPP
-
-### Xoá 1 hoặc nhiều CPP
-
-1. Vào trang **CPP List**
-2. Tích checkbox vào CPP cần xoá (tích nhiều để xoá nhiều cùng lúc)
-3. Nhấn nút **Delete** xuất hiện trên action bar
-4. Xem danh sách CPP sẽ xoá trong dialog xác nhận
-5. Nhấn **Confirm Delete** để xoá
-
-### Lưu ý
-
-- **Không thể hoàn tác** — xoá CPP sẽ xoá vĩnh viễn khỏi App Store Connect
-- CPP đang ở trạng thái **In Review** hoặc **Approved** có thể không xoá được — Apple sẽ trả lỗi
-
----
-
-## 7. Export danh sách CPP ra CSV
-
-1. Vào trang **CPP List**
-2. Nhấn nút **Export CSV** (góc trên phải, cạnh "Bulk Import CPPs")
-3. File CSV được tải về tự động với tên `cpps-YYYY-MM-DD.csv`
-
-### Nội dung file CSV
-
-```
-Name,Status,URL
-Summer Campaign,Draft,https://apps.apple.com/us/app/myapp/id123?ppid=abc123
-Holiday Sale,Approved,https://apps.apple.com/us/app/myapp/id123?ppid=def456
-```
-
-| Column | Nội dung |
-|---|---|
-| Name | Tên CPP |
-| Status | Trạng thái (Draft / In Review / Approved / Rejected) |
-| URL | Link App Store của CPP — dùng để share hoặc test |
+- Tên folder **khớp** với CPP đang có (không phân biệt hoa/thường) → merge, không tạo lại
+- Tên folder **chưa có** → tạo CPP mới (trạng thái Draft)
 
 ---
 
@@ -247,44 +236,115 @@ Holiday Sale,Approved,https://apps.apple.com/us/app/myapp/id123?ppid=def456
 ### Submit 1 hoặc nhiều CPP
 
 1. Vào trang **CPP List**
-2. Tích checkbox vào CPP cần submit (chỉ CPP ở trạng thái **Draft** mới có thể submit)
-3. Nhấn nút **Submit** (màu xanh, góc trên phải action bar)
-4. Dialog xác nhận hiển thị danh sách CPP sẽ submit:
-   - ✓ Eligible — CPP có thể submit
-   - ⚠ Not eligible — CPP không ở trạng thái Draft (sẽ bỏ qua)
-5. Nhấn **Submit for Review** để gửi
-6. Kết quả hiện theo từng CPP (thành công / lỗi)
+2. Tích checkbox vào CPP cần submit — chỉ CPP ở trạng thái **Draft** mới có thể submit
+3. Nhấn nút **Submit** (màu xanh, góc phải action bar)
+4. Dialog xác nhận hiển thị danh sách CPP và trạng thái eligible
+5. Nhấn **Submit for Review**
 
-### Trạng thái CPP sau khi submit
+### Các trường hợp sau khi nhấn Submit
+
+**Trường hợp 1 — Tất cả thành công:**
+- Hệ thống tự động hoàn tất submission
+- Dialog kết quả hiển thị danh sách CPP đã submit thành công
+
+**Trường hợp 2 — Một số CPP thất bại (Partial Fail):**
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  ⚠️  Some CPPs failed to add                             │
+│                                                          │
+│  2 of 5 CPPs could not be added. Review and decide.      │
+│                                                          │
+│  ✅  Summer Campaign                                     │
+│  ✅  Holiday Sale                                        │
+│  ✅  Back to School                                      │
+│  ❌  Spring Promo                                        │
+│       422 · Invalid version state                        │
+│  ❌  Black Friday                                        │
+│       409 · Already in another submission                │
+│                                                          │
+│  [ Rollback ]          [ Submit 3 successful CPPs → ]    │
+└──────────────────────────────────────────────────────────┘
+```
+
+- **Rollback** — hủy toàn bộ submission, không submit gì cả
+- **Submit X CPPs** — tiếp tục submit những CPP đã thêm thành công, bỏ qua CPP lỗi
+
+**Trường hợp 3 — Tất cả thất bại:**
+- Nút "Submit" bị vô hiệu hóa
+- Chỉ có thể nhấn **Rollback**
+
+### Trạng thái CPP
 
 | Trạng thái | Ý nghĩa |
 |---|---|
 | **Draft** | Đang soạn thảo, chưa gửi |
 | **In Review** | Đã gửi Apple, đang chờ duyệt |
 | **Approved** | Apple đã duyệt — CPP hiển thị với người dùng |
-| **Rejected** | Apple từ chối — hover vào badge đỏ để xem lý do |
+| **Rejected** | Apple từ chối — hover vào badge đỏ để xem lý do từ chối |
 
 ### Lưu ý
 
-- CPP cần có ít nhất 1 locale với đủ assets trước khi submit — nếu thiếu assets, Apple sẽ trả lỗi 422 và hiện thông báo trong kết quả
-- Sau khi submit, CPP không còn chỉnh sửa được cho đến khi Apple duyệt hoặc từ chối
+- CPP cần có ít nhất 1 locale với ảnh đủ kích thước — nếu thiếu, Apple trả lỗi 422
+- Sau khi submit, CPP không chỉnh sửa được cho đến khi Apple duyệt hoặc từ chối
+- Nếu bị **Rejected**: xem lý do trong tooltip badge → tạo version mới → upload lại → submit lại
 
 ---
 
-## 9. Cấu trúc thư mục chuẩn
+## 9. Xoá CPP
+
+1. Vào trang **CPP List**
+2. Tích checkbox vào CPP cần xoá (tích nhiều để xoá nhiều cùng lúc)
+3. Nhấn nút **Delete** (action bar bên trái)
+4. Xem danh sách CPP sẽ xoá trong dialog xác nhận
+5. Nhấn **Confirm Delete**
+
+> ⚠️ **Không thể hoàn tác.** CPP đang **In Review** hoặc **Approved** có thể không xoá được — Apple sẽ trả lỗi.
+
+---
+
+## 10. Export danh sách CPP ra CSV
+
+1. Vào trang **CPP List**
+2. Nhấn nút **Export CSV**
+3. File `cpps-YYYY-MM-DD.csv` tải về tự động
+
+### Nội dung file CSV
+
+| Column | Nội dung |
+|---|---|
+| Name | Tên CPP |
+| Status | Trạng thái (Draft / In Review / Approved / Rejected) |
+| URL | Link App Store của CPP — dùng để share hoặc test deep link |
+
+---
+
+## 11. Switch App Store Connect Account
+
+Nếu team quản lý nhiều Apple Developer accounts (ví dụ: nhiều client):
+
+1. Nhấn vào **Account Switcher** (góc trên phải Top Nav — hiển thị tên account hiện tại)
+2. Chọn account muốn switch
+3. Trang tự reload — toàn bộ dữ liệu (apps, CPPs) sẽ hiển thị theo account mới
+
+> Account mặc định được chọn khi mới đăng nhập. Sau khi switch, lựa chọn được lưu trong session.
+
+---
+
+## 12. Cấu trúc thư mục chuẩn
 
 ### Bulk Import Assets (1 CPP)
 
 ```
 <ten-folder>/
 ├── <locale>/
-│   ├── promo.txt
+│   ├── promo.txt                 ← optional, UTF-8, tối đa 170 ký tự
 │   ├── screenshots/
-│   │   ├── iphone/   ← PNG files
-│   │   └── ipad/     ← PNG files
+│   │   ├── iphone/               ← PNG, sắp xếp theo tên file
+│   │   └── ipad/
 │   └── previews/
-│       ├── iphone/   ← MP4 files
-│       └── ipad/     ← MP4 files
+│       ├── iphone/               ← MP4
+│       └── ipad/
 └── <locale-2>/
     └── ...
 ```
@@ -294,7 +354,7 @@ Holiday Sale,Approved,https://apps.apple.com/us/app/myapp/id123?ppid=def456
 ```
 <root>/
 ├── primary-locale.txt            ← BCP-47 code (ví dụ: en-US)
-├── metadata.xlsx                 ← optional (khuyến nghị)
+├── metadata.xlsx                 ← optional, khuyến nghị
 ├── <Tên CPP 1>/
 │   ├── deeplink.txt              ← optional (bỏ qua nếu dùng metadata.xlsx)
 │   ├── <locale>/
@@ -307,16 +367,14 @@ Holiday Sale,Approved,https://apps.apple.com/us/app/myapp/id123?ppid=def456
 │   │       └── ipad/
 │   └── <locale-2>/
 │       └── ...
-├── <Tên CPP 2>/
-│   └── ...
-└── _ignored/                     ← thư mục bắt đầu _ hoặc . sẽ bị bỏ qua
+└── _ignored/                     ← tên bắt đầu _ hoặc . → tự bỏ qua
 ```
 
 ### Tên locale được chấp nhận
 
-Cả hai dạng sau đây đều hợp lệ cho tên thư mục locale:
+Cả hai dạng đều hợp lệ:
 
-| Tên Apple (user-friendly) | BCP-47 code |
+| Tên Apple | BCP-47 code |
 |---|---|
 | `English (U.S.)` | `en-US` |
 | `Vietnamese` | `vi` |
@@ -328,63 +386,51 @@ Cả hai dạng sau đây đều hợp lệ cho tên thư mục locale:
 | `German` | `de-DE` |
 | `Spanish` | `es-ES` |
 | `Thai` | `th` |
+| `Indonesian` | `id` |
+| `Portuguese (Brazil)` | `pt-BR` |
 
-Xem đầy đủ 39 locales Apple hỗ trợ trong file `public/metadata-template.xlsx`.
+Xem đầy đủ 39 locales trong `public/metadata-template.xlsx`.
 
 ---
 
-## 10. Các file template và file hỗ trợ
+## 13. Các file template và file hỗ trợ
 
 ### `promo.txt` — Promotional Text
 
-- **Mục đích:** Chứa nội dung promotional text cho 1 locale
 - **Vị trí:** Trong thư mục locale (ví dụ: `en-US/promo.txt`)
-- **Format:** Plain text, UTF-8, không có định dạng đặc biệt
+- **Format:** Plain text, UTF-8, không định dạng đặc biệt
+- **Giới hạn:** Tối đa 170 ký tự
+- **Lưu ý:** Nếu dùng `metadata.xlsx`, file này bị bỏ qua
 
 ```
 Khám phá ưu đãi mùa hè với hàng nghìn sản phẩm giảm giá đến 70%. Mua sắm ngay hôm nay!
 ```
 
-- **Giới hạn:** Apple giới hạn 170 ký tự cho promotional text
-- **Lưu ý:** Nếu không có file này, promotional text của locale đó sẽ không được cập nhật. Nếu dùng `metadata.xlsx`, file này bị bỏ qua.
-
 ---
 
 ### `deeplink.txt` — Deep Link
 
-- **Mục đích:** URL scheme mở thẳng vào màn hình cụ thể trong app
 - **Vị trí:** Trong thư mục gốc của CPP (cùng cấp với các thư mục locale)
-- **Format:** 1 dòng duy nhất chứa URL
+- **Format:** 1 dòng chứa URL
+- **Lưu ý:** Nếu dùng `metadata.xlsx`, file này bị bỏ qua
 
 ```
 myapp://campaign/summer2026
 ```
 
-**Ví dụ thực tế:**
-```
-myapp://product/123
-```
-
-- **Lưu ý:** Nếu dùng `metadata.xlsx`, file này bị bỏ qua.
-
 ---
 
 ### `primary-locale.txt` — Primary Locale
 
-- **Mục đích:** Chỉ định locale chính dùng khi tạo CPP mới trong **CPP Bulk Import**
-- **Vị trí:** Trong thư mục **root** (cùng cấp với các thư mục CPP), **không phải** bên trong thư mục CPP
-- **Format:** BCP-47 code duy nhất
+- **Vị trí:** Thư mục **root** (cùng cấp với các thư mục CPP) — **không phải** trong thư mục CPP
+- **Format:** BCP-47 code duy nhất (1 dòng)
+- **Bắt buộc** khi batch có CPP mới cần tạo
 
 ```
 en-US
 ```
 
-**Các giá trị phổ biến:**
-- `en-US` — English (U.S.)
-- `vi` — Vietnamese
-- `ja` — Japanese
-
-**Nếu file thiếu hoặc giá trị không hợp lệ:** Hệ thống tự fallback theo thứ tự ưu tiên:
+**Nếu file thiếu hoặc giá trị không hợp lệ**, hệ thống fallback theo thứ tự:
 1. Locale đầu tiên đã có trong app store page
 2. Locale đầu tiên trong thư mục (theo alphabet)
 3. `en-US`
@@ -393,60 +439,112 @@ en-US
 
 ### `metadata.xlsx` — Excel Metadata *(khuyến nghị)*
 
-- **Mục đích:** Quản lý tập trung deep link và promotional text cho nhiều CPP + nhiều locale trong 1 file Excel
-- **Vị trí:** Trong thư mục **root** (cùng cấp với `primary-locale.txt`)
-- **Ưu tiên:** Khi có file này → **Excel thắng toàn bộ**, bỏ qua `deeplink.txt` và `promo.txt`
+- **Vị trí:** Thư mục **root** (cùng cấp với `primary-locale.txt`)
+- **Ưu tiên:** Khi có file này → **thắng toàn bộ**, bỏ qua `deeplink.txt` và `promo.txt`
+- **Giới hạn:** Tối đa 5MB, chỉ đọc sheet đầu tiên
 
-**Cấu trúc file:**
-
-| CPP Name | Deep Link | English (U.S.) | Vietnamese | Japanese |
-|---|---|---|---|---|
-| Summer Campaign | myapp://summer | Summer deals! | Ưu đãi mùa hè! | |
-| Holiday Sale | | Holiday savings! | | ホリデーセール |
-| Winter Promo | myapp://winter | | | |
-
-**Quy tắc:**
-- **Row 1** = header (bắt buộc có cột `CPP Name` và `Deep Link`)
-- **Cột `CPP Name`** — phải khớp **chính xác** (phân biệt hoa/thường) với tên thư mục CPP
-- **Cột `Deep Link`** — ô trống = không set deep link
-- **Cột locale** — tên cột dùng tên Apple user-friendly (ví dụ: `Vietnamese`, không phải `vi`)
-- **Ô trống** = không cập nhật giá trị đó
-- **Dòng trong Excel không có thư mục CPP tương ứng** → bỏ qua
-- **Thư mục CPP không có dòng trong Excel** → hiển thị cảnh báo `⚠ No metadata` trong preview
-
-**Download template:** Tải file mẫu tại `/metadata-template.xlsx` từ server (hoặc hỏi admin)
-
-**Giới hạn:** File tối đa 5MB. Chỉ đọc sheet đầu tiên.
+Xem hướng dẫn chi tiết tại [Phần 14 — Chuẩn bị metadata.xlsx](#14-chuẩn-bị-metadataxlsx).
 
 ---
 
-### Tóm tắt: file nào dùng ở đâu?
+### Tóm tắt: file nào dùng ở đâu
 
-| File | Dùng khi | Vị trí |
+| File | Dùng trong | Vị trí |
 |---|---|---|
-| `promo.txt` | Bulk Import 1 CPP hoặc CPP Bulk Import (không có metadata.xlsx) | Trong thư mục locale |
+| `promo.txt` | Bulk Import Assets hoặc CPP Bulk Import (không có metadata.xlsx) | Trong thư mục locale |
 | `deeplink.txt` | CPP Bulk Import (không có metadata.xlsx) | Trong thư mục CPP |
-| `primary-locale.txt` | CPP Bulk Import | Root folder (cùng cấp CPP folders) |
+| `primary-locale.txt` | CPP Bulk Import | Root folder |
 | `metadata.xlsx` | CPP Bulk Import (thay thế promo.txt + deeplink.txt) | Root folder |
 
 ---
 
-## Câu hỏi thường gặp
+## 14. Chuẩn bị metadata.xlsx
+
+`metadata.xlsx` là cách quản lý tập trung deep link và promotional text cho nhiều CPP + nhiều locale trong 1 file Excel. **Được khuyến nghị** khi batch có nhiều CPP.
+
+### Tải file mẫu
+
+Tải file template tại: `https://<your-domain>/metadata-template.xlsx`
+
+Hoặc hỏi admin để lấy file.
+
+### Cấu trúc file
+
+| CPP Name | Deep Link | English (U.S.) | Vietnamese | Japanese | ... |
+|---|---|---|---|---|---|
+| Summer Campaign | myapp://summer | Summer deals up to 70%! | Ưu đãi mùa hè đến 70%! | | |
+| Holiday Sale | | Holiday savings! | Ưu đãi ngày lễ! | ホリデーセール | |
+| Winter Promo | myapp://winter | | | | |
+
+### Quy tắc cột
+
+| Cột | Quy tắc |
+|---|---|
+| **CPP Name** | Bắt buộc. Phải khớp **chính xác** (phân biệt hoa/thường) với tên thư mục CPP |
+| **Deep Link** | Bắt buộc (có thể để trống). Ô trống = không set deep link |
+| **Tên locale** | Dùng tên Apple user-friendly: `Vietnamese`, `English (U.S.)`, `Japanese`,... (không dùng `vi`, `en-US`) |
+
+### Quy tắc ô
+
+- **Ô có giá trị** → cập nhật field đó
+- **Ô trống** → bỏ qua, không ghi đè
+- **Dòng không có thư mục CPP tương ứng** → bỏ qua (không gây lỗi)
+- **Thư mục CPP không có dòng trong Excel** → hiển thị cảnh báo `⚠ No metadata` trong preview, nhưng vẫn import được
+
+### Ví dụ thực tế
+
+Batch gồm 3 CPP, 3 locale (English, Vietnamese, Japanese):
+
+| CPP Name | Deep Link | English (U.S.) | Vietnamese | Japanese |
+|---|---|---|---|---|
+| Tet Sale 2026 | myapp://tet2026 | Celebrate Tet with us! | Chào Tết 2026! | |
+| Summer 2026 | myapp://summer2026 | Summer deals! | Ưu đãi mùa hè! | サマーセール！ |
+| Back to School | | Get ready for school! | Chuẩn bị năm học mới! | |
+
+**Kết quả:**
+- Tet Sale 2026: deep link set, promo text cho EN + VI (JP bỏ qua)
+- Summer 2026: deep link set, promo text cho EN + VI + JP
+- Back to School: không có deep link, promo text cho EN + VI
+
+### Lưu ý khi tạo file Excel
+
+- File phải là định dạng `.xlsx` (Excel 2007+)
+- Header phải ở **row 1** — không thêm row tiêu đề phụ
+- Cột `CPP Name` và `Deep Link` phải có mặt (dù Deep Link có thể để trống hết)
+- Tên cột locale phải chính xác — ví dụ `Vietnamese` (không phải `Vietnam` hay `vi`)
+- Không dùng công thức Excel — chỉ dùng giá trị text thuần
+- Giới hạn promotional text: **170 ký tự** — Excel không cảnh báo nhưng ASC sẽ từ chối nếu dài hơn
+
+---
+
+## 15. Câu hỏi thường gặp
 
 **Q: Thứ tự ảnh trong App Store được quyết định bởi điều gì?**
-A: Theo thứ tự tên file lexicographic. Đặt tên file có số thứ tự ở đầu (ví dụ: `01_home.png`, `02_detail.png`) để kiểm soát thứ tự hiển thị.
+A: Theo thứ tự tên file (a → z). Đặt số ở đầu tên file để kiểm soát: `01_home.png`, `02_feature.png`, `03_checkout.png`.
 
-**Q: Có thể upload ảnh iPhone và iPad riêng không?**
-A: Có. Đặt ảnh iPhone vào thư mục `screenshots/iphone/` và ảnh iPad vào `screenshots/ipad/`. Nếu chỉ có thư mục `iphone/` thì chỉ upload cho iPhone.
+**Q: Có thể upload riêng ảnh iPhone và iPad không?**
+A: Có. Đặt ảnh iPhone vào `screenshots/iphone/`, iPad vào `screenshots/ipad/`. Nếu chỉ có `iphone/` thì chỉ upload cho iPhone.
 
-**Q: Tôi vừa upload nhầm ảnh, có xoá được không?**
-A: Hiện tại CPP Manager chưa hỗ trợ xoá ảnh đơn lẻ qua UI. Vui lòng đăng nhập trực tiếp vào App Store Connect để xoá ảnh.
+**Q: Tôi vừa upload nhầm ảnh, có xóa được không?**
+A: CPP Manager chưa hỗ trợ xóa ảnh đơn lẻ qua UI. Vui lòng đăng nhập trực tiếp vào App Store Connect để xóa.
 
-**Q: Tại sao submit CPP bị lỗi 422?**
-A: Apple yêu cầu CPP phải có ít nhất 1 screenshot cho locale chính trước khi submit. Hãy upload ảnh cho CPP trước khi submit.
+**Q: Submit CPP bị lỗi 422 là gì?**
+A: Apple yêu cầu CPP phải có ít nhất 1 screenshot cho locale chính trước khi submit. Upload ảnh trước, sau đó mới submit.
 
-**Q: `primary-locale.txt` cần đặt trong thư mục CPP hay thư mục root?**
-A: Đặt trong **thư mục root** (cùng cấp với các thư mục CPP), dùng chung cho toàn bộ batch.
+**Q: Submit bị lỗi 409 "Already in another submission"?**
+A: CPP đó đang nằm trong một submission khác chưa hoàn tất. Rollback submission đó (nếu có) hoặc đợi nó hoàn tất.
 
-**Q: Metadata.xlsx có phân biệt hoa/thường khi so sánh tên CPP không?**
-A: Có. Cột `CPP Name` trong Excel phải khớp **chính xác** với tên thư mục CPP.
+**Q: `primary-locale.txt` để ở đâu?**
+A: Trong thư mục **root** (cùng cấp với các thư mục CPP), không phải bên trong thư mục CPP.
+
+**Q: metadata.xlsx có phân biệt hoa/thường trong cột CPP Name không?**
+A: **Có.** `Summer Campaign` khác `summer campaign`. Đảm bảo tên trong Excel khớp chính xác với tên thư mục.
+
+**Q: Có thể dùng cả metadata.xlsx lẫn promo.txt trong cùng 1 batch không?**
+A: Không. Khi có `metadata.xlsx`, toàn bộ `promo.txt` và `deeplink.txt` trong batch bị bỏ qua.
+
+**Q: CPP ở trạng thái Approved có thể submit lại không?**
+A: Không trực tiếp. Cần tạo version mới (qua CPP Editor) → upload assets mới → submit version đó.
+
+**Q: Sau khi submit thì thời gian review mất bao lâu?**
+A: Thường 1–3 ngày làm việc, phụ thuộc vào tải review của Apple. Theo dõi trạng thái trong CPP List.

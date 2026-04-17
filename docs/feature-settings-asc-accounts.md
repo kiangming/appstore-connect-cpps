@@ -1,252 +1,143 @@
-# Settings — ASC Account Builder
+# Settings — ASC Accounts (Supabase CRUD)
 
-> Status: **PENDING DEVELOPMENT**
-> Priority: Medium
-> Estimated effort: ~2 giờ (Claude)
-
----
-
-## Tóm tắt
-
-Settings page giúp admin tạo chuỗi `ASC_ACCOUNTS` đúng format để paste vào `.env` — thay thế việc tự tay escape newlines và construct JSON một dòng.
-
-**Pain point gốc:** Khai báo nhiều ASC accounts trong `ASC_ACCOUNTS` env var phải là JSON array trên 1 dòng duy nhất. Private key `.p8` có nhiều dòng phải được escape thủ công thành `\n` — dễ sai, khó đọc.
-
-**Giải pháp:** Form nhập từng field riêng, upload `.p8` file, `JSON.stringify()` tự xử lý escape. Output là chuỗi hoàn chỉnh để copy-paste.
+> Status: ✅ Implemented (v2 — 2026-04-07)
+>
+> v1 (2026-03-20): env var builder — generate `ASC_ACCOUNTS` string → copy-paste vào `.env`
+> v2 (2026-04-07): full CRUD lưu trong Supabase, private key mã hóa AES-256-GCM
 
 ---
 
-## Understanding Summary
+## Tóm tắt v2
 
-- **Xây dựng:** Settings Helper page — form nhập account info → generate `ASC_ACCOUNTS` string → copy-paste vào `.env` → restart
-- **Tại sao:** Giảm friction khi khai báo ASC accounts, đặc biệt private key multiline
-- **Ai dùng:** Chỉ admin (login bằng `ADMIN_EMAIL/ADMIN_PASSWORD`)
-- **Constraints:** Không lưu gì vào DB; không cần API route mới; client-side only
-- **Non-goals:** Real-time update AccountSwitcher, edit account sau khi tạo, delete account đang hoạt động, test connection
-
----
-
-## Assumptions
-
-- Admin = user login bằng Credentials provider có email === `ADMIN_EMAIL` env var
-- Sau khi paste `ASC_ACCOUNTS` vào `.env` và restart, AccountSwitcher tự cập nhật (behavior hiện tại)
-- Private key trong builder list tồn tại trong browser memory — mất khi refresh/navigate away (chấp nhận được)
-- Không cần warn user khi navigate away với data unsaved trong builder
+Admin-only Settings page với full CRUD để quản lý ASC accounts trực tiếp trên UI. Accounts lưu trong Supabase `asc_accounts` table, private key mã hóa AES-256-GCM với `ENCRYPTION_KEY` env var.
 
 ---
 
 ## Architecture
 
-### Luồng tổng quan
+### Luồng dữ liệu
 
 ```
-/settings  (Server Component)
-    ↓ getServerSession(authOptions)
-    ↓ if session.user.email !== ADMIN_EMAIL → redirect("/")
-    ↓ đọc ASC_ACCOUNTS env → mask sensitive fields → pass to client
+Admin UI (SettingsPage.tsx — Client Component)
+    ↓ fetch /api/admin/asc-accounts (+ [id])
+Next.js API Routes — check session.user.role === "admin"
     ↓
-<SettingsPage />  (Client Component)
-    ├── Section 1: Active Accounts   ← env accounts, masked, read-only
-    └── Section 2: Account Builder   ← form, generate, copy output
+lib/asc-account-repository.ts
+    ↓ encrypt/decrypt via lib/asc-crypto.ts
+Supabase asc_accounts table (service_role key)
 ```
 
-### Files cần tạo/sửa
+### Fallback logic (trong repository)
 
-| File | Thay đổi |
+```
+useSupabase() = SUPABASE_URL + SERVICE_ROLE_KEY + ENCRYPTION_KEY đều set
+    ↓ true
+Đọc từ Supabase — nếu rỗng, fallback về ASC_ACCOUNTS env var
+    ↓ false
+Đọc trực tiếp từ ASC_ACCOUNTS env var (backward compat)
+```
+
+---
+
+## Files
+
+| File | Mô tả |
 |---|---|
-| `app/(dashboard)/settings/page.tsx` | **Tạo mới** — Server Component, auth guard, pass masked accounts |
-| `components/settings/SettingsPage.tsx` | **Tạo mới** — Client Component, toàn bộ UI + logic |
-| `components/layout/SidebarNav.tsx` | **Sửa** — Thêm link "Settings" (luôn hiện, không cần isAdmin check) |
+| `lib/asc-crypto.ts` | AES-256-GCM encrypt/decrypt. Format: `base64(iv[16] + authTag[16] + ciphertext[N])` |
+| `lib/asc-account-repository.ts` | CRUD abstraction + 5-min in-memory cache. `invalidateAccountCache()` sau mỗi write. |
+| `app/api/admin/asc-accounts/route.ts` | GET (list public) + POST (create). Guard: `role !== "admin"` → 403 |
+| `app/api/admin/asc-accounts/[id]/route.ts` | PATCH (update) + DELETE. Guard: `role !== "admin"` → 403 |
+| `components/settings/SettingsPage.tsx` | Full CRUD UI. Merged từ `AscAccountsManager` (trang admin riêng đã xóa) |
+| `supabase/migrations/20260407000000_create_asc_accounts.sql` | Table DDL, RLS enabled, no row policies |
 
-Không cần API route mới, không cần DB, không cần env var mới.
+**DELETED:**
+- `app/(dashboard)/admin/asc-accounts/page.tsx`
+- `components/admin/AscAccountsManager.tsx`
 
 ---
 
-## UI Layout & Mockup
+## Supabase table `asc_accounts`
 
-### Page layout
-
-```
-┌──────────────────┬─────────────────────────────────────────────┐
-│ Sidebar          │ Settings                                    │
-│                  │ ─────────────────────────────────────────── │
-│  📱 Apps         │                                             │
-│  ⚙️ Settings  ← │  App Store Connect Accounts                 │
-│                  │  [Section 1 — Active Accounts]              │
-│                  │                                             │
-│                  │  Tạo cấu hình ASC_ACCOUNTS                 │
-│                  │  [Section 2 — Account Builder]              │
-└──────────────────┴─────────────────────────────────────────────┘
-```
-
-### Section 1 — Active Accounts (read-only)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ App Store Connect Accounts                                      │
-│ Accounts đang được cấu hình qua ASC_ACCOUNTS trong .env        │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │ 🏢 Client A                              [From ENV]       │  │
-│  │    Key ID:    AAAA••••••                                  │  │
-│  │    Issuer ID: aaaa-••••-••••-••••-aaaaaaaaaaaa            │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │ 🏢 Client B                              [From ENV]       │  │
-│  │    Key ID:    BBBB••••••                                  │  │
-│  │    Issuer ID: bbbb-••••-••••-••••-bbbbbbbbbbbb            │  │
-│  └───────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-Nếu `ASC_ACCOUNTS` không được set → hiển thị empty state:
-```
-  (Chưa có account nào được cấu hình trong .env)
-```
-
-### Section 2 — Account Builder
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ Tạo cấu hình ASC_ACCOUNTS                                      │
-│ Dùng form bên dưới để tạo chuỗi ASC_ACCOUNTS cho .env         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Accounts trong builder:                     (có thể để trống) │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │ Client A  │  Key: AAAAAAAAAA  │               [✕ Xoá]    │  │
-│  │ Client B  │  Key: BBBBBBBBBB  │               [✕ Xoá]    │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  ── Thêm account ─────────────────────────────────────────────  │
-│                                                                 │
-│  Tên hiển thị *              Key ID * (10 ký tự)               │
-│  [____________________]      [__________]                       │
-│                                                                 │
-│  Issuer ID *                                                    │
-│  [________________________________________________]             │
-│                                                                 │
-│  Private Key (.p8) *                                            │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │ -----BEGIN PRIVATE KEY-----                             │   │
-│  │ MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBH...             │   │
-│  │ -----END PRIVATE KEY-----                               │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│  [ Upload file .p8 ]  ← click để chọn file, tự điền textarea  │
-│                                                                 │
-│                                    [+ Thêm vào danh sách]      │
-│                                                                 │
-│  ── Output ───────────────────────────────────────────────────  │
-│                                                                 │
-│  [ Generate ASC_ACCOUNTS string ]                               │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │ ASC_ACCOUNTS=[{"id":"client-a","name":"Client A",...}]  │[📋]│
-│  └─────────────────────────────────────────────────────────┘   │
-│  ⚡ Copy toàn bộ dòng trên vào .env, thay ASC_ACCOUNTS cũ,    │
-│     rồi restart server.                                         │
-└─────────────────────────────────────────────────────────────────┘
+```sql
+CREATE TABLE asc_accounts (
+  id          TEXT PRIMARY KEY,
+  name        TEXT NOT NULL,
+  key_id      TEXT NOT NULL,
+  issuer_id   TEXT NOT NULL,
+  private_key TEXT NOT NULL,  -- AES-256-GCM encrypted base64
+  is_active   BOOLEAN NOT NULL DEFAULT false,
+  created_at  TIMESTAMPTZ DEFAULT now(),
+  updated_at  TIMESTAMPTZ DEFAULT now()
+);
+-- RLS enabled, NO row-level policies → chỉ service_role key có quyền
 ```
 
 ---
 
-## Data Flow & Key Logic
+## Encryption (`lib/asc-crypto.ts`)
 
-### Generate function (client-side, không gọi server)
+- Algorithm: AES-256-GCM (authenticated encryption)
+- Key source: `ENCRYPTION_KEY` env var — 64-char hex (32 bytes)
+- Packed format: `base64(randomIV[16] + authTag[16] + ciphertext[N])`
+- Attacker cần CÙNG LÚC: `ENCRYPTION_KEY` env var + Supabase service_role key → mới decrypt được
+
+Generate key:
+```bash
+openssl rand -hex 32
+```
+
+---
+
+## `lib/asc-account-repository.ts`
 
 ```typescript
-interface BuilderAccount {
-  name: string;       // "Client A"
-  keyId: string;      // "AAAAAAAAAA"
-  issuerId: string;   // "aaaa-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-  privateKey: string; // full .p8 content (multiline)
-}
+// Exports
+findAllAccounts(): Promise<AscAccount[]>        // decrypted, server-only
+findAllAccountsPublic(): Promise<AscAccountPublic[]>  // masked, safe cho client
+findAccountById(id): Promise<AscAccount | null>
+findDefaultAccount(): Promise<AscAccount | null>
+createAccount(data): Promise<AscAccountPublic>
+updateAccount(id, data): Promise<AscAccountPublic>
+deleteAccount(id): Promise<void>
+invalidateAccountCache(): void
 
-function generateEnvString(accounts: BuilderAccount[]): string {
-  const arr = accounts.map((a) => ({
-    id: slugify(a.name),
-    name: a.name,
-    keyId: a.keyId,
-    issuerId: a.issuerId,
-    privateKey: a.privateKey.trim().replace(/\r\n/g, "\n"),
-  }));
-  return `ASC_ACCOUNTS=${JSON.stringify(arr)}`;
-  // JSON.stringify tự escape \n trong privateKey ✓
-}
-
-function slugify(name: string): string {
-  return name.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
-}
-```
-
-### Upload .p8 — đọc client-side
-
-```typescript
-// File chỉ đọc trong browser, không upload lên server
-function handleFileUpload(file: File) {
-  const reader = new FileReader();
-  reader.onload = (e) => setPrivateKey(e.target?.result as string);
-  reader.readAsText(file);
-}
-```
-
-### Mask logic (server-side, trước khi truyền xuống client)
-
-```typescript
-// Server Component — không bao giờ expose privateKey hoặc issuerId đầy đủ
-const maskedAccounts = accounts.map((a) => ({
-  name: a.name,
-  keyId: a.keyId.slice(0, 4) + "••••••",
-  issuerId: a.issuerId.slice(0, 4) + "-••••-••••-••••-" + a.issuerId.slice(-4),
-}));
-```
-
-### Auth guard (server-side)
-
-```typescript
-// app/(dashboard)/settings/page.tsx
-const session = await getServerSession(authOptions);
-const isAdmin = session?.user?.email === process.env.ADMIN_EMAIL;
-if (!isAdmin) redirect("/");
+// Types
+interface AscAccount { id, name, keyId, issuerId, privateKey, isActive }
+interface AscAccountPublic { id, name, keyId, issuerId, isActive }  // no privateKey
 ```
 
 ---
 
-## Validation (khi nhấn "Thêm vào danh sách")
+## UI (SettingsPage.tsx)
 
-| Field | Rule | Error message |
-|---|---|---|
-| Tên hiển thị | Bắt buộc, không trống | "Vui lòng nhập tên account" |
-| Key ID | Exactly 10 ký tự, alphanumeric | "Key ID phải đúng 10 ký tự" |
-| Issuer ID | UUID format | "Issuer ID không đúng định dạng UUID" |
-| Private Key | Phải chứa `-----BEGIN PRIVATE KEY-----` | "Private key không hợp lệ" |
-| Slug unique | `slugify(name)` chưa tồn tại trong builder | "Tên này trùng với account đã thêm" |
+- List accounts: name, keyId (masked), issuerId (masked), active badge
+- Add form: name, keyId (10-char A-Z0-9), issuerId (UUID format), privateKey (textarea + .p8 file upload)
+- Edit form: same fields (privateKey optional — để trống = giữ nguyên)
+- Delete: confirm dialog, disable nếu account đang active
+- Validation: keyId 10-char `[A-Z0-9]`, issuerId UUID regex, privateKey phải chứa `-----BEGIN PRIVATE KEY-----`
 
 ---
 
-## Edge Cases
+## Env vars
 
-| Tình huống | Xử lý |
-|---|---|
-| Builder list rỗng, click Generate | Button disabled, tooltip "Thêm ít nhất 1 account" |
-| Private key có Windows CRLF (`\r\n`) | `replace(/\r\n/g, "\n")` trước khi stringify |
-| File upload không phải `.p8` / sai format | Validate header, show inline error |
-| Output string rất dài (5+ accounts) | Textarea scroll, không truncate |
-| User navigate away với data trong builder | Không warn — data không persist, không gây hại |
+```env
+ENCRYPTION_KEY=<64-char hex>      # bắt buộc để dùng Supabase storage
+SUPABASE_SERVICE_ROLE_KEY=...     # bắt buộc
+NEXT_PUBLIC_SUPABASE_URL=...      # bắt buộc
+
+# Fallback (optional, backward compat):
+ASC_ACCOUNTS=[{...}]
+```
 
 ---
 
-## Security Notes
+## Security
 
-**Private key exposure mitigations:**
-- Page chỉ accessible với admin (server redirect)
-- HTTPS — không leak trên network
-- Private key không gửi lên server (client-side FileReader + JSON.stringify)
-- Output textarea không auto-copy — user chủ động action
-
-**Acceptable risks (internal tool):**
-- Private key visible trong textarea khi nhập
-- Browser memory giữ key cho đến khi navigate away / refresh
+- Private key không bao giờ trả về qua API (chỉ `AscAccountPublic` — không có `privateKey`)
+- PATCH update: nếu `privateKey` field trống → giữ encrypted value cũ trong DB
+- `/api/admin/asc-accounts` require `session.user.role === "admin"` → 403 otherwise
+- Supabase RLS enabled, không có policies → anon/authenticated client không có quyền
+- Service_role key chỉ dùng server-side (`lib/asc-account-repository.ts`)
 
 ---
 
@@ -254,10 +145,8 @@ if (!isAdmin) redirect("/");
 
 | Quyết định | Alternatives | Lý do chọn |
 |---|---|---|
-| Không dùng DB | Supabase hybrid | Pain point là input format, không phải persistence. YAGNI. |
-| Auth guard bằng email === ADMIN_EMAIL | `isAdmin` trong JWT | Không cần thay đổi JWT schema; đủ đơn giản cho single-tenant |
-| Sidebar luôn hiện Settings link | Ẩn với non-admin | Server redirect rõ ràng hơn ẩn link; simpler |
-| Client-side generate | Server API | Không cần server xử lý sensitive data; simpler |
-| `JSON.stringify` cho escape | Manual string concat | Đây chính là lý do tính năng tồn tại — delegate escaping cho built-in |
-| Textarea + file upload cho private key | Chỉ paste / chỉ upload | File upload tránh lỗi copy-paste; textarea cho power users |
-| Slugify name thành ID | UUID / manual input | Tự động, consistent, không cần user hiểu concept "ID" |
+| Supabase lưu accounts | File-based, env-only | Không cần restart server khi thêm account; phù hợp Railway (ephemeral FS) |
+| AES-256-GCM | bcrypt, asymmetric | Symmetric — cần decrypt để dùng; GCM có auth tag chống tamper |
+| Single base64 column (iv+authTag+ciphertext) | 3 columns riêng | Đơn giản hơn, atomically consistent |
+| Merge AscAccountsManager vào SettingsPage | Trang admin riêng | Giảm số trang, Settings đã admin-only rồi |
+| 5-min in-memory cache | No cache, Redis | Tránh Supabase round-trip mỗi request; invalidate sau mỗi write |
