@@ -1,5 +1,6 @@
 import { getServerSession } from 'next-auth';
 import { redirect } from 'next/navigation';
+import { Toaster } from 'sonner';
 import { authOptions } from '@/lib/auth';
 import { getStoreUser } from '@/lib/store-submissions/auth';
 import { NotWhitelistedScreen } from '@/components/store-submissions/NotWhitelistedScreen';
@@ -21,5 +22,10 @@ export default async function StoreSubmissionsLayout({
     return <NotWhitelistedScreen email={session.user.email} />;
   }
 
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      <Toaster position="bottom-right" richColors closeButton />
+    </>
+  );
 }

@@ -16,7 +16,12 @@
 import { getServerSession, type Session } from 'next-auth';
 import { redirect } from 'next/navigation';
 import { authOptions } from '@/lib/auth';
-import { getStoreUser, type StoreRole, type StoreUser } from './auth';
+import {
+  getStoreUser,
+  syncStoreProfile,
+  type StoreRole,
+  type StoreUser,
+} from './auth';
 
 export interface StoreSession {
   session: Session;
@@ -43,6 +48,13 @@ export async function requireStoreSession(): Promise<StoreSession> {
   if (!storeUser) {
     redirect('/');
   }
+
+  await syncStoreProfile({
+    userId: storeUser.id,
+    googleSub: session.user.id ?? null,
+    displayName: session.user.name ?? null,
+    avatarUrl: session.user.image ?? null,
+  });
 
   return { session, storeUser };
 }

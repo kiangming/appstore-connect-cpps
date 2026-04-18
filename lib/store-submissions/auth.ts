@@ -92,6 +92,41 @@ export async function touchLastLogin(userId: string): Promise<void> {
     .eq('id', userId);
 }
 
+export interface GoogleProfileSync {
+  userId: string;
+  googleSub?: string | null;
+  displayName?: string | null;
+  avatarUrl?: string | null;
+}
+
+/**
+ * Sync Google profile fields + touch last_login_at on every guard pass.
+ *
+ * - Writes only provided fields (undefined → skip), so callers may pass
+ *   whatever NextAuth surfaces without clobbering admin-set values with null.
+ * - `last_login_at` is always refreshed.
+ * - Failures are logged and swallowed: telemetry must never break login.
+ * - `google_sub` is UNIQUE in the schema; a collision (e.g. account merge)
+ *   will be logged but won't throw.
+ */
+export async function syncStoreProfile(input: GoogleProfileSync): Promise<void> {
+  const patch: Record<string, string> = {
+    last_login_at: new Date().toISOString(),
+  };
+  if (input.googleSub) patch.google_sub = input.googleSub;
+  if (input.displayName) patch.display_name = input.displayName;
+  if (input.avatarUrl) patch.avatar_url = input.avatarUrl;
+
+  const { error } = await storeDb()
+    .from('users')
+    .update(patch)
+    .eq('id', input.userId);
+
+  if (error) {
+    console.error('[store-auth] syncStoreProfile failed:', error);
+  }
+}
+
 // === Error classes ===
 
 export class StoreUnauthorizedError extends Error {
