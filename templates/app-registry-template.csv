@@ -1,0 +1,7 @@
+name,display_name,aliases,apple_bundle_id,google_package_name,huawei_app_id,facebook_app_id,team_owner_email,active
+Skyline Runners,,Skyline|Skyline Runners: Endless,com.studio.skylinerunners,com.studio.skylinerunners,,9284715620,linh@company.com,true
+Dragon Guild,Dragon Guild: Fantasy Wars,DG|DG: Fantasy Wars,com.studio.dragonguild,com.studio.dragonguild,107892345,,nam@company.com,true
+Puzzle Quest Saga,,Puzzle Quest,com.studio.puzzlequest,com.studio.puzzlequest,,,linh@company.com,true
+Realm Defenders,Realm Defenders: Tower TD,Realm Defenders,com.studio.realmdefenders,com.studio.realmdefenders,,,minh@company.com,true
+Tap Tap Empire,,TTE,com.studio.taptapempire,,,8472910563,,true
+Legacy Heroes,,,com.studio.legacyheroes,,,,,false

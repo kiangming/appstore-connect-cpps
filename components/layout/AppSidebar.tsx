@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { useState } from "react";
-import { Layers, Settings, LogOut } from "lucide-react";
+import { Layers, Inbox, Settings, LogOut } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 interface NavItem {
@@ -21,7 +21,12 @@ const NAV_ITEMS: NavItem[] = [
     icon: Layers,
     href: "/apps",
   },
-  // Add new tools here
+  {
+    id: "store-submissions",
+    label: "Store Management",
+    icon: Inbox,
+    href: "/store-submissions",
+  },
 ];
 
 const ICONS = ["🦊", "🐻", "🐼", "🦁", "🐯", "🦝", "🦔", "🐨", "🦦", "🦋"];

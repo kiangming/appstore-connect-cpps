@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { Layers, ArrowRight } from "lucide-react";
+import { Layers, Inbox, ArrowRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 interface ToolCard {
@@ -21,7 +21,13 @@ const TOOLS: ToolCard[] = [
     icon: Layers,
     href: "/apps",
   },
-  // Add new tools here
+  {
+    id: "store-submissions",
+    name: "Store Management",
+    description: "Track app submission status across stores from email",
+    icon: Inbox,
+    href: "/store-submissions",
+  },
 ];
 
 function getGreeting(): string {

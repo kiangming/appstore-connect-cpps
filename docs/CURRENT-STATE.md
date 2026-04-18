@@ -2,16 +2,17 @@
 
 > **Đây là file đọc đầu tiên** khi bắt đầu session mới. Cung cấp toàn cảnh dự án, features đã làm và chưa làm.
 >
-> Last updated: 2026-04-07 (session 15)
+> Last updated: 2026-04-18 (session 16)
 
 ---
 
 ## Tóm tắt nhanh
 
-Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages (CPP) mà không cần vào UI của Apple.
+Internal tool suite. Tool chính hiện tại: **CPP Manager** (quản lý App Store Connect Custom Product Pages). Đang mở rộng thành multi-tool platform.
 - **Tech:** Next.js 14 App Router + TypeScript + Tailwind CSS + NextAuth + Supabase
 - **Deploy:** Railway (primary), Docker (self-host option)
 - **Người dùng:** Team nội bộ 2–5 người
+- **Layout:** Hub page (/) → tool cards. Global sidebar icon-only (56px) luôn visible.
 
 ---
 
@@ -20,7 +21,7 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 | Feature | Entry point | Doc chi tiết |
 |---|---|---|
 | App List + Search (fluid grid auto-fill, iTunes icon) | `app/(dashboard)/apps/page.tsx` + `components/apps/AppList.tsx` | `docs/feature-app-cpp-list.md` |
-| **Top Nav redesign** (bỏ sidebar, top nav + app sub-nav) | `components/layout/TopNav.tsx` + `components/layout/AppSubNav.tsx` | — |
+| ~~Top Nav redesign~~ → replaced by Hub + Sidebar (session 16) | `components/layout/AppSidebar.tsx` + `TopNav.tsx` + `AppSubNav.tsx` | `docs/feature-home-hub.md` |
 | **Authentication (Google OAuth only + role-based)** | `app/(auth)/login/page.tsx` + `lib/auth.ts`. Google-only (CredentialsProvider đã xóa). Role `admin`/`member` gán qua `ADMIN_EMAILS` env var. | `docs/feature-google-auth.md` |
 | CPP List + trạng thái | `app/(dashboard)/apps/[appId]/cpps/page.tsx` | `docs/feature-app-cpp-list.md` |
 | CPP Detail Panel (view) | `components/cpp/CppDetailPanel.tsx` | `docs/feature-app-cpp-list.md` |
@@ -39,6 +40,7 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 | **Submit CPP for Review v2** (sequential + retry + partial fail UX) | `components/cpp/CppList.tsx` + 3 routes: `submit/prepare`, `submit/confirm`, `submit/[submissionId]` DELETE. State machine `SubmitPhase`. PartialFailDialog. | `docs/feature-submit-cpp.md` |
 | **Settings — ASC Accounts (Supabase CRUD)** | Admin-only page. Full CRUD: list/add/edit/delete accounts lưu trong Supabase `asc_accounts` table. Private key mã hóa AES-256-GCM. | `docs/feature-settings-asc-accounts.md` |
 | **Asset Validation** (screenshot + video trước upload) | `lib/asset-validator.ts` + `lib/ffmpeg-loader.ts`. Tích hợp vào cả 3 flow upload. Deep mode dùng ffmpeg.wasm. | `docs/feature-asset-validation.md` |
+| **Home Hub + Global Sidebar** (session 16) | Hub page: `app/(dashboard)/page.tsx` + `HubPage.tsx`. Sidebar: `components/layout/AppSidebar.tsx`. Layout: `DashboardContent.tsx` (conditional TopNav/AppSubNav). | `docs/feature-home-hub.md` |
 
 ---
 
@@ -61,7 +63,10 @@ Web dashboard nội bộ để quản lý App Store Connect Custom Product Pages
 app/
 ├── (auth)/login/page.tsx           Server — wrapper (không còn đọc ADMIN_ENABLE)
 ├── (dashboard)/
-│   ├── layout.tsx                  Shell layout (TopNav + AppSubNav + main)
+│   ├── layout.tsx                  Shell layout (AppSidebar + DashboardContent)
+│   ├── DashboardContent.tsx        Client — conditional TopNav/AppSubNav (ẩn trên hub)
+│   ├── page.tsx                    Server — Hub page (auth guard + HubPage)
+│   ├── HubPage.tsx                 Client — tool cards grid + greeting
 │   ├── apps/page.tsx               Server — App List + export const dynamic
 │   └── apps/[appId]/cpps/
 │       ├── page.tsx                Server — CPP List
@@ -90,15 +95,15 @@ app/
 ├── api/admin/
 │   ├── asc-accounts/route.ts       GET list + POST create (admin only)
 │   └── asc-accounts/[id]/route.ts  PATCH update + DELETE (admin only)
-└── page.tsx                        export const dynamic = "force-dynamic" (Railway build fix)
 
 components/
 ├── auth/
 │   └── LoginForm.tsx       Google button only (CredentialsProvider đã xóa)
 ├── layout/
-│   ├── TopNav.tsx
+│   ├── AppSidebar.tsx     Global icon-only sidebar (56px) + hover flyout (180px)
+│   ├── TopNav.tsx          Chỉ còn AccountSwitcher + email (bỏ tabs, bỏ logo, bỏ logout)
 │   ├── AppSubNav.tsx
-│   ├── SidebarNav.tsx      DEPRECATED (không dùng trong layout)
+│   ├── SidebarNav.tsx      DEPRECATED
 │   ├── UserFooter.tsx      DEPRECATED
 │   └── AccountSwitcher.tsx
 ├── apps/AppList.tsx
@@ -139,6 +144,7 @@ types/asc.ts            TypeScript types cho ASC API
 DELETED FILES:
 - app/(dashboard)/admin/asc-accounts/page.tsx  (merged into SettingsPage)
 - components/admin/AscAccountsManager.tsx       (merged into SettingsPage)
+- app/page.tsx                                  (replaced by (dashboard)/page.tsx hub)
 ```
 
 ---
@@ -260,4 +266,14 @@ NEXT_PUBLIC_ASSET_VALIDATION_DEEP=true  # true = ffmpeg.wasm deep | false = basi
 
 25. **ASC Accounts — Supabase storage (session 15)** — `lib/asc-crypto.ts` encrypt/decrypt AES-256-GCM. `lib/asc-account-repository.ts` abstraction layer với 5-min in-memory cache; dùng Supabase khi `SUPABASE_URL + SERVICE_ROLE_KEY + ENCRYPTION_KEY` đều set, fallback về `ASC_ACCOUNTS` env var khi DB rỗng hoặc chưa configure. Admin CRUD: `/api/admin/asc-accounts` (GET list + POST create) + `/api/admin/asc-accounts/[id]` (PATCH + DELETE). `SettingsPage.tsx` merged từ `AscAccountsManager` (xóa trang `/admin/asc-accounts` riêng). Supabase table `asc_accounts`: RLS enabled, **không** có row-level policies — chỉ service_role key có quyền.
 
-26. **Railway deployment + build fix (session 15)** — Deploy target chính: Railway. `output: "standalone"` trong `next.config.mjs`. Build fail issue: pages gọi `getServerSession` được Next.js cố gắng pre-render static → fail vì `GoogleProvider` đọc env var. Fix: thêm `export const dynamic = "force-dynamic"` vào `app/page.tsx`, `app/(dashboard)/settings/page.tsx`, bất kỳ page nào dùng `getServerSession` trực tiếp. Railway env vars tương đương `.env.local` — set trong Railway project Settings > Variables.
+26. **Railway deployment + build fix (session 15)** — Deploy target chính: Railway. `output: "standalone"` trong `next.config.mjs`. Build fail issue: pages gọi `getServerSession` được Next.js cố gắng pre-render static → fail vì `GoogleProvider` đọc env var. Fix: thêm `export const dynamic = "force-dynamic"` vào `app/(dashboard)/page.tsx`, `app/(dashboard)/settings/page.tsx`, bất kỳ page nào dùng `getServerSession` trực tiếp. Railway env vars tương đương `.env.local` — set trong Railway project Settings > Variables.
+
+27. **Home Hub + Global Sidebar (session 16)** — Chuyển từ TopNav-tabs sang hub + sidebar layout:
+    - **Hub page** (`/`): `app/(dashboard)/page.tsx` (server, auth guard) → `HubPage.tsx` (client, tool cards grid). Route `/` sau login → hub. Card click → vào tool.
+    - **AppSidebar** (`components/layout/AppSidebar.tsx`): `fixed left-0`, icon-only 56px, hover → flyout 180px overlay. Logo `C` → `/`. Tool icons + active indicator (blue left-bar). Settings icon cuối. User avatar → dropdown (email + logout).
+    - **DashboardContent** (`app/(dashboard)/DashboardContent.tsx`): Client wrapper, ẩn TopNav + AppSubNav khi `pathname === "/"` (hub page).
+    - **TopNav simplified**: Bỏ logo, tabs Apps/Settings, logout button. Chỉ còn AccountSwitcher + email. z-index giảm từ z-50 → z-30.
+    - **Deleted**: `app/page.tsx` (thay bằng `(dashboard)/page.tsx`).
+    - **Thêm tool mới**: Thêm item vào `NAV_ITEMS` trong `AppSidebar.tsx` + `TOOLS` trong `HubPage.tsx`.
+
+28. **`app/page.tsx` removed (session 16)** — Root `app/page.tsx` (redirect `/` → `/apps`) đã xóa. Route `/` giờ do `app/(dashboard)/page.tsx` xử lý (auth guard + hub). `export const dynamic = "force-dynamic"` vẫn có ở đây.
