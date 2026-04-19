@@ -51,7 +51,7 @@ Tạo migration file mới cho change: `$ARGUMENTS`
 
 5. **Verify locally**:
    ```bash
-   pnpm db:reset  # applies all migrations from scratch
+   npm run db:reset  # applies all migrations from scratch
    ```
    Check không có lỗi. Verify schema matches expectation.
 

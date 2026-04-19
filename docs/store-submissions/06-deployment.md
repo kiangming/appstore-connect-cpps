@@ -49,8 +49,8 @@ External services:
 
 **Build config**:
 ```
-Build command:    pnpm install --frozen-lockfile && pnpm build
-Start command:    pnpm start
+Build command:    npm ci && npm run build
+Start command:    npm start
 Watch paths:      (default - all)
 Root directory:   /  (monorepo option: /apps/web)
 ```
@@ -86,7 +86,7 @@ Root directory:   /  (monorepo option: /apps/web)
     "builder": "NIXPACKS"
   },
   "deploy": {
-    "startCommand": "pnpm start",
+    "startCommand": "npm start",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3
   }
@@ -140,7 +140,7 @@ Final:
 
 ```bash
 # Local dev
-pnpm install -g supabase
+npm install -g supabase
 supabase login
 supabase link --project-ref {project-ref}
 
@@ -296,15 +296,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v3
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm test
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
   
   migrate-db:
     needs: lint-test
@@ -517,7 +516,7 @@ Nếu Gmail sync tạo tickets sai (vd regex bug):
 ### B.1.1. Installation
 
 ```bash
-pnpm add @sentry/nextjs
+npm install @sentry/nextjs
 npx @sentry/wizard@latest -i nextjs
 ```
 
@@ -999,7 +998,7 @@ Trước khi invite team vào dùng prod:
 - Gmail quota check (rarely issue)
 
 **Quarterly**:
-- Security review: dependencies update (pnpm audit)
+- Security review: dependencies update (npm audit)
 - Review retention policy, cleanup old data
 - Sentry + UptimeRobot quota vs tier
 

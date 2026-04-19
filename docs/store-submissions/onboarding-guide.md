@@ -155,7 +155,7 @@ Tất cả auth qua header `X-Cron-Secret`. Advisory lock ngăn concurrent runs.
 ### 5.1. Prerequisites
 
 - Node 20+ (recommend nvm)
-- pnpm 8+
+- npm 10+
 - Git
 - Supabase CLI (`npm i -g supabase`)
 - VS Code + recommended extensions (ESLint, Prettier, Tailwind IntelliSense)
@@ -165,7 +165,7 @@ Tất cả auth qua header `X-Cron-Secret`. Advisory lock ngăn concurrent runs.
 ```bash
 git clone git@github.com:yourcompany/store-management.git
 cd store-management
-pnpm install
+npm install
 ```
 
 ### 5.3. Local Supabase
@@ -220,7 +220,7 @@ psql $DATABASE_URL -c "SELECT * FROM users;"  # expect 1 (INITIAL_MANAGER_EMAIL)
 ### 5.6. Run dev server
 
 ```bash
-pnpm dev
+npm run dev
 # Open http://localhost:3000
 ```
 
@@ -229,10 +229,10 @@ Login với Google account = `INITIAL_MANAGER_EMAIL`. Verify dashboard renders.
 ### 5.7. Run tests
 
 ```bash
-pnpm test         # unit + integration tests
-pnpm test:watch   # watch mode during development
-pnpm typecheck    # TS check
-pnpm lint         # ESLint
+npm test              # unit + integration tests
+npm run test:watch    # watch mode during development
+npm run typecheck     # TS check
+npm run lint          # ESLint
 ```
 
 ### 5.8. Hit a cron endpoint locally

@@ -54,7 +54,7 @@ Verify pending changes (git diff hoặc PR) không vi phạm critical invariants
    ```
 
 5. **Recommend**:
-   - Run `pnpm lint && pnpm typecheck && pnpm test` trước khi commit
+   - Run `npm run lint && npm run typecheck && npm test` trước khi commit
    - Update `docs/` nếu architectural change
 
 ## Don't

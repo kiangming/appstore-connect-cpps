@@ -28,7 +28,7 @@ Khi Claude bắt đầu session, **hỏi user đang làm việc với module nà
 | Database | Supabase (PostgreSQL) |
 | App Auth | NextAuth.js + Google Provider |
 | Deploy | Railway |
-| Runtime | Node 20+, pnpm 8+ |
+| Runtime | Node 20+, npm 10+ |
 
 ### Shared files (không động trừ khi rõ ràng cần update)
 

@@ -41,7 +41,7 @@ Checklist cho mọi user-facing feature:
 - [ ] Loading state + error state + toast
 - [ ] Optimistic update nếu affect list view
 - [ ] Update relevant `docs/` nếu có architectural change
-- [ ] Run `pnpm lint && pnpm typecheck && pnpm test` — verify pass
+- [ ] Run `npm run lint && npm run typecheck && npm test` — verify pass
 
 ## Critical rules
 
