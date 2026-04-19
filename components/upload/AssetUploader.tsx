@@ -31,7 +31,7 @@ async function computeMd5Hex(file: File): Promise<string> {
     .join("");
 }
 
-export function AssetUploader({ cppId, screenshotSetId, onUploaded }: Props) {
+export function AssetUploader({ cppId: _cppId, screenshotSetId, onUploaded }: Props) {
   const [files, setFiles] = useState<UploadFile[]>([]);
 
   const onDrop = useCallback(

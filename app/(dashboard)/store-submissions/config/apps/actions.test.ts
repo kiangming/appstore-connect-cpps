@@ -104,37 +104,6 @@ function resetFromDispatcher(): void {
   });
 }
 
-/** Convenience: a select chain that supports .or / .in / .eq / .maybeSingle / .single */
-function selectChain(result: { data: unknown; error: unknown }, captureCalls?: string[]) {
-  const chain: Record<string, unknown> = {};
-  const push = (name: string) => captureCalls?.push(name);
-  const returnSelf = (name: string) => () => {
-    push(name);
-    return chain;
-  };
-  chain.select = returnSelf('select');
-  chain.or = returnSelf('or');
-  chain.in = returnSelf('in');
-  chain.eq = returnSelf('eq');
-  chain.ilike = returnSelf('ilike');
-  chain.order = returnSelf('order');
-  chain.limit = returnSelf('limit');
-  chain.maybeSingle = () => {
-    push('maybeSingle');
-    return Promise.resolve(result);
-  };
-  chain.single = () => {
-    push('single');
-    return Promise.resolve(result);
-  };
-  // For select().in(...) returning the array directly (no terminator)
-  chain.then = (resolve: (v: { data: unknown; error: unknown }) => void) => {
-    push('then');
-    resolve(result);
-  };
-  return chain;
-}
-
 beforeEach(() => {
   mockGetServerSession.mockReset();
   mockRequireStoreRole.mockReset();

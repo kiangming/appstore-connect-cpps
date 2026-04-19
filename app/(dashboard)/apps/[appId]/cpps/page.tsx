@@ -9,9 +9,9 @@ interface Props {
 
 export default async function CppsPage({ params }: Props) {
   let cpps: AppCustomProductPage[] = [];
-  let versionStates: Record<string, CppState> = {};
-  let versionIds: Record<string, string> = {};
-  let rejectReasons: Record<string, string> = {};
+  const versionStates: Record<string, CppState> = {};
+  const versionIds: Record<string, string> = {};
+  const rejectReasons: Record<string, string> = {};
   let fetchError: string | null = null;
 
   try {

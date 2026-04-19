@@ -305,13 +305,14 @@ export function validateScreenshotCount(
   newValidCount: number
 ): ValidationResult {
   const total = existingCount + newValidCount;
-  const { min, max } = SCREENSHOT_LIMITS[device];
+  // Intentionally ignoring SCREENSHOT_LIMITS[device].min here — the minimum is
+  // a submit-time invariant, not a drop-time one. Only max matters on drop.
+  const { max } = SCREENSHOT_LIMITS[device];
   const errors: string[] = [];
 
   if (total > max) {
     errors.push(`Too many screenshots: ${total} total — max ${max}`);
   }
-  // min is only checked at submit time, not on drop
 
   return { ok: errors.length === 0, errors, warnings: [] };
 }

@@ -279,7 +279,7 @@ interface LocalizationRowProps {
   cppId: string;
 }
 
-function LocalizationRow({ localization, cppId }: LocalizationRowProps) {
+function LocalizationRow({ localization, cppId: _cppId }: LocalizationRowProps) {
   const [open, setOpen] = useState(false);
 
   // ── Promo text ──────────────────────────────────────────────────────────

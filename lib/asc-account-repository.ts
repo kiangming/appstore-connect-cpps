@@ -58,7 +58,14 @@ function rowToAccount(row: AscAccountRow): AscAccount {
 
 // ── Source detection ──────────────────────────────────────────────────────────
 
-function useSupabase(): boolean {
+/**
+ * True when the Supabase-backed path is available (DB + crypto env vars all
+ * present). Named WITHOUT a `use` prefix on purpose — this is a plain boolean
+ * helper, not a React Hook. Do not rename back to `useSupabase`; ESLint's
+ * `react-hooks/rules-of-hooks` flags any call of a `use*`-named function from
+ * a non-component / non-hook context as a violation.
+ */
+function shouldUseSupabase(): boolean {
   return Boolean(
     process.env.NEXT_PUBLIC_SUPABASE_URL &&
       process.env.SUPABASE_SERVICE_ROLE_KEY &&
@@ -69,7 +76,7 @@ function useSupabase(): boolean {
 // ── Read operations ───────────────────────────────────────────────────────────
 
 export async function findAllAccounts(): Promise<AscAccount[]> {
-  if (!useSupabase()) return getEnvAccounts();
+  if (!shouldUseSupabase()) return getEnvAccounts();
 
   const cached = getCached();
   if (cached) return cached;
@@ -97,7 +104,7 @@ export async function findAllAccounts(): Promise<AscAccount[]> {
 }
 
 export async function findAccountById(id: string): Promise<AscAccount | null> {
-  if (!useSupabase()) return getEnvAccountById(id);
+  if (!shouldUseSupabase()) return getEnvAccountById(id);
 
   const cached = getCached();
   if (cached) return cached.find((a) => a.id === id) ?? null;

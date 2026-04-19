@@ -223,7 +223,7 @@ export function SettingsPage({ accounts: initial }: Props) {
 
         {accounts.length === 0 ? (
           <p className="text-sm text-slate-400 italic text-center py-6">
-            Chưa có account nào. Nhấn "Thêm account" để bắt đầu.
+            Chưa có account nào. Nhấn &ldquo;Thêm account&rdquo; để bắt đầu.
           </p>
         ) : (
           <div className="space-y-2">

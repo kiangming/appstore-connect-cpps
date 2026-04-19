@@ -237,7 +237,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
         // Use root-level primary-locale.txt (shared for all CPPs). If absent,
         // prefer a locale already in the app to avoid 409 on CPP creation.
         let primaryLocale = rootPrimaryLocale;
-        let primaryLocaleSource: "file" | "fallback" = rootPrimaryLocale ? "file" : "fallback";
+        const primaryLocaleSource: "file" | "fallback" = rootPrimaryLocale ? "file" : "fallback";
 
         if (!primaryLocale) {
           // Fallback: prefer a locale already in the app (avoids 409 when creating CPP
@@ -263,7 +263,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
         const metadataWarning = excelMetadata !== null && excelRow === null;
 
         // If existing, fetch its current localizations to get localizationId per locale
-        let existingLocaleMap = new Map<string, string>(); // locale → localizationId
+        const existingLocaleMap = new Map<string, string>(); // locale → localizationId
         if (existingCppId) {
           try {
             const res = await fetch(`/api/asc/cpps/${existingCppId}`);

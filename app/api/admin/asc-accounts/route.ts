@@ -6,10 +6,6 @@ import {
   createAccount,
 } from "@/lib/asc-account-repository";
 
-function requireAdmin() {
-  // Returns session or throws — used by all admin routes
-}
-
 export async function GET() {
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== "admin") {
