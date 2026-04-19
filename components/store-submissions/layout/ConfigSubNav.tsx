@@ -24,7 +24,6 @@ const TABS: ConfigTab[] = [
     label: 'App Registry',
     href: '/store-submissions/config/apps',
     icon: FileText,
-    disabled: true,
   },
   {
     key: 'rules',
