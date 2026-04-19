@@ -10,6 +10,12 @@
  */
 
 import { storeDb } from '../db';
+import type {
+  AppAlias,
+  AppWithAliases,
+  PlatformKey,
+  RulesSnapshot,
+} from '../classifier/types';
 import type { Outcome } from '../schemas/rules';
 
 // -- Record shapes -------------------------------------------------------
@@ -315,5 +321,141 @@ export async function getRuleVersion(
     ...row,
     saved_by_email,
     saved_by_display_name,
+  };
+}
+
+// -- Classifier-ready snapshot ------------------------------------------
+
+/**
+ * Load apps + aliases restricted to apps that have a binding to the
+ * target platform. Used by `getRulesSnapshotForPlatform` to satisfy the
+ * classifier's "apps_with_aliases must be platform-scoped" contract.
+ *
+ * Three queries (bindings → apps → aliases) — the first blocks, the
+ * second + third run in parallel. Acceptable while app counts stay
+ * under a few hundred; if that changes, promote to a Postgres view or
+ * a denormalized materialized view keyed by platform.
+ */
+async function loadAppsForPlatform(
+  platformId: string,
+): Promise<AppWithAliases[]> {
+  const db = storeDb();
+
+  const { data: bindings, error: bindErr } = await db
+    .from('app_platform_bindings')
+    .select('app_id')
+    .eq('platform_id', platformId);
+
+  if (bindErr) {
+    console.error('[store-rules] loadAppsForPlatform bindings:', bindErr);
+    throw new Error('Failed to load platform bindings');
+  }
+
+  const appIds = Array.from(
+    new Set((bindings ?? []).map((b) => (b as { app_id: string }).app_id)),
+  );
+  if (appIds.length === 0) return [];
+
+  const [appsRes, aliasesRes] = await Promise.all([
+    db
+      .from('apps')
+      .select('id, name')
+      .in('id', appIds)
+      .eq('active', true),
+    db
+      .from('app_aliases')
+      .select('app_id, alias_text, alias_regex, source_type')
+      .in('app_id', appIds),
+  ]);
+
+  if (appsRes.error) {
+    console.error('[store-rules] loadAppsForPlatform apps:', appsRes.error);
+    throw new Error('Failed to load apps');
+  }
+  if (aliasesRes.error) {
+    console.error('[store-rules] loadAppsForPlatform aliases:', aliasesRes.error);
+    throw new Error('Failed to load app aliases');
+  }
+
+  const aliasesByApp = new Map<string, AppAlias[]>();
+  for (const row of aliasesRes.data ?? []) {
+    const a = row as {
+      app_id: string;
+      alias_text: string | null;
+      alias_regex: string | null;
+      source_type: AppAlias['source_type'];
+    };
+    const bucket = aliasesByApp.get(a.app_id) ?? [];
+    bucket.push({
+      alias_text: a.alias_text,
+      alias_regex: a.alias_regex,
+      source_type: a.source_type,
+    });
+    aliasesByApp.set(a.app_id, bucket);
+  }
+
+  return (appsRes.data ?? []).map((row) => {
+    const app = row as { id: string; name: string };
+    return {
+      id: app.id,
+      name: app.name,
+      aliases: aliasesByApp.get(app.id) ?? [],
+      // Synthesized because the query already filtered by platform_id;
+      // the classifier's dev assertion validates this shape.
+      platform_bindings: [{ platform_id: platformId }],
+    };
+  });
+}
+
+/**
+ * Compose a classifier-ready RulesSnapshot for one platform.
+ *
+ * Returns `null` when the platform doesn't exist. Rows for inactive
+ * rules are included intentionally — the classifier's per-step matchers
+ * apply `.active` filtering, and excluding them here would hide them
+ * from the test endpoint's `override_rules` replay semantics.
+ *
+ * Read-only. Safe from Route Handlers, Server Components, and the
+ * `/api/store-submissions/rules/test` endpoint.
+ */
+export async function getRulesSnapshotForPlatform(
+  platformId: string,
+): Promise<RulesSnapshot | null> {
+  const base = await getRulesForPlatform(platformId);
+  if (!base) return null;
+
+  const apps_with_aliases = await loadAppsForPlatform(platformId);
+
+  return {
+    platform_id: base.platform.id,
+    platform_key: base.platform.key as PlatformKey,
+    senders: base.senders.map((s) => ({
+      id: s.id,
+      email: s.email,
+      is_primary: s.is_primary,
+      active: s.active,
+    })),
+    subject_patterns: base.subject_patterns.map((p) => ({
+      id: p.id,
+      outcome: p.outcome,
+      regex: p.regex,
+      priority: p.priority,
+      active: p.active,
+    })),
+    types: base.types.map((t) => ({
+      id: t.id,
+      name: t.name,
+      slug: t.slug,
+      body_keyword: t.body_keyword,
+      payload_extract_regex: t.payload_extract_regex,
+      sort_order: t.sort_order,
+      active: t.active,
+    })),
+    submission_id_patterns: base.submission_id_patterns.map((p) => ({
+      id: p.id,
+      body_regex: p.body_regex,
+      active: p.active,
+    })),
+    apps_with_aliases,
   };
 }
