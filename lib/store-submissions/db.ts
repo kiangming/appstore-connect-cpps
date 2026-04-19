@@ -22,10 +22,26 @@
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-let cachedClient: SupabaseClient | null = null;
+/**
+ * Supabase client scoped to the `store_mgmt` Postgres schema.
+ *
+ * The supabase-js v2 generics are: `SupabaseClient<Database, SchemaNameOrClientOptions, SchemaName, ...>`.
+ * When `createClient(url, key, { db: { schema: 'store_mgmt' } })` is called
+ * without an explicit `Database` type, the return is
+ * `SupabaseClient<any, any, 'store_mgmt', ...>` — i.e. the schema literal
+ * lands in the third generic slot, not the second. We reflect that here so
+ * the alias actually matches createClient's return and callers get proper
+ * method typing.
+ *
+ * Once we generate a real `Database` type from the schema, replace `any`
+ * in the first slot. See TODO.md PR-4-hotfix entry.
+ */
+export type StoreMgmtClient = SupabaseClient<any, any, 'store_mgmt'>;
 
-function getServiceClient(): SupabaseClient {
-  if (cachedClient) return cachedClient;
+let cachedClient: StoreMgmtClient | null = null;
+
+function getServiceClient(): StoreMgmtClient {
+  if (cachedClient !== null) return cachedClient;
 
   const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY;
@@ -33,16 +49,17 @@ function getServiceClient(): SupabaseClient {
   if (!url || !serviceKey) {
     throw new Error(
       'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars. ' +
-      'Store Management requires service role (backend-only).'
+        'Store Management requires service role (backend-only).',
     );
   }
 
-  cachedClient = createClient(url, serviceKey, {
+  const client = createClient(url, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
     db: { schema: 'store_mgmt' },
-  });
+  }) as StoreMgmtClient;
 
-  return cachedClient;
+  cachedClient = client;
+  return client;
 }
 
 /**
@@ -50,11 +67,11 @@ function getServiceClient(): SupabaseClient {
  *
  * SERVER-SIDE ONLY. Do not call this from Client Components.
  */
-export function storeDb(): SupabaseClient {
+export function storeDb(): StoreMgmtClient {
   if (typeof window !== 'undefined') {
     throw new Error(
       'storeDb() must not be called from the browser. ' +
-      'Use Server Actions or API Routes for Store Management DB access.'
+        'Use Server Actions or API Routes for Store Management DB access.',
     );
   }
   return getServiceClient();
