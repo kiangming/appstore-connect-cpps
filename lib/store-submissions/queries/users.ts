@@ -56,6 +56,10 @@ export async function getUserById(id: string): Promise<TeamUser | null> {
  * demoting or disabling a user. Callers that need a race-safe check must
  * perform this inside a transaction with FOR UPDATE locks — this helper alone
  * is susceptible to TOCTOU.
+ *
+ * @internal Currently unreferenced — the guarded RPC (`update_user_guarded`)
+ * performs the race-safe check atomically. Kept for future read-only use cases
+ * (reports, audit dashboards).
  */
 export async function countActiveManagers(): Promise<number> {
   const { count, error } = await storeDb()
