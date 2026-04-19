@@ -122,14 +122,12 @@ const makeAlias = (overrides: Partial<ExistingAlias> & { id: string }): Existing
 });
 
 describe('deriveAliasChangesOnRename', () => {
-  it('returns noop when old and new names are identical', () => {
-    const plan = deriveAliasChangesOnRename('Skyline', 'Skyline', []);
-    expect(plan.kind).toBe('noop');
+  it('returns an empty array when old and new names are identical', () => {
+    expect(deriveAliasChangesOnRename('Skyline', 'Skyline', [])).toEqual([]);
   });
 
-  it('treats whitespace-only differences as noop', () => {
-    const plan = deriveAliasChangesOnRename('Skyline', '  Skyline  ', []);
-    expect(plan.kind).toBe('noop');
+  it('treats whitespace-only differences as a noop', () => {
+    expect(deriveAliasChangesOnRename('Skyline', '  Skyline  ', [])).toEqual([]);
   });
 
   it('throws when newName is empty', () => {
@@ -140,18 +138,18 @@ describe('deriveAliasChangesOnRename', () => {
     expect(() => deriveAliasChangesOnRename('Skyline', '   ', [])).toThrow();
   });
 
-  it('demotes the existing AUTO_CURRENT row and adds a new one', () => {
+  it('demotes the existing AUTO_CURRENT row and inserts a new AUTO_CURRENT', () => {
     const aliases: ExistingAlias[] = [
       makeAlias({ id: 'a1', alias_text: 'Skyline', source_type: 'AUTO_CURRENT' }),
     ];
-    const plan = deriveAliasChangesOnRename('Skyline', 'Skyline Runners', aliases);
-    expect(plan.kind).toBe('rename');
-    if (plan.kind !== 'rename') throw new Error('unreachable');
-    expect(plan.demote).toEqual([{ id: 'a1', previous_name: 'Skyline' }]);
-    expect(plan.add).toEqual({ alias_text: 'Skyline Runners', source_type: 'AUTO_CURRENT' });
+    const changes = deriveAliasChangesOnRename('Skyline', 'Skyline Runners', aliases);
+    expect(changes).toEqual([
+      { kind: 'DEMOTE', aliasId: 'a1', previousName: 'Skyline' },
+      { kind: 'INSERT', aliasText: 'Skyline Runners', sourceType: 'AUTO_CURRENT' },
+    ]);
   });
 
-  it('ignores MANUAL, REGEX, and AUTO_HISTORICAL aliases', () => {
+  it('does not demote MANUAL, REGEX, or AUTO_HISTORICAL aliases', () => {
     const aliases: ExistingAlias[] = [
       makeAlias({ id: 'a1', alias_text: 'Skyline', source_type: 'AUTO_CURRENT' }),
       makeAlias({ id: 'a2', alias_text: 'SKY', source_type: 'MANUAL' }),
@@ -163,10 +161,9 @@ describe('deriveAliasChangesOnRename', () => {
         previous_name: 'Old Name',
       }),
     ];
-    const plan = deriveAliasChangesOnRename('Skyline', 'Skyline 2', aliases);
-    if (plan.kind !== 'rename') throw new Error('unreachable');
-    expect(plan.demote).toHaveLength(1);
-    expect(plan.demote[0].id).toBe('a1');
+    const changes = deriveAliasChangesOnRename('Skyline', 'Skyline 2', aliases);
+    const demoted = changes.filter((c) => c.kind === 'DEMOTE');
+    expect(demoted).toEqual([{ kind: 'DEMOTE', aliasId: 'a1', previousName: 'Skyline' }]);
   });
 
   it('defensively demotes multiple AUTO_CURRENT rows (corrupt state)', () => {
@@ -174,26 +171,108 @@ describe('deriveAliasChangesOnRename', () => {
       makeAlias({ id: 'a1', alias_text: 'A', source_type: 'AUTO_CURRENT' }),
       makeAlias({ id: 'a2', alias_text: 'A', source_type: 'AUTO_CURRENT' }),
     ];
-    const plan = deriveAliasChangesOnRename('A', 'B', aliases);
-    if (plan.kind !== 'rename') throw new Error('unreachable');
-    expect(plan.demote.map((d) => d.id).sort()).toEqual(['a1', 'a2']);
-    expect(plan.demote.every((d) => d.previous_name === 'A')).toBe(true);
+    const changes = deriveAliasChangesOnRename('A', 'B', aliases);
+    const demoted = changes.filter((c) => c.kind === 'DEMOTE');
+    expect(demoted.map((d) => (d as { aliasId: string }).aliasId).sort()).toEqual(['a1', 'a2']);
+    expect(
+      demoted.every((d) => (d as { previousName: string }).previousName === 'A'),
+    ).toBe(true);
   });
 
-  it('handles empty aliases list (nothing to demote, still adds new)', () => {
-    const plan = deriveAliasChangesOnRename('A', 'B', []);
-    if (plan.kind !== 'rename') throw new Error('unreachable');
-    expect(plan.demote).toEqual([]);
-    expect(plan.add.alias_text).toBe('B');
+  it('inserts a new AUTO_CURRENT when aliases list is empty', () => {
+    const changes = deriveAliasChangesOnRename('A', 'B', []);
+    expect(changes).toEqual([
+      { kind: 'INSERT', aliasText: 'B', sourceType: 'AUTO_CURRENT' },
+    ]);
   });
 
   it('trims oldName and newName before comparing', () => {
-    const plan = deriveAliasChangesOnRename('  Skyline ', 'Skyline Runners', [
+    const changes = deriveAliasChangesOnRename('  Skyline ', 'Skyline Runners', [
       makeAlias({ id: 'a1', alias_text: 'Skyline', source_type: 'AUTO_CURRENT' }),
     ]);
-    if (plan.kind !== 'rename') throw new Error('unreachable');
-    expect(plan.demote[0].previous_name).toBe('Skyline');
-    expect(plan.add.alias_text).toBe('Skyline Runners');
+    expect(changes).toEqual([
+      { kind: 'DEMOTE', aliasId: 'a1', previousName: 'Skyline' },
+      { kind: 'INSERT', aliasText: 'Skyline Runners', sourceType: 'AUTO_CURRENT' },
+    ]);
+  });
+
+  it('PROMOTES an existing MANUAL alias that matches the new name instead of inserting', () => {
+    const aliases: ExistingAlias[] = [
+      makeAlias({ id: 'a1', alias_text: 'Skyline', source_type: 'AUTO_CURRENT' }),
+      makeAlias({ id: 'a2', alias_text: 'Skyline Runners', source_type: 'MANUAL' }),
+    ];
+    const changes = deriveAliasChangesOnRename('Skyline', 'Skyline Runners', aliases);
+    expect(changes).toEqual([
+      { kind: 'DEMOTE', aliasId: 'a1', previousName: 'Skyline' },
+      { kind: 'PROMOTE', aliasId: 'a2' },
+    ]);
+    expect(changes.some((c) => c.kind === 'INSERT')).toBe(false);
+  });
+
+  it('PROMOTES case-insensitively (user typed different case)', () => {
+    const aliases: ExistingAlias[] = [
+      makeAlias({ id: 'a1', alias_text: 'Skyline', source_type: 'AUTO_CURRENT' }),
+      makeAlias({ id: 'a2', alias_text: 'skyline runners', source_type: 'MANUAL' }),
+    ];
+    const changes = deriveAliasChangesOnRename('Skyline', 'Skyline Runners', aliases);
+    expect(changes.find((c) => c.kind === 'PROMOTE')).toEqual({
+      kind: 'PROMOTE',
+      aliasId: 'a2',
+    });
+  });
+
+  it('PROMOTES an AUTO_HISTORICAL alias when its text matches the new name (re-rename)', () => {
+    // Scenario: user renamed Skyline → Skyline Runners (creating AUTO_HISTORICAL
+    // "Skyline"), then renamed back to "Skyline". The historical row should be
+    // promoted rather than inserting a duplicate.
+    const aliases: ExistingAlias[] = [
+      makeAlias({ id: 'a1', alias_text: 'Skyline Runners', source_type: 'AUTO_CURRENT' }),
+      makeAlias({
+        id: 'a2',
+        alias_text: 'Skyline',
+        source_type: 'AUTO_HISTORICAL',
+        previous_name: 'Skyline',
+      }),
+    ];
+    const changes = deriveAliasChangesOnRename('Skyline Runners', 'Skyline', aliases);
+    expect(changes).toEqual([
+      { kind: 'DEMOTE', aliasId: 'a1', previousName: 'Skyline Runners' },
+      { kind: 'PROMOTE', aliasId: 'a2' },
+    ]);
+  });
+
+  it('does not promote a REGEX alias even if it would match the new name text', () => {
+    // REGEX aliases do not carry alias_text; the promotion match is by text only.
+    const aliases: ExistingAlias[] = [
+      makeAlias({ id: 'a1', alias_text: 'Skyline', source_type: 'AUTO_CURRENT' }),
+      makeAlias({ id: 'a2', alias_regex: 'Skyline Runners', source_type: 'REGEX' }),
+    ];
+    const changes = deriveAliasChangesOnRename('Skyline', 'Skyline Runners', aliases);
+    expect(changes.find((c) => c.kind === 'PROMOTE')).toBeUndefined();
+    expect(changes.find((c) => c.kind === 'INSERT')).toBeDefined();
+  });
+
+  it('picks the first non-AUTO_CURRENT match when multiple aliases share the new name (corrupt state)', () => {
+    const aliases: ExistingAlias[] = [
+      makeAlias({ id: 'a1', alias_text: 'Skyline', source_type: 'AUTO_CURRENT' }),
+      makeAlias({ id: 'a2', alias_text: 'Skyline Runners', source_type: 'MANUAL' }),
+      makeAlias({ id: 'a3', alias_text: 'Skyline Runners', source_type: 'MANUAL' }),
+    ];
+    const changes = deriveAliasChangesOnRename('Skyline', 'Skyline Runners', aliases);
+    const promote = changes.find((c) => c.kind === 'PROMOTE');
+    expect(promote).toEqual({ kind: 'PROMOTE', aliasId: 'a2' });
+  });
+
+  it('applies DEMOTEs before the INSERT/PROMOTE so the caller can replay the array in order', () => {
+    const aliases: ExistingAlias[] = [
+      makeAlias({ id: 'a1', alias_text: 'Old', source_type: 'AUTO_CURRENT' }),
+      makeAlias({ id: 'a2', alias_text: 'New', source_type: 'MANUAL' }),
+    ];
+    const changes = deriveAliasChangesOnRename('Old', 'New', aliases);
+    const demoteIdx = changes.findIndex((c) => c.kind === 'DEMOTE');
+    const promoteIdx = changes.findIndex((c) => c.kind === 'PROMOTE');
+    expect(demoteIdx).toBeGreaterThanOrEqual(0);
+    expect(promoteIdx).toBeGreaterThan(demoteIdx);
   });
 });
 

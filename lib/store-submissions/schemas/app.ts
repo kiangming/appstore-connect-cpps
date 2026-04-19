@@ -182,3 +182,95 @@ export const csvRowSchema = z.object({
   active: csvBool,
 });
 export type CsvRowInput = z.infer<typeof csvRowSchema>;
+
+// -- Server Action input schemas ------------------------------------------
+
+const uuidField = z.string().uuid('Invalid id');
+
+/**
+ * Looser variant of `createAppSchema` consumed by the Server Action:
+ *   - `slug` is optional — when omitted, the action derives it from `name`
+ *     via generateSlugFromName and applies collision-resolution before the
+ *     RPC INSERT. When provided, it is validated verbatim.
+ * The stricter `createAppSchema` (slug required) remains for other callers
+ * and continues to gate inputs at the API boundary.
+ */
+export const createAppActionInputSchema = z.object({
+  name: nameField,
+  display_name: displayNameField,
+  slug: slugSchema.optional(),
+  team_owner_id: z.string().uuid('Invalid team_owner_id').nullable().optional(),
+  active: z.boolean().default(true),
+  platform_bindings: z.array(platformBindingInputSchema).default([]),
+});
+export type CreateAppActionInput = z.infer<typeof createAppActionInputSchema>;
+
+export const renameAppInputSchema = z.object({
+  id: uuidField,
+  new_name: nameField,
+});
+export type RenameAppInput = z.infer<typeof renameAppInputSchema>;
+
+export const deleteAppInputSchema = z.object({
+  id: uuidField,
+  hard: z.boolean().default(false),
+});
+export type DeleteAppInput = z.infer<typeof deleteAppInputSchema>;
+
+/**
+ * Alias add — same refinements as `aliasSchema` but keyed to an app_id and
+ * without the AUTO_* source types (users can only add MANUAL text or REGEX
+ * patterns via this entry point; AUTO_CURRENT / AUTO_HISTORICAL are managed
+ * by the rename transaction).
+ */
+export const addAliasInputSchema = z
+  .object({
+    app_id: uuidField,
+    alias_text: z.string().trim().min(1).max(200).optional(),
+    alias_regex: z.string().trim().min(1).max(500).optional(),
+    source_type: z.enum(['MANUAL', 'REGEX']),
+  })
+  .refine((d) => (d.alias_text != null) !== (d.alias_regex != null), {
+    message: 'Exactly one of alias_text or alias_regex must be set',
+  })
+  .refine((d) => d.source_type !== 'REGEX' || !!d.alias_regex, {
+    message: 'REGEX source_type requires alias_regex',
+    path: ['alias_regex'],
+  })
+  .refine(
+    (d) => {
+      if (!d.alias_regex) return true;
+      return validateAliasRegex(d.alias_regex).ok;
+    },
+    {
+      message: 'alias_regex must be a valid, non-permissive RE2 pattern',
+      path: ['alias_regex'],
+    },
+  );
+export type AddAliasInput = z.infer<typeof addAliasInputSchema>;
+
+export const removeAliasInputSchema = z.object({
+  id: uuidField,
+});
+export type RemoveAliasInput = z.infer<typeof removeAliasInputSchema>;
+
+export const setPlatformBindingInputSchema = z.object({
+  app_id: uuidField,
+  platform: platformKeySchema,
+  platform_ref: z.string().trim().min(1).max(200).optional(),
+  console_url: z.string().trim().url('console_url must be a valid URL').optional(),
+});
+export type SetPlatformBindingInput = z.infer<typeof setPlatformBindingInputSchema>;
+
+export const removePlatformBindingInputSchema = z.object({
+  app_id: uuidField,
+  platform: platformKeySchema,
+});
+export type RemovePlatformBindingInput = z.infer<typeof removePlatformBindingInputSchema>;
+
+export const importCsvInputSchema = z.object({
+  csv_text: z.string().min(1, 'csv_text is required'),
+  confirm: z.boolean().default(false),
+  strategy: z.enum(['SKIP_EXISTING', 'FAIL_ON_EXISTING']).default('SKIP_EXISTING'),
+});
+export type ImportCsvInput = z.infer<typeof importCsvInputSchema>;

@@ -70,44 +70,50 @@ export function generateSlugFromName(name: string): string {
 
 export type ExistingAlias = AliasInput & { id: string };
 
-export type AliasDemotion = {
-  id: string;
-  previous_name: string;
-};
-
-export type AliasAddition = {
-  alias_text: string;
-  source_type: Extract<AliasSourceType, 'AUTO_CURRENT'>;
-};
-
-export type AliasRenamePlan =
-  | { kind: 'noop'; reason: 'unchanged' }
-  | {
-      kind: 'rename';
-      demote: AliasDemotion[];
-      add: AliasAddition;
-    };
+/**
+ * Single atomic change in the rename plan. Callers apply these in array order
+ * inside a single transaction (DEMOTE first, then INSERT or PROMOTE).
+ *
+ *  - DEMOTE: UPDATE app_aliases SET source_type='AUTO_HISTORICAL',
+ *            previous_name=<previousName> WHERE id=<aliasId>.
+ *  - INSERT: INSERT a new AUTO_CURRENT row with alias_text=<aliasText>.
+ *  - PROMOTE: UPDATE app_aliases SET source_type='AUTO_CURRENT',
+ *             previous_name=NULL WHERE id=<aliasId>. Used when the user
+ *             already owned a MANUAL / REGEX / AUTO_HISTORICAL alias whose
+ *             alias_text matches the new name — promoting avoids inserting a
+ *             duplicate row that would violate the (app_id, lower(alias_text))
+ *             matching semantics.
+ */
+export type AliasChange =
+  | { kind: 'DEMOTE'; aliasId: string; previousName: string }
+  | { kind: 'INSERT'; aliasText: string; sourceType: Extract<AliasSourceType, 'AUTO_CURRENT'> }
+  | { kind: 'PROMOTE'; aliasId: string };
 
 /**
- * Compute the alias change plan when renaming an app from oldName → newName.
+ * Compute the ordered list of alias changes to apply when renaming an app
+ * from oldName → newName.
  *
- * The returned plan is a pure description:
- *   - `demote[]` — existing AUTO_CURRENT rows that the caller must UPDATE to
- *     AUTO_HISTORICAL + set `previous_name` = oldName.
- *   - `add` — a new AUTO_CURRENT row to INSERT with alias_text = newName.
+ *   1. DEMOTE every AUTO_CURRENT row (usually one; multiple tolerated for
+ *      corrupt-state recovery) with previous_name = oldName.
+ *   2. If an existing non-AUTO_CURRENT alias already has alias_text matching
+ *      newName (case-insensitive, trimmed), PROMOTE that row instead of
+ *      inserting a new one. Prevents the duplicate-row scenario where a user
+ *      had "Skyline Runners" as a MANUAL alias before renaming to it.
+ *   3. Otherwise, INSERT a new AUTO_CURRENT row with alias_text = newName.
  *
- * There should only ever be one AUTO_CURRENT row per app per the data model,
- * but we defensively demote *every* AUTO_CURRENT we're given — that way a
- * corrupt state with two AUTO_CURRENT rows converges back to a valid one.
+ * Returns an empty array when oldName === newName (trimmed) — caller should
+ * skip the rename transaction entirely.
  *
- * Returns `kind: 'noop'` when oldName === newName after trimming; caller
- * should skip the transaction entirely.
+ * Pure function. DB writes, ordering, and transactional rollback are the
+ * caller's responsibility (see rename_app_tx RPC in PR-4 migration).
+ *
+ * Throws when newName is empty/whitespace-only.
  */
 export function deriveAliasChangesOnRename(
   oldName: string,
   newName: string,
   currentAliases: ExistingAlias[],
-): AliasRenamePlan {
+): AliasChange[] {
   const trimmedOld = oldName.trim();
   const trimmedNew = newName.trim();
 
@@ -116,18 +122,32 @@ export function deriveAliasChangesOnRename(
   }
 
   if (trimmedOld === trimmedNew) {
-    return { kind: 'noop', reason: 'unchanged' };
+    return [];
   }
 
-  const demote = currentAliases
-    .filter((a) => a.source_type === 'AUTO_CURRENT')
-    .map((a) => ({ id: a.id, previous_name: trimmedOld }));
+  const changes: AliasChange[] = [];
 
-  return {
-    kind: 'rename',
-    demote,
-    add: { alias_text: trimmedNew, source_type: 'AUTO_CURRENT' },
-  };
+  for (const a of currentAliases) {
+    if (a.source_type === 'AUTO_CURRENT') {
+      changes.push({ kind: 'DEMOTE', aliasId: a.id, previousName: trimmedOld });
+    }
+  }
+
+  const lowerNew = trimmedNew.toLowerCase();
+  const promoteTarget = currentAliases.find(
+    (a) =>
+      a.source_type !== 'AUTO_CURRENT' &&
+      typeof a.alias_text === 'string' &&
+      a.alias_text.trim().toLowerCase() === lowerNew,
+  );
+
+  if (promoteTarget) {
+    changes.push({ kind: 'PROMOTE', aliasId: promoteTarget.id });
+  } else {
+    changes.push({ kind: 'INSERT', aliasText: trimmedNew, sourceType: 'AUTO_CURRENT' });
+  }
+
+  return changes;
 }
 
 // -- Conflict detection ----------------------------------------------------
