@@ -1,13 +1,17 @@
 'use client';
 
 import { useMemo, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Apple,
+  Archive,
+  ArchiveRestore,
   ChevronDown,
   ChevronRight,
   Download,
   ExternalLink,
   Facebook,
+  Pencil,
   Plus,
   Search,
   Upload,
@@ -18,11 +22,20 @@ import type {
   AppPlatformBindingRecord,
   AppAliasRecord,
 } from '@/lib/store-submissions/queries/apps';
+import type { TeamUser } from '@/lib/store-submissions/queries/users';
 import type { PlatformKey } from '@/lib/store-submissions/schemas/app';
-import { exportAppsCsvAction } from '@/app/(dashboard)/store-submissions/config/apps/actions';
+import {
+  deleteAppAction,
+  exportAppsCsvAction,
+  updateAppAction,
+} from '@/app/(dashboard)/store-submissions/config/apps/actions';
+import { AppDialog } from './AppDialog';
+import { AliasManager } from './AliasManager';
+import { CsvImportDialog } from './CsvImportDialog';
 
 interface AppsClientProps {
   initialApps: AppListRow[];
+  teamUsers: TeamUser[];
   isManager: boolean;
 }
 
@@ -91,13 +104,23 @@ function aliasesPreview(aliases: AppAliasRecord[]): {
   return { shown: usable.slice(0, 3), overflow: Math.max(0, usable.length - 3) };
 }
 
-export function AppsClient({ initialApps, isManager }: AppsClientProps) {
+type DialogState =
+  | { kind: 'none' }
+  | { kind: 'create' }
+  | { kind: 'edit'; app: AppListRow }
+  | { kind: 'import' };
+
+export function AppsClient({ initialApps, teamUsers, isManager }: AppsClientProps) {
+  const router = useRouter();
   const [search, setSearch] = useState('');
   const [platform, setPlatform] = useState<'all' | PlatformKey>('all');
   const [status, setStatus] = useState<StatusFilter>('active');
   const [owner, setOwner] = useState<string>('all');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [isExporting, startExport] = useTransition();
+  const [isArchivingId, setIsArchivingId] = useState<string | null>(null);
+  const [_isArchivePending, startArchive] = useTransition();
+  const [dialog, setDialog] = useState<DialogState>({ kind: 'none' });
 
   const ownerOptions = useMemo(() => {
     const seen = new Map<string, string>();
@@ -175,6 +198,27 @@ export function AppsClient({ initialApps, isManager }: AppsClientProps) {
       URL.revokeObjectURL(url);
       toast.success(`Exported ${initialApps.length} apps`);
     });
+  }
+
+  function handleArchiveToggle(app: AppListRow) {
+    setIsArchivingId(app.id);
+    startArchive(async () => {
+      const result = app.active
+        ? await deleteAppAction({ id: app.id, hard: false })
+        : await updateAppAction({ id: app.id, active: true });
+      setIsArchivingId(null);
+      if (result.ok) {
+        toast.success(app.active ? `Archived "${app.name}"` : `Restored "${app.name}"`);
+        router.refresh();
+      } else {
+        toast.error(result.error.message);
+      }
+    });
+  }
+
+  function handleDialogSuccess() {
+    setDialog({ kind: 'none' });
+    router.refresh();
   }
 
   return (
@@ -264,18 +308,16 @@ export function AppsClient({ initialApps, isManager }: AppsClientProps) {
             <>
               <button
                 type="button"
-                disabled
-                title="Coming in the next chunk"
-                className="inline-flex items-center gap-1.5 text-[13px] text-slate-600 border border-slate-200 bg-white rounded-lg px-3 py-1.5 opacity-50 cursor-not-allowed"
+                onClick={() => setDialog({ kind: 'import' })}
+                className="inline-flex items-center gap-1.5 text-[13px] text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-300 bg-white rounded-lg px-3 py-1.5"
               >
                 <Upload className="w-3.5 h-3.5" strokeWidth={1.8} />
                 Import CSV
               </button>
               <button
                 type="button"
-                disabled
-                title="Coming in the next chunk"
-                className="inline-flex items-center gap-1.5 text-[13px] text-white bg-[#0071E3] rounded-lg px-3 py-1.5 opacity-50 cursor-not-allowed"
+                onClick={() => setDialog({ kind: 'create' })}
+                className="inline-flex items-center gap-1.5 text-[13px] text-white bg-[#0071E3] hover:bg-[#005fcc] rounded-lg px-3 py-1.5"
               >
                 <Plus className="w-3.5 h-3.5" strokeWidth={2.5} />
                 Add app
@@ -342,10 +384,17 @@ export function AppsClient({ initialApps, isManager }: AppsClientProps) {
             const preview = aliasesPreview(app.aliases);
             return (
               <div key={app.id} className="border-b border-slate-100 last:border-b-0">
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   onClick={() => toggleExpand(app.id)}
-                  className="w-full grid grid-cols-[minmax(200px,260px)_minmax(180px,220px)_1fr_90px_110px_36px] gap-3 items-center px-5 py-3 hover:bg-slate-50/70 text-left"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      toggleExpand(app.id);
+                    }
+                  }}
+                  className="w-full grid grid-cols-[minmax(200px,260px)_minmax(180px,220px)_1fr_90px_110px_auto] gap-3 items-center px-5 py-3 hover:bg-slate-50/70 text-left cursor-pointer"
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <Avatar name={app.name} color={colorFromId(app.id)} />
@@ -397,16 +446,53 @@ export function AppsClient({ initialApps, isManager }: AppsClientProps) {
                     <StatusBadge active={app.active} />
                   </div>
 
-                  <div className="flex justify-end text-slate-400">
+                  <div className="flex justify-end items-center gap-0.5 text-slate-400">
+                    {isManager && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDialog({ kind: 'edit', app });
+                          }}
+                          title="Edit app"
+                          className="p-1.5 rounded hover:bg-slate-100 hover:text-slate-700"
+                        >
+                          <Pencil className="h-3.5 w-3.5" strokeWidth={1.8} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleArchiveToggle(app);
+                          }}
+                          disabled={isArchivingId === app.id}
+                          title={app.active ? 'Archive' : 'Restore'}
+                          className="p-1.5 rounded hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50"
+                        >
+                          {app.active ? (
+                            <Archive className="h-3.5 w-3.5" strokeWidth={1.8} />
+                          ) : (
+                            <ArchiveRestore className="h-3.5 w-3.5" strokeWidth={1.8} />
+                          )}
+                        </button>
+                      </>
+                    )}
                     {expanded ? (
-                      <ChevronDown className="h-4 w-4" strokeWidth={1.8} />
+                      <ChevronDown className="h-4 w-4 ml-1" strokeWidth={1.8} />
                     ) : (
-                      <ChevronRight className="h-4 w-4" strokeWidth={1.8} />
+                      <ChevronRight className="h-4 w-4 ml-1" strokeWidth={1.8} />
                     )}
                   </div>
-                </button>
+                </div>
 
-                {expanded && <ExpandedDetail app={app} />}
+                {expanded && (
+                  <ExpandedDetail
+                    app={app}
+                    isManager={isManager}
+                    onAliasChanged={() => router.refresh()}
+                  />
+                )}
               </div>
             );
           })}
@@ -416,6 +502,30 @@ export function AppsClient({ initialApps, isManager }: AppsClientProps) {
       <p className="text-[11px] text-slate-400 text-right">
         {filteredApps.length} of {initialApps.length} {initialApps.length === 1 ? 'app' : 'apps'}
       </p>
+
+      {dialog.kind === 'create' && (
+        <AppDialog
+          mode="create"
+          teamUsers={teamUsers}
+          onClose={() => setDialog({ kind: 'none' })}
+          onSuccess={handleDialogSuccess}
+        />
+      )}
+      {dialog.kind === 'edit' && (
+        <AppDialog
+          mode="edit"
+          app={dialog.app}
+          teamUsers={teamUsers}
+          onClose={() => setDialog({ kind: 'none' })}
+          onSuccess={handleDialogSuccess}
+        />
+      )}
+      {dialog.kind === 'import' && (
+        <CsvImportDialog
+          onClose={() => setDialog({ kind: 'none' })}
+          onSuccess={handleDialogSuccess}
+        />
+      )}
     </div>
   );
 }
@@ -529,7 +639,15 @@ function AliasChip({ alias, compact = false }: { alias: AppAliasRecord; compact?
   );
 }
 
-function ExpandedDetail({ app }: { app: AppListRow }) {
+function ExpandedDetail({
+  app,
+  isManager,
+  onAliasChanged,
+}: {
+  app: AppListRow;
+  isManager: boolean;
+  onAliasChanged: () => void;
+}) {
   const bindingsByKey = new Map<PlatformKey, AppPlatformBindingRecord>();
   for (const b of app.bindings) bindingsByKey.set(b.platform_key, b);
 
@@ -586,22 +704,17 @@ function ExpandedDetail({ app }: { app: AppListRow }) {
                 The canonical app name is auto-added as an alias
               </div>
             </div>
-            <div className="bg-white border border-slate-200 rounded-lg p-3 flex items-center gap-2 flex-wrap">
-              {app.aliases.length === 0 ? (
-                <span className="text-[12px] text-amber-700 italic">
-                  No aliases yet — emails referencing this app won&apos;t classify
-                </span>
-              ) : (
-                app.aliases
-                  .slice()
-                  .sort((a, b) => {
-                    const rank = (s: string) =>
-                      s === 'AUTO_CURRENT' ? 0 : s === 'AUTO_HISTORICAL' ? 1 : s === 'MANUAL' ? 2 : 3;
-                    return rank(a.source_type) - rank(b.source_type);
-                  })
-                  .map((alias) => <AliasChip key={alias.id} alias={alias} />)
-              )}
-            </div>
+            <AliasManager
+              appId={app.id}
+              aliases={app.aliases}
+              disabled={!isManager}
+              onChanged={onAliasChanged}
+            />
+            {!isManager && (
+              <p className="text-[10.5px] text-slate-400 mt-1">
+                Only MANAGER can add or remove aliases.
+              </p>
+            )}
           </div>
         </div>
 

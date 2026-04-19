@@ -1,13 +1,14 @@
 import { Boxes } from 'lucide-react';
 import { requireStoreSession } from '@/lib/store-submissions/session-guard';
 import { listApps } from '@/lib/store-submissions/queries/apps';
+import { listUsers } from '@/lib/store-submissions/queries/users';
 import { AppsClient } from '@/components/store-submissions/apps/AppsClient';
 
 export const dynamic = 'force-dynamic';
 
 export default async function AppsPage() {
   const { storeUser } = await requireStoreSession();
-  const apps = await listApps();
+  const [apps, teamUsers] = await Promise.all([listApps(), listUsers()]);
 
   return (
     <div className="px-8 py-10">
@@ -28,6 +29,7 @@ export default async function AppsPage() {
 
         <AppsClient
           initialApps={apps}
+          teamUsers={teamUsers.filter((u) => u.status === 'active')}
           isManager={storeUser.role === 'MANAGER'}
         />
       </div>
