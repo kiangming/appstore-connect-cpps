@@ -6,6 +6,7 @@ import { useSession, signOut } from "next-auth/react";
 import { useState } from "react";
 import { Layers, Inbox, Settings, LogOut } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { getSettingsHref } from "./sidebar-helpers";
 
 interface NavItem {
   id: string;
@@ -95,17 +96,25 @@ export function AppSidebar() {
         </div>
 
         {/* Settings */}
-        <Link
-          href="/settings"
-          title="Settings"
-          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors mb-1 ${
-            pathname === "/settings"
-              ? "text-[#0071E3] bg-blue-50"
-              : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
-          }`}
-        >
-          <Settings className="h-[20px] w-[20px]" strokeWidth={1.8} />
-        </Link>
+        {(() => {
+          const settingsHref = getSettingsHref(pathname);
+          const isSettingsActive =
+            pathname === settingsHref ||
+            pathname.startsWith(settingsHref + "/");
+          return (
+            <Link
+              href={settingsHref}
+              title="Settings"
+              className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors mb-1 ${
+                isSettingsActive
+                  ? "text-[#0071E3] bg-blue-50"
+                  : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <Settings className="h-[20px] w-[20px]" strokeWidth={1.8} />
+            </Link>
+          );
+        })()}
 
         {/* User avatar */}
         <button
