@@ -47,6 +47,11 @@ export function AppSidebar() {
   const email = session?.user?.email ?? "";
   const userIcon = email ? iconForEmail(email) : "👤";
 
+  // Shared by both Settings render points (icon rail + flyout panel).
+  const settingsHref = getSettingsHref(pathname);
+  const isSettingsActive =
+    pathname === settingsHref || pathname.startsWith(settingsHref + "/");
+
   async function handleLogout() {
     setLoggingOut(true);
     await signOut({ callbackUrl: "/login" });
@@ -96,25 +101,17 @@ export function AppSidebar() {
         </div>
 
         {/* Settings */}
-        {(() => {
-          const settingsHref = getSettingsHref(pathname);
-          const isSettingsActive =
-            pathname === settingsHref ||
-            pathname.startsWith(settingsHref + "/");
-          return (
-            <Link
-              href={settingsHref}
-              title="Settings"
-              className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors mb-1 ${
-                isSettingsActive
-                  ? "text-[#0071E3] bg-blue-50"
-                  : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
-              }`}
-            >
-              <Settings className="h-[20px] w-[20px]" strokeWidth={1.8} />
-            </Link>
-          );
-        })()}
+        <Link
+          href={settingsHref}
+          title="Settings"
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors mb-1 ${
+            isSettingsActive
+              ? "text-[#0071E3] bg-blue-50"
+              : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+          }`}
+        >
+          <Settings className="h-[20px] w-[20px]" strokeWidth={1.8} />
+        </Link>
 
         {/* User avatar */}
         <button
@@ -159,9 +156,9 @@ export function AppSidebar() {
 
           {/* Settings label */}
           <Link
-            href="/settings"
+            href={settingsHref}
             className={`flex items-center gap-3 h-10 px-4 text-[13px] transition-colors mb-1 ${
-              pathname === "/settings"
+              isSettingsActive
                 ? "text-[#0071E3] font-semibold bg-blue-50"
                 : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
             }`}
