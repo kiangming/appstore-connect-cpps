@@ -412,6 +412,40 @@ Claude sẽ skip module không liên quan để tránh confusion context.
 10. Don't rotate `GMAIL_ENCRYPTION_KEY` in production
 11. Don't modify shared files (`AppSidebar`, `Hub page`, `TopNav`) without cross-module considerations
 
+## Lessons learned (traps we've already hit)
+
+### 1. `ADMIN_EMAIL` vs `ADMIN_EMAILS` — two distinct env vars, do NOT conflate
+
+| Var | Purpose |
+|---|---|
+| `ADMIN_EMAIL` (singular) + `ADMIN_PASSWORD` | Legacy password-login admin. Shown on login page only when `ADMIN_ENABLE=1`. Bypasses Google SSO. |
+| `ADMIN_EMAILS` (plural, comma-separated) | Google SSO admin whitelist. Emails here receive `session.user.role = "admin"` via `lib/auth.ts:isAdminEmail`. **Required** for `/settings` (ASC `.p8` management). Without it, Google SSO users silently default to `role: "member"` and `/settings` redirects home with no error. |
+
+Changing `ADMIN_EMAILS`: restart dev/prod server (NextAuth caches env at startup) **and** sign out + sign in to mint a fresh JWT. Existing sessions keep the stale role.
+
+### 2. `'use server'` files — every export must be async
+
+Next.js rejects non-async exports in any module whose first line is `'use server'`. Pure sync helpers (e.g. row counters, validators, formatters) must live in a utility module, not the actions file. Example: `countSnapshotRows` was extracted to `lib/store-submissions/rules/snapshot-utils.ts` after Railway rejected the build.
+
+`next dev` is lenient — always verify with `npm run build`, not just `npm run dev`, before pushing.
+
+### 3. WASM-bundling npm packages need `serverComponentsExternalPackages`
+
+Packages that ship a `.wasm` binary (e.g. `re2-wasm`) fail at Next.js's "Collecting page data" phase with `ENOENT: ... re2.wasm` because webpack doesn't copy the binary into the expected output path. Fix: add the package to `experimental.serverComponentsExternalPackages` in `next.config.mjs` so Next.js treats it as external and resolves via `require()` against `node_modules/` at runtime.
+
+Current externalized packages: `re2-wasm`. Add new WASM-shipping dependencies to this array.
+
+## Pre-push checklist (both modules)
+
+Before pushing to `origin/main`, run in order:
+
+1. `npm run typecheck` — must be clean (zero errors).
+2. `npm test` — all tests must pass.
+3. `npm run lint` — zero errors; warnings acceptable.
+4. **`npm run build` — CRITICAL.** Catches production-only errors that `next dev` skips: `'use server'` async violations, WASM bundling failures, page-data-collection errors. Railway runs this same command.
+
+If any step fails, fix the root cause — never `--no-verify` past a hook or skip a check.
+
 ## Slash commands
 
 Custom commands trong `.claude/commands/`:
@@ -427,3 +461,4 @@ Custom commands trong `.claude/commands/`:
 - v1.0 — April 2026: Initial CPP Manager
 - v2.0 — April 2026: Added Home Hub + modular architecture
 - v3.0 — April 2026: Added Store Management module với schema `store_mgmt`
+- v3.1 — April 2026: Added Lessons learned (ADMIN_EMAILS, `'use server'` async, WASM externalization) + pre-push checklist after PR-6 Railway incidents
