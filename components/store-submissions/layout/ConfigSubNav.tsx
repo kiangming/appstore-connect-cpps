@@ -36,7 +36,6 @@ const TABS: ConfigTab[] = [
     label: 'Settings',
     href: '/store-submissions/config/settings',
     icon: Settings,
-    disabled: true,
   },
 ];
 
