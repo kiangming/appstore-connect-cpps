@@ -801,7 +801,7 @@ Trước khi chạy cron lần đầu:
 - [ ] `CRON_SECRET` generated và set: `openssl rand -hex 24`
 - [ ] Google Cloud project tạo, OAuth consent screen configured
 - [ ] Google OAuth Client ID/Secret set: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
-- [ ] OAuth redirect URI whitelist: `https://{prod-domain}/api/gmail/callback`
+- [ ] OAuth redirect URI whitelist: `https://{prod-domain}/api/store-submissions/gmail/callback` (plus `http://localhost:3000/...` for dev)
 - [ ] Gmail scope enabled trong consent screen: `https://www.googleapis.com/auth/gmail.modify`
 - [ ] Manager (initial user) login tool → Settings → "Connect Gmail" → OAuth shared mailbox
 - [ ] Verify `gmail_credentials` row tồn tại trong DB

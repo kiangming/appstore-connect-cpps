@@ -271,9 +271,10 @@ openssl rand -hex 24
 4. Credentials → Create OAuth Client ID:
    - Type: Web application
    - Authorized redirect URIs:
-     - `https://store.yourcompany.com/api/auth/callback/google`
-     - `https://store.yourcompany.com/api/gmail/callback`
-     - `http://localhost:3000/...` (for local dev)
+     - `https://store.yourcompany.com/api/auth/callback/google` (NextAuth login)
+     - `https://store.yourcompany.com/api/store-submissions/gmail/callback` (Gmail connect)
+     - `http://localhost:3000/api/auth/callback/google` (dev login)
+     - `http://localhost:3000/api/store-submissions/gmail/callback` (dev Gmail connect)
 5. Copy Client ID + Secret → Railway env vars
 
 **Note**: `Internal` user type skip verification (không cần Google review). Chỉ cho phép user thuộc workspace domain login.
