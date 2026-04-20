@@ -12,6 +12,12 @@ import {
 } from '@/lib/store-submissions/auth';
 import { storeDb } from '@/lib/store-submissions/db';
 import {
+  getRuleVersion,
+  listRuleVersions,
+  type RuleVersionRow,
+} from '@/lib/store-submissions/queries/rules';
+import {
+  configSnapshotSchema,
   rollbackRulesInputSchema,
   saveRulesInputSchema,
   type SaveRulesInput,
@@ -250,4 +256,167 @@ export async function rollbackRulesAction(
     ok: true,
     data: { version_number: rpcData as number },
   };
+}
+
+// -- Version history reads (MANAGER-only) --------------------------------
+
+export interface VersionSummary {
+  id: string;
+  version_number: number;
+  saved_at: string;
+  saved_by_email: string | null;
+  saved_by_display_name: string | null;
+  note: string | null;
+}
+
+export interface VersionDetail extends VersionSummary {
+  /**
+   * Counts derived from the stored config_snapshot. We compute them
+   * server-side so the client pays one round-trip for "how big was this
+   * version?" without deserializing ~hundreds of rows it would throw away.
+   * Full side-by-side diff view is deferred (see TODO.md "[PR-5 polish]
+   * VersionHistoryDialog full diff view").
+   */
+  counts: {
+    senders: number;
+    subject_patterns: number;
+    types: number;
+    submission_id_patterns: number;
+  };
+}
+
+/**
+ * List the 50 most recent versions for the given platform (metadata only,
+ * no config_snapshot). Powers the top of the Version History dialog.
+ *
+ * RBAC: MANAGER-only — consistent with saveRulesAction / rollbackRulesAction.
+ * DEV/VIEWER don't reach this screen because the config page redirects them.
+ */
+export async function listRuleVersionsAction(
+  platformId: string,
+): Promise<ActionResult<VersionSummary[]>> {
+  const guard = await guardManager();
+  if ('error' in guard) return { ok: false, error: guard.error };
+
+  if (typeof platformId !== 'string' || platformId === '') {
+    return {
+      ok: false,
+      error: { code: 'VALIDATION', message: 'platformId is required' },
+    };
+  }
+
+  let rows: RuleVersionRow[];
+  try {
+    rows = await listRuleVersions(platformId, 50);
+  } catch (err) {
+    console.error('[store-rules] listRuleVersionsAction:', err);
+    return {
+      ok: false,
+      error: { code: 'DB_ERROR', message: 'Failed to load version history' },
+    };
+  }
+
+  const data: VersionSummary[] = rows.map((r) => ({
+    id: r.id,
+    version_number: r.version_number,
+    saved_at: r.saved_at,
+    saved_by_email: r.saved_by_email,
+    saved_by_display_name: r.saved_by_display_name,
+    note: r.note,
+  }));
+
+  return { ok: true, data };
+}
+
+/**
+ * Counts inside a config_snapshot without allocating the full arrays for
+ * the UI. Values default to 0 when a field is missing so we stay resilient
+ * to older snapshots that might predate a rule type.
+ *
+ * Exported so a future diff-view implementation can reuse the same source
+ * of truth — and the unit test pins the invariant that "empty object →
+ * all zeros" rather than "throws".
+ */
+export function countSnapshotRows(
+  snapshot: unknown,
+): VersionDetail['counts'] {
+  const parsed = configSnapshotSchema.safeParse(snapshot);
+  if (parsed.success) {
+    return {
+      senders: parsed.data.senders.length,
+      subject_patterns: parsed.data.subject_patterns.length,
+      types: parsed.data.types.length,
+      submission_id_patterns: parsed.data.submission_id_patterns.length,
+    };
+  }
+  // Best-effort fallback — old snapshots that fail the strict zod schema
+  // can still surface partial counts (e.g. schema_version was added later).
+  const s = (snapshot ?? {}) as Record<string, unknown>;
+  const arr = (v: unknown) => (Array.isArray(v) ? v.length : 0);
+  return {
+    senders: arr(s.senders),
+    subject_patterns: arr(s.subject_patterns),
+    types: arr(s.types),
+    submission_id_patterns: arr(s.submission_id_patterns),
+  };
+}
+
+/**
+ * Fetch one version's details for the expanded row in Version History.
+ * Returns counts (not the full rule set) to keep the payload small —
+ * rollback semantics do NOT need the client to see the snapshot because
+ * the RPC reads it server-side.
+ */
+export async function getRuleVersionAction(input: {
+  platform_id: string;
+  version_number: number;
+}): Promise<ActionResult<VersionDetail>> {
+  const guard = await guardManager();
+  if ('error' in guard) return { ok: false, error: guard.error };
+
+  if (
+    typeof input.platform_id !== 'string' ||
+    input.platform_id === '' ||
+    !Number.isInteger(input.version_number) ||
+    input.version_number < 1
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: 'VALIDATION',
+        message: 'platform_id and version_number are required',
+      },
+    };
+  }
+
+  try {
+    const row = await getRuleVersion(input.platform_id, input.version_number);
+    if (!row) {
+      return {
+        ok: false,
+        error: {
+          code: 'NOT_FOUND',
+          message: `Version v${input.version_number} not found`,
+        },
+      };
+    }
+    return {
+      ok: true,
+      data: {
+        id: row.id,
+        version_number: row.version_number,
+        saved_at: row.saved_at,
+        saved_by_email: row.saved_by_email,
+        saved_by_display_name: row.saved_by_display_name,
+        note: row.note,
+        counts: countSnapshotRows(row.config_snapshot),
+      },
+    };
+  } catch (err) {
+    console.error('[store-rules] getRuleVersionAction:', err);
+    return {
+      ok: false,
+      error: { code: 'DB_ERROR', message: 'Failed to load version detail' },
+    };
+  }
 }

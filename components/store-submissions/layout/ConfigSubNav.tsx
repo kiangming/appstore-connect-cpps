@@ -30,7 +30,6 @@ const TABS: ConfigTab[] = [
     label: 'Email Rules',
     href: '/store-submissions/config/email-rules',
     icon: Rss,
-    disabled: true,
   },
   {
     key: 'settings',

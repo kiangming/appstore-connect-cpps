@@ -10,11 +10,15 @@ const {
   mockRevalidatePath,
   mockRpc,
   mockRequireStoreRole,
+  mockListRuleVersions,
+  mockGetRuleVersion,
 } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockRevalidatePath: vi.fn(),
   mockRpc: vi.fn(),
   mockRequireStoreRole: vi.fn(),
+  mockListRuleVersions: vi.fn(),
+  mockGetRuleVersion: vi.fn(),
 }));
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }));
@@ -32,11 +36,22 @@ vi.mock('@/lib/store-submissions/db', () => ({
   storeDb: () => ({ rpc: mockRpc }),
 }));
 
+vi.mock('@/lib/store-submissions/queries/rules', () => ({
+  listRuleVersions: mockListRuleVersions,
+  getRuleVersion: mockGetRuleVersion,
+}));
+
 // === Imports AFTER mocks ===
 
 import { StoreForbiddenError, StoreUnauthorizedError } from '@/lib/store-submissions/auth';
 
-import { rollbackRulesAction, saveRulesAction } from './actions';
+import {
+  countSnapshotRows,
+  getRuleVersionAction,
+  listRuleVersionsAction,
+  rollbackRulesAction,
+  saveRulesAction,
+} from './actions';
 
 // === Helpers ===
 
@@ -94,6 +109,8 @@ beforeEach(() => {
   mockRequireStoreRole.mockReset();
   mockRevalidatePath.mockReset();
   mockRpc.mockReset();
+  mockListRuleVersions.mockReset();
+  mockGetRuleVersion.mockReset();
 });
 
 afterEach(() => {
@@ -346,5 +363,286 @@ describe('rollbackRulesAction', () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('NOT_FOUND');
+  });
+});
+
+// ============================================================
+// listRuleVersionsAction — metadata-only version list
+// ============================================================
+
+describe('listRuleVersionsAction', () => {
+  it('returns UNAUTHORIZED when no session', async () => {
+    setNoSession();
+    const res = await listRuleVersionsAction(PLATFORM_ID);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('UNAUTHORIZED');
+    expect(mockListRuleVersions).not.toHaveBeenCalled();
+  });
+
+  it('returns FORBIDDEN for DEV', async () => {
+    setSessionDev();
+    const res = await listRuleVersionsAction(PLATFORM_ID);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('FORBIDDEN');
+    expect(mockListRuleVersions).not.toHaveBeenCalled();
+  });
+
+  describe('when caller is MANAGER', () => {
+    beforeEach(setSessionManager);
+
+    it('returns VALIDATION when platformId is empty', async () => {
+      const res = await listRuleVersionsAction('');
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error.code).toBe('VALIDATION');
+      expect(mockListRuleVersions).not.toHaveBeenCalled();
+    });
+
+    it('forwards the 50-row limit and maps rows to VersionSummary', async () => {
+      mockListRuleVersions.mockResolvedValueOnce([
+        {
+          id: 'v-1',
+          platform_id: PLATFORM_ID,
+          version_number: 12,
+          saved_by: 'u-1',
+          saved_at: '2026-04-18T10:00:00Z',
+          note: 'Added IN_REVIEW pattern',
+          saved_by_email: 'mgr@company.com',
+          saved_by_display_name: 'Linh Tran',
+        },
+      ]);
+
+      const res = await listRuleVersionsAction(PLATFORM_ID);
+      expect(res.ok).toBe(true);
+      if (!res.ok) throw new Error('expected ok');
+      expect(res.data).toEqual([
+        {
+          id: 'v-1',
+          version_number: 12,
+          saved_at: '2026-04-18T10:00:00Z',
+          saved_by_email: 'mgr@company.com',
+          saved_by_display_name: 'Linh Tran',
+          note: 'Added IN_REVIEW pattern',
+        },
+      ]);
+      expect(mockListRuleVersions).toHaveBeenCalledWith(PLATFORM_ID, 50);
+    });
+
+    it('returns DB_ERROR when the query throws', async () => {
+      mockListRuleVersions.mockRejectedValueOnce(new Error('boom'));
+      const res = await listRuleVersionsAction(PLATFORM_ID);
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error.code).toBe('DB_ERROR');
+    });
+  });
+});
+
+// ============================================================
+// countSnapshotRows — config_snapshot → counts
+// ============================================================
+
+describe('countSnapshotRows', () => {
+  it('counts arrays from a zod-valid snapshot', () => {
+    const snap = {
+      schema_version: 1,
+      senders: [
+        {
+          id: '00000000-0000-4000-a000-000000000001',
+          email: 'x@y.com',
+          is_primary: true,
+          active: true,
+        },
+      ],
+      subject_patterns: [
+        {
+          id: '00000000-0000-4000-a000-000000000002',
+          outcome: 'APPROVED',
+          regex: '(?<app_name>.+)',
+          priority: 10,
+          example_subject: null,
+          active: true,
+        },
+        {
+          id: '00000000-0000-4000-a000-000000000003',
+          outcome: 'REJECTED',
+          regex: 'foo',
+          priority: 20,
+          example_subject: null,
+          active: true,
+        },
+      ],
+      types: [],
+      submission_id_patterns: [
+        {
+          id: '00000000-0000-4000-a000-000000000004',
+          body_regex: '(?<submission_id>\\d+)',
+          active: true,
+        },
+      ],
+    };
+    expect(countSnapshotRows(snap)).toEqual({
+      senders: 1,
+      subject_patterns: 2,
+      types: 0,
+      submission_id_patterns: 1,
+    });
+  });
+
+  it('falls back to best-effort counts when schema fails', () => {
+    // Missing schema_version → zod rejects; fallback counts array lengths.
+    const snap = {
+      senders: [{ shape: 'wrong' }, { shape: 'wrong' }],
+      subject_patterns: [],
+      types: [{ shape: 'wrong' }],
+      submission_id_patterns: 'not-an-array',
+    };
+    expect(countSnapshotRows(snap)).toEqual({
+      senders: 2,
+      subject_patterns: 0,
+      types: 1,
+      submission_id_patterns: 0,
+    });
+  });
+
+  it('returns all zeros for null/empty input', () => {
+    expect(countSnapshotRows(null)).toEqual({
+      senders: 0,
+      subject_patterns: 0,
+      types: 0,
+      submission_id_patterns: 0,
+    });
+    expect(countSnapshotRows({})).toEqual({
+      senders: 0,
+      subject_patterns: 0,
+      types: 0,
+      submission_id_patterns: 0,
+    });
+  });
+});
+
+// ============================================================
+// getRuleVersionAction — version detail + count computation
+// ============================================================
+
+describe('getRuleVersionAction', () => {
+  it('returns UNAUTHORIZED when no session', async () => {
+    setNoSession();
+    const res = await getRuleVersionAction({
+      platform_id: PLATFORM_ID,
+      version_number: 12,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('UNAUTHORIZED');
+    expect(mockGetRuleVersion).not.toHaveBeenCalled();
+  });
+
+  it('returns FORBIDDEN for DEV', async () => {
+    setSessionDev();
+    const res = await getRuleVersionAction({
+      platform_id: PLATFORM_ID,
+      version_number: 12,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe('FORBIDDEN');
+    expect(mockGetRuleVersion).not.toHaveBeenCalled();
+  });
+
+  describe('when caller is MANAGER', () => {
+    beforeEach(setSessionManager);
+
+    it.each<[string, { platform_id: string; version_number: number }]>([
+      ['empty platform_id', { platform_id: '', version_number: 12 }],
+      [
+        'version_number=0',
+        { platform_id: PLATFORM_ID, version_number: 0 },
+      ],
+      [
+        'fractional version_number',
+        { platform_id: PLATFORM_ID, version_number: 1.5 },
+      ],
+    ])('returns VALIDATION when input is %s', async (_, input) => {
+      const res = await getRuleVersionAction(input);
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error.code).toBe('VALIDATION');
+      expect(mockGetRuleVersion).not.toHaveBeenCalled();
+    });
+
+    it('returns NOT_FOUND when the query yields null', async () => {
+      mockGetRuleVersion.mockResolvedValueOnce(null);
+      const res = await getRuleVersionAction({
+        platform_id: PLATFORM_ID,
+        version_number: 999,
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error.code).toBe('NOT_FOUND');
+    });
+
+    it('returns summary + computed counts from config_snapshot', async () => {
+      mockGetRuleVersion.mockResolvedValueOnce({
+        id: 'v-2',
+        platform_id: PLATFORM_ID,
+        version_number: 12,
+        saved_by: 'u-1',
+        saved_at: '2026-04-18T10:00:00Z',
+        note: 'Apple cleanup',
+        saved_by_email: 'mgr@company.com',
+        saved_by_display_name: 'Linh Tran',
+        config_snapshot: {
+          schema_version: 1,
+          senders: [
+            {
+              id: '00000000-0000-4000-a000-000000000001',
+              email: 'x@y.com',
+              is_primary: true,
+              active: true,
+            },
+          ],
+          subject_patterns: [],
+          types: [
+            {
+              id: '00000000-0000-4000-a000-000000000002',
+              name: 'App',
+              slug: 'app',
+              body_keyword: 'App Version',
+              payload_extract_regex: null,
+              sort_order: 10,
+              active: true,
+            },
+          ],
+          submission_id_patterns: [],
+        },
+      });
+
+      const res = await getRuleVersionAction({
+        platform_id: PLATFORM_ID,
+        version_number: 12,
+      });
+      expect(res.ok).toBe(true);
+      if (!res.ok) throw new Error('expected ok');
+      expect(res.data).toEqual({
+        id: 'v-2',
+        version_number: 12,
+        saved_at: '2026-04-18T10:00:00Z',
+        saved_by_email: 'mgr@company.com',
+        saved_by_display_name: 'Linh Tran',
+        note: 'Apple cleanup',
+        counts: {
+          senders: 1,
+          subject_patterns: 0,
+          types: 1,
+          submission_id_patterns: 0,
+        },
+      });
+      expect(mockGetRuleVersion).toHaveBeenCalledWith(PLATFORM_ID, 12);
+    });
+
+    it('returns DB_ERROR on query exception', async () => {
+      mockGetRuleVersion.mockRejectedValueOnce(new Error('boom'));
+      const res = await getRuleVersionAction({
+        platform_id: PLATFORM_ID,
+        version_number: 12,
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) expect(res.error.code).toBe('DB_ERROR');
+    });
   });
 });
