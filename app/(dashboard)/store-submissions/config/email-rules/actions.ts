@@ -16,8 +16,8 @@ import {
   listRuleVersions,
   type RuleVersionRow,
 } from '@/lib/store-submissions/queries/rules';
+import { countSnapshotRows } from '@/lib/store-submissions/rules/snapshot-utils';
 import {
-  configSnapshotSchema,
   rollbackRulesInputSchema,
   saveRulesInputSchema,
   type SaveRulesInput,
@@ -326,39 +326,6 @@ export async function listRuleVersionsAction(
   }));
 
   return { ok: true, data };
-}
-
-/**
- * Counts inside a config_snapshot without allocating the full arrays for
- * the UI. Values default to 0 when a field is missing so we stay resilient
- * to older snapshots that might predate a rule type.
- *
- * Exported so a future diff-view implementation can reuse the same source
- * of truth — and the unit test pins the invariant that "empty object →
- * all zeros" rather than "throws".
- */
-export function countSnapshotRows(
-  snapshot: unknown,
-): VersionDetail['counts'] {
-  const parsed = configSnapshotSchema.safeParse(snapshot);
-  if (parsed.success) {
-    return {
-      senders: parsed.data.senders.length,
-      subject_patterns: parsed.data.subject_patterns.length,
-      types: parsed.data.types.length,
-      submission_id_patterns: parsed.data.submission_id_patterns.length,
-    };
-  }
-  // Best-effort fallback — old snapshots that fail the strict zod schema
-  // can still surface partial counts (e.g. schema_version was added later).
-  const s = (snapshot ?? {}) as Record<string, unknown>;
-  const arr = (v: unknown) => (Array.isArray(v) ? v.length : 0);
-  return {
-    senders: arr(s.senders),
-    subject_patterns: arr(s.subject_patterns),
-    types: arr(s.types),
-    submission_id_patterns: arr(s.submission_id_patterns),
-  };
 }
 
 /**
