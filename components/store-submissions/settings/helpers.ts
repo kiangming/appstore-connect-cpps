@@ -6,27 +6,21 @@
 
 import type { GmailStatus } from '@/app/(dashboard)/store-submissions/config/settings/actions';
 
-export type GmailStatusKind = 'disconnected' | 'healthy' | 'expiring' | 'expired';
-
-/** Show the amber "Expiring" pill once fewer than 7 days remain. */
-export const EXPIRY_WARNING_DAYS = 7;
-
 /**
- * Map a raw status row to one of four UI states. Precedence:
- *   disconnected > expired > expiring > healthy.
- * `expired` is authoritative over `expiry_days` because a server-side
- * timestamp comparison (status.expired) trumps client-computed day math.
+ * The UI surfaces Gmail connectivity as a 2-state model:
+ *   - `disconnected`: no credentials row OR refresh_token revoked at Google.
+ *   - `connected`: row exists; access_token refresh is handled transparently
+ *     by PR-7 sync via the googleapis `oauth2.on('tokens')` event.
+ *
+ * Per docs/store-submissions/02-gmail-sync.md §6, access_token expiry is an
+ * internal mechanism, not a user-facing state — so no "expiring" or
+ * "expired" variants here. A refresh_token revoke surfaces via PR-7 sync's
+ * `consecutive_failures` counter, not via this component.
  */
+export type GmailStatusKind = 'disconnected' | 'connected';
+
 export function classifyStatus(status: GmailStatus): GmailStatusKind {
-  if (!status.connected) return 'disconnected';
-  if (status.expired) return 'expired';
-  if (
-    typeof status.expiry_days === 'number' &&
-    status.expiry_days <= EXPIRY_WARNING_DAYS
-  ) {
-    return 'expiring';
-  }
-  return 'healthy';
+  return status.connected ? 'connected' : 'disconnected';
 }
 
 /**

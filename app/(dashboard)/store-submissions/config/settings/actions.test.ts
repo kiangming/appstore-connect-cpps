@@ -247,15 +247,14 @@ describe('getGmailStatusAction', () => {
     if (res.ok) expect(res.data).toEqual({ connected: false });
   });
 
-  it('reports connected healthy (expires in 10 days)', async () => {
+  it('reports connected with email + connected_at + last_refreshed_at', async () => {
     setSessionManager();
     const now = Date.now();
-    const expiresAt = new Date(now + 10 * 24 * 60 * 60 * 1000);
     mockGetGmailCredentials.mockResolvedValueOnce({
       email: 'shared@studio.com',
       access_token: 'a',
       refresh_token: 'r',
-      token_expires_at: expiresAt,
+      token_expires_at: new Date(now + 3600_000),
       scopes: [],
       connected_at: new Date(now - 60_000),
       connected_by: 'user-1',
@@ -264,26 +263,23 @@ describe('getGmailStatusAction', () => {
     const res = await getGmailStatusAction();
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.data.connected).toBe(true);
-      expect(res.data.email).toBe('shared@studio.com');
-      expect(res.data.expired).toBe(false);
-      // Tolerant: action's Date.now() is either === test's now or a few ms later,
-      // so floor(10d - Δ / 86400000) is 9 or 10 depending on scheduling.
-      expect(res.data.expiry_days).toBeGreaterThanOrEqual(9);
-      expect(res.data.expiry_days).toBeLessThanOrEqual(10);
-      expect(res.data.expires_at).toBe(expiresAt.toISOString());
-      expect(res.data.last_refreshed_at).toBeTypeOf('string');
+      expect(res.data).toEqual({
+        connected: true,
+        email: 'shared@studio.com',
+        connected_at: expect.any(String),
+        last_refreshed_at: expect.any(String),
+      });
     }
   });
 
-  it('reports expired=true when past expiry', async () => {
+  it('reports connected with last_refreshed_at=null when never refreshed', async () => {
     setSessionManager();
     const now = Date.now();
     mockGetGmailCredentials.mockResolvedValueOnce({
       email: 'shared@studio.com',
       access_token: 'a',
       refresh_token: 'r',
-      token_expires_at: new Date(now - 60 * 1000),
+      token_expires_at: new Date(now + 3600_000),
       scopes: [],
       connected_at: new Date(now - 3600_000),
       connected_by: null,
@@ -293,30 +289,7 @@ describe('getGmailStatusAction', () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.data.connected).toBe(true);
-      expect(res.data.expired).toBe(true);
-      expect(res.data.expiry_days).toBeLessThan(0);
-    }
-  });
-
-  it('reports expiring soon (<7 days) without flagging expired', async () => {
-    setSessionManager();
-    const now = Date.now();
-    mockGetGmailCredentials.mockResolvedValueOnce({
-      email: 'x@y.com',
-      access_token: 'a',
-      refresh_token: 'r',
-      token_expires_at: new Date(now + 3 * 24 * 60 * 60 * 1000),
-      scopes: [],
-      connected_at: new Date(now - 3600_000),
-      connected_by: null,
-      last_refreshed_at: null,
-    });
-    const res = await getGmailStatusAction();
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.data.expired).toBe(false);
-      expect(res.data.expiry_days).toBeGreaterThanOrEqual(2);
-      expect(res.data.expiry_days).toBeLessThanOrEqual(3);
+      expect(res.data.last_refreshed_at).toBeNull();
     }
   });
 

@@ -4,10 +4,8 @@ import { useEffect, useRef, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
 import {
-  AlertCircle,
   CheckCircle2,
   CircleOff,
-  Clock,
   Loader2,
   Mail,
 } from 'lucide-react';
@@ -146,7 +144,7 @@ function GmailSection(props: {
         <StatusPill kind={kind} />
       </header>
 
-      <GmailStatusBody status={status} kind={kind} />
+      <GmailStatusBody status={status} />
 
       <div className="mt-5 flex items-center gap-2">
         {!isManager ? (
@@ -164,28 +162,15 @@ function GmailSection(props: {
             Connect Gmail
           </button>
         ) : (
-          <>
-            {(kind === 'expiring' || kind === 'expired') && (
-              <button
-                type="button"
-                onClick={onConnect}
-                disabled={isConnecting}
-                className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-[13px] font-medium bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
-              >
-                {isConnecting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                Reconnect
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onDisconnect}
-              disabled={isDisconnecting}
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-[13px] font-medium text-red-700 border border-red-200 bg-white hover:bg-red-50 disabled:opacity-50"
-            >
-              {isDisconnecting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              Disconnect
-            </button>
-          </>
+          <button
+            type="button"
+            onClick={onDisconnect}
+            disabled={isDisconnecting}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-[13px] font-medium text-red-700 border border-red-200 bg-white hover:bg-red-50 disabled:opacity-50"
+          >
+            {isDisconnecting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Disconnect
+          </button>
         )}
       </div>
     </section>
@@ -202,20 +187,10 @@ function StatusPill({ kind }: { kind: StatusKind }) {
       cls: 'bg-slate-100 text-slate-600 border-slate-200',
       Icon: CircleOff,
     },
-    healthy: {
+    connected: {
       text: 'Connected',
       cls: 'bg-emerald-50 text-emerald-700 border-emerald-200',
       Icon: CheckCircle2,
-    },
-    expiring: {
-      text: 'Expiring soon',
-      cls: 'bg-amber-50 text-amber-700 border-amber-200',
-      Icon: Clock,
-    },
-    expired: {
-      text: 'Expired',
-      cls: 'bg-red-50 text-red-700 border-red-200',
-      Icon: AlertCircle,
     },
   };
   const { text, cls, Icon } = map[kind];
@@ -229,13 +204,7 @@ function StatusPill({ kind }: { kind: StatusKind }) {
   );
 }
 
-function GmailStatusBody({
-  status,
-  kind,
-}: {
-  status: GmailStatus;
-  kind: StatusKind;
-}) {
+function GmailStatusBody({ status }: { status: GmailStatus }) {
   if (!status.connected) {
     return (
       <p className="text-[13px] text-slate-600">
@@ -261,21 +230,6 @@ function GmailStatusBody({
           <span className="text-[13px] text-slate-500">Connected:</span>
           <span className="text-[13px] text-slate-700">{connectedAt}</span>
         </div>
-      )}
-      {kind === 'expiring' &&
-        typeof status.expiry_days === 'number' &&
-        status.expiry_days >= 0 && (
-          <p className="mt-2 text-[12.5px] text-amber-700">
-            Token expires in {status.expiry_days}{' '}
-            {status.expiry_days === 1 ? 'day' : 'days'}. Reconnect before it
-            expires to avoid sync interruption.
-          </p>
-        )}
-      {kind === 'expired' && (
-        <p className="mt-2 text-[12.5px] text-red-700">
-          Token expired. Gmail sync is stopped — reconnect to resume
-          classification.
-        </p>
       )}
     </div>
   );

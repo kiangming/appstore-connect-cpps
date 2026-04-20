@@ -35,7 +35,6 @@ export type ActionResult<T = undefined> =
   | { ok: false; error: SettingsActionError };
 
 const SETTINGS_PATH = '/store-submissions/config/settings';
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 // -- Guards -----------------------------------------------------------------
 
@@ -135,15 +134,12 @@ export async function disconnectGmailAction(): Promise<ActionResult<undefined>> 
   return { ok: true, data: undefined };
 }
 
-// -- Status: report honest connection + expiry ------------------------------
+// -- Status: 2-state connected / disconnected -------------------------------
 
 export interface GmailStatus {
   connected: boolean;
   email?: string;
   connected_at?: string;
-  expires_at?: string;
-  expiry_days?: number;
-  expired?: boolean;
   last_refreshed_at?: string | null;
 }
 
@@ -151,11 +147,13 @@ export interface GmailStatus {
  * Reports the current Gmail connection status.
  *
  * Available to any authenticated Store Management user (not MANAGER-only) —
- * rationale: DEV/VIEWER need to know why sync may be broken.
+ * rationale: DEV/VIEWER need to see whether sync is even possible.
  *
- * Does NOT attempt to refresh the token. `expired=true` is the signal to
- * the UI that a MANAGER must reconnect. `expiry_days` is floored, and can
- * be negative when the token is already past expiry.
+ * Deliberately 2-state. Per docs/store-submissions/02-gmail-sync.md §6, the
+ * only user-facing Gmail state is Connected vs Disconnected. The `access_token`
+ * expiry (~1 hour) is refreshed transparently by googleapis' `oauth2.on('tokens')`
+ * handler (PR-7 sync). A refresh_token revoke surfaces via `consecutive_failures`
+ * in PR-7 sync health, not via this endpoint.
  */
 export async function getGmailStatusAction(): Promise<ActionResult<GmailStatus>> {
   const guard = await guardAnyStoreUser();
@@ -166,19 +164,12 @@ export async function getGmailStatusAction(): Promise<ActionResult<GmailStatus>>
     return { ok: true, data: { connected: false } };
   }
 
-  const now = Date.now();
-  const expiresAtMs = creds.token_expires_at.getTime();
-  const expiryDays = Math.floor((expiresAtMs - now) / DAY_MS);
-
   return {
     ok: true,
     data: {
       connected: true,
       email: creds.email,
       connected_at: creds.connected_at.toISOString(),
-      expires_at: creds.token_expires_at.toISOString(),
-      expiry_days: expiryDays,
-      expired: expiresAtMs < now,
       last_refreshed_at: creds.last_refreshed_at
         ? creds.last_refreshed_at.toISOString()
         : null,
