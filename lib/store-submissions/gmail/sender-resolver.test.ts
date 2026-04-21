@@ -7,10 +7,18 @@ import {
   vi,
 } from 'vitest';
 
-const { mockFrom, mockSelect, mockEq } = vi.hoisted(() => ({
+const {
+  mockFrom,
+  mockSendersSelect,
+  mockSendersEq,
+  mockPlatformsSelect,
+  mockPlatformsEq,
+} = vi.hoisted(() => ({
   mockFrom: vi.fn(),
-  mockSelect: vi.fn(),
-  mockEq: vi.fn(),
+  mockSendersSelect: vi.fn(),
+  mockSendersEq: vi.fn(),
+  mockPlatformsSelect: vi.fn(),
+  mockPlatformsEq: vi.fn(),
 }));
 
 vi.mock('../db', () => ({
@@ -18,10 +26,23 @@ vi.mock('../db', () => ({
 }));
 
 beforeEach(() => {
-  const chain = { select: mockSelect, eq: mockEq };
-  mockFrom.mockReturnValue(chain);
-  mockSelect.mockReturnValue(chain);
-  mockEq.mockReturnValue(chain);
+  // loadActiveSenders issues TWO `.from()` calls — one for `senders`,
+  // one for `platforms`. Branch the mock on the table name so each
+  // query gets its own chain + its own resolved payload.
+  vi.resetAllMocks();
+  const sendersChain = { select: mockSendersSelect, eq: mockSendersEq };
+  const platformsChain = { select: mockPlatformsSelect, eq: mockPlatformsEq };
+  mockSendersSelect.mockReturnValue(sendersChain);
+  mockPlatformsSelect.mockReturnValue(platformsChain);
+  // Default: queries resolve to empty so tests that don't override
+  // explicit data still complete cleanly.
+  mockSendersEq.mockResolvedValue({ data: [], error: null });
+  mockPlatformsEq.mockResolvedValue({ data: [], error: null });
+  mockFrom.mockImplementation((table: string) => {
+    if (table === 'senders') return sendersChain;
+    if (table === 'platforms') return platformsChain;
+    throw new Error(`unexpected table: ${table}`);
+  });
 });
 
 afterEach(() => {
@@ -33,15 +54,15 @@ afterEach(() => {
  * ========================================================================== */
 
 describe('loadActiveSenders', () => {
-  it('normalizes email to lowercase + trimmed', async () => {
-    mockEq.mockResolvedValueOnce({
+  it('normalizes email to lowercase + trimmed, joins via in-memory Map', async () => {
+    mockSendersEq.mockResolvedValueOnce({
       data: [
-        {
-          email: '  NO-REPLY@APPLE.COM ',
-          platform_id: 'apple-uuid',
-          platforms: { key: 'apple' },
-        },
+        { email: '  NO-REPLY@APPLE.COM ', platform_id: 'apple-uuid' },
       ],
+      error: null,
+    });
+    mockPlatformsEq.mockResolvedValueOnce({
+      data: [{ id: 'apple-uuid', key: 'apple' }],
       error: null,
     });
     const { loadActiveSenders } = await import('./sender-resolver');
@@ -55,26 +76,28 @@ describe('loadActiveSenders', () => {
     ]);
   });
 
-  it('filters !active via the DB query', async () => {
-    mockEq.mockResolvedValueOnce({ data: [], error: null });
+  it('filters active=true on BOTH senders AND platforms', async () => {
+    mockSendersEq.mockResolvedValueOnce({ data: [], error: null });
+    mockPlatformsEq.mockResolvedValueOnce({ data: [], error: null });
     const { loadActiveSenders } = await import('./sender-resolver');
     await loadActiveSenders();
-    expect(mockEq).toHaveBeenCalledWith('active', true);
+    // Each chain's `.eq` should have been called once with active=true.
+    expect(mockSendersEq).toHaveBeenCalledWith('active', true);
+    expect(mockPlatformsEq).toHaveBeenCalledWith('active', true);
   });
 
-  it('handles both object + array shapes for platforms join', async () => {
-    mockEq.mockResolvedValueOnce({
+  it('merges across multiple platforms correctly', async () => {
+    mockSendersEq.mockResolvedValueOnce({
       data: [
-        {
-          email: 'a@apple.com',
-          platform_id: 'apple-uuid',
-          platforms: [{ key: 'apple' }], // array form
-        },
-        {
-          email: 'b@google.com',
-          platform_id: 'google-uuid',
-          platforms: { key: 'google' }, // object form
-        },
+        { email: 'a@apple.com', platform_id: 'apple-uuid' },
+        { email: 'b@google.com', platform_id: 'google-uuid' },
+      ],
+      error: null,
+    });
+    mockPlatformsEq.mockResolvedValueOnce({
+      data: [
+        { id: 'apple-uuid', key: 'apple' },
+        { id: 'google-uuid', key: 'google' },
       ],
       error: null,
     });
@@ -86,24 +109,95 @@ describe('loadActiveSenders', () => {
     ]);
   });
 
-  it('skips rows missing platform key (defensive)', async () => {
-    mockEq.mockResolvedValueOnce({
+  // REGRESSION: original bug was that the `platforms!inner(key)` embedded
+  // select returned unexpected shapes under `.schema('store_mgmt')` and
+  // the defensive `if (!key) continue` skipped every row. The new
+  // 2-query implementation makes the "skip" path explicit — platform
+  // missing from the lookup Map → row dropped — which is the correct
+  // semantic here (inactive platform or FK orphan).
+  it('skips senders whose platform is INACTIVE (absent from platforms query result)', async () => {
+    mockSendersEq.mockResolvedValueOnce({
       data: [
-        { email: 'a@x.com', platform_id: 'uuid-1', platforms: null },
-        { email: 'b@x.com', platform_id: 'uuid-2', platforms: { key: 'apple' } },
+        { email: 'a@apple.com', platform_id: 'apple-uuid' }, // active=true sender
+        { email: 'b@google.com', platform_id: 'google-uuid' }, // also active sender
       ],
+      error: null,
+    });
+    // Platforms query returns ONLY active platforms. Apple is inactive
+    // in this scenario, so only google is returned — google sender
+    // kept, apple sender silently dropped.
+    mockPlatformsEq.mockResolvedValueOnce({
+      data: [{ id: 'google-uuid', key: 'google' }],
       error: null,
     });
     const { loadActiveSenders } = await import('./sender-resolver');
     const senders = await loadActiveSenders();
-    expect(senders.map((s) => s.email)).toEqual(['b@x.com']);
+    expect(senders.map((s) => s.email)).toEqual(['b@google.com']);
   });
 
-  it('throws when DB returns an error', async () => {
+  it('skips senders pointing to a non-existent platform (FK orphan defense)', async () => {
+    mockSendersEq.mockResolvedValueOnce({
+      data: [
+        { email: 'orphan@x.com', platform_id: 'does-not-exist' },
+        { email: 'ok@apple.com', platform_id: 'apple-uuid' },
+      ],
+      error: null,
+    });
+    mockPlatformsEq.mockResolvedValueOnce({
+      data: [{ id: 'apple-uuid', key: 'apple' }],
+      error: null,
+    });
+    const { loadActiveSenders } = await import('./sender-resolver');
+    const senders = await loadActiveSenders();
+    expect(senders.map((s) => s.email)).toEqual(['ok@apple.com']);
+  });
+
+  it('runs senders + platforms queries in parallel', async () => {
+    // Both queries issue before either resolves — verify via call
+    // timing: if serial, the second `.from` would wait for the first
+    // `.eq` to resolve. Promise.all in the implementation should
+    // trigger both `.from` calls synchronously.
+    let sendersEqResolve: (v: unknown) => void = () => {};
+    mockSendersEq.mockImplementationOnce(
+      () => new Promise((res) => { sendersEqResolve = res; }),
+    );
+    mockPlatformsEq.mockImplementationOnce(async () => ({
+      data: [{ id: 'apple-uuid', key: 'apple' }],
+      error: null,
+    }));
+
+    const { loadActiveSenders } = await import('./sender-resolver');
+    const promise = loadActiveSenders();
+
+    // Give both queries a tick to initiate before resolving senders.
+    await new Promise((res) => setImmediate(res));
+    expect(mockFrom).toHaveBeenCalledWith('senders');
+    expect(mockFrom).toHaveBeenCalledWith('platforms');
+
+    sendersEqResolve({ data: [], error: null });
+    await promise;
+  });
+
+  it('throws when senders query errors', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mockEq.mockResolvedValueOnce({
+    mockSendersEq.mockResolvedValueOnce({
       data: null,
-      error: { message: 'boom' },
+      error: { message: 'senders boom' },
+    });
+    mockPlatformsEq.mockResolvedValueOnce({ data: [], error: null });
+    const { loadActiveSenders } = await import('./sender-resolver');
+    await expect(loadActiveSenders()).rejects.toThrow(
+      /Failed to load active senders/,
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('throws when platforms query errors', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockSendersEq.mockResolvedValueOnce({ data: [], error: null });
+    mockPlatformsEq.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'platforms boom' },
     });
     const { loadActiveSenders } = await import('./sender-resolver');
     await expect(loadActiveSenders()).rejects.toThrow(
@@ -112,8 +206,9 @@ describe('loadActiveSenders', () => {
     errorSpy.mockRestore();
   });
 
-  it('returns empty when data is null', async () => {
-    mockEq.mockResolvedValueOnce({ data: null, error: null });
+  it('returns empty when both queries return null data (first-run edge case)', async () => {
+    mockSendersEq.mockResolvedValueOnce({ data: null, error: null });
+    mockPlatformsEq.mockResolvedValueOnce({ data: null, error: null });
     const { loadActiveSenders } = await import('./sender-resolver');
     await expect(loadActiveSenders()).resolves.toEqual([]);
   });

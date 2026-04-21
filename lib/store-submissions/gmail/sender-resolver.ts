@@ -38,7 +38,30 @@ export interface PlatformResolution {
 }
 
 /**
- * Load all active senders across every platform in a single query.
+ * Load all active senders across every platform.
+ *
+ * **Implementation: 2 independent queries + JS merge, NOT an embedded
+ * select.**
+ *
+ * History: the original implementation used
+ * `.select('email, platform_id, platforms!inner(key)')`. In production
+ * with the supabase-js client scoped via `.schema('store_mgmt')` (see
+ * `lib/store-submissions/db.ts`), that embedded-select returned a row
+ * shape where `platforms` was not expanded as expected. The defensive
+ * `if (!key) continue;` branch then silently dropped EVERY active
+ * sender, producing an empty resolver Map — every incoming email
+ * classified `DROPPED` with `reason=NO_SENDER_MATCH`, including correctly
+ * configured Apple senders. The DB-side JOIN was fine (verified by hand
+ * via SQL Editor); only the JS-side PostgREST embedding failed.
+ *
+ * The fix avoids the embedded select entirely: fetch senders + platforms
+ * as two parallel queries (each table has <50 rows in practice) and join
+ * in memory via a `Map<platformId, key>`. This:
+ *   - Decouples us from PostgREST embed shape changes across supabase-js
+ *     versions and across the schema-override client option.
+ *   - Applies `active = true` explicitly on BOTH tables (the original
+ *     query only filtered senders).
+ *   - Keeps the resolver surface + O(1) lookup unchanged downstream.
  *
  * Ordering is not guaranteed; the resolver does exact-match lookup so
  * order doesn't matter. If a sender is duplicated across platforms
@@ -47,29 +70,40 @@ export interface PlatformResolution {
  * domains, so this is not a real collision risk.
  */
 export async function loadActiveSenders(): Promise<ActiveSender[]> {
-  const { data, error } = await storeDb()
-    .from('senders')
-    .select('email, platform_id, platforms!inner(key)')
-    .eq('active', true);
+  const db = storeDb();
+  const [sendersRes, platformsRes] = await Promise.all([
+    db.from('senders').select('email, platform_id').eq('active', true),
+    db.from('platforms').select('id, key').eq('active', true),
+  ]);
 
-  if (error) {
-    console.error('[sender-resolver] Failed to load senders:', error);
+  if (sendersRes.error) {
+    console.error('[sender-resolver] Failed to load senders:', sendersRes.error);
     throw new Error('Failed to load active senders.');
   }
-  if (!data) return [];
+  if (platformsRes.error) {
+    console.error(
+      '[sender-resolver] Failed to load platforms:',
+      platformsRes.error,
+    );
+    throw new Error('Failed to load active senders.');
+  }
+
+  // Build platformId → key lookup. Inactive platforms are already
+  // filtered out by the query, so any sender whose platform is missing
+  // here is either inactive or an FK orphan — skipped either way.
+  const platformKeyById = new Map<string, string>();
+  for (const p of platformsRes.data ?? []) {
+    if (p.id && p.key) platformKeyById.set(String(p.id), String(p.key));
+  }
 
   const rows: ActiveSender[] = [];
-  for (const row of data) {
-    if (!row.email || !row.platform_id) continue;
-    // `platforms!inner` shape: supabase-js returns either a single
-    // object or an array depending on the join semantics; handle both.
-    const raw = (row as { platforms?: unknown }).platforms;
-    const platform = Array.isArray(raw) ? raw[0] : raw;
-    const key = (platform as { key?: string } | undefined)?.key;
-    if (!key) continue;
+  for (const s of sendersRes.data ?? []) {
+    if (!s.email || !s.platform_id) continue;
+    const key = platformKeyById.get(String(s.platform_id));
+    if (!key) continue; // platform inactive OR FK orphan
     rows.push({
-      email: String(row.email).trim().toLowerCase(),
-      platformId: String(row.platform_id),
+      email: String(s.email).trim().toLowerCase(),
+      platformId: String(s.platform_id),
       platformKey: key as PlatformKey,
     });
   }

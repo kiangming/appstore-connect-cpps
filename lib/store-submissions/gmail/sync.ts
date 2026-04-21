@@ -188,9 +188,30 @@ export async function runSync(options: RunSyncOptions = {}): Promise<SyncResult>
           stats,
         });
       } catch (err) {
-        // Per-message hard error (not a classifier ERROR — that's
-        // handled inside processMessage). This path catches DB write
-        // failures, unexpected exceptions, etc.
+        // Per-message HARD error — distinct from the classifier/parse
+        // errors that `processMessage` catches internally and persists
+        // as ERROR rows. This path triggers on things like `getMessage`
+        // network failures, `emailAlreadyPersisted` DB hiccups, or any
+        // other exception where we don't yet have enough context (no
+        // parsed email, maybe no gmail_msg_id) to construct a
+        // meaningful `email_messages` row.
+        //
+        // Semantic contract (see docs/store-submissions/02-gmail-sync.md §6.3):
+        // this path bumps `stats.errors` WITHOUT writing an
+        // `email_messages` row. Consequences:
+        //   - `sync_logs.emails_errored` > `SELECT count(*) WHERE
+        //     classification_status='ERROR'` is EXPECTED for transient
+        //     failures.
+        //   - The cursor doesn't advance (any stats.errors > 0 blocks
+        //     `advanceSyncState`), so the next tick re-fetches the same
+        //     Gmail message. Dedup via UNIQUE(gmail_msg_id) prevents
+        //     double-processing once the transient condition clears.
+        //   - No audit row means no inspect-able trace of the failure
+        //     in the Inbox UI; debugging relies on the app log
+        //     (captured via console.error below).
+        //
+        // Parse errors, classifier ERROR results, and NO_RULES ARE
+        // persisted inside `processMessage` — don't conflate.
         console.error(`[sync] Unhandled failure processing ${msgId}:`, err);
         stats.errors++;
       }

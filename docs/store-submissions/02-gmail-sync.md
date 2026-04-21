@@ -593,6 +593,39 @@ Email ERROR chỉ retry khi:
 - User manually trigger "Retry classification" trong UI (endpoint `POST /api/email-messages/{id}/retry`)
 - Hoặc fallback cron pick up lại (vì email không có label Processed)
 
+#### 6.3.1. Soft vs hard errors — stats vs persisted rows
+
+**Not all error paths persist an `email_messages` row.** Implementation
+reality (see `lib/store-submissions/gmail/sync.ts` batch loop):
+
+| Error path | Persists ERROR row? | `stats.errors` incremented? |
+|---|---|---|
+| `EmailParseError` from parser (malformed MIME) | ✅ Yes — row with `sender_email='unknown@parse.error'`, `error_code='PARSE_ERROR'` | ✅ |
+| Classifier returns `ErrorResult` (`NO_SUBJECT_MATCH`, `REGEX_TIMEOUT`, `PARSE_ERROR`) | ✅ Yes — row with real sender, `classification_result.error_code` set | ✅ |
+| Platform has no rules configured (`NO_RULES`) | ✅ Yes — row with real sender, `error_code='NO_RULES'` | ✅ |
+| **Outer-catch "hard" failure** (`getMessage` network error, `emailAlreadyPersisted` DB hiccup, unexpected exception) | ❌ **No row** | ✅ |
+
+**Rationale for no-row on outer-catch:** those failures happen *before*
+we have enough context to construct a meaningful row. A partial row
+with null `subject`/`sender_email` would just create noise in the
+Inbox view without aiding debugging.
+
+**Consequence — dashboards must account for this:**
+- `sync_logs.emails_errored` is a **superset** of
+  `SELECT count(*) FROM email_messages WHERE classification_status='ERROR'`.
+- The gap represents transient failures. These self-heal: the cursor
+  doesn't advance on any `stats.errors > 0`, so the next 5-min tick
+  re-fetches the same messages; dedup via `UNIQUE(gmail_msg_id)` skips
+  already-persisted ones, while the transient failures get retried.
+- Debugging transient failures relies on the `console.error` app log
+  (Railway), not the `email_messages` table.
+
+If persistent silent failures become a concern (e.g., 20% of runs
+showing this gap for a week), add an outer-catch row-write with a
+placeholder `sender_email='unknown@outer.error'`, parallel to the
+existing parse-error placeholder path. Acceptable for MVP to defer
+until the pattern surfaces.
+
 ---
 
 ## 7. Code structure
