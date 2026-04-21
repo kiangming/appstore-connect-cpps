@@ -97,17 +97,23 @@ Railway Cron UI setup:
 ```
 Name: gmail-sync
 Schedule: */5 * * * *
-Command: curl -X POST $RAILWAY_WEB_URL/api/sync/gmail -H "X-Cron-Secret: $CRON_SECRET"
+Command: curl -fsS -X POST $RAILWAY_WEB_URL/api/store-submissions/sync/gmail \
+           -H "X-Cron-Secret: $CRON_SECRET" \
+           --max-time 60
 Timeout: 60s
 
-Name: email-cleanup
-Schedule: 0 3 * * *
-Command: curl -X POST $RAILWAY_WEB_URL/api/cleanup/emails -H "X-Cron-Secret: $CRON_SECRET"
+Name: email-cleanup        (planned — ships with PR-polish retention)
+Schedule: 0 20 * * *
+Command: curl -fsS -X POST $RAILWAY_WEB_URL/api/store-submissions/cleanup/emails \
+           -H "X-Cron-Secret: $CRON_SECRET" \
+           --max-time 300
 Timeout: 300s
 
-Name: gmail-health-check
-Schedule: 0 4 * * 0
-Command: curl -X POST $RAILWAY_WEB_URL/api/health/gmail -H "X-Cron-Secret: $CRON_SECRET"
+Name: gmail-health-check   (weekly proactive historyId renewal, PR-polish)
+Schedule: 0 21 * * 6
+Command: curl -fsS -X POST $RAILWAY_WEB_URL/api/store-submissions/health/gmail \
+           -H "X-Cron-Secret: $CRON_SECRET" \
+           --max-time 30
 Timeout: 30s
 ```
 
@@ -117,10 +123,65 @@ Cron timezone trên Railway: **UTC**. Convert GMT+7 → UTC khi design schedule:
 
 Final:
 ```
-*/5 * * * *    gmail-sync            (every 5 min, any TZ)
-0 20 * * *     email-cleanup         (3am GMT+7 daily)
-0 21 * * 6     gmail-health-check    (4am Sunday GMT+7)
+*/5 * * * *    gmail-sync            (every 5 min, any TZ)    [SHIPPED — PR-7]
+0 20 * * *     email-cleanup         (3am GMT+7 daily)        [PR-polish]
+0 21 * * 6     gmail-health-check    (4am Sunday GMT+7)       [PR-polish]
 ```
+
+`-fsS` ensures `curl` fails the cron job on non-2xx (Railway then retries per `restartPolicy`). `--max-time` bounds the request; the endpoint itself internally caps per-tick work via `maxBatch`, so a healthy run finishes in <10s under normal load.
+
+#### A.2.2.1. Healthcheck endpoint (uptime monitoring)
+
+`GET /api/store-submissions/sync/health` — public, no auth, SELECT-only. Intended for external uptime monitors (UptimeRobot free tier, Better Uptime, Railway's own healthcheck).
+
+Response shape (stable contract):
+```json
+{
+  "status": "OK" | "STALE" | "UNCONFIGURED",
+  "last_synced_at": "2026-04-21T10:30:00.000Z",
+  "consecutive_failures": 0,
+  "stale_ms": 120000,
+  "recent_sync_count_24h": 288
+}
+```
+
+HTTP status mapping:
+- `200` when `status ∈ {OK, UNCONFIGURED}` — don't alert on first-time setup.
+- `503` when `status === STALE` (last sync > 15 min ago) — page ops.
+
+**UptimeRobot setup:**
+- Monitor type: HTTP(s)
+- URL: `https://<web>.railway.app/api/store-submissions/sync/health`
+- Method: GET
+- Interval: 5 min
+- Alert contact: ops email / Slack webhook
+- Alert when: "Down" 2 consecutive checks (10 min of STALE = real problem)
+
+#### A.2.2.2. Manual trigger (debugging)
+
+```bash
+# Kick off a sync run manually (bypasses the 5-min cron cadence)
+curl -fsS -X POST \
+  -H "X-Cron-Secret: $CRON_SECRET" \
+  https://<web>.railway.app/api/store-submissions/sync/gmail
+
+# Check health
+curl https://<web>.railway.app/api/store-submissions/sync/health
+```
+
+Successful sync returns `{success, mode, durationMs, stats: {fetched, classified, unclassified, dropped, errors}, nextHistoryId}`. Partial failure (some messages errored, others classified) still returns HTTP 200 with `success: false` in the body — this is distinct from "sync itself failed".
+
+#### A.2.2.3. Troubleshooting
+
+| Symptom | Response body | Fix |
+|---|---|---|
+| Auth loop — all cron runs returning 401 `UNAUTHORIZED` | `{error: "UNAUTHORIZED"}` | `CRON_SECRET` mismatch between `web` service env and the cron job command. Copy the value from web → re-paste in cron config. |
+| `500 INTERNAL_ERROR` on the auth check itself | `{error: "INTERNAL_ERROR"}` | `CRON_SECRET` env var is missing/empty on the web service. Set it and redeploy. |
+| `401 REFRESH_TOKEN_INVALID` (distinct from UNAUTHORIZED via body code) | `{error: "REFRESH_TOKEN_INVALID"}` | Gmail revoked the refresh token (user revoked at myaccount.google.com/permissions, or > 6 months inactivity). Manager reconnects Gmail from the Settings page. |
+| `412 GMAIL_NOT_CONNECTED` | `{error: "GMAIL_NOT_CONNECTED"}` | First-time setup — Manager hasn't connected Gmail. Open Settings → Connect Gmail. |
+| `409 SYNC_IN_PROGRESS` | `{error: "SYNC_IN_PROGRESS"}` | Previous run still holding the lock (normal during a long fallback backfill). Wait for next tick; if it persists > 15 min, check `gmail_sync_state.locked_at` in Supabase — rows stale > 10 min auto-release on next acquire. |
+| Healthcheck returns `STALE` | — | Check Railway cron service logs for execution errors. Query `store_mgmt.sync_logs ORDER BY ran_at DESC LIMIT 5` to see whether invocations are happening at all. |
+| `consecutive_failures` growing in healthcheck response | — | Read `gmail_sync_state.last_error` in Supabase for the underlying message (intentionally not surfaced in the public healthcheck to avoid state leak). |
 
 ## A.3. Supabase project setup
 
