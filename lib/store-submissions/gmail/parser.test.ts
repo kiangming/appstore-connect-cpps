@@ -16,6 +16,12 @@ import {
   TRUNCATION_MARKER,
 } from './parser';
 import {
+  buildMessage,
+  container,
+  header,
+  leaf,
+} from './__fixtures__/builders';
+import {
   appleApproved,
   edgeEmptyBody,
   edgeHtmlOnly,
@@ -352,5 +358,137 @@ describe('purity', () => {
     const before = JSON.stringify(appleApproved);
     parseGmailMessage(appleApproved);
     expect(JSON.stringify(appleApproved)).toBe(before);
+  });
+});
+
+/* ============================================================================
+ * NULL-byte sanitization (REGRESSION — Postgres 22P05)
+ * ==========================================================================
+ *
+ * Real-world emails sometimes contain `\u0000` bytes in text fields (legacy
+ * MUAs, binary payloads leaking past MIME boundaries, charset conversions
+ * producing NULL padding). Postgres TEXT rejects `\u0000` with SQLSTATE
+ * 22P05, so any unsanitized byte crashes the `email_messages` INSERT and
+ * drops the message into the outer-catch (stats.errors++, no audit row).
+ *
+ * These tests pin the parser-side sanitizer so the DB-facing output is
+ * always safe.
+ */
+
+describe('null-byte sanitization', () => {
+  it('strips \\u0000 from text/plain body (leaves rest intact)', () => {
+    const msg = buildMessage({
+      envelopeHeaders: [
+        header('From', 'sender@example.com'),
+        header('Subject', 'Hello'),
+      ],
+      payload: leaf({
+        mimeType: 'text/plain',
+        body: 'Valid\u0000text\u0000with\u0000nulls',
+      }),
+    });
+    const out = parseGmailMessage(msg);
+    expect(out.body).toBe('Validtextwithnulls');
+    expect(out.body).not.toContain('\u0000');
+  });
+
+  it('strips \\u0000 from subject', () => {
+    const msg = buildMessage({
+      envelopeHeaders: [
+        header('From', 'sender@example.com'),
+        header('Subject', 'Sub\u0000ject\u0000with\u0000nulls'),
+      ],
+      payload: leaf({ mimeType: 'text/plain', body: 'body' }),
+    });
+    const out = parseGmailMessage(msg);
+    expect(out.subject).toBe('Subjectwithnulls');
+    expect(out.subject).not.toContain('\u0000');
+  });
+
+  it('strips \\u0000 from display name in From header', () => {
+    const msg = buildMessage({
+      envelopeHeaders: [
+        header('From', '"Display\u0000Name" <sender@example.com>'),
+        header('Subject', 'x'),
+      ],
+      payload: leaf({ mimeType: 'text/plain', body: 'body' }),
+    });
+    const out = parseGmailMessage(msg);
+    expect(out.fromName).toBe('DisplayName');
+    expect(out.fromEmail).toBe('sender@example.com');
+  });
+
+  it('strips \\u0000 from HTML body (both body and bodyHtml)', () => {
+    const msg = buildMessage({
+      envelopeHeaders: [
+        header('From', 'sender@example.com'),
+        header('Subject', 'x'),
+      ],
+      payload: leaf({
+        mimeType: 'text/html',
+        body: '<p>content\u0000with\u0000null</p>',
+      }),
+    });
+    const out = parseGmailMessage(msg);
+    expect(out.body).not.toContain('\u0000');
+    expect(out.bodyHtml).toBeDefined();
+    expect(out.bodyHtml).not.toContain('\u0000');
+  });
+
+  it('strips \\u0000 from recipient list (To header)', () => {
+    const msg = buildMessage({
+      envelopeHeaders: [
+        header('From', 'sender@example.com'),
+        header('To', 'alice\u0000@example.com, bob@example.com'),
+        header('Subject', 'x'),
+      ],
+      payload: leaf({ mimeType: 'text/plain', body: 'body' }),
+    });
+    const out = parseGmailMessage(msg);
+    for (const r of out.to) {
+      expect(r).not.toContain('\u0000');
+    }
+    // Both recipients survive — the null byte in alice's address got stripped.
+    expect(out.to).toContain('alice@example.com');
+    expect(out.to).toContain('bob@example.com');
+  });
+
+  it('strips \\u0000 even when body is nested inside multipart/alternative', () => {
+    const msg = buildMessage({
+      envelopeHeaders: [
+        header('From', 'sender@example.com'),
+        header('Subject', 'Nested with nulls'),
+      ],
+      payload: container('multipart/alternative', [
+        leaf({
+          mimeType: 'text/plain',
+          body: 'plain\u0000text',
+        }),
+        leaf({
+          mimeType: 'text/html',
+          body: '<p>html\u0000payload</p>',
+        }),
+      ]),
+    });
+    const out = parseGmailMessage(msg);
+    expect(out.body).toBe('plaintext');
+    expect(out.bodyHtml).not.toContain('\u0000');
+  });
+
+  it('result is JSON-serializable (sanity check: no raw NULL bytes anywhere)', () => {
+    const msg = buildMessage({
+      envelopeHeaders: [
+        header('From', '"Bad\u0000Sender" <a@b.com>'),
+        header('Subject', 'Sub\u0000ject'),
+      ],
+      payload: leaf({
+        mimeType: 'text/plain',
+        body: 'lots\u0000of\u0000nulls\u0000here',
+      }),
+    });
+    const out = parseGmailMessage(msg);
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain('\\u0000');
+    expect(serialized).not.toContain('\u0000');
   });
 });

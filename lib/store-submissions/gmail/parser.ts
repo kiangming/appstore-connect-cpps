@@ -139,18 +139,50 @@ export function parseGmailMessage(msg: gmail_v1.Schema$Message): ParsedEmail {
     body = body.slice(0, MAX_BODY_CHARS) + TRUNCATION_MARKER;
   }
 
+  // Strip `\u0000` (NULL) bytes from every text field before returning.
+  // Postgres `TEXT` columns reject `\u0000` with SQLSTATE 22P05
+  // "unsupported Unicode escape sequence", so any unsanitized NULL byte
+  // crashes `INSERT INTO email_messages` — pulling the whole message
+  // into the outer-catch path (no row persisted, `stats.errors++`).
+  //
+  // Real-world sources of `\u0000` in body text:
+  //   - Legacy MUAs sending binary attachments inline without proper
+  //     multipart boundaries
+  //   - Malformed Content-Transfer-Encoding where Gmail's pre-decode
+  //     leaves raw binary intact
+  //   - UTF-16 payloads rendered via Buffer.toString('utf-8') leaking
+  //     odd-position null bytes from the surrogate pairs
+  //
+  // NULL is never semantically meaningful in email text — stripping is
+  // safe and lossless for classification purposes.
   return {
     messageId,
     threadId,
-    fromEmail,
-    fromName,
-    to,
-    subject,
-    body,
-    bodyHtml: html ? html : undefined,
+    fromEmail: sanitizeText(fromEmail),
+    fromName: fromName ? sanitizeText(fromName) : undefined,
+    to: to.map(sanitizeText).filter((s) => s.length > 0),
+    subject: sanitizeText(subject),
+    body: sanitizeText(body),
+    bodyHtml: html ? sanitizeText(html) : undefined,
     receivedAt,
     labels: msg.labelIds ?? [],
   };
+}
+
+/**
+ * Strip NULL bytes (`\u0000`) from a text value. Parser is the single
+ * source of truth for email text — applying here guarantees downstream
+ * DB inserts, classifier regex scans, and UI renders all get clean
+ * strings without per-caller sanitization.
+ *
+ * Returns `""` for null/undefined input so the caller can treat the
+ * result as always-string. We never preserve the intent of "missing
+ * text field" with undefined because that's the caller's job at the
+ * higher-level type boundary (see `ParsedEmail.fromName`).
+ */
+function sanitizeText(text: string | null | undefined): string {
+  if (!text) return '';
+  return text.replace(/\u0000/g, '');
 }
 
 /* -------------------------------------------------------------------------- */
