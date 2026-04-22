@@ -9,8 +9,8 @@
  *     (those propagate so the caller can log + alert).
  *
  * Pipeline (spec §3):
- *   1. sender  → platform         | null → DROPPED
- *   2. subject → outcome + name   | null → ERROR: NO_SUBJECT_MATCH
+ *   1. sender  → platform         | null → DROPPED: NO_SENDER_MATCH
+ *   2. subject → outcome + name   | null → DROPPED: SUBJECT_NOT_TRACKED
  *   3. app     → app_id           | null → UNCLASSIFIED_APP
  *   4. type    → type_id + payload| null → UNCLASSIFIED_TYPE
  *   5. submission_id              | null → fine, continue
@@ -90,13 +90,20 @@ export function classify(
       },
     });
 
-    // Step 2 — subject
+    // Step 2 — subject. A sender-matched email whose subject hits no
+    // configured pattern is NOT an error: the subject-pattern list is a
+    // whitelist of event types Managers care about (e.g. Apple sends
+    // "Ready for Distribution" / "IAP Approved" daily alongside the
+    // submission-review email we actually track). Flag as DROPPED with
+    // SUBJECT_NOT_TRACKED and preserve the sender trace for auditing.
     const subjectMatch = matchSubject(email.subject, rules);
     if (!subjectMatch) {
       return {
-        status: 'ERROR',
-        error_code: 'NO_SUBJECT_MATCH',
-        error_message: `No subject pattern matched for platform ${rules.platform_key}`,
+        status: 'DROPPED',
+        reason: 'SUBJECT_NOT_TRACKED',
+        platform_id: senderMatch.platform_id,
+        platform_key: senderMatch.platform_key,
+        matched_sender: senderMatch.sender_email,
         matched_rules: matched,
       };
     }
@@ -211,6 +218,7 @@ export type {
   AppWithAliases,
   ClassificationResult,
   ClassifiedResult,
+  DroppedReason,
   DroppedResult,
   EmailInput,
   ErrorResult,

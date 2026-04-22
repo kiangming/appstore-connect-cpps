@@ -266,7 +266,7 @@ describe('POST — classification outcomes', () => {
     expect(body.data.trace).toEqual([]);
   });
 
-  it('ERROR when sender matches but no subject pattern matches', async () => {
+  it('DROPPED SUBJECT_NOT_TRACKED when sender matches but no subject pattern matches', async () => {
     const res = await POST(
       makeRequest({
         sender: 'no-reply@apple.com',
@@ -278,10 +278,20 @@ describe('POST — classification outcomes', () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       ok: true;
-      data: { result: { status: string; error_code?: string }; trace: unknown[] };
+      data: {
+        result: {
+          status: string;
+          reason?: string;
+          platform_id?: string;
+          matched_sender?: string;
+        };
+        trace: unknown[];
+      };
     };
-    expect(body.data.result.status).toBe('ERROR');
-    expect(body.data.result.error_code).toBe('NO_SUBJECT_MATCH');
+    expect(body.data.result.status).toBe('DROPPED');
+    expect(body.data.result.reason).toBe('SUBJECT_NOT_TRACKED');
+    expect(body.data.result.platform_id).toBe(PLATFORM_ID);
+    expect(body.data.result.matched_sender).toBe('no-reply@apple.com');
     expect(body.data.trace).toHaveLength(1);
   });
 
@@ -490,8 +500,8 @@ describe('POST — zero side effects', () => {
       platform_id: PLATFORM_ID,
     };
     const scenarios = [
-      { ...commonBase, sender: 'unknown@x', subject: 'x', body: 'x' }, // DROPPED
-      { ...commonBase, subject: 'Weekly digest', body: 'x' }, // ERROR
+      { ...commonBase, sender: 'unknown@x', subject: 'x', body: 'x' }, // DROPPED NO_SENDER_MATCH
+      { ...commonBase, subject: 'Weekly digest', body: 'x' }, // DROPPED SUBJECT_NOT_TRACKED
       {
         ...commonBase,
         subject: 'Review of your Unknown submission is complete.',

@@ -422,6 +422,145 @@ describe('runSync — per-message routing', () => {
 });
 
 /* ============================================================================
+ * Regression: SUBJECT_NOT_TRACKED must not drift the failure counter
+ *
+ * Prior to 2026-04-22, sender-matched emails whose subject missed every
+ * whitelist pattern classified as ERROR/NO_SUBJECT_MATCH. That bumped
+ * `stats.errors`, which blocked `advanceSyncState` and triggered
+ * `recordSyncFailure` → `consecutive_failures++` on every sync batch
+ * that contained one — pure operational noise (Apple sends ~daily
+ * "Status Update" / "Ready for Distribution" / "IAP Approved" mails
+ * that are not in the tracked whitelist). These tests assert that
+ * DROPPED SUBJECT_NOT_TRACKED now counts under `stats.dropped` and lets
+ * the cursor advance.
+ * ========================================================================== */
+
+describe('runSync — SUBJECT_NOT_TRACKED does not block cursor advance', () => {
+  function primeSubjectNotTracked(n: number): void {
+    const ids = Array.from({ length: n }, (_, i) => `m${i + 1}`);
+    mockHistoryDelta(ids, '1100');
+    for (let i = 0; i < n; i++) {
+      hoisted.mockGetMessage.mockResolvedValueOnce({
+        id: ids[i],
+        threadId: `t${i + 1}`,
+      });
+      hoisted.mockParseGmailMessage.mockReturnValueOnce(
+        mockParsedEmail({ messageId: ids[i], threadId: `t${i + 1}` }),
+      );
+      hoisted.mockClassify.mockReturnValueOnce({
+        status: 'DROPPED',
+        reason: 'SUBJECT_NOT_TRACKED',
+        platform_id: 'apple-uuid',
+        platform_key: 'apple',
+        matched_sender: 'no-reply@apple.com',
+        matched_rules: [
+          {
+            step: 'sender',
+            matched: true,
+            details: { platform_key: 'apple' },
+          },
+        ],
+      });
+    }
+    // Sender resolves for every message in the batch.
+    hoisted.mockCreateSenderResolver.mockReturnValue(() => ({
+      platformId: 'apple-uuid',
+      platformKey: 'apple',
+    }));
+    hoisted.mockGetRulesSnapshot.mockResolvedValue({
+      platform_id: 'apple-uuid',
+      platform_key: 'apple',
+      senders: [],
+      subject_patterns: [],
+      types: [],
+      submission_id_patterns: [],
+      apps_with_aliases: [],
+    });
+  }
+
+  it('batch of 5 SUBJECT_NOT_TRACKED → stats.dropped=5, stats.errors=0, cursor advances, no failure recorded', async () => {
+    primeSubjectNotTracked(5);
+
+    const { runSync } = await import('./sync');
+    const result = await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(result.stats.dropped).toBe(5);
+    expect(result.stats.errors).toBe(0);
+    expect(result.success).toBe(true);
+
+    // Cursor MUST advance — the regression bug was that stats.errors>0
+    // blocked this call, leaving consecutive_failures++ as the tail effect.
+    expect(hoisted.mockAdvanceSyncState).toHaveBeenCalledTimes(1);
+    expect(hoisted.mockAdvanceSyncState).toHaveBeenCalledWith({
+      mode: 'INCREMENTAL',
+      newHistoryId: '1100',
+      processedCount: 5,
+    });
+    expect(hoisted.mockRecordSyncFailure).not.toHaveBeenCalled();
+
+    // All 5 rows persisted as DROPPED with the new reason.
+    expect(hoisted.mockInsert).toHaveBeenCalledTimes(5);
+    for (let i = 0; i < 5; i++) {
+      const payload = hoisted.mockInsert.mock.calls[i][0];
+      expect(payload.classification_status).toBe('DROPPED');
+      expect(payload.classification_result.reason).toBe('SUBJECT_NOT_TRACKED');
+      expect(payload.error_message).toBeNull();
+    }
+  });
+
+  it('mixed batch: 3 SUBJECT_NOT_TRACKED + 1 true PARSE_ERROR → errors=1 blocks cursor, dropped=3 unaffected', async () => {
+    const { EmailParseError } = await import('./errors');
+    mockHistoryDelta(['m1', 'm2', 'm3', 'm4'], '1100');
+
+    // m1, m2, m3 → parse ok, resolve ok, classify → DROPPED SUBJECT_NOT_TRACKED
+    for (const msgId of ['m1', 'm2', 'm3']) {
+      hoisted.mockGetMessage.mockResolvedValueOnce({ id: msgId, threadId: 't' });
+      hoisted.mockParseGmailMessage.mockReturnValueOnce(
+        mockParsedEmail({ messageId: msgId }),
+      );
+      hoisted.mockClassify.mockReturnValueOnce({
+        status: 'DROPPED',
+        reason: 'SUBJECT_NOT_TRACKED',
+        platform_id: 'apple-uuid',
+        platform_key: 'apple',
+        matched_sender: 'no-reply@apple.com',
+        matched_rules: [],
+      });
+    }
+    // m4 → parser throws EmailParseError (true processing failure).
+    hoisted.mockGetMessage.mockResolvedValueOnce({ id: 'm4', threadId: 't4' });
+    hoisted.mockParseGmailMessage.mockImplementationOnce(() => {
+      throw new EmailParseError('m4', 'Malformed MIME');
+    });
+
+    hoisted.mockCreateSenderResolver.mockReturnValue(() => ({
+      platformId: 'apple-uuid',
+      platformKey: 'apple',
+    }));
+    hoisted.mockGetRulesSnapshot.mockResolvedValue({
+      platform_id: 'apple-uuid',
+      platform_key: 'apple',
+      senders: [],
+      subject_patterns: [],
+      types: [],
+      submission_id_patterns: [],
+      apps_with_aliases: [],
+    });
+
+    const { runSync } = await import('./sync');
+    const result = await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(result.stats.dropped).toBe(3);
+    expect(result.stats.errors).toBe(1);
+    expect(result.success).toBe(false);
+
+    // True error still blocks the cursor — contract preserved.
+    expect(hoisted.mockAdvanceSyncState).not.toHaveBeenCalled();
+    expect(hoisted.mockRecordSyncFailure).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* ============================================================================
  * Dedup
  * ========================================================================== */
 

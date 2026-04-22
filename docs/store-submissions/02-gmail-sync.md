@@ -601,9 +601,16 @@ reality (see `lib/store-submissions/gmail/sync.ts` batch loop):
 | Error path | Persists ERROR row? | `stats.errors` incremented? |
 |---|---|---|
 | `EmailParseError` from parser (malformed MIME) | ✅ Yes — row with `sender_email='unknown@parse.error'`, `error_code='PARSE_ERROR'` | ✅ |
-| Classifier returns `ErrorResult` (`NO_SUBJECT_MATCH`, `REGEX_TIMEOUT`, `PARSE_ERROR`) | ✅ Yes — row with real sender, `classification_result.error_code` set | ✅ |
+| Classifier returns `ErrorResult` (`REGEX_TIMEOUT`, `PARSE_ERROR`) | ✅ Yes — row with real sender, `classification_result.error_code` set | ✅ |
 | Platform has no rules configured (`NO_RULES`) | ✅ Yes — row with real sender, `error_code='NO_RULES'` | ✅ |
 | **Outer-catch "hard" failure** (`getMessage` network error, `emailAlreadyPersisted` DB hiccup, unexpected exception) | ❌ **No row** | ✅ |
+
+**DROPPED reasons** (persisted with `classification_status='DROPPED'`, do NOT increment `stats.errors`):
+
+| Reason | When | Audit fields populated? |
+|---|---|---|
+| `NO_SENDER_MATCH` | `from` address not in any platform's sender list — email is not from a store | ❌ No (dropped before classifier runs; no trace) |
+| `SUBJECT_NOT_TRACKED` | Sender matched, but subject did not match any configured pattern. Subject patterns are a **whitelist** of event types Managers track (e.g. Apple sends "Status Update", "Ready for Distribution", "IAP Approved" daily alongside the submission-review email we care about) — non-match = intentional ignore, not a processing failure | ✅ Yes — `platform_id`, `platform_key`, `matched_sender`, `matched_rules` (sender step) retained for auditing which subjects need patterns added |
 
 **Rationale for no-row on outer-catch:** those failures happen *before*
 we have enough context to construct a meaningful row. A partial row

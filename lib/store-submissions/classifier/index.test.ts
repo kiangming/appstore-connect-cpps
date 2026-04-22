@@ -208,20 +208,41 @@ describe('classify — DROPPED (no sender match)', () => {
   });
 });
 
-describe('classify — ERROR (no subject pattern matched)', () => {
-  it('returns ERROR NO_SUBJECT_MATCH with sender trace populated', () => {
+describe('classify — DROPPED (subject pattern whitelist miss)', () => {
+  it('returns DROPPED SUBJECT_NOT_TRACKED with sender trace populated and does NOT call subsequent matchers', () => {
     mockMatchSender.mockReturnValue(senderHit);
     mockMatchSubject.mockReturnValue(null);
 
     const result = classify(makeEmail(), makeRules());
 
-    expect(result.status).toBe('ERROR');
-    if (result.status !== 'ERROR') return;
-    expect(result.error_code).toBe('NO_SUBJECT_MATCH');
-    expect(result.error_message).toContain('apple');
+    expect(result.status).toBe('DROPPED');
+    if (result.status !== 'DROPPED') return;
+    expect(result.reason).toBe('SUBJECT_NOT_TRACKED');
+    expect(result.platform_id).toBe(PLATFORM_ID);
+    expect(result.platform_key).toBe('apple');
+    expect(result.matched_sender).toBe('no-reply@apple.com');
     expect(result.matched_rules).toHaveLength(1);
-    expect(result.matched_rules[0]?.step).toBe('sender');
+    expect(result.matched_rules?.[0]?.step).toBe('sender');
     expect(mockMatchApp).not.toHaveBeenCalled();
+    expect(mockMatchType).not.toHaveBeenCalled();
+    expect(mockExtractSubmissionId).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes SUBJECT_NOT_TRACKED from NO_SENDER_MATCH by reason + audit fields', () => {
+    // NO_SENDER_MATCH has no audit fields populated.
+    mockMatchSender.mockReturnValueOnce(null);
+    const noSender = classify(makeEmail(), makeRules());
+    expect(noSender).toEqual({ status: 'DROPPED', reason: 'NO_SENDER_MATCH' });
+
+    // SUBJECT_NOT_TRACKED carries platform_id + matched_sender + sender trace.
+    mockMatchSender.mockReturnValueOnce(senderHit);
+    mockMatchSubject.mockReturnValueOnce(null);
+    const subjectMiss = classify(makeEmail(), makeRules());
+    expect(subjectMiss.status).toBe('DROPPED');
+    if (subjectMiss.status !== 'DROPPED') return;
+    expect(subjectMiss.reason).toBe('SUBJECT_NOT_TRACKED');
+    expect(subjectMiss.platform_id).toBe(PLATFORM_ID);
+    expect(subjectMiss.matched_sender).toBe('no-reply@apple.com');
   });
 });
 

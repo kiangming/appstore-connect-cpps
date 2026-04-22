@@ -42,15 +42,22 @@ Không throw exception (trừ programming error như invalid rules config — th
 
 ```typescript
 type ClassificationResult =
-  | DroppedResult          // Sender không match platform nào — email không phải từ store
+  | DroppedResult          // Email intentionally ignored (wrong sender OR subject not in whitelist)
   | UnclassifiedAppResult  // Subject match nhưng app không có trong Registry
   | UnclassifiedTypeResult // Type không detect được từ body
   | ClassifiedResult       // Full success
-  | ErrorResult;           // Parse/regex error
+  | ErrorResult;           // Parse/regex error — true processing failure
+
+type DroppedReason = 'NO_SENDER_MATCH' | 'SUBJECT_NOT_TRACKED';
 
 type DroppedResult = {
   status: 'DROPPED';
-  reason: 'NO_SENDER_MATCH';
+  reason: DroppedReason;
+  // Audit fields — populated for SUBJECT_NOT_TRACKED only; absent for NO_SENDER_MATCH.
+  platform_id?: UUID;
+  platform_key?: PlatformKey;
+  matched_sender?: string;
+  matched_rules?: MatchedRule[];
 };
 
 type UnclassifiedAppResult = {
@@ -84,7 +91,7 @@ type ClassifiedResult = {
 
 type ErrorResult = {
   status: 'ERROR';
-  error_code: 'NO_SUBJECT_MATCH' | 'REGEX_TIMEOUT' | 'PARSE_ERROR';
+  error_code: 'REGEX_TIMEOUT' | 'PARSE_ERROR';
   error_message: string;
   matched_rules: MatchedRule[];
 };
@@ -168,7 +175,9 @@ function matchSubject(
 - Pattern APPROVED: `Review of your (?P<app_name>.+) submission is complete\.`
 - Match → `{ outcome: 'APPROVED', extractedAppName: 'Skyline Runners' }`
 
-Không match pattern nào → `ErrorResult { error_code: 'NO_SUBJECT_MATCH' }`. Lý do là ERROR chứ không phải UNCLASSIFIED: sender đã confirm là platform email, mà subject không khớp pattern nào → hoặc pattern cần update, hoặc email này không phải submission notification (notification type khác, vd "Weekly digest").
+Không match pattern nào → `DroppedResult { reason: 'SUBJECT_NOT_TRACKED', platform_id, platform_key, matched_sender, matched_rules }`.
+
+**Rationale (reversed since v1 spec)**: subject patterns are a **whitelist** of event types Managers explicitly track. Apple (and other stores) routinely send other mail to the same addresses — "Status Update", "Ready for Distribution", "IAP Approved", weekly digests, etc. Before this change, any such mail was flagged ERROR, which bumped `sync_logs.emails_errored` and `gmail_sync_state.consecutive_failures`, creating alert noise for normal operation. Classifying non-whitelisted subjects as DROPPED preserves the original intent (ignore silently) while keeping ERROR reserved for true processing failures (`REGEX_TIMEOUT`, `PARSE_ERROR`, `NO_RULES`). Audit fields on the DROPPED row still let the Errors tab surface "which platform's whitelist ignored which subjects" so Managers can add patterns when a new event type becomes relevant.
 
 ### Step 3 — Lookup app by alias
 
@@ -287,13 +296,15 @@ export function classify(
     }
     matched.push({ step: 'sender', matched: true, details: { platformKey: platform.key } });
 
-    // Step 2
+    // Step 2 — subject patterns are a whitelist; non-match = intentional ignore.
     const subjectResult = matchSubject(email.subject, platform);
     if (!subjectResult) {
       return {
-        status: 'ERROR',
-        error_code: 'NO_SUBJECT_MATCH',
-        error_message: `No subject pattern matched for platform ${platform.key}`,
+        status: 'DROPPED',
+        reason: 'SUBJECT_NOT_TRACKED',
+        platform_id: platform.id,
+        platform_key: platform.key,
+        matched_sender: email.senderEmail,
         matched_rules: matched,
       };
     }
@@ -828,10 +839,11 @@ UI hiện list version + diff view (2 snapshots side-by-side). Simple text diff 
 |---|---|---|
 | `InvalidRegexError` | Save rule với pattern không RE2-compilable | Reject ở API validation, return 400 với error inline cho form field |
 | `RegexTimeoutError` | Classify runtime, body quá dài + pattern chậm | Email marked `ERROR`, `error_code=REGEX_TIMEOUT`, log rule_id + email_id |
-| `NO_SUBJECT_MATCH` | Subject không khớp pattern nào | Email marked `ERROR`, user check "Errors" tab trong Email Rules page |
 | `PARSE_ERROR` | Body encoding issue | Email marked `ERROR`, manually inspect |
 
-**"Errors" view trong UI Email Rules**: liệt kê email có `classification_status='ERROR'` với reason. Actions: (1) Retry sau khi fix rule; (2) Manual assign ticket; (3) Ignore (đổi status sang `DROPPED`).
+**Not an error** — `SUBJECT_NOT_TRACKED` (sender matched, subject did not match any whitelist pattern) classifies as `DROPPED`, not `ERROR`. See §3 Step 2 rationale. The row is persisted so UI can surface "untracked subjects per platform" for Managers to decide whether a new pattern is warranted.
+
+**"Errors" view trong UI Email Rules**: liệt kê email có `classification_status='ERROR'` với reason. Post-fix (2026-04-22): the view now shows only true processing failures (`REGEX_TIMEOUT`, `PARSE_ERROR`, `NO_RULES`) — subject-whitelist misses no longer appear here (they live under DROPPED with `reason=SUBJECT_NOT_TRACKED`). Actions: (1) Retry sau khi fix rule; (2) Manual assign ticket; (3) Ignore (đổi status sang `DROPPED`).
 
 **Retry endpoint**:
 ```

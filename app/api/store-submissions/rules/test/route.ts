@@ -150,7 +150,7 @@ function errorResponse(
 }
 
 function extractTrace(result: ClassificationResult): MatchedRule[] {
-  if (result.status === 'DROPPED') return [];
+  if (result.status === 'DROPPED') return result.matched_rules ?? [];
   return result.matched_rules;
 }
 

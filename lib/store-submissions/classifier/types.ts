@@ -128,9 +128,20 @@ export interface MatchedRule {
   details?: Record<string, unknown>;
 }
 
+export type DroppedReason = 'NO_SENDER_MATCH' | 'SUBJECT_NOT_TRACKED';
+
 export interface DroppedResult {
   status: 'DROPPED';
-  reason: 'NO_SENDER_MATCH';
+  reason: DroppedReason;
+  /**
+   * Audit fields — populated when the classifier has progressed past the
+   * sender step before dropping (currently only `SUBJECT_NOT_TRACKED`).
+   * Absent for `NO_SENDER_MATCH` to keep legacy rows untouched.
+   */
+  platform_id?: string;
+  platform_key?: PlatformKey;
+  matched_sender?: string;
+  matched_rules?: MatchedRule[];
 }
 
 export interface UnclassifiedAppResult {
@@ -162,7 +173,7 @@ export interface ClassifiedResult {
   matched_rules: MatchedRule[];
 }
 
-export type ErrorCode = 'NO_SUBJECT_MATCH' | 'REGEX_TIMEOUT' | 'PARSE_ERROR';
+export type ErrorCode = 'REGEX_TIMEOUT' | 'PARSE_ERROR';
 
 export interface ErrorResult {
   status: 'ERROR';
