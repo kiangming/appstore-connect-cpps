@@ -55,6 +55,8 @@ import type {
 } from '../classifier/types';
 import { storeDb } from '../db';
 import { getRulesSnapshotForPlatform } from '../queries/rules';
+import { isTicketableClassification } from '../tickets/types';
+import { associateEmailWithTicket } from '../tickets/wire';
 
 import {
   createGmailClient,
@@ -447,7 +449,7 @@ async function processMessage(
 
   // 6. Persist with classifier_version stamped onto the JSONB.
   const errorMsg = extractErrorMessage(classification);
-  await insertEmailMessageRow({
+  const inserted = await insertEmailMessageRow({
     gmailMsgId: parsed.messageId,
     gmailThreadId: parsed.threadId,
     subject: parsed.subject,
@@ -464,6 +466,33 @@ async function processMessage(
   });
 
   incrementStatsFor(classification.status, ctx.stats);
+
+  // 7. Ticket wire (PR-8). Only ticketable statuses reach the engine;
+  //    DROPPED (SUBJECT_NOT_TRACKED) + ERROR (REGEX_TIMEOUT, PARSE_ERROR)
+  //    short-circuit via `isTicketableClassification`. `inserted === null`
+  //    means the INSERT hit a UNIQUE(gmail_msg_id) race — the winning
+  //    run's wire call handles association; we bail to avoid double-wire.
+  //
+  //    Wire is GRACEFUL by contract: it swallows engine/UPDATE errors
+  //    and returns null. We still wrap with try/catch here as
+  //    defense-in-depth — if wire ever throws (future regression,
+  //    unexpected exception), we MUST NOT let it cascade to the outer
+  //    batch loop. Why: the email row is already persisted + stats
+  //    already incremented; propagating the throw would bump
+  //    `stats.errors`, block cursor advance, and wedge us in a retry
+  //    loop where dedup skips the row forever (ticket_id permanently
+  //    NULL). Swallowing preserves cursor progress; the orphan is
+  //    recoverable via Manager re-association (PR-9+).
+  if (inserted && isTicketableClassification(classification)) {
+    try {
+      await associateEmailWithTicket(inserted.id, classification);
+    } catch (wireErr) {
+      console.error(
+        '[sync] associateEmailWithTicket threw — wire contract violation',
+        { emailId: inserted.id, error: wireErr },
+      );
+    }
+  }
 }
 
 function incrementStatsFor(
@@ -544,8 +573,21 @@ async function emailAlreadyPersisted(gmailMsgId: string): Promise<boolean> {
   return !!data;
 }
 
-async function insertEmailMessageRow(row: EmailMessageRow): Promise<void> {
-  const { error } = await storeDb()
+/**
+ * Insert an `email_messages` row and return its generated `id`.
+ *
+ * Returns `null` on benign UNIQUE(gmail_msg_id) collisions (dedup race
+ * with a parallel run). Callers use the returned id to wire the row to
+ * a ticket (see `associateEmailWithTicket`); `null` signals "another
+ * run will handle wiring — bail without error."
+ *
+ * Throws for all other INSERT failures (DB unreachable, CHECK violation,
+ * etc.) — those propagate to the batch's per-message error handler.
+ */
+async function insertEmailMessageRow(
+  row: EmailMessageRow,
+): Promise<{ id: string } | null> {
+  const { data, error } = await storeDb()
     .from('email_messages')
     .insert({
       gmail_msg_id: row.gmailMsgId,
@@ -559,20 +601,23 @@ async function insertEmailMessageRow(row: EmailMessageRow): Promise<void> {
       classification_result: row.classificationResult,
       processed_at: new Date().toISOString(),
       error_message: row.errorMessage ?? null,
-      // ticket_id stays NULL — PR-8 ticket engine will back-fill when
-      // consuming classification_status = 'CLASSIFIED' rows.
+      // ticket_id left NULL at INSERT — the PR-8 ticket wire back-fills
+      // it via UPDATE for ticketable statuses (CLASSIFIED + UNCLASSIFIED_*).
       ticket_id: null,
-    });
+    })
+    .select('id')
+    .single();
 
   if (error) {
     // Race via UNIQUE(gmail_msg_id): another run just inserted the same
     // id. That's fine — treat as benign dedup collision, don't throw.
     if (isUniqueViolation(error)) {
-      return;
+      return null;
     }
     console.error('[sync] insertEmailMessageRow failed:', error);
     throw new Error(`Failed to insert email_messages: ${error.message}`);
   }
+  return data;
 }
 
 function isUniqueViolation(err: { code?: string; message?: string }): boolean {

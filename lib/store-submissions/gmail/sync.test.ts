@@ -43,6 +43,8 @@ const hoisted = vi.hoisted(() => ({
   mockGetRulesSnapshot: vi.fn(),
   // ../classifier
   mockClassify: vi.fn(),
+  // ../tickets/wire
+  mockAssociateEmailWithTicket: vi.fn(),
   // ../db
   mockFrom: vi.fn(),
   mockSelect: vi.fn(),
@@ -50,6 +52,9 @@ const hoisted = vi.hoisted(() => ({
   mockLimit: vi.fn(),
   mockMaybeSingle: vi.fn(),
   mockInsert: vi.fn(),
+  // INSERT chain terminals: `.insert(...).select('id').single()`
+  mockInsertSelect: vi.fn(),
+  mockInsertSingle: vi.fn(),
 }));
 
 vi.mock('./client', () => ({
@@ -88,6 +93,10 @@ vi.mock('../classifier', () => ({
   classify: hoisted.mockClassify,
 }));
 
+vi.mock('../tickets/wire', () => ({
+  associateEmailWithTicket: hoisted.mockAssociateEmailWithTicket,
+}));
+
 vi.mock('../db', () => ({
   storeDb: () => ({ from: hoisted.mockFrom }),
 }));
@@ -122,8 +131,9 @@ beforeEach(() => {
 
   // storeDb chain for emailAlreadyPersisted + insertEmailMessageRow.
   //   - `.from('email_messages').select('id').eq(...).limit(1).maybeSingle()`
-  //     → dedup check
-  //   - `.from('email_messages').insert(...)` → INSERT
+  //     → dedup check (uses chain.select → chain.eq → chain.limit → chain.maybeSingle)
+  //   - `.from('email_messages').insert(...).select('id').single()`
+  //     → INSERT (uses chain.insert → mockInsertSelect → mockInsertSingle)
   const chain = {
     select: hoisted.mockSelect,
     eq: hoisted.mockEq,
@@ -135,9 +145,20 @@ beforeEach(() => {
   hoisted.mockSelect.mockReturnValue(chain);
   hoisted.mockEq.mockReturnValue(chain);
   hoisted.mockLimit.mockReturnValue(chain);
-  // Default: no dedup collision, no insert errors.
+  // Default: no dedup collision.
   hoisted.mockMaybeSingle.mockResolvedValue({ data: null, error: null });
-  hoisted.mockInsert.mockResolvedValue({ error: null });
+  // INSERT chain: insert() → {select()} → {single()} → Promise<{data, error}>
+  hoisted.mockInsert.mockReturnValue({ select: hoisted.mockInsertSelect });
+  hoisted.mockInsertSelect.mockReturnValue({ single: hoisted.mockInsertSingle });
+  hoisted.mockInsertSingle.mockResolvedValue({
+    data: { id: 'email-row-uuid' },
+    error: null,
+  });
+  // Wire default: every call returns a ticket association. Tests that
+  // need failure/null use mockResolvedValueOnce / mockRejectedValueOnce.
+  hoisted.mockAssociateEmailWithTicket.mockResolvedValue({
+    ticketId: 'ticket-mock-uuid',
+  });
 });
 
 afterEach(() => {
@@ -591,7 +612,8 @@ describe('runSync — dedup', () => {
       mockParsedEmail({ fromEmail: 'spam@unknown.com' }),
     );
     hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => null);
-    hoisted.mockInsert.mockResolvedValueOnce({
+    hoisted.mockInsertSingle.mockResolvedValueOnce({
+      data: null,
       error: { code: '23505', message: 'duplicate key value violates unique constraint' },
     });
 
@@ -601,6 +623,316 @@ describe('runSync — dedup', () => {
     // UNIQUE violation must not bump errors — another run already
     // persisted the same row, which is a benign dedup collision.
     expect(result.stats.errors).toBe(0);
+  });
+});
+
+/* ============================================================================
+ * PR-8: Ticket wire integration
+ *
+ * Verifies sync.ts calls associateEmailWithTicket() iff the classification
+ * is ticketable (CLASSIFIED, UNCLASSIFIED_APP, UNCLASSIFIED_TYPE) AND the
+ * INSERT succeeded with a returned id. Wire failures (throw or null
+ * return) must NOT abort the sync batch — PR-8 "graceful degradation"
+ * contract.
+ * ========================================================================== */
+
+describe('runSync — ticket wire integration (PR-8)', () => {
+  /** Shared setup for a single-message batch with resolvable sender + rules. */
+  function primeSingleMessage(
+    msgId: string,
+    classification: Record<string, unknown>,
+  ) {
+    mockHistoryDelta([msgId], '1100');
+    hoisted.mockGetMessage.mockResolvedValueOnce({ id: msgId, threadId: 't1' });
+    hoisted.mockParseGmailMessage.mockReturnValueOnce(
+      mockParsedEmail({ messageId: msgId }),
+    );
+    hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => ({
+      platformId: 'apple-uuid',
+      platformKey: 'apple',
+    }));
+    hoisted.mockGetRulesSnapshot.mockResolvedValueOnce({
+      platform_id: 'apple-uuid',
+      platform_key: 'apple',
+      senders: [],
+      subject_patterns: [],
+      types: [],
+      submission_id_patterns: [],
+      apps_with_aliases: [],
+    });
+    hoisted.mockClassify.mockReturnValueOnce(classification);
+  }
+
+  it('CLASSIFIED → wire invoked with inserted id + full classification', async () => {
+    const classified = {
+      status: 'CLASSIFIED',
+      platform_id: 'apple-uuid',
+      app_id: 'app-1',
+      type_id: 'type-1',
+      outcome: 'APPROVED',
+      type_payload: {},
+      submission_id: 'sub-1',
+      extracted_app_name: 'Skyline Runners',
+      matched_rules: [],
+    };
+    primeSingleMessage('m1', classified);
+    hoisted.mockInsertSingle.mockResolvedValueOnce({
+      data: { id: 'email-uuid-classified' },
+      error: null,
+    });
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockAssociateEmailWithTicket).toHaveBeenCalledTimes(1);
+    const [emailId, passedClass] =
+      hoisted.mockAssociateEmailWithTicket.mock.calls[0];
+    expect(emailId).toBe('email-uuid-classified');
+    // classification_version is stamped in sync.ts before INSERT; wire
+    // receives the pre-stamp classification object directly from classify().
+    expect(passedClass.status).toBe('CLASSIFIED');
+    expect(passedClass.app_id).toBe('app-1');
+    expect(passedClass.type_id).toBe('type-1');
+  });
+
+  it('UNCLASSIFIED_APP → wire invoked (bucket ticket per invariant #8)', async () => {
+    primeSingleMessage('m2', {
+      status: 'UNCLASSIFIED_APP',
+      platform_id: 'apple-uuid',
+      outcome: 'APPROVED',
+      extracted_app_name: 'Unknown App',
+      matched_rules: [],
+    });
+    hoisted.mockInsertSingle.mockResolvedValueOnce({
+      data: { id: 'email-uuid-uncl-app' },
+      error: null,
+    });
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockAssociateEmailWithTicket).toHaveBeenCalledTimes(1);
+    const [emailId, passedClass] =
+      hoisted.mockAssociateEmailWithTicket.mock.calls[0];
+    expect(emailId).toBe('email-uuid-uncl-app');
+    expect(passedClass.status).toBe('UNCLASSIFIED_APP');
+  });
+
+  it('UNCLASSIFIED_TYPE → wire invoked (bucket ticket per invariant #8)', async () => {
+    primeSingleMessage('m3', {
+      status: 'UNCLASSIFIED_TYPE',
+      platform_id: 'apple-uuid',
+      app_id: 'app-1',
+      outcome: 'APPROVED',
+      extracted_app_name: 'Skyline Runners',
+      matched_rules: [],
+    });
+    hoisted.mockInsertSingle.mockResolvedValueOnce({
+      data: { id: 'email-uuid-uncl-type' },
+      error: null,
+    });
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockAssociateEmailWithTicket).toHaveBeenCalledTimes(1);
+    const [emailId, passedClass] =
+      hoisted.mockAssociateEmailWithTicket.mock.calls[0];
+    expect(emailId).toBe('email-uuid-uncl-type');
+    expect(passedClass.status).toBe('UNCLASSIFIED_TYPE');
+  });
+
+  it('DROPPED (SUBJECT_NOT_TRACKED) → wire NOT invoked (gated before call)', async () => {
+    primeSingleMessage('m4', {
+      status: 'DROPPED',
+      reason: 'SUBJECT_NOT_TRACKED',
+      platform_id: 'apple-uuid',
+      platform_key: 'apple',
+      matched_sender: 'no-reply@apple.com',
+      matched_rules: [],
+    });
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockAssociateEmailWithTicket).not.toHaveBeenCalled();
+  });
+
+  it('DROPPED (NO_SENDER_MATCH early-return) → wire NOT invoked', async () => {
+    mockHistoryDelta(['m5'], '1100');
+    hoisted.mockGetMessage.mockResolvedValueOnce({ id: 'm5', threadId: 't1' });
+    hoisted.mockParseGmailMessage.mockReturnValueOnce(
+      mockParsedEmail({ fromEmail: 'spam@unknown.com' }),
+    );
+    hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => null);
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockAssociateEmailWithTicket).not.toHaveBeenCalled();
+    expect(hoisted.mockClassify).not.toHaveBeenCalled();
+  });
+
+  it('ERROR (PARSE_ERROR early-return) → wire NOT invoked', async () => {
+    const { EmailParseError } = await import('./errors');
+    mockHistoryDelta(['m6'], '1100');
+    hoisted.mockGetMessage.mockResolvedValueOnce({ id: 'm6', threadId: 't1' });
+    hoisted.mockParseGmailMessage.mockImplementationOnce(() => {
+      throw new EmailParseError('m6', 'Malformed MIME');
+    });
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockAssociateEmailWithTicket).not.toHaveBeenCalled();
+  });
+
+  it('ERROR (NO_RULES early-return) → wire NOT invoked', async () => {
+    mockHistoryDelta(['m7'], '1100');
+    hoisted.mockGetMessage.mockResolvedValueOnce({ id: 'm7', threadId: 't1' });
+    hoisted.mockParseGmailMessage.mockReturnValueOnce(mockParsedEmail());
+    hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => ({
+      platformId: 'google-uuid',
+      platformKey: 'google',
+    }));
+    hoisted.mockGetRulesSnapshot.mockResolvedValueOnce(null); // no rules
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockAssociateEmailWithTicket).not.toHaveBeenCalled();
+    expect(hoisted.mockClassify).not.toHaveBeenCalled();
+  });
+
+  it('ERROR (classifier-produced REGEX_TIMEOUT) → wire NOT invoked (gated)', async () => {
+    primeSingleMessage('m8', {
+      status: 'ERROR',
+      error_code: 'REGEX_TIMEOUT',
+      error_message: 'regex exceeded 100ms',
+      matched_rules: [],
+    });
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    // Classifier ERROR goes through the success-path INSERT, but the
+    // `isTicketableClassification` pre-gate blocks the wire call.
+    expect(hoisted.mockAssociateEmailWithTicket).not.toHaveBeenCalled();
+  });
+
+  it('dedup race (INSERT returns null via UNIQUE violation) → wire NOT invoked', async () => {
+    primeSingleMessage('m9', {
+      status: 'CLASSIFIED',
+      platform_id: 'apple-uuid',
+      app_id: 'app-1',
+      type_id: 'type-1',
+      outcome: 'APPROVED',
+      type_payload: {},
+      submission_id: null,
+      extracted_app_name: 'X',
+      matched_rules: [],
+    });
+    hoisted.mockInsertSingle.mockResolvedValueOnce({
+      data: null,
+      error: {
+        code: '23505',
+        message: 'duplicate key value violates unique constraint',
+      },
+    });
+
+    const { runSync } = await import('./sync');
+    const result = await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    // The winning run handles the wire; this run bails silently.
+    expect(hoisted.mockAssociateEmailWithTicket).not.toHaveBeenCalled();
+    expect(result.stats.errors).toBe(0);
+  });
+
+  it('wire returns null (engine/UPDATE failed) → batch continues, no error', async () => {
+    primeSingleMessage('m10', {
+      status: 'CLASSIFIED',
+      platform_id: 'apple-uuid',
+      app_id: 'app-1',
+      type_id: 'type-1',
+      outcome: 'APPROVED',
+      type_payload: {},
+      submission_id: null,
+      extracted_app_name: 'X',
+      matched_rules: [],
+    });
+    hoisted.mockAssociateEmailWithTicket.mockResolvedValueOnce(null);
+
+    const { runSync } = await import('./sync');
+    const result = await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    // Wire failure is graceful — batch succeeds, cursor advances.
+    expect(result.success).toBe(true);
+    expect(result.stats.errors).toBe(0);
+    expect(result.stats.classified).toBe(1);
+    expect(hoisted.mockAdvanceSyncState).toHaveBeenCalledTimes(1);
+  });
+
+  it('wire throws (contract violation) → swallowed, cursor still advances', async () => {
+    // Wire's contract is "never throw" (it swallows + returns null on
+    // failure). Defense-in-depth: sync.ts wraps the call in try/catch
+    // anyway. Why it matters: without the wrap, a wire throw would
+    // bump `stats.errors`, block cursor advance, and cause dedup to
+    // permanently skip the row on retry → orphan with NULL ticket_id
+    // and a wedged cursor. With the wrap: email is persisted, stats
+    // are clean, cursor advances, orphan is Manager-recoverable.
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const classified = {
+      status: 'CLASSIFIED',
+      platform_id: 'apple-uuid',
+      app_id: 'app-1',
+      type_id: 'type-1',
+      outcome: 'APPROVED',
+      type_payload: {},
+      submission_id: null,
+      extracted_app_name: 'X',
+      matched_rules: [],
+    };
+    mockHistoryDelta(['m11', 'm12'], '1100');
+    for (const id of ['m11', 'm12']) {
+      hoisted.mockGetMessage.mockResolvedValueOnce({ id, threadId: 't' });
+      hoisted.mockParseGmailMessage.mockReturnValueOnce(
+        mockParsedEmail({ messageId: id }),
+      );
+      hoisted.mockClassify.mockReturnValueOnce(classified);
+    }
+    hoisted.mockCreateSenderResolver.mockReturnValue(() => ({
+      platformId: 'apple-uuid',
+      platformKey: 'apple',
+    }));
+    hoisted.mockGetRulesSnapshot.mockResolvedValue({
+      platform_id: 'apple-uuid',
+      platform_key: 'apple',
+      senders: [],
+      subject_patterns: [],
+      types: [],
+      submission_id_patterns: [],
+      apps_with_aliases: [],
+    });
+    hoisted.mockAssociateEmailWithTicket
+      .mockRejectedValueOnce(new Error('wire blew up unexpectedly'))
+      .mockResolvedValueOnce({ ticketId: 'ticket-ok' });
+
+    const { runSync } = await import('./sync');
+    const result = await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    // Both messages fully classified; wire throw did NOT bump errors.
+    expect(result.stats.classified).toBe(2);
+    expect(result.stats.errors).toBe(0);
+    expect(result.success).toBe(true);
+    expect(hoisted.mockAssociateEmailWithTicket).toHaveBeenCalledTimes(2);
+    // Cursor advanced — critical invariant: wire failure doesn't wedge sync.
+    expect(hoisted.mockAdvanceSyncState).toHaveBeenCalledTimes(1);
+    // Contract violation logged for observability.
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('wire contract violation'),
+      expect.objectContaining({ emailId: 'email-row-uuid' }),
+    );
   });
 });
 

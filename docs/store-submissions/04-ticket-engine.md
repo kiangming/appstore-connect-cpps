@@ -5,6 +5,47 @@
 
 ---
 
+## 0. Implementation status (read first)
+
+This document specifies the full Ticket Engine — email handling with `FOR UPDATE` locks, state machine, event log, user actions, app rename. **As of PR-8, most of it is not yet implemented.** What ships in each PR:
+
+### PR-8 (shipped) — wire + stub engine
+
+- `lib/store-submissions/tickets/wire.ts` — `associateEmailWithTicket(emailMessageId, classification)`
+- `lib/store-submissions/tickets/engine-stub.ts` — `findOrCreateTicket(input)` returning ephemeral `randomUUID()`
+- `lib/store-submissions/tickets/types.ts` — `FindOrCreateTicketInput`, `FindOrCreateTicketOutput`, `TicketableClassification`, `isTicketableClassification`
+- `gmail/sync.ts` integration: post-INSERT wire call with defensive try/catch
+
+**What the stub does not do:**
+- No DB writes (no `tickets` row, no `ticket_entries` row)
+- No dedup (every call returns a fresh UUID, even for the same grouping key)
+- No state machine, no `FOR UPDATE` lock, no event log, no transaction boundary
+
+**Why stub first:** decouples wire-path verification from engine-logic complexity. Isolates failure modes per PR (wire bugs in PR-8, engine bugs in PR-9). Unblocks PR-10 Inbox UI development against mock ticket data before the real engine ships.
+
+### PR-9 (planned) — real engine
+
+`engine-stub.ts` → `engine.ts` drop-in replacement, same `findOrCreateTicket` signature. Scope (tracked in `TODO.md` under `## PR-9`):
+
+- §3.1 Transactional `handleClassifiedEmail` orchestration
+- §3.2 `findOpenTicketForKey` with `FOR UPDATE` lock
+- §3.3–3.4 Create + update flows, `submission_id` dedup + append
+- §4.1 State derivation from email (`NEW → IN_REVIEW → REJECTED → APPROVED`)
+- §6 `ticket_entries` append-only event log + EMAIL snapshot writes
+- §5.2 Grouping-key conflict handling when unclassified → classified
+
+### PR-10+ (later)
+
+§7 user actions, §8 app rename, §9 full error hierarchy.
+
+### Stability contract
+
+The types exported from `tickets/types.ts` in PR-8 are the **interface boundary** with the wire layer and with any future caller (e.g. batch re-classification in PR-10). PR-9 may **extend** `FindOrCreateTicketOutput` with fields from §2.1 `TicketHandleResult` (`ticket` row, `previous_state`, `state_changed`), but must not rename or remove existing fields. Callers treat unknown new fields as optional.
+
+Sections §1–§13 below describe the PR-9 target design. Until PR-9 lands, the "Ticket Engine" in code means the stub; read with that caveat.
+
+---
+
 ## 1. Overview & responsibilities
 
 Ticket Engine cầm 3 trách nhiệm:

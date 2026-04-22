@@ -1070,6 +1070,83 @@ Schema đã support (A) qua ALTER trên.
 
 ---
 
+## 14. Ticket wiring (PR-8)
+
+Classifier output is a **pure value** — zero side effects, zero DB writes. The wire layer (PR-8, `lib/store-submissions/tickets/wire.ts`) is what bridges the classifier verdict into the `tickets` table. This section documents the bridge so a future reader can trace a single email from Gmail → `email_messages` row → ticket link.
+
+### 14.1 Gate: which classifications produce a ticket?
+
+Source of truth: `isTicketableClassification()` in `lib/store-submissions/tickets/types.ts`. Returns `true` for:
+
+| Status | Produces ticket? | Grouping key |
+|---|---|---|
+| `CLASSIFIED` | ✅ | `(app_id, type_id, platform_id)` |
+| `UNCLASSIFIED_APP` | ✅ | `(NULL, NULL, platform_id)` — platform bucket |
+| `UNCLASSIFIED_TYPE` | ✅ | `(app_id, NULL, platform_id)` — app bucket |
+| `DROPPED` | ❌ | — |
+| `ERROR` | ❌ | — |
+
+Unclassified buckets receive tickets **by design** (CLAUDE.md invariant #8). Without them, emails that matched a sender + subject but failed app/type resolution would have no Inbox surface — Managers would miss the operational cue to add rules or merge apps. DROPPED + ERROR stay ticket-less because they are terminal: DROPPED (`NO_SENDER_MATCH` / `SUBJECT_NOT_TRACKED`) = intentional ignore, ERROR = audit-only, recoverable by operator.
+
+### 14.2 Call path
+
+```
+gmail/sync.ts :: processMessage()
+  ├─ parse
+  ├─ resolve sender → platform (early-return DROPPED/ERROR skip wire)
+  ├─ classify()  ← pure function, no I/O
+  ├─ insertEmailMessageRow()  ← returns { id } | null
+  │                              null on UNIQUE(gmail_msg_id) race → skip wire
+  └─ if (inserted && isTicketableClassification(c)):
+       try:
+         associateEmailWithTicket(inserted.id, c)
+           ├─ defensive re-gate (source of truth: isTicketableClassification)
+           ├─ findOrCreateTicket(...)  ← PR-8 stub / PR-9 real engine
+           └─ UPDATE email_messages SET ticket_id = ? WHERE id = ?
+       catch:
+         log "[sync] ... wire contract violation" — swallow (see 14.4)
+```
+
+### 14.3 Graceful degradation
+
+Wire **never rethrows** by contract. Every failure path inside `associateEmailWithTicket`:
+
+1. Engine throws (`TicketEngineNotApplicableError` or unexpected) → log `[tickets-wire] findOrCreateTicket failed` at ERROR level → return `null`.
+2. `UPDATE email_messages.ticket_id` fails → log `[tickets-wire] UPDATE ... failed — ticket exists but link lost` at ERROR level → return `null`.
+
+A `null` return means the email row is persisted but `ticket_id` stays NULL. Recovery: PR-9+ Manager-initiated re-association, or the next email for the same grouping key picks up the orphan implicitly when PR-9's `findOrCreateTicket` looks for existing open tickets.
+
+Log prefix `[tickets-wire]` is intentional — enables Sentry filtering once `SENTRY_DSN` wiring lands (tracked in `TODO.md` under PR-7).
+
+### 14.4 Cursor wedge prevention (defensive try/catch in sync.ts)
+
+Wire's "never throw" contract is enforced by wire itself, but sync.ts wraps the call in its own try/catch **as defense-in-depth**. Why this matters:
+
+Without the wrap, a contract violation (future regression, unexpected exception type) would cascade to the batch loop's outer try/catch, which bumps `stats.errors`. That has a pathological consequence:
+
+```
+wire throws → stats.errors++ → advanceSyncState blocked
+  → cursor stays put → next tick refetches same Gmail IDs
+  → dedup via emailAlreadyPersisted → skip processMessage entirely
+  → wire never re-runs → ticket_id permanently NULL
+```
+
+The email row is persisted but orphaned **forever** — the cursor is wedged and dedup guarantees no retry. The inner try/catch in sync.ts swallows the throw, logs `[sync] associateEmailWithTicket threw — wire contract violation`, and lets the cursor advance. The orphan is still recoverable via Manager action; the cursor is not.
+
+### 14.5 PR-8 stub vs PR-9 real engine
+
+PR-8 ships `lib/store-submissions/tickets/engine-stub.ts` — `findOrCreateTicket()` returns `{ ticketId: randomUUID(), created: true, new_state: 'NEW' }` with no DB writes and no dedup. Purpose:
+
+- Verify the wire path end-to-end without blocking on the real engine's complexity (FOR UPDATE lock, submission_id dedup, state machine, `ticket_entries` snapshots).
+- Unblock PR-10 Inbox UI development against mock ticket data before PR-9 ships.
+- Isolate wire-path bugs from engine-logic bugs by PR.
+
+PR-9 drops in `engine.ts` behind the **same `findOrCreateTicket(input): FindOrCreateTicketOutput` signature** (`types.ts` documents the stability contract — field extensions allowed, removals/renames break the API). The wire and sync.ts layers do not change when the real engine lands.
+
+See `04-ticket-engine.md §0` for PR-9 implementation scope.
+
+---
+
 ## Kết luận
 
 Email Rule Engine là **pure function boundary** — tách biệt logic "hiểu email" khỏi orchestration Gmail + ticket. Critical design points:

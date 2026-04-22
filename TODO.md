@@ -52,3 +52,55 @@ Format: `- [ ] [PR-X] description — file path — rationale`
 - [ ] [PR-7 polish] MIME parser — investigate charset handling for Apple email bodies. Production observed encoding corruption pattern `Da:%u TrF0a;ng ChC"n LC"` suggesting an unsupported charset (possibly `x-mac-vietnamese` or an Apple-specific encoding). Subject decodes OK via RFC 2047; body decode fails. Extend `normalizeCharset` in `parser.ts` or add an `iconv-lite` fallback for rare charsets if the symptom shows real-world classification impact. Current 5-charset support: UTF-8, Latin-1, cp1252, us-ascii, UTF-16LE.
 - [ ] [PR-7 polish] Apple subject pattern migration seed drift — production UI was updated with a pattern that strips the `(iOS)` suffix: `^Review of your (?<app_name>.+?) (?:\(iOS\) )?submission is complete\.$`. Update `supabase/migrations/20260101100200_store_mgmt_seed_apple_rules.sql` to match so future dev environments don't regress. Original seed lacked `(iOS)` handling → extracted app names included the suffix → app lookup miss.
 - [ ] [rules calibration] Apple type rules populate — currently Apple emails stop at `UNCLASSIFIED_TYPE` (Steps 1–3 pass; Step 4 type keyword miss). Manager task via the Email Rules UI: populate type keywords for APPROVED outcomes (sample keywords from real bodies: "eligible for distribution", "review completed", "App Store Review"), REJECTED, PENDING states. Not a code bug — ongoing operational calibration as new Apple email templates surface. PR-8 ticket engine will still route UNCLASSIFIED_TYPE rows into the Unclassified bucket when it lands; type calibration is a forward-rolling improvement.
+
+## PR-8 — Email Rule Engine wiring ✅ COMPLETED (2026-04-22)
+
+Thin wire layer bridging classifier output → ticket engine. Stub engine returns ephemeral UUIDs; PR-9 drops in real engine behind same signature.
+
+**Shipped:**
+- `lib/store-submissions/tickets/types.ts` — `TicketableClassification` union + `isTicketableClassification` type-guard (single source of truth for wire pre-gate + engine defense-in-depth).
+- `lib/store-submissions/tickets/engine-stub.ts` — ephemeral `randomUUID()` stub, throws `TicketEngineNotApplicableError` on non-ticketable status.
+- `lib/store-submissions/tickets/wire.ts` — `associateEmailWithTicket(emailMessageId, classification)`, graceful errors, `[tickets-wire]` ERROR log prefix.
+- `lib/store-submissions/gmail/sync.ts` — `insertEmailMessageRow` signature change (`Promise<void>` → `Promise<{id} | null>` with `.select('id').single()`), wire integration post-INSERT, **defensive try/catch** preventing cursor-wedge bug.
+- +25 tests (14 tickets module + 11 sync wire integration).
+
+**Deferred polish (low priority):**
+
+- [ ] [PR-8 polish] `stats.tickets_associated` counter in `SyncStats` + `sync_logs` payload. Would touch the `sync_logs` schema (new column) — migration + `insertSyncLog` signature update. Derivable post-hoc via `SELECT count(*) FROM email_messages WHERE ticket_id IS NOT NULL AND processed_at > ?`. Punt unless observability actually needs it.
+- [ ] [PR-8 polish] Wire success log at DEBUG level (currently silent on success, ERROR on failure). Would give per-message trace for production debugging but add ~2880 log lines/day on the every-5-min cron. Revisit only if a real debugging incident demands it; current `[tickets-wire]` ERROR coverage + `ticket_id IS NOT NULL` SQL queries are sufficient.
+
+## PR-9 — Ticket Engine implementation (planned)
+
+Replace `engine-stub.ts` with real `engine.ts`. Same `findOrCreateTicket(input): FindOrCreateTicketOutput` signature — stub is a drop-in. Spec: `docs/store-submissions/04-ticket-engine.md` §1–§6.
+
+### 9.1 Real `findOrCreateTicket` + transaction boundary
+- [ ] Replace `engine-stub.ts` with `engine.ts` that opens a DB transaction wrapping find-open → (create OR update) → `ticket_entries` insert.
+- [ ] Populate `FindOrCreateTicketOutput` with extended fields per spec §2.1 `TicketHandleResult` (`ticket` row, `previous_state`, `state_changed`). Callers (wire) ignore unknown fields — non-breaking.
+- [ ] Wire up `supabase-js` transaction API (or switch to `postgres-js`/`drizzle` if `supabase-js` transactions prove unusable — deferred from PR-5 RPC work).
+
+### 9.2 `submission_id` dedup
+- [ ] When `classification.status === 'CLASSIFIED'` and `submission_id !== null`, look up existing open ticket by `(app_id, type_id, platform_id)` AND append `submission_id` to `tickets.submission_ids` array if new — see spec §3.4 `updateTicketWithEmail`.
+- [ ] Distinct-append only (no duplicates in the array).
+
+### 9.3 `FOR UPDATE` lock + concurrent safety
+- [ ] `findOpenTicketForKey` uses raw SQL `SELECT ... FROM store_mgmt.tickets WHERE ... FOR UPDATE` per spec §3.2. Two sync batches racing on the same grouping key must serialize — not race to create duplicate open tickets.
+- [ ] Verify partial unique index `idx_tickets_open_unique` catches any duplicate that slips past the lock (defense-in-depth).
+- [ ] Integration test with two concurrent `handleClassifiedEmail` calls against a real Postgres — depends on the local Docker test harness that is also blocking PR-5's RPC integration tests.
+
+### 9.4 `ticket_entries` EMAIL snapshot writes
+- [ ] Every EMAIL ticket_entry must embed `metadata.email_snapshot` per CLAUDE.md invariant #3: `{ subject, sender, received_at, body_excerpt }` with body clipped to 500 chars.
+- [ ] Append-only — no UPDATE on EMAIL entries (invariant #2).
+
+### 9.5 State machine + grouping
+- [ ] State derivation from classifier `outcome` per spec §4.1: `APPROVED → state='APPROVED'`, `REJECTED → state='REJECTED'`, neutral → no state change.
+- [ ] Grouping-key conflict resolution per spec §5.2 (when a user manually assigns app/type to an UNCLASSIFIED bucket ticket and the resolved key already has an open ticket → merge `submission_ids` + `type_payloads`, archive the bucket ticket).
+- [ ] Terminal state invariant per CLAUDE.md #6: `state IN ('APPROVED', 'DONE', 'ARCHIVED')` ↔ `closed_at IS NOT NULL` ↔ `resolution_type IS NOT NULL`.
+
+### 9.6 Wire + engine integration
+- [ ] Update `wire.ts` to consume the richer `FindOrCreateTicketOutput` (log `created`, `state_changed` at INFO level for observability — one line per ticketable email is acceptable).
+- [ ] Remove the stub file, update `tickets/index.ts` re-exports if one exists.
+- [ ] Update sync tests to assert state-change signals propagate.
+
+### 9.7 Docs
+- [ ] Update `03-email-rule-engine.md` §14 to remove "stub" caveats.
+- [ ] Update `04-ticket-engine.md` §0 "Implementation status" — mark PR-9 sections as shipped.
