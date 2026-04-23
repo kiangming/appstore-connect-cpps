@@ -183,6 +183,7 @@ INITIAL_MANAGER_EMAIL=    # first MANAGER role trong store_mgmt.users
 3. **Sender resolver — 2 independent queries** — Single embedded-select query had ambiguity với multi-platform senders. Split into sender lookup + platform assignment (PR-6).
 4. **Email Rule Engine — submission_id extraction** — Uses RE2 regex from `submission_id_patterns` table. V8 regex explicitly forbidden (ReDoS prevention).
 5. **Cron advisory lock** — Single `runSync` instance per deploy. Postgres advisory lock key = hash of cron name. Prevents overlap on slow syncs.
+6. **App Registry — platform binding required at create (fix 2026-04-23)** — App Creator dialog (`components/store-submissions/apps/AppDialog.tsx`) was filtering bindings by `platform_ref !== ''`; creating an app with all ref fields blank produced zero `app_platform_bindings` rows. Classifier's `loadAppsForPlatform` gates visibility on `(platform_id, app_id)` presence (not on `platform_ref`), so those apps stayed invisible to the pipeline and their emails classified as `UNCLASSIFIED_APP`. Fix: checkbox gate in the dialog + submit validation ≥1 platform. UI-only change — classifier, `create_app_tx` RPC, and schema were already correct. Audit badge `"No platforms"` on `/config/apps` list surfaces any historical unbound rows.
 
 ---
 

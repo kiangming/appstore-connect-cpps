@@ -15,6 +15,13 @@ import {
   updateAppAction,
 } from '@/app/(dashboard)/store-submissions/config/apps/actions';
 import { generateSlugFromName } from '@/lib/store-submissions/apps/alias-logic';
+import {
+  PLATFORM_KEYS,
+  buildCreatePayload,
+  buildEditActionPlan,
+  validateFormState,
+  type FormState,
+} from './app-dialog-logic';
 
 export type AppDialogMode = 'create' | 'edit';
 
@@ -25,8 +32,6 @@ interface AppDialogProps {
   onClose: () => void;
   onSuccess: () => void;
 }
-
-const PLATFORM_KEYS: PlatformKey[] = ['apple', 'google', 'huawei', 'facebook'];
 
 const PLATFORM_LABELS: Record<PlatformKey, string> = {
   apple: 'Apple App Store',
@@ -42,20 +47,12 @@ const PLATFORM_REF_HINT: Record<PlatformKey, string> = {
   facebook: 'Facebook app ID',
 };
 
-type FormState = {
-  name: string;
-  display_name: string;
-  team_owner_id: string;
-  active: boolean;
-  bindings: Record<PlatformKey, { platform_ref: string; console_url: string }>;
-};
-
 function emptyBindings(): FormState['bindings'] {
   return {
-    apple: { platform_ref: '', console_url: '' },
-    google: { platform_ref: '', console_url: '' },
-    huawei: { platform_ref: '', console_url: '' },
-    facebook: { platform_ref: '', console_url: '' },
+    apple: { enabled: false, platform_ref: '', console_url: '' },
+    google: { enabled: false, platform_ref: '', console_url: '' },
+    huawei: { enabled: false, platform_ref: '', console_url: '' },
+    facebook: { enabled: false, platform_ref: '', console_url: '' },
   };
 }
 
@@ -63,6 +60,7 @@ function bindingsFromApp(app: AppListRow): FormState['bindings'] {
   const result = emptyBindings();
   for (const b of app.bindings) {
     result[b.platform_key] = {
+      enabled: true,
       platform_ref: b.platform_ref ?? '',
       console_url: b.console_url ?? '',
     };
@@ -122,32 +120,24 @@ export function AppDialog({ mode, app, teamUsers, onClose, onSuccess }: AppDialo
     }));
   }
 
-  function collectBindingsForCreate() {
-    return PLATFORM_KEYS.filter((k) => form.bindings[k].platform_ref.trim() !== '').map(
-      (k) => ({
-        platform: k,
-        platform_ref: form.bindings[k].platform_ref.trim(),
-        console_url: form.bindings[k].console_url.trim() || undefined,
-      }),
-    );
+  function togglePlatform(key: PlatformKey, enabled: boolean) {
+    setForm((prev) => ({
+      ...prev,
+      bindings: { ...prev.bindings, [key]: { ...prev.bindings[key], enabled } },
+    }));
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (form.name.trim() === '') {
-      toast.error('Name is required');
+    const validation = validateFormState(form);
+    if (!validation.ok) {
+      toast.error(validation.error);
       return;
     }
 
     startTransition(async () => {
       if (mode === 'create') {
-        const result = await createAppAction({
-          name: form.name.trim(),
-          display_name: form.display_name.trim() || undefined,
-          team_owner_id: form.team_owner_id || null,
-          active: form.active,
-          platform_bindings: collectBindingsForCreate(),
-        });
+        const result = await createAppAction(buildCreatePayload(form));
         if (result.ok) {
           toast.success(`Added "${form.name.trim()}" (slug: ${result.data.slug})`);
           onSuccess();
@@ -157,56 +147,43 @@ export function AppDialog({ mode, app, teamUsers, onClose, onSuccess }: AppDialo
         return;
       }
 
-      // Edit mode: sequence of scoped actions so partial failure surfaces clearly.
+      // Edit mode: dispatch pure action plan so partial failure surfaces clearly.
       const original = app!;
+      const plan = buildEditActionPlan(form, original);
       const failures: string[] = [];
 
-      if (form.name.trim() !== original.name) {
-        const renameRes = await renameAppAction({
-          id: original.id,
-          new_name: form.name.trim(),
-        });
-        if (!renameRes.ok) failures.push(`rename: ${renameRes.error.message}`);
-      }
-
-      const updatePatch: Record<string, unknown> = { id: original.id };
-      if ((form.display_name.trim() || null) !== (original.display_name ?? null)) {
-        updatePatch.display_name = form.display_name.trim() || null;
-      }
-      if ((form.team_owner_id || null) !== (original.team_owner_id ?? null)) {
-        updatePatch.team_owner_id = form.team_owner_id || null;
-      }
-      if (form.active !== original.active) {
-        updatePatch.active = form.active;
-      }
-      if (Object.keys(updatePatch).length > 1) {
-        const updRes = await updateAppAction(updatePatch);
-        if (!updRes.ok) failures.push(`update: ${updRes.error.message}`);
-      }
-
-      for (const key of PLATFORM_KEYS) {
-        const original_binding = original.bindings.find((b) => b.platform_key === key);
-        const next_ref = form.bindings[key].platform_ref.trim();
-        const next_url = form.bindings[key].console_url.trim();
-        const had = original_binding !== undefined;
-        const wants = next_ref !== '';
-
-        if (had && !wants) {
-          const res = await removePlatformBindingAction({ app_id: original.id, platform: key });
-          if (!res.ok) failures.push(`${key}: ${res.error.message}`);
-        } else if (wants) {
-          const changed =
-            !had ||
-            (original_binding?.platform_ref ?? '') !== next_ref ||
-            (original_binding?.console_url ?? '') !== next_url;
-          if (changed) {
+      for (const action of plan) {
+        switch (action.kind) {
+          case 'rename': {
+            const res = await renameAppAction({
+              id: original.id,
+              new_name: action.new_name,
+            });
+            if (!res.ok) failures.push(`rename: ${res.error.message}`);
+            break;
+          }
+          case 'update': {
+            const res = await updateAppAction({ id: original.id, ...action.patch });
+            if (!res.ok) failures.push(`update: ${res.error.message}`);
+            break;
+          }
+          case 'upsertBinding': {
             const res = await setPlatformBindingAction({
               app_id: original.id,
-              platform: key,
-              platform_ref: next_ref,
-              console_url: next_url || undefined,
+              platform: action.platform,
+              platform_ref: action.platform_ref,
+              console_url: action.console_url,
             });
-            if (!res.ok) failures.push(`${key}: ${res.error.message}`);
+            if (!res.ok) failures.push(`${action.platform}: ${res.error.message}`);
+            break;
+          }
+          case 'removeBinding': {
+            const res = await removePlatformBindingAction({
+              app_id: original.id,
+              platform: action.platform,
+            });
+            if (!res.ok) failures.push(`${action.platform}: ${res.error.message}`);
+            break;
           }
         }
       }
@@ -314,27 +291,48 @@ export function AppDialog({ mode, app, teamUsers, onClose, onSuccess }: AppDialo
             </section>
 
             <section className="space-y-3">
-              <SectionHeader title="Platform bindings" hint="Leave blank to skip a platform" />
+              <SectionHeader
+                title="Platform bindings"
+                hint="Check at least one platform — ref can be filled later"
+              />
               <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
-                {PLATFORM_KEYS.map((key) => (
-                  <div key={key} className="px-3 py-3 grid grid-cols-[140px_1fr_1fr] gap-3 items-center">
-                    <div className="text-[12.5px] text-slate-700">{PLATFORM_LABELS[key]}</div>
-                    <input
-                      type="text"
-                      value={form.bindings[key].platform_ref}
-                      onChange={(e) => updateBinding(key, 'platform_ref', e.target.value)}
-                      placeholder={PLATFORM_REF_HINT[key]}
-                      className="px-2.5 py-1.5 border border-slate-200 rounded-md text-[12.5px] font-mono focus:outline-none focus:ring-2 focus:ring-[#0071E3]/20 focus:border-[#0071E3]"
-                    />
-                    <input
-                      type="url"
-                      value={form.bindings[key].console_url}
-                      onChange={(e) => updateBinding(key, 'console_url', e.target.value)}
-                      placeholder="Console URL (optional)"
-                      className="px-2.5 py-1.5 border border-slate-200 rounded-md text-[12.5px] focus:outline-none focus:ring-2 focus:ring-[#0071E3]/20 focus:border-[#0071E3]"
-                    />
-                  </div>
-                ))}
+                {PLATFORM_KEYS.map((key) => {
+                  const enabled = form.bindings[key].enabled;
+                  return (
+                    <label
+                      key={key}
+                      className="px-3 py-3 grid grid-cols-[auto_140px_1fr_1fr] gap-3 items-center cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={(e) => togglePlatform(key, e.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300 text-[#0071E3] focus:ring-[#0071E3]/20"
+                      />
+                      <div
+                        className={`text-[12.5px] ${enabled ? 'text-slate-700' : 'text-slate-400'}`}
+                      >
+                        {PLATFORM_LABELS[key]}
+                      </div>
+                      <input
+                        type="text"
+                        value={form.bindings[key].platform_ref}
+                        onChange={(e) => updateBinding(key, 'platform_ref', e.target.value)}
+                        placeholder={PLATFORM_REF_HINT[key]}
+                        disabled={!enabled}
+                        className="px-2.5 py-1.5 border border-slate-200 rounded-md text-[12.5px] font-mono focus:outline-none focus:ring-2 focus:ring-[#0071E3]/20 focus:border-[#0071E3] disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed"
+                      />
+                      <input
+                        type="url"
+                        value={form.bindings[key].console_url}
+                        onChange={(e) => updateBinding(key, 'console_url', e.target.value)}
+                        placeholder="Console URL (optional)"
+                        disabled={!enabled}
+                        className="px-2.5 py-1.5 border border-slate-200 rounded-md text-[12.5px] focus:outline-none focus:ring-2 focus:ring-[#0071E3]/20 focus:border-[#0071E3] disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed"
+                      />
+                    </label>
+                  );
+                })}
               </div>
               <p className="text-[11px] text-slate-400">
                 Aliases are managed from the app row&apos;s expanded view after create.

@@ -47,7 +47,7 @@ Format: `- [ ] [PR-X] description — file path — rationale`
 
 ## PR-7 Post-Ship Polish (surfaced from 2026-04-21/22 production deployment)
 
-- [ ] [PR-polish] App Creator dialog UX — require ≥1 platform binding at creation OR auto-select all active platforms by default. Unbound app invisible to classifier (`loadAppsForPlatform` in `lib/store-submissions/queries/rules.ts` gates on `app_platform_bindings`). Silent miss harder to debug than form validation error. Ref: incident 2026-04-21/22 (Đấu Trường Chân Lý, Thiên Long Bát Bộ VNG, Top Eleven all needed manual `app_platform_bindings` INSERT to unblock classification).
+- [x] [PR-polish] App Creator dialog UX — require ≥1 platform binding at creation OR auto-select all active platforms by default. Unbound app invisible to classifier (`loadAppsForPlatform` in `lib/store-submissions/queries/rules.ts` gates on `app_platform_bindings`). Silent miss harder to debug than form validation error. Ref: incident 2026-04-21/22 (Đấu Trường Chân Lý, Thiên Long Bát Bộ VNG, Top Eleven all needed manual `app_platform_bindings` INSERT to unblock classification). **Fixed 2026-04-23 — see PR-polish section below.**
 - [ ] [ops] Migration deploy automation — investigate Supabase CLI + Railway auto-apply migrations on push. Manual "Path G" SQL-Editor workflow caused 2 production incidents during PR-7 deployment: sync lock migration (`20260420000000_store_mgmt_gmail_sync_lock.sql`, cron crashed with "try_acquire_sync_lock does not exist") + app RPCs migration (`20260419050324_store_mgmt_app_rpcs.sql`, App Registry UI broken with "create_app_tx does not exist"). Priority: raise from backlog.
 - [ ] [PR-7 polish] MIME parser — investigate charset handling for Apple email bodies. Production observed encoding corruption pattern `Da:%u TrF0a;ng ChC"n LC"` suggesting an unsupported charset (possibly `x-mac-vietnamese` or an Apple-specific encoding). Subject decodes OK via RFC 2047; body decode fails. Extend `normalizeCharset` in `parser.ts` or add an `iconv-lite` fallback for rare charsets if the symptom shows real-world classification impact. Current 5-charset support: UTF-8, Latin-1, cp1252, us-ascii, UTF-16LE.
 - [ ] [PR-7 polish] Apple subject pattern migration seed drift — production UI was updated with a pattern that strips the `(iOS)` suffix: `^Review of your (?<app_name>.+?) (?:\(iOS\) )?submission is complete\.$`. Update `supabase/migrations/20260101100200_store_mgmt_seed_apple_rules.sql` to match so future dev environments don't regress. Original seed lacked `(iOS)` handling → extracted app names included the suffix → app lookup miss.
@@ -102,6 +102,42 @@ Replaced the PR-8 stub with a real transactional find-or-create + state machine 
 - [ ] [PR-9 polish] Surface `TicketEngineRaceError` + `TicketEngineNotFoundError` via Sentry (filter tag `component: 'ticket-engine'`). Blocked on `SENTRY_DSN` wiring (tracked under PR-7 polish).
 
 **Post-deploy verification queries** in `20260423100000_..._backfill_ticket_id.sql` header comments (pre-apply preview + post-apply `without_ticket_id = 0` assertion).
+
+## PR-polish — App Creator platform binding fix ✅ COMPLETED (2026-04-23)
+
+Fixed: Dialog silently dropped platforms without `platform_ref`. Now checkbox
+gate + submit validation require ≥1 platform selected. Edit-mode binding diff
+reworked to `hadBinding vs wantsBinding` semantic (decoupled from ref presence).
+
+**Root cause.** `AppDialog.collectBindingsForCreate()` filtered by
+`platform_ref.trim() !== ''` instead of user intent. Classifier gates on
+`platform_id` via `loadAppsForPlatform` — `platform_ref` is not read in the
+visibility check. Apps created with empty refs got zero binding rows and
+became invisible to the classifier → UNCLASSIFIED_APP.
+
+**Shipped (5 atomic sub-chunks):**
+
+| Sub-chunk | Scope |
+|---|---|
+| S.1 | `AppDialog.tsx` — `enabled` flag per platform, checkbox UI, disabled inputs, filter by `enabled` (not by ref) |
+| S.2 | Submit guard (≥1 platform) + edit-mode rewrite (DELETE / CREATE / UPDATE via `hadBinding` × `wantsBinding` matrix) |
+| S.3 | Extracted `components/store-submissions/apps/app-dialog-logic.ts` (pure helpers) + 11 unit tests; `AppDialog.handleSubmit` rewrote 100 → 55 LOC dispatcher |
+| S.4 | Docs — this entry + `CURRENT-STATE.md` known-quirk entry |
+| S.5 | `AppsClient.tsx` — "No platforms" red audit badge on list rows with zero bindings (defensive UX for historical unbound rows) |
+
+**Test count:** 785 → **796** (+11 pure unit tests covering validation, create payload, and edit action plan including the 3 critical binding scenarios: DELETE, UPDATE-clear-ref, CREATE-without-ref).
+
+**Zero infrastructure changes.** No migration, no RPC change, no API contract change — classifier and `create_app_tx` already handled nullable `platform_ref`; only the dialog UX needed fixing.
+
+### Manual QA items (post-ship verification)
+
+- [ ] Create app with Apple checkbox checked + ref blank → success, binding row created with `platform_ref = NULL`
+- [ ] Edit existing app, uncheck a platform → binding row DELETE'd
+- [ ] Edit existing app, clear a filled ref (checkbox stays checked) → binding row UPDATE'd with `platform_ref = NULL`
+- [ ] Create app with zero platforms checked → toast error `"Please select at least one platform"`, no action call
+- [ ] Disabled-input styling: unchecking a platform grays its ref + console URL inputs and blocks typing
+- [ ] `<label>` wrapping row: clicking anywhere on a platform row toggles the checkbox (a11y pattern)
+- [ ] `/config/apps` list: any app with zero bindings shows a red "No platforms" badge next to its `0 / 4` platform count
 
 ## PR-10 — Inbox UI (next)
 

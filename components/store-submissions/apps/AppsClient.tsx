@@ -3,6 +3,7 @@
 import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
+  AlertTriangle,
   Apple,
   Archive,
   ArchiveRestore,
@@ -424,6 +425,15 @@ export function AppsClient({ initialApps, teamUsers, isManager }: AppsClientProp
                     <span className="text-[11px] text-slate-400 ml-1">
                       {app.bindings.length} / 4
                     </span>
+                    {app.bindings.length === 0 && (
+                      <span
+                        className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded border bg-red-50 text-red-700 border-red-200 ml-1"
+                        title="App not linked to any platform — emails will classify as UNCLASSIFIED_APP"
+                      >
+                        <AlertTriangle className="w-2.5 h-2.5" strokeWidth={2} />
+                        No platforms
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-1 flex-wrap">
