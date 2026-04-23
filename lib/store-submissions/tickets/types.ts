@@ -72,10 +72,18 @@ export interface FindOrCreateTicketInput {
 /**
  * Ticket engine output.
  *
- * PR-8 stub populates: `ticketId`, `created`, `new_state` only.
- * PR-9 extends with: `previous_state`, `state_changed`, full `ticket`
- * row — see spec §2.1 `TicketHandleResult`. Callers must treat those
- * future fields as optional until PR-9 lands.
+ * PR-8 stub populates: `ticketId`, `created`, `new_state` only — the
+ * rest are `undefined`.
+ *
+ * PR-9 populates the full shape (`previous_state`, `state_changed`,
+ * `ticket`) per spec §2.1 `TicketHandleResult`. These fields are
+ * declared **optional** so PR-8-era callers (e.g. `wire.ts`, which
+ * reads only `ticketId`) compile unchanged and PR-10 UI consumers can
+ * progressively enhance once PR-9 ships.
+ *
+ * **Stability contract (reaffirmed):** extending fields — adding
+ * optional properties — is safe. Removing or renaming `ticketId`,
+ * `created`, `new_state` is a breaking change.
  */
 export interface FindOrCreateTicketOutput {
   ticketId: string;
@@ -86,6 +94,21 @@ export interface FindOrCreateTicketOutput {
    * the state machine (§4.1).
    */
   new_state: TicketState;
+  /**
+   * State immediately before this operation. `null` when `created === true`
+   * (ticket did not exist). Undefined in PR-8 stub; populated in PR-9.
+   */
+  previous_state?: TicketState | null;
+  /**
+   * `true` iff `previous_state !== new_state`. Lets callers skip STATE_CHANGE
+   * UI without recomputing. Undefined in PR-8 stub; populated in PR-9.
+   */
+  state_changed?: boolean;
+  /**
+   * Full ticket row post-write. Undefined in PR-8 stub; populated in PR-9
+   * (returned directly from the `find_or_create_ticket_tx` RPC).
+   */
+  ticket?: TicketRow;
 }
 
 /**
@@ -101,6 +124,35 @@ export type TicketState =
   | 'APPROVED'
   | 'DONE'
   | 'ARCHIVED';
+
+/**
+ * Shape of a `store_mgmt.tickets` row as returned by PR-9's
+ * `find_or_create_ticket_tx` RPC. Mirrors the table columns 1:1
+ * (see `supabase/migrations/20260101100000_store_mgmt_init.sql`
+ * lines 244–272).
+ *
+ * ISO timestamp strings, not `Date`, because Supabase RPC marshals
+ * timestamps as `TIMESTAMPTZ → string` over the wire.
+ */
+export interface TicketRow {
+  id: string;
+  display_id: string;
+  app_id: string | null;
+  platform_id: string;
+  type_id: string | null;
+  state: TicketState;
+  latest_outcome: 'IN_REVIEW' | 'REJECTED' | 'APPROVED' | null;
+  priority: 'LOW' | 'NORMAL' | 'HIGH';
+  assigned_to: string | null;
+  type_payloads: unknown[];
+  submission_ids: string[];
+  opened_at: string;
+  closed_at: string | null;
+  resolution_type: 'APPROVED' | 'DONE' | 'ARCHIVED' | null;
+  due_date: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 /**
  * Wire-level return.

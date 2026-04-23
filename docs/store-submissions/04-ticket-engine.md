@@ -5,6 +5,10 @@
 
 ---
 
+> **Implementation Note (2026-04-23)**: Spec uses Prisma-flavored syntax (`db.$transaction`, `tx.$queryRaw`) for illustration. Actual implementation uses Supabase JS + a PL/pgSQL RPC `find_or_create_ticket_tx` shipping in PR-9. Semantic intent (transaction boundary, `FOR UPDATE` lock, partial unique index as race fallback) preserved; syntax adapted. When reading code examples below, treat them as pseudocode describing the intent — the RPC is the canonical implementation.
+
+---
+
 ## 0. Implementation status (read first)
 
 This document specifies the full Ticket Engine — email handling with `FOR UPDATE` locks, state machine, event log, user actions, app rename. **As of PR-8, most of it is not yet implemented.** What ships in each PR:
