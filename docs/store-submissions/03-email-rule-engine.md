@@ -1070,9 +1070,9 @@ Schema đã support (A) qua ALTER trên.
 
 ---
 
-## 14. Ticket wiring (PR-8)
+## 14. Ticket wiring (PR-8 wire + PR-9 engine)
 
-Classifier output is a **pure value** — zero side effects, zero DB writes. The wire layer (PR-8, `lib/store-submissions/tickets/wire.ts`) is what bridges the classifier verdict into the `tickets` table. This section documents the bridge so a future reader can trace a single email from Gmail → `email_messages` row → ticket link.
+Classifier output is a **pure value** — zero side effects, zero DB writes. The wire layer (`lib/store-submissions/tickets/wire.ts`) bridges the classifier verdict into the `tickets` table via the PR-9 engine (`lib/store-submissions/tickets/engine.ts` → `store_mgmt.find_or_create_ticket_tx` RPC). This section documents the bridge so a future reader can trace a single email from Gmail → `email_messages` row → ticket link.
 
 ### 14.1 Gate: which classifications produce a ticket?
 
@@ -1101,7 +1101,7 @@ gmail/sync.ts :: processMessage()
        try:
          associateEmailWithTicket(inserted.id, c)
            ├─ defensive re-gate (source of truth: isTicketableClassification)
-           ├─ findOrCreateTicket(...)  ← PR-8 stub / PR-9 real engine
+           ├─ findOrCreateTicket(...)  ← engine.ts → find_or_create_ticket_tx RPC
            └─ UPDATE email_messages SET ticket_id = ? WHERE id = ?
        catch:
          log "[sync] ... wire contract violation" — swallow (see 14.4)
@@ -1111,10 +1111,10 @@ gmail/sync.ts :: processMessage()
 
 Wire **never rethrows** by contract. Every failure path inside `associateEmailWithTicket`:
 
-1. Engine throws (`TicketEngineNotApplicableError` or unexpected) → log `[tickets-wire] findOrCreateTicket failed` at ERROR level → return `null`.
+1. Engine throws (`TicketEngineNotApplicableError` / `TicketEngineValidationError` / `TicketEngineNotFoundError` / `TicketEngineRaceError` / unexpected) → log `[tickets-wire] findOrCreateTicket failed` at ERROR level → return `null`.
 2. `UPDATE email_messages.ticket_id` fails → log `[tickets-wire] UPDATE ... failed — ticket exists but link lost` at ERROR level → return `null`.
 
-A `null` return means the email row is persisted but `ticket_id` stays NULL. Recovery: PR-9+ Manager-initiated re-association, or the next email for the same grouping key picks up the orphan implicitly when PR-9's `findOrCreateTicket` looks for existing open tickets.
+A `null` return means the email row is persisted but `ticket_id` stays NULL. Recovery paths: (1) next email for the same grouping key picks up the orphan implicitly because the RPC's `SELECT ... FOR UPDATE` finds the existing open ticket; (2) the PR-9.6 backfill migration (`20260423100000_store_mgmt_backfill_ticket_id.sql`) is a one-shot that also works on demand — re-run to re-associate any row with `ticket_id IS NULL`. Both paths converge on the same `(app, type, platform)` grouping key invariant.
 
 Log prefix `[tickets-wire]` is intentional — enables Sentry filtering once `SENTRY_DSN` wiring lands (tracked in `TODO.md` under PR-7).
 
@@ -1133,17 +1133,21 @@ wire throws → stats.errors++ → advanceSyncState blocked
 
 The email row is persisted but orphaned **forever** — the cursor is wedged and dedup guarantees no retry. The inner try/catch in sync.ts swallows the throw, logs `[sync] associateEmailWithTicket threw — wire contract violation`, and lets the cursor advance. The orphan is still recoverable via Manager action; the cursor is not.
 
-### 14.5 PR-8 stub vs PR-9 real engine
+### 14.5 Engine architecture (PR-9 shipped 2026-04-23)
 
-PR-8 ships `lib/store-submissions/tickets/engine-stub.ts` — `findOrCreateTicket()` returns `{ ticketId: randomUUID(), created: true, new_state: 'NEW' }` with no DB writes and no dedup. Purpose:
+`engine.ts` is a thin TypeScript wrapper over the PL/pgSQL RPC `store_mgmt.find_or_create_ticket_tx`. Division of labor:
 
-- Verify the wire path end-to-end without blocking on the real engine's complexity (FOR UPDATE lock, submission_id dedup, state machine, `ticket_entries` snapshots).
-- Unblock PR-10 Inbox UI development against mock ticket data before PR-9 ships.
-- Isolate wire-path bugs from engine-logic bugs by PR.
+| Layer | Responsibility |
+|---|---|
+| `wire.ts` | Gate on `isTicketableClassification`; call engine; UPDATE `email_messages.ticket_id`; swallow errors with `[tickets-wire]` log |
+| `engine.ts` | Defense-in-depth re-gate; invoke RPC via Supabase `.rpc()`; map `PostgrestError.message` prefixes (`INVALID_STATUS` / `INVALID_ARG` / `INVALID_OUTCOME` / `NOT_FOUND` / `CONCURRENT_RACE_UNEXPECTED`) to typed errors; unwrap return JSONB (`ticket_id` → `ticketId`, rest passthrough) |
+| RPC `find_or_create_ticket_tx` | Transactional find-or-create on grouping key; SELECT FOR UPDATE + partial unique index race fallback; email-driven state machine (spec §4.1); EMAIL + STATE_CHANGE + PAYLOAD_ADDED event writes; atomic terminal transition (`closed_at` + `resolution_type` in single UPDATE) |
 
-PR-9 drops in `engine.ts` behind the **same `findOrCreateTicket(input): FindOrCreateTicketOutput` signature** (`types.ts` documents the stability contract — field extensions allowed, removals/renames break the API). The wire and sync.ts layers do not change when the real engine lands.
+Stability contract: `FindOrCreateTicketOutput` (types.ts) is the public surface. Field extensions are non-breaking; removals/renames are breaking. PR-10 Inbox UI is the first consumer of the extended fields (`ticket`, `previous_state`, `state_changed`).
 
-See `04-ticket-engine.md §0` for PR-9 implementation scope.
+The wire and sync.ts layers did **not** change between PR-8 stub and PR-9 real engine — the swap was a single-file diff plus import path updates.
+
+See `04-ticket-engine.md §0` for PR-9 shipped scope and PR-10+ remaining work (user actions, app rename, reclassify).
 
 ---
 

@@ -69,38 +69,49 @@ Thin wire layer bridging classifier output → ticket engine. Stub engine return
 - [ ] [PR-8 polish] `stats.tickets_associated` counter in `SyncStats` + `sync_logs` payload. Would touch the `sync_logs` schema (new column) — migration + `insertSyncLog` signature update. Derivable post-hoc via `SELECT count(*) FROM email_messages WHERE ticket_id IS NOT NULL AND processed_at > ?`. Punt unless observability actually needs it.
 - [ ] [PR-8 polish] Wire success log at DEBUG level (currently silent on success, ERROR on failure). Would give per-message trace for production debugging but add ~2880 log lines/day on the every-5-min cron. Revisit only if a real debugging incident demands it; current `[tickets-wire]` ERROR coverage + `ticket_id IS NOT NULL` SQL queries are sufficient.
 
-## PR-9 — Ticket Engine implementation (planned)
+## PR-9 — Ticket Engine implementation ✅ COMPLETED (2026-04-23)
 
-Replace `engine-stub.ts` with real `engine.ts`. Same `findOrCreateTicket(input): FindOrCreateTicketOutput` signature — stub is a drop-in. Spec: `docs/store-submissions/04-ticket-engine.md` §1–§6.
+Replaced the PR-8 stub with a real transactional find-or-create + state machine + event log. Adapted spec's Prisma-flavored `db.$transaction` syntax to a Supabase-native PL/pgSQL RPC. Wire + sync unchanged — drop-in interface.
 
-### 9.1 Real `findOrCreateTicket` + transaction boundary
-- [ ] Replace `engine-stub.ts` with `engine.ts` that opens a DB transaction wrapping find-open → (create OR update) → `ticket_entries` insert.
-- [ ] Populate `FindOrCreateTicketOutput` with extended fields per spec §2.1 `TicketHandleResult` (`ticket` row, `previous_state`, `state_changed`). Callers (wire) ignore unknown fields — non-breaking.
-- [ ] Wire up `supabase-js` transaction API (or switch to `postgres-js`/`drizzle` if `supabase-js` transactions prove unusable — deferred from PR-5 RPC work).
+**Shipped (7 atomic sub-chunks + docs):**
 
-### 9.2 `submission_id` dedup
-- [ ] When `classification.status === 'CLASSIFIED'` and `submission_id !== null`, look up existing open ticket by `(app_id, type_id, platform_id)` AND append `submission_id` to `tickets.submission_ids` array if new — see spec §3.4 `updateTicketWithEmail`.
-- [ ] Distinct-append only (no duplicates in the array).
+| Sub-chunk | Commit | Scope |
+|---|---|---|
+| 9.1 | `cd96140` | Extend `FindOrCreateTicketOutput` (+3 optional fields) + new `TicketRow` type + spec banner + `docs/store-submissions/CURRENT-STATE.md` (new doc) |
+| 9.2 | `ae3ed3e` | Migration `20260423000000_store_mgmt_ticket_engine_rpc.sql` — RPC `find_or_create_ticket_tx(p_classification JSONB, p_email_message_id UUID) RETURNS JSONB` + partial unique index `idx_store_mgmt_ticket_entries_email_idempotency` |
+| 9.3 | `4a30cca` | Real `engine.ts` replacing deleted `engine-stub.ts` + 4 typed error classes + 15 engine tests |
+| 9.4 | `4edc479` | Wire regression tests — pin error-agnostic catch + minimal-interface contract |
+| 9.5 | `3b7a637` | State transition matrix (9 rows + resubmit) + terminal fall-through + novelty + idempotency tests (+17) |
+| 9.6 | `e7c08b3` | Backfill migration `20260423100000_store_mgmt_backfill_ticket_id.sql` for PR-8-era NULL rows |
+| 9.7 | `718f62d` | End-to-end pipeline integration tests — real wire + real engine, only Supabase mocked (+13) |
+| 9.8 | this commit | Docs finalization (CURRENT-STATE.md, 04-ticket-engine.md §0, 03-email-rule-engine.md §14, TODO.md) |
 
-### 9.3 `FOR UPDATE` lock + concurrent safety
-- [ ] `findOpenTicketForKey` uses raw SQL `SELECT ... FROM store_mgmt.tickets WHERE ... FOR UPDATE` per spec §3.2. Two sync batches racing on the same grouping key must serialize — not race to create duplicate open tickets.
-- [ ] Verify partial unique index `idx_tickets_open_unique` catches any duplicate that slips past the lock (defense-in-depth).
-- [ ] Integration test with two concurrent `handleClassifiedEmail` calls against a real Postgres — depends on the local Docker test harness that is also blocking PR-5's RPC integration tests.
+**Test count:** 719 (pre-PR-9) → **785** (post-PR-9) = **+66 tests**.
 
-### 9.4 `ticket_entries` EMAIL snapshot writes
-- [ ] Every EMAIL ticket_entry must embed `metadata.email_snapshot` per CLAUDE.md invariant #3: `{ subject, sender, received_at, body_excerpt }` with body clipped to 500 chars.
-- [ ] Append-only — no UPDATE on EMAIL entries (invariant #2).
+**Key design adaptations from spec:**
 
-### 9.5 State machine + grouping
-- [ ] State derivation from classifier `outcome` per spec §4.1: `APPROVED → state='APPROVED'`, `REJECTED → state='REJECTED'`, neutral → no state change.
-- [ ] Grouping-key conflict resolution per spec §5.2 (when a user manually assigns app/type to an UNCLASSIFIED bucket ticket and the resolved key already has an open ticket → merge `submission_ids` + `type_payloads`, archive the bucket ticket).
-- [ ] Terminal state invariant per CLAUDE.md #6: `state IN ('APPROVED', 'DONE', 'ARCHIVED')` ↔ `closed_at IS NOT NULL` ↔ `resolution_type IS NOT NULL`.
+- Spec uses Prisma (`db.$transaction`, `tx.$queryRaw`); implementation uses Supabase JS + PL/pgSQL RPC — see `04-ticket-engine.md` banner.
+- Race strategy: `SELECT ... FOR UPDATE` → on miss `INSERT` → catch `unique_violation` → loop (3-iter budget). Partial unique index `idx_tickets_open_unique` is the canonical race arbiter.
+- EMAIL entry idempotency: DB-enforced via partial unique index + `ON CONFLICT DO NOTHING` (vs app-level guard) — prevents dup EMAIL entries on sync retry.
+- Deviation from §3.3: empty `type_payload` `{}` normalized to NULL at RPC extraction so audit trail stays signal-rich. Documented in migration header.
 
-### 9.6 Wire + engine integration
-- [ ] Update `wire.ts` to consume the richer `FindOrCreateTicketOutput` (log `created`, `state_changed` at INFO level for observability — one line per ticketable email is acceptable).
-- [ ] Remove the stub file, update `tickets/index.ts` re-exports if one exists.
-- [ ] Update sync tests to assert state-change signals propagate.
+**Deferred polish (post-ship, low priority):**
 
-### 9.7 Docs
-- [ ] Update `03-email-rule-engine.md` §14 to remove "stub" caveats.
-- [ ] Update `04-ticket-engine.md` §0 "Implementation status" — mark PR-9 sections as shipped.
+- [ ] [PR-9 polish] `stats.tickets_associated` counter in `SyncStats` + `sync_logs` payload. Schema change — migration + `insertSyncLog` signature update. Derivable via `SELECT count(*) FROM email_messages WHERE ticket_id IS NOT NULL AND processed_at > ?`. Punt unless observability demands it.
+- [ ] [PR-9 polish] Wire success log at DEBUG level (silent on success today). Would add ~2880 log lines/day on 5-min cron — revisit only on real debugging need.
+- [ ] [PR-9 polish] Surface `TicketEngineRaceError` + `TicketEngineNotFoundError` via Sentry (filter tag `component: 'ticket-engine'`). Blocked on `SENTRY_DSN` wiring (tracked under PR-7 polish).
+
+**Post-deploy verification queries** in `20260423100000_..._backfill_ticket_id.sql` header comments (pre-apply preview + post-apply `without_ticket_id = 0` assertion).
+
+## PR-10 — Inbox UI (next)
+
+Scope preview (detailed in `docs/store-submissions/CURRENT-STATE.md` PR-10 section):
+
+- Ticket list page với filters (state, app, platform, assigned_to, priority, date range)
+- State buckets: `NEW` / `IN_REVIEW` / `REJECTED` / terminal (`APPROVED` + `DONE` + `ARCHIVED`)
+- Unclassified buckets as dedicated views + manager reclassify flow (spec §5.2 merge)
+- Ticket detail modal với `ticket_entries` timeline (EMAIL snapshots + STATE_CHANGE + COMMENT + PAYLOAD_ADDED)
+- User action primitives: archive / follow-up / mark-done / assign / priority / comment / reject-reason — each a separate `*_tx` RPC per spec §2.2
+- First consumer of PR-9 extended `FindOrCreateTicketOutput` fields
+
+Dependencies: PR-9 RPC is the sole write path for email-driven transitions. User-action RPCs are a separate, additive surface (spec §7) — PR-9 did not ship them.
