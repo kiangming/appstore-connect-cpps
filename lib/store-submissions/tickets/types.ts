@@ -1,15 +1,15 @@
 /**
- * Shared types for the Ticket Engine + wire (PR-8 stub, PR-9 real impl).
+ * Shared types for the Ticket Engine + wire.
  *
- * The wire calls `findOrCreateTicket` immediately after `email_messages`
- * INSERT and back-fills `email_messages.ticket_id` with the returned ID.
+ * The wire calls `findOrCreateTicket` (from `./engine`) immediately after
+ * `email_messages` INSERT and back-fills `email_messages.ticket_id` with
+ * the returned ID.
  *
- * **Stability contract:** PR-8 ships a stub implementation
- * (`engine-stub.ts`) that returns ephemeral UUIDs without touching the
- * DB. PR-9 drops in the real engine (`engine.ts`) behind the SAME
- * `findOrCreateTicket` signature. The types defined here are the
- * interface boundary — **extending fields is allowed, removing/renaming
- * is a breaking change** for PR-9.
+ * **Stability contract:** `engine.ts` (PR-9) replaced the PR-8 stub
+ * behind the same `findOrCreateTicket` signature. The types defined here
+ * are the interface boundary — **extending fields is allowed,
+ * removing/renaming is a breaking change** for downstream consumers
+ * (wire, PR-10 UI, future batch re-classification).
  *
  * See:
  *   - docs/store-submissions/04-ticket-engine.md §2.1 (handleClassifiedEmail)

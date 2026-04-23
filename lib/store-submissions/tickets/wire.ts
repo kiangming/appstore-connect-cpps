@@ -1,19 +1,21 @@
 /**
- * Wire: `email_messages` ↔ tickets (PR-8).
+ * Wire: `email_messages` ↔ tickets.
  *
  * Called by `gmail/sync.ts` immediately after an `email_messages` row
  * is inserted. Responsible for:
  *
  *   1. Gating on ticketable statuses (CLASSIFIED, UNCLASSIFIED_APP,
  *      UNCLASSIFIED_TYPE). DROPPED + ERROR short-circuit with `null`.
- *   2. Delegating to the ticket engine (stub in PR-8, real in PR-9).
+ *   2. Delegating to the ticket engine (`./engine` — PR-9 real impl
+ *      calling the `find_or_create_ticket_tx` RPC; was `./engine-stub`
+ *      in PR-8).
  *   3. Back-filling `email_messages.ticket_id` via UPDATE.
  *
  * **Graceful degradation.** A wire failure MUST NOT abort the sync
  * batch. The email row is already persisted at this point; losing the
  * ticket association just means a Manager sees a disconnected email
- * row in the Inbox, which is recoverable (PR-9 ticket engine can
- * back-fill later when a follow-up email for the same key arrives).
+ * row in the Inbox, which is recoverable (PR-9.6 backfill migration
+ * re-runs association for rows with `ticket_id IS NULL`).
  * So: every failure path logs `[tickets-wire]` at ERROR level and
  * returns `null`. Never rethrow.
  *
@@ -26,7 +28,7 @@
 import type { ClassificationResult } from '../classifier/types';
 import { storeDb } from '../db';
 
-import { findOrCreateTicket } from './engine-stub';
+import { findOrCreateTicket } from './engine';
 import { isTicketableClassification } from './types';
 import type { TicketAssociation } from './types';
 

@@ -22,7 +22,7 @@ vi.mock('../db', () => ({
   storeDb: () => ({ from: mockFrom }),
 }));
 
-vi.mock('./engine-stub', () => ({
+vi.mock('./engine', () => ({
   findOrCreateTicket: mockFindOrCreateTicket,
 }));
 
