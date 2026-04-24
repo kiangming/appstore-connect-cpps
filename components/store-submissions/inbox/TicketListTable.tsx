@@ -138,14 +138,36 @@ function TicketRow({
 
       <div className="min-w-0">
         {ticket.app_name ? (
-          <div className="text-slate-900 truncate">{ticket.app_name}</div>
+          <>
+            <div className="text-slate-900 truncate">{ticket.app_name}</div>
+            {ticket.type_name && (
+              <div className="text-[11px] text-slate-400 truncate">
+                {ticket.type_name}
+              </div>
+            )}
+          </>
+        ) : ticket.first_email ? (
+          <>
+            <div
+              className="text-[12px] text-slate-700 truncate"
+              title={ticket.first_email.sender ?? undefined}
+            >
+              <span className="text-slate-400">From: </span>
+              {ticket.first_email.sender ?? (
+                <em className="italic text-slate-400">unknown sender</em>
+              )}
+            </div>
+            <div
+              className="text-[11px] text-slate-500 truncate"
+              title={ticket.first_email.subject ?? undefined}
+            >
+              {ticket.first_email.subject ?? (
+                <em className="italic text-slate-400">(no subject)</em>
+              )}
+            </div>
+          </>
         ) : (
           <em className="text-slate-400 italic">Unclassified</em>
-        )}
-        {ticket.type_name && (
-          <div className="text-[11px] text-slate-400 truncate">
-            {ticket.type_name}
-          </div>
         )}
       </div>
 

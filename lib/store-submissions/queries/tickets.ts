@@ -76,6 +76,23 @@ export interface TicketListRow {
   entry_count: number;
   submission_ids: string[];
   type_payload_count: number;
+
+  /**
+   * First EMAIL entry's snapshot for this ticket, hydrated only when the
+   * caller passes `options.includeFirstEmail = true` — the Inbox page
+   * does this for unclassified buckets so the row can display sender /
+   * subject as a fallback when `app_name` is null.
+   *
+   * `undefined` = caller didn't request hydration.
+   * `null`      = requested but no EMAIL entry exists for the ticket
+   *               (shouldn't happen in production — tickets are created
+   *               atomically with their first EMAIL entry — but guarded).
+   */
+  first_email?: {
+    subject: string | null;
+    sender: string | null;
+    received_at: string | null;
+  } | null;
 }
 
 export interface ListTicketsResult {
@@ -229,6 +246,22 @@ function sortOrderColumns(sort: TicketSort): Array<{ col: string; ascending: boo
 // -- listTickets ------------------------------------------------------------
 
 /**
+ * Optional hints that change fetch behavior but aren't user-facing
+ * filter state. Kept separate from `TicketsQuery` so URL params never
+ * let a caller toggle server-side work.
+ */
+export interface ListTicketsOptions {
+  /**
+   * When true, adds one parallel fetch of the earliest EMAIL entry per
+   * ticket and hydrates `first_email` on each row. Used by the Inbox
+   * "Unclassified" tab to render sender / subject as a fallback when
+   * `app_name` is null. Off by default — most callers don't need it and
+   * the extra round-trip isn't free.
+   */
+  includeFirstEmail?: boolean;
+}
+
+/**
  * List tickets with denormalized joined fields.
  *
  * Performance notes:
@@ -240,12 +273,20 @@ function sortOrderColumns(sort: TicketSort): Array<{ col: string; ascending: boo
  *     simple and sidesteps Supabase FK auto-detection fragility.
  *   - `entry_count` requires a second query grouped by ticket_id. One
  *     round-trip regardless of page size, so negligible at limit≤100.
+ *   - `options.includeFirstEmail` adds one extra parallel fetch
+ *     bounded by `(limit × avg_emails_per_ticket)` rows — fine at
+ *     current scale. Uses the `(ticket_id, created_at DESC)` index
+ *     on `ticket_entries`. Grouping to "first per ticket" happens in
+ *     app memory because PostgREST lacks `DISTINCT ON`.
  *
  * Filter scale assumptions: total ticket count stays <5k for the first
  * year (200/month × 24mo). Any full-table scan is still sub-100ms on
  * current workload. Revisit if volume grows.
  */
-export async function listTickets(filters: TicketsQuery): Promise<ListTicketsResult> {
+export async function listTickets(
+  filters: TicketsQuery,
+  options: ListTicketsOptions = {},
+): Promise<ListTicketsResult> {
   const db = storeDb();
 
   // Cursor validation: only the default sort supports keyset pagination.
@@ -350,27 +391,40 @@ export async function listTickets(filters: TicketsQuery): Promise<ListTicketsRes
   );
   const ticketIds = pageRows.map((t) => t.id);
 
-  const [appsRes, typesRes, platformsRes, usersRes, entryCountsRes] = await Promise.all([
-    appIds.length === 0
-      ? Promise.resolve({ data: [], error: null })
-      : db.from('apps').select('id, name, slug').in('id', appIds),
-    typeIds.length === 0
-      ? Promise.resolve({ data: [], error: null })
-      : db.from('types').select('id, name, slug').in('id', typeIds),
-    db
-      .from('platforms')
-      .select('id, key, display_name')
-      .in('id', platformIds),
-    assigneeIds.length === 0
-      ? Promise.resolve({ data: [], error: null })
-      : db.from('users').select('id, email, display_name').in('id', assigneeIds),
-    db
-      .from('ticket_entries')
-      .select('ticket_id')
-      .in('ticket_id', ticketIds),
-  ]);
+  const [appsRes, typesRes, platformsRes, usersRes, entryCountsRes, firstEmailsRes] =
+    await Promise.all([
+      appIds.length === 0
+        ? Promise.resolve({ data: [], error: null })
+        : db.from('apps').select('id, name, slug').in('id', appIds),
+      typeIds.length === 0
+        ? Promise.resolve({ data: [], error: null })
+        : db.from('types').select('id, name, slug').in('id', typeIds),
+      db
+        .from('platforms')
+        .select('id, key, display_name')
+        .in('id', platformIds),
+      assigneeIds.length === 0
+        ? Promise.resolve({ data: [], error: null })
+        : db.from('users').select('id, email, display_name').in('id', assigneeIds),
+      db
+        .from('ticket_entries')
+        .select('ticket_id')
+        .in('ticket_id', ticketIds),
+      // First-EMAIL-per-ticket fetch is conditional — only when the caller
+      // opts in. Sort is `(ticket_id, created_at ASC)` so the grouping
+      // below can pick the earliest per ticket with a Map first-write-wins.
+      options.includeFirstEmail
+        ? db
+            .from('ticket_entries')
+            .select('ticket_id, metadata, created_at')
+            .in('ticket_id', ticketIds)
+            .eq('entry_type', 'EMAIL')
+            .order('ticket_id', { ascending: true })
+            .order('created_at', { ascending: true })
+        : Promise.resolve({ data: null, error: null }),
+    ]);
 
-  for (const r of [appsRes, typesRes, platformsRes, usersRes, entryCountsRes]) {
+  for (const r of [appsRes, typesRes, platformsRes, usersRes, entryCountsRes, firstEmailsRes]) {
     if (r.error) {
       console.error('[store-tickets] listTickets join fetch failed:', r.error);
       throw new Error('Failed to load ticket details');
@@ -418,6 +472,43 @@ export async function listTickets(filters: TicketsQuery): Promise<ListTicketsRes
     entryCountByTicket.set(row.ticket_id, (entryCountByTicket.get(row.ticket_id) ?? 0) + 1);
   }
 
+  // First EMAIL snapshot per ticket — only populated when
+  // options.includeFirstEmail = true. First-write-wins on the Map,
+  // relying on the ORDER BY (ticket_id, created_at ASC) above.
+  const firstEmailByTicket = new Map<
+    string,
+    TicketListRow['first_email']
+  >();
+  if (options.includeFirstEmail && firstEmailsRes.data) {
+    for (const row of firstEmailsRes.data as Array<{
+      ticket_id: string;
+      metadata: Record<string, unknown> | null;
+      created_at: string;
+    }>) {
+      if (firstEmailByTicket.has(row.ticket_id)) continue;
+      const snap =
+        (row.metadata as
+          | {
+              email_snapshot?: {
+                subject?: string;
+                sender?: string;
+                received_at?: string;
+              };
+            }
+          | null)?.email_snapshot ?? null;
+      firstEmailByTicket.set(
+        row.ticket_id,
+        snap
+          ? {
+              subject: snap.subject ?? null,
+              sender: snap.sender ?? null,
+              received_at: snap.received_at ?? null,
+            }
+          : null,
+      );
+    }
+  }
+
   const tickets: TicketListRow[] = pageRows.map((t) => {
     const app = t.app_id ? appById.get(t.app_id) ?? null : null;
     const type = t.type_id ? typeById.get(t.type_id) ?? null : null;
@@ -454,6 +545,12 @@ export async function listTickets(filters: TicketsQuery): Promise<ListTicketsRes
       entry_count: entryCountByTicket.get(t.id) ?? 0,
       submission_ids: t.submission_ids,
       type_payload_count: Array.isArray(t.type_payloads) ? t.type_payloads.length : 0,
+
+      // Only set when requested — `undefined` signals "caller didn't ask";
+      // `null` signals "asked but no EMAIL entry exists" (edge case).
+      ...(options.includeFirstEmail
+        ? { first_email: firstEmailByTicket.get(t.id) ?? null }
+        : {}),
     };
   });
 

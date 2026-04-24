@@ -433,6 +433,160 @@ describe('listTickets pagination', () => {
 // E — Sort order
 // ==========================================================================
 
+// ==========================================================================
+// F — First-EMAIL hydration (includeFirstEmail option)
+// ==========================================================================
+
+describe('listTickets includeFirstEmail option', () => {
+  function makeHydrationMocks(opts: {
+    tickets: ReturnType<typeof makeRow>[];
+    firstEmails?: Array<{ ticket_id: string; metadata: unknown; created_at: string }>;
+  }) {
+    const ticketsBuilder = new MockBuilder({ data: opts.tickets, error: null });
+    const platformsBuilder = new MockBuilder({
+      data: [
+        { id: '33333333-3333-3333-3333-333333333333', key: 'apple', display_name: 'Apple' },
+      ],
+      error: null,
+    });
+    const appsBuilder = new MockBuilder({ data: [], error: null });
+    const typesBuilder = new MockBuilder({ data: [], error: null });
+    const entriesBuilder = new MockBuilder({ data: [], error: null });
+    const firstEmailsBuilder = new MockBuilder({
+      data: opts.firstEmails ?? [],
+      error: null,
+    });
+
+    const queue = new Map<string, MockBuilder[]>([
+      ['tickets', [ticketsBuilder]],
+      ['apps', [appsBuilder]],
+      ['types', [typesBuilder]],
+      ['platforms', [platformsBuilder]],
+      // Two ticket_entries calls when includeFirstEmail=true:
+      // 1) entry_count aggregation (unconditional), 2) first-email per ticket.
+      ['ticket_entries', [entriesBuilder, firstEmailsBuilder]],
+    ]);
+
+    return {
+      queue,
+      builders: {
+        tickets: ticketsBuilder,
+        firstEmails: firstEmailsBuilder,
+      },
+    };
+  }
+
+  it('skips the first-email fetch by default', async () => {
+    registerBuilders(
+      new Map([
+        ['tickets', [new MockBuilder({ data: [], error: null })]],
+      ]),
+    );
+
+    await listTickets({ limit: 50, sort: 'opened_at_desc' });
+
+    // Only the tickets query hit — no join fan-out because pageRows.length===0.
+    expect(mockFrom).toHaveBeenCalledTimes(1);
+    expect(mockFrom).toHaveBeenCalledWith('tickets');
+  });
+
+  it('omits first_email on rows when option is off', async () => {
+    const row = makeRow({
+      id: 'ticket-a',
+      app_id: null,
+      type_id: null,
+    });
+    const { queue } = makeHydrationMocks({ tickets: [row] });
+    // Drop the firstEmailsBuilder since we won't request it.
+    queue.set('ticket_entries', [new MockBuilder({ data: [], error: null })]);
+    registerBuilders(queue);
+
+    const result = await listTickets({ limit: 50, sort: 'opened_at_desc' });
+
+    expect(result.tickets[0].first_email).toBeUndefined();
+  });
+
+  it('fetches EMAIL entries + hydrates first_email when option is on', async () => {
+    const row = makeRow({
+      id: 'ticket-a',
+      app_id: null,
+      type_id: null,
+    });
+
+    const { queue, builders } = makeHydrationMocks({
+      tickets: [row],
+      firstEmails: [
+        {
+          ticket_id: 'ticket-a',
+          metadata: {
+            email_snapshot: {
+              subject: 'Your TestFlight build crashed',
+              sender: 'no-reply@apple.com',
+              received_at: '2026-04-22T10:00:00Z',
+            },
+          },
+          created_at: '2026-04-22T10:00:05Z',
+        },
+      ],
+    });
+    registerBuilders(queue);
+
+    const result = await listTickets(
+      { limit: 50, sort: 'opened_at_desc' },
+      { includeFirstEmail: true },
+    );
+
+    // Verify the extra query was configured correctly.
+    const calls = builders.firstEmails.calls;
+    expect(calls).toEqual(
+      expect.arrayContaining([
+        { method: 'eq', args: ['entry_type', 'EMAIL'] },
+        { method: 'order', args: ['ticket_id', { ascending: true }] },
+        { method: 'order', args: ['created_at', { ascending: true }] },
+      ]),
+    );
+
+    // Verify the hydration worked end-to-end.
+    expect(result.tickets[0].first_email).toEqual({
+      subject: 'Your TestFlight build crashed',
+      sender: 'no-reply@apple.com',
+      received_at: '2026-04-22T10:00:00Z',
+    });
+  });
+
+  it('picks earliest EMAIL per ticket when multiple rows match (first-write-wins)', async () => {
+    const row = makeRow({ id: 'ticket-a', app_id: null, type_id: null });
+
+    const { queue } = makeHydrationMocks({
+      tickets: [row],
+      firstEmails: [
+        {
+          ticket_id: 'ticket-a',
+          metadata: {
+            email_snapshot: { subject: 'First', sender: 'a@x.com' },
+          },
+          created_at: '2026-04-20T10:00:00Z',
+        },
+        {
+          ticket_id: 'ticket-a',
+          metadata: {
+            email_snapshot: { subject: 'Second', sender: 'b@x.com' },
+          },
+          created_at: '2026-04-21T10:00:00Z',
+        },
+      ],
+    });
+    registerBuilders(queue);
+
+    const result = await listTickets(
+      { limit: 50, sort: 'opened_at_desc' },
+      { includeFirstEmail: true },
+    );
+
+    expect(result.tickets[0].first_email?.subject).toBe('First');
+  });
+});
+
 describe('listTickets sort', () => {
   it('opened_at_desc → .order("opened_at", desc) then .order("id", desc)', async () => {
     const ticketsBuilder = new MockBuilder({ data: [], error: null });

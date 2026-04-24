@@ -67,8 +67,14 @@ export default async function InboxPage({
   const ticketIdCheck = rawTicket ? uuidSchema.safeParse(rawTicket) : null;
   const selectedTicketId = ticketIdCheck?.success ? ticketIdCheck.data : null;
 
+  // Unclassified buckets lack `app_name`, so the list row renders sender +
+  // subject as a fallback — that requires a per-ticket first-EMAIL lookup.
+  // Paid only when the user is actually looking at unclassified rows.
+  const isUnclassifiedView =
+    effectiveQuery.bucket?.startsWith('unclassified_') ?? false;
+
   const [data, apps, platforms, initialTicket] = await Promise.all([
-    listTickets(effectiveQuery),
+    listTickets(effectiveQuery, { includeFirstEmail: isUnclassifiedView }),
     listApps({ active: true }),
     listPlatforms(),
     selectedTicketId ? getTicketWithEntries(selectedTicketId) : Promise.resolve(null),
