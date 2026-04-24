@@ -24,9 +24,11 @@
  * Implementation progression:
  *   - PR-10.3.1: shell + URL sync + header placeholder
  *   - PR-10.3.2: header badges + metadata grid + submission IDs +
- *     type payloads (this chunk)
- *   - PR-10.3.3: timeline entries (EMAIL / STATE_CHANGE / PAYLOAD_ADDED)
+ *     type payloads
+ *   - PR-10.3.3: timeline entries (EMAIL / STATE_CHANGE / PAYLOAD_ADDED
+ *     — fallback for unknown/future entry types)
  *   - PR-10c.2: action footer (archive / follow-up / mark-done / unarchive)
+ *   - PR-10c.3: COMMENT / REJECT_REASON cards inside the timeline
  */
 
 import { useState } from 'react';
@@ -41,6 +43,7 @@ import {
   PriorityBadge,
   StateBadge,
 } from './TicketBadges';
+import { TicketEntriesTimeline } from './TicketEntriesTimeline';
 
 export interface TicketDetailPanelProps {
   /**
@@ -76,14 +79,12 @@ export function TicketDetailPanel({ ticket, isOpen, onClose }: TicketDetailPanel
                 <SubmissionIdsSection ids={ticket.ticket.submission_ids} />
                 <TypePayloadsSection payloads={ticket.ticket.type_payloads} />
 
-                {/* Timeline — PR-10.3.3 fills this */}
+                {/* Timeline */}
                 <section className="px-5 py-4">
                   <SectionLabel>Timeline</SectionLabel>
-                  <p className="text-[12px] text-slate-400 italic">
-                    PR-10.3.3 will render {ticket.entries.length}{' '}
-                    {ticket.entries.length === 1 ? 'entry' : 'entries'} here
-                    (EMAIL + STATE_CHANGE + PAYLOAD_ADDED cards).
-                  </p>
+                  <div className="mt-3">
+                    <TicketEntriesTimeline entries={ticket.entries} />
+                  </div>
                 </section>
               </>
             )}
