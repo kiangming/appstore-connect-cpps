@@ -19,8 +19,16 @@
  */
 
 import { useCallback, useMemo, useTransition } from 'react';
+import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { ChevronDown, ChevronRight, Search, X } from 'lucide-react';
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
+  Lightbulb,
+  Search,
+  X,
+} from 'lucide-react';
 
 import type {
   ListTicketsResult,
@@ -378,11 +386,34 @@ export function InboxClient({
         )}
       </div>
 
+      {/* -- Unclassified triage CTA (MANAGER-only) --
+          Hidden for DEV/VIEWER to remove dead links from the UI — they
+          can't write email rules. Hint the Manager toward `/config/email-rules`
+          where rules are authored so unclassified volume decreases. */}
+      {activeTab === 'unclassified' && role === 'MANAGER' && (
+        <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-[13px] text-blue-900 min-w-0">
+            <Lightbulb className="w-4 h-4 text-blue-500 flex-shrink-0" strokeWidth={1.8} />
+            <span className="truncate">
+              Want to auto-classify these? Add sender + subject rules.
+            </span>
+          </div>
+          <Link
+            href="/store-submissions/config/email-rules"
+            className="inline-flex items-center gap-1 text-[13px] font-medium text-blue-700 hover:text-blue-900 flex-shrink-0"
+          >
+            Manage rules
+            <ArrowRight className="w-3 h-3" strokeWidth={1.8} />
+          </Link>
+        </div>
+      )}
+
       {/* -- Ticket list -- */}
       <TicketListTable
         tickets={tickets}
         selectedTicketId={selectedTicketId}
         onRowClick={(t) => openPanel(t.id)}
+        emptyMessage={getEmptyMessage(activeTab, hasActiveFilters)}
       />
 
       {/* -- Ticket detail slide-over -- */}
@@ -427,6 +458,32 @@ const SORT_LABELS: Record<TicketSort, string> = {
   updated_at_desc: 'Recently updated',
   priority_desc: 'Priority',
 };
+
+/**
+ * Context-aware empty-state copy. When the user has filters applied
+ * we stay generic — they're the ones who narrowed the list, so the
+ * tab-specific message would be misleading (e.g. "No rejected tickets"
+ * when there are rejected tickets that just don't match a platform
+ * filter). With no filters active we can honestly say "no rejected
+ * tickets" because the tab + bucket are the only narrowing.
+ */
+function getEmptyMessage(activeTab: TabKey, hasActiveFilters: boolean): string {
+  if (hasActiveFilters) return 'No tickets match the current filters.';
+  switch (activeTab) {
+    case 'unclassified':
+      return 'All caught up — no tickets need classification right now.';
+    case 'open':
+      return 'No open tickets. Everything is triaged.';
+    case 'rejected':
+      return 'No rejected tickets.';
+    case 'approved':
+      return 'No approved tickets yet.';
+    case 'done':
+      return 'No tickets marked done.';
+    case 'archived':
+      return 'No archived tickets.';
+  }
+}
 
 function FilterPill({
   label,

@@ -51,17 +51,24 @@ export interface TicketListTableProps {
    * matters for grid column alignment.
    */
   selectedTicketId?: string | null;
+  /**
+   * Override the default empty-state copy. The Inbox passes context-
+   * aware messages (per-tab wording, filter-aware fallback) — see
+   * `getEmptyMessage` in InboxClient.
+   */
+  emptyMessage?: string;
 }
 
 export function TicketListTable({
   tickets,
   onRowClick,
   selectedTicketId,
+  emptyMessage = 'No tickets match the current filters.',
 }: TicketListTableProps) {
   if (tickets.length === 0) {
     return (
       <div className="bg-white border border-slate-200 rounded-xl p-10 text-center text-slate-500 text-[13px]">
-        No tickets match the current filters.
+        {emptyMessage}
       </div>
     );
   }
