@@ -294,6 +294,22 @@ describe('listTickets filters', () => {
     expect(isCalls).toEqual([{ method: 'is', args: ['type_id', null] }]);
   });
 
+  it('bucket=unclassified_any → .or("app_id.is.null,type_id.is.null")', async () => {
+    const ticketsBuilder = new MockBuilder({ data: [], error: null });
+    registerBuilders(new Map([['tickets', [ticketsBuilder]]]));
+
+    await listTickets({
+      bucket: 'unclassified_any',
+      limit: 50,
+      sort: 'opened_at_desc',
+    });
+
+    const orCalls = ticketsBuilder.calls.filter((c) => c.method === 'or');
+    expect(orCalls).toEqual([
+      { method: 'or', args: ['app_id.is.null,type_id.is.null'] },
+    ]);
+  });
+
   it('applies cursor as composite or() filter', async () => {
     const ticketsBuilder = new MockBuilder({ data: [], error: null });
     registerBuilders(new Map([['tickets', [ticketsBuilder]]]));

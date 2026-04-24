@@ -85,6 +85,13 @@ export const ticketBucketSchema = z.enum([
   'classified',
   'unclassified_app',
   'unclassified_type',
+  /**
+   * Union of unclassified_app OR unclassified_type — the Inbox
+   * "Unclassified" tab in PR-10.2.2 uses this because it's one user-
+   * facing concept. Expands to `app_id IS NULL OR type_id IS NULL` in
+   * the query layer.
+   */
+  'unclassified_any',
 ]);
 export type TicketBucket = z.infer<typeof ticketBucketSchema>;
 

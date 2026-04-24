@@ -2,7 +2,10 @@ import { Inbox } from 'lucide-react';
 
 import { requireStoreSession } from '@/lib/store-submissions/session-guard';
 import { listTickets } from '@/lib/store-submissions/queries/tickets';
+import { listApps } from '@/lib/store-submissions/queries/apps';
+import { listPlatforms } from '@/lib/store-submissions/queries/rules';
 import { parseTicketsQueryFromSearchParams } from '@/lib/store-submissions/inbox/search-params';
+import type { TicketsQuery } from '@/lib/store-submissions/schemas/ticket';
 import { InboxClient } from '@/components/store-submissions/inbox/InboxClient';
 
 export const dynamic = 'force-dynamic';
@@ -17,6 +20,12 @@ export const dynamic = 'force-dynamic';
  * browser back button restores prior filters. searchParams → validated
  * `TicketsQuery` via `parseTicketsQueryFromSearchParams`, which falls
  * back to defaults on malformed input (e.g. stale cursors).
+ *
+ * Default view convention: when no state/bucket filter is in the URL,
+ * the Inbox renders the "Open" tab (NEW + IN_REVIEW + REJECTED). The
+ * URL stays clean (no params) so users aren't stuck with a verbose
+ * shareable link for the default view. The client infers the active
+ * tab from the same `initialQuery` that was used to hydrate the URL.
  */
 export default async function InboxPage({
   searchParams,
@@ -26,7 +35,22 @@ export default async function InboxPage({
   const { storeUser } = await requireStoreSession();
 
   const query = parseTicketsQueryFromSearchParams(searchParams);
-  const data = await listTickets(query);
+
+  // Apply Open-tab default server-side when the URL has neither `state`
+  // nor `bucket`. Done here (not in the parser) because the parser is
+  // a pure searchParams→schema mapping; the Open default is a page-
+  // level UX decision, and a generic `listTickets` caller shouldn't
+  // silently gain "only open tickets" semantics.
+  const effectiveQuery: TicketsQuery =
+    !query.state && !query.bucket
+      ? { ...query, state: ['NEW', 'IN_REVIEW', 'REJECTED'] }
+      : query;
+
+  const [data, apps, platforms] = await Promise.all([
+    listTickets(effectiveQuery),
+    listApps({ active: true }),
+    listPlatforms(),
+  ]);
 
   return (
     <div className="px-8 py-10">
@@ -48,6 +72,8 @@ export default async function InboxPage({
         <InboxClient
           initialData={data}
           initialQuery={query}
+          apps={apps.map((a) => ({ id: a.id, name: a.name }))}
+          platforms={platforms.map((p) => ({ key: p.key, display_name: p.display_name }))}
           role={storeUser.role}
         />
       </div>

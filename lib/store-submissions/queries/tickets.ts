@@ -177,6 +177,7 @@ const ENTRY_COLUMNS =
 interface FilterableQuery<T> {
   is(column: string, value: null): T;
   not(column: string, operator: string, value: null): T;
+  or(filter: string): T;
 }
 
 function applyBucketFilter<T extends FilterableQuery<T>>(
@@ -190,6 +191,10 @@ function applyBucketFilter<T extends FilterableQuery<T>>(
       return q.is('app_id', null);
     case 'unclassified_type':
       return q.not('app_id', 'is', null).is('type_id', null);
+    case 'unclassified_any':
+      // Union of unclassified_app + unclassified_type, expressed via
+      // PostgREST's .or(): app_id IS NULL OR type_id IS NULL.
+      return q.or('app_id.is.null,type_id.is.null');
   }
 }
 
