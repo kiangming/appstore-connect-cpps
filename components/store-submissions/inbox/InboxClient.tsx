@@ -19,10 +19,13 @@
  */
 
 import { useCallback, useMemo, useTransition } from 'react';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { ChevronDown, ChevronRight, Search, X } from 'lucide-react';
 
-import type { ListTicketsResult } from '@/lib/store-submissions/queries/tickets';
+import type {
+  ListTicketsResult,
+  TicketWithEntries,
+} from '@/lib/store-submissions/queries/tickets';
 import type {
   TicketBucket,
   TicketsQuery,
@@ -32,6 +35,7 @@ import type {
 import type { PlatformKey } from '@/lib/store-submissions/schemas/app';
 import type { StoreRole } from '@/lib/store-submissions/auth';
 import { TicketListTable } from './TicketListTable';
+import { TicketDetailPanel } from './TicketDetailPanel';
 
 export interface InboxClientProps {
   initialData: ListTicketsResult;
@@ -40,6 +44,13 @@ export interface InboxClientProps {
   platforms: Array<{ key: string; display_name: string }>;
   /** Role-gated actions (state transitions) land in PR-10c. */
   role: StoreRole;
+  /**
+   * Ticket id parsed from `?ticket=<uuid>`; non-null when the panel is
+   * open. Used to highlight the corresponding row and gate the panel
+   * visibility. `initialTicket` carries the SSR-fetched detail payload.
+   */
+  selectedTicketId: string | null;
+  initialTicket: TicketWithEntries | null;
 }
 
 // -- Tabs -------------------------------------------------------------------
@@ -106,9 +117,12 @@ export function InboxClient({
   apps,
   platforms,
   role,
+  selectedTicketId,
+  initialTicket,
 }: InboxClientProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
 
   const activeTab = useMemo(() => getActiveTab(initialQuery), [initialQuery]);
@@ -188,6 +202,25 @@ export function InboxClient({
 
   function clearAllFilters() {
     navigate(new URLSearchParams());
+  }
+
+  /**
+   * Panel open/close — mutates only the `ticket` param via
+   * `useSearchParams()` so cursor and other filter state survive.
+   * Intentionally does NOT reuse `baseParams([])` because that helper
+   * always drops `cursor` (it's for filter changes); toggling the panel
+   * is orthogonal to pagination.
+   */
+  function openPanel(ticketId: string) {
+    const p = new URLSearchParams(searchParams?.toString() ?? '');
+    p.set('ticket', ticketId);
+    navigate(p);
+  }
+
+  function closePanel() {
+    const p = new URLSearchParams(searchParams?.toString() ?? '');
+    p.delete('ticket');
+    navigate(p);
   }
 
   /** True if any non-tab filter is active (platform/app/search/dates/sort non-default). */
@@ -348,13 +381,15 @@ export function InboxClient({
       {/* -- Ticket list -- */}
       <TicketListTable
         tickets={tickets}
-        onRowClick={(t) => {
-          // Detail panel wires up in PR-10b. Logging for dev-only visibility.
-          if (process.env.NODE_ENV !== 'production') {
-            // eslint-disable-next-line no-console
-            console.debug('[inbox] row clicked:', t.display_id, t.id);
-          }
-        }}
+        selectedTicketId={selectedTicketId}
+        onRowClick={(t) => openPanel(t.id)}
+      />
+
+      {/* -- Ticket detail slide-over -- */}
+      <TicketDetailPanel
+        ticket={initialTicket}
+        isOpen={selectedTicketId !== null}
+        onClose={closePanel}
       />
 
       {/* -- Pagination footer -- */}

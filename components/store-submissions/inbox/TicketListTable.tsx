@@ -43,9 +43,21 @@ const GRID = 'grid-cols-[140px_1fr_100px_110px_110px_120px_60px]';
 export interface TicketListTableProps {
   tickets: TicketListRow[];
   onRowClick?: (ticket: TicketListRow) => void;
+  /**
+   * When set, the matching row renders with a blue left accent + tinted
+   * background to signal "this is the ticket open in the side panel".
+   * Implemented with a constant-width left border (transparent when
+   * unselected, colored when selected) so row width never shifts —
+   * matters for grid column alignment.
+   */
+  selectedTicketId?: string | null;
 }
 
-export function TicketListTable({ tickets, onRowClick }: TicketListTableProps) {
+export function TicketListTable({
+  tickets,
+  onRowClick,
+  selectedTicketId,
+}: TicketListTableProps) {
   if (tickets.length === 0) {
     return (
       <div className="bg-white border border-slate-200 rounded-xl p-10 text-center text-slate-500 text-[13px]">
@@ -72,7 +84,12 @@ export function TicketListTable({ tickets, onRowClick }: TicketListTableProps) {
       </div>
 
       {tickets.map((ticket) => (
-        <TicketRow key={ticket.id} ticket={ticket} onRowClick={onRowClick} />
+        <TicketRow
+          key={ticket.id}
+          ticket={ticket}
+          onRowClick={onRowClick}
+          isSelected={ticket.id === selectedTicketId}
+        />
       ))}
     </div>
   );
@@ -81,11 +98,19 @@ export function TicketListTable({ tickets, onRowClick }: TicketListTableProps) {
 function TicketRow({
   ticket,
   onRowClick,
+  isSelected,
 }: {
   ticket: TicketListRow;
   onRowClick?: (ticket: TicketListRow) => void;
+  isSelected: boolean;
 }) {
   const handleClick = () => onRowClick?.(ticket);
+
+  // Left border is always 2px to prevent column-width jitter between
+  // selected/unselected states. Color swaps based on selection.
+  const selectionClasses = isSelected
+    ? 'bg-blue-50/70 border-l-[#0071E3]'
+    : 'border-l-transparent hover:bg-slate-50/70';
 
   return (
     <div
@@ -98,9 +123,11 @@ function TicketRow({
           handleClick();
         }
       }}
-      className={`grid ${GRID} gap-3 items-center px-5 py-3 border-b border-slate-100 last:border-b-0 hover:bg-slate-50/70 cursor-pointer text-[13px]`}
+      className={`grid ${GRID} gap-3 items-center px-5 py-3 border-b border-slate-100 last:border-b-0 border-l-2 cursor-pointer text-[13px] ${selectionClasses}`}
       data-testid="ticket-row"
       data-ticket-id={ticket.id}
+      data-selected={isSelected}
+      aria-current={isSelected ? 'true' : undefined}
     >
       <div className="flex items-center gap-2 min-w-0">
         <code className="font-mono text-[12px] text-slate-500 truncate">

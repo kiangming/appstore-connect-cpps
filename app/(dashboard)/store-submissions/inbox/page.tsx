@@ -1,12 +1,23 @@
 import { Inbox } from 'lucide-react';
+import { z } from 'zod';
 
 import { requireStoreSession } from '@/lib/store-submissions/session-guard';
-import { listTickets } from '@/lib/store-submissions/queries/tickets';
+import {
+  getTicketWithEntries,
+  listTickets,
+} from '@/lib/store-submissions/queries/tickets';
 import { listApps } from '@/lib/store-submissions/queries/apps';
 import { listPlatforms } from '@/lib/store-submissions/queries/rules';
 import { parseTicketsQueryFromSearchParams } from '@/lib/store-submissions/inbox/search-params';
 import type { TicketsQuery } from '@/lib/store-submissions/schemas/ticket';
 import { InboxClient } from '@/components/store-submissions/inbox/InboxClient';
+
+const uuidSchema = z.string().uuid();
+
+function firstOfStr(v: string | string[] | undefined): string | undefined {
+  if (v === undefined) return undefined;
+  return Array.isArray(v) ? v[0] : v;
+}
 
 export const dynamic = 'force-dynamic';
 
@@ -46,10 +57,21 @@ export default async function InboxPage({
       ? { ...query, state: ['NEW', 'IN_REVIEW', 'REJECTED'] }
       : query;
 
-  const [data, apps, platforms] = await Promise.all([
+  // Ticket detail panel: `?ticket=<uuid>` opens the slide-over with the
+  // matching ticket's data. Validated separately from ticketsQuerySchema
+  // — it's a UI state param, not a filter. Bad/missing UUIDs resolve to
+  // null so the panel renders a "not found" state instead of a server
+  // error. Only fetched when the param is present to skip the round-trip
+  // on the common no-panel case.
+  const rawTicket = firstOfStr(searchParams.ticket);
+  const ticketIdCheck = rawTicket ? uuidSchema.safeParse(rawTicket) : null;
+  const selectedTicketId = ticketIdCheck?.success ? ticketIdCheck.data : null;
+
+  const [data, apps, platforms, initialTicket] = await Promise.all([
     listTickets(effectiveQuery),
     listApps({ active: true }),
     listPlatforms(),
+    selectedTicketId ? getTicketWithEntries(selectedTicketId) : Promise.resolve(null),
   ]);
 
   return (
@@ -75,6 +97,8 @@ export default async function InboxPage({
           apps={apps.map((a) => ({ id: a.id, name: a.name }))}
           platforms={platforms.map((p) => ({ key: p.key, display_name: p.display_name }))}
           role={storeUser.role}
+          selectedTicketId={selectedTicketId}
+          initialTicket={initialTicket}
         />
       </div>
     </div>
