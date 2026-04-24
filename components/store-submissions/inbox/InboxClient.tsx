@@ -20,12 +20,9 @@
 
 import { useCallback, useMemo, useTransition } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { ChevronDown, Search, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Search, X } from 'lucide-react';
 
-import type {
-  ListTicketsResult,
-  TicketListRow,
-} from '@/lib/store-submissions/queries/tickets';
+import type { ListTicketsResult } from '@/lib/store-submissions/queries/tickets';
 import type {
   TicketBucket,
   TicketsQuery,
@@ -34,6 +31,7 @@ import type {
 } from '@/lib/store-submissions/schemas/ticket';
 import type { PlatformKey } from '@/lib/store-submissions/schemas/app';
 import type { StoreRole } from '@/lib/store-submissions/auth';
+import { TicketListTable } from './TicketListTable';
 
 export interface InboxClientProps {
   initialData: ListTicketsResult;
@@ -347,33 +345,40 @@ export function InboxClient({
         )}
       </div>
 
-      {/* -- Ticket list placeholder (10.2.3 replaces with real table) -- */}
-      <div className="bg-white border border-slate-200 rounded-xl p-6">
-        <p className="text-[12px] text-slate-400 uppercase tracking-wide mb-3">
-          PR-10.2.2 — tabs + filters live · sortable table arrives in 10.2.3
-        </p>
-        <div className="flex items-baseline gap-2 mb-4">
-          <span className="text-[22px] font-semibold text-slate-900">
-            {tickets.length}
-          </span>
-          <span className="text-[13px] text-slate-500">
-            ticket{tickets.length === 1 ? '' : 's'}
-            {has_more ? ' (more available)' : ''}
-            {' · '}tab: <code className="font-mono">{activeTab}</code>
-            {' · '}role: <code className="font-mono">{role}</code>
-          </span>
-        </div>
+      {/* -- Ticket list -- */}
+      <TicketListTable
+        tickets={tickets}
+        onRowClick={(t) => {
+          // Detail panel wires up in PR-10b. Logging for dev-only visibility.
+          if (process.env.NODE_ENV !== 'production') {
+            // eslint-disable-next-line no-console
+            console.debug('[inbox] row clicked:', t.display_id, t.id);
+          }
+        }}
+      />
 
-        {tickets.length === 0 ? (
-          <div className="py-12 text-center text-[13px] text-slate-400">
-            No tickets match the current filters.
-          </div>
-        ) : (
-          <ul className="divide-y divide-slate-100">
-            {tickets.slice(0, 10).map((t) => (
-              <InboxRowPreview key={t.id} ticket={t} />
-            ))}
-          </ul>
+      {/* -- Pagination footer -- */}
+      <div className="flex items-center justify-between text-[12px] text-slate-400">
+        <span>
+          {tickets.length} {tickets.length === 1 ? 'ticket' : 'tickets'}
+          {initialQuery.cursor ? ' on this page' : ''}
+          {' · '}role: <code className="font-mono">{role}</code>
+        </span>
+
+        {has_more && initialData.next_cursor && (
+          <button
+            type="button"
+            onClick={() => {
+              const p = baseParams([]);
+              p.set('cursor', initialData.next_cursor as string);
+              navigate(p);
+            }}
+            disabled={isPending}
+            className="inline-flex items-center gap-1 text-[13px] text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-300 bg-white rounded-lg px-3 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Next
+            <ChevronRight className="w-3.5 h-3.5" strokeWidth={1.8} />
+          </button>
         )}
       </div>
     </div>
@@ -438,21 +443,3 @@ function DateRangeInputs({
   );
 }
 
-function InboxRowPreview({ ticket }: { ticket: TicketListRow }) {
-  return (
-    <li className="py-3 flex items-center gap-3 text-[13px]">
-      <code className="font-mono text-slate-500 w-32 shrink-0">
-        {ticket.display_id}
-      </code>
-      <span className="text-slate-700 flex-1 truncate">
-        {ticket.app_name ?? <em className="text-slate-400">no app</em>}
-      </span>
-      <span className="text-slate-400 text-[12px] w-20 shrink-0">
-        {ticket.platform_key}
-      </span>
-      <span className="text-slate-500 text-[12px] w-20 shrink-0">
-        {ticket.state}
-      </span>
-    </li>
-  );
-}
