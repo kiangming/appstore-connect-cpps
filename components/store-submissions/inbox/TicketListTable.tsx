@@ -19,15 +19,26 @@
  * indicators on headers introduces two UI surfaces for the same state
  * and raises "should arrow click re-sort, or just indicate?" friction.
  * Revisit if usability testing shows users expect header sort. For now,
- * headers are descriptive labels.
+ * headers are descriptive labels. (Tracked in TODO.md PR-10 post-MVP.)
  *
- * State / latest_outcome / opened_at render as raw strings here.
- * PR-10.2.4 swaps in proper badges + relative-time formatting.
+ * Visual polish (PR-10.2.4):
+ *   - StateBadge / OutcomeBadge / PriorityBadge from ./TicketBadges
+ *   - PlatformIcon glyph + label (Apple / Google / Huawei / Facebook)
+ *   - Relative time via date-fns `formatDistanceToNow` with absolute
+ *     timestamp in the hover title
  */
 
-import type { TicketListRow } from '@/lib/store-submissions/queries/tickets';
+import { formatDistanceToNow } from 'date-fns';
 
-const GRID = 'grid-cols-[120px_1fr_100px_110px_110px_120px_60px]';
+import type { TicketListRow } from '@/lib/store-submissions/queries/tickets';
+import {
+  OutcomeBadge,
+  PlatformIcon,
+  PriorityBadge,
+  StateBadge,
+} from './TicketBadges';
+
+const GRID = 'grid-cols-[140px_1fr_100px_110px_110px_120px_60px]';
 
 export interface TicketListTableProps {
   tickets: TicketListRow[];
@@ -91,9 +102,12 @@ function TicketRow({
       data-testid="ticket-row"
       data-ticket-id={ticket.id}
     >
-      <code className="font-mono text-[12px] text-slate-500 truncate">
-        {ticket.display_id}
-      </code>
+      <div className="flex items-center gap-2 min-w-0">
+        <code className="font-mono text-[12px] text-slate-500 truncate">
+          {ticket.display_id}
+        </code>
+        <PriorityBadge priority={ticket.priority} />
+      </div>
 
       <div className="min-w-0">
         {ticket.app_name ? (
@@ -108,20 +122,29 @@ function TicketRow({
         )}
       </div>
 
-      <div className="text-slate-600 text-[12px] truncate">
-        {ticket.platform_display_name || ticket.platform_key}
+      <div className="flex items-center gap-1.5 text-[12px] text-slate-600 truncate">
+        <PlatformIcon
+          platform={ticket.platform_key}
+          label={ticket.platform_display_name || ticket.platform_key}
+        />
+        <span className="truncate">
+          {ticket.platform_display_name || ticket.platform_key}
+        </span>
       </div>
 
-      <div className="text-slate-700 text-[12px] font-medium">
-        {ticket.state}
+      <div>
+        <StateBadge state={ticket.state} />
       </div>
 
-      <div className="text-slate-500 text-[12px]">
-        {ticket.latest_outcome ?? '—'}
+      <div>
+        <OutcomeBadge outcome={ticket.latest_outcome} />
       </div>
 
-      <div className="text-slate-500 text-[12px]">
-        {formatOpenedAt(ticket.opened_at)}
+      <div
+        className="text-slate-500 text-[12px]"
+        title={new Date(ticket.opened_at).toLocaleString()}
+      >
+        {formatRelativeTime(ticket.opened_at)}
       </div>
 
       <div className="text-right text-slate-400 text-[12px] tabular-nums">
@@ -132,15 +155,16 @@ function TicketRow({
 }
 
 /**
- * Minimal locale-neutral date formatter. PR-10.2.4 replaces this with
- * a relative-time formatter ("2h ago", "3 days ago", etc).
+ * Human-readable relative time via date-fns.
+ *
+ * Covers the common case ("5 minutes ago", "about 2 hours ago",
+ * "3 days ago"). For >30d, `formatDistanceToNow` still produces
+ * reasonable output ("about 2 months ago") — tickets older than that
+ * are uncommon in triage, so no absolute-date fallback for MVP.
+ * Hover title shows absolute timestamp.
  */
-function formatOpenedAt(iso: string): string {
+function formatRelativeTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
+  return formatDistanceToNow(d, { addSuffix: true });
 }

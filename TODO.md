@@ -151,3 +151,14 @@ Scope preview (detailed in `docs/store-submissions/CURRENT-STATE.md` PR-10 secti
 - First consumer of PR-9 extended `FindOrCreateTicketOutput` fields
 
 Dependencies: PR-9 RPC is the sole write path for email-driven transitions. User-action RPCs are a separate, additive surface (spec §7) — PR-9 did not ship them.
+
+## PR-10a Post-MVP (surfaced during Inbox UI implementation)
+
+- [ ] [PR-10a] Sortable column headers in `TicketListTable` — `components/store-submissions/inbox/TicketListTable.tsx` — currently sort is FilterPill-only to avoid two UI surfaces for the same state. Revisit if usability feedback shows users expect header sort (click column → toggle direction).
+- [ ] [PR-10a] Priority column in `TicketListTable` when `sort=priority_desc` is active — today only HIGH renders inline with display_id as a red badge; LOW/NORMAL are hidden to reduce visual noise. A dedicated column would help when the user explicitly sorts by priority.
+- [ ] [PR-10a] Consolidate `PlatformIcon` — duplicated between `components/store-submissions/apps/AppsClient.tsx:54-74` and `components/store-submissions/inbox/TicketBadges.tsx`. Promote to `components/store-submissions/shared/PlatformIcon.tsx` on the 3rd usage per the codebase's "abstract on 3" rule.
+- [ ] [PR-10a] Absolute-date fallback for very old ticket `opened_at` — `formatDistanceToNow` produces "about 2 months ago" style; for dates >30d an absolute format ("Apr 22") is more precise. Acceptable for MVP since triage tickets rarely linger that long.
+- [ ] [PR-10a] Bulk actions (multi-select archive / mark-done) — deferred per scope trim. 200 tickets/month volume doesn't demand it yet. Revisit when user patterns show repetitive per-ticket actions.
+- [ ] [PR-10a] Count badges on state tabs (NEW: 12, REJECTED: 3, ...) — deferred per scope trim. Requires `listTicketCounts()` aggregate query. Add when users request at-a-glance queue visibility.
+- [ ] [PR-10a] Search by app name + email subject — MVP search is `display_id` ILIKE only. App-name search needs a two-pass subquery; subject search requires joining `email_messages`. Revisit when dataset grows or users complain.
+- [ ] [PR-10a] `updated_at_desc` / `priority_desc` sort pagination — cursor keyset is keyed by `(opened_at, id)` and only honored for `opened_at_desc`; other sorts return `next_cursor: null`. Low priority since the useful pagination pattern is newest-first. If deep history browsing by updated/priority becomes needed, extend the cursor shape.
