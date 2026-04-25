@@ -36,6 +36,7 @@
  * here; toast surfaces the migration's exact reason text.
  */
 
+import * as Sentry from '@sentry/nextjs';
 import { revalidatePath } from 'next/cache';
 import { getServerSession } from 'next-auth';
 
@@ -120,6 +121,10 @@ async function guardDevOrManager(): Promise<
       'DEV',
       'MANAGER',
     ]);
+    // Bind user to the Sentry scope so any captureException in this
+    // request auto-attaches actor identity (id + role). Email omitted —
+    // already implied by the user_id and avoids redundant PII transit.
+    Sentry.setUser({ id: user.id, username: user.role });
     return { user };
   } catch (err) {
     if (err instanceof StoreUnauthorizedError) {
@@ -141,7 +146,11 @@ async function guardDevOrManager(): Promise<
  * PR-10c.1.4); we detect and escalate to a `CONFLICT` code so the UI
  * can render a distinct toast.
  */
-function mapDispatcherError(err: unknown): ActionError {
+function mapDispatcherError(
+  err: unknown,
+  action: UserActionRequest['type'],
+  ticketId: string,
+): ActionError {
   if (err instanceof UnauthorizedActionError) {
     // Defense-in-depth: guardDevOrManager already rejected VIEWER, so
     // the dispatcher's own role check should never fire for our callers.
@@ -188,7 +197,15 @@ function mapDispatcherError(err: unknown): ActionError {
     // floor.
     return { code: 'FORBIDDEN', message: err.message };
   }
+  // Truly unexpected — typed dispatcher errors above are normal business
+  // flow (state guards, ownership). Anything reaching here is an RPC
+  // failure, schema drift, or Postgres outage. Capture with action +
+  // ticketId so ops can correlate by user request.
   console.error('[inbox-actions] unmapped dispatcher error:', err);
+  Sentry.captureException(err, {
+    tags: { component: 'inbox-actions', action },
+    extra: { ticketId },
+  });
   return {
     code: 'DB_ERROR',
     message:
@@ -233,7 +250,7 @@ async function executeTicketAction(
       },
     };
   } catch (err) {
-    return { ok: false, error: mapDispatcherError(err) };
+    return { ok: false, error: mapDispatcherError(err, request.type, ticketId) };
   }
 }
 

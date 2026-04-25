@@ -25,6 +25,8 @@
  *   - CLAUDE.md invariant #8 (classification-status → ticket mapping)
  */
 
+import * as Sentry from '@sentry/nextjs';
+
 import type { ClassificationResult } from '../classifier/types';
 import { storeDb } from '../db';
 
@@ -60,6 +62,10 @@ export async function associateEmailWithTicket(
       '[tickets-wire] findOrCreateTicket failed — leaving email_messages.ticket_id NULL',
       { emailMessageId, status: classification.status, error: err },
     );
+    Sentry.captureException(err, {
+      tags: { component: 'ticket-engine', phase: 'find-or-create' },
+      extra: { emailMessageId, classificationStatus: classification.status },
+    });
     return null;
   }
 
@@ -73,6 +79,10 @@ export async function associateEmailWithTicket(
       '[tickets-wire] UPDATE email_messages.ticket_id failed — ticket exists but link lost',
       { emailMessageId, ticketId, error },
     );
+    Sentry.captureException(error, {
+      tags: { component: 'ticket-engine', phase: 'update-link' },
+      extra: { emailMessageId, ticketId },
+    });
     return null;
   }
 

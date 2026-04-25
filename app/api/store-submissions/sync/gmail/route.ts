@@ -18,8 +18,9 @@
  *   - Auth failure: `console.warn` with IP + attempted-header length.
  *     Never log the header value itself, even partially.
  *   - Expected business errors (409, 412, 401-from-token): `console.info`.
- *   - Unknown 500: `console.error` with the underlying error. Once
- *     Sentry ships (see TODO.md PR-7), also `captureException` here.
+ *   - Unknown 500: `console.error` + `Sentry.captureException` with the
+ *     `component: 'gmail-sync'` tag. Business errors are NOT captured —
+ *     they're normal flow noise.
  *   - Success: `console.info` with a one-line stats summary.
  *
  * Auth note: uses `crypto.timingSafeEqual` to prevent byte-by-byte
@@ -29,6 +30,7 @@
  */
 
 import { timingSafeEqual } from 'crypto';
+import * as Sentry from '@sentry/nextjs';
 import { NextResponse, type NextRequest } from 'next/server';
 
 import {
@@ -203,8 +205,11 @@ function mapErrorToResponse(err: unknown): NextResponse {
   // Unknown failure path. Log the full error server-side for debugging,
   // but DO NOT include details in the response — leaking internal
   // messages has historically caused config/credential disclosures.
-  // Once Sentry is wired (TODO.md [PR-7]), also capture here.
+  // Sentry captures with component tag for ops triage (PR-10d.1.2).
   console.error('[cron/sync] 500 Unhandled error:', err);
+  Sentry.captureException(err, {
+    tags: { component: 'gmail-sync', endpoint: 'cron-tick' },
+  });
   return NextResponse.json(
     { success: false, error: 'INTERNAL_ERROR' },
     { status: 500 },
