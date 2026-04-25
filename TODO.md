@@ -139,9 +139,62 @@ became invisible to the classifier → UNCLASSIFIED_APP.
 - [ ] `<label>` wrapping row: clicking anywhere on a platform row toggles the checkbox (a11y pattern)
 - [ ] `/config/apps` list: any app with zero bindings shows a red "No platforms" badge next to its `0 / 4` platform count
 
-## PR-10 — Inbox UI (next)
+## PR-10c — Ticket user actions ✅ COMPLETED (2026-04-25)
 
-Scope preview (detailed in `docs/store-submissions/CURRENT-STATE.md` PR-10 section):
+Wire user-driven state transitions + comment + reject-reason flows on top of the email-driven engine shipped in PR-9. Adds 7 PL/pgSQL `*_tx` RPCs (spec §7), a TypeScript dispatcher with `executeTicketAction(actor, ticketId, action)`, role-gated UI footer + composer in the inbox detail panel, and timeline cards for the new entry types. Builds on PR-10a (list) + PR-10b (detail panel shell).
+
+**Shipped (8 atomic sub-chunks):**
+
+| Sub-chunk | Commit | Scope |
+|---|---|---|
+| 10c.1.1 | `6dc8a6c` | `state-machine.ts` pure helpers (action → next state derivation) + 46 tests |
+| 10c.1.2 | `ee27ef1` | `user-actions.ts` dispatcher + `tickets/auth.ts` per-action permission matrix + 46 tests |
+| 10c.1.3 | `1a58363` | Migration `20260424000000_store_mgmt_user_actions_rpcs.sql` — 7 RPCs (archive / follow_up / mark_done / unarchive / add_comment / edit_comment / add_reject_reason) |
+| 10c.1.4 | `fc7c18c` | User-actions integration tests (Supabase mocked, RPC error mapping covered) +24 |
+| 10c.2 | `b970517` | Inbox state-transition actions UI — 4 footer buttons + 10s Undo toast for ARCHIVE +20 |
+| 10c.3.1 | `0819dbc` | `CommentForm` (always visible) + reject-reason composer (toggle-revealed) +10 |
+| 10c.3.2 | `0257b83` | `CommentEntryCard` + `RejectReasonEntryCard` timeline renderers + `EditCommentForm` wired for own comments + trigger keyword fix (`'user' → 'user_action'` per spec §7.3) + currentUserId threaded 4 layers |
+| 10c.3.2.2 | `b833172` | RTL infra (`@vitejs/plugin-react`, `jsdom`, `jest-dom`, vitest setupFile) + 10 timeline component tests |
+
+**Test count:** 827 (pre-PR-10c) → **983** (post-PR-10c) = **+156 tests**.
+
+**7 user actions production-ready:** archive / follow_up / mark_done / unarchive / add_comment / edit_comment / add_reject_reason. Authorization matrix matches spec §7.2 (DEV/MANAGER permissive, VIEWER read-only, UNARCHIVE Manager-only).
+
+**Critical fix:** trigger keyword mismatch between RPC migration (`metadata.trigger='user_action'`, spec-canonical) and the timeline renderer (`=== 'user'`) — would have surfaced post-deploy as STATE_CHANGE entries falling through to UnknownEntryCard. Caught + fixed in 10c.3.2 with regression test in 10c.3.2.2.
+
+**Foundation unblocked by 10c.3.2.2:** RTL component-test infra now in place. Future timeline / form / detail-panel tests no longer need infra setup — drop in `// @vitest-environment jsdom` directive and write.
+
+**Pending after this commit:**
+
+- [ ] Path G — apply migration `20260424000000_store_mgmt_user_actions_rpcs.sql` via Supabase SQL Editor (production)
+- [ ] Manual QA scenarios: 4 state buttons / 10s Undo / comment add+edit ownership / reject reason / timeline render of all 5 entry types / VIEWER hides actions / DEV-MANAGER full functionality
+
+## Post-PR-10 — Reclassify feature (planned)
+
+**Scope**: Re-run classifier trên existing `email_messages` khi App Registry hoặc Email Rules updated.
+
+**Use cases:**
+
+- Apps added to Registry sau khi emails đã arrived (UNCLASSIFIED_APP → CLASSIFIED)
+- Subject patterns updated (UNCLASSIFIED_TYPE → CLASSIFIED)
+- Sender aliases added (DROPPED → classified)
+
+**Implementation approach:**
+
+- Extract classifier core từ `gmail/sync.ts` (currently coupled email-ingress)
+- New action: `reclassifyEmailMessageAction(email_message_id, actor_id)`
+- Bulk variant: `reclassifyUnclassifiedAction(bucket, actor_id)` — MANAGER only
+- UI: button trong ticket detail panel "Reclassify" (MANAGER-visible)
+- Or: bulk action button on Unclassified tab
+- Side effect: existing ticket may dissolve (FK cascade) hoặc migrate
+
+**Estimated scope**: ~1 day (PR-11 hoặc standalone PR).
+
+**Deferred rationale**: PR-10 scope discipline. Current UNCLASSIFIED_APP ticket acceptable interim; Manager reviews manually until reclassify ships.
+
+## PR-10 — Inbox UI (shipped via PR-10a / PR-10b / PR-10c)
+
+Original scope preview (detailed in `docs/store-submissions/CURRENT-STATE.md` PR-10 section):
 
 - Ticket list page với filters (state, app, platform, assigned_to, priority, date range)
 - State buckets: `NEW` / `IN_REVIEW` / `REJECTED` / terminal (`APPROVED` + `DONE` + `ARCHIVED`)

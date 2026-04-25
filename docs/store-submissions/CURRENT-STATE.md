@@ -2,7 +2,7 @@
 
 > **Đọc đầu tiên** khi bắt đầu session mới về module Store Management. Ghi lại trạng thái production + PR đã ship + known limitations chưa resolve.
 >
-> Last updated: 2026-04-23 (PR-9 shipped)
+> Last updated: 2026-04-25 (PR-10c shipped — user actions complete, Path G migration apply pending)
 
 ---
 
@@ -30,7 +30,9 @@ Module quản lý submission app/game multi-platform qua auto-classify email t�
 | PR-7 | Cron advisory lock + retry/backoff + NO_SUBJECT_MATCH reclassified as DROPPED | ✅ shipped |
 | PR-8 | Ticket engine **stub** + wire (sync → wire → stub findOrCreateTicket) | ✅ shipped (stub gap resolved in PR-9) |
 | PR-9 | Ticket engine **real** (RPC find_or_create_ticket_tx, FOR UPDATE, state machine, ticket_entries writes, backfill) | ✅ shipped 2026-04-23 |
-| PR-10 | Inbox UI + ticket detail view | ⏳ next |
+| PR-10a | Inbox list — filters, tabs, cursor pagination | ✅ shipped |
+| PR-10b | Ticket detail panel (slide-over) — header, metadata, timeline (EMAIL/STATE_CHANGE/PAYLOAD_ADDED) | ✅ shipped |
+| PR-10c | User actions — 7 RPCs + dispatcher + auth matrix + state-transition UI + comment/reject composer + COMMENT/REJECT_REASON timeline cards | ✅ shipped 2026-04-25 (migration apply pending Path G) |
 
 ---
 
@@ -47,6 +49,9 @@ Module quản lý submission app/game multi-platform qua auto-classify email t�
 | Ticket wire (email_messages → ticket_id backfill) | — | `lib/store-submissions/tickets/wire.ts` |
 | Ticket engine **real** (Supabase RPC, state machine, event log) | — | `lib/store-submissions/tickets/engine.ts` + migration `20260423000000_...rpc.sql` |
 | Classification status mapping (CLAUDE.md invariant #8) | — | `lib/store-submissions/classifier/types.ts` |
+| Inbox list + filters + cursor pagination | `/store-submissions/inbox` | `app/(dashboard)/store-submissions/inbox/page.tsx` + `components/store-submissions/inbox/InboxClient.tsx` |
+| Ticket detail panel (slide-over) + timeline cards | `?ticket=<uuid>` query param | `components/store-submissions/inbox/TicketDetailPanel.tsx` + `TicketEntriesTimeline.tsx` |
+| User actions (7 RPCs) — state transitions + comment + reject reason | `inbox/actions.ts` Server Actions | `lib/store-submissions/tickets/user-actions.ts` + migration `20260424000000_...user_actions_rpcs.sql` |
 
 ---
 
@@ -130,22 +135,62 @@ Wire reads only `ticketId` → zero downstream impact. PR-10 Inbox UI is the fir
 
 ---
 
-## PR-10 — Inbox UI (next)
+## PR-10c — User actions ✅ SHIPPED 2026-04-25
 
-### Scope preview
+Wires user-driven state transitions, comments, and reject-reason capture on top of the email-driven engine from PR-9. Authorization matrix (spec §7.2) implemented end-to-end: VIEWER read-only, DEV/MANAGER permissive, UNARCHIVE Manager-only.
 
-- Ticket list page với filters (state, app, platform, assigned_to, priority, date range)
-- Primary state buckets: `NEW` / `IN_REVIEW` / `REJECTED` / terminal (`APPROVED` + `DONE` + `ARCHIVED`)
-- Unclassified buckets as dedicated views (manager action: reclassify → merge into proper grouping key, spec §5.2)
-- Ticket detail modal với `ticket_entries` timeline (EMAIL snapshots + STATE_CHANGE + COMMENT + PAYLOAD_ADDED)
-- User action primitives (separate from PR-9 scope): archive / follow-up / mark-done / assign / priority / comment / reject-reason — each routes through a user-action RPC (deferred from 04-ticket-engine.md §2.2 until PR-10 ships UI)
-- First consumer of PR-9 extended output fields (`previous_state`, `state_changed`, full `ticket` row)
+### Shipped — 8 sub-chunks
 
-### Blockers / dependencies
+| Sub-chunk | Commit | Scope |
+|---|---|---|
+| 10c.1.1 | `6dc8a6c` | `state-machine.ts` pure helpers (action → next state) +46 tests |
+| 10c.1.2 | `ee27ef1` | `tickets/user-actions.ts` dispatcher + `tickets/auth.ts` per-action permission matrix +46 tests |
+| 10c.1.3 | `1a58363` | Migration `20260424000000_store_mgmt_user_actions_rpcs.sql` — 7 RPCs |
+| 10c.1.4 | `fc7c18c` | User-actions integration tests (RPC error mapping covered) +24 |
+| 10c.2 | `b970517` | Inbox state-transition UI — 4 footer buttons + 10s Undo toast for ARCHIVE +20 |
+| 10c.3.1 | `0819dbc` | `CommentForm` (always visible) + reject-reason composer (toggle-revealed) +10 |
+| 10c.3.2 | `0257b83` | `CommentEntryCard` + `RejectReasonEntryCard` timeline renderers + `EditCommentForm` wired for own comments + trigger keyword fix (`'user' → 'user_action'`) + `currentUserId` threaded 4 layers |
+| 10c.3.2.2 | `b833172` | RTL infra (`@vitejs/plugin-react`, `jsdom`, `jest-dom`, vitest setupFile) + 10 timeline component tests |
 
-- PR-9 RPC is the sole write path for email-driven transitions — PR-10 user-action handlers are a separate RPC surface (PL/pgSQL functions for `archive_ticket_tx`, `follow_up_ticket_tx`, etc. per spec §2.2)
-- Requires ticket_entries render query (spec §6.3) — server action or API route
-- Requires authorization matrix (spec §7.2) — manager vs member vs observer gates
+### Test coverage delta
+
+Pre-PR-10c: 827 → Post-PR-10c: **983** (+156 across all sub-chunks).
+
+### 7 production-ready user actions
+
+| Action | RPC | Allowed roles | Notes |
+|---|---|---|---|
+| Archive | `archive_ticket_tx` | DEV / MANAGER | 10s Undo toast in UI |
+| Follow up | `follow_up_ticket_tx` | DEV / MANAGER | NEW → IN_REVIEW |
+| Mark done | `mark_done_ticket_tx` | DEV / MANAGER | terminal |
+| Unarchive | `unarchive_ticket_tx` | MANAGER only | grouping-key conflict surfaces as `CONFLICT` |
+| Add comment | `add_comment_tx` | DEV / MANAGER | always-visible composer |
+| Edit comment | `edit_comment_tx` | author only (`COMMENT_FORBIDDEN` from RPC) | pencil affordance UI-gated, RPC authoritative |
+| Add reject reason | `add_reject_reason_tx` | DEV / MANAGER | toggle-revealed composer; entries immutable |
+
+### Critical fix shipped in 10c.3.2
+
+Trigger keyword mismatch — RPC migration writes spec-canonical `metadata.trigger='user_action'` (§7.3) but the timeline renderer in PR-10b checked `=== 'user'`. Without this fix, every user-driven STATE_CHANGE entry would have fallen through to `UnknownEntryCard` post-deploy. Renderer now matches; regression locked by `TicketEntriesTimeline.test.tsx`.
+
+### Foundation unblocked by 10c.3.2.2
+
+RTL component-test infrastructure now wired (`@vitejs/plugin-react` plugin + `jsdom` + per-file `// @vitest-environment jsdom` opt-in + `afterEach(cleanup)` setup). Future component tests drop in without infra setup. Mocked `vi.mock` factories must avoid JSX (hoisted above imports) — return `null` or use `React.createElement` if rendering matters.
+
+### Pending — Path G + manual QA
+
+- [ ] Apply migration `20260424000000_store_mgmt_user_actions_rpcs.sql` to production via Supabase SQL Editor
+- [ ] Manual QA scenarios:
+  - 4 state-transition buttons (archive / follow-up / mark-done / unarchive) per role
+  - 10s Undo toast cancels archive
+  - Comment add + edit (own only — verify pencil hidden on others' comments)
+  - Reject reason add (manual_paste flag set + chip rendered)
+  - Timeline renders all 5 entry types correctly (EMAIL / STATE_CHANGE / PAYLOAD_ADDED / COMMENT / REJECT_REASON)
+  - VIEWER hides actions footer + composer
+  - DEV/MANAGER full functionality
+
+### Deferred to post-PR-10 — Reclassify feature
+
+§5.2 reclassify (re-run classifier on existing emails after App Registry / Email Rules updates) is out of scope for PR-10. Manager reviews UNCLASSIFIED_APP / UNCLASSIFIED_TYPE bucket tickets manually until the reclassify action ships. See TODO.md "Post-PR-10 — Reclassify feature (planned)" for design sketch.
 
 ---
 

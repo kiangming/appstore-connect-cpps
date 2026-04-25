@@ -35,15 +35,32 @@ Replaced the stub with a transactional find-or-create + state machine + event lo
 
 **Small deviation from spec §3.3**: empty `type_payload` objects (`{}`) are NOT appended to `tickets.type_payloads` — they'd produce no-op PAYLOAD_ADDED events. Non-empty payloads append per spec shape `{ payload, first_seen_at }`. Documented in migration header.
 
-### PR-10+ (later)
+### PR-10c (shipped 2026-04-25) — user actions
 
-§5.2 reclassify (manual assign unclassified → classified with merge), §7 user actions (archive/follow-up/done/assign/priority/comment/reject-reason — each becomes its own `*_tx` RPC), §8 app rename transaction, §9 full error hierarchy expansion. Tracked in TODO.md and `CURRENT-STATE.md` PR-10 preview.
+Spec §7 user actions wired end-to-end:
+
+- `lib/store-submissions/tickets/state-machine.ts` — pure helpers `deriveStateFromUserAction`, `assertValidTransition`, etc. (commit `6dc8a6c`)
+- `lib/store-submissions/tickets/user-actions.ts` — `executeTicketAction(actor, ticketId, action)` dispatcher; routes per-action to its RPC and maps Postgrest error prefixes to typed errors (`UnauthorizedActionError`, `TicketNotFoundError`, `InvalidTransitionRpcError`, `CommentOwnershipError`) (commit `ee27ef1`)
+- `lib/store-submissions/tickets/auth.ts` — `canPerformAction(role, action)` permission matrix matching spec §7.2 (commit `ee27ef1`)
+- `supabase/migrations/20260424000000_store_mgmt_user_actions_rpcs.sql` — 7 PL/pgSQL RPCs: `archive_ticket_tx`, `follow_up_ticket_tx`, `mark_done_ticket_tx`, `unarchive_ticket_tx`, `add_comment_tx`, `edit_comment_tx`, `add_reject_reason_tx` (commit `1a58363`)
+- UI integration: state-transition footer (`TicketActionsBar`) with 10s Undo toast for ARCHIVE, comment composer (`CommentForm`), toggle-revealed reject-reason composer, `EditCommentForm` for own comments only (commits `b970517` / `0819dbc` / `0257b83`)
+- Component tests + RTL infra (commit `b833172`)
+
+**STATE_CHANGE metadata.trigger**: spec §7.3 mandates the literal string `'user_action'`. The PR-10b timeline renderer originally checked `=== 'user'` (a typo / drift) — that bug was caught + fixed in 10c.3.2 (commit `0257b83`) so user-driven transitions now render through `StateChangeEntryCard` instead of falling through to `UnknownEntryCard`. Regression locked by `components/store-submissions/inbox/TicketEntriesTimeline.test.tsx`.
+
+**Path G (pending)**: migration apply via Supabase SQL Editor, then production manual QA per `CURRENT-STATE.md` PR-10c "Pending" section.
+
+### PR-11+ (later)
+
+§5.2 reclassify (manual re-run classifier on existing emails after App Registry / Email Rules updates), §8 app rename transaction, §9 full error hierarchy expansion. Tracked in TODO.md "Post-PR-10 — Reclassify feature (planned)".
 
 ### Stability contract
 
-Types exported from `tickets/types.ts` are the **interface boundary** with the wire layer and any future caller (e.g. batch re-classification, PR-10 UI). PR-9 extended `FindOrCreateTicketOutput` with `ticket`, `previous_state`, `state_changed` per spec §2.1 `TicketHandleResult` — all optional, additive, non-breaking. Wire reads only `ticketId`; PR-10 UI consumes extended fields.
+Types exported from `tickets/types.ts` are the **interface boundary** with the wire layer and any future caller. PR-9 extended `FindOrCreateTicketOutput` with `ticket`, `previous_state`, `state_changed` per spec §2.1 `TicketHandleResult` — all optional, additive, non-breaking. Wire reads only `ticketId`; the inbox UI shipped in PR-10b consumes the extended fields.
 
-Sections §1–§13 below describe email-handling design fully shipped in PR-9 code + user-action + rename + reclassify flows still pending. Read §1–§6 as shipped; §7–§8 as target for PR-10+.
+PR-10c added a parallel surface: `executeTicketAction(actor, ticketId, action) → ActionResult<...>` returning `{ ticketId, previousState, newState, entryId }`. Independent of `FindOrCreateTicketOutput` — user actions write through their own RPCs, never through `find_or_create_ticket_tx`.
+
+Sections §1–§6 describe email-handling shipped in PR-9. Sections §7–§8 describe user actions shipped in PR-10c (state transitions + comment + reject-reason; assign + priority deferred). §5.2 reclassify + §8 app rename remain target for PR-11+.
 
 ---
 
