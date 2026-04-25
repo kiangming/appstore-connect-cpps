@@ -1,0 +1,680 @@
+Received: from TY0PR02MB6830.apcprd02.prod.outlook.com (2603:1096:405:15::13)
+ by PSAPR02MB5205.apcprd02.prod.outlook.com with HTTPS; Thu, 23 Apr 2026
+ 10:32:42 +0000
+Received: from SI1PR02CA0003.apcprd02.prod.outlook.com (2603:1096:4:1f7::20)
+ by TY0PR02MB6830.apcprd02.prod.outlook.com (2603:1096:405:15::13) with
+ Microsoft SMTP Server (version=TLS1_2,
+ cipher=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) id 15.20.9846.21; Thu, 23 Apr
+ 2026 10:32:38 +0000
+Received: from OSA0EPF000000C8.apcprd02.prod.outlook.com
+ (2603:1096:4:1f7:cafe::73) by SI1PR02CA0003.outlook.office365.com
+ (2603:1096:4:1f7::20) with Microsoft SMTP Server (version=TLS1_3,
+ cipher=TLS_AES_256_GCM_SHA384) id 15.20.9846.21 via Frontend Transport; Thu,
+ 23 Apr 2026 10:32:37 +0000
+Authentication-Results: spf=pass (sender IP is 17.111.110.54)
+ smtp.mailfrom=email.apple.com; dkim=pass (signature was verified)
+ header.d=email.apple.com;dmarc=pass action=none
+ header.from=email.apple.com;compauth=pass reason=100
+Received-SPF: Pass (protection.outlook.com: domain of email.apple.com
+ designates 17.111.110.54 as permitted sender)
+ receiver=protection.outlook.com; client-ip=17.111.110.54;
+ helo=rn2-txn-msbadger02103.apple.com; pr=C
+Received: from rn2-txn-msbadger02103.apple.com (17.111.110.54) by
+ OSA0EPF000000C8.mail.protection.outlook.com (10.167.240.54) with Microsoft
+ SMTP Server (version=TLS1_2, cipher=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) id
+ 15.20.9846.18 via Frontend Transport; Thu, 23 Apr 2026 10:32:36 +0000
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=email.apple.com;
+	s=email0517; t=1776940355;
+	bh=ygcUBQbODInpe1oZmt2oe0NRFLiAPQD80KwHsh7o46E=;
+	h=Date:From:To:Message-ID:Subject:Content-Type;
+	b=KLWjYehXXUG99hSgGrjx8lN57Rf5CeLtPuIsmQbauIbIqefhldv/uzIDjxqcQ3P6w
+	 9tuUsZBNTGrXZQe+0oFBzsQ3mkKzCzzCH6AinvqVl8tSEUJD0CdsETTqh9nASBfKuA
+	 otW1hcStRw9Qek0la6tTUO+vWInJDREadnEvZqQZAvdXehyujRnoE2+Sh0+smDkY1d
+	 xwFtNCE/TwNkCcAvXsiWE7YnZwYB3VvWrv0kNrpJR/aZ5MepjcjrQ9ZBOCel4OlrBc
+	 3XaBaf7J0430ZFO2nzQCPzS1N7Ym4K/TTru4fb/kcN0aPe9L32XBTV22Mnd+peQhTI
+	 5WZZDZ5aK33xQ==
+Date: Thu, 23 Apr 2026 10:32:35 +0000 (GMT)
+From: App Store Connect <no_reply@email.apple.com>
+To: minhgv@vng.com.vn
+Message-ID: <1462529463.190140402.1776940355622@email.apple.com>
+Subject: Review of your Call of Duty: Mobile VN (iOS) submission is
+ complete.
+Content-Type: multipart/alternative; 
+	boundary="----=_Part_190140400_1079979678.1776940355621"
+X-Broadcast-Id: 10631
+X-Attach-Flag: N
+X-COMMS-C: false
+X-Sent-To: minhgv@vng.com.vn,2,%2BCiuoJDnP1ajBjtJqP1r%2FD4EnSNKhjC0dPvf%2FcxvIU5kyXJUnAIbeIpFUZKopOOYnLpsWUqbQ4%2BK9IixjwUR8pEEMvQT%2FiqEg%2B%2BqMzf%2BQ0Py893EdKAoDw%2BVacalBZTaW7cXk0FBo6fwN09LqO8Sa9cwVAPQt8eFkm%2Be0xvPXAnFrqd9j8XEquwJQOWzh424eiDuDdpRmDELe6Ovp%2Fk91wj6O98OgZWYHnUDOUQ15VOu81naqZHiEU4RaTOtuxWNSugxRibXfytsv3M5M0Lf7DdEG2mzzm7rMVM%2Fpqgy3bmRVEDLqE1ZMUI0UnDZLmCvE42YbtPsX12f6QgjUitifNkL7nxvWv2HC1%2BE7B2%2BD8WVazl2kJPLF%2BNZ0NiSHutv8bYMmfBRXvK%2BX59STI%2FP2T7PQYJC%2FENOtmpVox%2BhD3%2B3i6tSfRzcoQUBPMkesxDiO37q%2FzzDS9K9EoA53aew5g%3D%3D
+X-TXN_ID: 0035e0ca-4a50-400f-b8b7-3ea15c81fbfc
+X-DKIM_SIGN_REQUIRED: YES
+X-EmailType-Id: 10631
+X-Business-Group: iTunes
+X-Country: US
+Return-Path: no_reply@email.apple.com
+X-MS-Exchange-Organization-ExpirationStartTime: 23 Apr 2026 10:32:37.2227
+ (UTC)
+X-MS-Exchange-Organization-ExpirationStartTimeReason: OriginalSubmit
+X-MS-Exchange-Organization-ExpirationInterval: 1:00:00:00.0000000
+X-MS-Exchange-Organization-ExpirationIntervalReason: OriginalSubmit
+X-MS-Exchange-Organization-Network-Message-Id: 45f63e6e-beee-400b-8ea5-08dea123a380
+X-EOPAttributedMessage: 0
+X-EOPTenantAttributedMessage: 7c112a6e-10e2-4e09-afc4-2e37bc60d821:0
+X-MS-Exchange-Organization-MessageDirectionality: Incoming
+X-MS-PublicTrafficType: Email
+X-MS-TrafficTypeDiagnostic: OSA0EPF000000C8:EE_|TY0PR02MB6830:EE_|PSAPR02MB5205:EE_
+X-MS-Exchange-Organization-AuthSource: OSA0EPF000000C8.apcprd02.prod.outlook.com
+X-MS-Exchange-Organization-AuthAs: Anonymous
+X-MS-Office365-Filtering-Correlation-Id: 45f63e6e-beee-400b-8ea5-08dea123a380
+X-MS-Exchange-AtpMessageProperties: SA|SL
+X-MS-Exchange-Organization-SCL: 1
+X-Microsoft-Antispam: BCL:4;ARA:13230040|704161211799003|6062899009|5082899009|69100299015|13012899012|3072899012|12012899012|5062899012|2092899012|7149299003|4092899012|3092899012|13102899012|3109299003|7049299003|13003099007|18002099003|19002099003|16102099003|8096899003|4076899003|55112099003|57112099003;
+X-Forefront-Antispam-Report: CIP:17.111.110.54;CTRY:US;LANG:en;SCL:1;SRV:;IPV:NLI;SFV:NSPM;H:rn2-txn-msbadger02103.apple.com;PTR:rn2-txn-msbadger02103.apple.com;CAT:NONE;SFS:(13230040)(704161211799003)(6062899009)(5082899009)(69100299015)(13012899012)(3072899012)(12012899012)(5062899012)(2092899012)(7149299003)(4092899012)(3092899012)(13102899012)(3109299003)(7049299003)(13003099007)(18002099003)(19002099003)(16102099003)(8096899003)(4076899003)(55112099003)(57112099003);DIR:INB;
+X-MS-Exchange-CrossTenant-OriginalArrivalTime: 23 Apr 2026 10:32:36.7103
+ (UTC)
+X-MS-Exchange-CrossTenant-Network-Message-Id: 45f63e6e-beee-400b-8ea5-08dea123a380
+X-MS-Exchange-CrossTenant-Id: 7c112a6e-10e2-4e09-afc4-2e37bc60d821
+X-MS-Exchange-CrossTenant-AuthSource: OSA0EPF000000C8.apcprd02.prod.outlook.com
+X-MS-Exchange-CrossTenant-AuthAs: Anonymous
+X-MS-Exchange-CrossTenant-FromEntityHeader: Internet
+X-MS-Exchange-Transport-CrossTenantHeadersStamped: TY0PR02MB6830
+X-MS-Exchange-Transport-EndToEndLatency: 00:00:05.6441457
+X-MS-Exchange-Processed-By-BccFoldering: 15.20.9846.017
+X-Microsoft-Antispam-Mailbox-Delivery:
+	ucf:0;jmr:0;auth:0;dest:I;ENG:(910005)(944490095)(944506478)(944626604)(920097)(930201)(20251009189)(140003)(1420198);
+X-Microsoft-Antispam-Message-Info:
+	=?Windows-1252?Q?SyrvJW+tlY8b47E5veKmUnfml0HO16vEJjzldvA0X9QfPr7AEkh5RQrJ?=
+ =?Windows-1252?Q?zBEn0DQuIyT6xPcHLspqY3jYYpqDIJHl3v1XV7ZGFislOiXTGCFKUut1?=
+ =?Windows-1252?Q?W0qlyUu4Dwzc23YJXn5aee1S+KKBxSScq6mmIbquIj69diuexlEj/eQ5?=
+ =?Windows-1252?Q?7XeUYqpJUHiFktcmbCSKLbvrDAKS61QUL6aXBe2+KPWp0ldz9A7HsZZW?=
+ =?Windows-1252?Q?FfCne6LgwJKrE5P2hfiH5Wxt20u7jA0JrI4dqxmOmhgPUs59h3BXd7dZ?=
+ =?Windows-1252?Q?/ILtk0rbY1qlhi56XBTRzJP+UJOaVWSVHD/iy6rZP+fNY59RYwC2QPVG?=
+ =?Windows-1252?Q?3L8DW5783Xslh7sfrzZN+f50lWz9VYZWrudkShALLLfA6kCp33pH5LYH?=
+ =?Windows-1252?Q?jqq5tuHwtum3AL46Ebvvs9azD9RRJsyMzoFWZz84tCL7DNqzTYv5Jb5G?=
+ =?Windows-1252?Q?WPKow0eHvtDEnVaoAcUj/HgowVBv9IriF8i7OHA9hodOTluDHQL2Z1pj?=
+ =?Windows-1252?Q?TysrCK/xwnUmgkI9hTZC5wT/ATClKv/dtpOP23P8sY2E32TPIUdYdeL4?=
+ =?Windows-1252?Q?a27CwRad/NC7Yl5oZm82jjh7CwCfcey/ifSFUt+7Jqcc2Xk6MsYuYeTR?=
+ =?Windows-1252?Q?iU0Zm1davM1idVeky6NADNOMAwsKzquPFLt4I3s4dja5Z8cLiK1NgAtj?=
+ =?Windows-1252?Q?6hi8SG4gzmncjlsScwpeR310tgOy5epTaqZAcGAEss2DmixH30K77g3c?=
+ =?Windows-1252?Q?X3sAST9NljDnI2BPtonckimkgi50mSr8DiI5bilrUhk8q373Q9sWdejx?=
+ =?Windows-1252?Q?h0esXd6nGL1rx6Wb5/S59BwpCtaKt6ddPyKfD1JsGF7KE0XVrVcjGB1X?=
+ =?Windows-1252?Q?v2p+u49rYB99+GVbd56Dsu+TEY/lXtwAYkBA4IvSrEuS0wkcJPPjNtex?=
+ =?Windows-1252?Q?D+qq7rDVcJ/jqmuKrSe1KsWYBM8LzFBuzKoDRiLC5s7t12IgFysicTWF?=
+ =?Windows-1252?Q?xFJnqeZsSmPefcMpVBJInpsGmOdSeI518/udYGn+rJ0ys2SIWr1JfXTA?=
+ =?Windows-1252?Q?gaUrl07Di+bzinUBnDGBJvL4rDHUpe4bQHgCoTW9G+Ub7AlaFRy4gN3Y?=
+ =?Windows-1252?Q?Czc6tyfe3Bzi0vplfUqqXPpw5i63w+tNgl3LQPx7K3Lrlc/6Cdkkfrv6?=
+ =?Windows-1252?Q?CUz45vpvkkFvgWjzjjx6e7lpp+lGY4JE6K2zRGwcLFBcylEQaLaWDzD4?=
+ =?Windows-1252?Q?MA7BsXAFDqnZc7o/iEpa4Rzd93RfGXLbyX+RwJx49/d76TXb5aLBsuGm?=
+ =?Windows-1252?Q?6j9fvfg8ndKNSuc2V3Yru61G9omreRcyJZ/k6gJYzMsXA5NnmhVnWSGx?=
+ =?Windows-1252?Q?ndOGmsYKxe3q0rXA5ai7Z9Ztk1Vftwwl46/Vz+kNBPR4/UG2Lz/4sWuH?=
+ =?Windows-1252?Q?gqPVSYdtE8gBTJUa7z9mq7F2cC9oyftND6l4iJP/yAScqjH58QDn3yF2?=
+ =?Windows-1252?Q?Yi6GxraIMxnzYDMdIJvFFI5SgT7NlqPaUxVV011rTD5PrVfGsxt8gdCE?=
+ =?Windows-1252?Q?rJiPbjLwBBZlAnKIERDVi47IGPJLUZwfSE39GH0Rho2dVbSPjuteDcdq?=
+ =?Windows-1252?Q?vG8CZTTkx+ZuzjYkHuohe2zyHuSHpYMGoOuJs0GNSik3GThbNZNe0cHq?=
+ =?Windows-1252?Q?nGZn0+c6LuwBp5w8IcM5Og54hcm5/Ql7XghtuZKSrsNuzNgFVfDYhQyq?=
+ =?Windows-1252?Q?uB+iByJ92m72fpdRk26H0BRiVRZbsyFlvEP2L/H/Zt6FjIogJOs/BO+d?=
+ =?Windows-1252?Q?o2G7m0wGAr8WmjWUNpx1SqVRtqHJ2T4xYMgXgBGwu5LOkTeJz9GcXY8x?=
+ =?Windows-1252?Q?5zoh2Lr5TAaoEPmqPBc7oNBsfMoQAU4vw8brhCNQe+fgjolca1+JGlWV?=
+ =?Windows-1252?Q?fW5WtnnZuAPWDp+ED26hGkfBgZAz550vOW4YekDe8DOjS1bZ+NjzuLwX?=
+ =?Windows-1252?Q?+Pz8hadRTMF0/PHHCDj3pAPElj0/Hy3VQqdVY677S+/PW2cBnd1z5acs?=
+ =?Windows-1252?Q?rfY/28EQS/HHJgq6TYUmO6BANY+v6ouP/E1YK5cfONXSfTBTh00GCjBk?=
+ =?Windows-1252?Q?sQcMWljyBIKUBamfxpZ7zT9GVjMJHLQP/TlJMB26+cUPXd1OKUHM4VjC?=
+ =?Windows-1252?Q?nlFOqFNsR4HrPbdLL5bi/UwViF/eq2xdZKpeBQAquOCmARB/lhKjbjiO?=
+ =?Windows-1252?Q?4hPrmml5uvp4OhRlvQuE18h+bjwqLywFLVsU/1ac2g1g0oBISMiPmE5E?=
+ =?Windows-1252?Q?2XpGYuSoddES8/MBWbImrZtUodneZgNTKmuHY2n9THPszOwby3QRnUJJ?=
+ =?Windows-1252?Q?LG+0osMQuHhFev/vsoZ29Sn9JNA62tMzlgdbqKiyo4vCi3e6UJkhqHYG?=
+ =?Windows-1252?Q?+fMvayuuldcS6j3F92FT/6Jymi6g6Th2UhM1AsG2FpwYHXfVndqQSerE?=
+ =?Windows-1252?Q?L32eqIRJtAU4io707xkEsqSEkBqw6LF1QYZImpbCPrfoDLwwmPX13JBA?=
+ =?Windows-1252?Q?mYnpFSJMKKeGYfUuTiFUkOafv/LrKP509SrKKooV3OXX4hGBUmhoiymg?=
+ =?Windows-1252?Q?HGJFu/1bqQQIntjolS7EN+5F8or0s3RSwSBCcXlTJ8o12xd7BHjqTxoN?=
+ =?Windows-1252?Q?pt5R/fQLsA9uGUddBKKPzjyyIloLhvEvflOPQu5BQBKVvHoIcThMzIgr?=
+ =?Windows-1252?Q?KvXEOcc+3dwDcmU/16LV5s4h5eW5pZZNWY7QysCMBDljlt077GNtaezG?=
+ =?Windows-1252?Q?+pDj/FNqdHcnWkqT7mwZs5+G9okYpHwhU4FP9GPUY1k4tbLh6oretxQR?=
+ =?Windows-1252?Q?y1pp3GhyD/zNxQwOgCfy/ABuxqFcJv6Z3q1z3L8Vq4gtpWm5mEzD+EKc?=
+MIME-Version: 1.0
+
+------=_Part_190140400_1079979678.1776940355621
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+Content-Disposition: inline
+
+Hello,
+
+Review of your submission has been completed. It is now eligible for distri=
+bution.
+
+Submission ID: bd1c3e93-1482-45fd-bb38-601a08596c70
+App Name: Call of Duty: Mobile VN
+
+Best regards,
+App Store Review
+------=_Part_190140400_1079979678.1776940355621
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+Content-Disposition: inline
+
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"><html xmlns=
+=3D"http://www.w3.org/1999/xhtml" xmlns:v=3D"urn:schemas-microsoft-com:vml"=
+ xmlns:o=3D"urn:schemas-microsoft-com:office:office"><head>
+<meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3Dutf-8"><t=
+itle>
+       =20
+       =20
+        Review of your Call of Duty: Mobile VN (iOS) submission is complete=
+.
+       =20
+    </title>
+    <meta name=3D"viewport" content=3D"width=3Ddevice-width">
+   =20
+   =20
+</head>
+<body style=3D"-ms-text-size-adjust:100%; -webkit-text-size-adjust:100%; ba=
+ckground-color:#ffffff; color:#333333; font-family:'SF Pro Text','SF Pro Ic=
+ons','Helvetica Neue',Helvetica,Arial,sans-serif; -webkit-font-smoothing:an=
+tialiased; font-size:17px; line-height:24px; margin:0; min-width:100%; padd=
+ing:0; text-align:left; width:100% !important;">
+<style>
+    @media only screen {
+        a:hover {
+            color: #0088cc;
+            text-decoration: underline !important;
+        }
+
+        a:active {
+            color: #0088cc !important;
+        }
+
+        a:visited {
+            color: #0088cc !important;
+        }
+
+        body * {
+            font-family: 'SF Pro Text', 'SF Pro Icons', 'Helvetica Neue', H=
+elvetica, Arial, sans-serif !important;
+            -webkit-font-smoothing: antialiased !important;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .row-content p,
+        .row-content p * {
+            font-weight: 400;
+        }
+    }
+
+    @media (max-width: 720px) {
+        table.body {
+            min-width: 320px !important;
+        }
+
+        table.body [class=3D"section"] {
+            background-color: transparent !important;
+            width: 90% !important;
+        }
+
+        table.body .container {
+            width: 100% !important;
+        }
+
+        table.body .copy-container {
+            width: 90% !important;
+        }
+    }
+
+    @media only screen and (max-width: 320px) {
+        table.body {
+            min-width: 280px !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .logo-container {
+            width: 90% !important;
+            margin: 0 auto !important;
+            text-align: left !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        table.header {
+            width: 100% !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .footer-wrapper .footer .container {
+            background-color: transparent !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .footer-wrapper .router-links p, .footer-wrapper .router-links td, =
+.footer-wrapper .router-links span {
+            font-size: 11px !important;
+            line-height: 11px !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .footer-wrapper .sosumi p {
+            text-align: left !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .footer-wrapper .sosumi .copy-container {
+            margin: 15px auto 15px !important;
+        }
+    }
+
+    @media (max-width: 550px) {
+        ul.router-content li:nth-of-type(3) a {
+            border-right: none !important;
+        }
+    }
+
+    @media (max-width: 414px) {
+        ul.router-content li:nth-of-type(2) a {
+            border-right: none !important;
+        }
+
+        ul.router-content li:nth-of-type(3) a {
+            border-right: 1px solid #ccc !important;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .footer-wrapper .router-links .copy-container {
+            margin: 15px auto 13px !important;
+            width: 90%;
+        }
+
+        .footer-wrapper .router-links .copy-container .router-link-phone ~ =
+.router-link-pipe {
+            display: none;
+        }
+
+        .footer-wrapper .router-links .copy-container .router-link-app {
+            white-space: nowrap !important;
+            display: block !important;
+            padding: 14px 0 0 !important;
+            border-top: 1px solid #d6d6d6 !important;
+            width: 100% !important;
+            margin: 14px auto 0 !important;
+        }
+    }
+
+</style>
+<table role=3D"presentation" class=3D"body" style=3D"border-collapse:collap=
+se; border-spacing:0; color:#333333; font-family:'SF Pro Text','SF Pro Icon=
+s','Helvetica Neue',Helvetica,Arial,sans-serif; -webkit-font-smoothing:anti=
+aliased; font-size:17px; height:100%; line-height:24px; margin:0; width:600=
+px; padding:0; text-align:left; vertical-align:top; width:100%;">
+    <tr>
+        <td align=3D"center" valign=3D"top">
+
+            <table role=3D"presentation" class=3D"section header" width=3D"=
+600" bgcolor=3D"#ffffff" style=3D"background-color:#ffffff; border-collapse=
+:collapse; border-spacing:0; margin:0; padding:0; text-align:inherit; verti=
+cal-align:top; width:600px;">
+                <tr>
+                    <td>
+                        <table role=3D"presentation" class=3D"container" al=
+ign=3D"center" width=3D"600" bgcolor=3D"#ffffff" style=3D"background-color:=
+#ffffff; border-collapse:collapse; border-spacing:0; margin:0; padding:0; t=
+ext-align:inherit; vertical-align:top; width:600px;">
+                            <tr>
+                                <td class=3D"logo" align=3D"left" style=3D"=
+padding:24px 0 0; text-align:left;">
+                                    <div class=3D"logo-container" style=3D"=
+margin:0; text-align:left;">
+                                        <div class=3D"image image-apple-ico=
+n"><img src=3D"https://developer.apple.com/click/images/apple_icon_2x.png" =
+width=3D"20" height=3D"25" alt=3D"" style=3D"-ms-interpolation-mode:bicubic=
+; border:none; clear:both; outline:none; text-decoration:none; margin:0;">
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+
+            <table role=3D"presentation" class=3D"section" width=3D"600" bg=
+color=3D"#fff" style=3D"background-color:#fff; border-collapse:collapse; bo=
+rder-spacing:0; padding:0; margin:0 auto; text-align:inherit; vertical-alig=
+n:top; width:600px;">
+                <tr height=3D"36" style=3D"height:36px;">
+                    <td></td>
+                </tr>
+                <tr>
+                    <td>
+
+                        <table role=3D"presentation" class=3D"container" wi=
+dth=3D"600" bgcolor=3D"#fff" style=3D"background-color:#fff; border-collaps=
+e:collapse; border-spacing:0; margin:0 auto; padding:0; text-align:inherit;=
+ vertical-align:top; width:600px;">
+                            <tr>
+                                <td>
+                                    <div class=3D"row-content">
+                                        <p style=3D"color:#333333; margin:0=
+; padding:0; line-height:1.6em; font-size:17px; font-family:'SF Pro Text','=
+SF Pro Icons','Helvetica Neue',Helvetica,Arial,sans-serif; -webkit-font-smo=
+othing:antialiased;">
+                                            Congratulations!
+                                        </p>
+                                       =20
+                                        <p style=3D"color:#333333; margin:0=
+; padding:0; line-height:1.6em; font-size:17px; font-family:'SF Pro Text','=
+SF Pro Icons','Helvetica Neue',Helvetica,Arial,sans-serif; -webkit-font-smo=
+othing:antialiased;">
+                                            Review of your submission has b=
+een completed. It is now eligible for distribution.
+                                           =20
+                                        </p>
+
+                                        <p style=3D"color:#333333; margin:0=
+; padding:18px 0 0; line-height:1.6em; font-size:17px; font-family:'SF Pro =
+Text','SF Pro Icons','Helvetica Neue',Helvetica,Arial,sans-serif; -webkit-f=
+ont-smoothing:antialiased;">
+                                           =20
+                                            Submitted:=20
+                                            Apr 23, 2026 at 03:18 AM Pacifi=
+c Daylight Time
+                                            <br>
+                                            Submitted by:
+                                            Store Admin
+                                            <br>
+                                           =20
+                                           =20
+                                            Number of items submitted:=20
+                                            5
+                                            <br>
+                                           =20
+                                            Submission ID:
+                                            bd1c3e93-1482-45fd-bb38-601a085=
+96c70
+                                            <br>
+                                            App Name:
+                                            Call of Duty: Mobile VN
+                                            <br>
+                                           =20
+                                                <a href=3D"https://apc01.sa=
+felinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fapps.apple.com%2Fapp%2F=
+call-of-duty-mobile-vn%2Fid1477030970&amp;data=3D05%7C02%7Cminhgv%40vng.com=
+.vn%7C45f63e6ebeee400b8ea508dea123a380%7C7c112a6e10e24e09afc42e37bc60d821%7=
+C0%7C0%7C639125371626141703%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWU=
+sIlYiOiIwLjAuMDAwMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7=
+C%7C%7C&amp;sdata=3DO1R0FhWnzkZPr48HVWlCRQEiwCIgbNKbmZ271%2BJSeqQ%3D&amp;re=
+served=3D0" originalsrc=3D"https://apps.apple.com/app/call-of-duty-mobile-v=
+n/id1477030970" style=3D"color: #0088cc; text-decoration: none;" class=3D"a=
+apl-link">
+                                                    https://apps.apple.com/=
+app/call-of-duty-mobile-vn/id1477030970
+                                                </a><br>
+                                           =20
+                                        </p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </table>
+
+                        <table role=3D"presentation" class=3D"container" wi=
+dth=3D"600" bgcolor=3D"#fafafa" style=3D"background-color:#fafafa; border-r=
+adius:17px; border-collapse:collapse; border-spacing:0; margin:30px auto 0;=
+ padding:0; text-align:inherit; vertical-align:top; width:600px;">
+                            <tr>
+                                <td>
+                                    <div class=3D"row-content" style=3D"mar=
+gin:30px">
+                                        <h2 style=3D"color:#333333; margin:=
+5px 0 0; padding:0; line-height:1.2em; font-size:24px; font-weight:600; fon=
+t-family:'SF Pro Text','SF Pro Icons','Helvetica Neue',Helvetica,Arial,sans=
+-serif; -webkit-font-smoothing:antialiased;">
+                                            Accepted items</h2>
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+                                       =20
+                                            <h3 style=3D"color:#333333; mar=
+gin:18px 0 0; padding:0; line-height:1.2em; font-size:17px; font-weight:600=
+; font-family:'SF Pro Text','SF Pro Icons','Helvetica Neue',Helvetica,Arial=
+,sans-serif; -webkit-font-smoothing:antialiased;">
+                                                In-App Events (5)</h3>
+
+                                           =20
+                                       =20
+
+                                       =20
+
+
+                                       =20
+
+                                       =20
+
+                                        <p style=3D"text-align: left; margi=
+n: 24px 0 24px 0;"><a style=3D"font-family:system,-apple-system,-webkit-sys=
+tem-font,SFNSText,'Segoe UI','Helvetica Neue',Helvetica,Arial,sans-serif; f=
+ont-weight: 400; background-color: #0071e3; color: #ffffff; font-size: 15px=
+; display: inline-block; padding: 0.5em 1.5em; text-decoration: none; text-=
+align: left; -webkit-border-radius: 0.5em; -moz-border-radius: 0.5em; -o-bo=
+rder-radius:0.5em; border-radius: 0.5em; margin: 0 auto; white-space:nowrap=
+;" href=3D"https://apc01.safelinks.protection.outlook.com/?url=3Dhttps%3A%2=
+F%2Fappstoreconnect.apple.com%2Folympus%2Fv1%2Fsession%2FswitchTo%2F69a6de7=
+1-54ad-47e3-e053-5b8c7c11a4d1%3FtargetUrl%3D%2Fapps%2F1477030970%2Fappstore=
+%2Freviewsubmissions%2Fdetails%2Fbd1c3e93-1482-45fd-bb38-601a08596c70&amp;d=
+ata=3D05%7C02%7Cminhgv%40vng.com.vn%7C45f63e6ebeee400b8ea508dea123a380%7C7c=
+112a6e10e24e09afc42e37bc60d821%7C0%7C0%7C639125371626186380%7CUnknown%7CTWF=
+pbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIwLjAuMDAwMCIsIlAiOiJXaW4zMiIsIkFOIj=
+oiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&amp;sdata=3DU%2BxC99eeUCQj4mzKWlud0=
+Z3U3Nu5LAMdnoOkL%2Bo05vo%3D&amp;reserved=3D0" originalsrc=3D"https://appsto=
+reconnect.apple.com/olympus/v1/session/switchTo/69a6de71-54ad-47e3-e053-5b8=
+c7c11a4d1?targetUrl=3D/apps/1477030970/appstore/reviewsubmissions/details/b=
+d1c3e93-1482-45fd-bb38-601a08596c70">View in
+                                            App&nbsp;Store&nbsp;Connect</a>=
+</p>
+
+                                        <p style=3D"color:#333333; margin:0=
+; padding:0 0 18px; line-height:1.6em; font-size:14px; font-family:'SF Pro =
+Text','SF Pro Icons','Helvetica Neue',Helvetica,Arial,sans-serif; -webkit-f=
+ont-smoothing:antialiased;">
+                                            Please note that it can take up=
+ to 24 hours after release for items to become publicly available.
+                                           =20
+                                        </p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </table>
+
+
+                        <table role=3D"presentation" class=3D"container" wi=
+dth=3D"600" bgcolor=3D"#fafafa" style=3D"background-color:#fafafa; border-r=
+adius:17px; border-collapse:collapse; border-spacing:0; margin:30px auto 0;=
+ padding:0; text-align:inherit; vertical-align:top; width:600px;">
+                            <tr>
+                                <td>
+                                   =20
+                                        <div class=3D"row-content" style=3D=
+"margin:30px">
+                                            <h2 style=3D"color:#333333; mar=
+gin:5px 0 0; padding:0 0 24px; line-height:1.2em; font-size:24px; font-weig=
+ht:600; font-family:'SF Pro Text','SF Pro Icons','Helvetica Neue',Helvetica=
+,Arial,sans-serif; -webkit-font-smoothing:antialiased;">
+                                                Supporting your success on =
+the App Store</h2>
+   =20
+                                            <p style=3D"color:#333333; marg=
+in:0; padding:0 0 18px; line-height:1.6em; font-size:17px; font-family:'SF =
+Pro Text','SF Pro Icons','Helvetica Neue',Helvetica,Arial,sans-serif; -webk=
+it-font-smoothing:antialiased;">
+                                                <a href=3D"https://apc01.sa=
+felinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fdeveloper.apple.com%2Fa=
+pp-store%2Fpromote%2F&amp;data=3D05%7C02%7Cminhgv%40vng.com.vn%7C45f63e6ebe=
+ee400b8ea508dea123a380%7C7c112a6e10e24e09afc42e37bc60d821%7C0%7C0%7C6391253=
+71626239320%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIwLjAuMDA=
+wMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&amp;sdat=
+a=3DpqlNPT5GYcTwqUwW5mp%2F3Rp356TyNxOph1VNqd%2FaYY4%3D&amp;reserved=3D0" or=
+iginalsrc=3D"https://developer.apple.com/app-store/promote/" style=3D"color=
+:#0088cc; text-decoration:none; font-weight:600;" class=3D"aapl-link">Promo=
+ting your apps</a><br>
+                                                Take advantage of marketing=
+ guidance, tools, and promotional offers to drive discovery.</p>
+   =20
+                                            <p style=3D"color:#333333; marg=
+in:0; padding:0 0 18px; line-height:1.6em; font-size:17px; font-family:'SF =
+Pro Text','SF Pro Icons','Helvetica Neue',Helvetica,Arial,sans-serif; -webk=
+it-font-smoothing:antialiased;">
+                                                <a href=3D"https://apc01.sa=
+felinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fdeveloper.apple.com%2Fa=
+pp-store-connect%2Fanalytics%2F&amp;data=3D05%7C02%7Cminhgv%40vng.com.vn%7C=
+45f63e6ebeee400b8ea508dea123a380%7C7c112a6e10e24e09afc42e37bc60d821%7C0%7C0=
+%7C639125371626286879%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiO=
+iIwLjAuMDAwMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7=
+C&amp;sdata=3DX3TPXtcae8JySwj47rtwNhaaijGOmt6KMajXpjucvU0%3D&amp;reserved=
+=3D0" originalsrc=3D"https://developer.apple.com/app-store-connect/analytic=
+s/" style=3D"color:#0088cc; text-decoration:none; font-weight:600;" class=
+=3D"aapl-link">App Analytics</a><br>
+                                                Measure your app=E2=80=99s =
+performance and gain unique insights with a variety of features in App Stor=
+e Connect.</p>
+   =20
+                                            <p style=3D"color:#333333; marg=
+in:0; padding:0 0 18px; line-height:1.6em; font-size:17px; font-family:'SF =
+Pro Text','SF Pro Icons','Helvetica Neue',Helvetica,Arial,sans-serif; -webk=
+it-font-smoothing:antialiased;">
+                                                <a href=3D"https://apc01.sa=
+felinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fdeveloper.apple.com%2Fa=
+pp-store%2Fratings-and-reviews%2F&amp;data=3D05%7C02%7Cminhgv%40vng.com.vn%=
+7C45f63e6ebeee400b8ea508dea123a380%7C7c112a6e10e24e09afc42e37bc60d821%7C0%7=
+C0%7C639125371626335297%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlY=
+iOiIwLjAuMDAwMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C=
+%7C&amp;sdata=3D3tX7oThKjJXMweBg9HyPK%2B2W6STpG0M5N5wzYTjPcyk%3D&amp;reserv=
+ed=3D0" originalsrc=3D"https://developer.apple.com/app-store/ratings-and-re=
+views/" style=3D"color:#0088cc; text-decoration:none; font-weight:600;" cla=
+ss=3D"aapl-link">Ratings and reviews</a><br>
+                                                Ask for ratings and respond=
+ to reviews to build rapport and encourage downloads.</p>
+   =20
+                                            <p style=3D"color:#333333; marg=
+in:0; padding:0 0 18px; line-height:1.6em; font-size:17px; font-family:'SF =
+Pro Text','SF Pro Icons','Helvetica Neue',Helvetica,Arial,sans-serif; -webk=
+it-font-smoothing:antialiased;">
+                                                <a href=3D"https://apc01.sa=
+felinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fdeveloper.apple.com%2Fa=
+pp-store%2Fapp-updates%2F&amp;data=3D05%7C02%7Cminhgv%40vng.com.vn%7C45f63e=
+6ebeee400b8ea508dea123a380%7C7c112a6e10e24e09afc42e37bc60d821%7C0%7C0%7C639=
+125371626384691%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIwLjA=
+uMDAwMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&amp;=
+sdata=3DbFIYY3FN52iDym9eLigBGUuKjnniN2O5glBgkOxZkts%3D&amp;reserved=3D0" or=
+iginalsrc=3D"https://developer.apple.com/app-store/app-updates/" style=3D"c=
+olor:#0088cc; text-decoration:none; font-weight:600;" class=3D"aapl-link">A=
+pp updates</a><br>
+                                                Stay competitive, engage cu=
+rrent users, and attract new ones with regular updates.</p>
+                                        </div>
+                                       =20
+                                </td>
+                            </tr>
+                        </table>
+
+
+                    </td>
+                </tr>
+                <tr height=3D"30" style=3D"height:30px;">
+                    <td></td>
+                </tr>
+            </table>
+            <div class=3D"footer-wrapper" style=3D"background-color:#fff;">
+                <table role=3D"presentation" class=3D"section" width=3D"600=
+" bgcolor=3D"#ffffff" style=3D"background-color:#ffffff; border-collapse:co=
+llapse; border-spacing:0; margin:0 auto; padding:0; text-align:inherit; ver=
+tical-align:top; width:600px;">
+                    <tr>
+                        <td style=3D"color:#999999; font-size:9px; line-hei=
+ght:12px; margin:0; mso-line-height-rule:exactly; padding:0; text-align:lef=
+t; vertical-align:top;">
+                           =20
+                            <table role=3D"presentation" class=3D"footer" s=
+tyle=3D"border-spacing:0; border-collapse:collapse; vertical-align:top; tex=
+t-align:inherit; width:100%; margin:0px 0px 10px 0px; padding:0;">
+                                <tr style=3D"vertical-align:top; text-align=
+:left; padding:0;">
+                                    <td style=3D" border-collapse:collapse =
+!important; vertical-align:top; text-align:left; padding:25px 0 0 0;" valig=
+n=3D"top">
+                                        <p class=3D"left-align-mobile" styl=
+e=3D"color:#999999; font-size:10px; text-align:left; display:block; line-he=
+ight:1.5em; margin:0; padding:0 10px 10px;" align=3D"center"> TM and =C2=A9
+                                            2026
+                                            Apple Inc.<br>One Apple
+                                            Park Way, Cupertino, CA 95014.<=
+br><br><a href=3D"https://apc01.safelinks.protection.outlook.com/?url=3Dhtt=
+ps%3A%2F%2Fwww.apple.com%2Flegal%2Finternet-services%2Fitunes%2F&amp;data=
+=3D05%7C02%7Cminhgv%40vng.com.vn%7C45f63e6ebeee400b8ea508dea123a380%7C7c112=
+a6e10e24e09afc42e37bc60d821%7C0%7C0%7C639125371626431263%7CUnknown%7CTWFpbG=
+Zsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIwLjAuMDAwMCIsIlAiOiJXaW4zMiIsIkFOIjoiT=
+WFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&amp;sdata=3DFdQ7qaBOVQvlLo8ypGXfSzWY5q=
+YT3Oo15GlVfkKI1Rs%3D&amp;reserved=3D0" originalsrc=3D"https://www.apple.com=
+/legal/internet-services/itunes/" style=3D"color:#999999; text-decoration:u=
+nderline;">Terms
+                                                of Service</a> | <a href=3D=
+"https://apc01.safelinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fwww.ap=
+ple.com%2Flegal%2Fprivacy%2F&amp;data=3D05%7C02%7Cminhgv%40vng.com.vn%7C45f=
+63e6ebeee400b8ea508dea123a380%7C7c112a6e10e24e09afc42e37bc60d821%7C0%7C0%7C=
+639125371626480065%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIw=
+LjAuMDAwMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&a=
+mp;sdata=3DELLtGkIcr9dqhqbQorM8m%2BjfMStdlrxDhk2b8d0u%2BhY%3D&amp;reserved=
+=3D0" originalsrc=3D"https://www.apple.com/legal/privacy/" style=3D"color:#=
+999999; text-decoration:underline;">Privacy
+                                                Policy</a> | <a href=3D"htt=
+ps://apc01.safelinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fdeveloper.=
+apple.com%2Fcontact%2F&amp;data=3D05%7C02%7Cminhgv%40vng.com.vn%7C45f63e6eb=
+eee400b8ea508dea123a380%7C7c112a6e10e24e09afc42e37bc60d821%7C0%7C0%7C639125=
+371626539236%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIwLjAuMD=
+AwMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&amp;sda=
+ta=3Dik2fBFDUaepuFq9ipsHGr0o3Ju8ra3XD%2Bumw1kRoEzE%3D&amp;reserved=3D0" ori=
+ginalsrc=3D"https://developer.apple.com/contact/" style=3D"color:#999999; t=
+ext-decoration:underline;">Contact
+                                                Us</a> | <a href=3D"https:/=
+/apc01.safelinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fappstoreconnec=
+t.apple.com%2F&amp;data=3D05%7C02%7Cminhgv%40vng.com.vn%7C45f63e6ebeee400b8=
+ea508dea123a380%7C7c112a6e10e24e09afc42e37bc60d821%7C0%7C0%7C63912537162658=
+9291%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIwLjAuMDAwMCIsIl=
+AiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&amp;sdata=3DFk7=
+IrSy2Jxy8U8tMlX8qvmpQBD9XFxlrxmiQ2W6Dz2w%3D&amp;reserved=3D0" originalsrc=
+=3D"https://appstoreconnect.apple.com/" style=3D"color:#999999; text-decora=
+tion:underline;">App Store
+                                                Connect</a>
+                                        </p>
+                                    </td>
+                                </tr>
+                                <tr style=3D"height:32px;">
+                                    <td></td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </td>
+    </tr>
+</table>
+
+</body>
+</html>=
+
+------=_Part_190140400_1079979678.1776940355621--
+
