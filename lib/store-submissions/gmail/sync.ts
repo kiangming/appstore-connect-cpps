@@ -47,6 +47,8 @@
  * trail.
  */
 
+import * as Sentry from '@sentry/nextjs';
+
 import { classify } from '../classifier';
 import type {
   ClassificationResult,
@@ -73,6 +75,7 @@ import {
   RefreshTokenInvalidError,
   SyncInProgressError,
 } from './errors';
+import { extractApple, type ExtractedPayload } from './html-extractor';
 import { parseGmailMessage, type ParsedEmail } from './parser';
 import {
   createSenderResolver,
@@ -410,6 +413,24 @@ async function processMessage(
     return;
   }
 
+  // 3b. Apple HTML extractor (PR-11). Apple text/plain bodies carry only
+  //     "Submission ID + App Name" — the type signal lives in the HTML
+  //     alternative. Extract here so both the classifier (PR-11.4) and
+  //     the persisted row receive the structured payload.
+  //
+  //     Gating on platformKey === 'apple': non-Apple platforms keep
+  //     `extracted_payload` NULL (signal: extraction not attempted),
+  //     distinct from `{ accepted_items: [] }` (signal: Apple email with
+  //     no Accepted items section, e.g. a rejection or marketing mail).
+  //     PR-11.5 reclassify uses this distinction.
+  const extractedPayload: ExtractedPayload | null =
+    platformRes.platformKey === 'apple'
+      ? extractApple(parsed.bodyHtml)
+      : null;
+  if (extractedPayload) {
+    alertOnUnknownExtractedTypes(extractedPayload, parsed.messageId);
+  }
+
   // 4. Load rules (memoized per run). If platform has no rules
   //    configured yet, mark ERROR — a sender in the senders table with
   //    no rules is a config gap that Managers must address.
@@ -434,6 +455,7 @@ async function processMessage(
         platform_key: platformRes.platformKey,
       },
       errorMessage: message,
+      extractedPayload,
     });
     ctx.stats.errors++;
     return;
@@ -444,6 +466,7 @@ async function processMessage(
     sender: parsed.fromEmail,
     subject: parsed.subject,
     body: parsed.body,
+    extracted_payload: extractedPayload,
   };
   const classification = classify(classInput, rules);
 
@@ -463,6 +486,7 @@ async function processMessage(
       classifier_version: CLASSIFIER_VERSION,
     },
     errorMessage: errorMsg,
+    extractedPayload,
   });
 
   incrementStatsFor(classification.status, ctx.stats);
@@ -556,6 +580,15 @@ interface EmailMessageRow {
   /** Full classifier output + classifier_version stamp. */
   classificationResult: Record<string, unknown>;
   errorMessage?: string | null;
+  /**
+   * PR-11. Apple HTML extractor output. NULL on three paths:
+   *   - parse-error path (no parsed email, no HTML to extract)
+   *   - NO_SENDER_MATCH path (no platform resolution, extractor not run)
+   *   - non-Apple platform (extractor is Apple-only until PR-12+)
+   * Apple emails always persist a non-null payload, even when
+   * `accepted_items` is empty (signals "extraction attempted, no items").
+   */
+  extractedPayload?: ExtractedPayload | null;
 }
 
 async function emailAlreadyPersisted(gmailMsgId: string): Promise<boolean> {
@@ -601,6 +634,7 @@ async function insertEmailMessageRow(
       classification_result: row.classificationResult,
       processed_at: new Date().toISOString(),
       error_message: row.errorMessage ?? null,
+      extracted_payload: row.extractedPayload ?? null,
       // ticket_id left NULL at INSERT — the PR-8 ticket wire back-fills
       // it via UPDATE for ticketable statuses (CLASSIFIED + UNCLASSIFIED_*).
       ticket_id: null,
@@ -635,6 +669,42 @@ function isUniqueViolation(err: { code?: string; message?: string }): boolean {
 function clampBatchSize(requested: number | undefined): number {
   if (!requested || requested < 1) return DEFAULT_MAX_BATCH;
   return Math.min(requested, HARD_CAP_MAX_BATCH);
+}
+
+/**
+ * Surface unrecognized Apple heading variations to Sentry as a warning.
+ *
+ * Empty `accepted_items` is NOT an alert — it just means the email had
+ * no Accepted items section (rejection notices, marketing, system
+ * digests). UNKNOWN means we found an `<h3>` under "Accepted items" that
+ * none of the 4 patterns matched. Apple may have introduced a new type
+ * variant or template — flag it so we can extend `html-extractor.ts`
+ * before the bucket fills with UNCLASSIFIED rows.
+ *
+ * Sentry has no DSN in test/dev envs and is a no-op there; production
+ * captures the warning under `component: 'html-extractor'`.
+ */
+function alertOnUnknownExtractedTypes(
+  payload: ExtractedPayload,
+  gmailMsgId: string,
+): void {
+  const unknown = payload.accepted_items.filter((it) => it.type === 'UNKNOWN');
+  if (unknown.length === 0) return;
+  Sentry.captureMessage(
+    `Unknown Apple heading variation(s): ${unknown
+      .map((i) => i.raw_heading.trim())
+      .join(', ')}`,
+    {
+      level: 'warning',
+      tags: { component: 'html-extractor', gmail_msg_id: gmailMsgId },
+      extra: {
+        unknown_items: unknown.map((i) => ({
+          heading: i.raw_heading,
+          body: i.raw_body,
+        })),
+      },
+    },
+  );
 }
 
 // Re-export error classes commonly caught by the endpoint (7.3.2) for

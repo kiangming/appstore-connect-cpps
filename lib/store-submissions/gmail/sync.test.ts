@@ -39,12 +39,17 @@ const hoisted = vi.hoisted(() => ({
   mockCreateSenderResolver: vi.fn(),
   // ./parser
   mockParseGmailMessage: vi.fn(),
+  // ./html-extractor
+  mockExtractApple: vi.fn(),
   // ../queries/rules
   mockGetRulesSnapshot: vi.fn(),
   // ../classifier
   mockClassify: vi.fn(),
   // ../tickets/wire
   mockAssociateEmailWithTicket: vi.fn(),
+  // @sentry/nextjs
+  mockSentryCaptureMessage: vi.fn(),
+  mockSentryCaptureException: vi.fn(),
   // ../db
   mockFrom: vi.fn(),
   mockSelect: vi.fn(),
@@ -85,6 +90,10 @@ vi.mock('./parser', () => ({
   TRUNCATION_MARKER: '\n\n[... truncated at 100KB]',
 }));
 
+vi.mock('./html-extractor', () => ({
+  extractApple: hoisted.mockExtractApple,
+}));
+
 vi.mock('../queries/rules', () => ({
   getRulesSnapshotForPlatform: hoisted.mockGetRulesSnapshot,
 }));
@@ -95,6 +104,11 @@ vi.mock('../classifier', () => ({
 
 vi.mock('../tickets/wire', () => ({
   associateEmailWithTicket: hoisted.mockAssociateEmailWithTicket,
+}));
+
+vi.mock('@sentry/nextjs', () => ({
+  captureMessage: hoisted.mockSentryCaptureMessage,
+  captureException: hoisted.mockSentryCaptureException,
 }));
 
 vi.mock('../db', () => ({
@@ -117,6 +131,9 @@ beforeEach(() => {
   hoisted.mockCreateGmailClient.mockResolvedValue({ __brand: 'gmail' });
   hoisted.mockLoadActiveSenders.mockResolvedValue([]);
   hoisted.mockCreateSenderResolver.mockReturnValue(() => null); // default: drop everything
+  // Default extractor: empty payload (no Accepted items section detected).
+  // Tests that exercise the extractor branch override per-call.
+  hoisted.mockExtractApple.mockReturnValue({ accepted_items: [] });
   hoisted.mockGetSyncState.mockResolvedValue({
     lastHistoryId: '1000',
     lastSyncedAt: null,
@@ -195,6 +212,7 @@ function mockParsedEmail(overrides: Partial<Record<string, unknown>> = {}) {
     to: overrides.to ?? ['team@studio.com'],
     subject: overrides.subject ?? 'subj',
     body: overrides.body ?? 'body',
+    bodyHtml: overrides.bodyHtml ?? '<html><body>html</body></html>',
     receivedAt: overrides.receivedAt ?? new Date('2026-04-20T10:00:00Z'),
     labels: overrides.labels ?? ['INBOX'],
   };
@@ -1245,5 +1263,215 @@ describe('runSync — sync_logs', () => {
       emailsDropped: 1,
       emailsErrored: 1,
     });
+  });
+});
+
+/* ============================================================================
+ * PR-11: HTML extractor wire
+ *
+ * Verifies sync.ts:
+ *   - Calls extractApple(parsed.bodyHtml) iff sender resolves to apple.
+ *   - Threads extracted_payload into both the classifier EmailInput and
+ *     the email_messages INSERT row.
+ *   - Fires Sentry warning when the extractor surfaces UNKNOWN headings
+ *     (early-warning signal that Apple changed the template).
+ *   - Persists `null` for non-Apple senders + DROPPED-pre-resolution.
+ * ========================================================================== */
+
+describe('runSync — HTML extractor wire (PR-11)', () => {
+  /** Helper: prime the mocks for a single Apple-sender CLASSIFIED message. */
+  function primeApple(msgId: string) {
+    mockHistoryDelta([msgId], '1100');
+    hoisted.mockGetMessage.mockResolvedValueOnce({ id: msgId, threadId: 't1' });
+    hoisted.mockParseGmailMessage.mockReturnValueOnce(
+      mockParsedEmail({
+        messageId: msgId,
+        bodyHtml: '<html><body>apple html</body></html>',
+      }),
+    );
+    hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => ({
+      platformId: 'apple-uuid',
+      platformKey: 'apple',
+    }));
+    hoisted.mockGetRulesSnapshot.mockResolvedValueOnce({
+      platform_id: 'apple-uuid',
+      platform_key: 'apple',
+      senders: [],
+      subject_patterns: [],
+      types: [],
+      submission_id_patterns: [],
+      apps_with_aliases: [],
+    });
+    hoisted.mockClassify.mockReturnValueOnce({
+      status: 'CLASSIFIED',
+      platform_id: 'apple-uuid',
+      app_id: 'app-1',
+      type_id: 'type-1',
+      outcome: 'APPROVED',
+      type_payload: {},
+      submission_id: null,
+      extracted_app_name: 'X',
+      matched_rules: [],
+    });
+  }
+
+  it('calls extractApple with parsed.bodyHtml when sender is Apple', async () => {
+    primeApple('m1');
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockExtractApple).toHaveBeenCalledTimes(1);
+    expect(hoisted.mockExtractApple).toHaveBeenCalledWith(
+      '<html><body>apple html</body></html>',
+    );
+  });
+
+  it('threads extracted_payload into classifier EmailInput', async () => {
+    const payload = {
+      accepted_items: [
+        {
+          type: 'APP_VERSION',
+          raw_heading: 'App Version',
+          raw_body: '1.0.13 for iOS',
+          version: '1.0.13',
+          platform: 'iOS',
+        },
+      ],
+    };
+    primeApple('m1');
+    hoisted.mockExtractApple.mockReturnValueOnce(payload);
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockClassify).toHaveBeenCalledTimes(1);
+    const classifierInput = hoisted.mockClassify.mock.calls[0][0];
+    expect(classifierInput.extracted_payload).toEqual(payload);
+  });
+
+  it('persists extracted_payload on email_messages INSERT', async () => {
+    const payload = { accepted_items: [] };
+    primeApple('m1');
+    hoisted.mockExtractApple.mockReturnValueOnce(payload);
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockInsert).toHaveBeenCalledTimes(1);
+    const insertRow = hoisted.mockInsert.mock.calls[0][0];
+    expect(insertRow.extracted_payload).toEqual(payload);
+  });
+
+  it('fires Sentry warning when extractor surfaces UNKNOWN heading', async () => {
+    primeApple('m1');
+    hoisted.mockExtractApple.mockReturnValueOnce({
+      accepted_items: [
+        {
+          type: 'UNKNOWN',
+          raw_heading: 'Future Apple Type',
+          raw_body: 'some new payload',
+        },
+      ],
+    });
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockSentryCaptureMessage).toHaveBeenCalledTimes(1);
+    const [message, context] =
+      hoisted.mockSentryCaptureMessage.mock.calls[0];
+    expect(message).toMatch(/Future Apple Type/);
+    expect(context.level).toBe('warning');
+    expect(context.tags.component).toBe('html-extractor');
+    expect(context.tags.gmail_msg_id).toBe('m1');
+  });
+
+  it('does not alert Sentry when accepted_items is empty', async () => {
+    primeApple('m1');
+    // Default mockReturnValue is { accepted_items: [] } — no override needed.
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockSentryCaptureMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not alert Sentry when only known types are present', async () => {
+    primeApple('m1');
+    hoisted.mockExtractApple.mockReturnValueOnce({
+      accepted_items: [
+        {
+          type: 'APP_VERSION',
+          raw_heading: 'App Version',
+          raw_body: '2.0.0 for iOS',
+          version: '2.0.0',
+          platform: 'iOS',
+        },
+      ],
+    });
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockSentryCaptureMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not run extractor for non-Apple platforms', async () => {
+    mockHistoryDelta(['m1'], '1100');
+    hoisted.mockGetMessage.mockResolvedValueOnce({ id: 'm1', threadId: 't1' });
+    hoisted.mockParseGmailMessage.mockReturnValueOnce(mockParsedEmail());
+    hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => ({
+      platformId: 'google-uuid',
+      platformKey: 'google',
+    }));
+    hoisted.mockGetRulesSnapshot.mockResolvedValueOnce({
+      platform_id: 'google-uuid',
+      platform_key: 'google',
+      senders: [],
+      subject_patterns: [],
+      types: [],
+      submission_id_patterns: [],
+      apps_with_aliases: [],
+    });
+    hoisted.mockClassify.mockReturnValueOnce({
+      status: 'CLASSIFIED',
+      platform_id: 'google-uuid',
+      app_id: 'app-1',
+      type_id: 'type-1',
+      outcome: 'APPROVED',
+      type_payload: {},
+      submission_id: null,
+      extracted_app_name: 'X',
+      matched_rules: [],
+    });
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockExtractApple).not.toHaveBeenCalled();
+
+    // INSERT row: extracted_payload null (not the empty-array signal —
+    // null means extraction was not attempted for this platform).
+    const insertRow = hoisted.mockInsert.mock.calls[0][0];
+    expect(insertRow.extracted_payload).toBeNull();
+
+    // Classifier input also receives null (typed as nullable).
+    const classifierInput = hoisted.mockClassify.mock.calls[0][0];
+    expect(classifierInput.extracted_payload).toBeNull();
+  });
+
+  it('skips extractor on NO_SENDER_MATCH and persists null', async () => {
+    mockHistoryDelta(['m1'], '1100');
+    hoisted.mockGetMessage.mockResolvedValueOnce({ id: 'm1', threadId: 't1' });
+    hoisted.mockParseGmailMessage.mockReturnValueOnce(
+      mockParsedEmail({ fromEmail: 'spam@unknown.com' }),
+    );
+    hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => null);
+
+    const { runSync } = await import('./sync');
+    await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(hoisted.mockExtractApple).not.toHaveBeenCalled();
+    const insertRow = hoisted.mockInsert.mock.calls[0][0];
+    expect(insertRow.extracted_payload).toBeNull();
   });
 });

@@ -13,6 +13,7 @@
  * their DB rows into these shapes.
  */
 
+import type { ExtractedPayload } from '../gmail/html-extractor';
 import type { Outcome } from '../schemas/rules';
 
 // -- Inputs --------------------------------------------------------------
@@ -34,6 +35,14 @@ export interface EmailInput {
    * clips to 100_000 chars (spec §4.3).
    */
   body: string;
+  /**
+   * Structured payload extracted from the HTML alternative part. PR-11
+   * adds this for Apple emails (where text/plain has no type signal).
+   * `null` for non-Apple platforms today; PR-12+ may populate per
+   * platform. The classifier (PR-11.4) consults this before falling
+   * back to body keyword matching.
+   */
+  extracted_payload?: ExtractedPayload | null;
 }
 
 export interface Sender {
