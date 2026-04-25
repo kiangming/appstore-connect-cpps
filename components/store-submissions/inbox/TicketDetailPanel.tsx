@@ -34,9 +34,10 @@
 import { useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { formatDistanceToNow } from 'date-fns';
-import { Check, ChevronRight, Copy, X } from 'lucide-react';
+import { Check, ChevronRight, Copy, Plus, X } from 'lucide-react';
 
 import type { StoreRole } from '@/lib/store-submissions/auth';
+import { canPerformAction } from '@/lib/store-submissions/tickets/auth';
 import type { TicketWithEntries } from '@/lib/store-submissions/queries/tickets';
 import {
   OutcomeBadge,
@@ -44,6 +45,7 @@ import {
   PriorityBadge,
   StateBadge,
 } from './TicketBadges';
+import { CommentForm } from './CommentForm';
 import { TicketActionsBar } from './TicketActionsBar';
 import { TicketEntriesTimeline } from './TicketEntriesTimeline';
 
@@ -99,6 +101,20 @@ export function TicketDetailPanel({
                     <TicketEntriesTimeline entries={ticket.entries} />
                   </div>
                 </section>
+
+                {/* Composer — comment + reject-reason inline expand.
+                    Hidden entirely for VIEWER. Reject-reason stays
+                    behind a toggle to keep the at-rest UI uncluttered
+                    (PR-10c.3.1 UX-Q1 Option B). */}
+                {canPerformAction(userRole, 'ADD_COMMENT') && (
+                  <ComposerSection
+                    ticketId={ticket.ticket.id}
+                    canAddRejectReason={canPerformAction(
+                      userRole,
+                      'ADD_REJECT_REASON',
+                    )}
+                  />
+                )}
               </>
             )}
           </div>
@@ -359,4 +375,71 @@ function absoluteTs(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString();
+}
+
+// -- Composer (comment + reject-reason inline expand) ---------------------
+
+/**
+ * Renders the always-visible comment textarea + a toggle button that
+ * inline-expands a reject-reason form. Decision per PR-10c.3.1 UX-Q1
+ * Option B: keep the at-rest panel uncluttered while the affordance
+ * stays discoverable.
+ *
+ * `canAddRejectReason` is the role gate for the toggle; the comment
+ * form's outer gate is the panel's `canPerformAction(userRole,
+ * 'ADD_COMMENT')` check, so this component assumes the gate already
+ * passed (no defensive re-check).
+ */
+function ComposerSection({
+  ticketId,
+  canAddRejectReason,
+}: {
+  ticketId: string;
+  canAddRejectReason: boolean;
+}) {
+  const [rejectOpen, setRejectOpen] = useState(false);
+
+  return (
+    <section className="px-5 py-4 border-t border-slate-100 space-y-4">
+      <div>
+        <SectionLabel>Add a comment</SectionLabel>
+        <div className="mt-3">
+          <CommentForm ticketId={ticketId} mode="comment" />
+        </div>
+      </div>
+
+      {canAddRejectReason && (
+        <div>
+          {!rejectOpen ? (
+            <button
+              type="button"
+              onClick={() => setRejectOpen(true)}
+              className="inline-flex items-center gap-1.5 text-[13px] text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-300 bg-white rounded-lg px-3 py-1.5 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" strokeWidth={1.8} />
+              Add rejection reason
+            </button>
+          ) : (
+            <div>
+              <SectionLabel>Add rejection reason</SectionLabel>
+              <div className="mt-3">
+                <CommentForm
+                  ticketId={ticketId}
+                  mode="reject_reason"
+                  onSuccess={() => setRejectOpen(false)}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setRejectOpen(false)}
+                className="mt-2 text-[12px] text-slate-500 hover:text-slate-700"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
 }

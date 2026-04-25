@@ -44,7 +44,10 @@ vi.mock('@/lib/store-submissions/tickets/user-actions', async () => {
 
 import { StoreForbiddenError, StoreUnauthorizedError } from '@/lib/store-submissions/auth';
 import {
+  addCommentAction,
+  addRejectReasonAction,
   archiveTicketAction,
+  editCommentAction,
   followUpTicketAction,
   markDoneTicketAction,
   unarchiveTicketAction,
@@ -363,9 +366,9 @@ describe('Server Actions — dispatcher error → ActionError mapping', () => {
   });
 });
 
-// -- Per-action request-type contract (quick regression guard) -------------
+// -- Per-action request-type contract (state transitions) -----------------
 
-describe('Server Actions — request-type routing', () => {
+describe('Server Actions — state-transition request-type routing', () => {
   it.each([
     ['archive', archiveTicketAction, 'ARCHIVE'],
     ['follow-up', followUpTicketAction, 'FOLLOW_UP'],
@@ -392,4 +395,172 @@ describe('Server Actions — request-type routing', () => {
       );
     },
   );
+});
+
+// -- Comment + reject-reason actions (PR-10c.3.1) -------------------------
+
+const ENTRY_ID = '22222222-2222-4222-8222-222222222222';
+
+describe('addCommentAction', () => {
+  it('happy path: forwards content to dispatcher with ADD_COMMENT type', async () => {
+    setSessionDev();
+    mockExecuteUserAction.mockResolvedValue({
+      ticketId: TICKET_ID,
+      previousState: 'IN_REVIEW',
+      newState: 'IN_REVIEW',
+      stateChanged: false,
+      entryId: 'entry-c1',
+    });
+
+    const result = await addCommentAction(TICKET_ID, '  trimmed by RPC  ');
+
+    // Dispatcher receives raw content; BTRIM lives server-side in RPC.
+    expect(mockExecuteUserAction).toHaveBeenCalledWith({
+      ticketId: TICKET_ID,
+      actor: { id: 'user-dev', role: 'DEV' },
+      request: { type: 'ADD_COMMENT', content: '  trimmed by RPC  ' },
+    });
+    expect(mockRevalidatePath).toHaveBeenCalledWith('/store-submissions/inbox');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.entryId).toBe('entry-c1');
+      expect(result.data.previousState).toBe(result.data.newState);
+    }
+  });
+
+  it('VIEWER → FORBIDDEN, no dispatcher call', async () => {
+    setSessionViewer();
+    const result = await addCommentAction(TICKET_ID, 'hello');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('FORBIDDEN');
+    expect(mockExecuteUserAction).not.toHaveBeenCalled();
+  });
+
+  it('non-string content → VALIDATION before session check', async () => {
+    const result = await addCommentAction(
+      TICKET_ID,
+      undefined as unknown as string,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('VALIDATION');
+    expect(mockGetServerSession).not.toHaveBeenCalled();
+  });
+
+  it('RPC INVALID_ARG (empty content) → VALIDATION', async () => {
+    setSessionDev();
+    mockExecuteUserAction.mockRejectedValue(
+      new (await import('@/lib/store-submissions/tickets/user-actions')).UserActionValidationError(
+        'INVALID_ARG: comment content must be non-empty',
+      ),
+    );
+
+    const result = await addCommentAction(TICKET_ID, '   ');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('VALIDATION');
+  });
+});
+
+describe('editCommentAction', () => {
+  it('happy path: forwards ticketId + entryId + content', async () => {
+    setSessionDev();
+    mockExecuteUserAction.mockResolvedValue({
+      ticketId: TICKET_ID,
+      previousState: 'NEW',
+      newState: 'NEW',
+      stateChanged: false,
+      entryId: ENTRY_ID,
+    });
+
+    const result = await editCommentAction(TICKET_ID, ENTRY_ID, 'revised');
+
+    expect(mockExecuteUserAction).toHaveBeenCalledWith({
+      ticketId: TICKET_ID,
+      actor: { id: 'user-dev', role: 'DEV' },
+      request: {
+        type: 'EDIT_COMMENT',
+        entryId: ENTRY_ID,
+        content: 'revised',
+      },
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('missing entryId → VALIDATION before session check', async () => {
+    const result = await editCommentAction(TICKET_ID, '', 'content');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('VALIDATION');
+    expect(mockGetServerSession).not.toHaveBeenCalled();
+  });
+
+  it('CommentOwnershipError (not author) → FORBIDDEN', async () => {
+    setSessionDev();
+    const { CommentOwnershipError: CO } = await import(
+      '@/lib/store-submissions/tickets/user-actions'
+    );
+    mockExecuteUserAction.mockRejectedValue(
+      new CO('COMMENT_FORBIDDEN: only the original author can edit this comment'),
+    );
+
+    const result = await editCommentAction(TICKET_ID, ENTRY_ID, 'x');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('FORBIDDEN');
+      expect(result.error.message).toMatch(/original author/);
+    }
+  });
+
+  it('cross-ticket entry (RPC INVALID_ARG) → VALIDATION', async () => {
+    setSessionDev();
+    const { UserActionValidationError: UV } = await import(
+      '@/lib/store-submissions/tickets/user-actions'
+    );
+    mockExecuteUserAction.mockRejectedValue(
+      new UV(
+        'INVALID_ARG: entry entry-42 does not belong to ticket ticket-B',
+      ),
+    );
+
+    const result = await editCommentAction(TICKET_ID, ENTRY_ID, 'x');
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('VALIDATION');
+  });
+});
+
+describe('addRejectReasonAction', () => {
+  it('happy path: forwards content with ADD_REJECT_REASON type', async () => {
+    setSessionDev();
+    mockExecuteUserAction.mockResolvedValue({
+      ticketId: TICKET_ID,
+      previousState: 'REJECTED',
+      newState: 'REJECTED',
+      stateChanged: false,
+      entryId: 'entry-r1',
+    });
+
+    const result = await addRejectReasonAction(
+      TICKET_ID,
+      'Guideline 2.3.10 — Metadata',
+    );
+
+    expect(mockExecuteUserAction).toHaveBeenCalledWith({
+      ticketId: TICKET_ID,
+      actor: { id: 'user-dev', role: 'DEV' },
+      request: {
+        type: 'ADD_REJECT_REASON',
+        content: 'Guideline 2.3.10 — Metadata',
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.entryId).toBe('entry-r1');
+  });
+
+  it('VIEWER → FORBIDDEN', async () => {
+    setSessionViewer();
+    const result = await addRejectReasonAction(TICKET_ID, 'x');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('FORBIDDEN');
+  });
 });

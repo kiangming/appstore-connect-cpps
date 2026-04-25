@@ -1,30 +1,39 @@
 'use server';
 
 /**
- * Server Actions for Inbox state-transition user actions.
+ * Server Actions for Inbox user actions — 7 total:
+ *   - 4 state transitions: archive / follow_up / mark_done / unarchive
+ *     (PR-10c.2)
+ *   - 3 event-log entries: add_comment / edit_comment / add_reject_reason
+ *     (PR-10c.3.1)
  *
- * Thin adapter between the `TicketActionsBar` client component and the
- * ticket engine dispatcher (`lib/store-submissions/tickets/user-actions.ts`,
- * PR-10c.1.2). Responsibilities:
+ * Thin adapter between the inbox client components (`TicketActionsBar`,
+ * `CommentForm`, `EditCommentForm`) and the ticket engine dispatcher
+ * (`lib/store-submissions/tickets/user-actions.ts`, PR-10c.1.2).
+ * Responsibilities:
  *
  *   1. Session guard via `requireStoreRole(['DEV', 'MANAGER'])` — VIEWER
  *      can never drive these flows even if the UI button leaks through.
  *   2. Dispatch to `executeUserAction` with a typed `UserActionRequest`.
  *   3. Translate typed dispatcher errors (InvalidTransitionRpcError,
- *      TicketNotFoundError, etc.) into a uniform `ActionResult` that
- *      the client renders as a toast.
+ *      TicketNotFoundError, CommentOwnershipError, etc.) into a uniform
+ *      `ActionResult` that the client renders as a toast.
  *   4. `revalidatePath('/store-submissions/inbox')` so the list + open
  *      detail panel re-fetch server-side with fresh state.
  *
- * Not in this file:
- *   - Comments / reject reasons (PR-10c.3.1)
- *   - UI invocation / toast rendering (TicketActionsBar)
- *
  * Pattern matches `config/apps/actions.ts` — same `ActionResult` shape,
  * same guard-wrapper idiom, same `mapRpcError`-style error translation.
- * Each of the four exported actions is a 1-liner routing to a shared
+ * Each exported action is a 1-liner routing to a shared
  * `executeTicketAction` helper to avoid duplicating guard + error code
- * across four call sites.
+ * across seven call sites.
+ *
+ * **Ownership check on EDIT_COMMENT**: enforced at the RPC layer
+ * (`edit_comment_tx` raises `COMMENT_FORBIDDEN` when actor ≠ author).
+ * Server Action does NOT pre-fetch the comment to mirror the check —
+ * that would add a round-trip without strengthening security (RPC is
+ * the authoritative gate, as with all our DB-resident invariants).
+ * Dispatcher's `CommentOwnershipError` maps to a `FORBIDDEN` `ActionResult`
+ * here; toast surfaces the migration's exact reason text.
  */
 
 import { revalidatePath } from 'next/cache';
@@ -252,4 +261,88 @@ export async function unarchiveTicketAction(
   ticketId: string,
 ): Promise<ActionResult<TicketTransitionResult>> {
   return executeTicketAction(ticketId, { type: 'UNARCHIVE' });
+}
+
+// -- Comment + reject-reason actions (PR-10c.3.1) -----------------------
+
+/**
+ * Append a COMMENT entry to the ticket. Per spec §7.5 + invariant #2,
+ * comments are the only mutable entry type — but only by the author and
+ * only via `editCommentAction`. This action is the append path.
+ *
+ * Content trimming is enforced server-side by `add_comment_tx` (BTRIM +
+ * non-empty check). The form layer (`CommentForm`) also disables the
+ * submit button on whitespace-only input — that's UX, not security.
+ */
+export async function addCommentAction(
+  ticketId: string,
+  content: string,
+): Promise<ActionResult<TicketTransitionResult>> {
+  if (typeof content !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'VALIDATION', message: 'content is required' },
+    };
+  }
+  return executeTicketAction(ticketId, { type: 'ADD_COMMENT', content });
+}
+
+/**
+ * Edit an existing COMMENT entry. RPC enforces:
+ *   - entry exists (NOT_FOUND)
+ *   - entry belongs to ticketId (INVALID_ARG cross-ticket defense)
+ *   - entry_type = 'COMMENT' (other types are immutable per invariant #2)
+ *   - actor is the original author (COMMENT_FORBIDDEN)
+ *   - content non-empty after BTRIM
+ *
+ * This action just dispatches; the dispatcher's `CommentOwnershipError`
+ * surfaces here as a `FORBIDDEN` ActionResult (not a transition error)
+ * so the toast can render "only the author can edit this comment".
+ */
+export async function editCommentAction(
+  ticketId: string,
+  entryId: string,
+  content: string,
+): Promise<ActionResult<TicketTransitionResult>> {
+  if (!entryId || typeof entryId !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'VALIDATION', message: 'entryId is required' },
+    };
+  }
+  if (typeof content !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'VALIDATION', message: 'content is required' },
+    };
+  }
+  return executeTicketAction(ticketId, {
+    type: 'EDIT_COMMENT',
+    entryId,
+    content,
+  });
+}
+
+/**
+ * Append a REJECT_REASON entry. Stored with `metadata.source =
+ * 'manual_paste'` per migration; that flag is the hook for post-MVP
+ * LLM categorization. State doesn't change — Manager pastes the reject
+ * reason as a record; the ticket's REJECTED state typically came from
+ * an Apple email already, or via FOLLOW_UP from NEW with a REJECTED
+ * latest_outcome.
+ */
+export async function addRejectReasonAction(
+  ticketId: string,
+  content: string,
+): Promise<ActionResult<TicketTransitionResult>> {
+  if (typeof content !== 'string') {
+    return {
+      ok: false,
+      error: { code: 'VALIDATION', message: 'content is required' },
+    };
+  }
+  return executeTicketAction(ticketId, {
+    type: 'ADD_REJECT_REASON',
+    content,
+  });
 }
