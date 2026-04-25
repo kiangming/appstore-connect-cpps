@@ -36,6 +36,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { formatDistanceToNow } from 'date-fns';
 import { Check, ChevronRight, Copy, X } from 'lucide-react';
 
+import type { StoreRole } from '@/lib/store-submissions/auth';
 import type { TicketWithEntries } from '@/lib/store-submissions/queries/tickets';
 import {
   OutcomeBadge,
@@ -43,6 +44,7 @@ import {
   PriorityBadge,
   StateBadge,
 } from './TicketBadges';
+import { TicketActionsBar } from './TicketActionsBar';
 import { TicketEntriesTimeline } from './TicketEntriesTimeline';
 
 export interface TicketDetailPanelProps {
@@ -55,9 +57,20 @@ export interface TicketDetailPanelProps {
   isOpen: boolean;
   /** Called for any close trigger (Esc, backdrop, X). URL is cleared by caller. */
   onClose: () => void;
+  /**
+   * Threaded down from page.tsx → InboxClient so the actions footer can
+   * gate button visibility. VIEWER hides the whole footer; DEV/MANAGER
+   * see state-appropriate transitions.
+   */
+  userRole: StoreRole;
 }
 
-export function TicketDetailPanel({ ticket, isOpen, onClose }: TicketDetailPanelProps) {
+export function TicketDetailPanel({
+  ticket,
+  isOpen,
+  onClose,
+  userRole,
+}: TicketDetailPanelProps) {
   return (
     <Dialog.Root open={isOpen} onOpenChange={(next) => !next && onClose()}>
       <Dialog.Portal>
@@ -89,6 +102,17 @@ export function TicketDetailPanel({ ticket, isOpen, onClose }: TicketDetailPanel
               </>
             )}
           </div>
+
+          {/* Actions footer — rendered only when the panel has a real
+              ticket. "Not found" state shows nothing actionable. */}
+          {ticket !== null && (
+            <TicketActionsBar
+              ticketId={ticket.ticket.id}
+              ticketDisplayId={ticket.ticket.display_id}
+              currentState={ticket.ticket.state}
+              userRole={userRole}
+            />
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

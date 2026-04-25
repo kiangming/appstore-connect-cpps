@@ -421,6 +421,7 @@ export function InboxClient({
         ticket={initialTicket}
         isOpen={selectedTicketId !== null}
         onClose={closePanel}
+        userRole={role}
       />
 
       {/* -- Pagination footer -- */}
