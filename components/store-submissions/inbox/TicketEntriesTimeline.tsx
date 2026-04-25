@@ -33,7 +33,7 @@
  * would double-validate data we produce ourselves.
  */
 
-import { useState } from 'react';
+import { useState, useTransition } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import {
   ArrowRight,
@@ -43,8 +43,12 @@ import {
   MessageCircle,
   PackagePlus,
   Pencil,
+  RefreshCcw,
 } from 'lucide-react';
+import { toast } from 'sonner';
 
+import { reclassifyEmailMessageAction } from '@/app/(dashboard)/store-submissions/inbox/reclassify-actions';
+import type { StoreRole } from '@/lib/store-submissions/auth';
 import type { TicketEntryRow } from '@/lib/store-submissions/queries/tickets';
 import type {
   TicketOutcome,
@@ -106,11 +110,19 @@ export interface TicketEntriesTimelineProps {
    * (`COMMENT_FORBIDDEN`); this prop is purely UX.
    */
   currentUserId: string;
+  /**
+   * Threaded same path as `currentUserId`, gates the MANAGER-only
+   * reclassify button on EMAIL entries. Optional for backward-compat
+   * with tests that don't exercise the affordance — when undefined,
+   * the button is never rendered.
+   */
+  userRole?: StoreRole;
 }
 
 export function TicketEntriesTimeline({
   entries,
   currentUserId,
+  userRole,
 }: TicketEntriesTimelineProps) {
   if (entries.length === 0) {
     return (
@@ -129,7 +141,11 @@ export function TicketEntriesTimeline({
             isLast={i === entries.length - 1}
           />
           <div className="flex-1 min-w-0 pb-5">
-            <EntryCard entry={entry} currentUserId={currentUserId} />
+            <EntryCard
+              entry={entry}
+              currentUserId={currentUserId}
+              userRole={userRole}
+            />
           </div>
         </li>
       ))}
@@ -172,13 +188,15 @@ function LeftGutter({
 function EntryCard({
   entry,
   currentUserId,
+  userRole,
 }: {
   entry: TicketEntryRow;
   currentUserId: string;
+  userRole?: StoreRole;
 }) {
   switch (entry.entry_type) {
     case 'EMAIL':
-      return <EmailEntryCard entry={entry} />;
+      return <EmailEntryCard entry={entry} userRole={userRole} />;
     case 'STATE_CHANGE':
       return <StateChangeEntryCard entry={entry} />;
     case 'PAYLOAD_ADDED':
@@ -194,7 +212,13 @@ function EntryCard({
 
 // -- EMAIL card ------------------------------------------------------------
 
-function EmailEntryCard({ entry }: { entry: TicketEntryRow }) {
+function EmailEntryCard({
+  entry,
+  userRole,
+}: {
+  entry: TicketEntryRow;
+  userRole?: StoreRole;
+}) {
   const md = entry.metadata as EmailMetadata;
   const snap = md.email_snapshot ?? {};
   const outcome = md.outcome ?? null;
@@ -242,8 +266,75 @@ function EmailEntryCard({ entry }: { entry: TicketEntryRow }) {
             </pre>
           </details>
         )}
+        {userRole === 'MANAGER' && entry.email_message_id && (
+          <ReclassifyEmailButton
+            emailMessageId={entry.email_message_id}
+            subject={snap.subject ?? '(no subject)'}
+          />
+        )}
       </div>
     </EntryShell>
+  );
+}
+
+/**
+ * MANAGER-only affordance to re-run the classifier on a persisted email.
+ * Browser `confirm()` is the gate — internal-tool scale (2-5 users) and
+ * matches the codebase's "no upfront confirms anywhere else" pragma.
+ * Outcome is announced via a sonner toast: changed (with new status),
+ * unchanged (idempotent), or error.
+ *
+ * Side effects landed here may dissolve the parent ticket (when the
+ * reclassified email was its only occupant) or move it across grouping
+ * keys. revalidatePath in the Server Action triggers re-fetch on the
+ * next render — the panel and list refresh automatically.
+ */
+function ReclassifyEmailButton({
+  emailMessageId,
+  subject,
+}: {
+  emailMessageId: string;
+  subject: string;
+}) {
+  const [isPending, startTransition] = useTransition();
+
+  function handleClick() {
+    const ok = window.confirm(
+      `Reclassify this email?\n\n"${subject}"\n\n` +
+        'This re-runs the classifier with current rules + extracted_payload. ' +
+        'May move the email to a different ticket.',
+    );
+    if (!ok) return;
+
+    startTransition(async () => {
+      const result = await reclassifyEmailMessageAction(emailMessageId);
+      if (!result.ok) {
+        toast.error(`Reclassify failed: ${result.error.message}`);
+        return;
+      }
+      if (result.data.changed) {
+        toast.success(
+          `Reclassified: ${result.data.previousStatus} → ${result.data.newStatus}`,
+        );
+      } else {
+        toast.info('No change — classifier produced the same result.');
+      }
+    });
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={isPending}
+      className="mt-2 inline-flex items-center gap-1 text-[11px] text-slate-500 hover:text-slate-900 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 rounded"
+    >
+      <RefreshCcw
+        className={`w-3 h-3 ${isPending ? 'animate-spin' : ''}`}
+        strokeWidth={1.8}
+      />
+      {isPending ? 'Reclassifying…' : 'Reclassify'}
+    </button>
   );
 }
 

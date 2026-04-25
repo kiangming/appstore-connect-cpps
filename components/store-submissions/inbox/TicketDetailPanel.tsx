@@ -109,6 +109,7 @@ export function TicketDetailPanel({
                     <TicketEntriesTimeline
                       entries={ticket.entries}
                       currentUserId={currentUserId}
+                      userRole={userRole}
                     />
                   </div>
                 </section>

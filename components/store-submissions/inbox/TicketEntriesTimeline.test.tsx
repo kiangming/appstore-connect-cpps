@@ -28,6 +28,36 @@ vi.mock('./EditCommentForm', () => ({
   EditCommentForm: () => null,
 }));
 
+// Server Actions module pulls server-only imports (next/cache,
+// next-auth, supabase service-role db). Stub it to a thin async returning
+// a benign success — the reclassify visibility tests don't invoke the
+// action, just check the button rendering.
+vi.mock(
+  '@/app/(dashboard)/store-submissions/inbox/reclassify-actions',
+  () => ({
+    reclassifyEmailMessageAction: vi.fn(async () => ({
+      ok: true,
+      data: {
+        emailMessageId: 'e1',
+        changed: false,
+        previousStatus: 'CLASSIFIED',
+        newStatus: 'CLASSIFIED',
+        previousTicketId: null,
+        newTicketId: null,
+      },
+    })),
+  }),
+);
+
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+  },
+}));
+
 import { TicketEntriesTimeline } from './TicketEntriesTimeline';
 
 const CURRENT_USER = 'user-self';
@@ -223,5 +253,90 @@ describe('TicketEntriesTimeline · dispatcher fallback', () => {
     expect(
       screen.getByText(/No renderer yet for entry type/),
     ).toBeInTheDocument();
+  });
+});
+
+// -- Reclassify button (PR-11.6) ------------------------------------------
+
+describe('TicketEntriesTimeline · EmailEntryCard reclassify button', () => {
+  function emailEntry() {
+    return makeEntry({
+      id: 'email-entry-1',
+      entry_type: 'EMAIL',
+      email_message_id: 'em-uuid-1',
+      metadata: {
+        email_snapshot: {
+          subject: 'Review of your X submission is complete.',
+          sender: 'no-reply@apple.com',
+          received_at: '2026-04-25T10:00:00Z',
+        },
+        outcome: 'APPROVED',
+        classification_status: 'CLASSIFIED',
+      },
+    });
+  }
+
+  it('renders the Reclassify button when userRole is MANAGER + email_message_id present', () => {
+    render(
+      <TicketEntriesTimeline
+        entries={[emailEntry()]}
+        currentUserId={CURRENT_USER}
+        userRole="MANAGER"
+      />,
+    );
+    expect(screen.getByRole('button', { name: /Reclassify/i })).toBeInTheDocument();
+  });
+
+  it('hides the Reclassify button when userRole is undefined (default render)', () => {
+    render(
+      <TicketEntriesTimeline
+        entries={[emailEntry()]}
+        currentUserId={CURRENT_USER}
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: /Reclassify/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('hides the Reclassify button for DEV role (MANAGER-only feature)', () => {
+    render(
+      <TicketEntriesTimeline
+        entries={[emailEntry()]}
+        currentUserId={CURRENT_USER}
+        userRole="DEV"
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: /Reclassify/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('hides the Reclassify button for VIEWER role', () => {
+    render(
+      <TicketEntriesTimeline
+        entries={[emailEntry()]}
+        currentUserId={CURRENT_USER}
+        userRole="VIEWER"
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: /Reclassify/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('hides the Reclassify button when entry has no email_message_id', () => {
+    const entry = emailEntry();
+    entry.email_message_id = null;
+    render(
+      <TicketEntriesTimeline
+        entries={[entry]}
+        currentUserId={CURRENT_USER}
+        userRole="MANAGER"
+      />,
+    );
+    expect(
+      screen.queryByRole('button', { name: /Reclassify/i }),
+    ).not.toBeInTheDocument();
   });
 });

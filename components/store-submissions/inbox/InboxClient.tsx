@@ -27,10 +27,13 @@ import {
   ChevronDown,
   ChevronRight,
   Lightbulb,
+  RefreshCcw,
   Search,
   X,
 } from 'lucide-react';
+import { toast } from 'sonner';
 
+import { reclassifyUnclassifiedAction } from '@/app/(dashboard)/store-submissions/inbox/reclassify-actions';
 import type {
   ListTicketsResult,
   TicketWithEntries,
@@ -462,16 +465,19 @@ export function InboxClient({
           <div className="flex items-center gap-2 text-[13px] text-blue-900 min-w-0">
             <Lightbulb className="w-4 h-4 text-blue-500 flex-shrink-0" strokeWidth={1.8} />
             <span className="truncate">
-              Want to auto-classify these? Add sender + subject rules.
+              Want to auto-classify these? Add rules, then re-run on existing emails.
             </span>
           </div>
-          <Link
-            href="/store-submissions/config/email-rules"
-            className="inline-flex items-center gap-1 text-[13px] font-medium text-blue-700 hover:text-blue-900 flex-shrink-0"
-          >
-            Manage rules
-            <ArrowRight className="w-3 h-3" strokeWidth={1.8} />
-          </Link>
+          <div className="flex items-center gap-3 flex-shrink-0">
+            <BulkReclassifyButton />
+            <Link
+              href="/store-submissions/config/email-rules"
+              className="inline-flex items-center gap-1 text-[13px] font-medium text-blue-700 hover:text-blue-900"
+            >
+              Manage rules
+              <ArrowRight className="w-3 h-3" strokeWidth={1.8} />
+            </Link>
+          </div>
         </div>
       )}
 
@@ -533,6 +539,61 @@ export function InboxClient({
 }
 
 // -- Subcomponents ----------------------------------------------------------
+
+/**
+ * MANAGER-only bulk reclassify trigger. Re-runs the classifier on every
+ * UNCLASSIFIED_APP / UNCLASSIFIED_TYPE email, sequentially. Per Q4 (prod
+ * scale ~14 rows) the simple confirm + toast feedback is sufficient — no
+ * progress bar or rate limit.
+ *
+ * Side effects to flag in confirm copy: emails may move to different
+ * tickets; some bucket tickets may end up empty (Manager cleans up).
+ */
+function BulkReclassifyButton() {
+  const [isPending, startTransition] = useTransition();
+
+  function handleClick() {
+    const ok = window.confirm(
+      'Reclassify all unclassified emails?\n\n' +
+        'This re-runs the classifier on every UNCLASSIFIED_APP and ' +
+        'UNCLASSIFIED_TYPE email with the current rules + extracted_payload. ' +
+        'Emails may move to different tickets and some buckets may end up empty.',
+    );
+    if (!ok) return;
+
+    startTransition(async () => {
+      const result = await reclassifyUnclassifiedAction('any');
+      if (!result.ok) {
+        toast.error(`Bulk reclassify failed: ${result.error.message}`);
+        return;
+      }
+      const { reclassified, unchanged, errors, total } = result.data;
+      const summary =
+        `Reclassified ${reclassified}/${total}` +
+        ` (${unchanged} unchanged${errors > 0 ? `, ${errors} error${errors === 1 ? '' : 's'}` : ''})`;
+      if (errors > 0) {
+        toast.warning(summary);
+      } else {
+        toast.success(summary);
+      }
+    });
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={isPending}
+      className="inline-flex items-center gap-1 text-[13px] font-medium text-blue-700 hover:text-blue-900 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      <RefreshCcw
+        className={`w-3 h-3 ${isPending ? 'animate-spin' : ''}`}
+        strokeWidth={1.8}
+      />
+      {isPending ? 'Reclassifying…' : 'Reclassify all'}
+    </button>
+  );
+}
 
 const SORT_LABELS: Record<TicketSort, string> = {
   opened_at_desc: 'Newest',

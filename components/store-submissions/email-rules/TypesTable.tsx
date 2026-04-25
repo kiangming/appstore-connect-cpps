@@ -116,6 +116,8 @@ export function TypesTable({ types, onChange }: TypesTableProps) {
         </button>
       </div>
 
+      <AppleHtmlTypeGuidance />
+
       {types.length === 0 && (
         <div className="bg-white border border-dashed border-slate-200 rounded-xl px-4 py-6 text-[12.5px] text-slate-500 italic">
           No types — every classified email will skip Step 4 (type detection).
@@ -210,5 +212,91 @@ export function TypesTable({ types, onChange }: TypesTableProps) {
         ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * Static guidance card. Documents the 4 Apple HTML headings the
+ * extractor (PR-11.1) auto-detects, mapped to the corresponding type
+ * slugs. Manager-facing context: when the body keyword path misses
+ * (which it always does for Apple — text/plain has no type signal),
+ * the structural extractor catches these via Priority 1 in
+ * `matchType`. New variants surface as `UNKNOWN` and fire a Sentry
+ * warning so the extractor can be extended.
+ *
+ * Per Q2 (PR-11 scope): static markdown card, no interactive
+ * preview / live validation. Easy to maintain + future-expandable.
+ */
+function AppleHtmlTypeGuidance() {
+  return (
+    <details className="mb-3 group bg-white border border-slate-200 rounded-xl">
+      <summary className="cursor-pointer select-none list-none flex items-center gap-1.5 px-4 py-3 text-[12.5px] font-medium text-slate-700">
+        <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold">
+          ?
+        </span>
+        Apple HTML auto-detection (PR-11) — 4 supported types
+      </summary>
+      <div className="px-4 pb-4 pt-1 text-[12.5px] text-slate-600 space-y-3">
+        <p>
+          Apple submission emails carry their type signal in the HTML
+          alternative under <code className="font-mono">&lt;h2&gt;Accepted items&lt;/h2&gt;</code>.
+          The extractor walks the next-sibling <code className="font-mono">&lt;h3&gt;</code>{' '}
+          headings and maps each to a DB type slug.
+        </p>
+        <dl className="space-y-2">
+          <div>
+            <dt className="font-mono text-[11.5px] text-slate-900">
+              app — App Version
+            </dt>
+            <dd className="text-[11.5px] text-slate-500 ml-3">
+              <code className="font-mono">
+                &lt;h3&gt;App Version&lt;/h3&gt;&lt;p&gt;{'{version}'} for {'{platform}'}&lt;/p&gt;
+              </code>{' '}
+              · Example: 1.0.13 for iOS
+            </dd>
+          </div>
+          <div>
+            <dt className="font-mono text-[11.5px] text-slate-900">
+              iae — In-App Events
+            </dt>
+            <dd className="text-[11.5px] text-slate-500 ml-3">
+              <code className="font-mono">
+                &lt;h3&gt;In-App Events ({'{count}'})&lt;/h3&gt;
+              </code>{' '}
+              · Count baked into heading; no body
+            </dd>
+          </div>
+          <div>
+            <dt className="font-mono text-[11.5px] text-slate-900">
+              cpp — Custom Product Pages
+            </dt>
+            <dd className="text-[11.5px] text-slate-500 ml-3">
+              <code className="font-mono">
+                &lt;h3&gt;Custom Product Pages&lt;/h3&gt;&lt;p&gt;{'{name}'}&lt;br&gt;{'{uuid}'}&lt;/p&gt;
+              </code>{' '}
+              · Example: CPP 2004 / e2232a07-…
+            </dd>
+          </div>
+          <div>
+            <dt className="font-mono text-[11.5px] text-slate-900">
+              ppo — Product Page Optimization
+            </dt>
+            <dd className="text-[11.5px] text-slate-500 ml-3">
+              <code className="font-mono">
+                &lt;h3&gt;Product Page Optimization&lt;/h3&gt;&lt;p&gt;{'{version_code}'}&lt;/p&gt;
+              </code>{' '}
+              · Example: 230426
+            </dd>
+          </div>
+        </dl>
+        <p className="text-[11.5px] text-slate-500">
+          Other variations classify as <span className="font-mono">UNCLASSIFIED_TYPE</span>{' '}
+          and emit a Sentry warning <span className="font-mono">component=html-extractor</span>{' '}
+          so the extractor can be extended. Body keyword (above) is
+          Priority 2 — used as fallback for non-Apple platforms or
+          UNKNOWN headings.
+        </p>
+      </div>
+    </details>
   );
 }
