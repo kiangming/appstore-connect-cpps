@@ -50,9 +50,57 @@ Spec §7 user actions wired end-to-end:
 
 **Path G (pending)**: migration apply via Supabase SQL Editor, then production manual QA per `CURRENT-STATE.md` PR-10c "Pending" section.
 
-### PR-11+ (later)
+### PR-11 (shipped 2026-04-25) — email-level reclassify
 
-§5.2 reclassify (manual re-run classifier on existing emails after App Registry / Email Rules updates), §8 app rename transaction, §9 full error hierarchy expansion. Tracked in TODO.md "Post-PR-10 — Reclassify feature (planned)".
+§5.2 spec describes a **ticket-level** reclassify (manually move app/type
+key on an existing ticket, merging into a conflicting open ticket if one
+exists). PR-11 ships a strict subset focused on the operational use case:
+**email-level reclassify** — re-run the classifier on a persisted email
+and atomically swap which ticket it's attached to.
+
+- `app/(dashboard)/store-submissions/inbox/reclassify-actions.ts` —
+  Server Actions `reclassifyEmailMessageAction(emailMessageId)` (single)
+  + `reclassifyUnclassifiedAction(bucket)` (bulk: `'app' | 'type' | 'any'`),
+  MANAGER-only role gate (commit `f00cac7`).
+- `supabase/migrations/20260425000002_store_mgmt_reclassify_rpc.sql` —
+  RPC `reclassify_email_tx(p_email_message_id, p_new_classification, p_actor_id)`:
+  FOR UPDATE on email row, no-op short-circuit when status + grouping key
+  unchanged, UPDATE `classification_result` + detach `ticket_id`,
+  STATE_CHANGE 'reclassify_out' entry on the old ticket, reuse
+  `find_or_create_ticket_tx` for the attach side (commit `f00cac7`).
+- UI (commit `130f35e`): `ReclassifyEmailButton` per EMAIL entry in the
+  ticket detail timeline (`components/store-submissions/inbox/TicketEntriesTimeline.tsx`,
+  MANAGER + `email_message_id` non-null) + `BulkReclassifyButton` in the
+  existing Unclassified-tab MANAGER banner.
+
+**Architecture note**: TS classifier + SQL atomic swap is a deliberate
+split. The classifier (RE2 regex, fixture-tested) runs in TypeScript;
+duplicating it in PL/pgSQL would fork two code paths. The RPC validates
+shape (INVALID_ARG / INVALID_STATUS / INVALID_OUTCOME prefixes) defensively.
+
+**MANAGER-only escalation** — different from DEV+MANAGER on the rest of
+inbox actions. Reclassify can dissolve buckets and move emails across
+grouping keys (heavier blast radius than archive/follow-up).
+
+**Old ticket handling** — when an email is reclassified out, the old
+ticket's `ticket_entries.email_message_id=<id>, entry_type='EMAIL'` row
+stays in place (audit per invariant #2). A new STATE_CHANGE entry of
+type `'reclassify_out'` is appended with metadata
+`{ from_status, to_status, from_app_id, from_type_id, to_app_id, to_type_id }`
++ `author_user_id = p_actor_id`. If the old ticket ends up empty (last
+email reclassified out), it is left for the Manager to clean up — no
+auto-archive cascade ships in PR-11.
+
+**Spec §5.2 ticket-level reclassify** (ticket → ticket merge with
+`ticket_entries.updateMany` move + delete old ticket) remains future
+work. PR-11 covers the production use case (Apple bucket TICKET-10000
+backlog of UNCLASSIFIED_APP rows after App Registry adds).
+
+### PR-12+ (later)
+
+§5.2 ticket-level reclassify with merge logic, §8 app rename transaction,
+§9 full error hierarchy expansion. Multi-platform HTML extractors
+(Google / Huawei / Facebook).
 
 ### Stability contract
 
@@ -60,7 +108,9 @@ Types exported from `tickets/types.ts` are the **interface boundary** with the w
 
 PR-10c added a parallel surface: `executeTicketAction(actor, ticketId, action) → ActionResult<...>` returning `{ ticketId, previousState, newState, entryId }`. Independent of `FindOrCreateTicketOutput` — user actions write through their own RPCs, never through `find_or_create_ticket_tx`.
 
-Sections §1–§6 describe email-handling shipped in PR-9. Sections §7–§8 describe user actions shipped in PR-10c (state transitions + comment + reject-reason; assign + priority deferred). §5.2 reclassify + §8 app rename remain target for PR-11+.
+PR-11 added `reclassify_email_tx(email_id, new_classification, actor_id) RETURNS JSONB` returning `{ changed, previous_status, new_status, previous_ticket_id, new_ticket_id }`. Independent surface — the Server Action computes `new_classification` in TS; the RPC handles the atomic write side. Reuses `find_or_create_ticket_tx` for the attach side, so its locking + idempotency contract carries through.
+
+Sections §1–§6 describe email-handling shipped in PR-9. Sections §7–§8 describe user actions shipped in PR-10c (state transitions + comment + reject-reason; assign + priority deferred). §5.2 ticket-level reclassify + §8 app rename remain target for PR-12+.
 
 ---
 

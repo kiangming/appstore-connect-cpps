@@ -260,6 +260,149 @@ MVP: classifier first-match only. Multi-match là extension nếu xuất hiện 
 
 Không match type nào → `UnclassifiedTypeResult`.
 
+#### Step 4 — PR-11 update: HTML extractor → two-tier match
+
+Apple submission emails ship as `multipart/alternative` with two body
+parts:
+
+- `text/plain` — minimal envelope (`Submission ID: ...` + `App Name: ...` only)
+- `text/html` — rich template carrying the actual type signal under
+  `<h2>Accepted items</h2>`
+
+The pre-PR-11 keyword path (`body.includes(body_keyword)`) **always
+missed for Apple** because the parser prefers `text/plain` when both
+parts are present, and Apple's plain text has no type token. Every Apple
+email landed in `UNCLASSIFIED_TYPE` until a Manager classified manually.
+
+**PR-11 fix**: pure HTML extractor at sync time + classifier consumes
+the structured payload before falling back to body keyword.
+
+##### `lib/store-submissions/gmail/html-extractor.ts`
+
+Pure function `extractApple(html: string | null | undefined): ExtractedPayload`.
+Walks `<h2>Accepted items</h2>`'s next-element siblings, collects the first
+non-anchor `<p>` body for each `<h3>` heading, and emits a typed
+`AcceptedItem`:
+
+| `type` discriminator | `<h3>` heading | Body shape | Payload fields |
+|---|---|---|---|
+| `APP_VERSION` | `App Version` | `{version} for {platform}` | `version`, `platform` |
+| `IN_APP_EVENTS` | `In-App Events ({count})` | (no body) | `count` |
+| `CUSTOM_PRODUCT_PAGE` | `Custom Product Pages` | `{name}<br>{uuid}<br>` | `name`, `uuid` |
+| `PRODUCT_PAGE_OPTIMIZATION` | `Product Page Optimization` | `{version_code}` | `version_code` |
+| `UNKNOWN` | (anything else) | preserved verbatim in `raw_heading` + `raw_body` | — |
+
+**Library**: `node-html-parser` ^7.1.0 (pure JS, no WASM, ~50 KB). Pure
+module — no I/O, no Sentry, no env reads. The Sentry alert for `UNKNOWN`
+headings (potential new Apple template variant) fires at the sync.ts
+call site so the extractor stays test-pure.
+
+**`<br>` preservation** before tag-strip — `node-html-parser`'s `.text`
+collapses across `<br>`, so `name<br>uuid` would otherwise become
+`nameuuid`. Replace `<br>` with `\n` first, then strip remaining tags.
+
+**Trailing-space tolerance** — Apple's "Custom Product Pages " heading
+has a trailing space; `raw_heading` preserves it verbatim, comparison
+trims semantically.
+
+**Failure modes** all return `{ accepted_items: [] }`: null/empty input,
+HTML doesn't parse, no `<h2>Accepted items</h2>`, no `<h3>` siblings.
+Empty result is the signal sync.ts uses for the no-alert path (rejection
+emails, marketing, status digests).
+
+##### Two-tier `matchType` (commit `994da90`)
+
+```typescript
+export function matchType(
+  email: EmailInput,
+  rules: RulesSnapshot,
+): TypeMatch | null {
+  const active = rules.types.filter((t) => t.active);
+  active.sort((a, b) => a.sort_order - b.sort_order);
+
+  // Priority 1: structured payload from HTML extractor
+  const firstItem = email.extracted_payload?.accepted_items[0];
+  if (firstItem && firstItem.type !== 'UNKNOWN') {
+    const slug = mapExtractorTypeToSlug(firstItem.type);
+    if (slug) {
+      const matched = active.find((t) => t.slug === slug);
+      if (matched) {
+        return {
+          type_id: matched.id,
+          type_slug: matched.slug,
+          type_name: matched.name,
+          payload: payloadFromExtractedItem(firstItem),
+        };
+      }
+      // Slug recognized but no active DB row — graceful fallback to P2.
+    }
+  }
+
+  // Priority 2: legacy body keyword match.
+  for (const type of active) {
+    if (!email.body.includes(type.body_keyword)) continue;
+    return {
+      type_id: type.id,
+      type_slug: type.slug,
+      type_name: type.name,
+      payload: extractPayload(email.body, type.payload_extract_regex),
+    };
+  }
+  return null;
+}
+```
+
+`mapExtractorTypeToSlug` is the `AcceptedItemType → DB slug` table:
+`APP_VERSION → 'app'`, `IN_APP_EVENTS → 'iae'`,
+`CUSTOM_PRODUCT_PAGE → 'cpp'`, `PRODUCT_PAGE_OPTIMIZATION → 'ppo'`.
+
+**Priority 1 wins over Priority 2** even when body keyword would match —
+the extractor sees the actual structure; body keyword is a heuristic.
+
+**Graceful slug-mapped-but-no-active-type fallback** — if extractor
+reports `PRODUCT_PAGE_OPTIMIZATION` but the `ppo` type isn't seeded yet
+(e.g. migration not yet applied), skip P1 and try P2. Locked by
+`type-matcher.test.ts` `'slug mapped but no active type seeded → falls
+through to body keyword'`.
+
+**PPO seed** ships in migration
+`20260425000001_store_mgmt_seed_apple_ppo_type.sql` — adds the missing
+`Product Page Optimization` type slug `ppo` for the `apple` platform.
+`payload_extract_regex` is NULL because Apple's text/plain has no PPO
+structure to regex against; the structured payload comes via
+`extracted_payload`.
+
+##### Persisted column `email_messages.extracted_payload`
+
+`JSONB` with GIN index, added in migration
+`20260425000000_store_mgmt_email_extracted_payload.sql`. 3-state
+semantic:
+
+| Value | Meaning |
+|---|---|
+| NULL | Extraction not attempted (non-Apple platform / parse error / NO_SENDER_MATCH) |
+| `{ accepted_items: [] }` | Apple email, no Accepted items section (rejection / marketing / status update) |
+| `{ accepted_items: [...] }` | Apple email with structured types |
+
+Reclassify uses this distinction (PR-11.5) — legacy rows + non-Apple
+stay NULL; `IS NOT NULL` filters Apple-extracted rows for bulk actions.
+
+##### Sentry alert for UNKNOWN headings
+
+`gmail/sync.ts:alertOnUnknownExtractedTypes` calls
+`Sentry.captureMessage(level='warning', tags={ component: 'html-extractor', gmail_msg_id })`
+when any item in `accepted_items` is `UNKNOWN` (extractor saw an `<h3>`
+under `Accepted items` that none of the 4 patterns matched). Empty
+`accepted_items` is **not** an alert — that's the legitimate
+rejection/marketing/digest path.
+
+##### Multi-platform extractors deferred (PR-12+)
+
+`extractGoogle`, `extractHuawei`, `extractFacebook` need real `.eml`
+samples first. Current `extractApple` is platform-coupled by name; the
+shared `ExtractedPayload` shape is the contract — extractors agree on
+the result type, not on the input template.
+
 ### Step 5 — Extract submission_id (optional)
 
 ```typescript

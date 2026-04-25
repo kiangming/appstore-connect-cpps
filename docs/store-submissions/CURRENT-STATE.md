@@ -2,7 +2,7 @@
 
 > **Đọc đầu tiên** khi bắt đầu session mới về module Store Management. Ghi lại trạng thái production + PR đã ship + known limitations chưa resolve.
 >
-> Last updated: 2026-04-25 (PR-10d shipped — PR-10 fully complete; Sentry wired end-to-end + keyboard navigation)
+> Last updated: 2026-04-25 (PR-11 shipped — Apple HTML extractor + classifier upgrade + Manager reclassify feature)
 
 ---
 
@@ -34,6 +34,7 @@ Module quản lý submission app/game multi-platform qua auto-classify email t�
 | PR-10b | Ticket detail panel (slide-over) — header, metadata, timeline (EMAIL/STATE_CHANGE/PAYLOAD_ADDED) | ✅ shipped |
 | PR-10c | User actions — 7 RPCs + dispatcher + auth matrix + state-transition UI + comment/reject composer + COMMENT/REJECT_REASON timeline cards | ✅ shipped 2026-04-25 (migration apply pending Path G) |
 | PR-10d | Polish + Observability — Sentry SDK init + 3 production captureException sites + 2 error boundaries + j/k/Enter keyboard navigation | ✅ shipped 2026-04-25 |
+| PR-11 | HTML Parsing + Reclassify — Apple HTML extractor + classifier two-tier match + PPO type seed + extracted_payload JSONB + reclassify_email_tx RPC + Manager UI (per-email + bulk) + type guidance card | ✅ shipped 2026-04-25 (3 migrations apply pending Path G) |
 
 ---
 
@@ -55,6 +56,9 @@ Module quản lý submission app/game multi-platform qua auto-classify email t�
 | User actions (7 RPCs) — state transitions + comment + reject reason | `inbox/actions.ts` Server Actions | `lib/store-submissions/tickets/user-actions.ts` + migration `20260424000000_...user_actions_rpcs.sql` |
 | Sentry observability (init + capture + boundaries) | auto-boots via `instrumentation.ts` | `instrumentation.ts` + `sentry.server.config.ts` + `sentry.edge.config.ts` + `instrumentation-client.ts` + `app/global-error.tsx` + `app/(dashboard)/store-submissions/inbox/error.tsx` |
 | Keyboard navigation (j / k / Enter) | Inbox page | `components/store-submissions/inbox/InboxClient.tsx` (uses `react-hotkeys-hook` v5) |
+| Apple HTML payload extractor (PR-11) | auto-runs in sync pipeline | `lib/store-submissions/gmail/html-extractor.ts` (uses `node-html-parser`) |
+| Two-tier type matching — extracted_payload Priority 1, body keyword Priority 2 | classifier Step 4 | `lib/store-submissions/classifier/type-matcher.ts` |
+| Manager reclassify (single email + bulk Unclassified) | Inbox detail panel + Unclassified banner | `app/(dashboard)/store-submissions/inbox/reclassify-actions.ts` + migration `20260425000002_...reclassify_rpc.sql` |
 
 ---
 
@@ -239,6 +243,97 @@ User context auto-binds via `guardDevOrManager` (`Sentry.setUser({ id, username:
 
 - E2E (Playwright) **deferred post-MVP** — greenfield infra (browser runtime, NextAuth fixture, dev-server lifecycle in CI) doesn't fit the 0.5-day budget. ROI is low for 2-5 internal users with 983 unit tests + RTL on critical timeline + manual QA. Re-trigger when 3+ critical flows accumulate.
 - Source map upload to Sentry guarded by `SENTRY_AUTH_TOKEN` — set in Railway CI to enable; local builds stay quiet without it.
+
+---
+
+## PR-11 — HTML Parsing + Reclassify ✅ SHIPPED 2026-04-25
+
+Apple submission emails carry their type signal exclusively in the
+HTML alternative (`text/plain` has only Submission ID + App Name). Pre-PR-11
+the classifier always landed in `UNCLASSIFIED_TYPE` for Apple. PR-11 adds
+a pure HTML extractor, threads the structured payload through the
+classifier as Priority 1, ships a `Product Page Optimization` type seed,
+and adds Manager-driven reclassify for the prod backlog of UNCLASSIFIED rows.
+
+### Shipped — 6 sub-chunks (+ 1 docs chunk)
+
+| Sub-chunk | Commit | Scope |
+|---|---|---|
+| 11.1 | `cb4480c` | `lib/store-submissions/gmail/html-extractor.ts` — pure `extractApple(html)` returning `{ accepted_items: AcceptedItem[] }`. 4 type variants + `UNKNOWN` fallback. 4 real `.eml` fixtures + 9 unit tests. `node-html-parser` ^7.1.0 added. |
+| 11.2 | `e3385d9` | Migration `20260425000000_store_mgmt_email_extracted_payload.sql` — `email_messages.extracted_payload JSONB` + GIN index. |
+| 11.3 | `50444d9` | `gmail/sync.ts` — Apple-gated `extractApple(parsed.bodyHtml)` after sender resolve; threads `extracted_payload` into `EmailInput` + `email_messages` INSERT. `Sentry.captureMessage` warning on UNKNOWN headings (`component: 'html-extractor'`). 3-state column semantic: NULL (non-Apple/error) vs empty array (Apple, no items) vs populated. +8 tests. |
+| 11.4 | `994da90` | Two-tier `matchType(email, rules)`: Priority 1 reads `extracted_payload.accepted_items[0]` and looks up by slug (`mapExtractorTypeToSlug` for `app`/`iae`/`cpp`/`ppo`); Priority 2 falls back to legacy `body.includes(body_keyword)`. Migration `20260425000001_...seed_apple_ppo_type.sql` adds the missing PPO type. +12 tests. |
+| 11.5 | `f00cac7` | Server Actions `reclassifyEmailMessageAction(emailMessageId)` + `reclassifyUnclassifiedAction(bucket)`, MANAGER-only. Migration `20260425000002_..._reclassify_rpc.sql` — `reclassify_email_tx` RPC: FOR UPDATE on email row, no-op short-circuit, detach + STATE_CHANGE 'reclassify_out' on old ticket, `find_or_create_ticket_tx` reuse for the attach side. +19 tests. |
+| 11.6 | `130f35e` | UI surfaces — per-email `ReclassifyEmailButton` in `EmailEntryCard` (MANAGER + `email_message_id` non-null), `BulkReclassifyButton` in the existing Unclassified-tab banner, `AppleHtmlTypeGuidance` collapsible card on the Email Rules type editor. `window.confirm` + `useTransition` + sonner toasts. +5 tests. Inbox bundle 13.7 → 14.4 kB. |
+| 11.7 | this commit | Docs finalization — CURRENT-STATE.md, 04-ticket-engine.md (§5.2 Shipped status), 03-email-rule-engine.md (new §3.5 HTML extractor), TODO.md (strike Reclassify feature, add deferred items). |
+
+### Test coverage delta
+
+Pre-PR-11: 983 → Post-PR-11: **1036** (+53 across 11.1, 11.3, 11.4, 11.5, 11.6).
+
+### Architecture — TS classifier + SQL atomic swap
+
+Reclassify deliberately splits across the language boundary:
+
+- **TS Server Action** re-runs the classifier on the persisted email
+  (sender resolve + rules load + `classify(input, rules)`) — preserves a
+  single source of truth for the classifier (RE2 regex + fixture-tested,
+  not duplicated in PL/pgSQL).
+- **SQL RPC** does the atomic swap given the pre-computed classification:
+  FOR UPDATE on the email row, write `classification_result` +
+  `classification_status`, detach `ticket_id`, STATE_CHANGE entry on the
+  old ticket, then `find_or_create_ticket_tx` for the attach side.
+  No-change short-circuit happens under FOR UPDATE so concurrent sync
+  writes can't slip past the comparison.
+
+### 3-state `extracted_payload` semantic
+
+| Value | Meaning | Producer |
+|---|---|---|
+| NULL | Extraction not attempted | Non-Apple platform; parse-error path; NO_SENDER_MATCH path |
+| `{ accepted_items: [] }` | Attempted, no items found | Apple sender + email has no "Accepted items" section (rejection notice, marketing, status digest) |
+| `{ accepted_items: [...] }` | Apple email with structured types | Apple sender + matched 1+ headings |
+
+Reclassify uses this distinction: legacy rows + non-Apple stay NULL, Apple
+rows always carry a non-null payload (even when empty). The bulk
+reclassify can identify legacy vs new rows via `IS NULL` vs `IS NOT NULL`.
+
+### Sentry tag taxonomy (extended)
+
+| `component` | Subcontext |
+|---|---|
+| `html-extractor` | `gmail_msg_id: <Gmail message id>` (UNKNOWN heading variants) |
+| `reclassify-actions` | `action: 'bulk-fetch' \| 'bulk-row'` + `emailMessageId` / `bucket` |
+
+### Cumulative PR-11 metrics
+
+- **7 commits total:** 11.1–11.7
+- **Tests:** 983 → **1036** (+53)
+- **Bundle (`/store-submissions/inbox`):** 13.7 → 14.4 kB (+0.7 kB)
+- **3 migrations pending Path G:** `20260425000000_..._email_extracted_payload.sql`, `20260425000001_..._seed_apple_ppo_type.sql`, `20260425000002_..._reclassify_rpc.sql`
+
+### Risk flags acknowledged (deferred)
+
+- **Real PL/pgSQL execution tests for `reclassify_email_tx`** — current 19 tests mock the RPC at the Server Action boundary. End-to-end against a migration-applied DB needs a Supabase local docker harness (also a PR-5 deferred item). Manual QA Path G validates production. Filed in TODO.md.
+- **Multi-platform extractors** (Google / Huawei / Facebook) deferred to PR-12+. Need real `.eml` samples first; current `extractApple` is platform-coupled by name.
+- **`UnifiedClassificationResult` typing cleanup** — Server Action's local `Record<string, unknown>` pragma matches sync.ts pragma (NO_RULES + NO_SENDER_MATCH live outside the classifier's `ErrorCode` union). Post-MVP unification across both files.
+- **Auto-archive empty old tickets** — when reclassify moves the last email out of an Unclassified bucket, the old ticket may end up empty. Manual cleanup by Manager for now; an "archive empty buckets" sweep could ship later.
+
+### Pending — Path G + manual QA
+
+- [ ] Apply 3 migrations via Supabase SQL Editor in order
+  1. `20260425000000_store_mgmt_email_extracted_payload.sql`
+  2. `20260425000001_store_mgmt_seed_apple_ppo_type.sql`
+  3. `20260425000002_store_mgmt_reclassify_rpc.sql`
+- [ ] Manual QA scenarios:
+  - Per-email Reclassify button visible only for MANAGER on EMAIL entries with `email_message_id`
+  - Confirm dialog readable; toast renders correct level (success / info / warning / error)
+  - Spinning RefreshCcw icon during `useTransition`
+  - Bulk button on Unclassified tab → "Reclassified N/M (K errors)" toast
+  - Apple HTML guidance card collapsible; renders 4 patterns + UNKNOWN note
+  - UNCLASSIFIED_TYPE production rows reclassify into typed buckets after migrations apply (PPO seed catches Gunny Mobi 230426)
+  - VIEWER never sees reclassify affordances
+  - DEV blocked from reclassify (MANAGER-only, escalated from DEV+MANAGER for blast-radius reasons)
 
 ---
 

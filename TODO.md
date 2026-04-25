@@ -196,28 +196,43 @@ Production observability + UX polish. Wires Sentry SDK end-to-end and adds keybo
 
 **Pending:** push 4 commits to `origin/main`.
 
-## Post-PR-10 — Reclassify feature (planned)
+## Post-PR-10 — Reclassify feature ✅ COMPLETED in PR-11 (2026-04-25)
 
-**Scope**: Re-run classifier trên existing `email_messages` khi App Registry hoặc Email Rules updated.
+Shipped in 7 sub-chunks. See `docs/store-submissions/CURRENT-STATE.md`
+"PR-11 — HTML Parsing + Reclassify" section + commits
+`cb4480c..130f35e + 11.7-docs`. Original use cases all addressed
+(UNCLASSIFIED_APP → CLASSIFIED after App Registry add, UNCLASSIFIED_TYPE
+→ CLASSIFIED after type seed, DROPPED via sender re-resolve).
 
-**Use cases:**
+**Architecture**: TS classifier + SQL atomic swap (RPC `reclassify_email_tx`)
+— see PR-11.5 commit `f00cac7` rationale. Spec §5.2 ticket-level
+reclassify (move all emails of a ticket via merge) remains future work,
+tracked under "PR-11 deferred items" below.
 
-- Apps added to Registry sau khi emails đã arrived (UNCLASSIFIED_APP → CLASSIFIED)
-- Subject patterns updated (UNCLASSIFIED_TYPE → CLASSIFIED)
-- Sender aliases added (DROPPED → classified)
+## PR-11 — HTML Parsing + Reclassify ✅ COMPLETED (2026-04-25)
 
-**Implementation approach:**
+7 sub-chunks. See `docs/store-submissions/CURRENT-STATE.md` for full detail.
 
-- Extract classifier core từ `gmail/sync.ts` (currently coupled email-ingress)
-- New action: `reclassifyEmailMessageAction(email_message_id, actor_id)`
-- Bulk variant: `reclassifyUnclassifiedAction(bucket, actor_id)` — MANAGER only
-- UI: button trong ticket detail panel "Reclassify" (MANAGER-visible)
-- Or: bulk action button on Unclassified tab
-- Side effect: existing ticket may dissolve (FK cascade) hoặc migrate
+**Test count:** 983 (pre-PR-11) → **1036** (post-PR-11) = **+53 tests**.
 
-**Estimated scope**: ~1 day (PR-11 hoặc standalone PR).
+**3 migrations pending Path G** (apply in order):
 
-**Deferred rationale**: PR-10 scope discipline. Current UNCLASSIFIED_APP ticket acceptable interim; Manager reviews manually until reclassify ships.
+1. `20260425000000_store_mgmt_email_extracted_payload.sql` — add JSONB column + GIN index
+2. `20260425000001_store_mgmt_seed_apple_ppo_type.sql` — PPO type seed
+3. `20260425000002_store_mgmt_reclassify_rpc.sql` — `reclassify_email_tx` RPC
+
+### Deferred from PR-11 (post-MVP)
+
+- [ ] [PR-11 polish] **Real PL/pgSQL execution tests for `reclassify_email_tx`** — current 19 tests in `app/(dashboard)/store-submissions/inbox/reclassify-actions.test.ts` mock the RPC at the Server Action boundary. End-to-end against a migration-applied DB (with `find_or_create_ticket_tx` reuse paths exercised) requires the same Supabase local docker harness that PR-5's TODO line 25 requested. File together when the harness lands. Manual QA Path G validates production in the meantime.
+- [ ] [PR-11 polish] **Multi-platform HTML extractors** — `extractGoogle` / `extractHuawei` / `extractFacebook`. Need real `.eml` samples first. Current `lib/store-submissions/gmail/html-extractor.ts` is Apple-coupled by name. Shared `ExtractedPayload` shape is the contract. Activate when prod sees enough volume from those platforms to need structured extraction.
+- [ ] [PR-11 polish] **Rejected items HTML parser** — all 4 PR-11 fixtures are APPROVED outcome. Apple's `"There's an issue with your X submission"` template's HTML structure not yet sampled. When a rejected email lands in prod, capture the .eml + extend `extractApple` to walk a `<h2>Rejected items</h2>` (or equivalent) section.
+- [ ] [PR-11 polish] **Auto-archive empty old tickets** — when reclassify moves the last email out of an Unclassified bucket, the old ticket may end up with zero emails. Currently left for Manager cleanup. Could ship a "sweep empty buckets" cron job or a "Empty bucket" badge on the inbox list. Decide based on real Manager workflow feedback.
+- [ ] [PR-11 polish] **`UnifiedClassificationResult` typing cleanup** — `lib/store-submissions/gmail/sync.ts` and `app/(dashboard)/store-submissions/inbox/reclassify-actions.ts` both relax to `Record<string, unknown>` for the persisted classification because the classifier's `ErrorCode` union doesn't include sync-layer concerns (`NO_RULES`, `NO_SENDER_MATCH` from non-classifier paths). Unify into a `PersistedClassification` type that's a superset of `ClassificationResult`. Cosmetic.
+- [ ] [PR-12+] **Spec §5.2 ticket-level reclassify (merge)** — move all emails of a ticket via Manager UI; if the new grouping key collides with an open ticket, MERGE entries + emails into the conflict ticket and delete the source. PR-11 ships email-level reclassify (the operational use case); ticket-level merge is the design described in `docs/store-submissions/04-ticket-engine.md` §5.2 lines 589-676.
+
+## Post-PR-11 — TicketDetailContext + prop drilling cleanup (planned)
+
+`currentUserId` and `userRole` are now threaded 4 layers (page → InboxClient → TicketDetailPanel → TicketEntriesTimeline → EmailEntryCard / CommentEntryCard). Acceptable for current scope but if PR-12+ adds 2+ more consumers (e.g. assignee chip, priority widget), promote to a React context provider on the panel root. Not urgent — both props are stable for the panel's lifetime.
 
 ## PR-10 — Inbox UI ✅ COMPLETE 2026-04-25 (shipped via PR-10a / PR-10b / PR-10c / PR-10d)
 
