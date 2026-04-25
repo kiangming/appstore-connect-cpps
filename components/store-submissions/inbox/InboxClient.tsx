@@ -53,6 +53,13 @@ export interface InboxClientProps {
   /** Role-gated actions (state transitions) land in PR-10c. */
   role: StoreRole;
   /**
+   * Viewer's `store_mgmt.users.id`. Threaded into the detail panel +
+   * timeline so the COMMENT card can show a pencil affordance only on
+   * the viewer's own comments. Server-side `edit_comment_tx` enforces
+   * authorship; this prop is purely UX.
+   */
+  currentUserId: string;
+  /**
    * Ticket id parsed from `?ticket=<uuid>`; non-null when the panel is
    * open. Used to highlight the corresponding row and gate the panel
    * visibility. `initialTicket` carries the SSR-fetched detail payload.
@@ -125,6 +132,7 @@ export function InboxClient({
   apps,
   platforms,
   role,
+  currentUserId,
   selectedTicketId,
   initialTicket,
 }: InboxClientProps) {
@@ -422,6 +430,7 @@ export function InboxClient({
         isOpen={selectedTicketId !== null}
         onClose={closePanel}
         userRole={role}
+        currentUserId={currentUserId}
       />
 
       {/* -- Pagination footer -- */}

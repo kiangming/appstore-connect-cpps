@@ -33,12 +33,16 @@
  * would double-validate data we produce ourselves.
  */
 
+import { useState } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import {
   ArrowRight,
+  Ban,
   HelpCircle,
   Mail,
+  MessageCircle,
   PackagePlus,
+  Pencil,
 } from 'lucide-react';
 
 import type { TicketEntryRow } from '@/lib/store-submissions/queries/tickets';
@@ -46,6 +50,7 @@ import type {
   TicketOutcome,
   TicketState,
 } from '@/lib/store-submissions/schemas/ticket';
+import { EditCommentForm } from './EditCommentForm';
 import { OutcomeBadge, StateBadge } from './TicketBadges';
 
 // -- Metadata shapes (runtime-unchecked) -----------------------------------
@@ -71,7 +76,7 @@ interface EmailMetadata {
 interface StateChangeMetadata {
   from?: TicketState;
   to?: TicketState;
-  trigger?: 'email' | 'user';
+  trigger?: 'email' | 'user_action';
   email_message_id?: string;
 }
 
@@ -79,13 +84,34 @@ interface PayloadAddedMetadata {
   payload?: unknown;
 }
 
+// COMMENT entries currently carry no metadata fields — the spec keeps the
+// shape extensible (e.g. future @mentions, reactions). Empty type kept as
+// a forward-compatible slot; suppress the unused-var rule until the first
+// field lands.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type CommentMetadata = Record<string, never>;
+
+interface RejectReasonMetadata {
+  source?: 'manual_paste' | string;
+}
+
 // -- Top-level timeline ----------------------------------------------------
 
 export interface TicketEntriesTimelineProps {
   entries: TicketEntryRow[];
+  /**
+   * Threaded down from page.tsx → InboxClient → TicketDetailPanel so the
+   * COMMENT card can show a pencil affordance only on the viewer's own
+   * comments. Server-side `edit_comment_tx` is the authoritative gate
+   * (`COMMENT_FORBIDDEN`); this prop is purely UX.
+   */
+  currentUserId: string;
 }
 
-export function TicketEntriesTimeline({ entries }: TicketEntriesTimelineProps) {
+export function TicketEntriesTimeline({
+  entries,
+  currentUserId,
+}: TicketEntriesTimelineProps) {
   if (entries.length === 0) {
     return (
       <p className="text-[12px] text-slate-400 italic">
@@ -103,7 +129,7 @@ export function TicketEntriesTimeline({ entries }: TicketEntriesTimelineProps) {
             isLast={i === entries.length - 1}
           />
           <div className="flex-1 min-w-0 pb-5">
-            <EntryCard entry={entry} />
+            <EntryCard entry={entry} currentUserId={currentUserId} />
           </div>
         </li>
       ))}
@@ -143,7 +169,13 @@ function LeftGutter({
 
 // -- Dispatcher ------------------------------------------------------------
 
-function EntryCard({ entry }: { entry: TicketEntryRow }) {
+function EntryCard({
+  entry,
+  currentUserId,
+}: {
+  entry: TicketEntryRow;
+  currentUserId: string;
+}) {
   switch (entry.entry_type) {
     case 'EMAIL':
       return <EmailEntryCard entry={entry} />;
@@ -151,6 +183,10 @@ function EntryCard({ entry }: { entry: TicketEntryRow }) {
       return <StateChangeEntryCard entry={entry} />;
     case 'PAYLOAD_ADDED':
       return <PayloadAddedEntryCard entry={entry} />;
+    case 'COMMENT':
+      return <CommentEntryCard entry={entry} currentUserId={currentUserId} />;
+    case 'REJECT_REASON':
+      return <RejectReasonEntryCard entry={entry} />;
     default:
       return <UnknownEntryCard entry={entry} />;
   }
@@ -258,7 +294,7 @@ function StateChangeEntryCard({ entry }: { entry: TicketEntryRow }) {
         )}
       </div>
       <p className="text-[11px] text-slate-500 mt-1.5">
-        {md.trigger === 'user'
+        {md.trigger === 'user_action'
           ? 'Triggered by user action'
           : md.trigger === 'email'
             ? 'Triggered by incoming email'
@@ -296,6 +332,120 @@ function PayloadAddedEntryCard({ entry }: { entry: TicketEntryRow }) {
           </pre>
         </details>
       )}
+    </EntryShell>
+  );
+}
+
+// -- COMMENT card ----------------------------------------------------------
+
+/**
+ * COMMENT entries are the only mutable entry type — author can edit own
+ * comments via `edit_comment_tx`. The pencil affordance is gated on
+ * ownership UX-side (visible iff `entry.author_user_id === currentUserId`),
+ * but the RPC is the authoritative gate (`COMMENT_FORBIDDEN`).
+ *
+ * Edit lifecycle: `useState` toggles between display + `<EditCommentForm>`.
+ * Re-mounting on toggle discards textarea state on cancel — matches typical
+ * Slack/Discord/Notion edit UX.
+ *
+ * Whitespace handling: `whitespace-pre-wrap` so pasted multi-line content
+ * (often the case — devs paste reply drafts here) renders intact. React
+ * `{value}` interpolation auto-escapes; no `dangerouslySetInnerHTML`.
+ */
+function CommentEntryCard({
+  entry,
+  currentUserId,
+}: {
+  entry: TicketEntryRow;
+  currentUserId: string;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const isOwn = entry.author_user_id === currentUserId;
+  const editedAt = entry.edited_at;
+
+  const editedSuffix = editedAt ? (
+    <>
+      <span className="text-slate-300">·</span>
+      <span
+        className="italic text-slate-400"
+        title={absoluteTs(editedAt)}
+      >
+        edited {formatRelative(editedAt)}
+      </span>
+    </>
+  ) : null;
+
+  return (
+    <EntryShell
+      icon={
+        <MessageCircle
+          className="w-3.5 h-3.5 text-emerald-600"
+          strokeWidth={1.8}
+        />
+      }
+      label="Comment"
+      entry={entry}
+      trailing={editedSuffix}
+    >
+      {isEditing ? (
+        <EditCommentForm
+          ticketId={entry.ticket_id}
+          entryId={entry.id}
+          initialContent={entry.content ?? ''}
+          onCancel={() => setIsEditing(false)}
+          onSuccess={() => setIsEditing(false)}
+        />
+      ) : (
+        <div className="relative group/comment">
+          <p className="text-[13px] text-slate-700 whitespace-pre-wrap break-words pr-7">
+            {entry.content ?? (
+              <span className="italic text-slate-400">(empty)</span>
+            )}
+          </p>
+          {isOwn && (
+            <button
+              type="button"
+              onClick={() => setIsEditing(true)}
+              aria-label="Edit comment"
+              className="absolute top-0 right-0 p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-100 opacity-0 group-hover/comment:opacity-100 focus-visible:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-200 transition-opacity"
+            >
+              <Pencil className="w-3.5 h-3.5" strokeWidth={1.8} />
+            </button>
+          )}
+        </div>
+      )}
+    </EntryShell>
+  );
+}
+
+// -- REJECT_REASON card ----------------------------------------------------
+
+/**
+ * REJECT_REASON entries are immutable per invariant #2 — no edit affordance.
+ * The "Pasted manually" chip surfaces `metadata.source = 'manual_paste'`,
+ * the hook for future LLM-categorized variants (post-MVP).
+ */
+function RejectReasonEntryCard({ entry }: { entry: TicketEntryRow }) {
+  const md = entry.metadata as RejectReasonMetadata;
+  const sourceChip =
+    md.source === 'manual_paste' ? (
+      <span className="inline-flex items-center text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded border bg-red-50 text-red-700 border-red-200">
+        Pasted manually
+      </span>
+    ) : null;
+
+  return (
+    <EntryShell
+      icon={<Ban className="w-3.5 h-3.5 text-red-600" strokeWidth={1.8} />}
+      label="Rejection reason"
+      entry={entry}
+      trailing={sourceChip}
+    >
+      <p className="text-[13px] text-slate-700 whitespace-pre-wrap break-words">
+        {entry.content ?? (
+          <span className="italic text-slate-400">(empty)</span>
+        )}
+      </p>
     </EntryShell>
   );
 }

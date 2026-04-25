@@ -65,6 +65,13 @@ export interface TicketDetailPanelProps {
    * see state-appropriate transitions.
    */
   userRole: StoreRole;
+  /**
+   * Viewer's `store_mgmt.users.id`. Forwarded into the timeline so the
+   * COMMENT card can show a pencil affordance only on the viewer's own
+   * comments. Server-side `edit_comment_tx` enforces authorship; this
+   * prop is purely UX.
+   */
+  currentUserId: string;
 }
 
 export function TicketDetailPanel({
@@ -72,6 +79,7 @@ export function TicketDetailPanel({
   isOpen,
   onClose,
   userRole,
+  currentUserId,
 }: TicketDetailPanelProps) {
   return (
     <Dialog.Root open={isOpen} onOpenChange={(next) => !next && onClose()}>
@@ -98,7 +106,10 @@ export function TicketDetailPanel({
                 <section className="px-5 py-4">
                   <SectionLabel>Timeline</SectionLabel>
                   <div className="mt-3">
-                    <TicketEntriesTimeline entries={ticket.entries} />
+                    <TicketEntriesTimeline
+                      entries={ticket.entries}
+                      currentUserId={currentUserId}
+                    />
                   </div>
                 </section>
 

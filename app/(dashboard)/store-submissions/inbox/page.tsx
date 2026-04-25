@@ -103,6 +103,7 @@ export default async function InboxPage({
           apps={apps.map((a) => ({ id: a.id, name: a.name }))}
           platforms={platforms.map((p) => ({ key: p.key, display_name: p.display_name }))}
           role={storeUser.role}
+          currentUserId={storeUser.id}
           selectedTicketId={selectedTicketId}
           initialTicket={initialTicket}
         />
