@@ -575,84 +575,43 @@ Nếu Gmail sync tạo tickets sai (vd regex bug):
 
 ## B.1. Sentry setup
 
-### B.1.1. Installation
+> **Status:** wired ✅ as of PR-10d.1.1 (commit `0fdaf92`). The historical wizard-based snippet below has been replaced by the modern Sentry SDK v10+ pattern in this repo. Source files are authoritative — this section is a pointer, not a parallel spec.
 
-```bash
-npm install @sentry/nextjs
-npx @sentry/wizard@latest -i nextjs
-```
+### B.1.1. Files in this repo
 
-Wizard creates:
-- `sentry.server.config.ts`
-- `sentry.edge.config.ts`  
-- `sentry.client.config.ts`
-- `next.config.js` wrapped với `withSentryConfig`
+| File | Role |
+|---|---|
+| `instrumentation.ts` | Next.js boot hook; routes per `NEXT_RUNTIME` to server / edge config; no-ops if `SENTRY_DSN` is unset |
+| `sentry.server.config.ts` | Node runtime init. `tracesSampleRate` 0.1 prod / 1.0 dev. `beforeSend` PII redactor for `body` / `email` / `content` keys. |
+| `sentry.edge.config.ts` | Edge runtime init (no Node APIs) |
+| `instrumentation-client.ts` | Browser init. Replaces the deprecated `sentry.client.config.ts` per Sentry v10 / Turbopack readiness. Exports `onRouterTransitionStart` for navigation instrumentation. Replay disabled (bundle-size). |
+| `next.config.mjs` | Wrapped with `withSentryConfig`. `silent: !CI`. `hideSourceMaps: true`. Source map upload only when `SENTRY_AUTH_TOKEN` is set. |
 
-Config:
-```typescript
-// sentry.server.config.ts
-import * as Sentry from '@sentry/nextjs';
+### B.1.2. Conditional init
 
-Sentry.init({
-  dsn: process.env.SENTRY_DSN,
-  environment: process.env.SENTRY_ENVIRONMENT,
-  release: process.env.SENTRY_RELEASE,
-  tracesSampleRate: 0.1,  // 10% traces sampled
-  profilesSampleRate: 0,  // disabled for MVP
-  ignoreErrors: [
-    'NEXT_REDIRECT',
-    'NEXT_NOT_FOUND',
-  ],
-  beforeSend(event) {
-    // Don't send in local dev
-    if (process.env.APP_ENV !== 'production') return null;
-    return event;
-  },
-});
-```
+Every config guards `Sentry.init()` behind `if (process.env.SENTRY_DSN)`. Local dev without a DSN no-ops gracefully — no console spam, no failed network calls. Production sets DSN per Railway service (web + cron-store).
 
 ### B.1.2. Usage patterns
 
-**API Route**:
-```typescript
-export async function POST(req: NextRequest) {
-  try {
-    // ... handler
-  } catch (err) {
-    Sentry.captureException(err, {
-      tags: { route: '/api/sync/gmail' },
-      extra: { requestHeaders: Object.fromEntries(req.headers) },
-    });
-    throw err;
-  }
-}
-```
+### B.1.3. Capture taxonomy (PR-10d.1.2)
 
-**Cron endpoint** (critical):
-```typescript
-// lib/gmail/sync.ts
-export async function runSync(options: SyncOptions) {
-  const transaction = Sentry.startTransaction({ name: 'gmail-sync' });
-  try {
-    // ... sync logic
-    transaction.setStatus('ok');
-  } catch (err) {
-    Sentry.captureException(err, {
-      tags: { component: 'gmail-sync', mode: currentMode },
-      extra: { state: syncState },
-    });
-    transaction.setStatus('internal_error');
-    throw err;
-  } finally {
-    transaction.finish();
-  }
-}
-```
+Tags applied at every `captureException` call so Sentry alerts can filter by component:
 
-**Client-side errors**:
-Auto-capture qua wrapper. React Error Boundaries tự send errors.
+| `component` | Subcontext | Source file |
+|---|---|---|
+| `gmail-sync` | `endpoint: 'cron-tick'` | `app/api/store-submissions/sync/gmail/route.ts` |
+| `ticket-engine` | `phase: 'find-or-create' \| 'update-link'` | `lib/store-submissions/tickets/wire.ts` |
+| `inbox-actions` | `action: <UserActionRequest['type']>` | `app/(dashboard)/store-submissions/inbox/actions.ts` |
+| `inbox-error-boundary` | (route-level render) | `app/(dashboard)/store-submissions/inbox/error.tsx` |
+| `global-error-boundary` | (root-layout render) | `app/global-error.tsx` |
 
-### B.1.3. Alerts config
+User context (`Sentry.setUser({ id, username: role })`) auto-binds in `guardDevOrManager` — id + role only, email omitted as PII.
+
+**Capture scope discipline:** capture 500s, race conditions, unmapped DB failures, and graceful-degradation boundary catches. Do NOT capture typed business errors (state guards, ownership checks, validation rejections) — they're normal flow and would drown the signal.
+
+> **API note:** `Sentry.startTransaction` was deprecated in v8+ (we ship v10.49). Use `Sentry.startSpan` if explicit transaction wrapping is needed; current implementation does not wrap the cron path because Sentry's auto-instrumentation already covers Next.js routes.
+
+### B.1.4. Alerts config
 
 Sentry UI → Alerts → create:
 

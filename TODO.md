@@ -42,7 +42,7 @@ Format: `- [ ] [PR-X] description — file path — rationale`
 - [ ] [PR-7 polish] Audit all test files: replace `vi.clearAllMocks()` with `vi.resetAllMocks()` in `beforeEach` to prevent `mockImplementationOnce` / `mockReturnValueOnce` queue leak between tests. Found during 7.3.1 `sync.test.ts` debug — the "stats aggregation" test failed because a previous test's queued parser impls stayed in the queue. `clearAllMocks` only wipes call history, not the Once queues. Scope: ~30 test files in the codebase.
 - [ ] [PR-7 polish] Replace synthetic MIME fixtures in `lib/store-submissions/gmail/__fixtures__/index.ts` with real anonymized samples from the shared mailbox (1 each: Apple, Google Play, Huawei, FB). Strip sensitive fields, use fake app names. Synthetic fixtures are good enough to exercise the parser's shape handling; real samples improve rule calibration accuracy.
 - [ ] [PR-7 polish] Add `pg_cron` job (or a daily cleanup endpoint) to delete `store_mgmt.sync_logs` older than 90 days. Currently unbounded growth — ~288 rows/day from the every-5-min cron = ~100K rows/year. Small per-row; housekeeping avoids surprise later.
-- [ ] [PR-7] Sentry wiring for the sync endpoint — `app/api/store-submissions/sync/gmail/route.ts`. `SENTRY_DSN` env is already allocated per `docs/store-submissions/06-deployment.md`; install `@sentry/nextjs`, initialize in `instrumentation.ts`, capture the 500-path error with `component: 'gmail-sync'` tag. Intentionally deferred because MVP doesn't ship with Sentry yet.
+- [x] [PR-7] Sentry wiring for the sync endpoint — `app/api/store-submissions/sync/gmail/route.ts`. ✅ Resolved by PR-10d.1.2 (commit `085e422`): `instrumentation.ts` + `sentry.server.config.ts` boot Sentry; the 500-path now calls `Sentry.captureException(err, { tags: { component: 'gmail-sync', endpoint: 'cron-tick' } })`.
 - [ ] [PR-7] Manual "Sync now" button in Settings page — trigger `POST /api/store-submissions/sync/gmail` via a Server Action, rate-limit 1/min per user. Emits `sync_method='MANUAL'` (value reserved in the `sync_logs` CHECK constraint, not yet produced by the cron path).
 
 ## PR-7 Post-Ship Polish (surfaced from 2026-04-21/22 production deployment)
@@ -99,7 +99,7 @@ Replaced the PR-8 stub with a real transactional find-or-create + state machine 
 
 - [ ] [PR-9 polish] `stats.tickets_associated` counter in `SyncStats` + `sync_logs` payload. Schema change — migration + `insertSyncLog` signature update. Derivable via `SELECT count(*) FROM email_messages WHERE ticket_id IS NOT NULL AND processed_at > ?`. Punt unless observability demands it.
 - [ ] [PR-9 polish] Wire success log at DEBUG level (silent on success today). Would add ~2880 log lines/day on 5-min cron — revisit only on real debugging need.
-- [ ] [PR-9 polish] Surface `TicketEngineRaceError` + `TicketEngineNotFoundError` via Sentry (filter tag `component: 'ticket-engine'`). Blocked on `SENTRY_DSN` wiring (tracked under PR-7 polish).
+- [x] [PR-9 polish] Surface `TicketEngineRaceError` + `TicketEngineNotFoundError` via Sentry. ✅ Resolved by PR-10d.1.2 (commit `085e422`): both engine errors are captured at the wire.ts swallowing boundary with `tags: { component: 'ticket-engine', phase: 'find-or-create' | 'update-link' }` so the graceful-null contract still holds while ops gets alerted.
 
 **Post-deploy verification queries** in `20260423100000_..._backfill_ticket_id.sql` header comments (pre-apply preview + post-apply `without_ticket_id = 0` assertion).
 
@@ -169,6 +169,33 @@ Wire user-driven state transitions + comment + reject-reason flows on top of the
 - [ ] Path G — apply migration `20260424000000_store_mgmt_user_actions_rpcs.sql` via Supabase SQL Editor (production)
 - [ ] Manual QA scenarios: 4 state buttons / 10s Undo / comment add+edit ownership / reject reason / timeline render of all 5 entry types / VIEWER hides actions / DEV-MANAGER full functionality
 
+## PR-10d — Polish + Observability ✅ COMPLETED (2026-04-25)
+
+Production observability + UX polish. Wires Sentry SDK end-to-end and adds keyboard navigation. Closes the PR-7 + PR-9 deferred Sentry debt.
+
+**Shipped (4 sub-chunks):**
+
+| Sub-chunk | Commit | Scope |
+|---|---|---|
+| 10d.1.1 | `0fdaf92` | Sentry init — `instrumentation.ts` + `sentry.server.config.ts` + `sentry.edge.config.ts` + `instrumentation-client.ts` (modern v10 pattern, replaces deprecated `sentry.client.config.ts`) + `withSentryConfig` wrap in `next.config.mjs` + `.env.example` additions |
+| 10d.1.2 | `085e422` | `Sentry.captureException` in 3 production error paths — gmail-sync 500 fallback, ticket-engine wire.ts (both catch sites), inbox-actions unmapped DB_ERROR. `Sentry.setUser` auto-binds via `guardDevOrManager`. Resolves TODO.md PR-7 + PR-9 debt. |
+| 10d.1.3 | `83dee62` | Route-level error boundary `app/(dashboard)/store-submissions/inbox/error.tsx` + root-layout fallback `app/global-error.tsx`. Resolves the SDK's `global-error.js` warning. |
+| 10d.2 | `f73355d` | j/k row navigation + Enter to open via `react-hotkeys-hook` v5. `focusedIndex` state with `ticketsKey`-stable reset. Desktop-only hint strip. Bundle 11 → 13.7 kB. |
+
+**Tag taxonomy established:**
+- `component`: `gmail-sync` | `ticket-engine` | `inbox-actions` | `inbox-error-boundary` | `global-error-boundary`
+- Subcontext: `phase` | `endpoint` | `action`
+- User context auto-bound via `guardDevOrManager` (id + role; email omitted as PII)
+- PII filter in `sentry.server.config.ts#beforeSend` redacts `body` / `email` / `content` keys (Apple/Google reviewer text never transits)
+
+**Capture scope discipline:**
+- DO capture: 500 errors, race conditions, unmapped DB failures, swallowing-boundary catches
+- DON'T capture: typed business errors (state guards, ownership checks, validation) — would flood Sentry with normal flow
+
+**Test count:** 983 unchanged (10d.2 logic too trivial to merit unit tests; E2E is the value-adding test type and was deferred per scope).
+
+**Pending:** push 4 commits to `origin/main`.
+
 ## Post-PR-10 — Reclassify feature (planned)
 
 **Scope**: Re-run classifier trên existing `email_messages` khi App Registry hoặc Email Rules updated.
@@ -192,7 +219,7 @@ Wire user-driven state transitions + comment + reject-reason flows on top of the
 
 **Deferred rationale**: PR-10 scope discipline. Current UNCLASSIFIED_APP ticket acceptable interim; Manager reviews manually until reclassify ships.
 
-## PR-10 — Inbox UI (shipped via PR-10a / PR-10b / PR-10c)
+## PR-10 — Inbox UI ✅ COMPLETE 2026-04-25 (shipped via PR-10a / PR-10b / PR-10c / PR-10d)
 
 Original scope preview (detailed in `docs/store-submissions/CURRENT-STATE.md` PR-10 section):
 

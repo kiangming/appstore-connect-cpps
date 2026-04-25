@@ -794,31 +794,36 @@ export function CreateAppForm({ platforms, onCreated }: Props) {
 
 ## B.5. Keyboard shortcuts
 
-Library: `react-hotkeys-hook`.
+Library: `react-hotkeys-hook` v5.2.4 (note: this repo ships v5; v4 docs differ in option-shape minor details, not in the basic `useHotkeys(keys, callback, options, deps)` signature).
 
-```typescript
-// hooks/use-inbox-shortcuts.ts
-import { useHotkeys } from 'react-hotkeys-hook';
+### Shipped (PR-10d.2)
 
-export function useInboxShortcuts(params: {
-  selected: Ticket | null;
-  onNavigate: (direction: 'up' | 'down') => void;
-  onArchive: (id: string) => void;
-  onFollowUp: (id: string) => void;
-  onOpen: (id: string) => void;
-}) {
-  useHotkeys('up', () => params.onNavigate('up'), { preventDefault: true });
-  useHotkeys('down', () => params.onNavigate('down'), { preventDefault: true });
-  useHotkeys('e', () => params.selected && params.onArchive(params.selected.id));
-  useHotkeys('f', () => params.selected && params.onFollowUp(params.selected.id));
-  useHotkeys('enter', () => params.selected && params.onOpen(params.selected.id));
-  useHotkeys('esc', () => closeDrawer());
-}
-```
+| Key | Action | Notes |
+|---|---|---|
+| `j` | Focus next row | `Math.min(prev + 1, count - 1)` — stays at end (no wrap) |
+| `k` | Focus previous row | `Math.max(prev - 1, 0)` — stays at start (no wrap) |
+| `Enter` | Open detail panel for focused row | No-op when no row is focused |
+| `Esc` | Close detail panel | Wired by Radix Dialog — no explicit `useHotkeys('esc')` needed |
 
-**Scope**: shortcuts chỉ active trong tab tương ứng. Disable khi focus trong input/textarea (hook built-in).
+Source: `components/store-submissions/inbox/InboxClient.tsx` (vim-style `j`/`k` chosen over `up`/`down` so browser arrow scrolling still works inside the panel).
 
-**Discoverability**: nút `?` mở modal cheatsheet liệt kê shortcuts.
+### Gating
+
+- **`enabled: !isPanelOpen`** — j/k navigation paused while the detail panel is open, so keys typed inside the dialog don't move list focus underneath
+- **`enableOnFormTags: false`** (v5 default) — typing into the search input or comment composer doesn't trigger navigation
+- **Empty list** — early return; no focus state created
+
+### Reset semantics
+
+`focusedIndex` is reset to `null` when the underlying ticket list changes (filter / sort / pagination). The reset is keyed on `ticketsKey = tickets.map(t => t.id).join(',')` rather than on `initialData` identity, so panel toggling (which re-renders InboxClient with new `searchParams` but the same list) does NOT clobber the user's focused position.
+
+### Deferred shortcuts
+
+`e` (archive) / `f` (follow-up) bindings from the original spec snippet are not shipped — the on-row Enter→panel→action footer flow was sufficient for MVP triage volume (~200/month). Revisit when keyboard-only users complain or volume forces faster bulk handling.
+
+### Discoverability
+
+Subtle hint strip immediately above the table (`hidden md:flex`, slate-400) shows `j k to navigate · Enter to open`. No global `?` cheatsheet modal — single-page surface, low shortcut count.
 
 ## B.6. Drawer state — ticket detail
 
