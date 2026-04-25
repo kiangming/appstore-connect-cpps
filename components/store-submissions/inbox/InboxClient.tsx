@@ -18,9 +18,10 @@
  *     shifts, so stale cursors point nowhere useful.
  */
 
-import { useCallback, useMemo, useTransition } from 'react';
+import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useHotkeys } from 'react-hotkeys-hook';
 import {
   ArrowRight,
   ChevronDown,
@@ -239,6 +240,64 @@ export function InboxClient({
     navigate(p);
   }
 
+  // -- Keyboard navigation (j/k/Enter) -------------------------------------
+  //
+  // Stays at boundaries (no wrap) for predictable UX. Initial null state
+  // means "no row focused"; first j/k press jumps to row 0. Disabled
+  // while the detail panel is open so j/k inside the panel don't
+  // accidentally move list focus underneath. `enableOnFormTags` defaults
+  // to false in v5 — typing into the search input or comment composer
+  // won't trigger navigation.
+  const isPanelOpen = selectedTicketId !== null;
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null);
+
+  // Reset focus when the underlying ticket list changes (filter / sort /
+  // pagination). Keying on the join of ticket ids gives a stable signal
+  // that ignores incidental prop-identity churn (e.g. panel toggling
+  // re-renders the page without changing the list).
+  const ticketsKey = useMemo(
+    () => initialData.tickets.map((t) => t.id).join(','),
+    [initialData.tickets],
+  );
+  useEffect(() => {
+    setFocusedIndex(null);
+  }, [ticketsKey]);
+
+  const ticketCount = initialData.tickets.length;
+
+  useHotkeys(
+    'j',
+    () => {
+      if (ticketCount === 0) return;
+      setFocusedIndex((prev) =>
+        prev === null ? 0 : Math.min(prev + 1, ticketCount - 1),
+      );
+    },
+    { enabled: !isPanelOpen, preventDefault: true },
+    [ticketCount, isPanelOpen],
+  );
+
+  useHotkeys(
+    'k',
+    () => {
+      if (ticketCount === 0) return;
+      setFocusedIndex((prev) => (prev === null ? 0 : Math.max(prev - 1, 0)));
+    },
+    { enabled: !isPanelOpen, preventDefault: true },
+    [ticketCount, isPanelOpen],
+  );
+
+  useHotkeys(
+    'enter',
+    () => {
+      if (focusedIndex === null) return;
+      const ticket = initialData.tickets[focusedIndex];
+      if (ticket) openPanel(ticket.id);
+    },
+    { enabled: !isPanelOpen, preventDefault: true },
+    [focusedIndex, isPanelOpen, initialData.tickets],
+  );
+
   /** True if any non-tab filter is active (platform/app/search/dates/sort non-default). */
   const hasActiveFilters = useMemo(() => {
     return Boolean(
@@ -416,10 +475,22 @@ export function InboxClient({
         </div>
       )}
 
+      {/* -- Keyboard hint (desktop only) -- */}
+      {tickets.length > 0 && (
+        <div className="hidden md:flex items-center gap-1 text-[11px] text-slate-400 -mt-1">
+          <Kbd>j</Kbd>
+          <Kbd>k</Kbd>
+          <span className="ml-1">to navigate</span>
+          <Kbd className="ml-3">Enter</Kbd>
+          <span className="ml-1">to open</span>
+        </div>
+      )}
+
       {/* -- Ticket list -- */}
       <TicketListTable
         tickets={tickets}
         selectedTicketId={selectedTicketId}
+        focusedIndex={focusedIndex}
         onRowClick={(t) => openPanel(t.id)}
         emptyMessage={getEmptyMessage(activeTab, hasActiveFilters)}
       />
@@ -493,6 +564,22 @@ function getEmptyMessage(activeTab: TabKey, hasActiveFilters: boolean): string {
     case 'archived':
       return 'No archived tickets.';
   }
+}
+
+function Kbd({
+  children,
+  className = '',
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <kbd
+      className={`px-1.5 py-0.5 bg-slate-100 rounded font-mono text-[10px] text-slate-500 ${className}`}
+    >
+      {children}
+    </kbd>
+  );
 }
 
 function FilterPill({

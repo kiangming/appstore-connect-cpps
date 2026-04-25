@@ -28,6 +28,8 @@
  *     timestamp in the hover title
  */
 
+import { useEffect, useRef } from 'react';
+
 import { formatDistanceToNow } from 'date-fns';
 
 import type { TicketListRow } from '@/lib/store-submissions/queries/tickets';
@@ -52,6 +54,13 @@ export interface TicketListTableProps {
    */
   selectedTicketId?: string | null;
   /**
+   * Index of the keyboard-focused row (j/k navigation). Distinct from
+   * `selectedTicketId` (which tracks the open panel). Renders a subtle
+   * inset ring; the focused row also auto-scrolls into view. Null = no
+   * keyboard focus active.
+   */
+  focusedIndex?: number | null;
+  /**
    * Override the default empty-state copy. The Inbox passes context-
    * aware messages (per-tab wording, filter-aware fallback) — see
    * `getEmptyMessage` in InboxClient.
@@ -63,6 +72,7 @@ export function TicketListTable({
   tickets,
   onRowClick,
   selectedTicketId,
+  focusedIndex,
   emptyMessage = 'No tickets match the current filters.',
 }: TicketListTableProps) {
   if (tickets.length === 0) {
@@ -90,12 +100,13 @@ export function TicketListTable({
         <div className="text-right">Entries</div>
       </div>
 
-      {tickets.map((ticket) => (
+      {tickets.map((ticket, index) => (
         <TicketRow
           key={ticket.id}
           ticket={ticket}
           onRowClick={onRowClick}
           isSelected={ticket.id === selectedTicketId}
+          isFocused={index === focusedIndex}
         />
       ))}
     </div>
@@ -106,11 +117,23 @@ function TicketRow({
   ticket,
   onRowClick,
   isSelected,
+  isFocused,
 }: {
   ticket: TicketListRow;
   onRowClick?: (ticket: TicketListRow) => void;
   isSelected: boolean;
+  isFocused: boolean;
 }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll the keyboard-focused row into view. `block: 'nearest'`
+  // avoids unnecessary scrolling when the row is already visible.
+  useEffect(() => {
+    if (isFocused) {
+      rowRef.current?.scrollIntoView({ block: 'nearest' });
+    }
+  }, [isFocused]);
+
   const handleClick = () => onRowClick?.(ticket);
 
   // Left border is always 2px to prevent column-width jitter between
@@ -118,9 +141,13 @@ function TicketRow({
   const selectionClasses = isSelected
     ? 'bg-blue-50/70 border-l-[#0071E3]'
     : 'border-l-transparent hover:bg-slate-50/70';
+  const focusClasses = isFocused
+    ? 'ring-2 ring-blue-500/30 ring-inset'
+    : '';
 
   return (
     <div
+      ref={rowRef}
       role="button"
       tabIndex={0}
       onClick={handleClick}
@@ -130,10 +157,11 @@ function TicketRow({
           handleClick();
         }
       }}
-      className={`grid ${GRID} gap-3 items-center px-5 py-3 border-b border-slate-100 last:border-b-0 border-l-2 cursor-pointer text-[13px] ${selectionClasses}`}
+      className={`grid ${GRID} gap-3 items-center px-5 py-3 border-b border-slate-100 last:border-b-0 border-l-2 cursor-pointer text-[13px] ${selectionClasses} ${focusClasses}`}
       data-testid="ticket-row"
       data-ticket-id={ticket.id}
       data-selected={isSelected}
+      data-focused={isFocused}
       aria-current={isSelected ? 'true' : undefined}
     >
       <div className="flex items-center gap-2 min-w-0">
