@@ -141,7 +141,7 @@ export function classify(
     });
 
     // Step 4 — type + payload
-    const typeMatch = matchType(email.body, rules);
+    const typeMatch = matchType(email, rules);
     if (!typeMatch) {
       matched.push({ step: 'type', matched: false });
       // extracted_app_name is non-null here because Step 3 would have
