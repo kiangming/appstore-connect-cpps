@@ -203,6 +203,39 @@ describe('GET /api/store-submissions/gmail/callback', () => {
     errorSpy.mockRestore();
   });
 
+  // --- Redirect base URL — env-based, not request.url (PR-12.8 hotfix) ----
+  //
+  // Behind Railway's edge proxy, `request.url` is reconstructed from the
+  // inbound `Host` header which can reflect Next.js's internal port
+  // (e.g. `localhost:8080`) rather than the external Railway domain.
+  // Pre-PR-12.8 the callback used `new URL(SETTINGS_PATH, request.url)`
+  // for its redirect base, which produced `Location: https://localhost:8080/...`
+  // — browser cannot follow.
+  //
+  // Fix: use `resolveBaseUrl()` (env-based: NEXTAUTH_URL → VERCEL_URL →
+  // RAILWAY_PUBLIC_DOMAIN → localhost fallback). Same helper that builds
+  // the OAuth `redirect_uri` sent to Google — single source of truth for
+  // both legs of the OAuth dance, immune to proxy header drift.
+
+  it('redirects via env-based base URL, not request.url (PR-12.8 Railway proxy fix)', async () => {
+    const oldNextAuthUrl = process.env.NEXTAUTH_URL;
+    process.env.NEXTAUTH_URL = 'https://prod.example.com';
+    try {
+      // mkRequest builds request.url with host studio.example.com — must
+      // NOT appear in the Location header. The env-based base URL is the
+      // authoritative source.
+      const res = await GET(mkRequest({ error: 'access_denied' }));
+      const location = res.headers.get('location') ?? '';
+      expect(location).toMatch(
+        /^https:\/\/prod\.example\.com\/store-submissions\/config\/settings\?/,
+      );
+      expect(location).not.toContain('studio.example.com');
+    } finally {
+      if (oldNextAuthUrl === undefined) delete process.env.NEXTAUTH_URL;
+      else process.env.NEXTAUTH_URL = oldNextAuthUrl;
+    }
+  });
+
   // --- Happy path --------------------------------------------------------
 
   it('happy path: exchange → profile → save → redirect gmail=connected', async () => {
