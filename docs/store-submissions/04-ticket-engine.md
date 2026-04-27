@@ -96,11 +96,64 @@ auto-archive cascade ships in PR-11.
 work. PR-11 covers the production use case (Apple bucket TICKET-10000
 backlog of UNCLASSIFIED_APP rows after App Registry adds).
 
-### PR-12+ (later)
+### PR-12 (shipped 2026-04-27) — Apple rejection parser + Backfill button
+
+PR-11 wire was untested in production: 0 Apple emails arrived between
+deploy (2026-04-25) and 2026-04-27, and rejection emails were
+classifying as `UNCLASSIFIED_TYPE` because `extractApple` only walked
+the acceptance anchor. PR-12 closes both gaps:
+
+- `lib/store-submissions/gmail/html-extractor.ts` — `extractApple(html, subject?)`
+  detects rejection template ("There's an issue with your X submission")
+  and walks h3 from a "...resolve the issues..." paragraph anchor instead
+  of `<h2>Accepted items</h2>`. Field renamed `accepted_items` → `items`
+  to cover both branches; new sibling `outcome: 'ACCEPTED' | 'REJECTED' | null`.
+  IAE matcher relaxed to optional `(N)` count (rejection variant has no
+  parens). 4 rejection `.eml` fixtures + 8 new tests (commit `b1060e8`).
+- **`outcome` is audit-only** — classifier does NOT read it.
+  `tickets.latest_outcome` continues to flow from `subject_patterns` via
+  the PR-9 `find_or_create_ticket_tx` RPC (single source of truth, lines
+  355-376 of `20260423000000_store_mgmt_ticket_engine_rpc.sql`). See
+  [03-email-rule-engine.md §3.5 PR-12 subsection](03-email-rule-engine.md)
+  for rationale.
+- `lib/store-submissions/reclassify/core.ts` — `reclassifyOne` extracted
+  from `reclassify-actions.ts` (-179/+13 line slimming) so both
+  reclassify + backfill Server Action shells share one pipeline (commit
+  `f4188db`).
+- `app/(dashboard)/store-submissions/inbox/backfill-actions.ts` —
+  `backfillSingleEmailAction(emailId)` + `backfillUnclassifiedAction({ limit? })`,
+  MANAGER-only. Re-fetches Gmail HTML for `extracted_payload IS NULL`
+  rows, runs `extractApple`, persists, then calls `reclassifyOne` for
+  atomic ticket swap. Apple-only SQL filter (`.in('sender_email', appleEmails)`).
+  Sequential per-row, continue-on-error. Sentry component tag
+  `'backfill-action'` with 4 per-row breadcrumbs (`fetch-start` →
+  `html-extracted` → `extract-result` → `reclassify-result`).
+- UI: `BackfillButtons` component in `InboxClient.tsx` MANAGER
+  Unclassified banner — "Backfill 1 row (test)" (limit:1, no confirm,
+  ~200ms) + "Backfill all" (full bulk, window.confirm, ~3s for 14 rows).
+- 8 backfill action tests (single happy + bulk happy + bulk empty +
+  VIEWER × 2 + per-row resilience + Apple-only filter × 2). Pattern:
+  `makeQueryBuilder` thenable Supabase chain helper, `vi.importActual`
+  preserves `EmailNotFoundError` + `ReclassifyValidationError` instanceof
+  checks (commit `00419bc`).
+
+**Two-step persistence design** — UPDATE `extracted_payload` then call
+`reclassify_email_tx` happens in two SQL round-trips, not one
+transaction. Bounded ~50ms gap is acceptable: `reclassify_email_tx`
+re-loads under FOR UPDATE so a concurrent sync run can't observe a
+half-updated row, and UNIQUE(gmail_msg_id) prevents duplicate ingestion.
+Manager-driven, not high-frequency. Single combined RPC would have
+required passing the payload as a parameter through the SQL, expanding
+the RPC surface for marginal atomicity gain.
+
+**Test count:** 1036 (pre-PR-12) → **1053** (post-PR-12) = **+17 tests**.
+
+### PR-13+ (later)
 
 §5.2 ticket-level reclassify with merge logic, §8 app rename transaction,
 §9 full error hierarchy expansion. Multi-platform HTML extractors
-(Google / Huawei / Facebook).
+(Google / Huawei / Facebook) + corresponding multi-platform backfill
+expansion (current backfill is Apple-only by `appleEmails` filter).
 
 ### Stability contract
 

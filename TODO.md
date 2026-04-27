@@ -224,11 +224,46 @@ tracked under "PR-11 deferred items" below.
 ### Deferred from PR-11 (post-MVP)
 
 - [ ] [PR-11 polish] **Real PL/pgSQL execution tests for `reclassify_email_tx`** — current 19 tests in `app/(dashboard)/store-submissions/inbox/reclassify-actions.test.ts` mock the RPC at the Server Action boundary. End-to-end against a migration-applied DB (with `find_or_create_ticket_tx` reuse paths exercised) requires the same Supabase local docker harness that PR-5's TODO line 25 requested. File together when the harness lands. Manual QA Path G validates production in the meantime.
-- [ ] [PR-11 polish] **Multi-platform HTML extractors** — `extractGoogle` / `extractHuawei` / `extractFacebook`. Need real `.eml` samples first. Current `lib/store-submissions/gmail/html-extractor.ts` is Apple-coupled by name. Shared `ExtractedPayload` shape is the contract. Activate when prod sees enough volume from those platforms to need structured extraction.
-- [ ] [PR-11 polish] **Rejected items HTML parser** — all 4 PR-11 fixtures are APPROVED outcome. Apple's `"There's an issue with your X submission"` template's HTML structure not yet sampled. When a rejected email lands in prod, capture the .eml + extend `extractApple` to walk a `<h2>Rejected items</h2>` (or equivalent) section.
+- [ ] [PR-13+ polish] **Multi-platform HTML extractors** — `extractGoogle` / `extractHuawei` / `extractFacebook`. Need real `.eml` samples first. Current `lib/store-submissions/gmail/html-extractor.ts` is Apple-coupled by name. Shared `ExtractedPayload` shape is the contract. Activate when prod sees enough volume from those platforms to need structured extraction. **Backfill button (`backfill-actions.ts`) is also Apple-only by `appleEmails` SQL filter — multi-platform extractor + multi-platform backfill ship together when each platform's extractor lands.**
+- [x] [PR-11 polish] **Rejected items HTML parser** — ✅ Resolved by PR-12.1+12.2 (commit `b1060e8`): `extractApple(html, subject?)` rejection branch + `outcome` audit flag + `items` rename + IAE optional count. 4 rejection `.eml` fixtures captured (App Version / IAE / CPP / PPO) + 8 new extractor tests.
 - [ ] [PR-11 polish] **Auto-archive empty old tickets** — when reclassify moves the last email out of an Unclassified bucket, the old ticket may end up with zero emails. Currently left for Manager cleanup. Could ship a "sweep empty buckets" cron job or a "Empty bucket" badge on the inbox list. Decide based on real Manager workflow feedback.
 - [ ] [PR-11 polish] **`UnifiedClassificationResult` typing cleanup** — `lib/store-submissions/gmail/sync.ts` and `app/(dashboard)/store-submissions/inbox/reclassify-actions.ts` both relax to `Record<string, unknown>` for the persisted classification because the classifier's `ErrorCode` union doesn't include sync-layer concerns (`NO_RULES`, `NO_SENDER_MATCH` from non-classifier paths). Unify into a `PersistedClassification` type that's a superset of `ClassificationResult`. Cosmetic.
-- [ ] [PR-12+] **Spec §5.2 ticket-level reclassify (merge)** — move all emails of a ticket via Manager UI; if the new grouping key collides with an open ticket, MERGE entries + emails into the conflict ticket and delete the source. PR-11 ships email-level reclassify (the operational use case); ticket-level merge is the design described in `docs/store-submissions/04-ticket-engine.md` §5.2 lines 589-676.
+- [ ] [PR-13+] **Spec §5.2 ticket-level reclassify (merge)** — move all emails of a ticket via Manager UI; if the new grouping key collides with an open ticket, MERGE entries + emails into the conflict ticket and delete the source. PR-11 ships email-level reclassify (the operational use case); ticket-level merge is the design described in `docs/store-submissions/04-ticket-engine.md` §5.2 lines 589-676.
+
+## PR-12 — Apple rejection parser + Backfill button MANAGER ✅ COMPLETED (2026-04-27)
+
+4 commits (down from 7-chunk plan via subsume discipline):
+
+| Commit | Scope |
+|---|---|
+| `b1060e8` | **PR-12.1+12.2 bundle** — `extractApple(html, subject?)` rejection branch + `outcome` audit flag + `items` rename + IAE optional `(N)` count + `extractIdAndName` (Submission ID + App Name parse) + 4 rejection `.eml` fixtures + restructured `html-extractor.test.ts` (4+4+4+6 tests). Sync wire threading + classifier audit comment subsumed (12.3 + 12.4 absorbed). |
+| `f4188db` | **PR-12.5** — `lib/store-submissions/reclassify/core.ts` extraction (~200 lines) + `backfill-actions.ts` (~370 lines) + `BackfillButtons` UI component. Sentry `backfill-action` taxonomy. |
+| `00419bc` | **PR-12.6** — 8 backfill action tests (single happy + bulk happy + bulk empty + VIEWER × 2 + per-row resilience + Apple-only filter × 2). |
+| this commit | **PR-12.7** — Docs finalization. |
+
+**Test count:** 1036 (pre-PR-12) → **1053** (post-PR-12) = **+17 tests** (8 extractor + 8 backfill action + 1 IAE-no-parens, accounting for restructure).
+
+**No migrations** — PR-12 is application-layer only. The shape rename
+(`accepted_items` → `items`) reuses the existing JSONB column; the
+Postgres `COMMENT ON COLUMN` in
+`20260425000000_store_mgmt_email_extracted_payload.sql:20` is left
+stale per the no-down-migrations rule and tracked under PR-13+ schema
+cleanup below.
+
+**Production state:** 14 legacy UNCLASSIFIED rows pre-PR-11.3 carry
+`extracted_payload IS NULL`; 0 Apple emails arrived post-2026-04-25
+deploy so the PR-11.3 wire was untested in production. PR-12 self-
+verified via 8 fixtures (4 acceptance + 4 rejection); production
+verification ships via the **Backfill 1 row (test)** button — run that
+first, verify Sentry breadcrumbs, then **Backfill all** for the bulk.
+
+### Deferred from PR-12 (post-ship, low priority)
+
+- [ ] [PR-13+ schema cleanup] **Refresh `COMMENT ON COLUMN extracted_payload`** — `supabase/migrations/20260425000000_store_mgmt_email_extracted_payload.sql:20` still reads `Shape: { accepted_items: AcceptedItem[] }` after the PR-12 rename. Postgres metadata comment, not enforced. Refresh on the next forward migration that touches the column.
+- [ ] [PR-13+ polish] **Sentry breadcrumb cap formalization for backfill** — current 4-stage × 14-row max = 56 breadcrumbs (well under Sentry default 100). Multi-platform expansion may push past — add explicit `cap-at-first-N + summary` pattern in `backfill-actions.ts` when batch sizes grow past ~20 candidates.
+- [ ] [PR-13+ extraction] **Per-row backfill affordance in EmailEntryCard** — `backfillSingleEmailAction(emailId)` is exported and tested but currently unused by UI (the Manager Unclassified banner uses bulk-with-limit:1). When ticket detail panel needs a "re-extract this specific email" affordance (e.g. a Manager investigating a specific email's outcome), wire the per-email button via `entry.email_message_id`. Pattern matches the existing `ReclassifyEmailButton` in `TicketEntriesTimeline.tsx`.
+- [ ] [PR-13+ test infra] **Vitest cold-start flake** — observed 1052/1053 once on first full suite run after `backfill-actions.test.ts` added (3 consecutive subsequent runs all 1053). Not specific to backfill tests; likely a vitest module loading race during cold start. If it recurs, investigate `vi.mock` hoisting timing or test file ordering.
+- [ ] [PR-13+ polish] **Multi-platform backfill expansion** — `backfill-actions.ts` is Apple-only by `appleEmails` SQL filter. Ships together with multi-platform HTML extractors (see PR-13+ multi-platform note above).
 
 ## Post-PR-11 — TicketDetailContext + prop drilling cleanup (planned)
 

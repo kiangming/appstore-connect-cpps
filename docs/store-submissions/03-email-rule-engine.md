@@ -279,16 +279,17 @@ the structured payload before falling back to body keyword.
 
 ##### `lib/store-submissions/gmail/html-extractor.ts`
 
-Pure function `extractApple(html: string | null | undefined): ExtractedPayload`.
-Walks `<h2>Accepted items</h2>`'s next-element siblings, collects the first
+Pure function `extractApple(html: string | null | undefined, subject?: string): ExtractedPayload`.
+Detects whether the email is an acceptance or rejection template, walks
+the appropriate anchor's next-element siblings, collects the first
 non-anchor `<p>` body for each `<h3>` heading, and emits a typed
 `AcceptedItem`:
 
 | `type` discriminator | `<h3>` heading | Body shape | Payload fields |
 |---|---|---|---|
 | `APP_VERSION` | `App Version` | `{version} for {platform}` | `version`, `platform` |
-| `IN_APP_EVENTS` | `In-App Events ({count})` | (no body) | `count` |
-| `CUSTOM_PRODUCT_PAGE` | `Custom Product Pages` | `{name}<br>{uuid}<br>` | `name`, `uuid` |
+| `IN_APP_EVENTS` | `In-App Events [(N)]` | acceptance: no body / rejection: description + numeric event id | `count` (acceptance only — rejection variant has no `(N)` parens) |
+| `CUSTOM_PRODUCT_PAGE` | `Custom Product Pages [ ]` | `{name}<br>{uuid}<br>` | `name`, `uuid` |
 | `PRODUCT_PAGE_OPTIMIZATION` | `Product Page Optimization` | `{version_code}` | `version_code` |
 | `UNKNOWN` | (anything else) | preserved verbatim in `raw_heading` + `raw_body` | — |
 
@@ -301,14 +302,67 @@ call site so the extractor stays test-pure.
 collapses across `<br>`, so `name<br>uuid` would otherwise become
 `nameuuid`. Replace `<br>` with `\n` first, then strip remaining tags.
 
-**Trailing-space tolerance** — Apple's "Custom Product Pages " heading
-has a trailing space; `raw_heading` preserves it verbatim, comparison
-trims semantically.
+**Trailing-space tolerance** — Apple's "Custom Product Pages " (acceptance)
+and "In-App Events " (rejection) headings carry a trailing space;
+`raw_heading` preserves it verbatim, comparison trims semantically.
 
-**Failure modes** all return `{ accepted_items: [] }`: null/empty input,
-HTML doesn't parse, no `<h2>Accepted items</h2>`, no `<h3>` siblings.
-Empty result is the signal sync.ts uses for the no-alert path (rejection
-emails, marketing, status digests).
+##### PR-12 — rejection branch + outcome flag
+
+PR-12 extends the extractor to handle Apple's rejection template
+("There's an issue with your X submission"), which has the same h3 +
+type-body shapes as acceptance but **no `<h2>Accepted items</h2>`
+anchor**. The h3 list sits directly after a paragraph containing
+"...resolve the issues...". Detection priority chain:
+
+```
+1. Subject contains "There's an issue with"  → outcome='REJECTED', walk h3 from rejection anchor
+2. <h2>Accepted items</h2> present           → outcome='ACCEPTED', walk h3 from h2 (PR-11 path)
+3. <p>...resolve the issues...</p> present   → outcome='REJECTED' (HTML fallback when subject missing)
+4. else                                      → outcome=null + items=[]
+```
+
+**Subject is authoritative** — when it carries the rejection marker
+even an HTML with malformed/missing anchor still classifies the
+**outcome** correctly (`items=[]` is the Sentry-visible signal that
+Apple changed the rejection template).
+
+**`outcome` is audit-only.** The classifier does **not** read it;
+`tickets.latest_outcome` continues to flow from `subject_patterns` via
+PR-9's `find_or_create_ticket_tx` RPC (single source of truth). See
+[type-matcher.ts:103-107](../../lib/store-submissions/classifier/type-matcher.ts)
+for the comment locking this in. Rationale:
+
+- Two sources of truth (subject_patterns + extractor) would diverge
+  silently when Manager edits subject patterns.
+- Manager has a workflow to override outcome via the reject-reason
+  composer post-classify (PR-10c.3.1) — extractor inference would
+  surprise that flow.
+- Subject patterns already work for the rejection path; the bug was
+  purely **type matching falling through** because `accepted_items`
+  was empty, not outcome attribution.
+
+**Field rename** — `ExtractedPayload.accepted_items` → `items` to cover
+both branches; the rich `AcceptedItem` shape (with typed `version`,
+`platform`, `count`, `name`, `uuid`, `version_code`) is preserved so
+the classifier doesn't have to re-parse from `content` strings. New
+sibling fields:
+- `outcome: 'ACCEPTED' | 'REJECTED' | null`
+- `submission_id?: string` — UUID parsed from `Submission ID:` line
+- `app_name?: string` — value parsed from `App Name:` line
+
+Both `submission_id` + `app_name` are populated for both branches when
+the labels are present in the HTML body (`extractIdAndName` handles
+both same-line `"Label: value"` and split-line `"Label:" / "value"`
+layouts).
+
+**IAE rejection relaxation** — acceptance variant `<h3>In-App Events (5)</h3>`
+populates `count`; rejection variant `<h3>In-App Events </h3>` (trailing
+space, no parens) parses with `count: undefined`. Body description +
+numeric event ID captured in `raw_body` for Manager debugging.
+
+**Failure modes** all return `{ outcome: null, items: [] }`: null/empty
+input, HTML doesn't parse, neither acceptance nor rejection anchor
+present.
 
 ##### Two-tier `matchType` (commit `994da90`)
 
@@ -321,7 +375,10 @@ export function matchType(
   active.sort((a, b) => a.sort_order - b.sort_order);
 
   // Priority 1: structured payload from HTML extractor
-  const firstItem = email.extracted_payload?.accepted_items[0];
+  // PR-12: field renamed `accepted_items` → `items` (covers both
+  // acceptance + rejection). The sibling `outcome` field is audit-only
+  // and intentionally not read here.
+  const firstItem = email.extracted_payload?.items[0];
   if (firstItem && firstItem.type !== 'UNKNOWN') {
     const slug = mapExtractorTypeToSlug(firstItem.type);
     if (slug) {
@@ -380,28 +437,44 @@ semantic:
 
 | Value | Meaning |
 |---|---|
-| NULL | Extraction not attempted (non-Apple platform / parse error / NO_SENDER_MATCH) |
-| `{ accepted_items: [] }` | Apple email, no Accepted items section (rejection / marketing / status update) |
-| `{ accepted_items: [...] }` | Apple email with structured types |
+| NULL | Extraction not attempted (non-Apple platform / parse error / NO_SENDER_MATCH / legacy row pre-PR-11.3) |
+| `{ outcome, items: [] }` | Apple email, neither acceptance h2 nor rejection anchor present (marketing mail, status digest, malformed template) |
+| `{ outcome, items: [...] }` | Apple email with structured types under acceptance OR rejection branch |
 
 Reclassify uses this distinction (PR-11.5) — legacy rows + non-Apple
 stay NULL; `IS NOT NULL` filters Apple-extracted rows for bulk actions.
+
+The PR-12.5 backfill flow (`backfill-actions.ts`) targets the inverse —
+`extracted_payload IS NULL AND classification_status IN (UNCLASSIFIED_*)
+AND sender_email IN (<apple senders>)` — to re-fetch Gmail HTML for
+legacy rows and populate the column. Once populated, PR-11.5 reclassify
+takes over via `reclassifyOne` (extracted to
+[`lib/store-submissions/reclassify/core.ts`](../../lib/store-submissions/reclassify/core.ts)
+in PR-12.5 so both Server Action shells share one pipeline).
+
+> **Migration COMMENT drift**: the `COMMENT ON COLUMN` set in
+> `20260425000000_store_mgmt_email_extracted_payload.sql:20` still
+> reads `Shape: { accepted_items: AcceptedItem[] }` — kept stale per the
+> no-down-migrations rule. Refreshed the next time a forward migration
+> touches the column.
 
 ##### Sentry alert for UNKNOWN headings
 
 `gmail/sync.ts:alertOnUnknownExtractedTypes` calls
 `Sentry.captureMessage(level='warning', tags={ component: 'html-extractor', gmail_msg_id })`
-when any item in `accepted_items` is `UNKNOWN` (extractor saw an `<h3>`
-under `Accepted items` that none of the 4 patterns matched). Empty
-`accepted_items` is **not** an alert — that's the legitimate
-rejection/marketing/digest path.
+when any item in `items` is `UNKNOWN` (extractor saw an `<h3>` under one
+of the anchors that none of the 4 patterns matched). Empty `items` is
+**not** an alert — that's the legitimate marketing/digest path or a
+malformed rejection where the anchor paragraph is missing.
 
-##### Multi-platform extractors deferred (PR-12+)
+##### Multi-platform extractors deferred (PR-13+)
 
 `extractGoogle`, `extractHuawei`, `extractFacebook` need real `.eml`
 samples first. Current `extractApple` is platform-coupled by name; the
 shared `ExtractedPayload` shape is the contract — extractors agree on
-the result type, not on the input template.
+the result type, not on the input template. Multi-platform backfill
+(currently `appleEmails` filter in `backfill-actions.ts`) ships after
+the corresponding extractor lands.
 
 ### Step 5 — Extract submission_id (optional)
 
