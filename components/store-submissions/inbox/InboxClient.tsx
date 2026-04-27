@@ -26,13 +26,16 @@ import {
   ArrowRight,
   ChevronDown,
   ChevronRight,
+  Database,
   Lightbulb,
+  PlayCircle,
   RefreshCcw,
   Search,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { backfillUnclassifiedAction } from '@/app/(dashboard)/store-submissions/inbox/backfill-actions';
 import { reclassifyUnclassifiedAction } from '@/app/(dashboard)/store-submissions/inbox/reclassify-actions';
 import type {
   ListTicketsResult,
@@ -469,6 +472,8 @@ export function InboxClient({
             </span>
           </div>
           <div className="flex items-center gap-3 flex-shrink-0">
+            <BackfillButtons />
+            <span className="w-px h-4 bg-blue-200" aria-hidden />
             <BulkReclassifyButton />
             <Link
               href="/store-submissions/config/email-rules"
@@ -539,6 +544,106 @@ export function InboxClient({
 }
 
 // -- Subcomponents ----------------------------------------------------------
+
+/**
+ * MANAGER-only Apple HTML backfill (PR-12.5).
+ *
+ * Two buttons sharing a single `useTransition`, so the user can't fire
+ * the bulk run while a test row is still in flight (or vice versa).
+ *
+ *   1. "Backfill 1 row (test)" — production-safety dry run. Calls the
+ *      bulk action with `limit: 1` so the server picks the oldest
+ *      candidate; toast reports the per-row outcome the Manager can
+ *      eyeball before kicking off the full run. No window.confirm —
+ *      the action is bounded (single row, ~200ms).
+ *
+ *   2. "Backfill all" — full bulk over UNCLASSIFIED Apple emails with
+ *      NULL `extracted_payload`. window.confirm gate per usual MANAGER
+ *      bulk-action pattern (matches BulkReclassifyButton).
+ *
+ * Both calls return a `BulkBackfillResult`; the toast surface differs
+ * by the call shape so the Manager sees the test-vs-bulk distinction.
+ *
+ * Why not a separate "single email" Server Action wired here:
+ *   `backfillSingleEmailAction(emailId)` exists in the Server Action
+ *   module for future per-row affordances + targeted testing. The UI's
+ *   "Test 1 row" affordance uses the bulk action with `limit: 1`
+ *   instead so the server picks the candidate (no need to thread
+ *   `email_message_id` through the ticket list — the UI shows tickets,
+ *   not raw emails).
+ */
+function BackfillButtons() {
+  const [isPending, startTransition] = useTransition();
+
+  function runBackfill(limit: number | undefined, label: string) {
+    if (limit === undefined) {
+      const ok = window.confirm(
+        'Backfill all unclassified Apple emails?\n\n' +
+          'For each email missing extracted_payload, re-fetches Gmail HTML, ' +
+          'runs the html-extractor, persists the payload, and reclassifies. ' +
+          'Estimated ~200ms per row.',
+      );
+      if (!ok) return;
+    }
+
+    startTransition(async () => {
+      const result = await backfillUnclassifiedAction(
+        limit !== undefined ? { limit } : {},
+      );
+      if (!result.ok) {
+        toast.error(`${label} failed: ${result.error.message}`);
+        return;
+      }
+      const { total, processed, reclassified, unchanged, errors } = result.data;
+      if (total === 0) {
+        toast.info(`${label}: no Apple emails need backfill.`);
+        return;
+      }
+      const errorCount = errors.length;
+      const summary =
+        `${label}: ${reclassified}/${total} reclassified` +
+        ` (${unchanged} unchanged${errorCount > 0 ? `, ${errorCount} error${errorCount === 1 ? '' : 's'}` : ''})`;
+      if (errorCount > 0) {
+        toast.warning(summary);
+      } else if (processed === total) {
+        toast.success(summary);
+      } else {
+        toast.info(summary);
+      }
+    });
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => runBackfill(1, 'Test backfill')}
+        disabled={isPending}
+        title="Run backfill on the oldest candidate row to verify the wire end-to-end before bulk."
+        className="inline-flex items-center gap-1 text-[13px] font-medium text-blue-700 hover:text-blue-900 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <PlayCircle
+          className={`w-3 h-3 ${isPending ? 'animate-pulse' : ''}`}
+          strokeWidth={1.8}
+        />
+        {isPending ? 'Running…' : 'Backfill 1 row (test)'}
+      </button>
+      <button
+        type="button"
+        onClick={() => runBackfill(undefined, 'Backfill')}
+        disabled={isPending}
+        title="Backfill all UNCLASSIFIED Apple emails missing extracted_payload."
+        className="inline-flex items-center gap-1 text-[13px] font-medium text-blue-700 hover:text-blue-900 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <Database
+          className={`w-3 h-3 ${isPending ? 'animate-pulse' : ''}`}
+          strokeWidth={1.8}
+        />
+        {isPending ? 'Running…' : 'Backfill all'}
+      </button>
+    </>
+  );
+}
 
 /**
  * MANAGER-only bulk reclassify trigger. Re-runs the classifier on every

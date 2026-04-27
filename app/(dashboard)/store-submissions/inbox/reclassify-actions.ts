@@ -23,6 +23,11 @@
  *   record while still getting transactional guarantees on the write
  *   side.
  *
+ * **Core extracted to `lib/store-submissions/reclassify/core.ts`** in
+ * PR-12.5 so the same pipeline can be reused by `backfill-actions.ts`
+ * (which prepends a Gmail re-fetch + html-extractor stage). This file
+ * stays the Server Action shell — auth, ActionResult mapping, revalidate.
+ *
  * MANAGER-only. Defense-in-depth: Server Action gates here, RPC trusts
  * the actor_id passed in (consistent with the rest of `inbox/actions.ts`).
  *
@@ -36,7 +41,6 @@
  */
 
 import * as Sentry from '@sentry/nextjs';
-import type { PostgrestError } from '@supabase/supabase-js';
 import { revalidatePath } from 'next/cache';
 import { getServerSession } from 'next-auth';
 
@@ -47,32 +51,20 @@ import {
   StoreUnauthorizedError,
   type StoreUser,
 } from '@/lib/store-submissions/auth';
-import { classify } from '@/lib/store-submissions/classifier';
-import type {
-  ClassificationResult,
-  EmailInput,
-} from '@/lib/store-submissions/classifier/types';
 import { storeDb } from '@/lib/store-submissions/db';
-import type { ExtractedPayload } from '@/lib/store-submissions/gmail/html-extractor';
 import {
-  createSenderResolver,
-  loadActiveSenders,
-} from '@/lib/store-submissions/gmail/sender-resolver';
-import { CLASSIFIER_VERSION } from '@/lib/store-submissions/gmail/sync';
-import { getRulesSnapshotForPlatform } from '@/lib/store-submissions/queries/rules';
+  EmailNotFoundError,
+  ReclassifyValidationError,
+  reclassifyOne,
+  type ReclassifyResult,
+} from '@/lib/store-submissions/reclassify/core';
 
 import type { ActionError, ActionResult } from './actions';
 
 // -- Public types --------------------------------------------------------
 
-export type ReclassifyResult = {
-  emailMessageId: string;
-  changed: boolean;
-  previousStatus: string;
-  newStatus: string;
-  previousTicketId: string | null;
-  newTicketId: string | null;
-};
+// Re-export so client components keep the same import path post-refactor.
+export type { ReclassifyResult };
 
 export type BulkReclassifyResult = {
   total: number;
@@ -82,42 +74,6 @@ export type BulkReclassifyResult = {
 };
 
 export type UnclassifiedBucket = 'app' | 'type' | 'any';
-
-// -- Internal types ------------------------------------------------------
-
-interface EmailRow {
-  id: string;
-  sender_email: string;
-  subject: string;
-  raw_body_text: string | null;
-  extracted_payload: ExtractedPayload | null;
-  classification_result: Record<string, unknown> | null;
-  ticket_id: string | null;
-}
-
-interface RpcReclassifyResult {
-  changed: boolean;
-  previous_status: string;
-  new_status: string;
-  previous_ticket_id: string | null;
-  new_ticket_id: string | null;
-}
-
-// -- Internal error classes (not exported — 'use server' rule) -----------
-
-class EmailNotFoundError extends Error {
-  constructor(emailId: string) {
-    super(`Email message ${emailId} does not exist`);
-    this.name = 'EmailNotFoundError';
-  }
-}
-
-class ReclassifyValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'ReclassifyValidationError';
-  }
-}
 
 // -- Auth helper (MANAGER-only) ------------------------------------------
 
@@ -140,116 +96,7 @@ async function guardManager(): Promise<
   }
 }
 
-// -- Core reclassify (re-run classifier + invoke RPC) --------------------
-
-/**
- * Re-classify one email and swap its ticket. Throws on failure; caller
- * maps to ActionError. Used by both the single + bulk public actions.
- */
-async function reclassifyOne(
-  emailMessageId: string,
-  actorId: string,
-): Promise<ReclassifyResult> {
-  // 1. Load email row.
-  const { data: rowData, error: rowErr } = await storeDb()
-    .from('email_messages')
-    .select(
-      'id, sender_email, subject, raw_body_text, extracted_payload, classification_result, ticket_id',
-    )
-    .eq('id', emailMessageId)
-    .maybeSingle();
-
-  if (rowErr) {
-    throw new Error(`Failed to load email_messages: ${rowErr.message}`);
-  }
-  if (!rowData) {
-    throw new EmailNotFoundError(emailMessageId);
-  }
-
-  const email = rowData as EmailRow;
-
-  // 2. Resolve sender against the *current* registry. A sender that
-  //    matched at sync time may since have been removed by a Manager;
-  //    in that case the email becomes DROPPED/NO_SENDER_MATCH.
-  const senders = await loadActiveSenders();
-  const resolve = createSenderResolver(senders);
-  const platformRes = resolve(email.sender_email);
-
-  // 3. Build the new classification — full pipeline mirrors sync.ts.
-  // Typed as Record<string, unknown> because the ERROR/NO_RULES branch is
-  // a sync-layer concern (not in classifier's ErrorCode union); same
-  // pragma as sync.ts where classification_result is JSONB-shaped, not
-  // strictly typed as ClassificationResult. The RPC validates structure
-  // server-side via INVALID_ARG / INVALID_STATUS prefixes.
-  let newClassification: Record<string, unknown>;
-
-  if (!platformRes) {
-    newClassification = {
-      status: 'DROPPED',
-      reason: 'NO_SENDER_MATCH',
-      classifier_version: CLASSIFIER_VERSION,
-    };
-  } else {
-    const rules = await getRulesSnapshotForPlatform(platformRes.platformId);
-    if (!rules) {
-      newClassification = {
-        status: 'ERROR',
-        error_code: 'NO_RULES',
-        error_message: `No rules configured for platform ${platformRes.platformKey}`,
-        matched_rules: [],
-        classifier_version: CLASSIFIER_VERSION,
-        platform_id: platformRes.platformId,
-        platform_key: platformRes.platformKey,
-      };
-    } else {
-      const input: EmailInput = {
-        sender: email.sender_email,
-        subject: email.subject,
-        body: email.raw_body_text ?? '',
-        extracted_payload: email.extracted_payload,
-      };
-      const c: ClassificationResult = classify(input, rules);
-      newClassification = { ...c, classifier_version: CLASSIFIER_VERSION };
-    }
-  }
-
-  // 4. Call the atomic swap RPC.
-  const { data, error } = await storeDb().rpc('reclassify_email_tx', {
-    p_email_message_id: emailMessageId,
-    p_new_classification: newClassification,
-    p_actor_id: actorId,
-  });
-
-  if (error) throw mapRpcError(error);
-  if (!data) {
-    throw new Error('reclassify_email_tx returned no data');
-  }
-
-  const out = data as RpcReclassifyResult;
-  return {
-    emailMessageId,
-    changed: out.changed,
-    previousStatus: out.previous_status,
-    newStatus: out.new_status,
-    previousTicketId: out.previous_ticket_id,
-    newTicketId: out.new_ticket_id,
-  };
-}
-
-function mapRpcError(error: PostgrestError): Error {
-  const message = error.message ?? 'unknown RPC error';
-  if (message.includes('NOT_FOUND')) {
-    return new EmailNotFoundError(message);
-  }
-  if (
-    message.includes('INVALID_ARG') ||
-    message.includes('INVALID_STATUS') ||
-    message.includes('INVALID_OUTCOME')
-  ) {
-    return new ReclassifyValidationError(message);
-  }
-  return new Error(`[reclassify] RPC failed: ${message}`);
-}
+// -- Error mapping -------------------------------------------------------
 
 function mapErrorToActionError(err: unknown, emailId: string): ActionError {
   if (err instanceof EmailNotFoundError) {
