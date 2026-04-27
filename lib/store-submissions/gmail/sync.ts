@@ -413,19 +413,24 @@ async function processMessage(
     return;
   }
 
-  // 3b. Apple HTML extractor (PR-11). Apple text/plain bodies carry only
-  //     "Submission ID + App Name" — the type signal lives in the HTML
-  //     alternative. Extract here so both the classifier (PR-11.4) and
-  //     the persisted row receive the structured payload.
+  // 3b. Apple HTML extractor (PR-11 + PR-12). Apple text/plain bodies
+  //     carry only "Submission ID + App Name" — the type signal lives
+  //     in the HTML alternative. Extract here so both the classifier
+  //     (PR-11.4) and the persisted row receive the structured payload.
+  //
+  //     PR-12 threads `parsed.subject` so the extractor can detect the
+  //     rejection template ("There's an issue with your X submission")
+  //     vs the acceptance template ("Review of your X submission is
+  //     complete"). Items extraction switches branches accordingly.
   //
   //     Gating on platformKey === 'apple': non-Apple platforms keep
   //     `extracted_payload` NULL (signal: extraction not attempted),
-  //     distinct from `{ accepted_items: [] }` (signal: Apple email with
-  //     no Accepted items section, e.g. a rejection or marketing mail).
-  //     PR-11.5 reclassify uses this distinction.
+  //     distinct from `{ outcome: null, items: [] }` (signal: Apple
+  //     email with no recognizable section, e.g. marketing mail). PR-
+  //     11.5 reclassify uses this distinction.
   const extractedPayload: ExtractedPayload | null =
     platformRes.platformKey === 'apple'
-      ? extractApple(parsed.bodyHtml)
+      ? extractApple(parsed.bodyHtml, parsed.subject)
       : null;
   if (extractedPayload) {
     alertOnUnknownExtractedTypes(extractedPayload, parsed.messageId);
@@ -674,12 +679,13 @@ function clampBatchSize(requested: number | undefined): number {
 /**
  * Surface unrecognized Apple heading variations to Sentry as a warning.
  *
- * Empty `accepted_items` is NOT an alert — it just means the email had
- * no Accepted items section (rejection notices, marketing, system
- * digests). UNKNOWN means we found an `<h3>` under "Accepted items" that
- * none of the 4 patterns matched. Apple may have introduced a new type
- * variant or template — flag it so we can extend `html-extractor.ts`
- * before the bucket fills with UNCLASSIFIED rows.
+ * Empty `items` is NOT an alert — it just means the email had no items
+ * section we recognize (marketing mail, system digests, or a malformed
+ * rejection where the anchor paragraph is missing). UNKNOWN means we
+ * found an `<h3>` under one of the anchors that none of the 4 type
+ * patterns matched. Apple may have introduced a new type variant or
+ * template — flag it so we can extend `html-extractor.ts` before the
+ * bucket fills with UNCLASSIFIED rows.
  *
  * Sentry has no DSN in test/dev envs and is a no-op there; production
  * captures the warning under `component: 'html-extractor'`.
@@ -688,7 +694,7 @@ function alertOnUnknownExtractedTypes(
   payload: ExtractedPayload,
   gmailMsgId: string,
 ): void {
-  const unknown = payload.accepted_items.filter((it) => it.type === 'UNKNOWN');
+  const unknown = payload.items.filter((it) => it.type === 'UNKNOWN');
   if (unknown.length === 0) return;
   Sentry.captureMessage(
     `Unknown Apple heading variation(s): ${unknown

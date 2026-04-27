@@ -1,0 +1,575 @@
+Received: from KUXPR02MB8856.apcprd02.prod.outlook.com (2603:1096:d10:54::11)
+ by PSAPR02MB5205.apcprd02.prod.outlook.com with HTTPS; Wed, 11 Mar 2026
+ 18:58:56 +0000
+Received: from PS2PR02CA0069.apcprd02.prod.outlook.com (2603:1096:300:5a::33)
+ by KUXPR02MB8856.apcprd02.prod.outlook.com (2603:1096:d10:54::11) with
+ Microsoft SMTP Server (version=TLS1_2,
+ cipher=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) id 15.20.9700.12; Wed, 11 Mar
+ 2026 18:58:52 +0000
+Received: from TY2PEPF0000AB85.apcprd03.prod.outlook.com
+ (2603:1096:300:5a:cafe::d6) by PS2PR02CA0069.outlook.office365.com
+ (2603:1096:300:5a::33) with Microsoft SMTP Server (version=TLS1_3,
+ cipher=TLS_AES_256_GCM_SHA384) id 15.20.9678.27 via Frontend Transport; Wed,
+ 11 Mar 2026 18:58:50 +0000
+Authentication-Results: spf=pass (sender IP is 17.111.110.124)
+ smtp.mailfrom=email.apple.com; dkim=pass (signature was verified)
+ header.d=email.apple.com;dmarc=pass action=none
+ header.from=email.apple.com;compauth=pass reason=100
+Received-SPF: Pass (protection.outlook.com: domain of email.apple.com
+ designates 17.111.110.124 as permitted sender)
+ receiver=protection.outlook.com; client-ip=17.111.110.124;
+ helo=rn2-txn-msbadger08107.apple.com; pr=C
+Received: from rn2-txn-msbadger08107.apple.com (17.111.110.124) by
+ TY2PEPF0000AB85.mail.protection.outlook.com (10.167.253.5) with Microsoft
+ SMTP Server (version=TLS1_2, cipher=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384) id
+ 15.20.9678.18 via Frontend Transport; Wed, 11 Mar 2026 18:58:52 +0000
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=email.apple.com;
+	s=email0517; t=1773255530;
+	bh=RwsA+fInigQmcFz5iWo1wqiRkAuvuvaPED1gwrJ84KY=;
+	h=Date:From:To:Message-ID:Subject:Content-Type;
+	b=EmVmyJJ/sLk4FLQmvTCz2sfxjVMSk7H/ScoqOlWNPbHlUgsAAtyjKx9zpGEoNEbti
+	 08hctAKeu9P7zrRHx1/yoKDSkIY8cjIxUWfkJfjPUqRUZszzbLR9w3V5DSyBsh1/eF
+	 Bih8TelKS3lB6qQQy2XeOG9NP+nn6onFQJr+WBQhetm759wVxYv+UXFRqnSxYgbQdT
+	 i/zE4xXbm6NWTps6T9tVGoeLLnteWB7B+AZ1s2xbeI7/0C6qFqhLXnKq3l94fi60JO
+	 XWgPn6QPAUi8TO3l++rE2aNfDveccElc30EFbpZPbQprh1eRCeiNaQ2Dgw32DOOROS
+	 e7HSbHbya/1Fw==
+Date: Wed, 11 Mar 2026 18:58:50 +0000 (GMT)
+From: App Store Connect <no_reply@email.apple.com>
+To: minhgv@vng.com.vn
+Message-ID: <1960762196.223531221.1773255530180@email.apple.com>
+Subject: =?UTF-8?Q?There's_an_issue_with_your_Ngh?=
+ =?UTF-8?Q?=E1=BB=8Bch_Th=E1=BB=A7y_H=C3=A0n_(iOS)_submission.?=
+Content-Type: multipart/alternative; 
+	boundary="----=_Part_223531219_1521659647.1773255530180"
+X-Broadcast-Id: 10631
+X-Attach-Flag: N
+X-COMMS-C: false
+X-Sent-To: minhgv@vng.com.vn,2,ln%2FgtJre5rrjRCZWuE1yQ1zOO8i1HPMwTm4siCzBPeZkyXJUnAIbeIpFUZKopOOYnLpsWUqbQ4%2BK9IixjwUR8iVq8rlhEeA82POLXEDF2cVxUA90uVIxQsDL%2B6qCCZ2H8y3AkWpT6Iswv8W2fDY94wxjRPnxdwiNtb52pRkoh9ngwE%2B0YXSg9YEgD0NIUtLv%2F%2BzEP40qQA1dKOr6qMM6Kgj6O98OgZWYHnUDOUQ15VOu81naqZHiEU4RaTOtuxWNSugxRibXfytsv3M5M0Lf7DdEG2mzzm7rMVM%2Fpqgy3bmRVEDLqE1ZMUI0UnDZLmCvE42YbtPsX12f6QgjUitifNkL7nxvWv2HC1%2BE7B2%2BD8WVazl2kJPLF%2BNZ0NiSHutv8bYMmfBRXvK%2BX59STI%2FP2T7PQYJC%2FENOtmpVox%2BhD3%2B3i6tSfRzcoQUBPMkesxDiO37q%2FzzDS9K9EoA53aew5g%3D%3D
+X-TXN_ID: d3c367c3-23f0-401c-b9ec-9a871041a98c
+X-DKIM_SIGN_REQUIRED: YES
+X-EmailType-Id: 10631
+X-Business-Group: iTunes
+X-Country: US
+Return-Path: no_reply@email.apple.com
+X-MS-Exchange-Organization-ExpirationStartTime: 11 Mar 2026 18:58:52.6130
+ (UTC)
+X-MS-Exchange-Organization-ExpirationStartTimeReason: OriginalSubmit
+X-MS-Exchange-Organization-ExpirationInterval: 1:00:00:00.0000000
+X-MS-Exchange-Organization-ExpirationIntervalReason: OriginalSubmit
+X-MS-Exchange-Organization-Network-Message-Id: 0903ed9a-2fb3-4113-0993-08de7fa03ce2
+X-EOPAttributedMessage: 0
+X-EOPTenantAttributedMessage: 7c112a6e-10e2-4e09-afc4-2e37bc60d821:0
+X-MS-Exchange-Organization-MessageDirectionality: Incoming
+X-MS-PublicTrafficType: Email
+X-MS-TrafficTypeDiagnostic: TY2PEPF0000AB85:EE_|KUXPR02MB8856:EE_|PSAPR02MB5205:EE_
+X-MS-Exchange-Organization-AuthSource: TY2PEPF0000AB85.apcprd03.prod.outlook.com
+X-MS-Exchange-Organization-AuthAs: Anonymous
+X-MS-Office365-Filtering-Correlation-Id: 0903ed9a-2fb3-4113-0993-08de7fa03ce2
+X-MS-Exchange-AtpMessageProperties: SA|SL
+X-MS-Exchange-Organization-SCL: 1
+X-Microsoft-Antispam: BCL:4;ARA:13230040|704160111799003|704161411799003|3072899012|2092899012|5062899012|3092899012|4092899012|7149299003|69100299015|6062899009|5082899009|12012899012|13102899012|13012899012|3109299003|7049299003|4076899003|8096899003|55112099003|19002099003|18002099003|16102099003;
+X-Forefront-Antispam-Report: CIP:17.111.110.124;CTRY:US;LANG:en;SCL:1;SRV:;IPV:NLI;SFV:NSPM;H:rn2-txn-msbadger08107.apple.com;PTR:rn2-txn-msbadger08107.apple.com;CAT:NONE;SFS:(13230040)(704160111799003)(704161411799003)(3072899012)(2092899012)(5062899012)(3092899012)(4092899012)(7149299003)(69100299015)(6062899009)(5082899009)(12012899012)(13102899012)(13012899012)(3109299003)(7049299003)(4076899003)(8096899003)(55112099003)(19002099003)(18002099003)(16102099003);DIR:INB;
+X-MS-Exchange-CrossTenant-OriginalArrivalTime: 11 Mar 2026 18:58:52.1532
+ (UTC)
+X-MS-Exchange-CrossTenant-Network-Message-Id: 0903ed9a-2fb3-4113-0993-08de7fa03ce2
+X-MS-Exchange-CrossTenant-Id: 7c112a6e-10e2-4e09-afc4-2e37bc60d821
+X-MS-Exchange-CrossTenant-AuthSource: TY2PEPF0000AB85.apcprd03.prod.outlook.com
+X-MS-Exchange-CrossTenant-AuthAs: Anonymous
+X-MS-Exchange-CrossTenant-FromEntityHeader: Internet
+X-MS-Exchange-Transport-CrossTenantHeadersStamped: KUXPR02MB8856
+X-MS-Exchange-Transport-EndToEndLatency: 00:00:04.0202591
+X-MS-Exchange-Processed-By-BccFoldering: 15.20.9700.003
+X-Microsoft-Antispam-Mailbox-Delivery:
+	ucf:0;jmr:0;auth:0;dest:I;ENG:(910005)(944490095)(944506478)(944626604)(920097)(930201)(20251009189)(140003)(1420198);
+X-Microsoft-Antispam-Message-Info:
+	=?utf-8?B?aUdaT1dxNEFud0FnM3NEdlZMdmViTkpIbTJ4d1NQZm1aMFl1dnN5Q1A5NnlZ?=
+ =?utf-8?B?MExyTGppRDhRNThBTGdkdTFpcDJlOWJ3aHphUnpCSjhEemZXb1lFcmRTVXRa?=
+ =?utf-8?B?SEk1NWdCM3UvbEtObHBLRzBCcjVYeHVNZ2x2WU5teDRyVjBweHRlTFVETWx5?=
+ =?utf-8?B?anJpMkptV1dYb2FVUWgzQlZLUkJyUGphWS92K1ltdTdLV2w1QzZwNW4yZ0tF?=
+ =?utf-8?B?Y1I1eXU3YWlCNGp3Vlpxc3E3K04yd21ndWFZTWM1SUVVS0lSZjB6ZHptTFhM?=
+ =?utf-8?B?KzJNODJqZCtENDlZMkVyaUhoTExrdTVsbGhJeE1WcG5OQjc5Z1RJem40UlhF?=
+ =?utf-8?B?eThMR0ZKZXhGazJRcDFiTUxRelZ1QXlkN1o4TnFBcmI3emZKL29GamQyOHlQ?=
+ =?utf-8?B?Skk5ZVVTNERHQWY3Z21aUzlHSDBEMVVobitUeFZwWXF1ckEzMURtNjF0dnhi?=
+ =?utf-8?B?RytCNnVqdzJjVUF0ZG4rcEUyOWFFelFGaVJJb3V0YWV0WEt1dG9GOTNWcVdH?=
+ =?utf-8?B?QnBkZnFia0lvcEt2YVdtZWtjRTlWU24vU0JFU05yU05Ka0tvUVl3b3JTdUly?=
+ =?utf-8?B?aUowQkk4cTFlY2pZLzZxSHh3WTE3cEUxNkw1T2hMV2tRRHJzMytqbk96ZW5B?=
+ =?utf-8?B?QkxENkw1STZqYkxqZlVIL2RUZTlYSGszMjdhN3Jna0I0S3lONEt2WVVqVEh4?=
+ =?utf-8?B?bFhETWdZUStiVFlqRzdLZWVqL3E3RlNnMzFrUDBJSG55a2RKbW12akhiZzJE?=
+ =?utf-8?B?aDYrd2swNzhmem1za2N2bzZKU3I1QWpKR0c2KzJMUEF5L21PTGlzRDVBWDVi?=
+ =?utf-8?B?eUcxOWdzSGpMWWJMVTNleU5FLzhpaTJ3bmZtNnB6anFQNXd0MEZhRWJJRG52?=
+ =?utf-8?B?T2MrZnFFMFF3K0VhVjZiWEpEYTdpMndDV3RmOUJhdjZ0dG82OFdKWGFodUFC?=
+ =?utf-8?B?KzNZd2ZrN0J6dWhoUFhtZk9mMGJHcEpjQnp0RlRMZU1ObzRJQS9wRTdnTEhQ?=
+ =?utf-8?B?aUxvOCtheHBvVkNackF5NWtmRlQyRTgyODVvaEFMSlVROWpLcGxDbkVhMGx6?=
+ =?utf-8?B?M2dEUWR1Vjk0OHZvbFliNkMwK2x4bExTdjZQcFArS2VpSWduQWpoZmhtVVFN?=
+ =?utf-8?B?SzlUVzROOGVNVGkwcCtCNkVBOTVaTUFsME1qdDhVRkw3aG5NUjJlOTV1dEdT?=
+ =?utf-8?B?bFdtTzNqUUxWUEM1T2FKbjJmbmo1Q0VXcUNTWGJIME1aTGxBTk91ekY3eFJk?=
+ =?utf-8?B?L1Z5WGRKM21tZVlsVUFYcG5zSkUzVkZ6YU96WlpGMTdoazYvZHQvRExoUm1l?=
+ =?utf-8?B?ZElQN0JHU3p5NXlxakRGaSs0UGdjWFV4V2tmSnBmRGxLM0dKV0xBTFpGT1FV?=
+ =?utf-8?B?MVVEdjZ4VTVnV3dQNnBxN2toTlFrRTExWEtTVEsybnRSS1AveEVpM2treHBN?=
+ =?utf-8?B?a0NQc04wVTZEbldCaEh4ZFIvbG1ZN2xRYXpLcWk5dDRRMGN2SnkwWlBFRVVl?=
+ =?utf-8?B?TTNjM0RwMDFKam4xRjN6SGx4dG0wZnB1R3NVaWtwd1NlMVpPT3M5VUU2WFg5?=
+ =?utf-8?B?UzFtbUszS3NDL0h2ZVlwTXBpQjh2UUxSZnVZc2JSSVYrMkpIazIxQmdkUWlL?=
+ =?utf-8?B?RTVzN2pZcGFQQ1VuQmdKRmx0cG9DbTJ3VlZIMkN2NXM0eHVBZDhPa0l1b1Vy?=
+ =?utf-8?B?b0pDQ2crWW9QTFpLaTFseGtWRmNLd0d6U0QwNW9QOXlhdHVNQ3N4WkR4RU52?=
+ =?utf-8?B?eStjKzgvbzEybHJ4RG9nek1RcytWeXFmZThWazJ3QlB6ZlNJNkhRZUdNUitY?=
+ =?utf-8?B?QXZSNVluRUx4OFB6dHEyaDErZlpZSGxqQmtwOUMvM2xiNGFUeWxRVjdKR0xk?=
+ =?utf-8?B?d213WHN6TFRNNTRPK2xrblJlYlRvUmNKZHlQRXE2c2wrZ2VjMXlSNW50TmY3?=
+ =?utf-8?B?RW9seTdubWpTcXZxbjRqcmFJSU1TUTNUTGo2dkdqRHozRGZzRHlBM05oZVcy?=
+ =?utf-8?B?SW5pUDVNek1aU1Nib3VMeEY1VnFFQVMzNHBrMEdNUVVqTm4vQ1NlakoxTXZq?=
+ =?utf-8?B?SnBMUG5nMnAxM1FiL1FoYUJuZ0xWN3RMRlFNM2M0ZktEalY1S2pUNDd1UGh2?=
+ =?utf-8?B?WW44QlVQdzVURWJMckxXZE1vY24rZGk4MmZ5RkhqaTZ4WWlnZ2w3Uy9VVUZ4?=
+ =?utf-8?B?SU1YZ0E3bmt0dXQ5alZFQUQ4ajJRbGxHZExzVkg1cnQxdGJMUnQ3ZlVRZWpm?=
+ =?utf-8?B?Q1l6Rjc5M2JWU21lNlV6YlI5dks1OWxPUEdIeUpsMEhuVnRZVFhjQzBmM0lD?=
+ =?utf-8?B?UVFwSW1USytHVHphU296ZEVleFZVbHFrU1REN1V1aTJYZWl4c1pUcGk4U3NW?=
+ =?utf-8?B?b3BuWkJ3SldFZFc3YXNmUmR2R2lTVGp6M1l6TlNveWVuR1MwWmppOUx3czli?=
+ =?utf-8?B?OFg4SVdjZFIyWU1STFR3TktPT2wwSHFLS1IyemNaSUs4VXVmZEY5YVprazBK?=
+ =?utf-8?B?Z1dFTmR3ZitIeVBodGdZQmdMeDdUTlE3Rk5EMmFycEFCaWdjTHNCM1BleG85?=
+ =?utf-8?B?MFluV3JuUWhqUHpkaHVDRnlueko2YzlTMWZSVkZaNEE4czFIY3ZBRmR0OGJB?=
+ =?utf-8?B?eVd4QzJqRnBteGFyL1ljYTJpODB3TW9yckdUdXg0Mi9PeEwvOFJva2ZYZlZk?=
+ =?utf-8?B?N09rdGpkTU1Gd245RkJvVWVvY2RJVExGeldWSm5LUk9jMXhmWGx3TkFvUTBS?=
+ =?utf-8?B?clZFM2pmR0VjbzY0Y21HSUdERTk3VUh0cTVKOFBOMVBmV2RNWlRwakxQd0hN?=
+ =?utf-8?B?YUNNMzNuSVFJMHFWRm9xVGtraStjVkcxUTFjSm0xc1E5Vk9GN0ZiRzBDYkRY?=
+ =?utf-8?B?azhUeWVjVzhsbmRFSGZEZjZHUG9LYklvTlZsYk5mYzZaUmpXSWFQUlBlTkhG?=
+ =?utf-8?B?Z2p0U3dtWmJTcmhlM2hQbFg0TG5XZEZiSENrbEYremhZY2FTeUNyZTN6V1Bn?=
+ =?utf-8?B?OFpPVGxBclF5d1Z1RUZWYVltVmhZeFJxSzZBWTlWMm0rSHA4MHFWa3RoTHdZ?=
+ =?utf-8?B?cVpZVTYybU9nS0pPSmVyYmNIWC9qWWdwVUdMcmNUcFJuSkZBM0xZTTlGUDlI?=
+ =?utf-8?B?ZGxxek54Slo4dk1FWEpYREtTZjNpZ0JaTURHOHNncWordGx6ai9iUlVvWk8x?=
+ =?utf-8?B?bFBRcTBhakFaSFBUQ3RZZWdISEU3LzFkUGZueE9Vdk5GOURxUk15TnZvZjJw?=
+ =?utf-8?B?dDdHd3Z0ZmlianpHOWpuMDB6VGpYcCtPRklVcjNXMWZIbnpkclltWThYTWNF?=
+ =?utf-8?B?OU8wVGlWZnFhdTE2dEt1cDNyVHlqQnF2YmJIc1cveHpyL2lVbXVUckVXbW1Y?=
+ =?utf-8?B?OXhOeHdNY1NYQUFMZE1GL0NjUC9sMUU1NEFTTkx3ZzBmL3NGRjhUUSs5T3JI?=
+ =?utf-8?B?dy9wRERCMU5rZ1ltUkZ0eXVzc1NhUjhKQTVYMERicjk5MU5rS3ZVbkRlUWFp?=
+ =?utf-8?B?MDVhWklVekJDWktIVU5Xb1Z6bFF0UzNlSnBkUkwxSjhBVlpobW1RMjFIZ09E?=
+ =?utf-8?B?a2FjTW9rQkhCdmhyUWM0cFR5cjJaaHpCUzRyNnNycVM4NktFcHg5TFZYQzFZ?=
+ =?utf-8?B?Qm9CNXRsNEtwMThsbFNwc3I5clBLdzkzYlEyUkppTUJEWnpLMnhHUzM5QlRF?=
+ =?utf-8?B?cVVHQjdpUVV3eitNeEQyVndTNlJPbHdGSmVzQVlqcmplWU5TUGVPekx0MUFu?=
+ =?utf-8?B?Mk50bUJtNHJrOHM1TjN2QWpYTEJXczZSZE1DNVJ4MGtvQVFTY2dNUmdremlh?=
+ =?utf-8?B?TEtYM2dabmRCalVnTStFUnJQK3A5Nm1NcmliVjliT1lvL2MvWUN0cjg4UVhV?=
+ =?utf-8?Q?OtCWhKZFQxwPf/ZIeBzln65eVzjh6vG3Uau34Z0m3KGkA?=
+MIME-Version: 1.0
+
+------=_Part_223531219_1521659647.1773255530180
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+Content-Disposition: inline
+
+Hello Minh,
+
+Thank you for submitting your items for review. We appreciate your enthusia=
+sm for Apple platforms. As you know, we want to provide a safe experience f=
+or users to get apps and a great opportunity for all developers to be succe=
+ssful. We do this by offering a highly curated App Store where every submis=
+sion is reviewed by experts and an editorial team helps users discover new =
+apps every day.
+
+During our review, we noticed an issue with your submission.
+
+App Name: Ngh=E1=BB=8Bch Th=E1=BB=A7y H=C3=A0n
+Submission ID: 9b56a268-9a31-40e1-9ad6-4b5c2a74c68a
+
+We look forward to working with you to resolve the issues with the followin=
+g items:
+
+You can also view this information on the App Review page in App Store Conn=
+ect.
+
+Best regards,
+App Review
+------=_Part_223531219_1521659647.1773255530180
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+Content-Disposition: inline
+
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"><html xmlns=
+=3D"http://www.w3.org/1999/xhtml" xmlns:v=3D"urn:schemas-microsoft-com:vml"=
+ xmlns:o=3D"urn:schemas-microsoft-com:office:office"><head>
+<meta http-equiv=3D"Content-Type" content=3D"text/html; charset=3Dutf-8"><t=
+itle>
+       =20
+        There's an issue with your Ngh=E1=BB=8Bch Th=E1=BB=A7y H=C3=A0n (iO=
+S) submission.
+    </title>
+    <meta name=3D"viewport" content=3D"width=3Ddevice-width">
+   =20
+   =20
+</head>
+<body style=3D"-ms-text-size-adjust:100%; -webkit-text-size-adjust:100%; ba=
+ckground-color:#ffffff; color:#333333; font-family:system,-apple-system,-we=
+bkit-system-font,SFNSText,'Segoe UI','Helvetica Neue',Helvetica,Arial,sans-=
+serif; -webkit-font-smoothing:antialiased; font-size:17px; line-height:24px=
+; margin:0; min-width:100%; padding:0; text-align:left; width:100% !importa=
+nt;">
+<style>
+    @media only screen {
+        a:hover {
+            color: #0088cc;
+            text-decoration: underline !important;
+        }
+
+        a:active {
+            color: #0088cc !important;
+        }
+
+        a:visited {
+            color: #0088cc !important;
+        }
+
+        body * {
+            font-family: system, -apple-system, -webkit-system-font, SFNSTe=
+xt, 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif !important;
+            -webkit-font-smoothing: antialiased !important;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .row-content p,
+        .row-content p * {
+            font-weight: 400;
+        }
+    }
+
+    @media (max-width: 720px) {
+        table.body {
+            min-width: 320px !important;
+        }
+
+        table.body [class=3D"section"] {
+            background-color: transparent !important;
+            width: 90% !important;
+        }
+
+        table.body .container {
+            width: 100% !important;
+        }
+
+        table.body .copy-container {
+            width: 90% !important;
+        }
+    }
+
+    @media only screen and (max-width: 320px) {
+        table.body {
+            min-width: 280px !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .logo-container {
+            width: 90% !important;
+            margin: 0 auto !important;
+            text-align: left !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        table.header {
+            width: 100% !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .footer-wrapper .footer .container {
+            background-color: transparent !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .footer-wrapper .router-links p, .footer-wrapper .router-links td, =
+.footer-wrapper .router-links span {
+            font-size: 11px !important;
+            line-height: 11px !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .footer-wrapper .sosumi p {
+            text-align: left !important;
+        }
+    }
+
+    @media (max-width: 720px) {
+        .footer-wrapper .sosumi .copy-container {
+            margin: 15px auto 15px !important;
+        }
+    }
+
+    @media (max-width: 480px) {
+        .footer-wrapper .router-links .copy-container {
+            margin: 15px auto 13px !important;
+            width: 90%;
+        }
+
+        .footer-wrapper .router-links .copy-container .router-link-phone ~ =
+.router-link-pipe {
+            display: none;
+        }
+
+        .footer-wrapper .router-links .copy-container .router-link-app {
+            white-space: nowrap !important;
+            display: block !important;
+            padding: 14px 0 0 !important;
+            border-top: 1px solid #d6d6d6 !important;
+            width: 100% !important;
+            margin: 14px auto 0 !important;
+        }
+    }
+
+</style>
+<table role=3D"presentation" class=3D"body" style=3D"border-collapse:collap=
+se; border-spacing:0; color:#333333; font-family:system,-apple-system,-webk=
+it-system-font,SFNSText,'Segoe UI','Helvetica Neue',Helvetica,Arial,sans-se=
+rif; -webkit-font-smoothing:antialiased; font-size:17px; height:100%; line-=
+height:24px; margin:0; width:600px; padding:0; text-align:left; vertical-al=
+ign:top; width:100%;">
+    <tr>
+        <td align=3D"center" valign=3D"top">
+
+            <table role=3D"presentation" class=3D"section header" width=3D"=
+600" bgcolor=3D"#ffffff" style=3D"background-color:#ffffff; border-collapse=
+:collapse; border-spacing:0; margin:0; padding:0; text-align:inherit; verti=
+cal-align:top; width:600px;">
+                <tr>
+                    <td>
+                        <table role=3D"presentation" class=3D"container" al=
+ign=3D"center" width=3D"600" bgcolor=3D"#ffffff" style=3D"background-color:=
+#ffffff; border-collapse:collapse; border-spacing:0; margin:0; padding:0; t=
+ext-align:inherit; vertical-align:top; width:600px;">
+                            <tr>
+                                <td class=3D"logo" align=3D"left" style=3D"=
+padding:24px 0 0; text-align:left;">
+                                    <div class=3D"logo-container" style=3D"=
+margin:0; text-align:left;">
+                                        <div class=3D"image image-apple-ico=
+n"><img src=3D"https://developer.apple.com/click/images/apple_icon_2x.png" =
+width=3D"20" height=3D"25" alt=3D"" style=3D"-ms-interpolation-mode:bicubic=
+; border:none; clear:both; outline:none; text-decoration:none; margin:0;">
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        </table>
+                    </td>
+                </tr>
+            </table>
+
+            <table role=3D"presentation" class=3D"section" width=3D"600" bg=
+color=3D"#fff" style=3D" border-bottom:1px solid #e9e9e9; background-color:=
+#fff; border-collapse:collapse; border-spacing:0; padding:0; margin:0 auto;=
+ text-align:inherit; vertical-align:top; width:600px;">
+                <tr height=3D"44" style=3D"height:44px;">
+                    <td></td>
+                </tr>
+                <tr>
+                    <td>
+
+                        <table role=3D"presentation" class=3D"container" wi=
+dth=3D"600" bgcolor=3D"#fff" style=3D"background-color:#fff; border-collaps=
+e:collapse; border-spacing:0; margin:0 auto; padding:0; text-align:inherit;=
+ vertical-align:top; width:600px;">
+                            <tr>
+                                <td>
+                                    <div class=3D"row-content">
+                                        <p style=3D"color: #333333; margin:=
+0; padding:0; line-height:1.6em; font-size:17px; font-family:system,-apple-=
+system,-webkit-system-font,SFNSText,'Segoe UI','Helvetica Neue',Helvetica,A=
+rial,sans-serif; -webkit-font-smoothing:antialiased;">
+                                        Hello Minh,
+                                        <br><br>
+                                            Thank you for submitting your i=
+tems for review. We noticed an issue with your submission that requires you=
+r attention.
+                                            <br>
+                                        </p>
+                                        <p style=3D"color:#333333; margin:0=
+; padding:18px 0 0; line-height:1.6em; font-size:17px; font-family:'SF Pro =
+Text','SF Pro Icons','Helvetica Neue',Helvetica,Arial,sans-serif; -webkit-f=
+ont-smoothing:antialiased;">
+                                           =20
+                                            Submitted:
+                                            Mar 09, 2026 at 09:46 AM Pacifi=
+c Daylight Time
+                                            <br>
+                                            Submitted by:
+                                            Tien Ngo Vo Thuy
+                                            <br>
+                                            Number of items submitted:
+                                            1
+                                            <br>
+                                           =20
+                                            Submission ID:
+                                            9b56a268-9a31-40e1-9ad6-4b5c2a7=
+4c68a
+                                            <br>
+                                            App Name:
+                                            Ngh=E1=BB=8Bch Th=E1=BB=A7y H=
+=C3=A0n
+                                            <br>
+                                            <br>
+                                        </p>
+                                        <p style=3D"color: #333333; margin:=
+0; padding:0; line-height:1.6em; font-size:17px; font-family:system,-apple-=
+system,-webkit-system-font,SFNSText,'Segoe UI','Helvetica Neue',Helvetica,A=
+rial,sans-serif; -webkit-font-smoothing:antialiased;">
+                                            We look forward
+                                            to working with you to resolve =
+the issues with the following items:
+                                            <br>
+                                        </p>
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+                                       =20
+
+
+                                       =20
+                                            <h3 style=3D"color:#333333; mar=
+gin:18px 0 0; padding:0; line-height:1.2em; font-size:17px; font-weight:600=
+; font-family:'SF Pro Text','SF Pro Icons','Helvetica Neue',Helvetica,Arial=
+,sans-serif; -webkit-font-smoothing:antialiased;">
+                                                Product Page Optimization</=
+h3>
+
+                                            <p style=3D"color:#333333; marg=
+in:0; padding:0; line-height:1.6em; font-size:17px; font-family:'SF Pro Tex=
+t','SF Pro Icons','Helvetica Neue',Helvetica,Arial,sans-serif; -webkit-font=
+-smoothing:antialiased;">
+                                                CPO 0903
+                                            </p>
+                                       =20
+
+                                       =20
+
+                                       =20
+                                        <br> <br>
+
+                                        <p style=3D"color: #333333; margin:=
+0; padding:0; line-height:1.6em; font-size:17px; font-family:system,-apple-=
+system,-webkit-system-font,SFNSText,'Segoe UI','Helvetica Neue',Helvetica,A=
+rial,sans-serif; -webkit-font-smoothing:antialiased;">
+                                            For details, next steps, and to=
+ ask questions about these issues, please visit the <a href=3D"https://apc0=
+1.safelinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fappstoreconnect.app=
+le.com%2Folympus%2Fv1%2Fsession%2FswitchTo%2F69a6de71-54ad-47e3-e053-5b8c7c=
+11a4d1%3FtargetUrl%3D%2Fapps%2F6743144418%2Fappstore%2Freviewsubmissions%2F=
+details%2F9b56a268-9a31-40e1-9ad6-4b5c2a74c68a&amp;data=3D05%7C02%7Cminhgv%=
+40vng.com.vn%7C0903ed9a2fb34113099308de7fa03ce2%7C7c112a6e10e24e09afc42e37b=
+c60d821%7C0%7C0%7C639088523363334783%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcG=
+kiOnRydWUsIlYiOiIwLjAuMDAwMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D=
+%3D%7C0%7C%7C%7C&amp;sdata=3DXwbWAd5x%2Bsdr0tWaW%2FhKwPrcbOxyq0KO8SZOWHrhpq=
+M%3D&amp;reserved=3D0" originalsrc=3D"https://appstoreconnect.apple.com/oly=
+mpus/v1/session/switchTo/69a6de71-54ad-47e3-e053-5b8c7c11a4d1?targetUrl=3D/=
+apps/6743144418/appstore/reviewsubmissions/details/9b56a268-9a31-40e1-9ad6-=
+4b5c2a74c68a" style=3D"color: #0088cc; text-decoration: none;" class=3D"aap=
+l-link">App Review
+                                            page</a> in App&nbsp;Store&nbsp=
+;Connect.
+                                            <br><br>
+                                            Best regards,<br>
+                                            App Review
+                                        </p>
+                                    </div>
+                                </td>
+                            </tr>
+                        </table>
+
+                    </td>
+                </tr>
+                <tr height=3D"44" style=3D"height:44px;">
+                    <td></td>
+                </tr>
+            </table>
+
+            <div class=3D"footer-wrapper" style=3D"background-color:#fff;">
+                <table role=3D"presentation" class=3D"section" width=3D"600=
+" bgcolor=3D"#ffffff" style=3D"background-color:#ffffff; border-collapse:co=
+llapse; border-spacing:0; margin:0 auto; padding:0; text-align:inherit; ver=
+tical-align:top; width:600px;">
+                    <tr>
+                        <td style=3D"color:#999999; font-size:9px; line-hei=
+ght:12px; margin:0; mso-line-height-rule:exactly; padding:0; text-align:lef=
+t; vertical-align:top;">
+                           =20
+                            <table role=3D"presentation" class=3D"footer" s=
+tyle=3D"border-spacing:0; border-collapse:collapse; vertical-align:top; tex=
+t-align:inherit; width:100%; margin:0px 0px 10px 0px; padding:0;">
+                                <tr style=3D"vertical-align:top; text-align=
+:left; padding:0;">
+                                    <td style=3D" border-collapse:collapse =
+!important; vertical-align:top; text-align:left; padding:25px 0 0 0;" valig=
+n=3D"top">
+                                        <p class=3D"left-align-mobile" styl=
+e=3D"color:#999999; font-size:10px; text-align:left; display:block; line-he=
+ight:1.5em; margin:0; padding:0 10px 10px;" align=3D"center"> TM and =C2=A9
+                                            2026
+                                            Apple Inc.<br>One Apple
+                                            Park Way, Cupertino, CA 95014.<=
+br><br><a href=3D"https://apc01.safelinks.protection.outlook.com/?url=3Dhtt=
+ps%3A%2F%2Fwww.apple.com%2Flegal%2Finternet-services%2Fitunes%2F&amp;data=
+=3D05%7C02%7Cminhgv%40vng.com.vn%7C0903ed9a2fb34113099308de7fa03ce2%7C7c112=
+a6e10e24e09afc42e37bc60d821%7C0%7C0%7C639088523363362684%7CUnknown%7CTWFpbG=
+Zsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIwLjAuMDAwMCIsIlAiOiJXaW4zMiIsIkFOIjoiT=
+WFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&amp;sdata=3DBwMfY1MLZSpmFjcUPHocWCN1%2=
+FKGcJ7NREYviZJ1S0lM%3D&amp;reserved=3D0" originalsrc=3D"https://www.apple.c=
+om/legal/internet-services/itunes/" style=3D"color:#999999; text-decoration=
+:underline;">Terms
+                                                of Service</a> | <a href=3D=
+"https://apc01.safelinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fwww.ap=
+ple.com%2Flegal%2Fprivacy%2F&amp;data=3D05%7C02%7Cminhgv%40vng.com.vn%7C090=
+3ed9a2fb34113099308de7fa03ce2%7C7c112a6e10e24e09afc42e37bc60d821%7C0%7C0%7C=
+639088523363382687%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIw=
+LjAuMDAwMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&a=
+mp;sdata=3D4diRBRXWU89KIyIhp5IvoWx3s25UibIWdw97hXx2hRs%3D&amp;reserved=3D0"=
+ originalsrc=3D"https://www.apple.com/legal/privacy/" style=3D"color:#99999=
+9; text-decoration:underline;">Privacy
+                                                Policy</a> | <a href=3D"htt=
+ps://apc01.safelinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fdeveloper.=
+apple.com%2Fcontact%2F&amp;data=3D05%7C02%7Cminhgv%40vng.com.vn%7C0903ed9a2=
+fb34113099308de7fa03ce2%7C7c112a6e10e24e09afc42e37bc60d821%7C0%7C0%7C639088=
+523363411647%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIwLjAuMD=
+AwMCIsIlAiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&amp;sda=
+ta=3DoVa24pN7NvOTA60elYLN3oNCHvgKFQuBA62RhD3NcNg%3D&amp;reserved=3D0" origi=
+nalsrc=3D"https://developer.apple.com/contact/" style=3D"color:#999999; tex=
+t-decoration:underline;">Contact
+                                                Us</a> | <a href=3D"https:/=
+/apc01.safelinks.protection.outlook.com/?url=3Dhttps%3A%2F%2Fappstoreconnec=
+t.apple.com%2F&amp;data=3D05%7C02%7Cminhgv%40vng.com.vn%7C0903ed9a2fb341130=
+99308de7fa03ce2%7C7c112a6e10e24e09afc42e37bc60d821%7C0%7C0%7C63908852336343=
+1107%7CUnknown%7CTWFpbGZsb3d8eyJFbXB0eU1hcGkiOnRydWUsIlYiOiIwLjAuMDAwMCIsIl=
+AiOiJXaW4zMiIsIkFOIjoiTWFpbCIsIldUIjoyfQ%3D%3D%7C0%7C%7C%7C&amp;sdata=3DfLA=
+pLV8f14hNthdwjo0ppPChRX0TMXdKhOmPcdp%2BRqg%3D&amp;reserved=3D0" originalsrc=
+=3D"https://appstoreconnect.apple.com/" style=3D"color:#999999; text-decora=
+tion:underline;">App Store
+                                                Connect</a></p>
+                                    </td>
+                                </tr>
+                                <tr style=3D"height:32px;">
+                                    <td></td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </td>
+    </tr>
+</table>
+
+</body>
+</html>=
+
+------=_Part_223531219_1521659647.1773255530180--
+

@@ -99,8 +99,12 @@ export function matchType(
   const active = rules.types.filter((t) => t.active);
   active.sort((a, b) => a.sort_order - b.sort_order);
 
-  // Priority 1: structured payload from HTML extractor (PR-11).
-  const firstItem = email.extracted_payload?.accepted_items[0];
+  // Priority 1: structured payload from HTML extractor (PR-11, renamed
+  // `accepted_items` → `items` in PR-12 so the field name covers both
+  // acceptance + rejection templates). The `outcome` sibling field is
+  // audit-only — classifier does not consume it; subject_patterns drive
+  // `tickets.latest_outcome` per PR-9 (single source of truth).
+  const firstItem = email.extracted_payload?.items[0];
   if (firstItem && firstItem.type !== 'UNKNOWN') {
     const slug = mapExtractorTypeToSlug(firstItem.type);
     if (slug) {

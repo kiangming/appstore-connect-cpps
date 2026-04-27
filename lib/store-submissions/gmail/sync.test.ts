@@ -131,9 +131,9 @@ beforeEach(() => {
   hoisted.mockCreateGmailClient.mockResolvedValue({ __brand: 'gmail' });
   hoisted.mockLoadActiveSenders.mockResolvedValue([]);
   hoisted.mockCreateSenderResolver.mockReturnValue(() => null); // default: drop everything
-  // Default extractor: empty payload (no Accepted items section detected).
+  // Default extractor: empty payload (no items section detected).
   // Tests that exercise the extractor branch override per-call.
-  hoisted.mockExtractApple.mockReturnValue({ accepted_items: [] });
+  hoisted.mockExtractApple.mockReturnValue({ outcome: null, items: [] });
   hoisted.mockGetSyncState.mockResolvedValue({
     lastHistoryId: '1000',
     lastSyncedAt: null,
@@ -1315,22 +1315,27 @@ describe('runSync — HTML extractor wire (PR-11)', () => {
     });
   }
 
-  it('calls extractApple with parsed.bodyHtml when sender is Apple', async () => {
+  it('calls extractApple with parsed.bodyHtml + subject when sender is Apple', async () => {
     primeApple('m1');
     const { runSync } = await import('./sync');
     await runSync({ gmailClient: { __brand: 'gmail' } as never });
 
     expect(hoisted.mockExtractApple).toHaveBeenCalledTimes(1);
+    // PR-12: subject threaded so the extractor can detect rejection
+    // template ("There's an issue with..."). `mockParsedEmail` defaults
+    // subject to 'subj'.
     expect(hoisted.mockExtractApple).toHaveBeenCalledWith(
       '<html><body>apple html</body></html>',
+      'subj',
     );
   });
 
   it('threads extracted_payload into classifier EmailInput', async () => {
     const payload = {
-      accepted_items: [
+      outcome: 'ACCEPTED' as const,
+      items: [
         {
-          type: 'APP_VERSION',
+          type: 'APP_VERSION' as const,
           raw_heading: 'App Version',
           raw_body: '1.0.13 for iOS',
           version: '1.0.13',
@@ -1350,7 +1355,7 @@ describe('runSync — HTML extractor wire (PR-11)', () => {
   });
 
   it('persists extracted_payload on email_messages INSERT', async () => {
-    const payload = { accepted_items: [] };
+    const payload = { outcome: null, items: [] };
     primeApple('m1');
     hoisted.mockExtractApple.mockReturnValueOnce(payload);
 
@@ -1365,9 +1370,10 @@ describe('runSync — HTML extractor wire (PR-11)', () => {
   it('fires Sentry warning when extractor surfaces UNKNOWN heading', async () => {
     primeApple('m1');
     hoisted.mockExtractApple.mockReturnValueOnce({
-      accepted_items: [
+      outcome: 'ACCEPTED' as const,
+      items: [
         {
-          type: 'UNKNOWN',
+          type: 'UNKNOWN' as const,
           raw_heading: 'Future Apple Type',
           raw_body: 'some new payload',
         },
@@ -1386,9 +1392,9 @@ describe('runSync — HTML extractor wire (PR-11)', () => {
     expect(context.tags.gmail_msg_id).toBe('m1');
   });
 
-  it('does not alert Sentry when accepted_items is empty', async () => {
+  it('does not alert Sentry when items is empty', async () => {
     primeApple('m1');
-    // Default mockReturnValue is { accepted_items: [] } — no override needed.
+    // Default mockReturnValue is { outcome: null, items: [] } — no override needed.
     const { runSync } = await import('./sync');
     await runSync({ gmailClient: { __brand: 'gmail' } as never });
 
@@ -1398,9 +1404,10 @@ describe('runSync — HTML extractor wire (PR-11)', () => {
   it('does not alert Sentry when only known types are present', async () => {
     primeApple('m1');
     hoisted.mockExtractApple.mockReturnValueOnce({
-      accepted_items: [
+      outcome: 'ACCEPTED' as const,
+      items: [
         {
-          type: 'APP_VERSION',
+          type: 'APP_VERSION' as const,
           raw_heading: 'App Version',
           raw_body: '2.0.0 for iOS',
           version: '2.0.0',

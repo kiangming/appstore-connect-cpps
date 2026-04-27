@@ -256,7 +256,7 @@ describe('reclassifyEmailMessageAction — happy paths', () => {
         sender_email: 'no-reply@apple.com',
         subject: 'Review of your X submission is complete.',
         raw_body_text: 'Submission ID: ...',
-        extracted_payload: { accepted_items: [] },
+        extracted_payload: { outcome: null, items: [] },
         classification_result: { status: 'UNCLASSIFIED_APP' },
         ticket_id: 'old-ticket-uuid',
         ...over,

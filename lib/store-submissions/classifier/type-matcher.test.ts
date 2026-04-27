@@ -138,8 +138,12 @@ const APPLE_TYPES: Type[] = [
   t({ id: 'tid-ppo', slug: 'ppo', name: 'Product Page Optimization', body_keyword: 'Product Page Optimization', sort_order: 40 }),
 ];
 
-function payload(items: ExtractedPayload['accepted_items']): ExtractedPayload {
-  return { accepted_items: items };
+function payload(items: ExtractedPayload['items']): ExtractedPayload {
+  // outcome is audit-only — classifier doesn't read it, but the field is
+  // required on the new shape (PR-12). Default to 'ACCEPTED' since the
+  // existing tests model the acceptance template; rejection-specific
+  // payload tests can override.
+  return { outcome: 'ACCEPTED', items };
 }
 
 describe('matchType — Priority 1: extracted_payload (PR-11)', () => {
@@ -246,7 +250,7 @@ describe('matchType — Priority 1: extracted_payload (PR-11)', () => {
     expect(r?.type_slug).toBe('app');
   });
 
-  it('empty accepted_items → falls through to body keyword path', () => {
+  it('empty items → falls through to body keyword path', () => {
     const r = matchType(
       e('App Version 1.2.3', { extracted_payload: payload([]) }),
       rules(APPLE_TYPES),
