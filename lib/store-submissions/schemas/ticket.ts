@@ -48,6 +48,24 @@ export type OpenTicketState = z.infer<typeof openTicketStateSchema>;
 export const ticketOutcomeSchema = z.enum(['IN_REVIEW', 'REJECTED', 'APPROVED']);
 export type TicketOutcome = z.infer<typeof ticketOutcomeSchema>;
 
+/**
+ * Inbox outcome filter — accepts the 3 outcome enum values or the literal
+ * `'none'` to filter for tickets where `latest_outcome IS NULL` (no email
+ * has set an outcome yet). Distinct from `ticketOutcomeSchema` because the
+ * column itself is nullable; the 'none' literal lets URLs encode the
+ * "filter for null" intent explicitly (omitting the param means "no
+ * outcome filter at all").
+ *
+ * Used by the Inbox outcome chip row to refine within the active state
+ * tab (PR-13). The Outcome column already shows latest_outcome; this
+ * adds filtering by that same dimension.
+ */
+export const outcomeFilterSchema = z.union([
+  ticketOutcomeSchema,
+  z.literal('none'),
+]);
+export type OutcomeFilter = z.infer<typeof outcomeFilterSchema>;
+
 export const ticketPrioritySchema = z.enum(['LOW', 'NORMAL', 'HIGH']);
 export type TicketPriority = z.infer<typeof ticketPrioritySchema>;
 
@@ -139,6 +157,12 @@ export const ticketsQuerySchema = z.object({
 
   state: z.union([ticketStateSchema, z.array(ticketStateSchema).min(1)]).optional(),
   bucket: ticketBucketSchema.optional(),
+  /**
+   * Outcome chip filter (PR-13). Orthogonal to `state` — `state` is the
+   * Manager-driven lifecycle, `outcome` is the email-derived signal.
+   * `'none'` matches `latest_outcome IS NULL`; omit for no filter.
+   */
+  outcome: outcomeFilterSchema.optional(),
   platform_key: platformKeySchema.optional(),
   app_id: z.string().uuid().optional(),
   type_id: z.string().uuid().optional(),

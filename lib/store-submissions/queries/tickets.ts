@@ -330,6 +330,15 @@ export async function listTickets(
       q = q.eq('state', filters.state);
     }
   }
+  if (filters.outcome) {
+    // Outcome dimension is independent of state (PR-13). 'none' literal
+    // filters for the NULL branch — distinct from "no filter" (omitted).
+    if (filters.outcome === 'none') {
+      q = q.is('latest_outcome', null);
+    } else {
+      q = q.eq('latest_outcome', filters.outcome);
+    }
+  }
   if (filters.bucket) q = applyBucketFilter(q, filters.bucket);
   if (platformIdFilter) q = q.eq('platform_id', platformIdFilter);
   if (filters.app_id) q = q.eq('app_id', filters.app_id);

@@ -67,4 +67,28 @@ describe('parseTicketsQueryFromSearchParams', () => {
     expect(q.platform_key).toBe('apple');
     expect(q.search).toBe('TK-12');
   });
+
+  // -- PR-13 outcome filter --------------------------------------------------
+
+  it('parses outcome enum value (APPROVED)', () => {
+    const q = parseTicketsQueryFromSearchParams({ outcome: 'APPROVED' });
+    expect(q.outcome).toBe('APPROVED');
+  });
+
+  it("parses outcome='none' literal for latest_outcome IS NULL", () => {
+    const q = parseTicketsQueryFromSearchParams({ outcome: 'none' });
+    expect(q.outcome).toBe('none');
+  });
+
+  it('falls back to defaults on invalid outcome value', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const q = parseTicketsQueryFromSearchParams({ outcome: 'BOGUS' });
+    expect(q.outcome).toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('omits outcome when param is absent (no filter)', () => {
+    const q = parseTicketsQueryFromSearchParams({ state: 'NEW' });
+    expect(q.outcome).toBeUndefined();
+  });
 });

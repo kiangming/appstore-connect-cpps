@@ -49,6 +49,7 @@ export function parseTicketsQueryFromSearchParams(
     limit: firstOf(params.limit),
     state: normalizeState(params.state),
     bucket: firstOf(params.bucket),
+    outcome: firstOf(params.outcome),
     platform_key: firstOf(params.platform_key),
     app_id: firstOf(params.app_id),
     type_id: firstOf(params.type_id),

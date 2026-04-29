@@ -310,6 +310,64 @@ describe('listTickets filters', () => {
     ]);
   });
 
+  // -- PR-13 outcome filter --------------------------------------------------
+
+  it('outcome=APPROVED → .eq("latest_outcome", "APPROVED")', async () => {
+    const ticketsBuilder = new MockBuilder({ data: [], error: null });
+    registerBuilders(new Map([['tickets', [ticketsBuilder]]]));
+
+    await listTickets({ outcome: 'APPROVED', limit: 50, sort: 'opened_at_desc' });
+
+    const eqCalls = ticketsBuilder.calls.filter((c) => c.method === 'eq');
+    expect(eqCalls).toEqual(
+      expect.arrayContaining([{ method: 'eq', args: ['latest_outcome', 'APPROVED'] }]),
+    );
+  });
+
+  it('outcome="none" → .is("latest_outcome", null)', async () => {
+    const ticketsBuilder = new MockBuilder({ data: [], error: null });
+    registerBuilders(new Map([['tickets', [ticketsBuilder]]]));
+
+    await listTickets({ outcome: 'none', limit: 50, sort: 'opened_at_desc' });
+
+    const isCalls = ticketsBuilder.calls.filter((c) => c.method === 'is');
+    expect(isCalls).toEqual([{ method: 'is', args: ['latest_outcome', null] }]);
+  });
+
+  it('omits outcome predicate when filter is absent', async () => {
+    const ticketsBuilder = new MockBuilder({ data: [], error: null });
+    registerBuilders(new Map([['tickets', [ticketsBuilder]]]));
+
+    await listTickets({ limit: 50, sort: 'opened_at_desc' });
+
+    const touchedOutcome = ticketsBuilder.calls.some(
+      (c) =>
+        (c.method === 'eq' || c.method === 'is') &&
+        Array.isArray(c.args) &&
+        c.args[0] === 'latest_outcome',
+    );
+    expect(touchedOutcome).toBe(false);
+  });
+
+  it('combines state + outcome (both filters AND together)', async () => {
+    const ticketsBuilder = new MockBuilder({ data: [], error: null });
+    registerBuilders(new Map([['tickets', [ticketsBuilder]]]));
+
+    await listTickets({
+      state: ['NEW', 'IN_REVIEW', 'REJECTED'],
+      outcome: 'REJECTED',
+      limit: 50,
+      sort: 'opened_at_desc',
+    });
+
+    expect(ticketsBuilder.calls).toEqual(
+      expect.arrayContaining([
+        { method: 'in', args: ['state', ['NEW', 'IN_REVIEW', 'REJECTED']] },
+        { method: 'eq', args: ['latest_outcome', 'REJECTED'] },
+      ]),
+    );
+  });
+
   it('applies cursor as composite or() filter', async () => {
     const ticketsBuilder = new MockBuilder({ data: [], error: null });
     registerBuilders(new Map([['tickets', [ticketsBuilder]]]));
