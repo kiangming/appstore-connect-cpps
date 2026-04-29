@@ -42,6 +42,7 @@ import type {
   TicketWithEntries,
 } from '@/lib/store-submissions/queries/tickets';
 import type {
+  OutcomeFilter,
   TicketBucket,
   TicketsQuery,
   TicketSort,
@@ -75,13 +76,20 @@ export interface InboxClientProps {
   initialTicket: TicketWithEntries | null;
 }
 
-// -- Tabs -------------------------------------------------------------------
+// -- Tabs (state dimension) -------------------------------------------------
+//
+// PR-13: 5-tab structure. The standalone "Rejected" tab was removed —
+// it conflated `state=REJECTED` (lifecycle) with `latest_outcome=REJECTED`
+// (email-derived signal). Outcome filtering moved to the chip row below
+// (`OutcomeChips`), which refines within whichever state tab is active.
+// `state=APPROVED` keeps a standalone tab because it's a meaningful
+// terminal state (Manager `FOLLOW_UP` action lands here when an Apple
+// approval email already set `latest_outcome=APPROVED`).
 
-type TabKey = 'open' | 'rejected' | 'approved' | 'done' | 'archived' | 'unclassified';
+type TabKey = 'open' | 'approved' | 'done' | 'archived' | 'unclassified';
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'open', label: 'Open' },
-  { key: 'rejected', label: 'Rejected' },
   { key: 'approved', label: 'Approved' },
   { key: 'done', label: 'Done' },
   { key: 'archived', label: 'Archived' },
@@ -99,7 +107,6 @@ function getActiveTab(query: TicketsQuery): TabKey {
     if (query.state === 'APPROVED') return 'approved';
     if (query.state === 'DONE') return 'done';
     if (query.state === 'ARCHIVED') return 'archived';
-    if (query.state === 'REJECTED') return 'rejected';
   }
   return 'open';
 }
@@ -118,8 +125,6 @@ function tabStateMutations(tab: TabKey): {
       // Intentionally empty — Open is the "no explicit filter" default;
       // the page applies it server-side. Clean URL for the common case.
       return { states: [], bucket: null };
-    case 'rejected':
-      return { states: ['REJECTED'], bucket: null };
     case 'approved':
       return { states: ['APPROVED'], bucket: null };
     case 'done':
@@ -129,6 +134,28 @@ function tabStateMutations(tab: TabKey): {
     case 'unclassified':
       return { states: [], bucket: 'unclassified_any' };
   }
+}
+
+// -- Outcome chips (latest_outcome dimension) -------------------------------
+//
+// Secondary refinement within the active state tab. Five chips covering
+// the full latest_outcome dimension (3 enum values + null + "no filter").
+// Chip selection survives tab switches via `baseParams` scalarKeys — a
+// Manager who's filtered to "Reject" tickets stays filtered when they
+// switch from Open to Done.
+
+type ChipKey = 'all' | OutcomeFilter;
+
+const OUTCOME_CHIPS: Array<{ key: ChipKey; label: string }> = [
+  { key: 'all', label: 'All' },
+  { key: 'APPROVED', label: 'Approve' },
+  { key: 'REJECTED', label: 'Reject' },
+  { key: 'IN_REVIEW', label: 'In review' },
+  { key: 'none', label: 'No outcome' },
+];
+
+function getActiveChip(query: TicketsQuery): ChipKey {
+  return query.outcome ?? 'all';
 }
 
 // -- Client component -------------------------------------------------------
@@ -149,6 +176,7 @@ export function InboxClient({
   const [isPending, startTransition] = useTransition();
 
   const activeTab = useMemo(() => getActiveTab(initialQuery), [initialQuery]);
+  const activeChip = useMemo(() => getActiveChip(initialQuery), [initialQuery]);
 
   /**
    * Write a fresh URL, dropping `cursor` and keeping only filter params
@@ -184,6 +212,7 @@ export function InboxClient({
       }
       const scalarKeys: Array<keyof TicketsQuery> = [
         'bucket',
+        'outcome',
         'platform_key',
         'app_id',
         'type_id',
@@ -214,6 +243,15 @@ export function InboxClient({
     const p = baseParams(['state', 'bucket']);
     for (const s of states) p.append('state', s);
     if (bucket) p.set('bucket', bucket);
+    navigate(p);
+  }
+
+  function selectChip(chip: ChipKey) {
+    // 'all' clears the outcome filter; every other key persists as the
+    // literal URL value (enum or 'none'). baseParams strips the existing
+    // outcome so re-selecting "All" produces a clean URL.
+    const p = baseParams(['outcome']);
+    if (chip !== 'all') p.set('outcome', chip);
     navigate(p);
   }
 
@@ -304,7 +342,11 @@ export function InboxClient({
     [focusedIndex, isPanelOpen, initialData.tickets],
   );
 
-  /** True if any non-tab filter is active (platform/app/search/dates/sort non-default). */
+  /**
+   * True if any non-tab filter is active (platform/app/search/dates/sort
+   * non-default, or an outcome chip other than "All"). Drives the
+   * "Clear filters" button visibility.
+   */
   const hasActiveFilters = useMemo(() => {
     return Boolean(
       initialQuery.platform_key ||
@@ -312,6 +354,7 @@ export function InboxClient({
         initialQuery.search ||
         initialQuery.opened_from ||
         initialQuery.opened_to ||
+        initialQuery.outcome ||
         (initialQuery.sort && initialQuery.sort !== 'opened_at_desc'),
     );
   }, [initialQuery]);
@@ -324,7 +367,7 @@ export function InboxClient({
         isPending ? 'opacity-60 pointer-events-none' : ''
       }`}
     >
-      {/* -- State tabs -- */}
+      {/* -- State tabs (lifecycle dimension) -- */}
       <div className="border-b border-slate-200">
         <div className="flex items-center gap-1">
           {TABS.map((tab) => {
@@ -349,6 +392,34 @@ export function InboxClient({
           })}
         </div>
       </div>
+
+      {/* -- Outcome chips (latest_outcome dimension, secondary refinement) --
+          Hidden on the Unclassified tab — those tickets have no outcome
+          (no classified email yet by definition) so the chips would be
+          dead UI. */}
+      {activeTab !== 'unclassified' && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[12px] text-slate-400 mr-1">Outcome</span>
+          {OUTCOME_CHIPS.map((chip) => {
+            const active = chip.key === activeChip;
+            return (
+              <button
+                key={chip.key}
+                type="button"
+                onClick={() => selectChip(chip.key)}
+                aria-pressed={active}
+                className={`text-[12px] px-2.5 py-1 rounded-full border transition-colors ${
+                  active
+                    ? 'bg-blue-50 border-blue-200 text-blue-700'
+                    : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-900'
+                }`}
+              >
+                {chip.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* -- Filter row -- */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -721,8 +792,6 @@ function getEmptyMessage(activeTab: TabKey, hasActiveFilters: boolean): string {
       return 'All caught up — no tickets need classification right now.';
     case 'open':
       return 'No open tickets. Everything is triaged.';
-    case 'rejected':
-      return 'No rejected tickets.';
     case 'approved':
       return 'No approved tickets yet.';
     case 'done':
