@@ -50,6 +50,10 @@ import type {
 } from '@/lib/store-submissions/schemas/ticket';
 import type { PlatformKey } from '@/lib/store-submissions/schemas/app';
 import type { StoreRole } from '@/lib/store-submissions/auth';
+import {
+  getEmptyMessage,
+  type InboxTabKey,
+} from '@/lib/store-submissions/inbox/empty-message';
 import { TicketListTable } from './TicketListTable';
 import { TicketDetailPanel } from './TicketDetailPanel';
 
@@ -86,7 +90,7 @@ export interface InboxClientProps {
 // terminal state (Manager `FOLLOW_UP` action lands here when an Apple
 // approval email already set `latest_outcome=APPROVED`).
 
-type TabKey = 'open' | 'approved' | 'done' | 'archived' | 'unclassified';
+type TabKey = InboxTabKey;
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: 'open', label: 'Open' },
@@ -343,21 +347,24 @@ export function InboxClient({
   );
 
   /**
-   * True if any non-tab filter is active (platform/app/search/dates/sort
-   * non-default, or an outcome chip other than "All"). Drives the
-   * "Clear filters" button visibility.
+   * "Other filters" = platform/app/search/dates/sort non-default. The
+   * outcome chip is excluded — it's primary dimension matrix UI, not a
+   * secondary filter, and the empty-state copy distinguishes the two.
+   * `hasActiveFilters` (drives the Clear filters button) folds outcome
+   * back in so any non-default chip surfaces the Clear affordance.
    */
-  const hasActiveFilters = useMemo(() => {
+  const hasOtherFilters = useMemo(() => {
     return Boolean(
       initialQuery.platform_key ||
         initialQuery.app_id ||
         initialQuery.search ||
         initialQuery.opened_from ||
         initialQuery.opened_to ||
-        initialQuery.outcome ||
         (initialQuery.sort && initialQuery.sort !== 'opened_at_desc'),
     );
   }, [initialQuery]);
+
+  const hasActiveFilters = hasOtherFilters || Boolean(initialQuery.outcome);
 
   const { tickets, has_more } = initialData;
 
@@ -574,7 +581,11 @@ export function InboxClient({
         selectedTicketId={selectedTicketId}
         focusedIndex={focusedIndex}
         onRowClick={(t) => openPanel(t.id)}
-        emptyMessage={getEmptyMessage(activeTab, hasActiveFilters)}
+        emptyMessage={getEmptyMessage({
+          activeTab,
+          outcome: initialQuery.outcome,
+          hasOtherFilters,
+        })}
       />
 
       {/* -- Ticket detail slide-over -- */}
@@ -776,30 +787,6 @@ const SORT_LABELS: Record<TicketSort, string> = {
   updated_at_desc: 'Recently updated',
   priority_desc: 'Priority',
 };
-
-/**
- * Context-aware empty-state copy. When the user has filters applied
- * we stay generic — they're the ones who narrowed the list, so the
- * tab-specific message would be misleading (e.g. "No rejected tickets"
- * when there are rejected tickets that just don't match a platform
- * filter). With no filters active we can honestly say "no rejected
- * tickets" because the tab + bucket are the only narrowing.
- */
-function getEmptyMessage(activeTab: TabKey, hasActiveFilters: boolean): string {
-  if (hasActiveFilters) return 'No tickets match the current filters.';
-  switch (activeTab) {
-    case 'unclassified':
-      return 'All caught up — no tickets need classification right now.';
-    case 'open':
-      return 'No open tickets. Everything is triaged.';
-    case 'approved':
-      return 'No approved tickets yet.';
-    case 'done':
-      return 'No tickets marked done.';
-    case 'archived':
-      return 'No archived tickets.';
-  }
-}
 
 function Kbd({
   children,
