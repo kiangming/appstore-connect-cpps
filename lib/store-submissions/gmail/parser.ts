@@ -379,40 +379,89 @@ function decodePartBody(part: gmail_v1.Schema$MessagePart): string {
 
   // Gmail wraps every leaf body in base64url regardless of the original
   // transfer encoding. After base64url decode we have the "raw" bytes
-  // Gmail's MIME parser produced — which, in the common case, are the
-  // already-decoded payload. If Gmail *didn't* decode (rare), the bytes
-  // may still be quoted-printable; we defensively apply the QP decoder
-  // when the transfer encoding header announces it.
+  // Gmail's MIME parser produced. If the part is announced as QP we
+  // run the byte-level decoder unconditionally — bytes that don't form
+  // a valid `=XX` / `=\r?\n` escape are passed through unchanged, so
+  // the decoder is a no-op on already-decoded bodies and a real decoder
+  // on QP-encoded ones.
   const raw = Buffer.from(data, 'base64url');
 
   if (transfer === 'quoted-printable') {
-    const asAscii = raw.toString('ascii');
-    if (/=[0-9A-Fa-f]{2}|=\r?\n/.test(asAscii)) {
-      return decodeQuotedPrintable(asAscii, charset);
-    }
+    return decodeQuotedPrintable(raw, charset);
   }
 
   return raw.toString(charset);
 }
 
-function decodeQuotedPrintable(input: string, charset: BufferEncoding): string {
-  // Strip soft line breaks `=\r\n` / `=\n` first.
-  const cleaned = input.replace(/=\r?\n/g, '');
-  const bytes: number[] = [];
-  for (let i = 0; i < cleaned.length; i++) {
-    const c = cleaned[i];
-    if (c === '=' && i + 2 < cleaned.length) {
-      const hex = cleaned.slice(i + 1, i + 3);
-      if (/^[0-9A-Fa-f]{2}$/.test(hex)) {
-        bytes.push(parseInt(hex, 16));
+/**
+ * Walk the raw bytes of a quoted-printable body and emit the decoded
+ * payload as a string in the declared charset.
+ *
+ * Why bytes, not a string: the previous `string`-keyed implementation
+ * was preceded by `raw.toString('ascii')`, which masks every byte with
+ * `& 0x7F`. Apple sometimes ships parts with `Content-Transfer-Encoding:
+ * QUOTED-PRINTABLE` whose bodies are actually raw UTF-8 (mislabel — see
+ * gmail_msg_id 19dd4987eaf7f79d, "Đấu Trường Chân Lý", April 2026). For
+ * those bodies the ASCII mask turned UTF-8 lead/continuation bytes into
+ * spurious `=` and control bytes (e.g. `0xBD` → `0x3D`), tripping the
+ * detect regex and feeding mojibake into the decoder. Operating on the
+ * raw `Buffer` keeps high-bit bytes (≥ 0x80) intact so genuine
+ * UTF-8 passes through, while the byte `0x3D` (ASCII `=`) — and only
+ * that byte — triggers escape parsing.
+ *
+ * Soft line breaks: `=\r\n` (3 bytes) or `=\n` (2 bytes) are dropped
+ * per RFC 2045 §6.7. Hex escapes: `=` + two ASCII hex digits decode to
+ * a single byte. A `=` that isn't followed by a valid escape is passed
+ * through literally — the spec calls this a transmission error but
+ * being lenient avoids losing data on malformed input.
+ */
+function decodeQuotedPrintable(raw: Buffer, charset: BufferEncoding): string {
+  const out: number[] = [];
+  let i = 0;
+  while (i < raw.length) {
+    const b = raw[i];
+    if (b === 0x3d /* '=' */) {
+      // Soft break `=\r\n`
+      if (raw[i + 1] === 0x0d && raw[i + 2] === 0x0a) {
+        i += 3;
+        continue;
+      }
+      // Soft break `=\n`
+      if (raw[i + 1] === 0x0a) {
         i += 2;
         continue;
       }
+      // Hex escape `=XX`
+      const h1 = raw[i + 1];
+      const h2 = raw[i + 2];
+      if (h1 !== undefined && h2 !== undefined && isHexByte(h1) && isHexByte(h2)) {
+        out.push((hexValue(h1) << 4) | hexValue(h2));
+        i += 3;
+        continue;
+      }
+      // Stray `=` — keep literally and advance one byte.
+      out.push(b);
+      i += 1;
+      continue;
     }
-    // Single-byte plain ASCII (guaranteed by QP spec).
-    bytes.push(cleaned.charCodeAt(i) & 0xff);
+    out.push(b);
+    i += 1;
   }
-  return Buffer.from(bytes).toString(charset);
+  return Buffer.from(out).toString(charset);
+}
+
+function isHexByte(b: number): boolean {
+  return (
+    (b >= 0x30 && b <= 0x39) || // 0-9
+    (b >= 0x41 && b <= 0x46) || // A-F
+    (b >= 0x61 && b <= 0x66) //   a-f
+  );
+}
+
+function hexValue(b: number): number {
+  if (b >= 0x30 && b <= 0x39) return b - 0x30;
+  if (b >= 0x41 && b <= 0x46) return b - 0x41 + 10;
+  return b - 0x61 + 10;
 }
 
 /** Pull `charset=...` out of a Content-Type header. UTF-8 if absent. */

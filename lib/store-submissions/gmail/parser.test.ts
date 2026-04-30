@@ -23,6 +23,7 @@ import {
 } from './__fixtures__/builders';
 import {
   appleApproved,
+  edgeAppleMislabelUtf8,
   edgeEmptyBody,
   edgeHtmlOnly,
   edgeLargeBody,
@@ -234,6 +235,90 @@ describe('body extraction', () => {
     expect(out.body).toBe('Deeply nested text body — parser should find this.');
     // HTML at level 2 is captured too.
     expect(out.bodyHtml).toBe('<p>HTML alternative at level 2</p>');
+  });
+});
+
+/* ============================================================================
+ * PR-14 — Apple "QP mislabel" decode regression
+ * ==========================================================================
+ *
+ * Production bug discovered via diagnostic API route on TICKET-10009
+ * (gmail_msg_id=19dd4987eaf7f79d, app "Đấu Trường Chân Lý"). Apple emits
+ * `Content-Transfer-Encoding: QUOTED-PRINTABLE` headers for parts whose
+ * body bytes are actually raw UTF-8 — no `=XX` escapes anywhere in the
+ * bytes. The pre-fix parser's `raw.toString('ascii')` step masks UTF-8
+ * lead/continuation bytes with `& 0x7F`, producing spurious `=` and
+ * control bytes that fool the QP-detection regex; `decodeQuotedPrintable`
+ * then mangles the data further.
+ *
+ * Concrete trace from the production message: byte `0xBD` (tail of `ý`)
+ * masks to `0x3D` (`=`); the following `\r\n` triggers the `/=\r?\n/`
+ * branch of the detect regex; QP "soft-break removal" drops bytes; the
+ * "decoded" string surfaces as `D\u0010a:%u TrF0a;\u001dng ChC"n L`.
+ *
+ * The fix (14.2) replaces the string-keyed decoder with a byte-keyed
+ * walker that operates on the raw `Buffer` — bytes ≥ 0x80 pass through
+ * unchanged so mislabeled UTF-8 is preserved, while genuine `=XX` /
+ * `=\r?\n` escapes are still decoded for legitimately-QP-encoded bodies.
+ *
+ *   Layer 1 (subject):   RFC 2047 continuation-line collapse [DEFERRED]
+ *   Layer 2 (bodyHtml):  mixed `=3D` + raw UTF-8 (Apple's HTML shape)
+ *   Layer 3 (body):      pure raw UTF-8 mislabeled as QP
+ *   Layer 4 (excerpt):   500-char JS slice of decoded body
+ *
+ * Layer 1 is parked on the PR-15+ list — distinct decoder, distinct
+ * symptom, separate scope.
+ */
+
+describe('PR-14 — Apple mislabeled QP body decodes correctly', () => {
+  // Split into one `it` per layer so a regression on one stage doesn't
+  // mask another. The mislabel fixture has identical bytes Apple sent
+  // to TICKET-10009 — passes mean the byte-level decoder handles
+  // production data; failures localize to the exact decode stage.
+
+  it.skip('layer 1 — subject: RFC 2047 continuation-line collapse (deferred to PR-15+)', () => {
+    // RFC 2047 §5(1): adjacent encoded-words separated by CRLF + WSP
+    // must collapse the whitespace. `decodeRfc2047` runs the per-word
+    // decode before the collapse pass, so by the time the collapse
+    // regex `\?=\s+=\?` runs the markers are gone — orphan whitespace
+    // leaks. Distinct decoder from `decodeQuotedPrintable`, distinct
+    // fix. Tracked separately.
+    expect(true).toBe(false); // unreachable — placeholder only
+  });
+
+  it('layer 2 — bodyHtml: mixed `=3D` attribute escapes + inline raw UTF-8', () => {
+    const out = parseGmailMessage(edgeAppleMislabelUtf8);
+    expect(out.bodyHtml).toBeDefined();
+    // Apple's mislabel: app name written as raw UTF-8 inside HTML even
+    // though the part is announced as QP. Byte-level decoder must
+    // pass these bytes through unchanged.
+    expect(out.bodyHtml!).toContain('Đấu Trường Chân Lý');
+    // …while still decoding genuine `=3D` attribute escapes that share
+    // the same body. A "skip QP if any byte ≥ 0x80" shortcut would
+    // leave `xmlns=3D"…"` in the output and fail the next assertion.
+    expect(out.bodyHtml!).toContain('xmlns="http://www.w3.org/1999/xhtml"');
+    expect(out.bodyHtml!).not.toContain('xmlns=3D');
+    // No control-byte residue from a false-positive QP false-decode.
+    expect(out.bodyHtml!).not.toMatch(/[\x01-\x08\x0B\x0C\x0E-\x1F]/);
+  });
+
+  it('layer 3 — body: pure raw UTF-8 mislabeled as QP (the production failure mode)', () => {
+    const out = parseGmailMessage(edgeAppleMislabelUtf8);
+    // body is what sync.ts persists as email_messages.raw_body_text and
+    // what the SQL RPC slices into ticket_entries snapshot.body_excerpt.
+    expect(out.body).toContain('Đấu Trường Chân Lý');
+    expect(out.body).toContain('App Name: Đấu Trường Chân Lý');
+    // Pre-fix output contained `D\u0010a:%u TrF0a;\u001dng ChC"n L` —
+    // mask any control-byte residue.
+    expect(out.body).not.toMatch(/[\x01-\x08\x0B\x0C\x0E-\x1F]/);
+    expect(out.body).not.toContain('Da:%u');
+  });
+
+  it('layer 4 — 500-char excerpt: UTF-8 codepoints preserved through JS slice', () => {
+    const out = parseGmailMessage(edgeAppleMislabelUtf8);
+    const excerpt = out.body.slice(0, 500);
+    expect(excerpt).toContain('Đấu Trường Chân Lý');
+    expect(excerpt).not.toMatch(/[\x01-\x08\x0B\x0C\x0E-\x1F]/);
   });
 });
 

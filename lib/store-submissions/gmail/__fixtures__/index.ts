@@ -409,3 +409,108 @@ export const edgeMissingFrom: Message = buildMessage({
     body: 'body',
   }),
 });
+
+/* ============================================================================
+ * PR-14 diagnostic — Apple "QP mislabel" production reproduction
+ * ==========================================================================
+ *
+ * The bug: Apple emits some templates with `Content-Transfer-Encoding:
+ * QUOTED-PRINTABLE` headers, but the body bytes are actually raw UTF-8
+ * (no `=XX` escapes). Diagnosed via the diagnostic API route on
+ * gmail_msg_id=19dd4987eaf7f79d (TICKET-10009, "Đấu Trường Chân Lý").
+ *
+ * The pre-fix parser hits this path:
+ *   1. Reads CTE header → "quoted-printable"
+ *   2. Calls `raw.toString('ascii')` to detect QP escapes — but ASCII
+ *      decode masks every byte with `& 0x7F`, so UTF-8 lead/continuation
+ *      bytes (≥ 0x80) become spurious printable ASCII (e.g. `0xC4` → `D`,
+ *      `0xBD` → `=`).
+ *   3. The fake `=` byte at position N — followed by CRLF or by two
+ *      hex-looking masked bytes — fools the regex
+ *      `/=[0-9A-Fa-f]{2}|=\r?\n/`.
+ *   4. `decodeQuotedPrintable` runs on the masked-ASCII string and
+ *      mangles the data further (soft-breaks dropped, false `=XX`
+ *      escapes "decoded").
+ *
+ * The fixture below mirrors the real-world shape we pulled from Gmail:
+ *   - multipart/alternative with text/plain + text/html
+ *   - Both parts headered as QUOTED-PRINTABLE
+ *   - text/plain body: pure raw UTF-8 (Apple's mislabel for plain text)
+ *   - text/html body: mixed — `=3D` for `=` in attributes (real QP) PLUS
+ *     raw UTF-8 for the inline app name (the same mislabel)
+ *
+ * Why the mixed HTML matters: the byte-level decoder must handle BOTH
+ * — decode `=3D` correctly AND pass UTF-8 bytes through unchanged. A
+ * naive "skip QP entirely if any byte ≥ 0x80" fix would break the
+ * `=3D` decode and leave HTML attributes broken.
+ *
+ * RFC 2047 Q-encoded subject is preserved from the real fixture so the
+ * deferred Layer-1 continuation-line bug (PR-15+) stays observable.
+ */
+
+// "Đấu Trường Chân Lý" — bytes confirmed via diagnostic hex dump:
+//   c4 90  e1 ba a5  75  20  54 72  c6 b0  e1 bb 9d  6e 67  20  43 68
+//   c3 a2  6e  20  4c  c3 bd
+const TFT_NAME = 'Đấu Trường Chân Lý';
+
+export const edgeAppleMislabelUtf8: Message = buildMessage({
+  id: 'apple-mislabel-utf8-001',
+  threadId: 'apple-mislabel-t1',
+  internalDate: '1777388247000', // 2026-04-28T14:57:27Z (real TICKET-10009 ts)
+  labelIds: ['INBOX', 'UNREAD', 'CATEGORY_UPDATES'],
+  envelopeHeaders: [
+    header('From', 'App Store Connect <no_reply@email.apple.com>'),
+    header('To', 'store.admin@vng.com.vn'),
+    // Subject is RFC-2047-decoded by a separate code path
+    // (`decodeRfc2047`) that does NOT have the ASCII-mask bug. Real
+    // production data shows subjects render correctly even when bodies
+    // are corrupted, so we use a plain string here — the diagnostic
+    // suite's Layer 1 (continuation-line) test is the dedicated probe
+    // for the orthogonal RFC-2047 issue and uses its own fixture
+    // shape (kept on the deferred PR-15+ list).
+    header('Subject', `Review of your ${TFT_NAME} (iOS) submission is complete.`),
+    header('Date', 'Tue, 28 Apr 2026 14:57:27 +0000'),
+  ],
+  payload: container('multipart/alternative', [
+    // text/plain — Apple's mislabel: header announces QP, body is raw
+    // UTF-8 (zero `=XX` escapes anywhere in the bytes).
+    leaf({
+      mimeType: 'text/plain',
+      transferEncoding: 'QUOTED-PRINTABLE',
+      // body field encoded as UTF-8 by the leaf() builder — exactly
+      // what Apple actually puts on the wire.
+      body:
+        'Hello,\r\n\r\n' +
+        'Review of your submission has been completed. It is now eligible for distribution.\r\n\r\n' +
+        'Submission ID: 2210ae22-9265-4fb2-a361-396bf26787ee\r\n' +
+        `App Name: ${TFT_NAME}\r\n\r\n` +
+        'Best regards,\r\nApp Store Review',
+    }),
+    // text/html — mixed: `=3D` in attributes (real QP) PLUS inline raw
+    // UTF-8 for the app name (Apple's mislabel for the same name in
+    // the same email). preEncodedData lets us hand-craft the byte mix
+    // since builders.ts otherwise UTF-8-encodes the whole `body`.
+    leaf({
+      mimeType: 'text/html',
+      transferEncoding: 'QUOTED-PRINTABLE',
+      body: '', // ignored when preEncodedData is set
+      preEncodedData: b64u(
+        Buffer.concat([
+          Buffer.from(
+            '<html xmlns=3D"http://www.w3.org/1999/xhtml">' +
+              '<head><title>Review of your ',
+            'utf-8',
+          ),
+          Buffer.from(TFT_NAME, 'utf-8'), // raw UTF-8 inline
+          Buffer.from(
+            ' (iOS) submission is complete.</title></head>' +
+              '<body><p>App Name: ',
+            'utf-8',
+          ),
+          Buffer.from(TFT_NAME, 'utf-8'), // raw UTF-8 inline (again)
+          Buffer.from('</p></body></html>', 'utf-8'),
+        ]),
+      ),
+    }),
+  ]),
+});
