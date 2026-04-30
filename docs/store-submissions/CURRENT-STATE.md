@@ -2,7 +2,7 @@
 
 > **Đọc đầu tiên** khi bắt đầu session mới về module Store Management. Ghi lại trạng thái production + PR đã ship + known limitations chưa resolve.
 >
-> Last updated: 2026-04-27 (PR-12 shipped — Apple rejection parser + Backfill button MANAGER)
+> Last updated: 2026-04-30 (PR-13 shipped — Outcome filter dimension separation)
 
 ---
 
@@ -36,6 +36,7 @@ Module quản lý submission app/game multi-platform qua auto-classify email t�
 | PR-10d | Polish + Observability — Sentry SDK init + 3 production captureException sites + 2 error boundaries + j/k/Enter keyboard navigation | ✅ shipped 2026-04-25 |
 | PR-11 | HTML Parsing + Reclassify — Apple HTML extractor + classifier two-tier match + PPO type seed + extracted_payload JSONB + reclassify_email_tx RPC + Manager UI (per-email + bulk) + type guidance card | ✅ shipped 2026-04-25 (3 migrations apply pending Path G) |
 | PR-12 | Apple rejection parser + Backfill button — `extractApple(html, subject?)` rejection branch + `outcome` audit flag + `items` rename + IAE optional count + `submission_id`/`app_name` parse + `reclassify-core` extraction + MANAGER Backfill button (test 1 row + bulk all) + Sentry `backfill-action` taxonomy | ✅ shipped 2026-04-27 (no migrations) |
+| PR-13 | Outcome filter dimension separation — `outcomeFilterSchema` (enum ∪ `'none'`) + `listTickets` predicate + URL parser + 5-tab consolidation (drop Rejected, keep Approved standalone) + 5-chip outcome row (All/Approve/Reject/In review/No outcome) + empty-state copy refresh + 3-dimension docs. Resolves Issue 2 from PR-12 close ("Approve" tab empty while Outcome column shows "Approve") | ✅ shipped 2026-04-30 (no migrations) |
 
 ---
 
@@ -478,6 +479,115 @@ concurrent sync runs can't observe a half-updated row.
 - **Sentry breadcrumb cap formalization** — current 4-stage × 14-row max = 56 breadcrumbs (well under Sentry's default 100 cap). Multi-platform expansion may push past — add explicit cap-at-first-N pattern when batch sizes grow.
 - **Migration COMMENT refresh** — `20260425000000_store_mgmt_email_extracted_payload.sql:20` still mentions old `accepted_items` shape. Postgres metadata comment, not enforced. Refreshed on next forward migration touching the column.
 - **0 Apple emails post-deploy** — wire still untested with real production traffic. Path G manual QA validates with backfill of 14 legacy rows; first new Apple email arrival will exercise the live path.
+
+---
+
+## PR-13 — Outcome filter dimension separation ✅ SHIPPED 2026-04-30
+
+PR-12 backfill populated `tickets.latest_outcome` at production scale
+for the first time, exposing a pre-existing UI dimension misalignment:
+the Inbox "Approve" tab queried `state=APPROVED` (lifecycle) while the
+Outcome column rendered `latest_outcome=APPROVED` (email-derived).
+Tickets with `state=IN_REVIEW` + `latest_outcome=APPROVED` showed
+"Approve" in the column but were filtered out of the "Approve" tab.
+PR-13 surfaces the outcome dimension as a first-class chip refinement
+within the lifecycle tabs — not a regression, an exposure.
+
+### Shipped — 4 commits
+
+| Commit | Scope |
+|---|---|
+| `d556fc6` | **PR-13.1** — Backend: `outcomeFilterSchema = z.union([ticketOutcomeSchema, z.literal('none')])` threaded into `ticketsQuerySchema` + `listTickets` predicate (`'none'` → `.is('latest_outcome', null)`, enum → `.eq('latest_outcome', value)`) + URL parser threading via `firstOf` + 8 tests (4 schema/parser + 4 query). |
+| `346785a` | **PR-13.2** — UI: 5-tab consolidation (drop Rejected, keep Approved standalone) + outcome chip row (All/Approve/Reject/In review/No outcome) + visual hierarchy (tabs underline / chips pill rounded-full) + `aria-pressed` accessibility + chip-survives-tab-switch via `baseParams.scalarKeys` + chips hidden on Unclassified tab. |
+| `41f0a84` | **PR-13.3** — Empty-state refresh: pure helper extraction (`lib/store-submissions/inbox/empty-message.ts`) + Hybrid Option C decision tree + `hasOtherFilters` vs `hasActiveFilters` split (different consumers, different semantics) + 5 tests. Net `InboxClient.tsx` -24 lines. |
+| this commit | **PR-13.4** — Docs (CURRENT-STATE.md + 03-email-rule-engine.md + 04-ticket-engine.md + TODO.md). |
+
+### Three-dimension model (independent axes)
+
+| Dimension | Column | Driven by | UI surface |
+|---|---|---|---|
+| Lifecycle | `tickets.state` (NEW/IN_REVIEW/REJECTED/APPROVED/DONE/ARCHIVED) | Manager actions (`FOLLOW_UP`, `MARK_DONE`, `ARCHIVE`, `UNARCHIVE`) | State tabs |
+| Outcome | `tickets.latest_outcome` (IN_REVIEW/REJECTED/APPROVED + nullable) | `subject_patterns` flow via PR-9 `find_or_create_ticket_tx` RPC (single source of truth, lines 355-376 of `20260423000000_..._ticket_engine_rpc.sql`) | Outcome chips + Outcome column badge |
+| Triage | `email_messages.classification_status` (CLASSIFIED/UNCLASSIFIED_*/DROPPED/ERROR) | Classifier output (sender + subject + type) | Unclassified tab (via `app_id IS NULL OR type_id IS NULL` bucket) |
+
+A single ticket can carry mixed-dimension values — `state=IN_REVIEW` +
+`latest_outcome=APPROVED` is the exact combo PR-12 backfill made common
+in production. Q1 Option A discipline (PR-12) keeps
+`extracted_payload.outcome` as audit-only JSONB so the classifier
+doesn't fork two outcome sources of truth.
+
+### 5-tab structure (final)
+
+| Tab | Predicate |
+|---|---|
+| Open (default) | `state IN ('NEW', 'IN_REVIEW', 'REJECTED')` |
+| Approved | `state = 'APPROVED'` (FOLLOW_UP terminal — Manager promoted) |
+| Done | `state = 'DONE'` (MARK_DONE terminal) |
+| Archived | `state = 'ARCHIVED'` |
+| Unclassified | `app_id IS NULL OR type_id IS NULL` |
+
+The standalone "Rejected" tab was removed — it conflated
+`state=REJECTED` (an open lifecycle state, included in Open) with
+`latest_outcome=REJECTED` (email-derived). Rejected work is now
+reachable via Open tab + Reject chip.
+
+### 5-chip outcome refinement (within active tab)
+
+| Chip | URL | Predicate |
+|---|---|---|
+| All (leftmost default) | (no `outcome` param) | no filter |
+| Approve | `?outcome=APPROVED` | `latest_outcome = 'APPROVED'` |
+| Reject | `?outcome=REJECTED` | `latest_outcome = 'REJECTED'` |
+| In review | `?outcome=IN_REVIEW` | `latest_outcome = 'IN_REVIEW'` |
+| No outcome | `?outcome=none` | `latest_outcome IS NULL` |
+
+Chips hidden on Unclassified tab (no classified email yet, so chip
+filter has no semantic content). Chip selection survives tab switches
+via `baseParams.scalarKeys` — Manager workflow "show me Reject across
+both Open and Done" preserved without re-clicking.
+
+### Behavior changes (Manager UX improvement)
+
+Empty-state copy for combined state × outcome filter:
+
+| Combo (zero results) | Before | After |
+|---|---|---|
+| Open + Reject chip | "No tickets match the current filters." | "No open tickets with outcome 'Reject'. Try clearing the chip filter." |
+| Approved + No outcome chip | "No tickets match the current filters." | "All approved tickets have an outcome assigned." |
+
+### Test + bundle deltas
+
+- Tests: 1053 (pre-PR-13) → **1067** (+14 cumulative across 13.1 +8 schema/parser/query, 13.3 +5 empty-message; 13.2 unchanged per UI-layer convention)
+- Bundle (`/store-submissions/inbox`): 15.1 → **15.4 kB** (+0.3 kB across 4 commits)
+- No migrations (application-layer only)
+
+### Backward compat
+
+- Existing `?state=APPROVED` bookmarks parse and filter identically
+- Bookmarks without `outcome` resolve to "All" chip default (no URL change)
+- Removed Rejected tab → old `?state=REJECTED` URLs still filter via the schema (state array-friendly), they just don't map to a visible tab anymore. Manager replacement workflow: Open tab + Reject chip.
+- `clearAllFilters` semantics preserved (wipes everything including outcome)
+
+### Pending — Path G + manual QA
+
+- [ ] Push 4 PR-13 commits to `origin/main` → Railway auto-deploy (~3 min)
+- [ ] Manual UAT scenarios:
+  - 5 tabs visible; Rejected tab gone
+  - Click chip "Approve" inside Open tab → tickets with `latest_outcome=APPROVED` surface (regardless of state value)
+  - URL: `?state=NEW&outcome=APPROVED` works correctly; `?outcome=none` filters NULL branch
+  - "All" chip default = no `outcome` param in URL (clean default)
+  - Unclassified tab hides chip row entirely
+  - Empty-state copy improvements visible (Open + Reject zero, Approved + None zero)
+  - Backward compat: existing `?state=APPROVED` bookmark still works
+  - Mobile: chips wrap (5 chips manageable)
+  - Issue 2 verified resolved: `latest_outcome=APPROVED` tickets with `state=IN_REVIEW` reachable via Open tab + Approve chip
+
+### Risk flags acknowledged (deferred)
+
+- **Issue 1 (UTF-8 body preview)** — bumped to PR-14
+- **Multi-platform extractor expansion** — PR-15+ (Apple-only at present)
+- **Per-row backfill affordance in EmailEntryCard** — PR-15+
+- **Migration COMMENT refresh** + **Sentry breadcrumb cap** + **Vitest cold-start flake** + **Gmail OAuth token resilience** + **Spec §5.2 ticket-level merge** — all PR-16+ infra/cleanup
 
 ---
 

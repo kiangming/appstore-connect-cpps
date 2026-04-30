@@ -96,6 +96,47 @@ auto-archive cascade ships in PR-11.
 work. PR-11 covers the production use case (Apple bucket TICKET-10000
 backlog of UNCLASSIFIED_APP rows after App Registry adds).
 
+### PR-13 (shipped 2026-04-30) — Outcome filter dimension separation
+
+PR-12 backfill populated `tickets.latest_outcome` at production scale
+for the first time, exposing a pre-existing Inbox UI dimension
+misalignment: the "Approve" tab queried `tickets.state = 'APPROVED'`
+(Manager-driven lifecycle) while the Outcome column rendered
+`tickets.latest_outcome = 'APPROVED'` (email-derived). Tickets with
+`state=IN_REVIEW` + `latest_outcome=APPROVED` showed "Approve" in the
+column but were filtered out of the "Approve" tab.
+
+PR-13 surfaces the outcome dimension as a first-class chip refinement
+within the lifecycle tabs:
+
+- `lib/store-submissions/schemas/ticket.ts` — `outcomeFilterSchema =
+  z.union([ticketOutcomeSchema, z.literal('none')])` threaded into
+  `ticketsQuerySchema`. The `'none'` literal is a URL-explicit way to
+  filter for `latest_outcome IS NULL`; omitting the param means "no
+  outcome filter" (commit `d556fc6`).
+- `lib/store-submissions/queries/tickets.ts` — `listTickets` predicate
+  added after `state` filter: `'none'` → `.is('latest_outcome', null)`,
+  enum value → `.eq('latest_outcome', value)`. Outcome and state filter
+  AND together (commit `d556fc6`).
+- `components/store-submissions/inbox/InboxClient.tsx` — 5-tab
+  consolidation (drop standalone Rejected, keep Approved standalone for
+  the FOLLOW_UP terminal path) + 5-chip outcome row (All/Approve/Reject/
+  In review/No outcome) + chip selection survives tab switches via
+  `baseParams.scalarKeys` + chips hidden on Unclassified tab (no
+  classified email yet) (commit `346785a`).
+- `lib/store-submissions/inbox/empty-message.ts` — pure helper extracted
+  for combined state × outcome empty-state copy with Hybrid Option C
+  decision tree (commit `41f0a84`).
+
+**Engine unchanged** — `latest_outcome` flow continues from
+`subject_patterns` via the PR-9 RPC (single source of truth, lines
+355-376 of `20260423000000_..._ticket_engine_rpc.sql`). PR-13 is a
+read-side UI affordance only; no migrations, no engine changes.
+
+Tests: 1053 → 1067 (+14). Bundle: 15.1 → 15.4 kB (+0.3 kB). See
+`CURRENT-STATE.md` PR-13 section for the full breakdown + Manager UX
+behavior changes.
+
 ### PR-12 (shipped 2026-04-27) — Apple rejection parser + Backfill button
 
 PR-11 wire was untested in production: 0 Apple emails arrived between

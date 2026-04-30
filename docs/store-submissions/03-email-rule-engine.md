@@ -330,7 +330,27 @@ Apple changed the rejection template).
 `tickets.latest_outcome` continues to flow from `subject_patterns` via
 PR-9's `find_or_create_ticket_tx` RPC (single source of truth). See
 [type-matcher.ts:103-107](../../lib/store-submissions/classifier/type-matcher.ts)
-for the comment locking this in. Rationale:
+for the comment locking this in.
+
+**PR-13 dimension separation** — the Inbox UI now exposes
+`tickets.latest_outcome` as a first-class chip dimension separate from
+the state lifecycle tabs. Three independent dimensions to keep in mind
+when reading the classifier output:
+
+| Dimension | Column | Driven by | UI |
+|---|---|---|---|
+| Lifecycle | `tickets.state` | Manager actions (FOLLOW_UP / MARK_DONE / ARCHIVE) | State tabs |
+| Outcome | `tickets.latest_outcome` | `subject_patterns` (this engine, PR-9 RPC) | Outcome chips + column badge |
+| Triage | `email_messages.classification_status` | Classifier output (sender + subject + type) | Unclassified bucket |
+
+A ticket can carry mixed-dimension values — e.g. `state=IN_REVIEW` +
+`latest_outcome=APPROVED` (Manager hasn't promoted the lifecycle even
+though Apple sent an approval email). PR-13's chip row makes this combo
+discoverable; pre-PR-13 the "Approve" tab queried only `state=APPROVED`
+and excluded these rows. See `CURRENT-STATE.md` PR-13 section for the
+production exposure context.
+
+Rationale for the audit-only discipline:
 
 - Two sources of truth (subject_patterns + extractor) would diverge
   silently when Manager edits subject patterns.

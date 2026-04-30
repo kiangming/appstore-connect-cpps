@@ -265,6 +265,33 @@ first, verify Sentry breadcrumbs, then **Backfill all** for the bulk.
 - [ ] [PR-13+ test infra] **Vitest cold-start flake** — observed 1052/1053 once on first full suite run after `backfill-actions.test.ts` added (3 consecutive subsequent runs all 1053). Not specific to backfill tests; likely a vitest module loading race during cold start. If it recurs, investigate `vi.mock` hoisting timing or test file ordering.
 - [ ] [PR-13+ polish] **Multi-platform backfill expansion** — `backfill-actions.ts` is Apple-only by `appleEmails` SQL filter. Ships together with multi-platform HTML extractors (see PR-13+ multi-platform note above).
 
+## PR-13 — Outcome filter dimension separation ✅ COMPLETED (2026-04-30)
+
+4 commits (single session, ~4h):
+
+| Commit | Scope |
+|---|---|
+| `d556fc6` | **PR-13.1** — Backend: `outcomeFilterSchema` (enum ∪ `'none'` literal) threaded into `ticketsQuerySchema` + `listTickets` predicate (`'none'` → `.is('latest_outcome', null)`, enum → `.eq`) + URL parser via `firstOf` + 8 tests (4 schema/parser + 4 query). Backward compat verified — existing `?state=APPROVED` bookmarks parse and filter identically. |
+| `346785a` | **PR-13.2** — UI tab consolidation + chip row: drop standalone Rejected tab (was conflated with outcome dimension, masked Issue 2) + 5-tab final (Open/Approved/Done/Archived/Unclassified) + 5-chip outcome row (All/Approve/Reject/In review/No outcome) + visual hierarchy (tabs underline / chips pill rounded-full) + `aria-pressed` + chip-survives-tab-switch via `baseParams.scalarKeys` + chips hidden on Unclassified tab. Bundle inbox 15.1 → 15.2 kB (+0.1 kB). |
+| `41f0a84` | **PR-13.3** — Empty-state refresh: pure helper extraction (`lib/store-submissions/inbox/empty-message.ts`) + Hybrid Option C decision tree (5 branches: hasOtherFilters → generic; unclassified → triage; outcome='none' → "All {tab} have outcome assigned"; outcome=enum → "No {tab} with outcome '{label}'. Try clearing chip filter."; default → tab-specific) + `hasOtherFilters` vs `hasActiveFilters` split (different consumers, different semantics — empty-message branching vs Clear-button surface) + 5 tests. Net InboxClient -24 lines. |
+| this commit | **PR-13.4** — Docs (CURRENT-STATE.md PR-13 milestone + 03-email-rule-engine.md 3-dimension paragraph + 04-ticket-engine.md PR-13 §0 subsection + this entry). |
+
+**Test count:** 1053 (pre-PR-13) → **1067** (post-PR-13) = **+14 tests** cumulative.
+
+**Bundle inbox:** 15.1 → **15.4 kB** (+0.3 kB across 4 commits, well under +0.5–1 kB target).
+
+**No migrations** — PR-13 is application-layer only (read-side UI affordance + URL/query schema). Engine, RPC, and `latest_outcome` flow unchanged.
+
+**Issue 2 resolved.** PR-12 backfill populated `tickets.latest_outcome` at production scale for the first time, exposing a pre-existing UI dimension misalignment: tickets with `state=IN_REVIEW` + `latest_outcome=APPROVED` showed "Approve" in the Outcome column but were filtered out of the "Approve" tab (which queried `state=APPROVED`). Not a regression — exposure surfaced by Q1 Option A discipline correctly populating the dimension. Fix surfaces outcome as first-class chip refinement WITHIN state tabs, with clear 3-dimension model documented (state / latest_outcome / classification_status).
+
+### Risk flags bumped from PR-13 close
+
+- [ ] [PR-14] **Issue 1 — UTF-8 body preview** — surfaced from PR-12 close, deferred from PR-13 scope (kept PR-13 focused on Issue 2 dimension misalignment only). Body preview in `EmailEntryCard` shows mojibake for some Apple emails; investigate `normalizeCharset` extension or `iconv-lite` fallback (related to PR-7 polish line 52). Filed under PR-14.
+- [ ] [PR-15+] **Per-row backfill affordance in EmailEntryCard** — see PR-12 deferred items (line 264). Same scope.
+- [ ] [PR-15+] **Multi-platform extractor expansion** — see PR-11/PR-12 deferred items.
+- [ ] [PR-16+] **Migration COMMENT refresh** + **Sentry breadcrumb cap formalization** + **Vitest cold-start flake** + **Gmail OAuth token resilience** — all infra cleanup deferred from PR-12.
+- [ ] [PR-16+] **Spec §5.2 ticket-level merge** — see PR-11 deferred items (line 231).
+
 ## Post-PR-11 — TicketDetailContext + prop drilling cleanup (planned)
 
 `currentUserId` and `userRole` are now threaded 4 layers (page → InboxClient → TicketDetailPanel → TicketEntriesTimeline → EmailEntryCard / CommentEntryCard). Acceptable for current scope but if PR-12+ adds 2+ more consumers (e.g. assignee chip, priority widget), promote to a React context provider on the panel root. Not urgent — both props are stable for the panel's lifetime.
