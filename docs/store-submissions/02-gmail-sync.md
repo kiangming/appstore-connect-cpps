@@ -445,6 +445,55 @@ function extractEmail(from: string): string {
 - Forwarded email: parse inline quote
 - Multi-language: UTF-8 Vietnamese + English
 
+### 4.3.1. MIME body decode — charset + transfer encoding (PR-14)
+
+The pseudo-code in 4.3 elides the actual transfer-encoding handling. The
+real `decodePartBody` in `lib/store-submissions/gmail/parser.ts` reads
+the per-part `Content-Type` charset and `Content-Transfer-Encoding`
+header, then walks the base64url-decoded raw bytes via a byte-level
+quoted-printable decoder before applying the declared charset.
+
+**Three body shapes the decoder handles** (all observed in production):
+
+| Shape | Header | Body bytes | Decoder behavior |
+|---|---|---|---|
+| Pure QP | `CTE: quoted-printable` | `=C3=A9` style escapes, all bytes < `0x80` | Walk bytes; `0x3D` (`=`) triggers escape parsing; `=XX` decoded to byte; `=\r\n` / `=\n` dropped as soft break. |
+| Pure raw UTF-8 (Apple "mislabel" — see PR-14) | `CTE: quoted-printable` | Raw UTF-8 bytes, no `=XX` anywhere | Walk bytes; no `0x3D` escape triggers; bytes ≥ `0x80` pass through unchanged; `Buffer.from(bytes).toString(charset)` produces correct UTF-8 string. |
+| Mixed (Apple HTML body) | `CTE: quoted-printable` | `xmlns=3D"..."` (real QP) + raw UTF-8 inline (mislabel) | Both behaviors run in one pass: `=3D` decoded to `=`; UTF-8 bytes pass through. Single decoder serves all three shapes. |
+
+**Why a byte walker, not a string walker.** The pre-PR-14 implementation
+ran `raw.toString('ascii')` to detect QP escape patterns. Node's ASCII
+decode masks every byte with `& 0x7F` (deliberate per Node docs), which
+turns UTF-8 lead/continuation bytes into spurious printable ASCII —
+including spurious `=` bytes that triggered false-positive QP decode on
+mislabeled bodies. Byte `0xBD` (tail of `ý`) masks to `0x3D` (`=`); when
+followed by CRLF this matched the `/=\r?\n/` regex and the decoder
+mangled the data. The byte walker operates on the raw `Buffer` so high
+bits survive intact and only literal ASCII `0x3D` triggers escape
+parsing.
+
+**Apple "mislabel" quirk.** Apple App Store Connect's transactional
+emails sometimes ship with `Content-Transfer-Encoding: QUOTED-PRINTABLE`
+headers but bodies that are actually raw UTF-8 (zero `=XX` escapes
+anywhere). The QP header is a lie. RFC 2045 §6.7 requires QP output to
+be 7-bit ASCII; Apple's bodies violate that for non-ASCII app names.
+The byte-level decoder accepts both forms gracefully (real QP is
+decoded; mislabel-UTF-8 passes through). Production hit this on 14
+functional rows across 4 distinct apps before the fix shipped — see
+`CURRENT-STATE.md` PR-14 milestone for the byte-cascade analysis and
+`__fixtures__/index.ts` `edgeAppleMislabelUtf8` for the regression
+fixture mirroring the production wire shape.
+
+**Decoder location:** `decodeQuotedPrintable(raw: Buffer, charset)` in
+`lib/store-submissions/gmail/parser.ts` (~line 415). Helpers `isHexByte`
+and `hexValue` are defined inline at the bottom of the same file.
+
+**Charset support:** UTF-8 (default), Latin-1 / ISO-8859-1 / cp1252
+(via `latin1` Node alias), US-ASCII, UTF-16LE. Unknown charsets fall
+back to UTF-8 with `Buffer.toString` emitting `\uFFFD` replacement
+characters for non-decodable bytes — graceful degradation rather than
+parse-error abort.
+
 ### 4.4. Labels management
 
 ```ts

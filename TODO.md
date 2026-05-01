@@ -49,7 +49,7 @@ Format: `- [ ] [PR-X] description — file path — rationale`
 
 - [x] [PR-polish] App Creator dialog UX — require ≥1 platform binding at creation OR auto-select all active platforms by default. Unbound app invisible to classifier (`loadAppsForPlatform` in `lib/store-submissions/queries/rules.ts` gates on `app_platform_bindings`). Silent miss harder to debug than form validation error. Ref: incident 2026-04-21/22 (Đấu Trường Chân Lý, Thiên Long Bát Bộ VNG, Top Eleven all needed manual `app_platform_bindings` INSERT to unblock classification). **Fixed 2026-04-23 — see PR-polish section below.**
 - [ ] [ops] Migration deploy automation — investigate Supabase CLI + Railway auto-apply migrations on push. Manual "Path G" SQL-Editor workflow caused 2 production incidents during PR-7 deployment: sync lock migration (`20260420000000_store_mgmt_gmail_sync_lock.sql`, cron crashed with "try_acquire_sync_lock does not exist") + app RPCs migration (`20260419050324_store_mgmt_app_rpcs.sql`, App Registry UI broken with "create_app_tx does not exist"). Priority: raise from backlog.
-- [ ] [PR-7 polish] MIME parser — investigate charset handling for Apple email bodies. Production observed encoding corruption pattern `Da:%u TrF0a;ng ChC"n LC"` suggesting an unsupported charset (possibly `x-mac-vietnamese` or an Apple-specific encoding). Subject decodes OK via RFC 2047; body decode fails. Extend `normalizeCharset` in `parser.ts` or add an `iconv-lite` fallback for rare charsets if the symptom shows real-world classification impact. Current 5-charset support: UTF-8, Latin-1, cp1252, us-ascii, UTF-16LE.
+- [x] [PR-7 polish] MIME parser charset handling — ✅ resolved by PR-14 (2026-05-01). Production corruption pattern `Da:%u TrF0a;ng ChC"n LC"` was NOT a charset issue. Root cause: parser's `raw.toString('ascii')` step (line 386-395 pre-fix) masked every byte with `& 0x7F`, false-positive-triggering QP decode on raw-UTF-8 bodies Apple mislabeled as `Content-Transfer-Encoding: QUOTED-PRINTABLE`. Byte `0xC4` (Đ lead) → `0x44` (D); `0xBD` (ý tail) → `0x3D` (`=`) followed by CRLF triggered the soft-break decoder; cascading corruption. Fix: byte-level decoder in `decodeQuotedPrintable(raw: Buffer, charset)` — walks bytes directly, only literal ASCII `0x3D` triggers escape parsing, bytes ≥ `0x80` pass through. Same 5-charset support retained (UTF-8 default + Latin-1 / cp1252 / us-ascii / UTF-16LE).
 - [ ] [PR-7 polish] Apple subject pattern migration seed drift — production UI was updated with a pattern that strips the `(iOS)` suffix: `^Review of your (?<app_name>.+?) (?:\(iOS\) )?submission is complete\.$`. Update `supabase/migrations/20260101100200_store_mgmt_seed_apple_rules.sql` to match so future dev environments don't regress. Original seed lacked `(iOS)` handling → extracted app names included the suffix → app lookup miss.
 - [ ] [rules calibration] Apple type rules populate — currently Apple emails stop at `UNCLASSIFIED_TYPE` (Steps 1–3 pass; Step 4 type keyword miss). Manager task via the Email Rules UI: populate type keywords for APPROVED outcomes (sample keywords from real bodies: "eligible for distribution", "review completed", "App Store Review"), REJECTED, PENDING states. Not a code bug — ongoing operational calibration as new Apple email templates surface. PR-8 ticket engine will still route UNCLASSIFIED_TYPE rows into the Unclassified bucket when it lands; type calibration is a forward-rolling improvement.
 
@@ -286,11 +286,50 @@ first, verify Sentry breadcrumbs, then **Backfill all** for the bulk.
 
 ### Risk flags bumped from PR-13 close
 
-- [ ] [PR-14] **Issue 1 — UTF-8 body preview** — surfaced from PR-12 close, deferred from PR-13 scope (kept PR-13 focused on Issue 2 dimension misalignment only). Body preview in `EmailEntryCard` shows mojibake for some Apple emails; investigate `normalizeCharset` extension or `iconv-lite` fallback (related to PR-7 polish line 52). Filed under PR-14.
+- [x] [PR-14] **Issue 1 — UTF-8 body preview** — ✅ resolved by PR-14 (2026-05-01). Surfaced from PR-12 close, scoped under PR-14 after PR-13 shipped. Hypothesis flipped multiple times during investigation (charset → Apple-side broken → parser bug); root cause was the `raw.toString('ascii')` byte-mask step in `decodeQuotedPrintable`. Fix shipped + 14 functional production rows backfilled via the maintenance banner.
 - [ ] [PR-15+] **Per-row backfill affordance in EmailEntryCard** — see PR-12 deferred items (line 264). Same scope.
 - [ ] [PR-15+] **Multi-platform extractor expansion** — see PR-11/PR-12 deferred items.
 - [ ] [PR-16+] **Migration COMMENT refresh** + **Sentry breadcrumb cap formalization** + **Vitest cold-start flake** + **Gmail OAuth token resilience** — all infra cleanup deferred from PR-12.
 - [ ] [PR-16+] **Spec §5.2 ticket-level merge** — see PR-11 deferred items (line 231).
+
+## PR-14 — Byte-level QP decoder + corrupt-payload backfill ✅ COMPLETED (2026-05-01)
+
+5 commits (single multi-step session, ~5h with investigation):
+
+| Commit | Scope |
+|---|---|
+| `d20c898` | **PR-14.1+14.2 bundle** — Byte-level QP decoder rewrite. Replaced `decodeQuotedPrintable(input: string, charset)` with `(raw: Buffer, charset)` byte walker. `decodePartBody` no longer runs `raw.toString('ascii')` (the `& 0x7F` mask step that turned UTF-8 bytes `0xC4 0x90` into `D \u0010`, etc.). New synthetic fixture `edgeAppleMislabelUtf8` mirrors TICKET-10009 wire shape (multipart/alternative, both parts CTE: QUOTED-PRINTABLE, text/plain raw UTF-8, text/html mixed `=3D` + raw UTF-8). 4-layer diagnostic block (Layer 1 RFC 2047 continuation-line `.skip()`, Layers 2-4 unskipped). +3 tests. |
+| `66223da` | **PR-14.3** — Charset coverage fixtures + tests. Chinese (`彈彈英雄`, 3-byte UTF-8), Japanese mixed scripts (`テスト『日本語アプリ』ゲーム`), emoji (`🎮 Crystal Quest 🐉`, 4-byte → UTF-16 surrogate pair pinned `\uD83C\uDFAE`), mixed-encoding (genuine `=C3=A9` QP escape + raw UTF-8 `0xC3 0xA9` decode identically to `é`). +4 tests. |
+| `2ee80e8` | **PR-14.4** — `backfillCorruptPayloadAction` + maintenance banner D2. Apple-only re-fetch + re-parse + re-extract pipeline targeting rows whose `extracted_payload->>'app_name'` or `raw_body_text` carry control-byte residue. PostgREST `.or()` regex filter on `[\x01-\x08\x0B\x0C\x0E-\x1F]` (verify-then-fallback per Decision 3; RPC fallback documented inline). MANAGER-only Sentry tag `variant: 'corrupt-payload'`. New `lib/store-submissions/backfill/core.ts` extraction (mirrors PR-12.5 `reclassify/core.ts` precedent); `backfillOne` now writes BOTH `raw_body_text` + `extracted_payload`, so NULL-payload backfill incidentally repairs any byte-mask corruption in the same row. New `lib/store-submissions/queries/corrupt-payload.ts` count probe (MANAGER-only, head:true, gracefully degrades to 0). New `CorruptPayloadBanner` subcomponent rendering above state tabs (D2 override of locked Decision 4 D1 — corrupt rows are CLASSIFIED status, not Unclassified, so D1 would have hidden the action). +5 tests. |
+| this commit | **PR-14.5** — Docs (CURRENT-STATE.md PR-14 milestone + 02-gmail-sync.md §4.3.1 MIME body decode subsection + this entry). Cleanup verification (diagnose-message diagnostic API route absent, no stale scripts). |
+
+**Test count:** 1067 (pre-PR-14) → **1079** (post-PR-14) = **+12 tests** cumulative. 1 deferred `it.skip()` placeholder for Layer 1 RFC 2047 continuation-line bug.
+
+**Bundle inbox:** minor increase from new `CorruptPayloadBanner` subcomponent + `Wrench` icon import.
+
+**No migrations** — PR-14 is application-layer only (parser fix + new Server Action + UI banner + new query module). No schema change. Forward-only fix; new emails post-deploy parse correctly via the byte-level decoder.
+
+**Production scope at fix time** — 14 functional rows (`extracted_payload IS NOT NULL`, `classification_status != 'DROPPED'`) across 4 distinct apps (Đấu Trường Chân Lý / TFT VN, LMHT: Tốc Chiến / LoL Wild Rift VN, 彈彈英雄, 創世紀戰M：阿修羅計畫). 189 additional rows hit the regex but were DROPPED — left alone per Decision 2 (functional impact only).
+
+### Investigation discipline (4 hypothesis pivots earned by data)
+
+1. **Synthetic real-QP fixture passed** — proved parser handles real QP correctly; bug had to be elsewhere.
+2. **Layer 1 RFC 2047 continuation-line bug discovered** — real but orthogonal to production symptom (subjects render fine in prod). Parked PR-15+.
+3. **Production SQL diagnostic confirmed BOTH `raw_body_text` and `extracted_payload` garbled** — same parser path; parser was the culprit.
+4. **Diagnostic API route revealed Apple's wire bytes are correct UTF-8** — parser corrupts them via `raw.toString('ascii')` byte-mask. Synthetic fixture had used real QP encoding; real Apple emails ship raw UTF-8 with the QP header lying. Mislabel was the missing fixture variant.
+
+The diagnostic API route (`GET /api/store-submissions/diagnose-message?id=…`) was deleted before any commit — investigation ephemeral, not shipped.
+
+### Decision overrides (vs locked plan)
+
+- **Banner placement: D2 over D1.** Locked plan was D1 (3rd button in Unclassified-tab banner). Codebase grounding revealed corrupt rows are CLASSIFIED status (Open/Done tabs), not Unclassified. D1 would have hidden the action behind a tab where the rows don't appear. D2 ships a separate amber maintenance banner above state tabs, visible on every tab when count > 0.
+- **`.or()` regex over RPC migration (Decision 3 = verify-then-fallback).** Direct PostgREST `.or()` syntax shipped; RPC fallback documented inline for hot-pivot if production rejects.
+
+### Open follow-ups (PR-15+)
+
+- [ ] [PR-15+] **Layer 1 — RFC 2047 subject continuation-line whitespace** — `decodeRfc2047` in `parser.ts` runs the per-word decode before the `\?=\s+=\?` collapse pass; encoded-word markers are gone by the time the collapse runs and orphan whitespace leaks (e.g. `Chơi Nga y Game` instead of `Chơi Ngay Game`). Real bug confirmed by Layer 1 diagnostic but separate decoder, separate symptom from the production-reported PR-14 corruption. Tracked as `it.skip()` placeholder in `parser.test.ts` with fix-pointer comment.
+- [ ] [PR-14 manual QA] **PostgREST `.or()` regex runtime validation** — verify the candidate filter and count probe work in production. Hot-pivot to the RPC fallback in `app/(dashboard)/store-submissions/inbox/backfill-corrupt-actions.ts` if rejected.
+- [ ] [PR-15+] **Auto-mark-done APPROVED logic** + **duplicate ticket entries bug** — surfaced in earlier PR-12/13 close; not addressed in PR-14.
 
 ## Post-PR-11 — TicketDetailContext + prop drilling cleanup (planned)
 
