@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   decodeCursor,
   encodeCursor,
+  getTicketWithEntries,
   InvalidCursorError,
   listTickets,
 } from './tickets';
@@ -498,7 +499,12 @@ describe('listTickets pagination', () => {
 describe('listTickets includeFirstEmail option', () => {
   function makeHydrationMocks(opts: {
     tickets: ReturnType<typeof makeRow>[];
-    firstEmails?: Array<{ ticket_id: string; metadata: unknown; created_at: string }>;
+    firstEmails?: Array<{
+      ticket_id: string;
+      metadata: unknown;
+      created_at: string;
+      email_message?: { ticket_id: string | null };
+    }>;
   }) {
     const ticketsBuilder = new MockBuilder({ data: opts.tickets, error: null });
     const platformsBuilder = new MockBuilder({
@@ -584,6 +590,7 @@ describe('listTickets includeFirstEmail option', () => {
             },
           },
           created_at: '2026-04-22T10:00:05Z',
+          email_message: { ticket_id: 'ticket-a' },
         },
       ],
     });
@@ -624,6 +631,7 @@ describe('listTickets includeFirstEmail option', () => {
             email_snapshot: { subject: 'First', sender: 'a@x.com' },
           },
           created_at: '2026-04-20T10:00:00Z',
+          email_message: { ticket_id: 'ticket-a' },
         },
         {
           ticket_id: 'ticket-a',
@@ -631,6 +639,7 @@ describe('listTickets includeFirstEmail option', () => {
             email_snapshot: { subject: 'Second', sender: 'b@x.com' },
           },
           created_at: '2026-04-21T10:00:00Z',
+          email_message: { ticket_id: 'ticket-a' },
         },
       ],
     });
@@ -671,5 +680,284 @@ describe('listTickets sort', () => {
       { method: 'order', args: ['opened_at', { ascending: false }] },
       { method: 'order', args: ['id', { ascending: false }] },
     ]);
+  });
+});
+
+// ==========================================================================
+// G — PR-15.5: stale-EMAIL filter (reclassify audit history hidden)
+// --------------------------------------------------------------------------
+// `reclassify_email_tx` deliberately leaves the original EMAIL entry on
+// the old (UNCLASSIFIED) ticket as audit history per invariant #2 and
+// inserts a fresh EMAIL entry on the new ticket. Without filtering at
+// read time, the same email surfaces twice in the UI.
+//
+// Filter rule: an EMAIL entry on ticket X is "current" iff
+// `email_message.ticket_id === X`. Non-EMAIL entries (STATE_CHANGE,
+// COMMENT, PAYLOAD_ADDED) are unaffected.
+// ==========================================================================
+
+describe('getTicketWithEntries · stale-EMAIL filter (PR-15.5)', () => {
+  const TICKET_ID = '11111111-1111-1111-1111-111111111111';
+  const OTHER_TICKET_ID = '99999999-9999-9999-9999-999999999999';
+
+  function setupTicketDetailMocks(opts: {
+    ticketRow: ReturnType<typeof makeRow>;
+    entries: Array<Record<string, unknown>>;
+  }) {
+    const ticketBuilder = new MockBuilder({ data: opts.ticketRow, error: null });
+    const entriesBuilder = new MockBuilder({ data: opts.entries, error: null });
+    const platformBuilder = new MockBuilder({
+      data: {
+        id: '33333333-3333-3333-3333-333333333333',
+        key: 'apple',
+        display_name: 'Apple',
+      },
+      error: null,
+    });
+    const appBuilder = new MockBuilder({ data: null, error: null });
+    const typeBuilder = new MockBuilder({ data: null, error: null });
+    const assigneeBuilder = new MockBuilder({ data: null, error: null });
+
+    return new Map<string, MockBuilder[]>([
+      ['tickets', [ticketBuilder]],
+      ['ticket_entries', [entriesBuilder]],
+      ['platforms', [platformBuilder]],
+      ['apps', [appBuilder]],
+      ['types', [typeBuilder]],
+      ['users', [assigneeBuilder]],
+    ]);
+  }
+
+  it('hides EMAIL entries whose email_message has since been reclassified out', async () => {
+    const ticketRow = makeRow({
+      id: TICKET_ID,
+      app_id: null,
+      type_id: null,
+    });
+
+    const queue = setupTicketDetailMocks({
+      ticketRow,
+      entries: [
+        // CURRENT EMAIL: still attached to TICKET_ID. Should be visible.
+        {
+          id: 'entry-current-email',
+          ticket_id: TICKET_ID,
+          entry_type: 'EMAIL',
+          author_user_id: null,
+          content: null,
+          metadata: { email_snapshot: { subject: 'still here' } },
+          email_message_id: 'email-current',
+          attachment_refs: null,
+          edited_at: null,
+          created_at: '2026-04-23T10:00:00Z',
+          email_message: { ticket_id: TICKET_ID },
+        },
+        // STALE EMAIL: same row's email has since been reclassified to
+        // OTHER_TICKET_ID. Should be filtered out.
+        {
+          id: 'entry-stale-email',
+          ticket_id: TICKET_ID,
+          entry_type: 'EMAIL',
+          author_user_id: null,
+          content: null,
+          metadata: { email_snapshot: { subject: 'reclassified out' } },
+          email_message_id: 'email-stale',
+          attachment_refs: null,
+          edited_at: null,
+          created_at: '2026-04-23T11:00:00Z',
+          email_message: { ticket_id: OTHER_TICKET_ID },
+        },
+        // STATE_CHANGE 'reclassify_out': audit annotation. Should stay
+        // visible regardless of any embed (EMAIL filter must not affect
+        // non-EMAIL entries).
+        {
+          id: 'entry-reclassify-out',
+          ticket_id: TICKET_ID,
+          entry_type: 'STATE_CHANGE',
+          author_user_id: null,
+          content: null,
+          metadata: { type: 'reclassify_out' },
+          email_message_id: 'email-stale',
+          attachment_refs: null,
+          edited_at: null,
+          created_at: '2026-04-23T11:00:01Z',
+          email_message: { ticket_id: OTHER_TICKET_ID },
+        },
+      ],
+    });
+    registerBuilders(queue);
+
+    const result = await getTicketWithEntries(TICKET_ID);
+
+    expect(result).not.toBeNull();
+    const entryIds = result!.entries.map((e) => e.id);
+    expect(entryIds).toEqual(['entry-current-email', 'entry-reclassify-out']);
+    expect(entryIds).not.toContain('entry-stale-email');
+  });
+
+  it('also hides EMAIL entries whose email_message.ticket_id is null (DROPPED reclassify)', async () => {
+    const ticketRow = makeRow({ id: TICKET_ID, app_id: null, type_id: null });
+
+    const queue = setupTicketDetailMocks({
+      ticketRow,
+      entries: [
+        {
+          id: 'entry-dropped-email',
+          ticket_id: TICKET_ID,
+          entry_type: 'EMAIL',
+          author_user_id: null,
+          content: null,
+          metadata: { email_snapshot: { subject: 'dropped' } },
+          email_message_id: 'email-dropped',
+          attachment_refs: null,
+          edited_at: null,
+          created_at: '2026-04-23T10:00:00Z',
+          email_message: { ticket_id: null },
+        },
+      ],
+    });
+    registerBuilders(queue);
+
+    const result = await getTicketWithEntries(TICKET_ID);
+    expect(result!.entries).toHaveLength(0);
+  });
+
+  it('keeps EMAIL entries when email_message.ticket_id matches (regression — normal case unchanged)', async () => {
+    const ticketRow = makeRow({
+      id: TICKET_ID,
+      app_id: '22222222-2222-2222-2222-222222222222',
+      type_id: '44444444-4444-4444-4444-444444444444',
+    });
+
+    const queue = setupTicketDetailMocks({
+      ticketRow,
+      entries: [
+        {
+          id: 'entry-classified-email',
+          ticket_id: TICKET_ID,
+          entry_type: 'EMAIL',
+          author_user_id: null,
+          content: null,
+          metadata: { email_snapshot: { subject: 'normal' } },
+          email_message_id: 'email-classified',
+          attachment_refs: null,
+          edited_at: null,
+          created_at: '2026-04-23T10:00:00Z',
+          email_message: { ticket_id: TICKET_ID },
+        },
+      ],
+    });
+    queue.set('apps', [
+      new MockBuilder({
+        data: { id: '22222222-2222-2222-2222-222222222222', name: 'App', slug: 'app' },
+        error: null,
+      }),
+    ]);
+    queue.set('types', [
+      new MockBuilder({
+        data: { id: '44444444-4444-4444-4444-444444444444', name: 'Type', slug: 'type' },
+        error: null,
+      }),
+    ]);
+    registerBuilders(queue);
+
+    const result = await getTicketWithEntries(TICKET_ID);
+    expect(result!.entries).toHaveLength(1);
+    expect(result!.entries[0].id).toBe('entry-classified-email');
+  });
+});
+
+describe('listTickets · stale-EMAIL filter on first_email preview (PR-15.5)', () => {
+  const TICKET_A = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const TICKET_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb';
+
+  it('skips stale rows when picking earliest current EMAIL per ticket', async () => {
+    // Ticket A is the catch-all. It has TWO EMAIL entries:
+    //   1. earliest, but reclassified out (email_message.ticket_id = TICKET_B)
+    //   2. later, still attached (email_message.ticket_id = TICKET_A)
+    // The filter must skip (1) and pick (2) as the preview.
+    const rowA = makeRow({ id: TICKET_A, app_id: null, type_id: null });
+    const ticketsBuilder = new MockBuilder({ data: [rowA], error: null });
+    const platformsBuilder = new MockBuilder({
+      data: [
+        { id: '33333333-3333-3333-3333-333333333333', key: 'apple', display_name: 'Apple' },
+      ],
+      error: null,
+    });
+    const entryCountsBuilder = new MockBuilder({ data: [], error: null });
+    const firstEmailsBuilder = new MockBuilder({
+      data: [
+        {
+          ticket_id: TICKET_A,
+          metadata: { email_snapshot: { subject: 'reclassified out earlier' } },
+          created_at: '2026-04-22T10:00:00Z',
+          email_message: { ticket_id: TICKET_B },
+        },
+        {
+          ticket_id: TICKET_A,
+          metadata: { email_snapshot: { subject: 'still attached' } },
+          created_at: '2026-04-22T11:00:00Z',
+          email_message: { ticket_id: TICKET_A },
+        },
+      ],
+      error: null,
+    });
+
+    registerBuilders(
+      new Map([
+        ['tickets', [ticketsBuilder]],
+        ['apps', [new MockBuilder({ data: [], error: null })]],
+        ['types', [new MockBuilder({ data: [], error: null })]],
+        ['platforms', [platformsBuilder]],
+        ['ticket_entries', [entryCountsBuilder, firstEmailsBuilder]],
+      ]),
+    );
+
+    const result = await listTickets(
+      { limit: 50, sort: 'opened_at_desc' },
+      { includeFirstEmail: true },
+    );
+
+    expect(result.tickets[0].first_email?.subject).toBe('still attached');
+  });
+
+  it('returns first_email=null when every EMAIL entry on the ticket is stale', async () => {
+    const rowA = makeRow({ id: TICKET_A, app_id: null, type_id: null });
+    const ticketsBuilder = new MockBuilder({ data: [rowA], error: null });
+    const platformsBuilder = new MockBuilder({
+      data: [
+        { id: '33333333-3333-3333-3333-333333333333', key: 'apple', display_name: 'Apple' },
+      ],
+      error: null,
+    });
+    const entryCountsBuilder = new MockBuilder({ data: [], error: null });
+    const firstEmailsBuilder = new MockBuilder({
+      data: [
+        {
+          ticket_id: TICKET_A,
+          metadata: { email_snapshot: { subject: 'all reclassified out' } },
+          created_at: '2026-04-22T10:00:00Z',
+          email_message: { ticket_id: TICKET_B },
+        },
+      ],
+      error: null,
+    });
+
+    registerBuilders(
+      new Map([
+        ['tickets', [ticketsBuilder]],
+        ['apps', [new MockBuilder({ data: [], error: null })]],
+        ['types', [new MockBuilder({ data: [], error: null })]],
+        ['platforms', [platformsBuilder]],
+        ['ticket_entries', [entryCountsBuilder, firstEmailsBuilder]],
+      ]),
+    );
+
+    const result = await listTickets(
+      { limit: 50, sort: 'opened_at_desc' },
+      { includeFirstEmail: true },
+    );
+
+    expect(result.tickets[0].first_email).toBeNull();
   });
 });

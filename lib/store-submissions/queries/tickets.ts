@@ -422,10 +422,19 @@ export async function listTickets(
       // First-EMAIL-per-ticket fetch is conditional — only when the caller
       // opts in. Sort is `(ticket_id, created_at ASC)` so the grouping
       // below can pick the earliest per ticket with a Map first-write-wins.
+      //
+      // PR-15.5: embed `email_messages.ticket_id` (the source of truth for
+      // "where this email currently lives") so we can hide stale EMAIL
+      // entries that were intentionally left behind on the old ticket by
+      // `reclassify_email_tx` as audit history (invariant #2). Without
+      // the filter, TICKET-10000-style catch-all buckets surface a
+      // reclassified-out email as their `first_email` preview.
       options.includeFirstEmail
         ? db
             .from('ticket_entries')
-            .select('ticket_id, metadata, created_at')
+            .select(
+              'ticket_id, metadata, created_at, email_message:email_messages!email_message_id (ticket_id)',
+            )
             .in('ticket_id', ticketIds)
             .eq('entry_type', 'EMAIL')
             .order('ticket_id', { ascending: true })
@@ -484,16 +493,24 @@ export async function listTickets(
   // First EMAIL snapshot per ticket — only populated when
   // options.includeFirstEmail = true. First-write-wins on the Map,
   // relying on the ORDER BY (ticket_id, created_at ASC) above.
+  //
+  // PR-15.5: skip stale rows BEFORE the first-write-wins check — an
+  // entry whose embedded `email_message.ticket_id` no longer matches
+  // the ticket we're previewing was reclassified out and should not
+  // be surfaced as the inbox card preview.
   const firstEmailByTicket = new Map<
     string,
     TicketListRow['first_email']
   >();
   if (options.includeFirstEmail && firstEmailsRes.data) {
-    for (const row of firstEmailsRes.data as Array<{
+    for (const row of firstEmailsRes.data as unknown as Array<{
       ticket_id: string;
       metadata: Record<string, unknown> | null;
       created_at: string;
+      email_message: { ticket_id: string | null } | null;
     }>) {
+      const currentTicketId = row.email_message?.ticket_id ?? null;
+      if (currentTicketId !== row.ticket_id) continue;
       if (firstEmailByTicket.has(row.ticket_id)) continue;
       const snap =
         (row.metadata as
@@ -601,9 +618,16 @@ export async function getTicketWithEntries(id: string): Promise<TicketWithEntrie
   const t = ticket as unknown as TicketRow;
 
   const [entriesRes, appRes, typeRes, platformRes, assigneeRes] = await Promise.all([
+    // PR-15.5: embed `email_messages.ticket_id` so we can filter out
+    // stale EMAIL entries that `reclassify_email_tx` deliberately leaves
+    // behind on the old ticket as audit history (invariant #2). The
+    // detail panel timeline should only render EMAIL entries for emails
+    // currently attached to this ticket.
     db
       .from('ticket_entries')
-      .select(ENTRY_COLUMNS)
+      .select(
+        `${ENTRY_COLUMNS}, email_message:email_messages!email_message_id (ticket_id)`,
+      )
       .eq('ticket_id', t.id)
       .order('created_at', { ascending: true }),
     t.app_id
@@ -644,11 +668,29 @@ export async function getTicketWithEntries(id: string): Promise<TicketWithEntrie
     attachment_refs: unknown[] | null;
     edited_at: string | null;
     created_at: string;
+    // PR-15.5: PostgREST embed used only by the source-of-truth filter
+    // below. Stripped from the returned `TicketEntryRow` shape.
+    email_message: { ticket_id: string | null } | null;
   }>;
+
+  // PR-15.5: hide EMAIL entries whose email has been reclassified out
+  // of this ticket. STATE_CHANGE / COMMENT / PAYLOAD_ADDED entries are
+  // unaffected — they're tied to the ticket itself, not to an external
+  // attachment that can move. The STATE_CHANGE 'reclassify_out' entry
+  // appended by `reclassify_email_tx` therefore stays visible as audit.
+  const visibleRawEntries = rawEntries.filter((e) => {
+    if (e.entry_type !== 'EMAIL') return true;
+    const currentTicketId = e.email_message?.ticket_id ?? null;
+    return currentTicketId === t.id;
+  });
 
   // Hydrate entry authors in one round-trip rather than per-entry.
   const authorIds = Array.from(
-    new Set(rawEntries.map((e) => e.author_user_id).filter((v): v is string => v !== null)),
+    new Set(
+      visibleRawEntries
+        .map((e) => e.author_user_id)
+        .filter((v): v is string => v !== null),
+    ),
   );
   let authorById = new Map<string, { email: string; display_name: string | null }>();
   if (authorIds.length > 0) {
@@ -667,7 +709,7 @@ export async function getTicketWithEntries(id: string): Promise<TicketWithEntrie
     );
   }
 
-  const entries: TicketEntryRow[] = rawEntries.map((e) => {
+  const entries: TicketEntryRow[] = visibleRawEntries.map((e) => {
     const author = e.author_user_id ? authorById.get(e.author_user_id) ?? null : null;
     return {
       id: e.id,

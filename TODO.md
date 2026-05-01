@@ -370,6 +370,48 @@ the empty-output cases the user originally reported.
 - [ ] [PR-16+] **Threshold tuning** — `SLUG_MIN_MEANINGFUL_LENGTH=3` conservatively rejects 2-char abbreviations like `"VN"`. If Manager UAT signals this feels wrong, lower to 2; hash fallback still catches CJK / emoji / pure-punctuation. Wait for production signal before tuning.
 - [ ] [PR-16+] **CSV bulk-import slug override** — `importAppsCsvAction` derives slug from `name` only (no manual override path). With PR-15.2's hash fallback the action no longer fails on CJK names. If Managers want readable slugs for bulk-imported CJK apps, add a `slug` column to the CSV template + parser. Defer until UAT surfaces the need.
 
+## PR-15.5 — Stale-EMAIL filter post-reclassify ✅ COMPLETED (2026-05-01)
+
+Hotfix between PR-15 (slug generator) and PR-16 (auto-mark-done design). 1 commit. Surfaced from production immediately after PR-15 unblocked CJK app registration: Manager reclassified Play Together VNG email out of TICKET-10000 (UNCLASSIFIED_APP catch-all), but the same email kept rendering in both TICKET-10000 and the new classified ticket.
+
+**Root cause** — intentional data divergence missed by UI:
+- `reclassify_email_tx` deliberately leaves the original EMAIL `ticket_entry` on the old ticket as audit history per CLAUDE.md invariant #2 (ticket_entries append-only). RPC explicitly cites this in its own comment.
+- `email_messages.ticket_id` is the single source of truth for "where this email currently lives"; it gets correctly updated to the new ticket.
+- UI queries (`getTicketWithEntries`, `listTickets` firstEmail subquery) read `ticket_entries` by `ticket_id` only — never joined `email_messages.ticket_id` to filter.
+- Stale EMAIL entry surfaced on TICKET-10000 detail panel + as the inbox card's `first_email` preview, alongside the (correct) new EMAIL entry on the destination ticket.
+
+**Fix** — Option A (UI filter at read time):
+- PostgREST embed `email_message:email_messages!email_message_id (ticket_id)` pulls each EMAIL entry's current `ticket_id` alongside the entry data.
+- JS filter: hide `EMAIL` entries whose embedded current `ticket_id` doesn't match the rendering ticket. STATE_CHANGE / COMMENT / PAYLOAD_ADDED entries unaffected.
+- The STATE_CHANGE `'reclassify_out'` audit annotation on the old ticket stays visible — Manager can see what happened.
+
+**Files**:
+- `lib/store-submissions/queries/tickets.ts`:
+  * `getTicketWithEntries`: PostgREST embed + `visibleRawEntries` filter (lines 605-612, 645-660)
+  * `listTickets` firstEmail subquery: PostgREST embed (lines 425-435) + filter inside the first-write-wins map loop (lines 491-510). Filter applies BEFORE the map check so the next-oldest CURRENT EMAIL becomes the preview, not the next-oldest stale.
+- `lib/store-submissions/queries/tickets.test.ts`:
+  * +5 tests:
+    - 3 detail-panel cases: stale hidden + STATE_CHANGE preserved; DROPPED reclassify (ticket_id=null) hidden; normal-case regression
+    - 2 listTickets firstEmail cases: skip stale to pick next current; all-stale → first_email=null
+  * Updated 2 pre-existing tests + the `makeHydrationMocks` helper signature to include `email_message: { ticket_id }` in fixtures (otherwise filter sees `undefined` and hides them too).
+
+**Discarded alternatives**:
+- UPDATE/DELETE old EMAIL entry — violates invariant #2 (append-only); RPC's own comment cites this.
+- New `superseded_by_ticket_id` column on ticket_entries — schema-change overkill; column UPDATE softens but doesn't escape the append-only intent.
+- Visual marker on stale entries — still shows duplicate content, just labeled.
+- Auto-archive ticket on last-EMAIL-exit — bigger scope, deferred PR-16+ as standalone follow-up.
+
+**No backfill, no migration, no RPC change.** Filter applies at read time and retroactively hides existing stale entries on next page load.
+
+**Test count**: 1096 → **1101** (+5).
+**Bundle**: zero (filter logic + query string change).
+
+### Open follow-ups (PR-16+)
+
+- [ ] [PR-16+] **Auto-archive ticket on last-EMAIL-exit** — `reclassify_email_tx` could detect when the old ticket has zero current EMAIL entries remaining post-reclassify and atomically transition `state` to `ARCHIVED` with `resolution_type='SYSTEM_RECLASSIFIED'`. Empty TICKET-10000 then disappears from inbox listing entirely instead of showing as a card with no preview. RPC change required; state-machine semantics + backfill discussion needed.
+- [ ] [PR-16+] **"Reclassified from TICKET-X" annotation on destination ticket** — mirror of the `STATE_CHANGE 'reclassify_out'` audit entry. `find_or_create_ticket_tx` could detect reclassify-source via a parameter and label the new ticket's transition entry as `'reclassify_in'` with source ticket's display_id for full bidirectional audit visibility.
+- [ ] [PR-16+] **`entry_count` semantics review** — inbox card's `entry_count` counts ALL `ticket_entries` rows. After PR-15.5 a ticket may show `entry_count: 5` while `first_email: null` (5 = 1 stale EMAIL + 4 STATE_CHANGE). Count and preview disagree visually. Either rename the count to "events" or apply the same stale-EMAIL filter to the count. Worth Manager UAT signal first.
+
 ## Post-PR-11 — TicketDetailContext + prop drilling cleanup (planned)
 
 `currentUserId` and `userRole` are now threaded 4 layers (page → InboxClient → TicketDetailPanel → TicketEntriesTimeline → EmailEntryCard / CommentEntryCard). Acceptable for current scope but if PR-12+ adds 2+ more consumers (e.g. assignee chip, priority widget), promote to a React context provider on the panel root. Not urgent — both props are stable for the panel's lifetime.
