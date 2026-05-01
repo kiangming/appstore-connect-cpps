@@ -16,6 +16,7 @@ function makeForm(overrides: Partial<FormState> = {}): FormState {
   return {
     name: '',
     display_name: '',
+    slug: '',
     team_owner_id: '',
     active: true,
     bindings: {
@@ -92,6 +93,81 @@ describe('validateFormState', () => {
     });
     expect(validateFormState(form)).toEqual({ ok: true });
   });
+
+  it('accepts a valid slug override in create mode', () => {
+    const form = makeForm({
+      name: 'My App',
+      slug: 'my-custom-slug',
+      bindings: {
+        apple: { enabled: true, platform_ref: '', console_url: '' },
+        google: { enabled: false, platform_ref: '', console_url: '' },
+        huawei: { enabled: false, platform_ref: '', console_url: '' },
+        facebook: { enabled: false, platform_ref: '', console_url: '' },
+      },
+    });
+    expect(validateFormState(form, 'create')).toEqual({ ok: true });
+  });
+
+  it('rejects an invalid slug override (uppercase) in create mode', () => {
+    const form = makeForm({
+      name: 'My App',
+      slug: 'My-Slug',
+      bindings: {
+        apple: { enabled: true, platform_ref: '', console_url: '' },
+        google: { enabled: false, platform_ref: '', console_url: '' },
+        huawei: { enabled: false, platform_ref: '', console_url: '' },
+        facebook: { enabled: false, platform_ref: '', console_url: '' },
+      },
+    });
+    const result = validateFormState(form, 'create');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/lowercase/i);
+  });
+
+  it('rejects an invalid slug override (trailing hyphen) in create mode', () => {
+    const form = makeForm({
+      name: 'My App',
+      slug: 'my-slug-',
+      bindings: {
+        apple: { enabled: true, platform_ref: '', console_url: '' },
+        google: { enabled: false, platform_ref: '', console_url: '' },
+        huawei: { enabled: false, platform_ref: '', console_url: '' },
+        facebook: { enabled: false, platform_ref: '', console_url: '' },
+      },
+    });
+    const result = validateFormState(form, 'create');
+    expect(result.ok).toBe(false);
+  });
+
+  it('treats empty slug as "let server auto-derive" — accepts in create mode', () => {
+    const form = makeForm({
+      name: 'My App',
+      slug: '',
+      bindings: {
+        apple: { enabled: true, platform_ref: '', console_url: '' },
+        google: { enabled: false, platform_ref: '', console_url: '' },
+        huawei: { enabled: false, platform_ref: '', console_url: '' },
+        facebook: { enabled: false, platform_ref: '', console_url: '' },
+      },
+    });
+    expect(validateFormState(form, 'create')).toEqual({ ok: true });
+  });
+
+  it('skips slug validation in edit mode (slug is not editable on rename)', () => {
+    // Even if slug accidentally has a stale invalid value in edit-mode form
+    // state, validateFormState must not block the save — slug is read-only.
+    const form = makeForm({
+      name: 'My App',
+      slug: 'INVALID--SLUG',
+      bindings: {
+        apple: { enabled: true, platform_ref: '', console_url: '' },
+        google: { enabled: false, platform_ref: '', console_url: '' },
+        huawei: { enabled: false, platform_ref: '', console_url: '' },
+        facebook: { enabled: false, platform_ref: '', console_url: '' },
+      },
+    });
+    expect(validateFormState(form, 'edit')).toEqual({ ok: true });
+  });
 });
 
 describe('buildCreatePayload', () => {
@@ -128,6 +204,18 @@ describe('buildCreatePayload', () => {
       { platform: 'apple', platform_ref: 'com.example', console_url: undefined },
       { platform: 'google', platform_ref: undefined, console_url: undefined },
     ]);
+  });
+
+  it('omits slug when override is empty (server auto-derives)', () => {
+    const payload = buildCreatePayload(makeForm({ name: 'My App', slug: '' }));
+    expect(payload.slug).toBeUndefined();
+  });
+
+  it('forwards a non-empty slug override (trimmed) verbatim to the action', () => {
+    const payload = buildCreatePayload(
+      makeForm({ name: '彈彈英雄', slug: '  tantanyingxiong  ' }),
+    );
+    expect(payload.slug).toBe('tantanyingxiong');
   });
 });
 

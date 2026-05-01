@@ -10,6 +10,7 @@ import type {
   AppListRow,
   AppPlatformBindingRecord,
 } from '@/lib/store-submissions/queries/apps';
+import { slugSchema } from '@/lib/store-submissions/schemas/slug';
 import type {
   CreateAppActionInput,
   PlatformKey,
@@ -31,6 +32,16 @@ export type FormBinding = {
 export type FormState = {
   name: string;
   display_name: string;
+  /**
+   * Slug override. Empty string means "let the Server Action derive from
+   * `name`" (existing default — preserves backward compat for unchanged
+   * Latin/Vietnamese workflows). When non-empty, must satisfy `slugSchema`
+   * and is sent verbatim through createAppAction.
+   *
+   * Only meaningful in 'create' mode — edit doesn't change the slug per the
+   * UX contract ("won't change on rename" helper text).
+   */
+  slug: string;
   team_owner_id: string;
   active: boolean;
   bindings: Record<PlatformKey, FormBinding>;
@@ -55,9 +66,28 @@ export type EditAction =
 
 export type ValidationResult = { ok: true } | { ok: false; error: string };
 
-export function validateFormState(form: FormState): ValidationResult {
+/**
+ * Validate the form for the given dialog mode.
+ *
+ * Mode 'create': name + ≥1 platform + (if slug override non-empty, valid slug).
+ * Mode 'edit':   name + ≥1 platform. Slug is not editable in edit mode and is
+ *                deliberately skipped.
+ */
+export function validateFormState(
+  form: FormState,
+  mode: 'create' | 'edit' = 'create',
+): ValidationResult {
   if (form.name.trim() === '') {
     return { ok: false, error: 'Name is required' };
+  }
+  if (mode === 'create' && form.slug.trim() !== '') {
+    const result = slugSchema.safeParse(form.slug.trim());
+    if (!result.success) {
+      return {
+        ok: false,
+        error: result.error.issues[0]?.message ?? 'Invalid slug',
+      };
+    }
   }
   const enabledCount = PLATFORM_KEYS.filter((k) => form.bindings[k].enabled).length;
   if (enabledCount === 0) {
@@ -70,6 +100,7 @@ export function buildCreatePayload(form: FormState): CreateAppActionInput {
   return {
     name: form.name.trim(),
     display_name: form.display_name.trim() || undefined,
+    slug: form.slug.trim() || undefined,
     team_owner_id: form.team_owner_id || null,
     active: form.active,
     platform_bindings: PLATFORM_KEYS.filter((k) => form.bindings[k].enabled).map(

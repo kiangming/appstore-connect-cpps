@@ -14,6 +14,9 @@
 import { z } from 'zod';
 
 import { validateAliasRegex } from '../regex/validators';
+import { slugSchema } from './slug';
+
+export { slugSchema };
 
 // -- Shared fields ----------------------------------------------------------
 
@@ -27,22 +30,6 @@ export type AliasSourceType = z.infer<typeof aliasSourceTypeSchema>;
 
 export const platformKeySchema = z.enum(['apple', 'google', 'huawei', 'facebook']);
 export type PlatformKey = z.infer<typeof platformKeySchema>;
-
-/**
- * Slug format: URL-friendly ASCII.
- *   - lowercase letters, digits, hyphens
- *   - no leading/trailing/consecutive hyphens
- *   - 1..50 chars (suffix room for collision resolution in PR-4)
- */
-export const slugSchema = z
-  .string()
-  .trim()
-  .min(1, 'Slug is required')
-  .max(50, 'Slug must be 50 characters or fewer')
-  .regex(
-    /^[a-z0-9]+(-[a-z0-9]+)*$/,
-    'Slug must be lowercase ASCII letters, digits, and single hyphens',
-  );
 
 const nameField = z.string().trim().min(1, 'Name is required').max(200, 'Name too long');
 const displayNameField = z.string().trim().max(200, 'Display name too long').optional();

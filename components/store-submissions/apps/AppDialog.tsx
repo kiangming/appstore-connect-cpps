@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { Loader2, X, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
@@ -15,6 +15,7 @@ import {
   updateAppAction,
 } from '@/app/(dashboard)/store-submissions/config/apps/actions';
 import { generateSlugFromName } from '@/lib/store-submissions/apps/alias-logic';
+import { slugSchema } from '@/lib/store-submissions/schemas/slug';
 import {
   PLATFORM_KEYS,
   buildCreatePayload,
@@ -72,6 +73,7 @@ function defaultsFromApp(app: AppListRow): FormState {
   return {
     name: app.name,
     display_name: app.display_name ?? '',
+    slug: '', // unused in edit mode — slug is read-only on rename
     team_owner_id: app.team_owner_id ?? '',
     active: app.active,
     bindings: bindingsFromApp(app),
@@ -82,10 +84,22 @@ function defaultsForCreate(): FormState {
   return {
     name: '',
     display_name: '',
+    slug: '',
     team_owner_id: '',
     active: true,
     bindings: emptyBindings(),
   };
+}
+
+const HASH_SLUG_RE = /^app-[0-9a-f]{8}$/;
+
+function safeAutoSlug(name: string): string {
+  if (name.trim() === '') return '';
+  try {
+    return generateSlugFromName(name);
+  } catch {
+    return '';
+  }
 }
 
 export function AppDialog({ mode, app, teamUsers, onClose, onSuccess }: AppDialogProps) {
@@ -98,14 +112,27 @@ export function AppDialog({ mode, app, teamUsers, onClose, onSuccess }: AppDialo
   );
   const [isPending, startTransition] = useTransition();
 
-  const slugPreview = useMemo(() => {
-    if (form.name.trim() === '') return '—';
-    try {
-      return generateSlugFromName(form.name);
-    } catch {
-      return '(name produces no valid slug)';
-    }
-  }, [form.name]);
+  // Track whether the Manager has edited the slug input directly. While
+  // untouched, the slug auto-fills from the name; after the first manual
+  // edit it sticks. Prevents the useEffect → setForm → re-fire infinite
+  // loop because we only re-derive while !slugTouched.
+  const [slugTouched, setSlugTouched] = useState(false);
+
+  useEffect(() => {
+    if (mode !== 'create' || slugTouched) return;
+    const auto = safeAutoSlug(form.name);
+    setForm((p) => (p.slug === auto ? p : { ...p, slug: auto }));
+  }, [form.name, mode, slugTouched]);
+
+  const slugIsHashFallback = mode === 'create' && !slugTouched && HASH_SLUG_RE.test(form.slug);
+
+  const slugError = useMemo(() => {
+    if (mode !== 'create') return null;
+    const trimmed = form.slug.trim();
+    if (trimmed === '') return null; // empty = let server auto-derive on submit
+    const result = slugSchema.safeParse(trimmed);
+    return result.success ? null : result.error.issues[0]?.message ?? 'Invalid slug';
+  }, [form.slug, mode]);
 
   const nameChanged = mode === 'edit' && app && form.name.trim() !== app.name;
 
@@ -129,7 +156,7 @@ export function AppDialog({ mode, app, teamUsers, onClose, onSuccess }: AppDialo
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const validation = validateFormState(form);
+    const validation = validateFormState(form, mode);
     if (!validation.ok) {
       toast.error(validation.error);
       return;
@@ -227,14 +254,50 @@ export function AppDialog({ mode, app, teamUsers, onClose, onSuccess }: AppDialo
                   placeholder="e.g. Skyline Runners"
                   className="w-full px-3 py-2 border border-slate-200 rounded-lg text-[14px] focus:outline-none focus:ring-2 focus:ring-[#0071E3]/20 focus:border-[#0071E3]"
                 />
-                <p className="text-[11px] text-slate-400 mt-1">
-                  {mode === 'create' ? (
-                    <>Slug preview: <span className="font-mono">{slugPreview}</span></>
-                  ) : (
-                    <>Current slug: <span className="font-mono">{app!.slug}</span> (won&apos;t change on rename)</>
-                  )}
-                </p>
+                {mode === 'edit' && (
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Current slug: <span className="font-mono">{app!.slug}</span> (won&apos;t change on rename)
+                  </p>
+                )}
               </Field>
+
+              {mode === 'create' && (
+                <Field label="Slug">
+                  <input
+                    type="text"
+                    value={form.slug}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setSlugTouched(true);
+                      setForm((p) => ({ ...p, slug: v }));
+                    }}
+                    placeholder="auto-generated from name"
+                    aria-invalid={slugError != null}
+                    aria-describedby="slug-help"
+                    className={`w-full px-3 py-2 border rounded-lg text-[14px] font-mono focus:outline-none focus:ring-2 ${
+                      slugError
+                        ? 'border-red-300 focus:ring-red-300/30 focus:border-red-400'
+                        : 'border-slate-200 focus:ring-[#0071E3]/20 focus:border-[#0071E3]'
+                    }`}
+                  />
+                  <p id="slug-help" className="text-[11px] text-slate-400 mt-1">
+                    {slugError ? (
+                      <span className="text-red-600">{slugError}</span>
+                    ) : slugIsHashFallback ? (
+                      <>
+                        Auto-generated random slug — name has no Latin letters. Replace with
+                        a readable identifier (e.g. <span className="font-mono">tantanyingxiong</span>) if you
+                        prefer.
+                      </>
+                    ) : (
+                      <>
+                        Used internally for ticket joining. Auto-generated from name; edit to use
+                        a custom short identifier.
+                      </>
+                    )}
+                  </p>
+                </Field>
+              )}
 
               {nameChanged && (
                 <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200 text-[12px] text-amber-900">
@@ -350,7 +413,7 @@ export function AppDialog({ mode, app, teamUsers, onClose, onSuccess }: AppDialo
               </button>
               <button
                 type="submit"
-                disabled={isPending}
+                disabled={isPending || slugError != null}
                 className="inline-flex items-center gap-2 bg-[#0071E3] hover:bg-[#005fcc] text-white text-[13px] font-semibold rounded-lg px-4 py-2 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isPending && <Loader2 className="h-4 w-4 animate-spin" />}
