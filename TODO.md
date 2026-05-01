@@ -287,8 +287,8 @@ first, verify Sentry breadcrumbs, then **Backfill all** for the bulk.
 ### Risk flags bumped from PR-13 close
 
 - [x] [PR-14] **Issue 1 — UTF-8 body preview** — ✅ resolved by PR-14 (2026-05-01). Surfaced from PR-12 close, scoped under PR-14 after PR-13 shipped. Hypothesis flipped multiple times during investigation (charset → Apple-side broken → parser bug); root cause was the `raw.toString('ascii')` byte-mask step in `decodeQuotedPrintable`. Fix shipped + 14 functional production rows backfilled via the maintenance banner.
-- [ ] [PR-15+] **Per-row backfill affordance in EmailEntryCard** — see PR-12 deferred items (line 264). Same scope.
-- [ ] [PR-15+] **Multi-platform extractor expansion** — see PR-11/PR-12 deferred items.
+- [ ] [PR-16+] **Per-row backfill affordance in EmailEntryCard** — see PR-12 deferred items (line 264). Same scope.
+- [ ] [PR-16+] **Multi-platform extractor expansion** — see PR-11/PR-12 deferred items.
 - [ ] [PR-16+] **Migration COMMENT refresh** + **Sentry breadcrumb cap formalization** + **Vitest cold-start flake** + **Gmail OAuth token resilience** — all infra cleanup deferred from PR-12.
 - [ ] [PR-16+] **Spec §5.2 ticket-level merge** — see PR-11 deferred items (line 231).
 
@@ -314,7 +314,7 @@ first, verify Sentry breadcrumbs, then **Backfill all** for the bulk.
 ### Investigation discipline (4 hypothesis pivots earned by data)
 
 1. **Synthetic real-QP fixture passed** — proved parser handles real QP correctly; bug had to be elsewhere.
-2. **Layer 1 RFC 2047 continuation-line bug discovered** — real but orthogonal to production symptom (subjects render fine in prod). Parked PR-15+.
+2. **Layer 1 RFC 2047 continuation-line bug discovered** — real but orthogonal to production symptom (subjects render fine in prod). Parked PR-16+.
 3. **Production SQL diagnostic confirmed BOTH `raw_body_text` and `extracted_payload` garbled** — same parser path; parser was the culprit.
 4. **Diagnostic API route revealed Apple's wire bytes are correct UTF-8** — parser corrupts them via `raw.toString('ascii')` byte-mask. Synthetic fixture had used real QP encoding; real Apple emails ship raw UTF-8 with the QP header lying. Mislabel was the missing fixture variant.
 
@@ -325,11 +325,50 @@ The diagnostic API route (`GET /api/store-submissions/diagnose-message?id=…`) 
 - **Banner placement: D2 over D1.** Locked plan was D1 (3rd button in Unclassified-tab banner). Codebase grounding revealed corrupt rows are CLASSIFIED status (Open/Done tabs), not Unclassified. D1 would have hidden the action behind a tab where the rows don't appear. D2 ships a separate amber maintenance banner above state tabs, visible on every tab when count > 0.
 - **`.or()` regex over RPC migration (Decision 3 = verify-then-fallback).** Direct PostgREST `.or()` syntax shipped; RPC fallback documented inline for hot-pivot if production rejects.
 
-### Open follow-ups (PR-15+)
+### Open follow-ups (PR-16+)
 
-- [ ] [PR-15+] **Layer 1 — RFC 2047 subject continuation-line whitespace** — `decodeRfc2047` in `parser.ts` runs the per-word decode before the `\?=\s+=\?` collapse pass; encoded-word markers are gone by the time the collapse runs and orphan whitespace leaks (e.g. `Chơi Nga y Game` instead of `Chơi Ngay Game`). Real bug confirmed by Layer 1 diagnostic but separate decoder, separate symptom from the production-reported PR-14 corruption. Tracked as `it.skip()` placeholder in `parser.test.ts` with fix-pointer comment.
+- [ ] [PR-16+] **Layer 1 — RFC 2047 subject continuation-line whitespace** — `decodeRfc2047` in `parser.ts` runs the per-word decode before the `\?=\s+=\?` collapse pass; encoded-word markers are gone by the time the collapse runs and orphan whitespace leaks (e.g. `Chơi Nga y Game` instead of `Chơi Ngay Game`). Real bug confirmed by Layer 1 diagnostic but separate decoder, separate symptom from the production-reported PR-14 corruption. Tracked as `it.skip()` placeholder in `parser.test.ts` with fix-pointer comment.
 - [ ] [PR-14 manual QA] **PostgREST `.or()` regex runtime validation** — verify the candidate filter and count probe work in production. Hot-pivot to the RPC fallback in `app/(dashboard)/store-submissions/inbox/backfill-corrupt-actions.ts` if rejected.
-- [ ] [PR-15+] **Auto-mark-done APPROVED logic** + **duplicate ticket entries bug** — surfaced in earlier PR-12/13 close; not addressed in PR-14.
+- [ ] [PR-16+] **Auto-mark-done APPROVED logic** + **duplicate ticket entries bug** — surfaced in earlier PR-12/13 close; not addressed in PR-14.
+
+## PR-15 — Slug generator non-ASCII support ✅ COMPLETED (2026-05-01)
+
+3 commits (single multi-step session, ~2.5h):
+
+| Commit | Scope |
+|---|---|
+| `e0e3922` | **PR-15.2** — `generateSlugFromName` hash fallback (FNV-1a 32-bit pure TS, `app-<8hex>` format) for inputs with fewer than `SLUG_MIN_MEANINGFUL_LENGTH=3` ASCII alphanumerics. `tryGenerateAsciiSlug` exported helper returns `string \| null` so the type-slug auto-derive in `safeSlugFromName` (TypesTable) preserves `""` semantic instead of receiving an unhelpful hash. +10 alias-logic tests (CJK, single-`m` degenerate, TFT boundary, VN below-threshold, emoji, pure-punct, lone combining marks, determinism, distinctness, threshold const). +2 helpers tests locking the type-slug divergence. +1 createAppAction integration test (replaced the obsolete "rejects on InvalidSlugError" test). `Node crypto` deliberately avoided — `alias-logic.ts` is imported by AppDialog (Client Component); FNV-1a is client-bundle-safe, async Web Crypto would not fit the synchronous signature. |
+| `fb04521` | **PR-15.3** — AppDialog slug override input field (create-mode only; edit-mode keeps "won't change on rename" helper text unchanged). `slugTouched` state + per-tick `setForm(p => p.slug === auto ? p : ...)` guard prevent useEffect → setForm infinite loop in React strict mode. Contextual helper text (default / hash-fallback hint with `tantanyingxiong` example / red error). `aria-invalid` + `aria-describedby` a11y. Submit disabled on validation error. `slugSchema` extracted to `lib/store-submissions/schemas/slug.ts` (only `zod` dep) so client bundle no longer pulls `re2-wasm` transitively via `validateAliasRegex` in `schemas/app.ts`; `app.ts` re-exports for unchanged server-side imports — same trap documented in CLAUDE.md's lessons-learned. Mode-aware `validateFormState(form, mode)` skips slug check in edit mode. +7 app-dialog-logic tests. |
+| this commit | **PR-15.4** — Docs (CURRENT-STATE.md PR-15 milestone + features-table row + PR-timeline row + this entry). Retag stale `[PR-15+]` deferral markers → `[PR-16+]` across CURRENT-STATE.md and TODO.md. |
+
+**Test count:** 1079 (pre-PR-15) → **1096** (post-PR-15) = **+17 tests** cumulative across 15.2 +13 + 15.3 +7, minus 1 obsolete throw test deleted in 15.2 (the "rejects on InvalidSlugError" path no longer fires for non-empty input).
+
+**Bundle (`/store-submissions/config/apps`):** +0.5 kB for the slug input + slim `slugSchema` module. FNV-1a 32-bit adds zero bytes vs the SHA-256 alternative (no Node `crypto` polyfill needed).
+
+**No migrations** — PR-15 is application-layer only. No DB column change. All existing slugs preserved unchanged; new apps post-deploy use the new logic.
+
+**Production scope at fix time** — Manager blocked from registering 12+ apps in the `UNCLASSIFIED_APP` bucket whose UTF-8 names PR-14 had just repaired. Affected apps: 彈彈英雄, 創世紀戰M：阿修羅計畫, plus other Asian-language titles in the VNG portfolio.
+
+### Hidden bug surfaced + bonus fix
+
+`創世紀戰M：阿修羅計畫` did not throw — the lone Latin "M" survived
+normalization and produced slug `"m"`. Passed `slugSchema` (min 1
+char) but semantically useless and likely to collide. The
+`SLUG_MIN_MEANINGFUL_LENGTH=3` threshold catches this case alongside
+the empty-output cases the user originally reported.
+
+### Architecture decisions
+
+- **FNV-1a 32-bit pure TS over Node `crypto.createHash` SHA-256.** Required for client-bundle compat — `alias-logic.ts` is imported by `AppDialog.tsx` for live slug preview, and Next.js 14 doesn't auto-polyfill Node's `crypto`. 4B output space is plenty for ~200 apps; UNIQUE constraint catches collisions.
+- **`tryGenerateAsciiSlug` helper extraction.** Two callers, two semantics: app-registry wants hash fallback to unblock CJK; type-slug auto-derive in TypesTable wants `""` so Manager picks meaningful short codes (`app`, `iae`, `ipa`). Same pattern as PR-12.5 (`reclassify/core.ts`) and PR-14.4 (`backfill/core.ts`).
+- **`slugSchema` module split.** Avoids pulling `re2-wasm` into the client bundle when AppDialog validates slug input. Server-side imports unchanged via re-export. Mirrors the `alias-logic.ts` ↔ `alias-conflicts.ts` split documented in CLAUDE.md lessons-learned.
+- **Mode-aware `validateFormState(form, mode)`.** Edit mode skips slug check (read-only on rename per existing UX contract). Save button stays unblocked even if edit-mode FormState defensively carries an invalid slug value.
+- **Threshold = 3 ASCII alphanumerics.** Catches `"m"` degenerates and 2-char abbreviations while preserving 3-letter acronyms (`TFT`, `VNG`, `LOL`). Exported as constant for future tuning if Manager UAT signals.
+
+### Open follow-ups (PR-16+)
+
+- [ ] [PR-16+] **Threshold tuning** — `SLUG_MIN_MEANINGFUL_LENGTH=3` conservatively rejects 2-char abbreviations like `"VN"`. If Manager UAT signals this feels wrong, lower to 2; hash fallback still catches CJK / emoji / pure-punctuation. Wait for production signal before tuning.
+- [ ] [PR-16+] **CSV bulk-import slug override** — `importAppsCsvAction` derives slug from `name` only (no manual override path). With PR-15.2's hash fallback the action no longer fails on CJK names. If Managers want readable slugs for bulk-imported CJK apps, add a `slug` column to the CSV template + parser. Defer until UAT surfaces the need.
 
 ## Post-PR-11 — TicketDetailContext + prop drilling cleanup (planned)
 
