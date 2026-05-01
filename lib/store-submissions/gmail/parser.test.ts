@@ -23,6 +23,10 @@ import {
 } from './__fixtures__/builders';
 import {
   appleApproved,
+  edgeAppleMislabelChinese,
+  edgeAppleMislabelEmoji,
+  edgeAppleMislabelJapanese,
+  edgeAppleMislabelMixedEncoding,
   edgeAppleMislabelUtf8,
   edgeEmptyBody,
   edgeHtmlOnly,
@@ -319,6 +323,50 @@ describe('PR-14 — Apple mislabeled QP body decodes correctly', () => {
     const excerpt = out.body.slice(0, 500);
     expect(excerpt).toContain('Đấu Trường Chân Lý');
     expect(excerpt).not.toMatch(/[\x01-\x08\x0B\x0C\x0E-\x1F]/);
+  });
+});
+
+/* ============================================================================
+ * PR-14.3 — Charset coverage (CJK + emoji + mixed encoding)
+ * ==========================================================================
+ *
+ * Same mislabel pattern as Layer 3 above, exercised across the byte
+ * ranges production has hit. The shared assertion shape: target name
+ * decodes verbatim, no control-byte residue (the pre-fix corruption
+ * fingerprint), no `=XX` escape leakage. One `it` per fixture so a
+ * regression on one charset doesn't mask the others.
+ */
+
+describe('PR-14.3 — byte-level decoder charset coverage', () => {
+  it('Chinese (3-byte UTF-8 sequences, 0xE0–0xEF lead bytes)', () => {
+    const out = parseGmailMessage(edgeAppleMislabelChinese);
+    expect(out.body).toContain('彈彈英雄');
+    expect(out.body).not.toMatch(/[\x01-\x08\x0B\x0C\x0E-\x1F]/);
+    expect(out.body).not.toMatch(/=[0-9A-F]{2}/i);
+  });
+
+  it('Japanese mixed scripts (hiragana + katakana + kanji + ASCII transitions)', () => {
+    const out = parseGmailMessage(edgeAppleMislabelJapanese);
+    expect(out.body).toContain('テスト『日本語アプリ』ゲーム');
+    expect(out.body).not.toMatch(/[\x01-\x08\x0B\x0C\x0E-\x1F]/);
+    expect(out.body).not.toMatch(/=[0-9A-F]{2}/i);
+  });
+
+  it('Emoji (4-byte UTF-8 sequences → UTF-16 surrogate pairs)', () => {
+    const out = parseGmailMessage(edgeAppleMislabelEmoji);
+    expect(out.body).toContain('🎮 Crystal Quest 🐉');
+    // Emoji are length-2 in JS strings (surrogate pair); confirm both
+    // halves of 🎮 (U+1F3AE) survived the byte→string conversion.
+    expect(out.body).toContain('\uD83C\uDFAE');
+    expect(out.body).not.toMatch(/[\x01-\x08\x0B\x0C\x0E-\x1F]/);
+  });
+
+  it('mixed encoding: `=C3=A9` (real QP) and raw UTF-8 `0xC3 0xA9` decode identically to `é`', () => {
+    const out = parseGmailMessage(edgeAppleMislabelMixedEncoding);
+    expect(out.body).toContain('QP-form: café');
+    expect(out.body).toContain('Raw-form: café');
+    expect(out.body).not.toMatch(/=[0-9A-F]{2}/i);
+    expect(out.body).not.toMatch(/[\x01-\x08\x0B\x0C\x0E-\x1F]/);
   });
 });
 

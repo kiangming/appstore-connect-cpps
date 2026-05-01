@@ -514,3 +514,110 @@ export const edgeAppleMislabelUtf8: Message = buildMessage({
     }),
   ]),
 });
+
+/* ============================================================================
+ * PR-14.3 — Apple "QP mislabel" charset coverage
+ * ==========================================================================
+ *
+ * Same mislabel pattern as `edgeAppleMislabelUtf8` (CTE: QUOTED-PRINTABLE
+ * header, body bytes raw UTF-8) extended over additional Unicode ranges
+ * that production has hit (Q-A diagnostic listed 4 distinct apps;
+ * Vietnamese is covered above). Each fixture is minimal — just enough
+ * envelope + a body line containing the target string — because the
+ * byte-level decoder is one code path: charset coverage is about
+ * proving every UTF-8 byte sequence pattern survives the walker, not
+ * about exercising the rest of the parser.
+ *
+ * Byte-pattern stressors per fixture:
+ *   - Chinese (CJK BMP): all 3-byte sequences (0xE0–0xEF lead bytes)
+ *   - Japanese (mixed scripts): hiragana, katakana, kanji intermixed
+ *     with ASCII — exercises the byte-walker's transition between
+ *     ≥0x80 pass-through and <0x80 ASCII bytes
+ *   - Emoji (supplementary plane): 4-byte sequences (0xF0–0xF4 lead
+ *     bytes) — the only fixture that exercises UTF-16 surrogate-pair
+ *     production via Buffer.toString('utf-8')
+ *   - Mixed-encoding: same character emitted twice in the same body —
+ *     once as a genuine QP escape (`=C3=A9` → `é`), once as raw UTF-8
+ *     bytes (`0xC3 0xA9` → `é`). Both must decode to the same string.
+ */
+
+const CHINESE_NAME = '彈彈英雄';
+const JAPANESE_NAME = 'テスト『日本語アプリ』ゲーム';
+const EMOJI_NAME = '🎮 Crystal Quest 🐉';
+
+export const edgeAppleMislabelChinese: Message = buildMessage({
+  id: 'apple-mislabel-zh-001',
+  threadId: 'apple-mislabel-zh-t1',
+  internalDate: '1777400000000',
+  envelopeHeaders: [
+    header('From', 'App Store Connect <no_reply@email.apple.com>'),
+    header('To', 'store.admin@example.com'),
+    header('Subject', `Review of your ${CHINESE_NAME} (iOS) submission is complete.`),
+  ],
+  payload: leaf({
+    mimeType: 'text/plain',
+    transferEncoding: 'QUOTED-PRINTABLE',
+    body: `App Name: ${CHINESE_NAME}\r\n`,
+  }),
+});
+
+export const edgeAppleMislabelJapanese: Message = buildMessage({
+  id: 'apple-mislabel-ja-001',
+  threadId: 'apple-mislabel-ja-t1',
+  internalDate: '1777401000000',
+  envelopeHeaders: [
+    header('From', 'App Store Connect <no_reply@email.apple.com>'),
+    header('To', 'store.admin@example.com'),
+    header('Subject', `Review of your ${JAPANESE_NAME} submission is complete.`),
+  ],
+  payload: leaf({
+    mimeType: 'text/plain',
+    transferEncoding: 'QUOTED-PRINTABLE',
+    body: `App Name: ${JAPANESE_NAME}\r\n`,
+  }),
+});
+
+export const edgeAppleMislabelEmoji: Message = buildMessage({
+  id: 'apple-mislabel-emoji-001',
+  threadId: 'apple-mislabel-emoji-t1',
+  internalDate: '1777402000000',
+  envelopeHeaders: [
+    header('From', 'App Store Connect <no_reply@email.apple.com>'),
+    header('To', 'store.admin@example.com'),
+    header('Subject', `Review of your ${EMOJI_NAME} submission is complete.`),
+  ],
+  payload: leaf({
+    mimeType: 'text/plain',
+    transferEncoding: 'QUOTED-PRINTABLE',
+    body: `App Name: ${EMOJI_NAME}\r\n`,
+  }),
+});
+
+// Same body emits `é` twice: once as `=C3=A9` (real QP escape) and once
+// as the literal UTF-8 bytes `0xC3 0xA9` (raw, mislabel-style). The
+// byte walker must produce identical output for both — `=` triggers
+// escape parsing, ≥0x80 bytes pass through.
+export const edgeAppleMislabelMixedEncoding: Message = buildMessage({
+  id: 'apple-mislabel-mixed-001',
+  threadId: 'apple-mislabel-mixed-t1',
+  internalDate: '1777403000000',
+  envelopeHeaders: [
+    header('From', 'App Store Connect <no_reply@email.apple.com>'),
+    header('To', 'store.admin@example.com'),
+    header('Subject', 'Mixed encoding repro'),
+  ],
+  payload: leaf({
+    mimeType: 'text/plain',
+    transferEncoding: 'QUOTED-PRINTABLE',
+    body: '', // ignored — preEncodedData drives the bytes
+    preEncodedData: b64u(
+      Buffer.concat([
+        Buffer.from('QP-form: caf', 'utf-8'),   // ASCII
+        Buffer.from('=C3=A9', 'ascii'),          // QP escape for é
+        Buffer.from('\r\nRaw-form: caf', 'utf-8'),
+        Buffer.from([0xc3, 0xa9]),               // Raw UTF-8 for é
+        Buffer.from('\r\n', 'utf-8'),
+      ]),
+    ),
+  }),
+});
