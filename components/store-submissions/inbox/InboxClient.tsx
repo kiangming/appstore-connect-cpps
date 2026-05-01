@@ -31,11 +31,13 @@ import {
   PlayCircle,
   RefreshCcw,
   Search,
+  Wrench,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { backfillUnclassifiedAction } from '@/app/(dashboard)/store-submissions/inbox/backfill-actions';
+import { backfillCorruptPayloadAction } from '@/app/(dashboard)/store-submissions/inbox/backfill-corrupt-actions';
 import { reclassifyUnclassifiedAction } from '@/app/(dashboard)/store-submissions/inbox/reclassify-actions';
 import type {
   ListTicketsResult,
@@ -78,6 +80,13 @@ export interface InboxClientProps {
    */
   selectedTicketId: string | null;
   initialTicket: TicketWithEntries | null;
+  /**
+   * Count of email_messages with control-byte residue in payload or
+   * body — pre-PR-14 byte-mask QP decoder bug. Drives the MANAGER-only
+   * maintenance banner. Server-side default: `0` for non-MANAGER roles
+   * (cheap-out — they couldn't act on the count anyway).
+   */
+  corruptPayloadCount: number;
 }
 
 // -- Tabs (state dimension) -------------------------------------------------
@@ -173,6 +182,7 @@ export function InboxClient({
   currentUserId,
   selectedTicketId,
   initialTicket,
+  corruptPayloadCount,
 }: InboxClientProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -374,6 +384,16 @@ export function InboxClient({
         isPending ? 'opacity-60 pointer-events-none' : ''
       }`}
     >
+      {/* -- Maintenance banner (PR-14.4) — MANAGER-only, auto-hides at zero --
+          Shown on every tab because corrupt rows are CLASSIFIED status and
+          live in Open/Done tabs, not Unclassified — so scoping this to one
+          tab would hide the action behind a tab where the rows don't appear.
+          Once the action drains the queue the count goes to 0 and the
+          banner retires automatically without code change. */}
+      {role === 'MANAGER' && corruptPayloadCount > 0 && (
+        <CorruptPayloadBanner count={corruptPayloadCount} />
+      )}
+
       {/* -- State tabs (lifecycle dimension) -- */}
       <div className="border-b border-slate-200">
         <div className="flex items-center gap-1">
@@ -779,6 +799,81 @@ function BulkReclassifyButton() {
       />
       {isPending ? 'Reclassifying…' : 'Reclassify all'}
     </button>
+  );
+}
+
+/**
+ * MANAGER-only corrupt-payload repair (PR-14.4).
+ *
+ * Re-fetches Gmail HTML for emails whose persisted `extracted_payload`
+ * or `raw_body_text` carry control-byte residue from the pre-PR-14
+ * byte-mask QP decoder bug, re-parses with the now-byte-safe parser
+ * (PR-14.2), and triggers `reclassify_email_tx` per row.
+ *
+ * Lives as its own banner (not nested in the Unclassified one) because
+ * the affected rows are CLASSIFIED status — they appear in Open / Done
+ * tabs, not Unclassified. The banner shows on every tab when the count
+ * is positive and auto-retires when the queue drains to zero.
+ */
+function CorruptPayloadBanner({ count }: { count: number }) {
+  const [isPending, startTransition] = useTransition();
+
+  function handleClick() {
+    const ok = window.confirm(
+      `Repair ${count} corrupt payload${count === 1 ? '' : 's'}?\n\n` +
+        'These emails were processed by the pre-PR-14 parser and have ' +
+        'mojibake in their app names / body text. This re-fetches Gmail, ' +
+        're-parses with the byte-level decoder, and re-runs classification. ' +
+        'Tickets may move; some buckets may end up empty.',
+    );
+    if (!ok) return;
+
+    startTransition(async () => {
+      const result = await backfillCorruptPayloadAction({});
+      if (!result.ok) {
+        toast.error(`Repair failed: ${result.error.message}`);
+        return;
+      }
+      const { total, processed, reclassified, unchanged, errors } = result.data;
+      if (total === 0) {
+        toast.info('No corrupt payloads found.');
+        return;
+      }
+      const errorCount = errors.length;
+      const summary =
+        `Repaired ${processed}/${total}` +
+        ` (${reclassified} reclassified, ${unchanged} unchanged` +
+        `${errorCount > 0 ? `, ${errorCount} error${errorCount === 1 ? '' : 's'}` : ''})`;
+      if (errorCount > 0) {
+        toast.warning(summary);
+      } else {
+        toast.success(summary);
+      }
+    });
+  }
+
+  return (
+    <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 text-[13px] text-amber-900 min-w-0">
+        <Wrench className="w-4 h-4 text-amber-600 flex-shrink-0" strokeWidth={1.8} />
+        <span className="truncate">
+          Maintenance — {count} ticket{count === 1 ? '' : 's'} have garbled
+          app names from the pre-PR-14 parser bug.
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={isPending}
+        className="inline-flex items-center gap-1 text-[13px] font-medium text-amber-800 hover:text-amber-900 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+      >
+        <Wrench
+          className={`w-3 h-3 ${isPending ? 'animate-pulse' : ''}`}
+          strokeWidth={1.8}
+        />
+        {isPending ? 'Repairing…' : `Repair corrupt payloads (${count})`}
+      </button>
+    </div>
   );
 }
 

@@ -7,6 +7,7 @@ import {
   listTickets,
 } from '@/lib/store-submissions/queries/tickets';
 import { listApps } from '@/lib/store-submissions/queries/apps';
+import { getCorruptPayloadCount } from '@/lib/store-submissions/queries/corrupt-payload';
 import { listPlatforms } from '@/lib/store-submissions/queries/rules';
 import { parseTicketsQueryFromSearchParams } from '@/lib/store-submissions/inbox/search-params';
 import type { TicketsQuery } from '@/lib/store-submissions/schemas/ticket';
@@ -73,12 +74,20 @@ export default async function InboxPage({
   const isUnclassifiedView =
     effectiveQuery.bucket?.startsWith('unclassified_') ?? false;
 
-  const [data, apps, platforms, initialTicket] = await Promise.all([
-    listTickets(effectiveQuery, { includeFirstEmail: isUnclassifiedView }),
-    listApps({ active: true }),
-    listPlatforms(),
-    selectedTicketId ? getTicketWithEntries(selectedTicketId) : Promise.resolve(null),
-  ]);
+  // Maintenance banner probe (PR-14.4): count emails whose payload was
+  // corrupted by the pre-PR-14 byte-mask decoder. MANAGER-only — skipped
+  // for VIEWER/DEV so the regular page load isn't taxed by a query whose
+  // result they couldn't act on.
+  const [data, apps, platforms, initialTicket, corruptPayloadCount] =
+    await Promise.all([
+      listTickets(effectiveQuery, { includeFirstEmail: isUnclassifiedView }),
+      listApps({ active: true }),
+      listPlatforms(),
+      selectedTicketId ? getTicketWithEntries(selectedTicketId) : Promise.resolve(null),
+      storeUser.role === 'MANAGER'
+        ? getCorruptPayloadCount()
+        : Promise.resolve(0),
+    ]);
 
   return (
     <div className="px-8 py-10">
@@ -106,6 +115,7 @@ export default async function InboxPage({
           currentUserId={storeUser.id}
           selectedTicketId={selectedTicketId}
           initialTicket={initialTicket}
+          corruptPayloadCount={corruptPayloadCount}
         />
       </div>
     </div>

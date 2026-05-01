@@ -5,11 +5,12 @@
  * emails (PR-12.5).
  *
  * Re-fetches Gmail HTML for rows missing `extracted_payload`, runs the
- * html-extractor (PR-12.1), persists the structured payload, then triggers
- * `reclassify_email_tx` atomic via `reclassifyOne` from the shared core
- * module. Apple-only initially (D2); multi-platform deferred PR-13+.
+ * html-extractor (PR-12.1), persists the structured payload + the
+ * (possibly corrected) raw body text, then triggers `reclassify_email_tx`
+ * atomic via `reclassifyOne` from the shared reclassify core. Apple-only
+ * initially (D2); multi-platform deferred PR-13+.
  *
- * Two actions:
+ * Two actions (this file):
  *   - `backfillSingleEmailAction(emailId)` — explicit single-row backfill.
  *     Server-side guard verifies the email exists + sender resolves to
  *     Apple. Used by future per-row affordances; the UI's "Test 1 row"
@@ -22,25 +23,16 @@
  *     Optional `limit` lets the UI run a 1-row dry-run for production
  *     safety before bulk.
  *
- * **Production state context (2026-04):**
- *   - 14 legacy UNCLASSIFIED rows pre-PR-11.3 (extracted_payload NULL)
- *   - 0 Apple emails arrived post-deploy (wire untested in production)
- *   - Single-row test mode is the production-safety verification step
- *     before the bulk run; both buttons share this code path.
+ * Sibling: `backfill-corrupt-actions.ts` ships
+ * `backfillCorruptPayloadAction` for the PR-14 "extracted_payload was
+ * computed by the buggy decoder" cleanup. Both files share
+ * `lib/store-submissions/backfill/core.ts`, where the per-row pipeline,
+ * sender filter, error classes, and error mapping live.
  *
- * **Sentry telemetry** under `component: 'backfill-action'`:
- *   - per-row breadcrumbs: fetch-start / html-extracted / extract-result /
- *     reclassify-result
- *   - per-stage exceptions tagged with `stage: gmail-fetch | extract |
- *     reclassify | bulk-row | unmapped` so production failures pinpoint
- *     the exact pipeline step
- *
- * Atomicity: the UPDATE `extracted_payload` and the subsequent
- * reclassify happen in two SQL round-trips, not one transaction.
- * `reclassify_email_tx` re-loads the row under FOR UPDATE so a concurrent
- * sync run can't observe a half-updated row, and UNIQUE(gmail_msg_id)
- * already prevents duplicate ingestion. The brief window between UPDATE
- * and reclassify is bounded to ~50ms — Manager-driven, not high-frequency.
+ * **Sentry telemetry** under `component: 'backfill-action'` (set in
+ * `guardManager` below). Per-row breadcrumbs + per-stage exception
+ * tags are emitted from the shared `core.ts` module so both action
+ * files produce uniform telemetry.
  */
 
 import * as Sentry from '@sentry/nextjs';
@@ -54,83 +46,19 @@ import {
   StoreUnauthorizedError,
   type StoreUser,
 } from '@/lib/store-submissions/auth';
+import {
+  backfillOne,
+  createBackfillGmailClient,
+  loadAppleSenderFilter,
+  mapErrorToActionError,
+  type BackfillBulkOptions,
+  type BackfillContext,
+  type BackfillResult,
+  type BulkBackfillResult,
+} from '@/lib/store-submissions/backfill/core';
 import { storeDb } from '@/lib/store-submissions/db';
-import {
-  createGmailClient,
-  getMessage,
-  type GmailClient,
-} from '@/lib/store-submissions/gmail/client';
-import {
-  extractApple,
-  type ExtractedPayload,
-} from '@/lib/store-submissions/gmail/html-extractor';
-import { parseGmailMessage } from '@/lib/store-submissions/gmail/parser';
-import {
-  createSenderResolver,
-  loadActiveSenders,
-} from '@/lib/store-submissions/gmail/sender-resolver';
-import {
-  EmailNotFoundError,
-  ReclassifyValidationError,
-  reclassifyOne,
-  type ReclassifyResult,
-} from '@/lib/store-submissions/reclassify/core';
 
 import type { ActionError, ActionResult } from './actions';
-
-// -- Public types --------------------------------------------------------
-
-export interface BackfillResult {
-  emailMessageId: string;
-  /** Outcome from the freshly-extracted payload. */
-  outcome: 'ACCEPTED' | 'REJECTED' | null;
-  /** Number of `items[]` parsed from HTML. */
-  itemsCount: number;
-  /** Reclassify outcome — `changed: false` means the new classification
-   *  matched the old (e.g. payload was usable but resolved the same
-   *  type/app already on file). */
-  reclassify: ReclassifyResult;
-}
-
-export interface BulkBackfillError {
-  emailMessageId: string;
-  error: string;
-}
-
-export interface BulkBackfillResult {
-  /** Total candidates found (before per-row processing). */
-  total: number;
-  /** Successfully processed (extract + reclassify completed). */
-  processed: number;
-  /** Subset of `processed` where reclassify_email_tx returned changed=true. */
-  reclassified: number;
-  /** Subset of `processed` where the new classification matched the old. */
-  unchanged: number;
-  /** Per-row failures — batch continues past each. */
-  errors: BulkBackfillError[];
-}
-
-export interface BackfillBulkOptions {
-  /** Cap candidates to N for production-safety dry-runs. Omit for full bulk. */
-  limit?: number;
-}
-
-// -- Internal error classes (not exported per 'use server' rule) ---------
-
-class NotApplePlatformError extends Error {
-  constructor(emailId: string) {
-    super(`Email ${emailId} is not from an Apple sender — backfill is Apple-only`);
-    this.name = 'NotApplePlatformError';
-  }
-}
-
-class GmailFetchError extends Error {
-  constructor(emailId: string, cause: unknown) {
-    const causeMsg = cause instanceof Error ? cause.message : String(cause);
-    super(`Failed to re-fetch Gmail message for email ${emailId}: ${causeMsg}`);
-    this.name = 'GmailFetchError';
-  }
-}
 
 // -- Auth helper (MANAGER-only) ------------------------------------------
 
@@ -152,198 +80,6 @@ async function guardManager(): Promise<
     }
     throw err;
   }
-}
-
-// -- Per-row backfill pipeline ------------------------------------------
-
-interface BackfillContext {
-  gmailClient: GmailClient;
-  isAppleSender: (email: string) => boolean;
-}
-
-interface EmailLookupRow {
-  id: string;
-  gmail_msg_id: string;
-  sender_email: string;
-}
-
-/**
- * Re-fetch Gmail HTML for one persisted email row, run extractApple,
- * UPDATE extracted_payload, then call reclassifyOne for atomic ticket
- * swap. Throws on any failure; caller maps to ActionError or accumulates
- * in bulk mode.
- */
-async function backfillOne(
-  emailMessageId: string,
-  actorId: string,
-  ctx: BackfillContext,
-): Promise<BackfillResult> {
-  Sentry.addBreadcrumb({
-    category: 'backfill',
-    level: 'info',
-    message: 'fetch-start',
-    data: { emailMessageId },
-  });
-
-  // 1. Load row to get gmail_msg_id + sender (subject pulled fresh from
-  //    Gmail in step 2; the persisted subject may be stale if the user
-  //    edited it via Gmail label/reply, though Apple emails are static).
-  const { data: rowData, error: rowErr } = await storeDb()
-    .from('email_messages')
-    .select('id, gmail_msg_id, sender_email')
-    .eq('id', emailMessageId)
-    .maybeSingle();
-
-  if (rowErr) {
-    throw new Error(`Failed to load email_messages: ${rowErr.message}`);
-  }
-  if (!rowData) {
-    throw new EmailNotFoundError(emailMessageId);
-  }
-
-  const row = rowData as EmailLookupRow;
-  if (!ctx.isAppleSender(row.sender_email)) {
-    throw new NotApplePlatformError(emailMessageId);
-  }
-
-  // 2. Re-fetch Gmail HTML. Both `getMessage` and `parseGmailMessage`
-  //    can throw — wrap together so the caller's error surface is one
-  //    typed `GmailFetchError` regardless of which step failed.
-  let parsedSubject: string;
-  let parsedBodyHtml: string | undefined;
-  try {
-    const raw = await getMessage(ctx.gmailClient, row.gmail_msg_id);
-    const parsed = parseGmailMessage(raw);
-    parsedSubject = parsed.subject;
-    parsedBodyHtml = parsed.bodyHtml;
-  } catch (err) {
-    Sentry.captureException(err, {
-      tags: { component: 'backfill-action', stage: 'gmail-fetch' },
-      extra: { emailMessageId, gmailMsgId: row.gmail_msg_id },
-    });
-    throw new GmailFetchError(emailMessageId, err);
-  }
-
-  Sentry.addBreadcrumb({
-    category: 'backfill',
-    level: 'info',
-    message: 'html-extracted',
-    data: {
-      emailMessageId,
-      htmlSize: parsedBodyHtml?.length ?? 0,
-    },
-  });
-
-  // 3. Run extractor with subject (PR-12 rejection branch detection).
-  const payload: ExtractedPayload = extractApple(
-    parsedBodyHtml,
-    parsedSubject,
-  );
-
-  Sentry.addBreadcrumb({
-    category: 'backfill',
-    level: 'info',
-    message: 'extract-result',
-    data: {
-      emailMessageId,
-      outcome: payload.outcome,
-      itemsCount: payload.items.length,
-      itemTypes: payload.items.map((i) => i.type),
-    },
-  });
-
-  // 4. Persist extracted_payload. The reclassify step below will load
-  //    the row again with the fresh payload and atomically swap the
-  //    ticket via RPC. Classification stays untouched here — the RPC
-  //    handles the transition.
-  const { error: updateErr } = await storeDb()
-    .from('email_messages')
-    .update({ extracted_payload: payload })
-    .eq('id', emailMessageId);
-
-  if (updateErr) {
-    throw new Error(
-      `Failed to persist extracted_payload: ${updateErr.message}`,
-    );
-  }
-
-  // 5. Reclassify (re-uses existing pipeline + atomic RPC).
-  const reclassify = await reclassifyOne(emailMessageId, actorId);
-
-  Sentry.addBreadcrumb({
-    category: 'backfill',
-    level: 'info',
-    message: 'reclassify-result',
-    data: {
-      emailMessageId,
-      changed: reclassify.changed,
-      previousStatus: reclassify.previousStatus,
-      newStatus: reclassify.newStatus,
-    },
-  });
-
-  return {
-    emailMessageId,
-    outcome: payload.outcome,
-    itemsCount: payload.items.length,
-    reclassify,
-  };
-}
-
-// -- Helpers (sender filter) --------------------------------------------
-
-/**
- * Build the Apple-sender predicate + email list used to filter
- * candidates. Returns `null` when no Apple senders are configured —
- * caller short-circuits with empty result.
- */
-async function loadAppleSenderFilter(): Promise<
-  | { isAppleSender: (email: string) => boolean; appleEmails: string[] }
-  | null
-> {
-  const senders = await loadActiveSenders();
-  const resolve = createSenderResolver(senders);
-  const isAppleSender = (email: string) =>
-    resolve(email)?.platformKey === 'apple';
-  const appleEmails = senders
-    .filter((s) => s.platformKey === 'apple')
-    .map((s) => s.email);
-  if (appleEmails.length === 0) return null;
-  return { isAppleSender, appleEmails };
-}
-
-// -- Error mapping ------------------------------------------------------
-
-function mapErrorToActionError(err: unknown, emailId: string): ActionError {
-  if (err instanceof EmailNotFoundError) {
-    return {
-      code: 'NOT_FOUND',
-      message:
-        'This email no longer exists — the list may be stale. Refresh and try again.',
-    };
-  }
-  if (err instanceof NotApplePlatformError) {
-    return {
-      code: 'VALIDATION',
-      message:
-        'Backfill is Apple-only — this email is from a non-Apple sender.',
-    };
-  }
-  if (err instanceof GmailFetchError) {
-    return { code: 'DB_ERROR', message: err.message };
-  }
-  if (err instanceof ReclassifyValidationError) {
-    return { code: 'VALIDATION', message: err.message };
-  }
-  console.error('[backfill-action] unmapped error:', err);
-  Sentry.captureException(err, {
-    tags: { component: 'backfill-action', stage: 'unmapped' },
-    extra: { emailMessageId: emailId },
-  });
-  return {
-    code: 'DB_ERROR',
-    message: 'Unexpected error during backfill. Please try again.',
-  };
 }
 
 // -- Public Server Actions ----------------------------------------------
@@ -372,25 +108,14 @@ export async function backfillSingleEmailAction(
     };
   }
 
-  let gmailClient: GmailClient;
-  try {
-    gmailClient = await createGmailClient();
-  } catch (err) {
-    Sentry.captureException(err, {
-      tags: { component: 'backfill-action', stage: 'gmail-client' },
-    });
-    return {
-      ok: false,
-      error: {
-        code: 'DB_ERROR',
-        message: 'Failed to create Gmail client. Check Gmail connection.',
-      },
-    };
+  const clientResult = await createBackfillGmailClient();
+  if ('error' in clientResult) {
+    return { ok: false, error: clientResult.error };
   }
 
   try {
     const result = await backfillOne(emailMessageId, guard.user.id, {
-      gmailClient,
+      gmailClient: clientResult.client,
       isAppleSender: filter.isAppleSender,
     });
     revalidatePath('/store-submissions/inbox');
@@ -468,24 +193,13 @@ export async function backfillUnclassifiedAction(
     return { ok: true, data: stats };
   }
 
-  let gmailClient: GmailClient;
-  try {
-    gmailClient = await createGmailClient();
-  } catch (err) {
-    Sentry.captureException(err, {
-      tags: { component: 'backfill-action', stage: 'gmail-client' },
-    });
-    return {
-      ok: false,
-      error: {
-        code: 'DB_ERROR',
-        message: 'Failed to create Gmail client. Check Gmail connection.',
-      },
-    };
+  const clientResult = await createBackfillGmailClient();
+  if ('error' in clientResult) {
+    return { ok: false, error: clientResult.error };
   }
 
   const ctx: BackfillContext = {
-    gmailClient,
+    gmailClient: clientResult.client,
     isAppleSender: filter.isAppleSender,
   };
 

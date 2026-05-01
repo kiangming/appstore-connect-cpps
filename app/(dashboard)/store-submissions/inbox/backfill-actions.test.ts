@@ -284,8 +284,11 @@ describe('backfillSingleEmailAction — happy path', () => {
       '<html>...</html>',
       "There's an issue with your X submission",
     );
-    // UPDATE chain receives the freshly-extracted payload.
+    // UPDATE chain receives both the corrected raw_body_text (PR-14.4
+    // — re-parsing under the byte-level decoder may repair pre-PR-14
+    // mojibake) and the freshly-extracted payload.
     expect(updateBuilder.update).toHaveBeenCalledWith({
+      raw_body_text: 'Submission ID: ...',
       extracted_payload: {
         outcome: 'REJECTED',
         items: expect.arrayContaining([
