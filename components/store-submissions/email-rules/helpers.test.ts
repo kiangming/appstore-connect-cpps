@@ -351,7 +351,17 @@ describe('safeSlugFromName', () => {
   });
 
   it('returns "" when the name has no ASCII alphanumerics', () => {
+    // Type slugs are short ASCII codes (app, iae, ipa) — Manager types the
+    // slug by hand for non-Latin type names rather than receiving a hash.
     expect(safeSlugFromName('!!!')).toBe('');
+  });
+
+  it('returns "" for CJK-only names (does not apply app-registry hash fallback)', () => {
+    expect(safeSlugFromName('彈彈英雄')).toBe('');
+  });
+
+  it('returns "" for 1-2 char names (below the meaningful-slug threshold)', () => {
+    expect(safeSlugFromName('VN')).toBe('');
   });
 });
 

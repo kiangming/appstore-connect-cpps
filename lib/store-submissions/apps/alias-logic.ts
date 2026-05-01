@@ -24,27 +24,44 @@ export class InvalidSlugError extends Error {
 export const SLUG_MAX_LENGTH = 50;
 
 /**
- * Generate a URL-friendly slug from an app name.
- *
- * - NFD-decomposes and strips Unicode combining marks → drops diacritics
- *   (Vietnamese, French, Spanish, etc.).
- * - Maps Vietnamese đ/Đ manually because they are precomposed code points,
- *   not composed characters, and NFD leaves them intact.
- * - Lowercases, replaces runs of non-ASCII-alphanumeric with a single hyphen,
- *   trims leading/trailing hyphens.
- * - Truncates at SLUG_MAX_LENGTH (50) to leave room for collision suffixes
- *   like `-2`, `-3` that the caller applies in PR-4.
- *
- * Returns the candidate slug — callers MUST check for collisions against the
- * database before using it.
- *
- * Throws InvalidSlugError when the input is empty or contains no characters
- * that map to ASCII alphanumerics (e.g., "!!!" or "  ").
+ * Below this many ASCII alphanumerics in the normalized output, the slug is
+ * considered too thin to be human-meaningful (e.g. "彈彈英雄" → "", "創世紀戰M…"
+ * → "m") and we fall back to a deterministic hash. Set to 3 so 2-letter
+ * abbreviations ("VN") hash but 3-letter acronyms ("TFT") survive.
  */
-export function generateSlugFromName(name: string): string {
-  if (typeof name !== 'string' || name.trim() === '') {
-    throw new InvalidSlugError(name, 'input is empty or whitespace-only');
+export const SLUG_MIN_MEANINGFUL_LENGTH = 3;
+
+/**
+ * FNV-1a 32-bit hash. Pure TS — no Node `crypto` import — so this module stays
+ * importable from Client Components (AppDialog uses generateSlugFromName for
+ * the live slug preview). 4B output space is more than sufficient for our
+ * ~200-app scope; the apps.slug UNIQUE constraint catches any collision and
+ * suggestAvailableSlug appends a numeric suffix.
+ */
+function fnv1a32Hex(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
   }
+  return hash.toString(16).padStart(8, '0');
+}
+
+/**
+ * Try to generate a clean ASCII slug from `name` using NFD + diacritic strip
+ * + đ/Đ map + lowercase + non-alphanumeric → hyphen + truncate.
+ *
+ * Returns `null` when:
+ *   - input is not a non-empty string after trim, OR
+ *   - the normalized result has fewer than SLUG_MIN_MEANINGFUL_LENGTH ASCII
+ *     alphanumerics (CJK names, emoji, pure punctuation, 1-2 char Latin).
+ *
+ * Callers that want a guaranteed slug should layer their own fallback on top
+ * (apps use a hash; type-slug derivation in TypesTable returns "" so the
+ * Manager types the slug manually).
+ */
+export function tryGenerateAsciiSlug(name: string): string | null {
+  if (typeof name !== 'string' || name.trim() === '') return null;
 
   const deaccented = name
     .normalize('NFD')
@@ -59,10 +76,30 @@ export function generateSlugFromName(name: string): string {
     .slice(0, SLUG_MAX_LENGTH)
     .replace(/^-+|-+$/g, '');
 
-  if (slug === '') {
-    throw new InvalidSlugError(name, 'no ASCII alphanumerics remain after normalization');
+  return slug.replace(/-/g, '').length < SLUG_MIN_MEANINGFUL_LENGTH ? null : slug;
+}
+
+/**
+ * Generate a URL-friendly slug from an app name.
+ *
+ * - Latin/Vietnamese/French/Spanish names normalize to a clean ASCII slug
+ *   (`tryGenerateAsciiSlug`).
+ * - CJK names, emoji-only names, pure punctuation, and 1-2 char Latin
+ *   abbreviations fall back to a deterministic `app-<8 hex>` hash slug —
+ *   unblocks app registry creation for non-Latin names without changing any
+ *   existing slug.
+ *
+ * Returns the candidate slug — callers MUST check for collisions against the
+ * database before using it.
+ *
+ * Throws InvalidSlugError only when the input is empty, whitespace-only, or
+ * not a string. Any non-empty input produces a slug.
+ */
+export function generateSlugFromName(name: string): string {
+  if (typeof name !== 'string' || name.trim() === '') {
+    throw new InvalidSlugError(name, 'input is empty or whitespace-only');
   }
-  return slug;
+  return tryGenerateAsciiSlug(name) ?? `app-${fnv1a32Hex(name)}`;
 }
 
 // -- Rename plan -----------------------------------------------------------

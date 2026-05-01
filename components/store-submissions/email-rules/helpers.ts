@@ -8,10 +8,7 @@
  * the beforeunload warning, and the tab-switch confirm.
  */
 
-import {
-  InvalidSlugError,
-  generateSlugFromName,
-} from '@/lib/store-submissions/apps/alias-logic';
+import { tryGenerateAsciiSlug } from '@/lib/store-submissions/apps/alias-logic';
 import type {
   PlatformRow,
   PlatformRules,
@@ -219,18 +216,14 @@ export function nextNumericField<T>(rows: T[], field: keyof T): number {
 }
 
 /**
- * Safe wrapper around generateSlugFromName — empty/invalid names return ""
- * so the types-table auto-derive-on-blur UX never throws. Manager can type
- * a slug by hand when the derivation fails (e.g. name="!!!").
+ * Safe wrapper for the Types table auto-derive-on-blur UX. Returns "" when
+ * the name doesn't yield a clean ASCII slug — Manager types the slug by hand
+ * for names like "!!!" or "彈彈". We deliberately do NOT use the app-registry
+ * hash fallback here: a hash like `app-3f8b2c1a` is meaningless as a type
+ * slug (types are short ASCII codes like `app`, `iae`, `ipa`).
  */
 export function safeSlugFromName(name: string): string {
-  if (!name || name.trim() === '') return '';
-  try {
-    return generateSlugFromName(name);
-  } catch (err) {
-    if (err instanceof InvalidSlugError) return '';
-    throw err;
-  }
+  return tryGenerateAsciiSlug(name) ?? '';
 }
 
 function isPlatformKey(v: string | undefined | null): v is PlatformKey {

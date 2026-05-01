@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import type { ExistingAlias } from './alias-logic';
 import {
   SLUG_MAX_LENGTH,
+  SLUG_MIN_MEANINGFUL_LENGTH,
   InvalidSlugError,
   deriveAliasChangesOnRename,
   generateSlugFromName,
 } from './alias-logic';
+
+const HASH_SLUG_RE = /^app-[0-9a-f]{8}$/;
 
 describe('generateSlugFromName — ASCII', () => {
   it('lowercases and hyphenates spaces', () => {
@@ -72,6 +75,57 @@ describe('generateSlugFromName — truncation', () => {
   });
 });
 
+describe('generateSlugFromName — hash fallback for non-ASCII input', () => {
+  it('returns an app-<hash> slug for CJK-only names', () => {
+    const slug = generateSlugFromName('彈彈英雄');
+    expect(slug).toMatch(HASH_SLUG_RE);
+  });
+
+  it('falls back when the only ASCII char is below the meaningful threshold', () => {
+    // 創世紀戰M：阿修羅計畫 → "m" alone (1 char < SLUG_MIN_MEANINGFUL_LENGTH)
+    const slug = generateSlugFromName('創世紀戰M：阿修羅計畫');
+    expect(slug).toMatch(HASH_SLUG_RE);
+  });
+
+  it('preserves a 3-letter Latin acronym (boundary above threshold)', () => {
+    // SLUG_MIN_MEANINGFUL_LENGTH=3 — "TFT" survives as auto-slug.
+    expect(generateSlugFromName('TFT')).toBe('tft');
+  });
+
+  it('hashes a 2-letter Latin abbreviation (boundary below threshold)', () => {
+    expect(generateSlugFromName('VN')).toMatch(HASH_SLUG_RE);
+  });
+
+  it('hashes emoji-only names', () => {
+    expect(generateSlugFromName('🎮')).toMatch(HASH_SLUG_RE);
+  });
+
+  it('hashes pure-punctuation names instead of throwing', () => {
+    // Previously threw "no ASCII alphanumerics remain"; now hash-falls-back.
+    expect(generateSlugFromName('!!!???')).toMatch(HASH_SLUG_RE);
+  });
+
+  it('hashes lone combining marks instead of throwing', () => {
+    expect(generateSlugFromName('\u0301\u0302')).toMatch(HASH_SLUG_RE);
+  });
+
+  it('is deterministic — same input produces the same hash slug across calls', () => {
+    expect(generateSlugFromName('彈彈英雄')).toBe(generateSlugFromName('彈彈英雄'));
+  });
+
+  it('produces distinct hash slugs for distinct CJK names', () => {
+    const a = generateSlugFromName('彈彈英雄');
+    const b = generateSlugFromName('阿修羅計畫');
+    expect(a).not.toBe(b);
+    expect(a).toMatch(HASH_SLUG_RE);
+    expect(b).toMatch(HASH_SLUG_RE);
+  });
+
+  it('exposes the threshold constant for downstream tuning visibility', () => {
+    expect(SLUG_MIN_MEANINGFUL_LENGTH).toBe(3);
+  });
+});
+
 describe('generateSlugFromName — error cases', () => {
   it('throws InvalidSlugError on empty string', () => {
     expect(() => generateSlugFromName('')).toThrow(InvalidSlugError);
@@ -79,24 +133,6 @@ describe('generateSlugFromName — error cases', () => {
 
   it('throws InvalidSlugError on whitespace-only', () => {
     expect(() => generateSlugFromName('   \t\n ')).toThrow(InvalidSlugError);
-  });
-
-  it('throws InvalidSlugError when only punctuation remains', () => {
-    try {
-      generateSlugFromName('!!!???');
-      throw new Error('expected throw');
-    } catch (err) {
-      expect(err).toBeInstanceOf(InvalidSlugError);
-      const e = err as InvalidSlugError;
-      expect(e.input).toBe('!!!???');
-      expect(e.reason).toContain('no ASCII alphanumerics');
-      expect(e.name).toBe('InvalidSlugError');
-    }
-  });
-
-  it('throws InvalidSlugError when only non-Latin diacritics remain with no base letters', () => {
-    // A standalone combining mark (unlikely from real input but defensive)
-    expect(() => generateSlugFromName('\u0301\u0302')).toThrow(InvalidSlugError);
   });
 
   it('throws InvalidSlugError for non-string input', () => {

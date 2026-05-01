@@ -193,11 +193,20 @@ describe('createAppAction', () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  it('rejects name that produces no slug (VALIDATION via InvalidSlugError)', async () => {
-    onTable('apps', () => ({ select: () => ({ or: () => Promise.resolve({ data: [], error: null }) }) }));
-    const result = await createAppAction({ name: '!!!' });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('VALIDATION');
+  it('hash-falls-back when the name has no ASCII alphanumerics (CJK / pure punctuation)', async () => {
+    onTable('apps', () => ({
+      select: () => ({ or: () => Promise.resolve({ data: [], error: null }) }),
+    }));
+    mockRpc.mockResolvedValueOnce({ data: VALID_UUID, error: null });
+
+    const result = await createAppAction({ name: '彈彈英雄' });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.data.slug).toMatch(/^app-[0-9a-f]{8}$/);
+    expect(mockRpc).toHaveBeenCalledWith(
+      'create_app_tx',
+      expect.objectContaining({ p_name: '彈彈英雄', p_slug: expect.stringMatching(/^app-[0-9a-f]{8}$/) }),
+    );
   });
 
   it('auto-generates slug from name and dispatches RPC', async () => {
