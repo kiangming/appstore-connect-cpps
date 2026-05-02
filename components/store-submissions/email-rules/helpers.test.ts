@@ -61,6 +61,7 @@ function baseRules(): PlatformRules {
         example_subject: null,
         active: true,
         auto_done_eligible: false,
+        auto_reopen_eligible: false,
       },
     ],
     types: [
@@ -114,6 +115,7 @@ describe('buildDraftState', () => {
           example_subject: null,
           active: true,
           auto_done_eligible: false,
+          auto_reopen_eligible: false,
         },
       ],
       types: [
@@ -181,6 +183,7 @@ describe('isDraftDirty', () => {
       example_subject: null,
       active: true,
       auto_done_eligible: false,
+      auto_reopen_eligible: false,
     });
     expect(isDraftDirty(original, modified)).toBe(true);
   });
@@ -202,6 +205,7 @@ describe('isDraftDirty', () => {
       example_subject: null,
       active: true,
       auto_done_eligible: false,
+      auto_reopen_eligible: false,
     });
     const modified: typeof original = {
       ...original,
@@ -244,6 +248,7 @@ describe('updateRow', () => {
       example_subject: null,
       active: true,
       auto_done_eligible: false,
+      auto_reopen_eligible: false,
     };
     const next = updateRow([draft], 0, { auto_done_eligible: true });
     expect(next[0]?.auto_done_eligible).toBe(true);

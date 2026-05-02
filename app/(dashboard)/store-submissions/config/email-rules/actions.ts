@@ -178,6 +178,7 @@ export async function saveRulesAction(
       example_subject: p.example_subject ?? null,
       active: p.active,
       auto_done_eligible: p.auto_done_eligible,
+      auto_reopen_eligible: p.auto_reopen_eligible,
     })),
     p_types: data.types.map((t) => ({
       name: t.name,

@@ -59,6 +59,7 @@ export interface SubjectPatternDraft {
   example_subject: string | null;
   active: boolean;
   auto_done_eligible: boolean;
+  auto_reopen_eligible: boolean;
 }
 
 export interface TypeDraft {
@@ -101,6 +102,7 @@ const fromSubjectRow = (r: SubjectPatternRow): SubjectPatternDraft => ({
   example_subject: r.example_subject,
   active: r.active,
   auto_done_eligible: r.auto_done_eligible,
+  auto_reopen_eligible: r.auto_reopen_eligible,
 });
 
 const fromTypeRow = (r: TypeRow): TypeDraft => ({

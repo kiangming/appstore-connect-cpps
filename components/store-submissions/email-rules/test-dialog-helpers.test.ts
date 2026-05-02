@@ -69,6 +69,7 @@ describe('buildTestPayload', () => {
           example_subject: null,
           active: true,
           auto_done_eligible: false,
+          auto_reopen_eligible: false,
         },
         {
           outcome: 'REJECTED',
@@ -77,6 +78,7 @@ describe('buildTestPayload', () => {
           example_subject: null,
           active: true,
           auto_done_eligible: false,
+          auto_reopen_eligible: false,
         },
       ],
     };

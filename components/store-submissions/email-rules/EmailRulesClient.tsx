@@ -180,6 +180,10 @@ export function EmailRulesClient({
           // here at the page-level payload builder. Future subject_patterns
           // fields must add a line here too.
           auto_done_eligible: p.auto_done_eligible,
+          // PR-16b.5: same threading discipline cho the second Manager
+          // opt-in flag. N-layer cascade audit (PR-16a.5 lesson): Layer 9
+          // intermediate payload builder is the canonical missed site.
+          auto_reopen_eligible: p.auto_reopen_eligible,
         })),
         types: draft.types.map((t) => ({
           name: t.name,

@@ -90,6 +90,14 @@ export const subjectPatternInputSchema = z
      * Default false preserves pre-PR-16 behavior on every existing pattern.
      */
     auto_done_eligible: z.boolean().default(false),
+    /**
+     * PR-16b.5 Manager opt-in: when TRUE, REJECTED emails matching
+     * pattern trigger auto-reopen of recent auto-DONE ticket cho same
+     * grouping key. Default false preserves "build mới = ticket mới"
+     * Apple workflow semantic — Manager must explicitly enable on
+     * platforms where same-build re-rejection is possible.
+     */
+    auto_reopen_eligible: z.boolean().default(false),
   })
   .superRefine((d, ctx) => {
     const r = validateSubjectPattern(d.regex);
@@ -285,6 +293,9 @@ export const configSnapshotSchema = z.object({
       // with a FALSE default so legacy version detail/rollback still validate
       // strict and replay as opt-out.
       auto_done_eligible: z.boolean().optional().default(false),
+      // PR-16b.5 additive: pre-PR-16b.5 snapshots lack the field — same
+      // legacy back-compat strategy as auto_done_eligible.
+      auto_reopen_eligible: z.boolean().optional().default(false),
     }),
   ),
   types: z.array(
