@@ -180,6 +180,15 @@ export interface ClassifiedResult {
   submission_id: string | null;
   extracted_app_name: string;
   matched_rules: MatchedRule[];
+  /**
+   * PR-16: id of the subject pattern that matched. Threaded into
+   * find_or_create_ticket_tx so the RPC can check
+   * subject_patterns.auto_done_eligible without re-querying matched_rules.
+   * Optional for backward compat with existing test fixtures and JSON
+   * shapes — when absent the RPC falls through to the pre-PR-16 path
+   * (no auto-DONE).
+   */
+  subject_pattern_id?: string | null;
 }
 
 export type ErrorCode = 'REGEX_TIMEOUT' | 'PARSE_ERROR';

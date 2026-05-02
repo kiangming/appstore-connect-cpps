@@ -191,6 +191,7 @@ export function classify(
       submission_id: subIdMatch?.submission_id ?? null,
       extracted_app_name: extractedName,
       matched_rules: matched,
+      subject_pattern_id: subjectMatch.pattern_id,
     };
   } catch (err) {
     if (err instanceof RegexTimeoutError) {
