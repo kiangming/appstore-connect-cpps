@@ -24,6 +24,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useHotkeys } from 'react-hotkeys-hook';
 import {
   ArrowRight,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Database,
@@ -87,6 +88,13 @@ export interface InboxClientProps {
    * (cheap-out — they couldn't act on the count anyway).
    */
   corruptPayloadCount: number;
+  /**
+   * PR-16b Q1.E: count of state=DONE tickets closed trong the last 7
+   * days whose latest STATE_CHANGE is system-origin auto_mark_done.
+   * Drives the MANAGER-only "X tickets auto-completed" info banner.
+   * Server-side default: `0` for non-MANAGER roles. Auto-hides at zero.
+   */
+  autoCompletedCount: number;
 }
 
 // -- Tabs (state dimension) -------------------------------------------------
@@ -183,6 +191,7 @@ export function InboxClient({
   selectedTicketId,
   initialTicket,
   corruptPayloadCount,
+  autoCompletedCount,
 }: InboxClientProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -384,6 +393,16 @@ export function InboxClient({
         isPending ? 'opacity-60 pointer-events-none' : ''
       }`}
     >
+      {/* -- Auto-completed banner (PR-16b Q1.E) — MANAGER-only, auto-hides
+          at zero. Info-tone (blue) distinct từ amber maintenance banner
+          below. Shown on every tab because auto-completed tickets bypass
+          the Open queue entirely; the banner is the Manager's only
+          surface to discover them without navigating manually to
+          /auto-completed. */}
+      {role === 'MANAGER' && autoCompletedCount > 0 && (
+        <AutoCompletedBanner count={autoCompletedCount} />
+      )}
+
       {/* -- Maintenance banner (PR-14.4) — MANAGER-only, auto-hides at zero --
           Shown on every tab because corrupt rows are CLASSIFIED status and
           live in Open/Done tabs, not Unclassified — so scoping this to one
@@ -799,6 +818,43 @@ function BulkReclassifyButton() {
       />
       {isPending ? 'Reclassifying…' : 'Reclassify all'}
     </button>
+  );
+}
+
+/**
+ * MANAGER-only auto-completed visibility banner (PR-16b Q1.E).
+ *
+ * Surfaces the count of state=DONE tickets closed trong the last 7
+ * days whose latest STATE_CHANGE is system-origin auto_mark_done —
+ * i.e. tickets that bypassed the Open queue via PR-16a auto-DONE.
+ * The banner gives Manager an at-a-glance handle on what was
+ * auto-completed without needing to dig through the Done tab; click
+ * navigates to the dedicated /auto-completed view.
+ *
+ * Read-only affordance — no destructive action behind it. Distinct
+ * from PR-14.4's amber maintenance banner (which IS an action).
+ * Auto-retires at count = 0.
+ */
+function AutoCompletedBanner({ count }: { count: number }) {
+  return (
+    <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 text-[13px] text-blue-900 min-w-0">
+        <CheckCircle2
+          className="w-4 h-4 text-blue-600 flex-shrink-0"
+          strokeWidth={1.8}
+        />
+        <span className="truncate">
+          {count} ticket{count === 1 ? '' : 's'} auto-completed in the last 7 days
+        </span>
+      </div>
+      <Link
+        href="/store-submissions/inbox/auto-completed"
+        className="inline-flex items-center gap-1 text-[13px] font-medium text-blue-800 hover:text-blue-900 flex-shrink-0"
+      >
+        View all
+        <ArrowRight className="w-3 h-3" strokeWidth={1.8} />
+      </Link>
+    </div>
   );
 }
 

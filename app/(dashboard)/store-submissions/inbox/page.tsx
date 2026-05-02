@@ -7,6 +7,7 @@ import {
   listTickets,
 } from '@/lib/store-submissions/queries/tickets';
 import { listApps } from '@/lib/store-submissions/queries/apps';
+import { getAutoCompletedCount } from '@/lib/store-submissions/queries/auto-completed';
 import { getCorruptPayloadCount } from '@/lib/store-submissions/queries/corrupt-payload';
 import { listPlatforms } from '@/lib/store-submissions/queries/rules';
 import { parseTicketsQueryFromSearchParams } from '@/lib/store-submissions/inbox/search-params';
@@ -78,16 +79,30 @@ export default async function InboxPage({
   // corrupted by the pre-PR-14 byte-mask decoder. MANAGER-only — skipped
   // for VIEWER/DEV so the regular page load isn't taxed by a query whose
   // result they couldn't act on.
-  const [data, apps, platforms, initialTicket, corruptPayloadCount] =
-    await Promise.all([
-      listTickets(effectiveQuery, { includeFirstEmail: isUnclassifiedView }),
-      listApps({ active: true }),
-      listPlatforms(),
-      selectedTicketId ? getTicketWithEntries(selectedTicketId) : Promise.resolve(null),
-      storeUser.role === 'MANAGER'
-        ? getCorruptPayloadCount()
-        : Promise.resolve(0),
-    ]);
+  //
+  // Auto-completed banner probe (PR-16b Q1.E): count of state=DONE tickets
+  // closed trong last 7 days whose latest STATE_CHANGE is system-origin
+  // auto_mark_done. Same MANAGER-only gating as corrupt-payload — VIEWER
+  // / DEV roles can't interpret the banner action surface.
+  const [
+    data,
+    apps,
+    platforms,
+    initialTicket,
+    corruptPayloadCount,
+    autoCompletedCount,
+  ] = await Promise.all([
+    listTickets(effectiveQuery, { includeFirstEmail: isUnclassifiedView }),
+    listApps({ active: true }),
+    listPlatforms(),
+    selectedTicketId ? getTicketWithEntries(selectedTicketId) : Promise.resolve(null),
+    storeUser.role === 'MANAGER'
+      ? getCorruptPayloadCount()
+      : Promise.resolve(0),
+    storeUser.role === 'MANAGER'
+      ? getAutoCompletedCount()
+      : Promise.resolve(0),
+  ]);
 
   return (
     <div className="px-8 py-10">
@@ -116,6 +131,7 @@ export default async function InboxPage({
           selectedTicketId={selectedTicketId}
           initialTicket={initialTicket}
           corruptPayloadCount={corruptPayloadCount}
+          autoCompletedCount={autoCompletedCount}
         />
       </div>
     </div>
