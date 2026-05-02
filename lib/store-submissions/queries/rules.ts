@@ -43,6 +43,7 @@ export interface SubjectPatternRow {
   priority: number;
   example_subject: string | null;
   active: boolean;
+  auto_done_eligible: boolean;
 }
 
 export interface TypeRow {
@@ -151,7 +152,9 @@ export async function getRulesForPlatform(
       .order('email', { ascending: true }),
     db
       .from('subject_patterns')
-      .select('id, platform_id, outcome, regex, priority, example_subject, active')
+      .select(
+        'id, platform_id, outcome, regex, priority, example_subject, active, auto_done_eligible',
+      )
       .eq('platform_id', platformId)
       .order('priority', { ascending: true }),
     db

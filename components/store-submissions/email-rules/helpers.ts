@@ -58,6 +58,7 @@ export interface SubjectPatternDraft {
   priority: number;
   example_subject: string | null;
   active: boolean;
+  auto_done_eligible: boolean;
 }
 
 export interface TypeDraft {
@@ -99,6 +100,7 @@ const fromSubjectRow = (r: SubjectPatternRow): SubjectPatternDraft => ({
   priority: r.priority,
   example_subject: r.example_subject,
   active: r.active,
+  auto_done_eligible: r.auto_done_eligible,
 });
 
 const fromTypeRow = (r: TypeRow): TypeDraft => ({

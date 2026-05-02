@@ -68,6 +68,7 @@ describe('buildTestPayload', () => {
           priority: 1,
           example_subject: null,
           active: true,
+          auto_done_eligible: false,
         },
         {
           outcome: 'REJECTED',
@@ -75,6 +76,7 @@ describe('buildTestPayload', () => {
           priority: 2,
           example_subject: null,
           active: true,
+          auto_done_eligible: false,
         },
       ],
     };

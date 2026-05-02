@@ -34,6 +34,7 @@ const emptyPattern = (): SubjectPatternDraft => ({
   priority: 100,
   example_subject: null,
   active: true,
+  auto_done_eligible: false,
 });
 
 export function SubjectPatternsTable({
@@ -75,6 +76,16 @@ export function SubjectPatternsTable({
     const current = patterns[sourceIdx];
     if (!current) return;
     onChange(updateRow(patterns, sourceIdx, { active: !current.active }));
+  };
+
+  const handleAutoDoneEligibleToggle = (sourceIdx: number) => {
+    const current = patterns[sourceIdx];
+    if (!current) return;
+    onChange(
+      updateRow(patterns, sourceIdx, {
+        auto_done_eligible: !current.auto_done_eligible,
+      }),
+    );
   };
 
   const handleRemove = (sourceIdx: number) =>
@@ -119,7 +130,7 @@ export function SubjectPatternsTable({
           return (
             <div
               key={sourceIdx}
-              className="grid grid-cols-[140px_1fr_90px_auto_auto] gap-3 items-start px-4 py-3 border-b border-slate-100 last:border-b-0"
+              className="grid grid-cols-[140px_1fr_90px_auto_auto_auto] gap-3 items-start px-4 py-3 border-b border-slate-100 last:border-b-0"
             >
               <div className="space-y-1">
                 <select
@@ -162,6 +173,20 @@ export function SubjectPatternsTable({
                   className="w-full px-2 py-1 border border-slate-200 rounded-md text-[12.5px] font-mono focus:outline-none focus:ring-2 focus:ring-[#0071E3]/20 focus:border-[#0071E3]"
                 />
               </div>
+
+              <label
+                className="inline-flex items-center gap-1.5 text-[11.5px] text-slate-500 cursor-pointer select-none mt-5"
+                title="When enabled, matching emails with APPROVED outcome auto-complete tickets without manual review"
+              >
+                <input
+                  type="checkbox"
+                  checked={pattern.auto_done_eligible}
+                  onChange={() => handleAutoDoneEligibleToggle(sourceIdx)}
+                  disabled={pattern.outcome !== 'APPROVED'}
+                  className="h-3.5 w-3.5 accent-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                />
+                Auto-DONE
+              </label>
 
               <label className="inline-flex items-center gap-1.5 text-[11.5px] text-slate-500 cursor-pointer select-none mt-5">
                 <input

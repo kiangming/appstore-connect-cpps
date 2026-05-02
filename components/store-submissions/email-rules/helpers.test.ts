@@ -59,6 +59,7 @@ function baseRules(): PlatformRules {
         priority: 1,
         example_subject: null,
         active: true,
+        auto_done_eligible: false,
       },
     ],
     types: [
@@ -111,6 +112,7 @@ describe('buildDraftState', () => {
           priority: 1,
           example_subject: null,
           active: true,
+          auto_done_eligible: false,
         },
       ],
       types: [
@@ -177,6 +179,7 @@ describe('isDraftDirty', () => {
       priority: 2,
       example_subject: null,
       active: true,
+      auto_done_eligible: false,
     });
     expect(isDraftDirty(original, modified)).toBe(true);
   });
@@ -197,6 +200,7 @@ describe('isDraftDirty', () => {
       priority: 2,
       example_subject: null,
       active: true,
+      auto_done_eligible: false,
     });
     const modified: typeof original = {
       ...original,

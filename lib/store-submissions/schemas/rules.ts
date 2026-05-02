@@ -84,6 +84,12 @@ export const subjectPatternInputSchema = z
     priority: z.number().int().min(0).max(10_000).default(100),
     example_subject: z.string().trim().max(500).optional().nullable(),
     active: z.boolean().default(true),
+    /**
+     * PR-16 Manager opt-in: when TRUE, matching emails với
+     * latest_outcome=APPROVED skip the Open queue and land in DONE.
+     * Default false preserves pre-PR-16 behavior on every existing pattern.
+     */
+    auto_done_eligible: z.boolean().default(false),
   })
   .superRefine((d, ctx) => {
     const r = validateSubjectPattern(d.regex);
@@ -275,6 +281,10 @@ export const configSnapshotSchema = z.object({
       priority: z.number().int(),
       example_subject: z.string().nullable(),
       active: z.boolean(),
+      // PR-16 additive: pre-PR-16 snapshots lack the field — keep optional
+      // with a FALSE default so legacy version detail/rollback still validate
+      // strict and replay as opt-out.
+      auto_done_eligible: z.boolean().optional().default(false),
     }),
   ),
   types: z.array(
