@@ -171,6 +171,15 @@ export function EmailRulesClient({
           priority: p.priority,
           example_subject: p.example_subject,
           active: p.active,
+          // PR-16a.5 hotfix: thread Manager opt-in flag through to the
+          // Server Action. Without this line zod's .default(false) on the
+          // input schema silently coerced the missing field to false, the
+          // RPC persisted false, router.refresh() reloaded false, and the
+          // checkbox appeared to "revert" after every Save. The Server
+          // Action → RPC mapper (actions.ts) was correct; the gap was
+          // here at the page-level payload builder. Future subject_patterns
+          // fields must add a line here too.
+          auto_done_eligible: p.auto_done_eligible,
         })),
         types: draft.types.map((t) => ({
           name: t.name,
