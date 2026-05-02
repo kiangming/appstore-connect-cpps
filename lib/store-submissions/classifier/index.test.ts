@@ -188,6 +188,25 @@ describe('classify — CLASSIFIED happy path', () => {
     expect(subIdTrace?.matched).toBe(false);
     expect(subIdTrace?.details).toBeUndefined();
   });
+
+  // PR-16a.4: subject_pattern_id propagation. find_or_create_ticket_tx
+  // reads p_classification->>'subject_pattern_id' to look up
+  // subject_patterns.auto_done_eligible without re-deriving the match.
+  // Regression guard: changing the CLASSIFIED return shape must keep
+  // this field populated from subjectMatch.pattern_id.
+  it('CLASSIFIED result populates subject_pattern_id from the matched subject pattern (PR-16)', () => {
+    mockMatchSender.mockReturnValue(senderHit);
+    mockMatchSubject.mockReturnValue(subjectHit);
+    mockMatchApp.mockReturnValue(appHit);
+    mockMatchType.mockReturnValue(typeHit);
+    mockExtractSubmissionId.mockReturnValue(subIdHit);
+
+    const result = classify(makeEmail(), makeRules({ apps_with_aliases: [makeApp()] }));
+
+    expect(result.status).toBe('CLASSIFIED');
+    if (result.status !== 'CLASSIFIED') return;
+    expect(result.subject_pattern_id).toBe(PATTERN_ID);
+  });
 });
 
 // ------------------------------------------------------------------

@@ -17,6 +17,7 @@ import {
   setPrimarySender,
   sortByNumericField,
   updateRow,
+  type SubjectPatternDraft,
 } from './helpers';
 
 const applyPlatform: PlatformRow = {
@@ -228,6 +229,28 @@ describe('updateRow', () => {
     const rows = [{ id: 'a' }];
     expect(updateRow(rows, -1, { id: 'z' })).toBe(rows);
     expect(updateRow(rows, 5, { id: 'z' })).toBe(rows);
+  });
+
+  // PR-16a.4: SubjectPatternsTable toggles auto_done_eligible via
+  // updateRow with a `{ auto_done_eligible: !current }` patch. Pin the
+  // round-trip so a future shallow-merge regression doesn't silently
+  // drop the new field.
+  it('preserves auto_done_eligible toggle on SubjectPatternDraft (PR-16)', () => {
+    const draft: SubjectPatternDraft = {
+      id: 'p1',
+      outcome: 'APPROVED',
+      regex: 'Review of your (?<app_name>.+) submission is complete\\.',
+      priority: 10,
+      example_subject: null,
+      active: true,
+      auto_done_eligible: false,
+    };
+    const next = updateRow([draft], 0, { auto_done_eligible: true });
+    expect(next[0]?.auto_done_eligible).toBe(true);
+    // Other fields untouched.
+    expect(next[0]?.outcome).toBe('APPROVED');
+    expect(next[0]?.regex).toBe(draft.regex);
+    expect(next[0]?.active).toBe(true);
   });
 });
 

@@ -40,6 +40,33 @@
 -- Backward compat: when classification JSONB lacks subject_pattern_id
 -- (old code paths or tests), v_subject_pattern_id resolves to NULL,
 -- v_auto_done stays FALSE, behavior identical to pre-PR-16.
+--
+-- Idempotency caveat:
+--   Pre-PR-16 the partial unique index `idx_store_mgmt_tickets_open_unique`
+--   caught duplicate findOrCreateTicket calls because every ticket was
+--   born trong NEW state (covered by the index's WHERE state IN
+--   ('NEW','IN_REVIEW','REJECTED') predicate). A second concurrent
+--   INSERT lost the unique_violation race and looped back to find the
+--   winner.
+--
+--   Auto-DONE creates land trong DONE state, NOT covered by the partial
+--   unique index. A second findOrCreateTicket call với the same
+--   email_message_id would not match the open-state SELECT and could
+--   succeed at the INSERT step, producing a duplicate ticket.
+--
+--   Real production paths are idempotent at higher layers, so this edge
+--   is unreachable today:
+--     * Cron sync — UNIQUE(email_messages.gmail_msg_id) ensures wire is
+--       called exactly once per Gmail message (gmail/sync.ts:515 only
+--       wires when `inserted` non-null).
+--     * Reclassify — reclassify_email_tx no-op short-circuit at
+--       L130-138 (status + grouping unchanged → return changed=FALSE
+--       before touching find-or-create).
+--     * Backfill — routes via reclassify, inherits the short-circuit.
+--
+--   Defensive RPC-level test is deferred PR-17+ Path C infrastructure
+--   (live Postgres test instance + fixture seed) since current vitest
+--   suite mocks the RPC. See PR-16a.4 commit for Path A scope rationale.
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION store_mgmt.find_or_create_ticket_tx(

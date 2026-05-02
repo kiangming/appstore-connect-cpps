@@ -282,6 +282,71 @@ describe('findOrCreateTicket — happy paths', () => {
       p_email_message_id: 'email-1',
     });
   });
+
+  // PR-16a.4: auto-DONE response shape regression guards.
+  // The PL/pgSQL RPC reports state_changed=true on auto-DONE creates
+  // (Decision 4) and new_state='DONE' read from the inserted row, so
+  // the engine TS layer must not assume created=true implies
+  // state_changed=false. SQL behavior validated separately via Manual
+  // QA Scenarios 3-4; these tests pin the wire-format contract.
+  it('auto-DONE create response shape — state=DONE, state_changed=true, previous_state=null', async () => {
+    mockRpc.mockResolvedValueOnce({
+      data: {
+        ticket_id: 'ticket-auto-done',
+        created: true,
+        previous_state: null,
+        new_state: 'DONE',
+        state_changed: true,
+        ticket: baseTicket({
+          id: 'ticket-auto-done',
+          state: 'DONE',
+          closed_at: '2026-05-02T00:00:00Z',
+          resolution_type: 'DONE',
+        }),
+      },
+      error: null,
+    });
+
+    const out = await findOrCreateTicket({
+      emailMessageId: 'email-auto-done',
+      classification: classified(),
+    });
+
+    expect(out.ticketId).toBe('ticket-auto-done');
+    expect(out.created).toBe(true);
+    expect(out.new_state).toBe('DONE');
+    expect(out.previous_state).toBeNull();
+    expect(out.state_changed).toBe(true);
+    expect(out.ticket?.state).toBe('DONE');
+    expect(out.ticket?.closed_at).toBe('2026-05-02T00:00:00Z');
+    expect(out.ticket?.resolution_type).toBe('DONE');
+  });
+
+  it('auto-DONE update response shape — IN_REVIEW → DONE (reclassify path Q6.B)', async () => {
+    mockRpc.mockResolvedValueOnce(
+      rpcUpdated({
+        prev: 'IN_REVIEW',
+        next: 'DONE',
+        ticketOverrides: {
+          closed_at: '2026-05-02T00:00:00Z',
+          resolution_type: 'DONE',
+        },
+      }),
+    );
+
+    const out = await findOrCreateTicket({
+      emailMessageId: 'email-reclassify',
+      classification: classified(),
+    });
+
+    expect(out.created).toBe(false);
+    expect(out.previous_state).toBe('IN_REVIEW');
+    expect(out.new_state).toBe('DONE');
+    expect(out.state_changed).toBe(true);
+    expect(out.ticket?.state).toBe('DONE');
+    expect(out.ticket?.closed_at).toBe('2026-05-02T00:00:00Z');
+    expect(out.ticket?.resolution_type).toBe('DONE');
+  });
 });
 
 // -- RPC error mapping ---------------------------------------------------

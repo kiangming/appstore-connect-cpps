@@ -74,6 +74,24 @@ describe('subjectPatternInputSchema', () => {
     const r = subjectPatternInputSchema.safeParse({ ...base, outcome: 'PENDING' as unknown });
     expect(r.success).toBe(false);
   });
+
+  // PR-16a.4: auto_done_eligible field shape regression guards.
+  // Manager opt-in field must accept explicit true and default to false
+  // when omitted (preserves pre-PR-16 behavior on existing patterns).
+  it('accepts auto_done_eligible=true (PR-16 Manager opt-in)', () => {
+    const r = subjectPatternInputSchema.safeParse({
+      ...base,
+      auto_done_eligible: true,
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.auto_done_eligible).toBe(true);
+  });
+
+  it('defaults auto_done_eligible to false when omitted (PR-16 back-compat)', () => {
+    const r = subjectPatternInputSchema.safeParse(base);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.auto_done_eligible).toBe(false);
+  });
 });
 
 describe('typeInputSchema', () => {
@@ -299,5 +317,59 @@ describe('configSnapshotSchema', () => {
         submission_id_patterns: [],
       }).success,
     ).toBe(false);
+  });
+
+  // PR-16a.4: snapshot schema treats auto_done_eligible as additive
+  // (optional with default false). New snapshots from save_rules_tx
+  // include the field; legacy snapshots saved pre-PR-16 omit it and
+  // must still validate so rollback to historical versions doesn't
+  // wedge on schema parse — the rollback RPC migration uses
+  // COALESCE(...,false) for the same reason.
+  it('accepts subject_patterns with auto_done_eligible (PR-16 forward shape)', () => {
+    const r = configSnapshotSchema.safeParse({
+      schema_version: 1,
+      senders: [],
+      subject_patterns: [
+        {
+          id: '00000000-0000-4000-a000-000000000010',
+          outcome: 'APPROVED',
+          regex: '(?<app_name>.+)',
+          priority: 10,
+          example_subject: null,
+          active: true,
+          auto_done_eligible: true,
+        },
+      ],
+      types: [],
+      submission_id_patterns: [],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.subject_patterns[0]?.auto_done_eligible).toBe(true);
+    }
+  });
+
+  it('accepts legacy subject_patterns without auto_done_eligible (PR-16 back-compat)', () => {
+    const r = configSnapshotSchema.safeParse({
+      schema_version: 1,
+      senders: [],
+      subject_patterns: [
+        {
+          id: '00000000-0000-4000-a000-000000000011',
+          outcome: 'APPROVED',
+          regex: '(?<app_name>.+)',
+          priority: 10,
+          example_subject: null,
+          active: true,
+          // auto_done_eligible omitted — pre-PR-16 snapshot
+        },
+      ],
+      types: [],
+      submission_id_patterns: [],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.subject_patterns[0]?.auto_done_eligible).toBe(false);
+    }
   });
 });
