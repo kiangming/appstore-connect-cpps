@@ -347,6 +347,47 @@ describe('findOrCreateTicket — happy paths', () => {
     expect(out.ticket?.closed_at).toBe('2026-05-02T00:00:00Z');
     expect(out.ticket?.resolution_type).toBe('DONE');
   });
+
+  // PR-16b.3: auto-reopen response shape regression guard.
+  // The new pre-LOOP branch of find_or_create_ticket_tx flips a
+  // DONE auto-DONE'd ticket back to IN_REVIEW when a REJECTED
+  // email arrives — reports created=false, previous_state='DONE',
+  // new_state='IN_REVIEW', state_changed=true. SQL behavior
+  // validated via Manual QA Scenario C (live REJECTED email);
+  // this test pins the wire-format contract so the engine TS
+  // layer doesn't barf on the response.
+  it('auto-reopen response shape — DONE → IN_REVIEW (REJECTED post-auto-DONE)', async () => {
+    mockRpc.mockResolvedValueOnce({
+      data: {
+        ticket_id: 'ticket-auto-reopen',
+        created: false,
+        previous_state: 'DONE',
+        new_state: 'IN_REVIEW',
+        state_changed: true,
+        ticket: baseTicket({
+          id: 'ticket-auto-reopen',
+          state: 'IN_REVIEW',
+          latest_outcome: 'REJECTED',
+          closed_at: null,
+          resolution_type: null,
+        }),
+      },
+      error: null,
+    });
+
+    const out = await findOrCreateTicket({
+      emailMessageId: 'email-rejected-post-auto-done',
+      classification: classified(),
+    });
+
+    expect(out.created).toBe(false);
+    expect(out.previous_state).toBe('DONE');
+    expect(out.new_state).toBe('IN_REVIEW');
+    expect(out.state_changed).toBe(true);
+    expect(out.ticket?.state).toBe('IN_REVIEW');
+    expect(out.ticket?.closed_at).toBeNull();
+    expect(out.ticket?.resolution_type).toBeNull();
+  });
 });
 
 // -- RPC error mapping ---------------------------------------------------
