@@ -92,6 +92,26 @@ describe('subjectPatternInputSchema', () => {
     expect(r.success).toBe(true);
     if (r.success) expect(r.data.auto_done_eligible).toBe(false);
   });
+
+  // PR-16b.5: auto_reopen_eligible field shape regression guards.
+  // Manager opt-in field cho auto-reopen branch eligibility. Default
+  // FALSE preserves "build mới = ticket mới" Apple workflow semantic;
+  // Manager explicitly enables on platforms allowing same-build
+  // re-rejection.
+  it('accepts auto_reopen_eligible=true (PR-16b.5 Manager opt-in)', () => {
+    const r = subjectPatternInputSchema.safeParse({
+      ...base,
+      auto_reopen_eligible: true,
+    });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.auto_reopen_eligible).toBe(true);
+  });
+
+  it('defaults auto_reopen_eligible to false when omitted (PR-16b.5 back-compat)', () => {
+    const r = subjectPatternInputSchema.safeParse(base);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.auto_reopen_eligible).toBe(false);
+  });
 });
 
 describe('typeInputSchema', () => {
@@ -370,6 +390,60 @@ describe('configSnapshotSchema', () => {
     expect(r.success).toBe(true);
     if (r.success) {
       expect(r.data.subject_patterns[0]?.auto_done_eligible).toBe(false);
+    }
+  });
+
+  // PR-16b.5: same additive back-compat strategy cho auto_reopen_eligible.
+  // New snapshots include the field; pre-PR-16b.5 snapshots predating
+  // the column omit it and must still validate (rollback to historical
+  // version uses COALESCE(...,false) for the same reason at the SQL layer).
+  it('accepts subject_patterns with auto_reopen_eligible (PR-16b.5 forward shape)', () => {
+    const r = configSnapshotSchema.safeParse({
+      schema_version: 1,
+      senders: [],
+      subject_patterns: [
+        {
+          id: '00000000-0000-4000-a000-000000000020',
+          outcome: 'REJECTED',
+          regex: 'There is an issue with your (?<app_name>.+)',
+          priority: 10,
+          example_subject: null,
+          active: true,
+          auto_done_eligible: false,
+          auto_reopen_eligible: true,
+        },
+      ],
+      types: [],
+      submission_id_patterns: [],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.subject_patterns[0]?.auto_reopen_eligible).toBe(true);
+    }
+  });
+
+  it('accepts legacy subject_patterns without auto_reopen_eligible (PR-16b.5 back-compat)', () => {
+    const r = configSnapshotSchema.safeParse({
+      schema_version: 1,
+      senders: [],
+      subject_patterns: [
+        {
+          id: '00000000-0000-4000-a000-000000000021',
+          outcome: 'REJECTED',
+          regex: '(?<app_name>.+)',
+          priority: 10,
+          example_subject: null,
+          active: true,
+          auto_done_eligible: false,
+          // auto_reopen_eligible omitted — pre-PR-16b.5 snapshot
+        },
+      ],
+      types: [],
+      submission_id_patterns: [],
+    });
+    expect(r.success).toBe(true);
+    if (r.success) {
+      expect(r.data.subject_patterns[0]?.auto_reopen_eligible).toBe(false);
     }
   });
 });

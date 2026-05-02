@@ -257,6 +257,29 @@ describe('updateRow', () => {
     expect(next[0]?.regex).toBe(draft.regex);
     expect(next[0]?.active).toBe(true);
   });
+
+  // PR-16b.5: same round-trip pin cho auto_reopen_eligible. The toggle
+  // patches `{ auto_reopen_eligible: !current }` via updateRow; this
+  // test guards against a future shallow-merge regression silently
+  // dropping the second Manager opt-in field (Layer 12 cascade audit).
+  it('preserves auto_reopen_eligible toggle on SubjectPatternDraft (PR-16b.5)', () => {
+    const draft: SubjectPatternDraft = {
+      id: 'p2',
+      outcome: 'REJECTED',
+      regex: "There's an issue with your (?<app_name>.+)",
+      priority: 20,
+      example_subject: null,
+      active: true,
+      auto_done_eligible: false,
+      auto_reopen_eligible: false,
+    };
+    const next = updateRow([draft], 0, { auto_reopen_eligible: true });
+    expect(next[0]?.auto_reopen_eligible).toBe(true);
+    // Other fields, including the sibling auto_done_eligible flag, untouched.
+    expect(next[0]?.auto_done_eligible).toBe(false);
+    expect(next[0]?.outcome).toBe('REJECTED');
+    expect(next[0]?.active).toBe(true);
+  });
 });
 
 describe('addRow', () => {
