@@ -2,7 +2,7 @@
 
 > **Đọc đầu tiên** khi bắt đầu session mới về module Store Management. Ghi lại trạng thái production + PR đã ship + known limitations chưa resolve.
 >
-> Last updated: 2026-05-01 (PR-15.5 hotfix shipped — stale-EMAIL filter post-reclassify, after PR-15 slug generator + PR-14 byte-level QP decoder)
+> Last updated: 2026-05-03 (PR-16 fully closed — auto-mark-done + auto-completed banner + auto-reopen Manager opt-in shipped 2026-05-02 / 2026-05-03 across 4 sub-PRs + 1 hotfix; previous: PR-15.5 stale-EMAIL filter 2026-05-01, PR-15 slug generator 2026-05-01, PR-14 byte-level QP decoder 2026-05-01)
 
 ---
 
@@ -40,6 +40,10 @@ Module quản lý submission app/game multi-platform qua auto-classify email t�
 | PR-14 | UTF-8 body preview corruption fix — byte-level QP decoder (Buffer-walk, no `raw.toString('ascii')`) replaces the pre-fix string-keyed decoder that masked UTF-8 bytes with `& 0x7F` and false-positive-triggered QP decode on raw-UTF-8 bodies Apple mislabeled as `Content-Transfer-Encoding: QUOTED-PRINTABLE`. + 8 fixture variants (Vietnamese mislabel + Chinese / Japanese / emoji / mixed-encoding charset coverage) + `backfillCorruptPayloadAction` MANAGER cleanup + maintenance banner D2 + `backfill/core.ts` extraction. Resolves Issue 1 from PR-12 close (mojibake'd app names in 14 functional production rows across 4 distinct apps) | ✅ shipped 2026-05-01 (no migrations) |
 | PR-15 | Slug generator non-ASCII support — `generateSlugFromName` hash fallback for CJK / emoji / pure-punctuation / 1-2 char Latin names (FNV-1a 32-bit, client-bundle-safe pure TS, `app-<8hex>` format) replaces the pre-fix `InvalidSlugError` throw that blocked Manager from registering apps surfaced by PR-14's UTF-8 repair (彈彈英雄, 創世紀戰M：阿修羅計畫, etc.). Threshold `SLUG_MIN_MEANINGFUL_LENGTH=3` also catches degenerate single-char slugs (創世紀戰M → "m"). `tryGenerateAsciiSlug` helper exposed so type-slug derivation in TypesTable preserves "" semantic instead of getting hash autocomplete. AppDialog adds slug override input field with auto-fill via `slugTouched` state + per-tick guard, contextual helper text (default / hash-fallback / error), `aria-invalid` + `aria-describedby` a11y, submit disabled on validation error. `slugSchema` extracted to `schemas/slug.ts` to avoid pulling `re2-wasm` into the client bundle. Mode-aware `validateFormState` skips slug check in edit mode (slug stable on rename). | ✅ shipped 2026-05-01 (no migrations) |
 | PR-15.5 | Stale-EMAIL filter post-reclassify — Manager-reported confusion: same email visible in TICKET-10000 (UNCLASSIFIED_APP catch-all) AND new classified ticket after reclassify. Root cause: `reclassify_email_tx` deliberately leaves the original `EMAIL` ticket_entry on the old ticket as audit history per invariant #2 (ticket_entries append-only); the UI queried `ticket_entries` by `ticket_id` directly without joining `email_messages.ticket_id` (the source of truth for "where this email currently lives"). Fix: PostgREST embed `email_message:email_messages!email_message_id (ticket_id)` in `getTicketWithEntries` (detail panel) + `listTickets` firstEmail subquery, with read-time JS filter that hides EMAIL entries whose embedded current `ticket_id` doesn't match the rendering ticket. STATE_CHANGE `'reclassify_out'` audit annotations stay visible. No RPC change, no schema change, no backfill — filter applies retroactively to existing stale entries on next read. | ✅ shipped 2026-05-01 (no migrations) |
+| PR-16a | Auto-mark-done foundation — Manager opt-in toggle (`subject_patterns.auto_done_eligible`) + `find_or_create_ticket_tx` auto-DONE branch (CLASSIFIED + APPROVED + eligible pattern → ticket lands directly trong DONE state, skip Open queue) + Q4.A/Q4.C audit metadata via `ticket_entries.metadata.{actor,reason,subject_pattern_id}` (NULL author_user_id + `metadata.actor='system'` reuses existing email-driven STATE_CHANGE convention) + Q5.D Manager-curated opt-in per pattern (default FALSE preserves pre-PR-16 behavior) + Settings UI toggle với UX guard disabled cho non-APPROVED outcomes + Path A unit tests (8). 5 design overrides during investigation: metadata.reason vs new column (no `ticket_state_changes` table exists), NULL+metadata.actor vs reserved UUID (FK + role enum cascade cost), `subject_pattern_id` top-level on `ClassifiedResult` (clean type-safe RPC access), STATE_CHANGE special case on auto-DONE create (audit completeness). Reclassify path Q6.B inheritance free (reclassify_email_tx invokes find_or_create_ticket_tx). | ✅ shipped 2026-05-02 (3 migrations) |
+| PR-16a.5 | handleSave payload threading hotfix — Manager UAT Scenario 2 surfaced: tick Auto-DONE + Save → success toast → checkbox reverts unchecked. Root cause: 7-layer cascade pipeline missed Layer 9 (`EmailRulesClient.handleSave` intermediate payload builder between component state + Server Action). Zod `.default(false)` silently coerced missing field, RPC persisted false, `router.refresh()` reloaded false, checkbox appeared to revert. Fix: 1-line addition trong handleSave threading `auto_done_eligible: p.auto_done_eligible`. Inline comment notes future fields must add line here. N-layer cascade audit memory crystallized (Pattern 9 saved post-fix, applied successfully PR-16b.5). | ✅ shipped 2026-05-02 (no migrations) |
+| PR-16b | Auto-completed banner + dedicated view + auto-reopen RPC — MANAGER-only `count_auto_completed_tickets()` + `list_auto_completed_tickets(p_days, p_limit)` RPCs với latest-STATE_CHANGE EXISTS subquery filtering tickets state=DONE + system-origin auto_mark_done + last 7 days. Inbox blue/info banner Q1.E (auto-hides at zero) + dedicated `/store-submissions/inbox/auto-completed` view với MANAGER soft redirect + friendly empty state. Auto-reopen pre-LOOP branch trong `find_or_create_ticket_tx` Q2.D + Q3.B: REJECTED email arrives auto-DONE'd ticket → state DONE → IN_REVIEW. PR-15.5 stale filter preserved (read-time only). Telemetry deferred PR-17+. Path A tests +7. | ✅ shipped 2026-05-03 (2 migrations) |
+| PR-16b.5 | Auto-reopen Manager opt-in toggle — Manager domain insight surfaced post-deploy: Apple's REJECTED workflow is per-build (different submission_id), không cùng build APPROVED trước. "Build mới = ticket mới" semantic. PR-16b.3 auto-reopen-always violates domain reality. Path D Manager opt-in: `subject_patterns.auto_reopen_eligible` BOOLEAN DEFAULT FALSE column + RPCs threaded + Settings UI 7th column toggle với amber accent + ⚠️ warning tooltip + UX guard disabled cho non-REJECTED + `find_or_create_ticket_tx` auto-reopen branch gated by pattern eligibility (two-phase short-circuit: cheap gate check trước expensive EXISTS subquery). Default FALSE preserves correct semantic. Layer 9 cascade audit applied successfully (PR-16a.5 lesson reuse). Path A tests +5. | ✅ shipped 2026-05-03 (3 migrations) |
 
 ---
 
@@ -67,6 +71,9 @@ Module quản lý submission app/game multi-platform qua auto-classify email t�
 | Manager backfill (Apple-only HTML re-extract + reclassify) | Inbox Unclassified banner — "Backfill 1 row (test)" + "Backfill all" | `app/(dashboard)/store-submissions/inbox/backfill-actions.ts` (re-fetches Gmail HTML for `extracted_payload IS NULL` rows, runs `extractApple`, persists, then `reclassifyOne`) |
 | Manager corrupt-payload repair (Apple-only re-parse with byte-safe decoder + reclassify) | Inbox maintenance banner — "Repair corrupt payloads (N)" (auto-hides at N=0) | `app/(dashboard)/store-submissions/inbox/backfill-corrupt-actions.ts` + shared `lib/store-submissions/backfill/core.ts` + `lib/store-submissions/queries/corrupt-payload.ts` (count probe, MANAGER-only, head:true) |
 | Slug generator non-ASCII support (CJK / emoji / pure-punctuation hash fallback + Manager override input) | Settings → Apps → Add app | `lib/store-submissions/apps/alias-logic.ts` (`tryGenerateAsciiSlug`, `generateSlugFromName`, FNV-1a 32-bit hash, `SLUG_MIN_MEANINGFUL_LENGTH=3`) + `lib/store-submissions/schemas/slug.ts` (slim re-export to avoid `re2-wasm` in client bundle) + `components/store-submissions/apps/AppDialog.tsx` (slug input + auto-fill + contextual hint + a11y) |
+| Auto-mark-done Manager opt-in (per-pattern toggle, default FALSE) — APPROVED email matching eligible pattern → ticket born directly trong DONE state, skip Open queue (PR-16a) | Settings → Email rules → SubjectPatternsTable "Auto-DONE" column | migration `20260502000000_..._auto_mark_done.sql` (column add) + `20260502000001_..._rules_auto_done.sql` (rules RPCs threaded) + `20260502000002_..._find_or_create_auto_done.sql` (auto-DONE branch trong find_or_create_ticket_tx) + `components/store-submissions/email-rules/SubjectPatternsTable.tsx` (emerald accent toggle, disabled cho non-APPROVED) + `lib/store-submissions/classifier/types.ts` (`subject_pattern_id` top-level on ClassifiedResult) |
+| Auto-completed visibility surface — MANAGER-only Inbox banner + dedicated `/auto-completed` view listing state=DONE tickets last 7 days với system-origin auto_mark_done STATE_CHANGE (PR-16b) | Inbox blue banner above tabs + `/store-submissions/inbox/auto-completed` route | migration `20260503000000_..._auto_completed_query.sql` (count + list RPCs với latest-STATE_CHANGE EXISTS subquery) + `lib/store-submissions/queries/auto-completed.ts` (graceful 0-on-error degrade) + `app/(dashboard)/store-submissions/inbox/auto-completed/page.tsx` (Server Component + MANAGER soft redirect) + `components/store-submissions/inbox/AutoCompletedListClient.tsx` (thin client wrapper around TicketListTable) |
+| Auto-reopen Manager opt-in (per-pattern toggle, default FALSE preserves "build mới = ticket mới" Apple workflow semantic) — REJECTED email matching eligible pattern + auto-DONE'd ticket trong same grouping key → DONE → IN_REVIEW (PR-16b.5) | Settings → Email rules → SubjectPatternsTable "Auto-Reopen" 7th column | migration `20260504000000_..._auto_reopen_eligible.sql` (column add) + `20260504000001_..._rules_auto_reopen.sql` (rules RPCs threaded) + `20260504000002_..._find_or_create_eligibility.sql` (eligibility gate trong auto-reopen branch — two-phase short-circuit cho production cost) + `SubjectPatternsTable.tsx` (amber accent toggle với ⚠️ warning tooltip, disabled cho non-REJECTED) |
 
 ---
 
@@ -590,9 +597,9 @@ Empty-state copy for combined state × outcome filter:
 ### Risk flags acknowledged (deferred)
 
 - **Issue 1 (UTF-8 body preview)** — ✅ resolved by PR-14 (byte-level QP decoder + backfill action)
-- **Multi-platform extractor expansion** — PR-16+ (Apple-only at present)
-- **Per-row backfill affordance in EmailEntryCard** — PR-16+
-- **Migration COMMENT refresh** + **Sentry breadcrumb cap** + **Vitest cold-start flake** + **Gmail OAuth token resilience** + **Spec §5.2 ticket-level merge** — all PR-16+ infra/cleanup
+- **Multi-platform extractor expansion** — PR-17+ (Apple-only at present)
+- **Per-row backfill affordance in EmailEntryCard** — PR-17+
+- **Migration COMMENT refresh** + **Sentry breadcrumb cap** + **Vitest cold-start flake** + **Gmail OAuth token resilience** + **Spec §5.2 ticket-level merge** — all PR-17+ infra/cleanup
 
 ---
 
@@ -680,7 +687,7 @@ correctly in one pass.
 
 | # | Commit | Scope |
 |---|---|---|
-| 14.1+14.2 | `d20c898` | Bundle: replaced synthetic real-QP fixture (`edgeAppleVietnameseQpRejection`, didn't reproduce the bug) with `edgeAppleMislabelUtf8` mirroring TICKET-10009's wire shape (multipart/alternative, both parts CTE: QUOTED-PRINTABLE, text/plain raw UTF-8, text/html mixed `=3D` + raw UTF-8). Decoder rewrite. 4-layer diagnostic block (Layer 1 RFC 2047 continuation-line bug `.skip()` deferred to PR-16+). +3 tests unskipped. |
+| 14.1+14.2 | `d20c898` | Bundle: replaced synthetic real-QP fixture (`edgeAppleVietnameseQpRejection`, didn't reproduce the bug) with `edgeAppleMislabelUtf8` mirroring TICKET-10009's wire shape (multipart/alternative, both parts CTE: QUOTED-PRINTABLE, text/plain raw UTF-8, text/html mixed `=3D` + raw UTF-8). Decoder rewrite. 4-layer diagnostic block (Layer 1 RFC 2047 continuation-line bug `.skip()` deferred to PR-17+). +3 tests unskipped. |
 | 14.3 | `66223da` | Charset coverage: 4 mislabel fixtures × 4 tests. Chinese (3-byte UTF-8), Japanese (mixed scripts + ASCII transitions), emoji (4-byte → UTF-16 surrogate pair, pinned `\uD83C\uDFAE`), mixed-encoding (`=C3=A9` + raw `0xC3 0xA9` decode identically to `é`). +4 tests. |
 | 14.4 | `2ee80e8` | `backfillCorruptPayloadAction` MANAGER cleanup (Apple-only, control-byte regex filter via PostgREST `.or()`, sequential per-row, sentry tag `variant: 'corrupt-payload'`) + maintenance banner D2 (separate from Unclassified banner, amber/Wrench tone, auto-retires when count → 0) + `lib/store-submissions/backfill/core.ts` extraction (mirrors PR-12.5 reclassify/core.ts pattern; backfillOne now writes BOTH `raw_body_text` + `extracted_payload`, so NULL-payload backfill incidentally repairs any byte-mask corruption in the same row). +5 tests. |
 | 14.5 | this commit | Docs (this milestone section + 02-gmail-sync.md MIME-decode subsection + TODO.md PR-14 close + Layer 1 deferral). Cleanup verification (diagnose-message route absent, no stale scripts, gauntlet clean). |
@@ -692,7 +699,7 @@ correctly in one pass.
    Synthetic fixture didn't reproduce the bug.
 2. **Pivot to RFC 2047 subject-decode bug (Layer 1)** — real but
    orthogonal to the production symptom. Subjects render correctly in
-   prod. Parked PR-16+.
+   prod. Parked PR-17+.
 3. **Pivot to "Apple sends broken bodies"** — production data via SQL
    diagnostic confirmed BOTH `raw_body_text` and `extracted_payload->>'app_name'`
    garbled (HTML extractor consumes the same parser path).
@@ -736,7 +743,7 @@ now reproduces the bug deterministically.
 - Tests: 1067 (pre-PR-14) → **1079** (+12 cumulative across 14.1+14.2 +3 +
   14.3 +4 + 14.4 +5; 14.5 docs unchanged)
 - 1 deferred test (`it.skip()`) for Layer 1 RFC 2047 continuation-line
-  bug — distinct decoder, distinct symptom, PR-16+ candidate
+  bug — distinct decoder, distinct symptom, PR-17+ candidate
 - Bundle (`/store-submissions/inbox`): minor increase from new banner
   subcomponent
 - No migrations (parser fix is forward-only application code; no schema
@@ -762,7 +769,7 @@ now reproduces the bug deterministically.
   of `Chơi Ngay Game`). Real bug confirmed by Layer 1 diagnostic but
   separate decoder, separate symptom. Tracked as `it.skip()` placeholder
   in [`parser.test.ts`](../../lib/store-submissions/gmail/parser.test.ts)
-  with a fix-pointer comment. Defer PR-16+.
+  with a fix-pointer comment. Defer PR-17+.
 - [ ] **PostgREST `.or()` regex runtime validation** — manual QA
   scenario per PR-14.5 plan; if rejected, hot-pivot to the RPC
   fallback documented in `backfill-corrupt-actions.ts`.
@@ -1029,7 +1036,7 @@ for (const row of firstEmailsRes.data) {
 | UPDATE/DELETE old EMAIL entry post-reclassify | Violates invariant #2; the RPC explicitly cites this in its own comment |
 | New `superseded_by_ticket_id` column on ticket_entries | Schema change overkill; column UPDATE softens but doesn't escape the append-only intent |
 | Visual marker on stale EMAIL entries (muted styling + "Reclassified to TICKET-X" banner) | Still shows duplicate content, just labeled — UX inferior to full hide |
-| Auto-archive ticket on last-EMAIL-exit | Bigger scope (RPC + state machine); deferred PR-16+ as standalone follow-up |
+| Auto-archive ticket on last-EMAIL-exit | Bigger scope (RPC + state machine); deferred PR-17+ as standalone follow-up |
 
 ### Test + bundle deltas
 
@@ -1049,7 +1056,7 @@ for (const row of firstEmailsRes.data) {
   happen for EMAIL entries) → embed is null → filter hides it; no
   content to show anyway
 
-### Open follow-ups (PR-16+)
+### Open follow-ups (PR-17+)
 
 - [ ] **Auto-archive ticket on last-EMAIL-exit** —
   [`reclassify_email_tx`](../../supabase/migrations/20260425000002_store_mgmt_reclassify_rpc.sql)
@@ -1072,6 +1079,128 @@ for (const row of firstEmailsRes.data) {
   `first_email: null` — count and preview disagree. Either rename
   the count to "events" in the UI or filter it the same way EMAILs
   are filtered. Worth Manager UAT signal before deciding.
+
+---
+
+## PR-16 — Auto-mark-done + auto-completed banner + auto-reopen Manager opt-in ✅ SHIPPED 2026-05-02 / 2026-05-03
+
+Largest milestone yet: 4 sub-PRs + 1 hotfix shipped across 2 days.
+8 commits cumulative, 8 migrations applied production sequential,
+1116 → 1121 tests (+5 Path A; cumulative +20 from PR-15.5 baseline
+1101). Manager UAT Phase 1 verified 2026-05-02 (PR-16a + PR-16a.5)
+and 2026-05-03 (PR-16b.5). Phase 2-4 deferred chờ data accumulation
++ live Apple email + long-term telemetry.
+
+### Sub-PR breakdown
+
+| Sub-PR | Commits | Scope |
+|---|---|---|
+| **PR-16a** | `6ffe7b0` (foundation+UI), `c231594` (RPC auto-DONE), `cc8389d` (tests + caveat docs) | Auto-DONE foundation: Manager opt-in toggle (`auto_done_eligible`), `find_or_create_ticket_tx` auto-DONE branch, audit metadata via `ticket_entries.metadata.{actor,reason,subject_pattern_id}`, Settings UI emerald toggle với UX guard, 8 Path A tests |
+| **PR-16a.5** | `2d5f171` | handleSave payload threading hotfix — Manager UAT Scenario 2 surfaced 7-layer cascade gap (Layer 9 intermediate payload). N-layer cascade audit memory crystallized post-fix |
+| **PR-16b** | `6b820e9` (banner + view), `32c8cbe` (auto-reopen RPC + tests) | Auto-completed visibility surface: `count_auto_completed_tickets()` + `list_auto_completed_tickets()` RPCs, MANAGER-only Inbox blue/info banner Q1.E (auto-hides at zero), dedicated `/auto-completed` view với MANAGER soft redirect + friendly empty state, auto-reopen pre-LOOP branch trong find_or_create_ticket_tx Q2.D + Q3.B (DONE → IN_REVIEW on REJECTED), 7 Path A tests |
+| **PR-16b.5** | `b455fa9` (foundation + UI), `3aa093b` (RPC eligibility + tests) | Auto-reopen Manager opt-in toggle — Manager domain insight surfaced post-deploy: Apple's REJECTED workflow per-build (different submission_id), không cùng build APPROVED trước. "Build mới = ticket mới" semantic. Path D opt-in flag (`auto_reopen_eligible` default FALSE) preserves correct semantic. RPC eligibility gate two-phase short-circuit (cheap gate trước expensive EXISTS). Layer 9 cascade audit applied successfully (PR-16a.5 lesson reuse). 5 Path A tests |
+
+### Design decisions Q1-Q8 — final ship status
+
+Reference [`pr-16-auto-mark-done-design.md`](./pr-16-auto-mark-done-design.md) cho full discussion.
+
+| Q | Decision | Status |
+|---|---|---|
+| Q1 (Visibility) | Q1.E inbox banner | ✅ shipped PR-16b |
+| Q2 (Override) | Q2.B manual reopen + Q2.D auto-reopen on REJECTED | ✅ shipped PR-16b (gated PR-16b.5 Manager opt-in) |
+| Q3 (Post-DONE REJECTED) | Q3.B auto-reopen IN_REVIEW | ✅ shipped PR-16b (gated PR-16b.5) |
+| Q4 (Audit) | Q4.A reserved system identity + Q4.C reason field | ✅ shipped PR-16a (overrides applied — see below) |
+| Q5 (Confidence) | Q5.A subject patterns single source + Q5.D Manager opt-in per pattern | ✅ shipped PR-16a |
+| Q6 (App registry timing) | Q6.A CLASSIFIED only + Q6.B retroactive on reclassify | ✅ shipped PR-16a (free inheritance via reclassify_email_tx) |
+| Q7 (Notifications) | Q7.A banner only initially | ✅ shipped (telemetry deferred PR-17+ pending UAT) |
+| Q8 (Approved tab fate) | Q8.D defer telemetry-informed | ⏸ PR-17+ candidate (1-2 months data) |
+
+### Design overrides earned by codebase grounding + Manager domain insight
+
+5 overrides applied during investigation + post-deploy:
+
+1. **Q4.C reason field → `metadata.reason` JSONB instead of new column.** Original design proposed `ALTER TABLE ticket_state_changes ADD COLUMN reason`. Codebase grounding revealed `ticket_state_changes` table không exist; state changes tracked via `ticket_entries` với `entry_type='STATE_CHANGE'` + JSONB metadata. Existing convention (`reclassify_email_tx`, `find_or_create_ticket_tx`) puts structured fields trong metadata. Override: use `metadata.reason` directly — no schema change for this piece.
+
+2. **Q4.A SYSTEM_USER_ID → NULL + `metadata.actor='system'`.** Original design proposed reserved UUID + INSERT system user row. FK constraint `author_user_id REFERENCES users(id)` + `users.role` CHECK (`MANAGER/DEV/VIEWER` only) would require 3 cascade changes. Existing `find_or_create_ticket_tx` already passes `author_user_id = NULL` cho email-driven STATE_CHANGE entries (encodes "system" via `metadata.trigger='email'`). Override: keep NULL, encode actor via `metadata.actor='system'` — pattern reuse, smaller surface.
+
+3. **`subject_pattern_id` top-level on `ClassifiedResult`.** Original design left pattern_id buried trong `matched_rules[].details.pattern_id` JSONB. RPC needs it for `auto_done_eligible` lookup. Override: add `subject_pattern_id: string | null` field at top level — clean type-safe access, classifier change minimal.
+
+4. **STATE_CHANGE entry on auto-DONE create (special case).** Existing pattern skips STATE_CHANGE on create. Auto-DONE creates need audit completeness — Manager opens auto-DONE ticket detail → expects to see "this ticket auto-DONEd at creation với reason X" trong timeline. Override: special-case `IF v_state_changed OR (v_created AND v_auto_done)` writes STATE_CHANGE entry với `from=NULL, to='DONE', reason='auto_mark_done_initial', actor='system'`.
+
+5. **(POST-DEPLOY) Auto-reopen Manager opt-in toggle (PR-16b.5).** Manager domain insight surfaced after PR-16b.3 shipped: Apple's REJECTED workflow is per-build (different `submission_id`), không cùng build APPROVED trước. "Build mới = ticket mới" semantic. PR-16b.3 auto-reopen-always merged distinct builds into one ticket — semantically wrong. Override: Path D opt-in flag (`auto_reopen_eligible` default FALSE) preserves correct semantic. Code preserved cho future Apple workflow flexibility (toggle vs hard-coded).
+
+### Schema changes summary
+
+**3 column additions** (sequential migrations applied):
+
+- `subject_patterns.auto_done_eligible BOOLEAN NOT NULL DEFAULT FALSE` — PR-16a.1 migration `20260502000000`
+- `subject_patterns.auto_reopen_eligible BOOLEAN NOT NULL DEFAULT FALSE` — PR-16b.5.1 migration `20260504000000`
+- `ticket_entries.metadata.{actor,reason,subject_pattern_id}` — JSONB convention, no schema change (Q4.C override)
+
+**8 RPC migrations** applied production sequential:
+
+| Order | Migration | Purpose |
+|---|---|---|
+| 1 | `20260502000000` | `subject_patterns.auto_done_eligible` column add |
+| 2 | `20260502000001` | `build_rules_snapshot` + `save_rules_tx` + `rollback_rules_tx` thread `auto_done_eligible` |
+| 3 | `20260502000002` | `find_or_create_ticket_tx` auto-DONE branch (PR-16a.2) |
+| 4 | `20260503000000` | `count_auto_completed_tickets()` + `list_auto_completed_tickets()` RPCs |
+| 5 | `20260503000001` | `find_or_create_ticket_tx` auto-reopen branch (PR-16b.3 — superseded by 8) |
+| 6 | `20260504000000` | `subject_patterns.auto_reopen_eligible` column add |
+| 7 | `20260504000001` | rules RPCs CREATE OR REPLACE thread `auto_reopen_eligible` |
+| 8 | `20260504000002` | `find_or_create_ticket_tx` eligibility gate (supersedes 5; two-phase short-circuit) |
+
+### Manager UAT verification matrix
+
+**Phase 1 — Settings UI + persistence** (✅ verified 2026-05-02 / 05-03):
+
+| Scenario | Coverage | Status |
+|---|---|---|
+| Scenario 1 (PR-16a) | Settings UI Auto-DONE toggle visible với emerald accent + UX guard | ✅ |
+| Scenario 2 (PR-16a → 16a.5 hotfix) | Auto-DONE toggle persists save (post-hotfix) | ✅ |
+| Scenario X (PR-16b.5) | Auto-Reopen toggle UI 7th column + amber accent + ⚠️ tooltip + UX guard | ✅ |
+| Scenario Y (PR-16b.5) | Auto-Reopen toggle persists save (Layer 9 cascade audit verified) | ✅ |
+| Scenario Z (PR-16b.5) | Default FALSE preserves "build mới = ticket mới" semantic | ✅ passive |
+
+**Phase 2 — Banner + visibility** (⏸ data-dependent):
+
+- Scenario A (banner visibility when count>0)
+- Scenario B (empty state when count=0)
+- Scenario D (manual reopen Q2.B UI inspection)
+- Scenario E (role gates VIEWER/DEV redirect)
+
+**Phase 3 — Real Apple email** (⏸ chờ live emails):
+
+- Scenarios 3-6 (PR-16a live auto-DONE + audit trail + control + reclassify Q6.B)
+- Scenario C (PR-16b auto-reopen real REJECTED post-DONE)
+- Scenario W (PR-16b.5 auto-reopen với toggle ON — niche usage)
+
+**Phase 4 — Long-term telemetry** (⏸ 1-2 months data):
+
+- Q8 Approved tab fate decision (telemetry-informed)
+- Q1.E + Q8 telemetry capture (PR-17+ candidate)
+- Auto-DONE accuracy rate
+- Auto-reopen Manager opt-in adoption rate
+
+### Production state post-PR-16
+
+- Cron sync running clean (gmail_msg_id UNIQUE idempotent)
+- Auto-DONE foundation deployed + persistence verified post-hotfix
+- Banner + dedicated `/auto-completed` view operational (visibility surface)
+- Auto-reopen Manager opt-in functional với default FALSE preserves Apple workflow semantic
+- 8 migrations applied sequential successfully
+- All Phase 1 scenarios verified
+
+### PR-17+ candidates from PR-16
+
+- **Q1.E + Q8 telemetry capture** — banner click frequency, time-series, state=APPROVED count cho Q8 decision criteria
+- **Path C DB integration test infrastructure** (~3-4h scope) — covers SQL behavior gaps trong Path A coverage (auto-DONE branch logic, eligibility gate, idempotency edge case)
+- **`buildSavePayload(draft)` helper extraction** (~30min) — defensive architecture pattern from PR-16a.5 hotfix lesson; single canonical mapper prevents future Layer 9 bugs
+- **Q2.B reopen affordance verification** — Manual QA Scenario D pending; if absent, add per-ticket reopen button to TicketDetailPanel
+
+### Stale tag retag note
+
+PR-16+ → PR-17+ retag complete across `CURRENT-STATE.md`, `TODO.md`, `inbox-state-outcome-dimensions.md` (~26 occurrences total). Verify post-retag: `grep -rn "PR-16+\|PR-16 candidate" docs/ TODO.md` returns 0 results.
 
 ---
 
