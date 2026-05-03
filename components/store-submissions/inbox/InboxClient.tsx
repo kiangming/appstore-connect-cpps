@@ -64,7 +64,15 @@ export interface InboxClientProps {
   initialData: ListTicketsResult;
   initialQuery: TicketsQuery;
   apps: Array<{ id: string; name: string }>;
-  platforms: Array<{ key: string; display_name: string }>;
+  platforms: Array<{ id: string; key: string; display_name: string }>;
+  /**
+   * PR-17.1: all active types across every platform. The Type FilterPill
+   * filters this list down to the active platform tab (a type belongs to
+   * exactly one platform). When no platform is active the pill is
+   * disabled — selecting a type without a platform would silently match
+   * zero rows because each `type_id` is unique to one platform.
+   */
+  types: Array<{ id: string; platform_id: string; name: string }>;
   /** Role-gated actions (state transitions) land in PR-10c. */
   role: StoreRole;
   /**
@@ -186,6 +194,7 @@ export function InboxClient({
   initialQuery,
   apps,
   platforms,
+  types,
   role,
   currentUserId,
   selectedTicketId,
@@ -200,6 +209,26 @@ export function InboxClient({
 
   const activeTab = useMemo(() => getActiveTab(initialQuery), [initialQuery]);
   const activeChip = useMemo(() => getActiveChip(initialQuery), [initialQuery]);
+
+  // PR-17.1: Type FilterPill scope. A type belongs to exactly one
+  // platform, so the dropdown is meaningful only when a platform tab is
+  // active. Without one, the pill is rendered disabled with a hint
+  // (Decision 2). When active, we filter the global types list down to
+  // the rows matching the platform's id.
+  const activePlatform = useMemo(
+    () =>
+      initialQuery.platform_key
+        ? platforms.find((p) => p.key === initialQuery.platform_key) ?? null
+        : null,
+    [platforms, initialQuery.platform_key],
+  );
+  const typesForPlatform = useMemo(
+    () =>
+      activePlatform
+        ? types.filter((t) => t.platform_id === activePlatform.id)
+        : [],
+    [types, activePlatform],
+  );
 
   /**
    * Write a fresh URL, dropping `cursor` and keeping only filter params
@@ -279,7 +308,13 @@ export function InboxClient({
   }
 
   function setScalarFilter(key: keyof TicketsQuery, value: string | undefined) {
-    const p = baseParams([key]);
+    // PR-17.1: changing `platform_key` must also drop `type_id` —
+    // each type belongs to exactly one platform, so a stale type_id
+    // from the previous platform would silently match zero rows.
+    // The reset list is the canonical place to enforce this invariant.
+    const reset: Array<keyof TicketsQuery> = [key];
+    if (key === 'platform_key') reset.push('type_id');
+    const p = baseParams(reset);
     if (value && value !== '') p.set(key, value);
     navigate(p);
   }
@@ -376,10 +411,13 @@ export function InboxClient({
     return Boolean(
       initialQuery.platform_key ||
         initialQuery.app_id ||
+        initialQuery.type_id ||
         initialQuery.search ||
         initialQuery.opened_from ||
         initialQuery.opened_to ||
-        (initialQuery.sort && initialQuery.sort !== 'opened_at_desc'),
+        // PR-17.1: default sort flipped to updated_at_desc — any other
+        // sort counts as a non-default filter for the Clear affordance.
+        (initialQuery.sort && initialQuery.sort !== 'updated_at_desc'),
     );
   }, [initialQuery]);
 
@@ -536,6 +574,36 @@ export function InboxClient({
             {apps.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name}
+              </option>
+            ))}
+          </select>
+        </FilterPill>
+
+        <FilterPill
+          label="Type"
+          value={
+            !activePlatform
+              ? 'All'
+              : initialQuery.type_id
+                ? typesForPlatform.find((t) => t.id === initialQuery.type_id)?.name ??
+                  'Unknown'
+                : 'All'
+          }
+          disabled={!activePlatform}
+          disabledHint="Select a platform first"
+        >
+          <select
+            value={initialQuery.type_id ?? ''}
+            onChange={(e) =>
+              setScalarFilter('type_id', e.target.value || undefined)
+            }
+            disabled={!activePlatform}
+            className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed"
+          >
+            <option value="">All types</option>
+            {typesForPlatform.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
               </option>
             ))}
           </select>
@@ -959,16 +1027,44 @@ function FilterPill({
   label,
   value,
   children,
+  disabled = false,
+  disabledHint,
 }: {
   label: string;
   value: string;
   children: React.ReactNode;
+  /**
+   * When true the pill renders muted, blocks click-to-open, and surfaces
+   * `disabledHint` as a tooltip. The wrapped `<select>` should also set
+   * its own `disabled` so keyboard-tabbing past the pill skips it.
+   * Used by the Type pill when no platform is active (PR-17.1).
+   */
+  disabled?: boolean;
+  disabledHint?: string;
 }) {
+  // Note: we don't apply `pointer-events-none` so the `title` tooltip
+  // still surfaces on hover. The wrapped <select> being `disabled` is
+  // what actually prevents the dropdown from opening.
+  const stateClasses = disabled
+    ? 'text-slate-300 border-slate-100 bg-slate-50 cursor-not-allowed'
+    : 'text-slate-600 hover:text-slate-900 border-slate-200 hover:border-slate-300 bg-white cursor-pointer';
   return (
-    <label className="relative inline-flex items-center gap-1.5 text-[13px] text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-300 bg-white rounded-lg px-3 py-1.5 cursor-pointer">
+    <label
+      className={`relative inline-flex items-center gap-1.5 text-[13px] border rounded-lg px-3 py-1.5 ${stateClasses}`}
+      title={disabled ? disabledHint : undefined}
+    >
       <span className="font-medium">{label}</span>
-      <span className="text-slate-400 font-normal">{value}</span>
-      <ChevronDown className="w-3 h-3 text-slate-400" strokeWidth={1.8} />
+      <span
+        className={
+          disabled ? 'text-slate-300 font-normal' : 'text-slate-400 font-normal'
+        }
+      >
+        {value}
+      </span>
+      <ChevronDown
+        className={`w-3 h-3 ${disabled ? 'text-slate-200' : 'text-slate-400'}`}
+        strokeWidth={1.8}
+      />
       {children}
     </label>
   );

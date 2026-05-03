@@ -121,16 +121,41 @@ afterEach(() => {
 // ==========================================================================
 
 describe('encodeCursor / decodeCursor', () => {
-  it('roundtrips opened_at + id through base64url', () => {
-    const opened_at = '2026-04-23T10:00:00Z';
+  it('roundtrips value + id + sort through base64url (opened_at_desc)', () => {
+    const v = '2026-04-23T10:00:00Z';
     const id = 'abcd-1234';
-    const cursor = encodeCursor(opened_at, id);
+    const cursor = encodeCursor(v, id, 'opened_at_desc');
 
     // base64url: no padding `=`, no `+` or `/`
     expect(cursor).toMatch(/^[A-Za-z0-9_-]+$/);
 
     const decoded = decodeCursor(cursor);
-    expect(decoded).toEqual({ opened_at, id });
+    expect(decoded).toEqual({ v, id, s: 'opened_at_desc' });
+  });
+
+  it('roundtrips value + id + sort through base64url (updated_at_desc)', () => {
+    const v = '2026-05-01T10:00:00Z';
+    const id = 'wxyz-9999';
+    const cursor = encodeCursor(v, id, 'updated_at_desc');
+
+    const decoded = decodeCursor(cursor);
+    expect(decoded).toEqual({ v, id, s: 'updated_at_desc' });
+  });
+
+  it('legacy {opened_at, id} cursor decodes as opened_at_desc (PR-17.1 backward compat)', () => {
+    // Cursor minted by pre-PR-17.1 code — no `s` discriminator, uses
+    // the old field name. We accept it gracefully so Manager bookmarks
+    // and mid-flight pagination URLs survive the deploy.
+    const legacy = Buffer.from(
+      JSON.stringify({ opened_at: '2026-04-22T00:00:00Z', id: 'legacy-id' }),
+      'utf8',
+    ).toString('base64url');
+
+    expect(decodeCursor(legacy)).toEqual({
+      v: '2026-04-22T00:00:00Z',
+      id: 'legacy-id',
+      s: 'opened_at_desc',
+    });
   });
 
   it('decodeCursor throws InvalidCursorError on non-base64 garbage', () => {
@@ -142,9 +167,21 @@ describe('encodeCursor / decodeCursor', () => {
     expect(() => decodeCursor(bad)).toThrow(InvalidCursorError);
   });
 
-  it('decodeCursor throws InvalidCursorError on invalid opened_at date', () => {
+  it('decodeCursor throws InvalidCursorError on invalid date in v', () => {
     const bad = Buffer.from(
-      JSON.stringify({ opened_at: 'not-a-date', id: 'x' }),
+      JSON.stringify({ v: 'not-a-date', id: 'x', s: 'opened_at_desc' }),
+      'utf8',
+    ).toString('base64url');
+    expect(() => decodeCursor(bad)).toThrow(InvalidCursorError);
+  });
+
+  it('decodeCursor throws InvalidCursorError on unknown sort discriminator', () => {
+    const bad = Buffer.from(
+      JSON.stringify({
+        v: '2026-04-22T00:00:00Z',
+        id: 'x',
+        s: 'priority_desc',
+      }),
       'utf8',
     ).toString('base64url');
     expect(() => decodeCursor(bad)).toThrow(InvalidCursorError);
@@ -162,21 +199,46 @@ describe('listTickets cursor/sort compatibility', () => {
     ]);
     registerBuilders(queue);
 
-    const cursor = encodeCursor('2026-04-23T00:00:00Z', 'some-id');
+    const cursor = encodeCursor('2026-04-23T00:00:00Z', 'some-id', 'opened_at_desc');
     await expect(
       listTickets({ cursor, limit: 50, sort: 'opened_at_desc' }),
     ).resolves.toEqual({ tickets: [], next_cursor: null, has_more: false });
   });
 
-  it('rejects cursor with non-default sort (InvalidCursorError)', async () => {
+  it('accepts cursor when sort=updated_at_desc (PR-17.1 keyset extension)', async () => {
+    const queue: BuilderQueue = new Map([
+      ['tickets', [new MockBuilder({ data: [], error: null })]],
+    ]);
+    registerBuilders(queue);
+
+    const cursor = encodeCursor('2026-05-01T00:00:00Z', 'some-id', 'updated_at_desc');
+    await expect(
+      listTickets({ cursor, limit: 50, sort: 'updated_at_desc' }),
+    ).resolves.toEqual({ tickets: [], next_cursor: null, has_more: false });
+  });
+
+  it('rejects cursor when its sort discriminator does not match active sort', async () => {
     // No builders needed — the error throws before any DB call.
     mockFrom.mockImplementation(() => {
       throw new Error('[test] from() should not be reached');
     });
 
-    const cursor = encodeCursor('2026-04-23T00:00:00Z', 'some-id');
+    // Cursor encoded for opened_at_desc but caller is paginating
+    // updated_at_desc — keysets are incompatible.
+    const cursor = encodeCursor('2026-04-23T00:00:00Z', 'some-id', 'opened_at_desc');
     await expect(
       listTickets({ cursor, limit: 50, sort: 'updated_at_desc' }),
+    ).rejects.toThrow(InvalidCursorError);
+  });
+
+  it('rejects cursor when sort is not a keyset-supporting sort', async () => {
+    mockFrom.mockImplementation(() => {
+      throw new Error('[test] from() should not be reached');
+    });
+
+    const cursor = encodeCursor('2026-04-23T00:00:00Z', 'some-id', 'opened_at_desc');
+    await expect(
+      listTickets({ cursor, limit: 50, sort: 'priority_desc' }),
     ).rejects.toThrow(InvalidCursorError);
   });
 });
@@ -373,7 +435,7 @@ describe('listTickets filters', () => {
     const ticketsBuilder = new MockBuilder({ data: [], error: null });
     registerBuilders(new Map([['tickets', [ticketsBuilder]]]));
 
-    const cursor = encodeCursor('2026-04-20T00:00:00Z', 'ticket-xyz');
+    const cursor = encodeCursor('2026-04-20T00:00:00Z', 'ticket-xyz', 'opened_at_desc');
     await listTickets({ cursor, limit: 50, sort: 'opened_at_desc' });
 
     const orCall = ticketsBuilder.calls.find((c) => c.method === 'or');
@@ -484,7 +546,69 @@ describe('listTickets pagination', () => {
     expect(result.tickets[0].id).toBe('row-1');
 
     // next_cursor encodes row-1 (the last visible row), not row-2 (the sentinel).
-    expect(result.next_cursor).toBe(encodeCursor('2026-04-22T00:00:00Z', 'row-1'));
+    expect(result.next_cursor).toBe(
+      encodeCursor('2026-04-22T00:00:00Z', 'row-1', 'opened_at_desc'),
+    );
+  });
+
+  it('next_cursor uses updated_at value when sort=updated_at_desc (PR-17.1)', async () => {
+    const rows = [
+      makeRow({
+        id: 'row-1',
+        opened_at: '2026-04-22T00:00:00Z',
+        updated_at: '2026-05-02T10:00:00Z',
+      }),
+      makeRow({
+        id: 'row-2',
+        opened_at: '2026-04-21T00:00:00Z',
+        updated_at: '2026-05-02T09:00:00Z',
+      }),
+    ];
+    registerBuilders(
+      new Map([
+        ['tickets', [new MockBuilder({ data: rows, error: null })]],
+        [
+          'apps',
+          [
+            new MockBuilder({
+              data: [{ id: '22222222-2222-2222-2222-222222222222', name: 'App', slug: 'app' }],
+              error: null,
+            }),
+          ],
+        ],
+        [
+          'types',
+          [
+            new MockBuilder({
+              data: [{ id: '44444444-4444-4444-4444-444444444444', name: 'T', slug: 't' }],
+              error: null,
+            }),
+          ],
+        ],
+        [
+          'platforms',
+          [
+            new MockBuilder({
+              data: [
+                {
+                  id: '33333333-3333-3333-3333-333333333333',
+                  key: 'apple',
+                  display_name: 'Apple',
+                },
+              ],
+              error: null,
+            }),
+          ],
+        ],
+        ['ticket_entries', [new MockBuilder({ data: [], error: null })]],
+      ]),
+    );
+
+    const result = await listTickets({ limit: 1, sort: 'updated_at_desc' });
+    expect(result.has_more).toBe(true);
+    expect(result.next_cursor).toBe(
+      encodeCursor('2026-05-02T10:00:00Z', 'row-1', 'updated_at_desc'),
+    );
   });
 });
 

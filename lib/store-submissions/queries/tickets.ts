@@ -134,22 +134,53 @@ export class InvalidCursorError extends Error {
   }
 }
 
-interface DecodedCursor {
-  opened_at: string;
-  id: string;
-}
-
 /**
- * Encode the keyset tuple `(opened_at, id)` as base64url. Exposed for
- * test visibility — production callers only see `next_cursor: string`.
+ * Sort modes that support keyset cursor pagination. `priority_desc` is
+ * excluded — its keyset would be a 3-tuple `(priority, opened_at, id)`
+ * and the tiebreak semantics aren't worth the complexity at MVP scale.
  */
-export function encodeCursor(opened_at: string, id: string): string {
-  return Buffer.from(JSON.stringify({ opened_at, id }), 'utf8').toString('base64url');
+type CursorSort = 'opened_at_desc' | 'updated_at_desc';
+
+const CURSOR_COL_BY_SORT: Record<CursorSort, 'opened_at' | 'updated_at'> = {
+  opened_at_desc: 'opened_at',
+  updated_at_desc: 'updated_at',
+};
+
+interface DecodedCursor {
+  /** Sort key value (ISO timestamp matching `s`). */
+  v: string;
+  /** Tiebreaker — the row id at the boundary. */
+  id: string;
+  /**
+   * Sort discriminator. Optional in the decoded shape so legacy cursors
+   * encoded before PR-17.1 (which had only `{opened_at, id}`) round-trip
+   * gracefully — `decodeCursor` rewrites them to the new shape with
+   * `s='opened_at_desc'`.
+   */
+  s: CursorSort;
 }
 
 /**
- * Decode and validate shape. Throws InvalidCursorError on any parse
- * failure or missing fields — callers should surface this as a 400.
+ * Encode a keyset cursor as base64url JSON. The cursor is opaque to
+ * clients; we only need it round-trippable here. Including the sort
+ * discriminator (`s`) lets us validate that the caller is paginating on
+ * the same sort the cursor was minted on.
+ */
+export function encodeCursor(value: string, id: string, sort: CursorSort): string {
+  return Buffer.from(JSON.stringify({ v: value, id, s: sort }), 'utf8').toString('base64url');
+}
+
+/**
+ * Decode and validate shape. Accepts two cursor formats:
+ *
+ *   - Current (PR-17.1+): `{v, id, s}` — sort-aware, full validation.
+ *   - Legacy (pre-PR-17.1): `{opened_at, id}` — no discriminator.
+ *     Treated as `s='opened_at_desc'` to keep Manager bookmarks /
+ *     mid-flight pagination URLs working through the deploy. Remove the
+ *     legacy branch in PR-18+ once telemetry confirms no stale URLs.
+ *
+ * Throws `InvalidCursorError` on any parse failure or missing required
+ * fields — callers should surface this as a 400.
  */
 export function decodeCursor(cursor: string): DecodedCursor {
   let raw: string;
@@ -166,18 +197,30 @@ export function decodeCursor(cursor: string): DecodedCursor {
     throw new InvalidCursorError();
   }
 
-  if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    typeof (parsed as DecodedCursor).opened_at !== 'string' ||
-    typeof (parsed as DecodedCursor).id !== 'string'
-  ) {
+  if (typeof parsed !== 'object' || parsed === null) {
     throw new InvalidCursorError();
   }
 
-  const c = parsed as DecodedCursor;
-  if (Number.isNaN(Date.parse(c.opened_at))) throw new InvalidCursorError();
-  return c;
+  const obj = parsed as Record<string, unknown>;
+
+  // Legacy shape `{opened_at, id}` — assume opened_at_desc.
+  if (typeof obj.v !== 'string' && typeof obj.opened_at === 'string') {
+    if (typeof obj.id !== 'string') throw new InvalidCursorError();
+    if (Number.isNaN(Date.parse(obj.opened_at))) throw new InvalidCursorError();
+    return { v: obj.opened_at, id: obj.id, s: 'opened_at_desc' };
+  }
+
+  // Current shape `{v, id, s}`.
+  if (
+    typeof obj.v !== 'string' ||
+    typeof obj.id !== 'string' ||
+    (obj.s !== 'opened_at_desc' && obj.s !== 'updated_at_desc')
+  ) {
+    throw new InvalidCursorError();
+  }
+  if (Number.isNaN(Date.parse(obj.v))) throw new InvalidCursorError();
+
+  return { v: obj.v, id: obj.id, s: obj.s };
 }
 
 // -- Internal helpers -------------------------------------------------------
@@ -289,15 +332,24 @@ export async function listTickets(
 ): Promise<ListTicketsResult> {
   const db = storeDb();
 
-  // Cursor validation: only the default sort supports keyset pagination.
+  // Cursor validation: keyset pagination is supported for the two
+  // date-based sorts (opened_at_desc, updated_at_desc). The cursor
+  // carries its own sort discriminator (`s`) — if the caller mixes a
+  // cursor minted on one sort with a different active sort, throw so we
+  // never silently return rows from the wrong keyset.
   let cursor: DecodedCursor | null = null;
   if (filters.cursor) {
-    if (filters.sort !== 'opened_at_desc') {
+    if (filters.sort !== 'opened_at_desc' && filters.sort !== 'updated_at_desc') {
       throw new InvalidCursorError(
-        `Cursor pagination is only supported with sort=opened_at_desc (got ${filters.sort})`,
+        `Cursor pagination is only supported with sort=opened_at_desc or updated_at_desc (got ${filters.sort})`,
       );
     }
     cursor = decodeCursor(filters.cursor);
+    if (cursor.s !== filters.sort) {
+      throw new InvalidCursorError(
+        `Cursor sort=${cursor.s} does not match active sort=${filters.sort}`,
+      );
+    }
   }
 
   // Resolve platform key → id upfront. Skipping when not filtered so we
@@ -357,13 +409,13 @@ export async function listTickets(
     q = q.ilike('display_id', `%${escaped}%`);
   }
 
-  // Keyset pagination: `(opened_at, id) < (cursor.opened_at, cursor.id)`.
+  // Keyset pagination: `(<col>, id) < (cursor.v, cursor.id)`, where
+  // `<col>` is opened_at or updated_at depending on the active sort.
   // PostgREST `.or()` supports nested `and(...)` grouping.
   if (cursor) {
-    const { opened_at, id } = cursor;
-    q = q.or(
-      `opened_at.lt.${opened_at},and(opened_at.eq.${opened_at},id.lt.${id})`,
-    );
+    const col = CURSOR_COL_BY_SORT[cursor.s];
+    const { v, id } = cursor;
+    q = q.or(`${col}.lt.${v},and(${col}.eq.${v},id.lt.${id})`);
   }
 
   for (const { col, ascending } of sortOrderColumns(filters.sort)) {
@@ -580,9 +632,17 @@ export async function listTickets(
     };
   });
 
+  // next_cursor is emitted only for the keyset-supporting sorts and only
+  // when there's actually another page. For `priority_desc` (and any
+  // future non-keyset sort) callers fall through to client-side scroll.
+  const lastRow = pageRows[pageRows.length - 1];
   const next_cursor =
-    hasMore && filters.sort === 'opened_at_desc'
-      ? encodeCursor(pageRows[pageRows.length - 1].opened_at, pageRows[pageRows.length - 1].id)
+    hasMore && (filters.sort === 'opened_at_desc' || filters.sort === 'updated_at_desc')
+      ? encodeCursor(
+          filters.sort === 'opened_at_desc' ? lastRow.opened_at : lastRow.updated_at,
+          lastRow.id,
+          filters.sort,
+        )
       : null;
 
   return { tickets, next_cursor, has_more: hasMore };

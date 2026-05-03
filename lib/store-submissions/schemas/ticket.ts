@@ -178,7 +178,12 @@ export const ticketsQuerySchema = z.object({
   opened_from: isoDateSchema.optional(),
   opened_to: isoDateSchema.optional(),
 
-  sort: ticketSortSchema.default('opened_at_desc'),
+  // PR-17.1: default switched to `updated_at_desc` so the Inbox surfaces
+  // recently-touched tickets first (matches Manager triage workflow:
+  // "what changed since I last looked?"). `opened_at_desc` remains a
+  // selectable option via the Sort pill. Cursor pagination is now
+  // sort-aware (see queries/tickets.ts encodeCursor / decodeCursor).
+  sort: ticketSortSchema.default('updated_at_desc'),
 });
 export type TicketsQuery = z.infer<typeof ticketsQuerySchema>;
 

@@ -10,6 +10,7 @@ import { listApps } from '@/lib/store-submissions/queries/apps';
 import { getAutoCompletedCount } from '@/lib/store-submissions/queries/auto-completed';
 import { getCorruptPayloadCount } from '@/lib/store-submissions/queries/corrupt-payload';
 import { listPlatforms } from '@/lib/store-submissions/queries/rules';
+import { listAllTypes } from '@/lib/store-submissions/queries/types';
 import { parseTicketsQueryFromSearchParams } from '@/lib/store-submissions/inbox/search-params';
 import type { TicketsQuery } from '@/lib/store-submissions/schemas/ticket';
 import { InboxClient } from '@/components/store-submissions/inbox/InboxClient';
@@ -88,6 +89,7 @@ export default async function InboxPage({
     data,
     apps,
     platforms,
+    types,
     initialTicket,
     corruptPayloadCount,
     autoCompletedCount,
@@ -95,6 +97,7 @@ export default async function InboxPage({
     listTickets(effectiveQuery, { includeFirstEmail: isUnclassifiedView }),
     listApps({ active: true }),
     listPlatforms(),
+    listAllTypes(),
     selectedTicketId ? getTicketWithEntries(selectedTicketId) : Promise.resolve(null),
     storeUser.role === 'MANAGER'
       ? getCorruptPayloadCount()
@@ -125,7 +128,16 @@ export default async function InboxPage({
           initialData={data}
           initialQuery={query}
           apps={apps.map((a) => ({ id: a.id, name: a.name }))}
-          platforms={platforms.map((p) => ({ key: p.key, display_name: p.display_name }))}
+          platforms={platforms.map((p) => ({
+            id: p.id,
+            key: p.key,
+            display_name: p.display_name,
+          }))}
+          types={types.map((t) => ({
+            id: t.id,
+            platform_id: t.platform_id,
+            name: t.name,
+          }))}
           role={storeUser.role}
           currentUserId={storeUser.id}
           selectedTicketId={selectedTicketId}

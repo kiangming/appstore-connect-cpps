@@ -24,14 +24,17 @@
  * Visual polish (PR-10.2.4):
  *   - StateBadge / OutcomeBadge / PriorityBadge from ./TicketBadges
  *   - PlatformIcon glyph + label (Apple / Google / Huawei / Facebook)
- *   - Relative time via date-fns `formatDistanceToNow` with absolute
- *     timestamp in the hover title
+ *   - Absolute "dd/MM/yyyy HH:mm" timestamp in list (PR-17.1) — scanning
+ *     context wants precision over relative-time prose. Detail panel +
+ *     entry timeline keep relative time for reading context.
  */
 
 import { useEffect, useRef } from 'react';
 
-import { formatDistanceToNow } from 'date-fns';
-
+import {
+  absoluteTs,
+  formatDateTime,
+} from '@/lib/store-submissions/utils/format-date';
 import type { TicketListRow } from '@/lib/store-submissions/queries/tickets';
 import {
   OutcomeBadge,
@@ -40,7 +43,12 @@ import {
   StateBadge,
 } from './TicketBadges';
 
-const GRID = 'grid-cols-[140px_1fr_100px_110px_110px_120px_60px]';
+// PR-17.1: extended 7→8 cols. Added "Last update" between Opened and
+// Entries — the new default sort (`updated_at_desc`) makes it the
+// primary scan column. Both date columns are 130px to fit the
+// "dd/MM/yyyy HH:mm" absolute format comfortably with a tabular-nums
+// font.
+const GRID = 'grid-cols-[140px_1fr_100px_110px_110px_130px_130px_60px]';
 
 export interface TicketListTableProps {
   tickets: TicketListRow[];
@@ -97,6 +105,7 @@ export function TicketListTable({
         <div>State</div>
         <div>Outcome</div>
         <div>Opened</div>
+        <div>Last update</div>
         <div className="text-right">Entries</div>
       </div>
 
@@ -225,10 +234,17 @@ function TicketRow({
       </div>
 
       <div
-        className="text-slate-500 text-[12px]"
-        title={new Date(ticket.opened_at).toLocaleString()}
+        className="text-slate-500 text-[12px] tabular-nums"
+        title={absoluteTs(ticket.opened_at)}
       >
-        {formatRelativeTime(ticket.opened_at)}
+        {formatDateTime(ticket.opened_at)}
+      </div>
+
+      <div
+        className="text-slate-500 text-[12px] tabular-nums"
+        title={absoluteTs(ticket.updated_at)}
+      >
+        {formatDateTime(ticket.updated_at)}
       </div>
 
       <div className="text-right text-slate-400 text-[12px] tabular-nums">
@@ -236,19 +252,4 @@ function TicketRow({
       </div>
     </div>
   );
-}
-
-/**
- * Human-readable relative time via date-fns.
- *
- * Covers the common case ("5 minutes ago", "about 2 hours ago",
- * "3 days ago"). For >30d, `formatDistanceToNow` still produces
- * reasonable output ("about 2 months ago") — tickets older than that
- * are uncommon in triage, so no absolute-date fallback for MVP.
- * Hover title shows absolute timestamp.
- */
-function formatRelativeTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return formatDistanceToNow(d, { addSuffix: true });
 }

@@ -18,6 +18,7 @@ import type {
   TypeRow,
 } from '@/lib/store-submissions/queries/rules';
 import type { PlatformKey } from '@/lib/store-submissions/schemas/app';
+import type { SaveRulesInput } from '@/lib/store-submissions/schemas/rules';
 
 /**
  * Platforms are hard-coded in the classifier
@@ -143,6 +144,61 @@ export function buildDraftState(rules: PlatformRules): DraftState {
  */
 export function isDraftDirty(original: DraftState, current: DraftState): boolean {
   return JSON.stringify(original) !== JSON.stringify(current);
+}
+
+// -- Save payload builder ------------------------------------------------
+
+/**
+ * Pure DraftState → SaveRulesInput mapper. Single canonical site for the
+ * "Layer 12" intermediate payload that PR-16a.5 + PR-16b.5 hotfixes both
+ * touched: when a new field threads through the cascade (DB column → RPC
+ * → query → types → zod → Server Action → UI input → page handler), this
+ * mapper is the one place that always needs updating.
+ *
+ * Strong typing on the return — `SaveRulesInput` is the zod-inferred
+ * input type for the Server Action — turns missing-field omissions into
+ * TypeScript compile errors instead of silent runtime `.default(false)`
+ * coercions. The PR-16a.5 bug (auto_done_eligible silently dropped from
+ * a hand-written payload object) cannot recur here.
+ *
+ * Note: `expectedVersion` may be `null` for a platform's first commit
+ * (truly no prior save). The Server Action's zod schema accepts null;
+ * RPC compares with `IS NOT DISTINCT FROM`.
+ */
+export function buildSavePayload(
+  draft: DraftState,
+  opts: { platformId: string; expectedVersion: number | null },
+): SaveRulesInput {
+  return {
+    platform_id: opts.platformId,
+    expected_version_number: opts.expectedVersion,
+    senders: draft.senders.map((s) => ({
+      email: s.email,
+      is_primary: s.is_primary,
+      active: s.active,
+    })),
+    subject_patterns: draft.subject_patterns.map((p) => ({
+      outcome: p.outcome,
+      regex: p.regex,
+      priority: p.priority,
+      example_subject: p.example_subject,
+      active: p.active,
+      auto_done_eligible: p.auto_done_eligible,
+      auto_reopen_eligible: p.auto_reopen_eligible,
+    })),
+    types: draft.types.map((t) => ({
+      name: t.name,
+      slug: t.slug,
+      body_keyword: t.body_keyword,
+      payload_extract_regex: t.payload_extract_regex,
+      sort_order: t.sort_order,
+      active: t.active,
+    })),
+    submission_id_patterns: draft.submission_id_patterns.map((p) => ({
+      body_regex: p.body_regex,
+      active: p.active,
+    })),
+  };
 }
 
 // -- Platform tab resolution --------------------------------------------

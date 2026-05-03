@@ -72,6 +72,7 @@ export function parseTicketsQueryFromSearchParams(
   console.warn('[inbox] invalid searchParams, falling back to defaults:', {
     issues: parsed.error.flatten().fieldErrors,
   });
-  // Empty object → all-default query (sort=opened_at_desc, limit=50).
+  // Empty object → all-default query (sort=updated_at_desc, limit=50
+  // since PR-17.1).
   return ticketsQuerySchema.parse({});
 }

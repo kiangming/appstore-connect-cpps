@@ -9,6 +9,7 @@ import {
   PLATFORM_KEYS,
   addRow,
   buildDraftState,
+  buildSavePayload,
   isDraftDirty,
   nextNumericField,
   removeRow,
@@ -449,5 +450,100 @@ describe('resolvePlatformKey', () => {
       { ...googlePlatform, active: false },
     ];
     expect(resolvePlatformKey('apple', allInactive)).toBeNull();
+  });
+});
+
+// -- buildSavePayload (PR-17.1) -------------------------------------------
+
+describe('buildSavePayload', () => {
+  it('produces a SaveRulesInput-shaped payload from a DraftState', () => {
+    const draft = buildDraftState(baseRules());
+    const payload = buildSavePayload(draft, {
+      platformId: applyPlatform.id,
+      expectedVersion: 12,
+    });
+
+    expect(payload).toEqual({
+      platform_id: applyPlatform.id,
+      expected_version_number: 12,
+      senders: [
+        { email: 'no-reply@apple.com', is_primary: true, active: true },
+      ],
+      subject_patterns: [
+        {
+          outcome: 'APPROVED',
+          regex: 'Review of your (?<app_name>.+) submission is complete\\.',
+          priority: 1,
+          example_subject: null,
+          active: true,
+          auto_done_eligible: false,
+          auto_reopen_eligible: false,
+        },
+      ],
+      types: [
+        {
+          name: 'App',
+          slug: 'app',
+          body_keyword: 'App Version',
+          payload_extract_regex: null,
+          sort_order: 100,
+          active: true,
+        },
+      ],
+      submission_id_patterns: [
+        { body_regex: 'Submission ID: (?<submission_id>[A-Z0-9-]+)', active: true },
+      ],
+    });
+  });
+
+  it('threads auto_done_eligible from the draft (PR-16a.5 regression guard)', () => {
+    const draft = buildDraftState(baseRules());
+    draft.subject_patterns[0]!.auto_done_eligible = true;
+
+    const payload = buildSavePayload(draft, {
+      platformId: applyPlatform.id,
+      expectedVersion: 12,
+    });
+
+    expect(payload.subject_patterns[0]!.auto_done_eligible).toBe(true);
+  });
+
+  it('threads auto_reopen_eligible from the draft (PR-16b.5 regression guard)', () => {
+    const draft = buildDraftState(baseRules());
+    draft.subject_patterns[0]!.auto_reopen_eligible = true;
+
+    const payload = buildSavePayload(draft, {
+      platformId: applyPlatform.id,
+      expectedVersion: 12,
+    });
+
+    expect(payload.subject_patterns[0]!.auto_reopen_eligible).toBe(true);
+  });
+
+  it('passes expectedVersion=null through (first save on a platform)', () => {
+    const draft = buildDraftState(baseRules());
+    const payload = buildSavePayload(draft, {
+      platformId: applyPlatform.id,
+      expectedVersion: null,
+    });
+
+    expect(payload.expected_version_number).toBeNull();
+  });
+
+  it('drops draft-only `id` fields so payload matches input schema shape', () => {
+    const draft = buildDraftState(baseRules());
+    const payload = buildSavePayload(draft, {
+      platformId: applyPlatform.id,
+      expectedVersion: 12,
+    });
+
+    // Payload mappers intentionally omit `id` — the Server Action's
+    // schema doesn't accept it on the bulk-save path.
+    expect((payload.senders[0] as Record<string, unknown>).id).toBeUndefined();
+    expect((payload.subject_patterns[0] as Record<string, unknown>).id).toBeUndefined();
+    expect((payload.types[0] as Record<string, unknown>).id).toBeUndefined();
+    expect(
+      (payload.submission_id_patterns[0] as Record<string, unknown>).id,
+    ).toBeUndefined();
   });
 });

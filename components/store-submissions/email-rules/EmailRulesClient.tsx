@@ -16,6 +16,7 @@ import {
   PLATFORM_KEYS,
   PLATFORM_LABELS,
   buildDraftState,
+  buildSavePayload,
   isDraftDirty,
   type DraftState,
   type SenderDraft,
@@ -157,47 +158,15 @@ export function EmailRulesClient({
     if (!dirty || isSaving) return;
 
     startSave(async () => {
-      const payload = {
-        platform_id: platformId,
-        expected_version_number: initialRules.latest_version,
-        senders: draft.senders.map((s) => ({
-          email: s.email,
-          is_primary: s.is_primary,
-          active: s.active,
-        })),
-        subject_patterns: draft.subject_patterns.map((p) => ({
-          outcome: p.outcome,
-          regex: p.regex,
-          priority: p.priority,
-          example_subject: p.example_subject,
-          active: p.active,
-          // PR-16a.5 hotfix: thread Manager opt-in flag through to the
-          // Server Action. Without this line zod's .default(false) on the
-          // input schema silently coerced the missing field to false, the
-          // RPC persisted false, router.refresh() reloaded false, and the
-          // checkbox appeared to "revert" after every Save. The Server
-          // Action → RPC mapper (actions.ts) was correct; the gap was
-          // here at the page-level payload builder. Future subject_patterns
-          // fields must add a line here too.
-          auto_done_eligible: p.auto_done_eligible,
-          // PR-16b.5: same threading discipline cho the second Manager
-          // opt-in flag. N-layer cascade audit (PR-16a.5 lesson): Layer 9
-          // intermediate payload builder is the canonical missed site.
-          auto_reopen_eligible: p.auto_reopen_eligible,
-        })),
-        types: draft.types.map((t) => ({
-          name: t.name,
-          slug: t.slug,
-          body_keyword: t.body_keyword,
-          payload_extract_regex: t.payload_extract_regex,
-          sort_order: t.sort_order,
-          active: t.active,
-        })),
-        submission_id_patterns: draft.submission_id_patterns.map((p) => ({
-          body_regex: p.body_regex,
-          active: p.active,
-        })),
-      };
+      // PR-17.1: payload construction lives in `buildSavePayload` (helpers.ts).
+      // Strong typing on the helper return turns missing-field omissions
+      // into TS compile errors instead of silent zod `.default(false)` —
+      // the gotcha that caused PR-16a.5 + PR-16b.5 hotfixes when fields
+      // were threaded inline here.
+      const payload = buildSavePayload(draft, {
+        platformId,
+        expectedVersion: initialRules.latest_version,
+      });
 
       const res = await saveRulesAction(payload);
       if (res.ok) {

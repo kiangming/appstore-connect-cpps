@@ -8,7 +8,9 @@ afterEach(() => {
 describe('parseTicketsQueryFromSearchParams', () => {
   it('returns defaults on empty input', () => {
     const q = parseTicketsQueryFromSearchParams({});
-    expect(q.sort).toBe('opened_at_desc');
+    // PR-17.1: default sort flipped from opened_at_desc to updated_at_desc
+    // so the Inbox surfaces recently-touched tickets first.
+    expect(q.sort).toBe('updated_at_desc');
     expect(q.limit).toBe(50);
     expect(q.state).toBeUndefined();
     expect(q.bucket).toBeUndefined();
@@ -36,7 +38,7 @@ describe('parseTicketsQueryFromSearchParams', () => {
     const q = parseTicketsQueryFromSearchParams({ state: 'NOT_A_STATE' });
     // Whole-shape rejection → empty defaults.
     expect(q.state).toBeUndefined();
-    expect(q.sort).toBe('opened_at_desc');
+    expect(q.sort).toBe('updated_at_desc');
     expect(warn).toHaveBeenCalled();
   });
 
