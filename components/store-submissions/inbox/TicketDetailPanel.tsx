@@ -31,7 +31,7 @@
  *   - PR-10c.3: COMMENT / REJECT_REASON cards inside the timeline
  */
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { formatDistanceToNow } from 'date-fns';
 import { Check, ChevronRight, Copy, Plus, X } from 'lucide-react';
@@ -39,6 +39,7 @@ import { Check, ChevronRight, Copy, Plus, X } from 'lucide-react';
 import type { StoreRole } from '@/lib/store-submissions/auth';
 import { canPerformAction } from '@/lib/store-submissions/tickets/auth';
 import type { TicketWithEntries } from '@/lib/store-submissions/queries/tickets';
+import { extractVersions } from '@/lib/store-submissions/utils/extract-versions';
 import {
   OutcomeBadge,
   PlatformIcon,
@@ -100,6 +101,7 @@ export function TicketDetailPanel({
               <>
                 <MetadataSection ticket={ticket} />
                 <SubmissionIdsSection ids={ticket.ticket.submission_ids} />
+                <VersionsSection payloads={ticket.ticket.type_payloads} />
                 <TypePayloadsSection payloads={ticket.ticket.type_payloads} />
 
                 {/* Timeline */}
@@ -279,6 +281,55 @@ function SubmissionIdsSection({ ids }: { ids: string[] }) {
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+/**
+ * Versions chip row (PR-17.2). Curated summary of the version strings
+ * carried by `tickets.type_payloads` — the data lineage's user-facing
+ * front-end. The raw JSONB lives in `TypePayloadsSection` directly
+ * below this one for debugging.
+ *
+ * Empty fallback: render nothing. Apple patterns reliably populate
+ * `<version>`; other platforms may not, in which case suppressing the
+ * section entirely keeps the panel tight (Manager-friendly) and the
+ * raw TypePayloads section remains as a debug fallback.
+ */
+function VersionsSection({ payloads }: { payloads: unknown[] }) {
+  const versions = extractVersions(payloads);
+  if (versions.length === 0) return null;
+
+  return (
+    <section className="px-5 py-4 border-b border-slate-100">
+      <SectionLabel>Versions ({versions.length})</SectionLabel>
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {versions.map((v, i) => {
+          const isLatest = i === versions.length - 1;
+          return (
+            <Fragment key={v}>
+              <span
+                className={
+                  isLatest
+                    ? 'inline-flex items-center gap-1 bg-rose-50 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded font-mono text-[12px]'
+                    : 'bg-slate-100 px-1.5 py-0.5 rounded font-mono text-[12px] text-slate-700'
+                }
+              >
+                {v}
+                {isLatest && (
+                  <span className="text-[10px]">← latest</span>
+                )}
+              </span>
+              {i < versions.length - 1 && (
+                <ChevronRight
+                  className="w-3 h-3 text-slate-400"
+                  strokeWidth={1.8}
+                />
+              )}
+            </Fragment>
+          );
+        })}
+      </div>
     </section>
   );
 }

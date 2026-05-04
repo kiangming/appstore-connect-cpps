@@ -655,10 +655,11 @@ export async function listTickets(
  *
  * Returns `null` when the ticket is not found (caller surfaces 404).
  *
- * Entries are ordered by `created_at ASC` — timeline UIs render oldest
- * first so the reader scrolls top-down through history. Index
- * `(ticket_id, created_at DESC)` still answers this efficiently (direction
- * is free on a b-tree index).
+ * Entries are ordered by `created_at DESC` (PR-17.2) — Manager triage
+ * opens a ticket asking "what's the latest activity here?", and the
+ * newest entry should be visible without scrolling. Older entries
+ * scroll downward into history. Index `(ticket_id, created_at DESC)`
+ * answers this directly.
  */
 export async function getTicketWithEntries(id: string): Promise<TicketWithEntries | null> {
   const db = storeDb();
@@ -689,7 +690,8 @@ export async function getTicketWithEntries(id: string): Promise<TicketWithEntrie
         `${ENTRY_COLUMNS}, email_message:email_messages!email_message_id (ticket_id)`,
       )
       .eq('ticket_id', t.id)
-      .order('created_at', { ascending: true }),
+      // PR-17.2: newest-top ordering. See header comment for rationale.
+      .order('created_at', { ascending: false }),
     t.app_id
       ? db.from('apps').select('id, name, slug').eq('id', t.app_id).maybeSingle()
       : Promise.resolve({ data: null, error: null }),

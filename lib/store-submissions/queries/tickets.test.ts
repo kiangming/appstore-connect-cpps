@@ -859,41 +859,18 @@ describe('getTicketWithEntries · stale-EMAIL filter (PR-15.5)', () => {
       type_id: null,
     });
 
+    // Fixture order mirrors what PostgREST returns under
+    // `.order('created_at', { ascending: false })` (PR-17.2): newest
+    // first. The mock builder echoes the array as-is — it does not
+    // re-sort — so seeding in the production sort order keeps the
+    // test honest about the contract callers actually see.
     const queue = setupTicketDetailMocks({
       ticketRow,
       entries: [
-        // CURRENT EMAIL: still attached to TICKET_ID. Should be visible.
-        {
-          id: 'entry-current-email',
-          ticket_id: TICKET_ID,
-          entry_type: 'EMAIL',
-          author_user_id: null,
-          content: null,
-          metadata: { email_snapshot: { subject: 'still here' } },
-          email_message_id: 'email-current',
-          attachment_refs: null,
-          edited_at: null,
-          created_at: '2026-04-23T10:00:00Z',
-          email_message: { ticket_id: TICKET_ID },
-        },
-        // STALE EMAIL: same row's email has since been reclassified to
-        // OTHER_TICKET_ID. Should be filtered out.
-        {
-          id: 'entry-stale-email',
-          ticket_id: TICKET_ID,
-          entry_type: 'EMAIL',
-          author_user_id: null,
-          content: null,
-          metadata: { email_snapshot: { subject: 'reclassified out' } },
-          email_message_id: 'email-stale',
-          attachment_refs: null,
-          edited_at: null,
-          created_at: '2026-04-23T11:00:00Z',
-          email_message: { ticket_id: OTHER_TICKET_ID },
-        },
-        // STATE_CHANGE 'reclassify_out': audit annotation. Should stay
-        // visible regardless of any embed (EMAIL filter must not affect
-        // non-EMAIL entries).
+        // STATE_CHANGE 'reclassify_out': newest (11:00:01). Audit
+        // annotation that should stay visible regardless of any
+        // email_message embed (EMAIL filter must not affect non-EMAIL
+        // entries).
         {
           id: 'entry-reclassify-out',
           ticket_id: TICKET_ID,
@@ -907,6 +884,36 @@ describe('getTicketWithEntries · stale-EMAIL filter (PR-15.5)', () => {
           created_at: '2026-04-23T11:00:01Z',
           email_message: { ticket_id: OTHER_TICKET_ID },
         },
+        // STALE EMAIL: same row's email has since been reclassified to
+        // OTHER_TICKET_ID. Should be filtered out (11:00:00).
+        {
+          id: 'entry-stale-email',
+          ticket_id: TICKET_ID,
+          entry_type: 'EMAIL',
+          author_user_id: null,
+          content: null,
+          metadata: { email_snapshot: { subject: 'reclassified out' } },
+          email_message_id: 'email-stale',
+          attachment_refs: null,
+          edited_at: null,
+          created_at: '2026-04-23T11:00:00Z',
+          email_message: { ticket_id: OTHER_TICKET_ID },
+        },
+        // CURRENT EMAIL: oldest (10:00:00), still attached to
+        // TICKET_ID. Should be visible.
+        {
+          id: 'entry-current-email',
+          ticket_id: TICKET_ID,
+          entry_type: 'EMAIL',
+          author_user_id: null,
+          content: null,
+          metadata: { email_snapshot: { subject: 'still here' } },
+          email_message_id: 'email-current',
+          attachment_refs: null,
+          edited_at: null,
+          created_at: '2026-04-23T10:00:00Z',
+          email_message: { ticket_id: TICKET_ID },
+        },
       ],
     });
     registerBuilders(queue);
@@ -915,7 +922,11 @@ describe('getTicketWithEntries · stale-EMAIL filter (PR-15.5)', () => {
 
     expect(result).not.toBeNull();
     const entryIds = result!.entries.map((e) => e.id);
-    expect(entryIds).toEqual(['entry-current-email', 'entry-reclassify-out']);
+    // PR-17.2: entries returned in DESC order (newest first), so
+    // `entry-reclassify-out` (11:00:01) precedes `entry-current-email`
+    // (10:00:00). The stale `entry-stale-email` (11:00:00) is filtered
+    // out regardless of sort direction.
+    expect(entryIds).toEqual(['entry-reclassify-out', 'entry-current-email']);
     expect(entryIds).not.toContain('entry-stale-email');
   });
 
