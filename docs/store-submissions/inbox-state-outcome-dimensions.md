@@ -565,7 +565,7 @@ Ticket có thể `state=NEW` + `latest_outcome=APPROVED` (Apple approved, Manage
 PR-13 investigation noted: `state=APPROVED` rare. Lý do:
 - Most approved tickets immediately marked DONE by Manager (workflow shortcut NEW → DONE)
 - `state=APPROVED` reserved cho FOLLOW_UP cases (Apple approved + đợi next milestone trước close)
-- Auto-mark-done logic ✅ shipped PR-16; state=APPROVED có thể become near-extinct post-Manager-opt-in → drop tab decision deferred PR-17+ telemetry-informed (Q8.D defer; 1-2 months data needed)
+- Auto-mark-done logic ✅ shipped PR-16; state=APPROVED có thể become near-extinct post-Manager-opt-in → drop tab decision deferred PR-18+ telemetry-informed (Q8.D defer; 1-2 months data needed)
 
 ### Confusion 3: "Reclassify changes both dimensions?"
 
@@ -626,7 +626,7 @@ Bypasses lifecycle:
 7. **Notification flow**: weekly digest cho auto-completed tickets?
 8. **Approved tab fate**: state=APPROVED becomes extinct → drop tab?
 
-### Other PR-17+ candidates from PR-15.5
+### Other PR-18+ candidates from PR-15.5
 
 - Auto-archive empty unclassified tickets (TICKET-10000 cleanup khi entries reduce zero)
 - "Reclassified from TICKET-10000" annotation new ticket (mirror reclassify_out audit)
@@ -663,7 +663,8 @@ UI surfaces 2 dimensions (tabs + chips). classification_status surfaces via Uncl
 - **PR-15**: Slug generator non-ASCII support
 - **PR-15.5**: Stale-EMAIL filter post-reclassify (hotfix)
 - **PR-16**: Auto-mark-done + auto-completed banner + auto-reopen Manager opt-in (4 sub-PRs + 1 hotfix shipped 2026-05-02 / 2026-05-03)
-- **PR-17+**: Telemetry capture (Q1.E + Q8) + Path C DB integration tests + buildSavePayload helper extraction (PR-16a.5 follow-up)
+- **PR-17**: Inbox UI/UX optimizations + Ticket detail polish (2 sub-PRs + 1 hotfix shipped 2026-05-03 / 2026-05-04; `buildSavePayload` helper extraction shipped PR-17.1.e)
+- **PR-18+**: Telemetry capture (Q1.E + Q8) + Path C DB integration tests + Layer 1 RFC 2047 + multi-platform extractor expansion
 
 **Code locations**:
 - State enum: `lib/store-submissions/schemas/ticket.ts`

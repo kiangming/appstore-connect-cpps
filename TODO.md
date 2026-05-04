@@ -287,10 +287,10 @@ first, verify Sentry breadcrumbs, then **Backfill all** for the bulk.
 ### Risk flags bumped from PR-13 close
 
 - [x] [PR-14] **Issue 1 — UTF-8 body preview** — ✅ resolved by PR-14 (2026-05-01). Surfaced from PR-12 close, scoped under PR-14 after PR-13 shipped. Hypothesis flipped multiple times during investigation (charset → Apple-side broken → parser bug); root cause was the `raw.toString('ascii')` byte-mask step in `decodeQuotedPrintable`. Fix shipped + 14 functional production rows backfilled via the maintenance banner.
-- [ ] [PR-17+] **Per-row backfill affordance in EmailEntryCard** — see PR-12 deferred items (line 264). Same scope.
-- [ ] [PR-17+] **Multi-platform extractor expansion** — see PR-11/PR-12 deferred items.
-- [ ] [PR-17+] **Migration COMMENT refresh** + **Sentry breadcrumb cap formalization** + **Vitest cold-start flake** + **Gmail OAuth token resilience** — all infra cleanup deferred from PR-12.
-- [ ] [PR-17+] **Spec §5.2 ticket-level merge** — see PR-11 deferred items (line 231).
+- [ ] [PR-18+] **Per-row backfill affordance in EmailEntryCard** — see PR-12 deferred items (line 264). Same scope.
+- [ ] [PR-18+] **Multi-platform extractor expansion** — see PR-11/PR-12 deferred items.
+- [ ] [PR-18+] **Migration COMMENT refresh** + **Sentry breadcrumb cap formalization** + **Vitest cold-start flake** + **Gmail OAuth token resilience** — all infra cleanup deferred from PR-12.
+- [ ] [PR-18+] **Spec §5.2 ticket-level merge** — see PR-11 deferred items (line 231).
 
 ## PR-14 — Byte-level QP decoder + corrupt-payload backfill ✅ COMPLETED (2026-05-01)
 
@@ -314,7 +314,7 @@ first, verify Sentry breadcrumbs, then **Backfill all** for the bulk.
 ### Investigation discipline (4 hypothesis pivots earned by data)
 
 1. **Synthetic real-QP fixture passed** — proved parser handles real QP correctly; bug had to be elsewhere.
-2. **Layer 1 RFC 2047 continuation-line bug discovered** — real but orthogonal to production symptom (subjects render fine in prod). Parked PR-17+.
+2. **Layer 1 RFC 2047 continuation-line bug discovered** — real but orthogonal to production symptom (subjects render fine in prod). Parked PR-18+.
 3. **Production SQL diagnostic confirmed BOTH `raw_body_text` and `extracted_payload` garbled** — same parser path; parser was the culprit.
 4. **Diagnostic API route revealed Apple's wire bytes are correct UTF-8** — parser corrupts them via `raw.toString('ascii')` byte-mask. Synthetic fixture had used real QP encoding; real Apple emails ship raw UTF-8 with the QP header lying. Mislabel was the missing fixture variant.
 
@@ -325,11 +325,11 @@ The diagnostic API route (`GET /api/store-submissions/diagnose-message?id=…`) 
 - **Banner placement: D2 over D1.** Locked plan was D1 (3rd button in Unclassified-tab banner). Codebase grounding revealed corrupt rows are CLASSIFIED status (Open/Done tabs), not Unclassified. D1 would have hidden the action behind a tab where the rows don't appear. D2 ships a separate amber maintenance banner above state tabs, visible on every tab when count > 0.
 - **`.or()` regex over RPC migration (Decision 3 = verify-then-fallback).** Direct PostgREST `.or()` syntax shipped; RPC fallback documented inline for hot-pivot if production rejects.
 
-### Open follow-ups (PR-17+)
+### Open follow-ups (PR-18+)
 
-- [ ] [PR-17+] **Layer 1 — RFC 2047 subject continuation-line whitespace** — `decodeRfc2047` in `parser.ts` runs the per-word decode before the `\?=\s+=\?` collapse pass; encoded-word markers are gone by the time the collapse runs and orphan whitespace leaks (e.g. `Chơi Nga y Game` instead of `Chơi Ngay Game`). Real bug confirmed by Layer 1 diagnostic but separate decoder, separate symptom from the production-reported PR-14 corruption. Tracked as `it.skip()` placeholder in `parser.test.ts` with fix-pointer comment.
+- [ ] [PR-18+] **Layer 1 — RFC 2047 subject continuation-line whitespace** — `decodeRfc2047` in `parser.ts` runs the per-word decode before the `\?=\s+=\?` collapse pass; encoded-word markers are gone by the time the collapse runs and orphan whitespace leaks (e.g. `Chơi Nga y Game` instead of `Chơi Ngay Game`). Real bug confirmed by Layer 1 diagnostic but separate decoder, separate symptom from the production-reported PR-14 corruption. Tracked as `it.skip()` placeholder in `parser.test.ts` with fix-pointer comment.
 - [ ] [PR-14 manual QA] **PostgREST `.or()` regex runtime validation** — verify the candidate filter and count probe work in production. Hot-pivot to the RPC fallback in `app/(dashboard)/store-submissions/inbox/backfill-corrupt-actions.ts` if rejected.
-- [ ] [PR-17+] **Auto-mark-done APPROVED logic** + **duplicate ticket entries bug** — surfaced in earlier PR-12/13 close; not addressed in PR-14.
+- [ ] [PR-18+] **Auto-mark-done APPROVED logic** + **duplicate ticket entries bug** — surfaced in earlier PR-12/13 close; not addressed in PR-14.
 
 ## PR-15 — Slug generator non-ASCII support ✅ COMPLETED (2026-05-01)
 
@@ -365,10 +365,10 @@ the empty-output cases the user originally reported.
 - **Mode-aware `validateFormState(form, mode)`.** Edit mode skips slug check (read-only on rename per existing UX contract). Save button stays unblocked even if edit-mode FormState defensively carries an invalid slug value.
 - **Threshold = 3 ASCII alphanumerics.** Catches `"m"` degenerates and 2-char abbreviations while preserving 3-letter acronyms (`TFT`, `VNG`, `LOL`). Exported as constant for future tuning if Manager UAT signals.
 
-### Open follow-ups (PR-17+)
+### Open follow-ups (PR-18+)
 
-- [ ] [PR-17+] **Threshold tuning** — `SLUG_MIN_MEANINGFUL_LENGTH=3` conservatively rejects 2-char abbreviations like `"VN"`. If Manager UAT signals this feels wrong, lower to 2; hash fallback still catches CJK / emoji / pure-punctuation. Wait for production signal before tuning.
-- [ ] [PR-17+] **CSV bulk-import slug override** — `importAppsCsvAction` derives slug from `name` only (no manual override path). With PR-15.2's hash fallback the action no longer fails on CJK names. If Managers want readable slugs for bulk-imported CJK apps, add a `slug` column to the CSV template + parser. Defer until UAT surfaces the need.
+- [ ] [PR-18+] **Threshold tuning** — `SLUG_MIN_MEANINGFUL_LENGTH=3` conservatively rejects 2-char abbreviations like `"VN"`. If Manager UAT signals this feels wrong, lower to 2; hash fallback still catches CJK / emoji / pure-punctuation. Wait for production signal before tuning.
+- [ ] [PR-18+] **CSV bulk-import slug override** — `importAppsCsvAction` derives slug from `name` only (no manual override path). With PR-15.2's hash fallback the action no longer fails on CJK names. If Managers want readable slugs for bulk-imported CJK apps, add a `slug` column to the CSV template + parser. Defer until UAT surfaces the need.
 
 ## PR-15.5 — Stale-EMAIL filter post-reclassify ✅ COMPLETED (2026-05-01)
 
@@ -399,18 +399,48 @@ Hotfix between PR-15 (slug generator) and PR-16 (auto-mark-done design). 1 commi
 - UPDATE/DELETE old EMAIL entry — violates invariant #2 (append-only); RPC's own comment cites this.
 - New `superseded_by_ticket_id` column on ticket_entries — schema-change overkill; column UPDATE softens but doesn't escape the append-only intent.
 - Visual marker on stale entries — still shows duplicate content, just labeled.
-- Auto-archive ticket on last-EMAIL-exit — bigger scope, deferred PR-17+ as standalone follow-up.
+- Auto-archive ticket on last-EMAIL-exit — bigger scope, deferred PR-18+ as standalone follow-up.
 
 **No backfill, no migration, no RPC change.** Filter applies at read time and retroactively hides existing stale entries on next page load.
 
 **Test count**: 1096 → **1101** (+5).
 **Bundle**: zero (filter logic + query string change).
 
-### Open follow-ups (PR-17+)
+### Open follow-ups (PR-18+)
 
-- [ ] [PR-17+] **Auto-archive ticket on last-EMAIL-exit** — `reclassify_email_tx` could detect when the old ticket has zero current EMAIL entries remaining post-reclassify and atomically transition `state` to `ARCHIVED` with `resolution_type='SYSTEM_RECLASSIFIED'`. Empty TICKET-10000 then disappears from inbox listing entirely instead of showing as a card with no preview. RPC change required; state-machine semantics + backfill discussion needed.
-- [ ] [PR-17+] **"Reclassified from TICKET-X" annotation on destination ticket** — mirror of the `STATE_CHANGE 'reclassify_out'` audit entry. `find_or_create_ticket_tx` could detect reclassify-source via a parameter and label the new ticket's transition entry as `'reclassify_in'` with source ticket's display_id for full bidirectional audit visibility.
-- [ ] [PR-17+] **`entry_count` semantics review** — inbox card's `entry_count` counts ALL `ticket_entries` rows. After PR-15.5 a ticket may show `entry_count: 5` while `first_email: null` (5 = 1 stale EMAIL + 4 STATE_CHANGE). Count and preview disagree visually. Either rename the count to "events" or apply the same stale-EMAIL filter to the count. Worth Manager UAT signal first.
+- [ ] [PR-18+] **Auto-archive ticket on last-EMAIL-exit** — `reclassify_email_tx` could detect when the old ticket has zero current EMAIL entries remaining post-reclassify and atomically transition `state` to `ARCHIVED` with `resolution_type='SYSTEM_RECLASSIFIED'`. Empty TICKET-10000 then disappears from inbox listing entirely instead of showing as a card with no preview. RPC change required; state-machine semantics + backfill discussion needed.
+- [ ] [PR-18+] **"Reclassified from TICKET-X" annotation on destination ticket** — mirror of the `STATE_CHANGE 'reclassify_out'` audit entry. `find_or_create_ticket_tx` could detect reclassify-source via a parameter and label the new ticket's transition entry as `'reclassify_in'` with source ticket's display_id for full bidirectional audit visibility.
+- [ ] [PR-18+] **`entry_count` semantics review** — inbox card's `entry_count` counts ALL `ticket_entries` rows. After PR-15.5 a ticket may show `entry_count: 5` while `first_email: null` (5 = 1 stale EMAIL + 4 STATE_CHANGE). Count and preview disagree visually. Either rename the count to "events" or apply the same stale-EMAIL filter to the count. Worth Manager UAT signal first.
+
+## PR-17 — Inbox UI/UX optimizations + Ticket detail polish ✅ COMPLETED (2026-05-03 / 2026-05-04)
+
+2 sub-PRs + 1 hotfix shipped across 2 days. 3 commits, 0 migrations (UI + cursor + helper changes only). Manager UAT MV1-MV6 verified all-green; MV6 surfaced PR-17.2.5 hotfix via image evidence.
+
+| Commit | Sub-PR | Scope |
+|---|---|---|
+| `d1fc8f3` | **PR-17.1** | Inbox UX optimizations bundle (5 sub-chunks): date format util `format-date.ts` ABSOLUTE `dd/MM/yyyy HH:mm` (list scanning) + RELATIVE (detail reading); Last update column add (TicketListTable grid 7→8 cols); default sort flip `updated_at_desc` + sort-aware cursor keyset extension `DecodedCursor: { v, id, s }` với legacy `{opened_at, id}` graceful fallback; type filter scoped active platform với disabled state + tooltip hint when no platform + atomic `type_id` clear on platform change (Pattern 9 defense-in-depth); `buildSavePayload(draft)` helper extraction Pattern 9 defensive crystallized — pure mapper TS-typed, layer 12 omissions become compile errors. Path A tests +16. |
+| `27ec2ce` | **PR-17.2** | Ticket detail polish (2 sub-chunks): reverse entry order `getTicketWithEntries .order('created_at', { ascending: false })` Manager triage focus, index `(ticket_id, created_at DESC)` answers query directly zero perf cost; version list display `extractVersions` util pure helper sister-file pattern + inline `VersionsSection` trong `TicketDetailPanel` mockup-style chevron-separated chips với rose-accent latest + "← latest" suffix + silent omission khi empty. Path A tests +6. |
+| `b9f8876` | **PR-17.2.5** hotfix | extractVersions nested data shape — Manager UAT MV6 image evidence: VersionsSection omitted on a ticket type=app với version 4.4.0 (Apple, type_payloads has 1 entry). Root cause: helper read `p.version` (top-level) but production exclusively wrapped `p.payload.version` per RPC INSERT shape since PR-9 (`jsonb_build_object('payload', v_type_payload, 'first_seen_at', ...)` trong migration `20260423000000`). Fix: read `p.payload.version` (strict nested only). Test fixtures rewritten production-realistic + 3 defensive tests cho nested edge cases. Path A tests +3. |
+
+**Test count:** 1121 (post-PR-16) → **1141** (post-PR-17) = **+20 tests** cumulative.
+
+**Manager UAT verification (MV1-MV6 all ✅):**
+- MV1 Date format `dd/MM/yyyy HH:mm` trong inbox list
+- MV2 Last update column functional + sort-aware
+- MV3 Default sort `updated_at_desc` + cursor pagination intact
+- MV4 Type filter scoped active platform với disabled state + tooltip + atomic clear
+- MV5 Reverse entry order trong ticket detail (newest top — Manager triage)
+- MV6 Version list display (1-version visible + multi-version chevron chips) — verified post-PR-17.2.5
+
+**Memory pattern reuse:**
+- Pattern 9 N-layer cascade audit reuse #2 (PR-17.2.5) — test-infrastructure drift class; 13-point checklist evolution adds Layer 0 ("trace data flow source-to-consumer; verify test fixture matches production storage shape")
+- Pattern 10 Domain assumption pivots reuse #6 (PR-17.2.5) — Manager UAT image evidence + production data shape investigation; cumulative 6 instances proven
+
+Reference: [`docs/store-submissions/CURRENT-STATE.md`](docs/store-submissions/CURRENT-STATE.md) PR-17 milestone section cho comprehensive scope, 6 decisions locked, memory pattern reuse confirmations, UAT matrix, PR-18+ candidates.
+
+### Open follow-ups (PR-18+)
+
+(None specific to PR-17 — `buildSavePayload(draft)` helper extraction shipped PR-17.1.e; PR-18+ candidates list consolidated trong CURRENT-STATE.md PR-17 milestone section.)
 
 ## PR-16 — Auto-mark-done + auto-completed banner + auto-reopen Manager opt-in ✅ COMPLETED (2026-05-02 / 2026-05-03)
 
@@ -435,16 +465,16 @@ Hotfix between PR-15 (slug generator) and PR-16 (auto-mark-done design). 1 commi
 - Phase 1 (Settings UI + persistence): ✅ verified Scenarios 1-2 + X-Y-Z
 - Phase 2 (Banner + visibility): ⏸ data-dependent
 - Phase 3 (Real Apple email): ⏸ chờ live emails (Scenarios 3-7, C, W)
-- Phase 4 (Long-term telemetry): ⏸ 1-2 months data informs PR-17+ decisions
+- Phase 4 (Long-term telemetry): ⏸ 1-2 months data informs PR-18+ decisions
 
-Reference: [`docs/store-submissions/CURRENT-STATE.md`](docs/store-submissions/CURRENT-STATE.md) PR-16 milestone section cho comprehensive scope, design decisions Q1-Q8 với 5 overrides, schema changes summary, UAT matrix, PR-17+ candidates.
+Reference: [`docs/store-submissions/CURRENT-STATE.md`](docs/store-submissions/CURRENT-STATE.md) PR-16 milestone section cho comprehensive scope, design decisions Q1-Q8 với 5 overrides, schema changes summary, UAT matrix, PR-18+ candidates.
 
-### Open follow-ups (PR-17+)
+### Open follow-ups (PR-18+)
 
-- [ ] [PR-17+] **Q1.E + Q8 telemetry capture** — banner click frequency, time-series, state=APPROVED count cho Q8 Approved tab fate decision criteria. Manager UAT Phase 3-4 informs priority.
-- [ ] [PR-17+] **Path C DB integration test infrastructure** (~3-4h scope) — covers SQL behavior gaps trong Path A coverage: auto-DONE branch logic, eligibility gate, idempotency edge case (defensive double-call test deferred from PR-16a.4 caveat).
-- [ ] [PR-17+] **`buildSavePayload(draft)` helper extraction** (~30min) — defensive architecture pattern from PR-16a.5 hotfix lesson. Single canonical mapper prevents future Layer 9 bugs (cascade thread depth easy to miss when feature spans 7+ layers).
-- [ ] [PR-17+] **Q2.B reopen affordance** — Manual QA Scenario D pending; if absent từ TicketDetailPanel, add per-ticket reopen button cho DONE tickets (parity với mark_done_ticket_tx). May already exist trong existing UI.
+- [ ] [PR-18+] **Q1.E + Q8 telemetry capture** — banner click frequency, time-series, state=APPROVED count cho Q8 Approved tab fate decision criteria. Manager UAT Phase 3-4 informs priority.
+- [ ] [PR-18+] **Path C DB integration test infrastructure** (~3-4h scope) — covers SQL behavior gaps trong Path A coverage: auto-DONE branch logic, eligibility gate, idempotency edge case (defensive double-call test deferred from PR-16a.4 caveat). Reinforced by PR-17.2.5 hotfix (test-infrastructure trap exposed; Path A unit fixtures drifted from production storage shape).
+- [x] ~~**`buildSavePayload(draft)` helper extraction**~~ — ✅ shipped PR-17.1.e (Pattern 9 defensive crystallized as canonical mapper).
+- [ ] [PR-18+] **Q2.B reopen affordance** — Manual QA Scenario D pending; if absent từ TicketDetailPanel, add per-ticket reopen button cho DONE tickets (parity với mark_done_ticket_tx). May already exist trong existing UI.
 
 ## Post-PR-11 — TicketDetailContext + prop drilling cleanup (planned)
 
