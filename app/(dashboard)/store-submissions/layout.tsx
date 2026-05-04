@@ -4,6 +4,7 @@ import { Toaster } from 'sonner';
 import { authOptions } from '@/lib/auth';
 import { getStoreUser } from '@/lib/store-submissions/auth';
 import { NotWhitelistedScreen } from '@/components/store-submissions/NotWhitelistedScreen';
+import { StoreSubNav } from '@/components/store-submissions/layout/StoreSubNav';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,6 +25,7 @@ export default async function StoreSubmissionsLayout({
 
   return (
     <>
+      <StoreSubNav />
       {children}
       <Toaster position="bottom-right" richColors closeButton />
     </>
