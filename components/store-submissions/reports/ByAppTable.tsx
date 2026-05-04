@@ -3,6 +3,12 @@ import type { ByAppResult } from '@/lib/store-submissions/queries/reports';
 
 interface Props {
   data: ByAppResult;
+  /**
+   * PR-22: when the Reports surface is filtered by a type, the per-app
+   * and "View all" deep links into the Inbox should preserve that scope
+   * so Manager keeps filter context across surfaces.
+   */
+  typeId?: string;
 }
 
 /**
@@ -10,7 +16,8 @@ interface Props {
  * drills into the Inbox filtered to that app; the "View all" CTA drops
  * the app filter and just scopes by platform.
  */
-export function ByAppTable({ data }: Props) {
+export function ByAppTable({ data, typeId }: Props) {
+  const typeQs = typeId ? `&type_id=${typeId}` : '';
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-4">
       <div className="flex items-center justify-between mb-3">
@@ -20,7 +27,7 @@ export function ByAppTable({ data }: Props) {
         </div>
         {data.total_apps > data.rows.length && (
           <Link
-            href="/store-submissions/inbox?platform_key=apple"
+            href={`/store-submissions/inbox?platform_key=apple${typeQs}`}
             className="text-[12px] text-slate-600 hover:text-slate-900 underline-offset-4 hover:underline"
           >
             View all {data.total_apps}
@@ -50,7 +57,7 @@ export function ByAppTable({ data }: Props) {
                 <tr key={row.app_id} className="border-b border-slate-100 last:border-b-0">
                   <td className="py-2">
                     <Link
-                      href={`/store-submissions/inbox?platform_key=apple&app_id=${row.app_id}`}
+                      href={`/store-submissions/inbox?platform_key=apple&app_id=${row.app_id}${typeQs}`}
                       className="text-slate-700 hover:text-slate-900 hover:underline"
                     >
                       {row.app_name}

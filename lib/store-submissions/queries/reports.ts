@@ -289,10 +289,15 @@ async function getApplePlatformId(): Promise<string | null> {
  * Fetch + aggregate the 4 KPI metrics for a window plus deltas vs the
  * previous equally-sized window. Single Supabase query covers both
  * windows (60-day span when window=30d) — partitioning happens in JS.
+ *
+ * `typeId` (PR-22): when provided, scopes results to tickets of that
+ * type. Manager flow `Type → App → counts` uses this to dimension
+ * the dashboard. Undefined = all Apple types (legacy default).
  */
 export async function getAppleReportsKpis(
   windowStart: Date,
   windowEnd: Date,
+  typeId?: string,
 ): Promise<ReportsKpis> {
   const apple = await getApplePlatformId();
   if (!apple) return emptyKpis();
@@ -300,13 +305,15 @@ export async function getAppleReportsKpis(
   const span = windowEnd.getTime() - windowStart.getTime();
   const prevStart = new Date(windowStart.getTime() - span);
 
-  const { data, error } = await storeDb()
+  let q = storeDb()
     .from('tickets')
     .select('state, latest_outcome, opened_at, closed_at, resolution_type')
     .eq('platform_id', apple)
     .gte('opened_at', prevStart.toISOString())
     .lt('opened_at', windowEnd.toISOString());
+  if (typeId) q = q.eq('type_id', typeId);
 
+  const { data, error } = await q;
   if (error || !data) return emptyKpis();
   return aggregateKpis(data as KpiInputRow[], windowStart, windowEnd);
 }
@@ -324,45 +331,53 @@ function emptyKpis(): ReportsKpis {
 /**
  * Daily trend chart data for the current window only (no comparison
  * window — KPI deltas already convey period-over-period change).
+ * `typeId` (PR-22) scopes the same way as `getAppleReportsKpis`.
  */
 export async function getAppleTrendByDay(
   windowStart: Date,
   windowEnd: Date,
+  typeId?: string,
 ): Promise<TrendBucket[]> {
   const apple = await getApplePlatformId();
   if (!apple) return bucketTrendByDay([], windowStart, windowEnd);
 
-  const { data, error } = await storeDb()
+  let q = storeDb()
     .from('tickets')
     .select('opened_at, latest_outcome, state, resolution_type')
     .eq('platform_id', apple)
     .gte('opened_at', windowStart.toISOString())
     .lt('opened_at', windowEnd.toISOString());
+  if (typeId) q = q.eq('type_id', typeId);
 
+  const { data, error } = await q;
   if (error || !data) return bucketTrendByDay([], windowStart, windowEnd);
   return bucketTrendByDay(data as TrendInputRow[], windowStart, windowEnd);
 }
 
 /**
  * Top N apps by submit volume in window. Excludes unclassified tickets
- * (app_id IS NULL).
+ * (app_id IS NULL). `typeId` (PR-22) scopes to a single type so the
+ * "Type → App" dimension realizes the Manager flow.
  */
 export async function getAppleByAppTable(
   windowStart: Date,
   windowEnd: Date,
   limit = 5,
+  typeId?: string,
 ): Promise<ByAppResult> {
   const apple = await getApplePlatformId();
   if (!apple) return { rows: [], total_apps: 0 };
 
-  const { data, error } = await storeDb()
+  let q = storeDb()
     .from('tickets')
     .select('app_id, latest_outcome, apps!inner(name)')
     .eq('platform_id', apple)
     .not('app_id', 'is', null)
     .gte('opened_at', windowStart.toISOString())
     .lt('opened_at', windowEnd.toISOString());
+  if (typeId) q = q.eq('type_id', typeId);
 
+  const { data, error } = await q;
   if (error || !data) return { rows: [], total_apps: 0 };
 
   // Supabase nests `apps` as either an object or array depending on join
@@ -387,12 +402,16 @@ export async function getAppleByAppTable(
  * Most recent N reject-reason entries on Apple tickets. Sourced from
  * `ticket_entries.entry_type='REJECT_REASON'` (manually logged free
  * text — no taxonomy yet, that's the deferred Phase-3 scope).
+ * `typeId` (PR-22) scopes through the `tickets!inner` join.
  */
-export async function getAppleRecentRejected(limit = 5): Promise<RecentRejected[]> {
+export async function getAppleRecentRejected(
+  limit = 5,
+  typeId?: string,
+): Promise<RecentRejected[]> {
   const apple = await getApplePlatformId();
   if (!apple) return [];
 
-  const { data, error } = await storeDb()
+  let q = storeDb()
     .from('ticket_entries')
     .select(
       'id, content, created_at, ticket_id, tickets!inner(display_id, platform_id, app_id, apps(name))',
@@ -401,7 +420,9 @@ export async function getAppleRecentRejected(limit = 5): Promise<RecentRejected[
     .eq('tickets.platform_id', apple)
     .order('created_at', { ascending: false })
     .limit(limit);
+  if (typeId) q = q.eq('tickets.type_id', typeId);
 
+  const { data, error } = await q;
   if (error || !data) return [];
 
   return (data as Array<{
