@@ -94,10 +94,20 @@ interface KpiInputRow {
  * equally-sized window. Pure: takes rows that span both windows and
  * partitions by `opened_at`.
  *
- * Q2 lock: Approved = `state='APPROVED' OR resolution_type='APPROVED'`
- * (covers tickets manually marked DONE after approval — resolution_type
- * carries the underlying outcome). Avg review time uses the same
- * predicate so the metric matches the count.
+ * PR-21 semantic lock — Apple verdict view, symmetric across all KPIs:
+ *   Approved = `latest_outcome='APPROVED'`
+ *   Rejected = `latest_outcome='REJECTED'`
+ * Reports surface = Apple analytics view (counts what Apple decided).
+ * Manager workflow view (state/resolution-based) lives in the Inbox
+ * state-chip filter (PR-13 surface), not here. Two surfaces, two
+ * intentional semantics. Avg review time uses the same predicate as
+ * Approved so the metric matches the count.
+ *
+ * Tradeoff vs the prior PR-19 lock: a ticket where Apple said APPROVED
+ * but Manager hasn't moved it terminal still counts in Approved here
+ * (Apple reality, not workflow progress). A ticket Manager marked DONE
+ * post-approval but where `latest_outcome` is somehow null does NOT
+ * count.
  */
 export function aggregateKpis(
   rows: KpiInputRow[],
@@ -108,7 +118,7 @@ export function aggregateKpis(
   const prevStart = new Date(windowStart.getTime() - windowSpanMs);
 
   const isApproved = (r: KpiInputRow): boolean =>
-    r.state === 'APPROVED' || r.resolution_type === 'APPROVED';
+    r.latest_outcome === 'APPROVED';
 
   const reviewMs = (r: KpiInputRow): number | null => {
     if (!isApproved(r) || !r.closed_at) return null;
@@ -168,13 +178,16 @@ interface TrendInputRow {
  * Bucket rows into N daily buckets between windowStart (inclusive) and
  * windowEnd (exclusive). Each bucket is keyed by YYYY-MM-DD in UTC.
  *
- * Outcome assignment per row:
- *   - approved if state='APPROVED' or resolution_type='APPROVED'
- *   - rejected if latest_outcome='REJECTED' (and not approved above)
- *   - else in_review (covers latest_outcome=null and 'IN_REVIEW')
+ * PR-21 semantic lock — same Apple-verdict view as `aggregateKpis`:
+ *   - approved  if latest_outcome='APPROVED' (priority 1)
+ *   - rejected  if latest_outcome='REJECTED' (priority 2)
+ *   - else      in_review (covers latest_outcome=null + 'IN_REVIEW')
  *
  * NULL latest_outcome → in_review by convention (Manager sees all open
- * tickets as "in review" until an email signals otherwise).
+ * tickets as "in review" until an email signals otherwise). Note that
+ * `state` and `resolution_type` are not consulted here: a ticket
+ * Manager moved terminal but lacking an Apple outcome stacks as
+ * in_review, not approved. That mirrors the KPI predicate.
  */
 export function bucketTrendByDay(
   rows: TrendInputRow[],
@@ -194,8 +207,7 @@ export function bucketTrendByDay(
     const date = isoDate(new Date(r.opened_at));
     const bucket = buckets.get(date);
     if (!bucket) continue;
-    const isApproved = r.state === 'APPROVED' || r.resolution_type === 'APPROVED';
-    if (isApproved) bucket.approved++;
+    if (r.latest_outcome === 'APPROVED') bucket.approved++;
     else if (r.latest_outcome === 'REJECTED') bucket.rejected++;
     else bucket.in_review++;
   }
