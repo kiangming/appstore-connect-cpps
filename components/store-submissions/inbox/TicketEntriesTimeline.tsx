@@ -82,6 +82,19 @@ interface StateChangeMetadata {
   to?: TicketState;
   trigger?: 'email' | 'user_action';
   email_message_id?: string;
+  /**
+   * Reclassify variant discriminator. When set, the entry annotates a
+   * `reclassify_email_tx` event rather than a generic state transition;
+   * `from_status`/`to_status` carry classification statuses (CLASSIFIED /
+   * UNCLASSIFIED_APP / etc.) and `from_ticket_id`/`to_ticket_id` cross-link
+   * the source and destination tickets. See migration
+   * 20260504000003_store_mgmt_reclassify_in_audit.sql.
+   */
+  type?: 'reclassify_in' | 'reclassify_out' | string;
+  from_status?: string;
+  to_status?: string;
+  from_ticket_id?: string;
+  to_ticket_id?: string;
 }
 
 interface PayloadAddedMetadata {
@@ -362,8 +375,24 @@ function ClassificationChip({ status }: { status: string }) {
 
 // -- STATE_CHANGE card -----------------------------------------------------
 
+/**
+ * STATE_CHANGE entries cover three variants disambiguated by `metadata.type`:
+ *   - undefined / other: generic state transition (NEW → IN_REVIEW etc.) —
+ *     the original `from`/`to` shape with a `trigger` field
+ *   - `reclassify_out`: source-side audit of `reclassify_email_tx` (PR-11.5+)
+ *   - `reclassify_in`:  destination-side audit (PR-20)
+ *
+ * Reclassify metadata uses `from_status`/`to_status` (classification statuses,
+ * not TicketStates) plus a cross-link ticket id. Pre-PR-20 `reclassify_out`
+ * rows lack `to_ticket_id`; render falls back to a "destination: pending"
+ * placeholder so legacy entries still display gracefully.
+ */
 function StateChangeEntryCard({ entry }: { entry: TicketEntryRow }) {
   const md = entry.metadata as StateChangeMetadata;
+
+  if (md.type === 'reclassify_out' || md.type === 'reclassify_in') {
+    return <ReclassifyEntryCard entry={entry} md={md} />;
+  }
 
   return (
     <EntryShell
@@ -392,6 +421,71 @@ function StateChangeEntryCard({ entry }: { entry: TicketEntryRow }) {
             : 'Trigger unknown'}
       </p>
     </EntryShell>
+  );
+}
+
+function ReclassifyEntryCard({
+  entry,
+  md,
+}: {
+  entry: TicketEntryRow;
+  md: StateChangeMetadata;
+}) {
+  const isOut = md.type === 'reclassify_out';
+  const label = isOut ? 'Reclassified out' : 'Reclassified in';
+  const otherTicketId = isOut ? md.to_ticket_id : md.from_ticket_id;
+  const otherShortId = otherTicketId ? otherTicketId.slice(0, 8) : null;
+  const directionLabel = isOut ? 'destination' : 'source';
+
+  // Defensive: prefer `from_status`/`to_status` (reclassify shape) but fall
+  // back to legacy `from`/`to` if a row in the wild only carries those.
+  const fromStatus = md.from_status ?? md.from;
+  const toStatus = md.to_status ?? md.to;
+
+  return (
+    <EntryShell
+      icon={<ArrowRight className="w-3.5 h-3.5 text-amber-600" strokeWidth={1.8} />}
+      label={label}
+      entry={entry}
+    >
+      <div className="text-[12px] text-slate-600">
+        {otherShortId ? (
+          <a
+            href={`/store-submissions/inbox?ticket=${otherTicketId}`}
+            className="font-mono text-slate-700 hover:text-blue-600 hover:underline"
+          >
+            {directionLabel}: #{otherShortId}
+          </a>
+        ) : (
+          <span className="italic text-slate-400">
+            {directionLabel}: pending
+          </span>
+        )}
+      </div>
+      {(fromStatus || toStatus) && (
+        <div className="flex items-center gap-2 flex-wrap mt-1.5">
+          {fromStatus ? (
+            <ClassificationStatusChip status={fromStatus} />
+          ) : (
+            <span className="text-[11px] text-slate-400 italic">(unknown)</span>
+          )}
+          <ArrowRight className="w-3 h-3 text-slate-400" strokeWidth={1.8} />
+          {toStatus ? (
+            <ClassificationStatusChip status={toStatus} />
+          ) : (
+            <span className="text-[11px] text-slate-400 italic">(unknown)</span>
+          )}
+        </div>
+      )}
+    </EntryShell>
+  );
+}
+
+function ClassificationStatusChip({ status }: { status: string }) {
+  return (
+    <span className="inline-flex items-center text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded border bg-slate-50 text-slate-700 border-slate-200">
+      {status}
+    </span>
   );
 }
 

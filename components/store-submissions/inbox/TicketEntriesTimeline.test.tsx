@@ -123,6 +123,75 @@ describe('TicketEntriesTimeline · STATE_CHANGE trigger keyword', () => {
   });
 });
 
+// -- Reclassify variants (PR-20) ------------------------------------------
+
+describe('TicketEntriesTimeline · STATE_CHANGE reclassify variants', () => {
+  it('renders reclassify_out with destination short-id link + status transition', () => {
+    renderTimeline([
+      makeEntry({
+        entry_type: 'STATE_CHANGE',
+        metadata: {
+          type: 'reclassify_out',
+          from_status: 'UNCLASSIFIED_APP',
+          to_status: 'CLASSIFIED',
+          to_ticket_id: 'abc12345-aaaa-bbbb-cccc-deadbeef0001',
+        },
+      }),
+    ]);
+    expect(screen.getByText('Reclassified out')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /destination: #abc12345/ });
+    expect(link).toHaveAttribute(
+      'href',
+      '/store-submissions/inbox?ticket=abc12345-aaaa-bbbb-cccc-deadbeef0001',
+    );
+    expect(screen.getByText('UNCLASSIFIED_APP')).toBeInTheDocument();
+    expect(screen.getByText('CLASSIFIED')).toBeInTheDocument();
+  });
+
+  it('renders reclassify_in with source short-id link + status transition', () => {
+    renderTimeline([
+      makeEntry({
+        entry_type: 'STATE_CHANGE',
+        metadata: {
+          type: 'reclassify_in',
+          from_status: 'UNCLASSIFIED_APP',
+          to_status: 'CLASSIFIED',
+          from_ticket_id: 'def67890-1111-2222-3333-444455556666',
+        },
+      }),
+    ]);
+    expect(screen.getByText('Reclassified in')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: /source: #def67890/ });
+    expect(link).toHaveAttribute(
+      'href',
+      '/store-submissions/inbox?ticket=def67890-1111-2222-3333-444455556666',
+    );
+    expect(screen.getByText('UNCLASSIFIED_APP')).toBeInTheDocument();
+    expect(screen.getByText('CLASSIFIED')).toBeInTheDocument();
+  });
+
+  it('renders reclassify_out gracefully when to_ticket_id missing (legacy PR-11.5/PR-12.5 rows)', () => {
+    renderTimeline([
+      makeEntry({
+        entry_type: 'STATE_CHANGE',
+        metadata: {
+          type: 'reclassify_out',
+          from_status: 'UNCLASSIFIED_APP',
+          to_status: 'DROPPED',
+          // no to_ticket_id — pre-PR-20 shape
+        },
+      }),
+    ]);
+    expect(screen.getByText('Reclassified out')).toBeInTheDocument();
+    expect(screen.getByText(/destination: pending/)).toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: /destination/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText('UNCLASSIFIED_APP')).toBeInTheDocument();
+    expect(screen.getByText('DROPPED')).toBeInTheDocument();
+  });
+});
+
 // -- CommentEntryCard ------------------------------------------------------
 
 describe('TicketEntriesTimeline · CommentEntryCard', () => {
