@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import { EmailParseError } from './errors';
 import {
+  decodeRfc2047,
   MAX_BODY_CHARS,
   parseGmailMessage,
   TRUNCATION_MARKER,
@@ -39,6 +40,7 @@ import {
   edgeMultiRecipientTo,
   edgeNestedMultipart,
   edgeQuotedPrintable,
+  edgeRfc2047ContinuationSubject,
   edgeRfc2047Subject,
   edgeVietnameseUtf8,
   facebookGameReviewed,
@@ -265,13 +267,17 @@ describe('body extraction', () => {
  * unchanged so mislabeled UTF-8 is preserved, while genuine `=XX` /
  * `=\r?\n` escapes are still decoded for legitimately-QP-encoded bodies.
  *
- *   Layer 1 (subject):   RFC 2047 continuation-line collapse [DEFERRED]
+ *   Layer 1 (subject):   RFC 2047 continuation-line collapse  [PR-18]
  *   Layer 2 (bodyHtml):  mixed `=3D` + raw UTF-8 (Apple's HTML shape)
  *   Layer 3 (body):      pure raw UTF-8 mislabeled as QP
  *   Layer 4 (excerpt):   500-char JS slice of decoded body
  *
- * Layer 1 is parked on the PR-15+ list — distinct decoder, distinct
- * symptom, separate scope.
+ * Layer 1 was deferred on PR-14 and resolved in PR-18: `decodeRfc2047`
+ * was running per-encoded-word decode BEFORE the collapse pass, so the
+ * `?=` / `=?` markers were consumed first and the collapse regex
+ * `\?=\s+=\?` ran on a string that no longer contained them — orphan
+ * "\r\n " from the RFC 5322 fold leaked into the decoded subject. PR-18
+ * swaps the order: collapse first (markers preserved), decode second.
  */
 
 describe('PR-14 — Apple mislabeled QP body decodes correctly', () => {
@@ -280,14 +286,21 @@ describe('PR-14 — Apple mislabeled QP body decodes correctly', () => {
   // to TICKET-10009 — passes mean the byte-level decoder handles
   // production data; failures localize to the exact decode stage.
 
-  it.skip('layer 1 — subject: RFC 2047 continuation-line collapse (deferred to PR-15+)', () => {
-    // RFC 2047 §5(1): adjacent encoded-words separated by CRLF + WSP
-    // must collapse the whitespace. `decodeRfc2047` runs the per-word
-    // decode before the collapse pass, so by the time the collapse
-    // regex `\?=\s+=\?` runs the markers are gone — orphan whitespace
-    // leaks. Distinct decoder from `decodeQuotedPrintable`, distinct
-    // fix. Tracked separately.
-    expect(true).toBe(false); // unreachable — placeholder only
+  it('layer 1 — subject: RFC 2047 continuation-line collapse (PR-18)', () => {
+    // Apple wire form: a single logical phrase split across two
+    // `=?UTF-8?B?…?=` words because the combined encoded-word would
+    // exceed RFC 2047's 75-char-per-word cap. The fixture's two parts
+    // decode to "App đã được duyệt - phần 1" and " phần 2 của tiêu
+    // đề dài" — note the leading space on part 2 is *content*, not the
+    // CRLF+WSP separator (which §6.2 mandates we drop).
+    const out = parseGmailMessage(edgeRfc2047ContinuationSubject);
+    expect(out.subject).toBe('App đã được duyệt - phần 1 phần 2 của tiêu đề dài');
+    // Pre-PR-18 fingerprint: `\r\n ` between the two decoded parts —
+    // the fold separator leaking through because the per-word decode
+    // ran before the collapse pass and consumed the `?=`/`=?` markers
+    // the collapse regex needed.
+    expect(out.subject).not.toMatch(/\r|\n/);
+    expect(out.subject).not.toMatch(/\s{2,}/);
   });
 
   it('layer 2 — bodyHtml: mixed `=3D` attribute escapes + inline raw UTF-8', () => {
@@ -367,6 +380,55 @@ describe('PR-14.3 — byte-level decoder charset coverage', () => {
     expect(out.body).toContain('Raw-form: café');
     expect(out.body).not.toMatch(/=[0-9A-F]{2}/i);
     expect(out.body).not.toMatch(/[\x01-\x08\x0B\x0C\x0E-\x1F]/);
+  });
+});
+
+/* ============================================================================
+ * PR-18 — RFC 2047 continuation-line collapse edge cases
+ * ==========================================================================
+ *
+ * Layer 1 of the PR-14 deferred list. The integration test above
+ * (`PR-14 layer 1`) covers the Apple-realistic Vietnamese subject end
+ * to end through `parseGmailMessage`. The cases below probe the
+ * decoder directly so a regression on collapse semantics localizes to
+ * `decodeRfc2047` instead of cascading through fixture construction.
+ *
+ *   Test 2: single-space separator (Gmail API's typical unfolded form)
+ *   Test 3: mixed B + Q encodings adjacent (collapse is encoding-agnostic)
+ *   Test 4: encoded-word adjacent to plain text — whitespace MUST
+ *           survive (regression guard for the `\?=\s+=\?` boundary)
+ */
+
+describe('PR-18 — RFC 2047 continuation-line collapse', () => {
+  it('single-space separator between adjacent encoded-words is collapsed', () => {
+    // Gmail's API generally pre-unfolds RFC 5322 folds to a single space.
+    // §6.2 still says drop it — the space is the fold residue, not content.
+    const part1 = Buffer.from('Hello', 'utf-8').toString('base64');
+    const part2 = Buffer.from('World', 'utf-8').toString('base64');
+    const input = `=?UTF-8?B?${part1}?= =?UTF-8?B?${part2}?=`;
+    expect(decodeRfc2047(input)).toBe('HelloWorld');
+  });
+
+  it('mixed B and Q encodings adjacent — collapse is encoding-agnostic', () => {
+    // Real Apple subjects sometimes mix encodings across continuation
+    // segments. The collapse regex matches on `?=…=?` markers only, so
+    // it doesn't care whether B or Q sits inside.
+    const part1 = `=?UTF-8?B?${Buffer.from('Hello', 'utf-8').toString('base64')}?=`;
+    const part2 = '=?UTF-8?Q?World?=';
+    const input = `${part1}\r\n ${part2}`;
+    expect(decodeRfc2047(input)).toBe('HelloWorld');
+  });
+
+  it('whitespace between encoded-word and plain text is preserved', () => {
+    // Critical regression guard. The collapse regex is `\?=\s+=\?` —
+    // it requires `=?…?=` boundaries on BOTH sides. A plain-text run
+    // following an encoded-word has no `=?` opener, so the regex won't
+    // match and the surrounding whitespace stays put. If someone ever
+    // loosens this regex the assertion below catches it.
+    const part1 = `=?UTF-8?B?${Buffer.from('Hello', 'utf-8').toString('base64')}?=`;
+    expect(decodeRfc2047(`${part1} World`)).toBe('Hello World');
+    // Symmetric case: plain text → encoded-word.
+    expect(decodeRfc2047(`Hello ${part1}`)).toBe('Hello Hello');
   });
 });
 

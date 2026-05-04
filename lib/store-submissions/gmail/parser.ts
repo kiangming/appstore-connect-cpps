@@ -285,10 +285,27 @@ function parseAddress(raw: string): Address {
  *
  * Only supports the two transfer encodings RFC 2047 defines: B (base64)
  * and Q (quoted-printable-ish, with `_` = space).
+ *
+ * Two-pass design — order matters:
+ *   1. Collapse linear-white-space (CRLF + WSP, or single space) between
+ *      adjacent encoded-words per RFC 2047 §6.2: that whitespace is the
+ *      fold separator, never display content. Must run BEFORE decode
+ *      while the `?=` / `=?` markers are still present.
+ *   2. Per-encoded-word decode. Apple emits subjects whose multibyte
+ *      content (Vietnamese, CJK, emoji) crosses RFC 2047's 75-char
+ *      per-word cap, splitting a single logical phrase into multiple
+ *      encoded-words separated by CRLF+WSP. After step 1 they collapse
+ *      to a single concatenated `=?…?==?…?=` run that this regex
+ *      decodes word-by-word with no orphan whitespace left between.
  */
-function decodeRfc2047(s: string): string {
+export function decodeRfc2047(s: string): string {
   if (!s.includes('=?')) return s;
   return s
+    // Step 1: collapse the fold between adjacent encoded-words. The
+    // boundary `?=…=?` is what makes this safe — whitespace between an
+    // encoded-word and surrounding plain text is preserved.
+    .replace(/\?=\s+=\?/g, '?==?')
+    // Step 2: decode each encoded-word independently.
     .replace(
       /=\?([^?]+)\?([BQbq])\?([^?]*)\?=/g,
       (_m, charset: string, encoding: string, data: string) => {
@@ -318,10 +335,7 @@ function decodeRfc2047(s: string): string {
           return data;
         }
       },
-    )
-    // RFC 2047 §5: CRLF + whitespace between adjacent encoded-words should
-    // be collapsed. Harmless on non-encoded input.
-    .replace(/\?=\s+=\?/g, '?==?');
+    );
 }
 
 /* -------------------------------------------------------------------------- */

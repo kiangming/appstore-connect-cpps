@@ -18,6 +18,10 @@
  *     - edgeLatin1Body       charset=ISO-8859-1 (non-UTF8 path)
  *     - edgeQuotedPrintable  Content-Transfer-Encoding: quoted-printable body
  *     - edgeRfc2047Subject   =?UTF-8?B?...?= encoded-word subject
+ *     - edgeRfc2047ContinuationSubject  RFC 2047 §6.2 — adjacent encoded-words
+ *                            separated by CRLF+WSP (Apple wire form for long
+ *                            multibyte subjects). Drives the Layer 1 collapse
+ *                            test from PR-14's deferred list.
  *     - edgeMultiRecipientTo comma-separated To header → deduped list
  *     - edgeMissingInternalDate  required field missing — parser throws
  *
@@ -358,6 +362,43 @@ export const edgeRfc2047Subject: Message = buildMessage({
     body: 'Plain body.',
   }),
 });
+
+// RFC 2047 §6.2: adjacent encoded-words separated by linear-white-space
+// (CRLF + WSP) collapse on display — the whitespace is ignored. Apple's
+// wire form for long multibyte subjects: a single logical phrase split
+// across two `=?UTF-8?B?…?=` words because the combined encoded-word
+// length would exceed RFC 2047's 75-char-per-word cap.
+//
+// This fixture mirrors that shape with a Vietnamese app-name template
+// ("App đã được duyệt - phần 1" + " phần 2 của tiêu đề dài"). Each part
+// is a self-contained UTF-8 string; concatenation after collapse must
+// yield "App đã được duyệt - phần 1 phần 2 của tiêu đề dài" — the
+// inter-part space comes from the *content* of part2, NOT from the
+// separator (which §6.2 mandates we drop).
+//
+// Pre-PR-18 bug: `decodeRfc2047` ran the per-encoded-word decode pass
+// BEFORE the collapse pass, so by the time `\?=\s+=\?` ran the markers
+// were gone and orphan "\r\n " leaked into the decoded subject.
+export const edgeRfc2047ContinuationSubject: Message = (() => {
+  const part1 = Buffer.from('App đã được duyệt - phần 1', 'utf-8').toString('base64');
+  const part2 = Buffer.from(' phần 2 của tiêu đề dài', 'utf-8').toString('base64');
+  return buildMessage({
+    id: 'edge-rfc2047-cont-001',
+    threadId: 'edge-rfc2047-cont-t1',
+    internalDate: '1713633500000',
+    envelopeHeaders: [
+      header('From', 'App Store Connect <no_reply@email.apple.com>'),
+      header('To', 'me@example.com'),
+      // CRLF + single space — the RFC 5322 fold pattern Apple emits for
+      // subjects whose encoded-word would exceed 75 chars.
+      header('Subject', `=?UTF-8?B?${part1}?=\r\n =?UTF-8?B?${part2}?=`),
+    ],
+    payload: leaf({
+      mimeType: 'text/plain',
+      body: 'Plain body.',
+    }),
+  });
+})();
 
 export const edgeMultiRecipientTo: Message = buildMessage({
   id: 'edge-multito-001',
