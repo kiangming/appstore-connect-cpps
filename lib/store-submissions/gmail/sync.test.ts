@@ -194,12 +194,50 @@ function mockHistoryDelta(messageIds: string[], nextHistoryId = '1100') {
   });
 }
 
+/**
+ * PR-23: queue multiple `listHistory` page responses in order. Each page
+ * shape mirrors `HistoryDelta` from `./client`.
+ */
+function mockHistoryPages(
+  pages: Array<{
+    messageIds: string[];
+    nextHistoryId?: string | null;
+    nextPageToken?: string | null;
+  }>,
+) {
+  for (const p of pages) {
+    hoisted.mockListHistory.mockResolvedValueOnce({
+      messageIds: p.messageIds,
+      nextHistoryId: p.nextHistoryId ?? null,
+      nextPageToken: p.nextPageToken ?? null,
+    });
+  }
+}
+
 function mockFallback(messageIds: string[], nextHistoryId = '2000') {
   hoisted.mockListMessages.mockResolvedValueOnce({
     messageIds,
     nextPageToken: null,
     resultSizeEstimate: messageIds.length,
   });
+  hoisted.mockGetCurrentHistoryId.mockResolvedValueOnce(nextHistoryId);
+}
+
+/**
+ * PR-23: queue multiple `listMessages` page responses + a current
+ * historyId. Used for fallback pagination tests.
+ */
+function mockFallbackPages(
+  pages: Array<{ messageIds: string[]; nextPageToken?: string | null }>,
+  nextHistoryId = '2000',
+) {
+  for (const p of pages) {
+    hoisted.mockListMessages.mockResolvedValueOnce({
+      messageIds: p.messageIds,
+      nextPageToken: p.nextPageToken ?? null,
+      resultSizeEstimate: p.messageIds.length,
+    });
+  }
   hoisted.mockGetCurrentHistoryId.mockResolvedValueOnce(nextHistoryId);
 }
 
@@ -1071,18 +1109,27 @@ describe('runSync — cursor advancement', () => {
 });
 
 /* ============================================================================
- * maxBatch handling
+ * PR-23: pagination + Bug C (no slice)
+ *
+ * Three production data-loss bugs fixed:
+ *   Bug A — INCREMENTAL: orchestrator called listHistory once and
+ *           ignored nextPageToken; pages 2+ silently skipped while
+ *           cursor advanced past them.
+ *   Bug B — FALLBACK: listMessages('in:inbox') had no pagination loop
+ *           and no date anchor; 50-newest cap dropped older messages
+ *           in the failure window.
+ *   Bug C — slice(0, maxBatch): IDs 51-100 of a single-page response
+ *           silently discarded; cursor still advanced past them.
  * ========================================================================== */
 
-describe('runSync — maxBatch', () => {
-  it('caps batch at default 50 when 100 IDs available', async () => {
+describe('runSync — Bug C (no slice)', () => {
+  it('processes ALL IDs from a single page (100 IDs, default maxBatch=50)', async () => {
+    // Pre-PR-23: slice(0, 50) discarded IDs 50-99 with cursor advancing.
+    // Post-PR-23: all 100 are processed in one tick.
     const ids = Array.from({ length: 100 }, (_, i) => `m${i}`);
     mockHistoryDelta(ids, '9999');
     for (let i = 0; i < 100; i++) {
-      hoisted.mockGetMessage.mockResolvedValueOnce({
-        id: `m${i}`,
-        threadId: 't',
-      });
+      hoisted.mockGetMessage.mockResolvedValueOnce({ id: `m${i}`, threadId: 't' });
       hoisted.mockParseGmailMessage.mockReturnValueOnce(
         mockParsedEmail({ messageId: `m${i}` }),
       );
@@ -1092,21 +1139,37 @@ describe('runSync — maxBatch', () => {
     const { runSync } = await import('./sync');
     const result = await runSync({ gmailClient: { __brand: 'gmail' } as never });
 
-    expect(result.stats.fetched).toBe(50);
-    expect(result.stats.dropped).toBe(50);
-    expect(hoisted.mockGetMessage).toHaveBeenCalledTimes(50);
+    expect(result.stats.fetched).toBe(100);
+    expect(result.stats.dropped).toBe(100);
+    expect(hoisted.mockGetMessage).toHaveBeenCalledTimes(100);
+    // Single page, no nextPageToken → not stopped early → cursor advances.
+    expect(result.stoppedEarly).toBe(false);
+    expect(hoisted.mockAdvanceSyncState).toHaveBeenCalledWith({
+      mode: 'INCREMENTAL',
+      newHistoryId: '9999',
+      processedCount: 100,
+    });
   });
+});
 
-  it('honors explicit maxBatch up to 200', async () => {
-    const ids = Array.from({ length: 250 }, (_, i) => `m${i}`);
-    mockHistoryDelta(ids, '9999');
-    for (let i = 0; i < 200; i++) {
-      hoisted.mockGetMessage.mockResolvedValueOnce({
-        id: `m${i}`,
-        threadId: 't',
-      });
+describe('runSync — Bug A INCREMENTAL pagination', () => {
+  it('drains all pages when nextPageToken is set on early pages', async () => {
+    mockHistoryPages([
+      {
+        messageIds: ['m1', 'm2'],
+        nextHistoryId: '1100',
+        nextPageToken: 'page2-token',
+      },
+      {
+        messageIds: ['m3', 'm4'],
+        nextHistoryId: '1200',
+        nextPageToken: null,
+      },
+    ]);
+    for (const id of ['m1', 'm2', 'm3', 'm4']) {
+      hoisted.mockGetMessage.mockResolvedValueOnce({ id, threadId: 't' });
       hoisted.mockParseGmailMessage.mockReturnValueOnce(
-        mockParsedEmail({ messageId: `m${i}` }),
+        mockParsedEmail({ messageId: id }),
       );
     }
     hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => null);
@@ -1114,22 +1177,36 @@ describe('runSync — maxBatch', () => {
     const { runSync } = await import('./sync');
     const result = await runSync({
       gmailClient: { __brand: 'gmail' } as never,
-      maxBatch: 500, // clamped to 200
+      maxBatch: 200, // high enough to allow draining
     });
 
-    expect(result.stats.fetched).toBe(200);
+    expect(hoisted.mockListHistory).toHaveBeenCalledTimes(2);
+    // Page 2 must be requested with the page-1 token threaded through.
+    // listHistory(client, params, retryOptions?) — params at index [1].
+    expect(hoisted.mockListHistory.mock.calls[1][1]).toMatchObject({
+      pageToken: 'page2-token',
+    });
+    expect(result.stats.fetched).toBe(4);
+    expect(result.pagesFetched).toBe(2);
+    expect(result.stoppedEarly).toBe(false);
+    // Cursor advances to FINAL page's historyId, not page-1's.
+    expect(hoisted.mockAdvanceSyncState).toHaveBeenCalledWith({
+      mode: 'INCREMENTAL',
+      newHistoryId: '1200',
+      processedCount: 4,
+    });
   });
 
-  it('treats maxBatch < 1 as default 50', async () => {
-    const ids = Array.from({ length: 100 }, (_, i) => `m${i}`);
-    mockHistoryDelta(ids, '9999');
-    for (let i = 0; i < 50; i++) {
-      hoisted.mockGetMessage.mockResolvedValueOnce({
-        id: `m${i}`,
-        threadId: 't',
-      });
+  it('preserves cursor (newHistoryId=null) when stopped early on maxBatch', async () => {
+    // Page 1 returns 100 IDs + still has pageToken; maxBatch=50 hits cap.
+    const idsP1 = Array.from({ length: 100 }, (_, i) => `m${i}`);
+    mockHistoryPages([
+      { messageIds: idsP1, nextHistoryId: '1100', nextPageToken: 'page2-token' },
+    ]);
+    for (const id of idsP1) {
+      hoisted.mockGetMessage.mockResolvedValueOnce({ id, threadId: 't' });
       hoisted.mockParseGmailMessage.mockReturnValueOnce(
-        mockParsedEmail({ messageId: `m${i}` }),
+        mockParsedEmail({ messageId: id }),
       );
     }
     hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => null);
@@ -1137,9 +1214,302 @@ describe('runSync — maxBatch', () => {
     const { runSync } = await import('./sync');
     const result = await runSync({
       gmailClient: { __brand: 'gmail' } as never,
-      maxBatch: 0, // invalid → default
+      maxBatch: 50,
     });
-    expect(result.stats.fetched).toBe(50);
+
+    // Only 1 page fetched — break triggered before page 2.
+    expect(hoisted.mockListHistory).toHaveBeenCalledTimes(1);
+    expect(result.pagesFetched).toBe(1);
+    expect(result.stoppedEarly).toBe(true);
+    expect(result.stats.fetched).toBe(100);
+
+    // Cursor preserved — next tick re-fetches from same lastHistoryId,
+    // dedup absorbs the redundant page-1 messages, walks to page 2+.
+    expect(hoisted.mockAdvanceSyncState).toHaveBeenCalledWith({
+      mode: 'INCREMENTAL',
+      newHistoryId: null,
+      processedCount: 100,
+    });
+  });
+
+  it('safety cap: stops after SYNC_MAX_PAGES (10) even if pageToken keeps coming', async () => {
+    // 11 pages all advertise nextPageToken=keep — we must stop at 10.
+    const pages = Array.from({ length: 11 }, (_, i) => ({
+      messageIds: [] as string[],
+      nextHistoryId: String(2000 + i),
+      nextPageToken: 'keep',
+    }));
+    mockHistoryPages(pages);
+    hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => null);
+
+    const { runSync } = await import('./sync');
+    const result = await runSync({
+      gmailClient: { __brand: 'gmail' } as never,
+      maxBatch: 200, // never triggers the maxBatch break
+    });
+
+    expect(hoisted.mockListHistory).toHaveBeenCalledTimes(10);
+    expect(result.pagesFetched).toBe(10);
+    expect(result.stoppedEarly).toBe(true);
+    // Conservative cursor: stoppedEarly + INCREMENTAL → cursor preserved.
+    expect(hoisted.mockAdvanceSyncState).toHaveBeenCalledWith({
+      mode: 'INCREMENTAL',
+      newHistoryId: null,
+      processedCount: 0,
+    });
+  });
+});
+
+describe('runSync — Bug B FALLBACK pagination + recovery', () => {
+  it('first-run uses plain "in:inbox" query (no recovery_since)', async () => {
+    hoisted.mockGetSyncState.mockResolvedValueOnce({
+      lastHistoryId: null,
+      lastSyncedAt: null,
+      lastFullSyncAt: null,
+      emailsProcessedTotal: 0,
+      consecutiveFailures: 0,
+      lastError: null,
+      lastErrorAt: null,
+      lockedAt: null,
+      lockedBy: null,
+    });
+    mockFallback([], '5000');
+
+    const { runSync } = await import('./sync');
+    const result = await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(result.mode).toBe('FALLBACK');
+    expect(result.recoverySince).toBeNull();
+    // listMessages(client, params, retryOptions?) — params at index [1].
+    const callArgs = hoisted.mockListMessages.mock.calls[0][1];
+    expect(callArgs.query).toBe('in:inbox');
+    expect(callArgs.pageToken).toBeUndefined();
+  });
+
+  it('recovery uses date-bounded query when listHistory throws GmailHistoryExpiredError', async () => {
+    const { GmailHistoryExpiredError } = await import('./errors');
+    // last_synced_at = 2026-04-22T10:00:00Z. Recovery anchor =
+    // last_synced_at - 1 day = 2026-04-21 → query 'in:inbox after:2026/04/21'.
+    hoisted.mockGetSyncState.mockResolvedValueOnce({
+      lastHistoryId: '1000',
+      lastSyncedAt: new Date('2026-04-22T10:00:00Z'),
+      lastFullSyncAt: null,
+      emailsProcessedTotal: 0,
+      consecutiveFailures: 215,
+      lastError: 'expired',
+      lastErrorAt: null,
+      lockedAt: null,
+      lockedBy: null,
+    });
+    hoisted.mockListHistory.mockRejectedValueOnce(
+      new GmailHistoryExpiredError(new Error('404')),
+    );
+    mockFallback([], '5000');
+
+    const { runSync } = await import('./sync');
+    const result = await runSync({ gmailClient: { __brand: 'gmail' } as never });
+
+    expect(result.mode).toBe('FALLBACK');
+    expect(result.recoverySince).toEqual(new Date('2026-04-21T10:00:00Z'));
+    const callArgs = hoisted.mockListMessages.mock.calls[0][1];
+    expect(callArgs.query).toBe('in:inbox after:2026/04/21');
+  });
+
+  it('paginates listMessages when nextPageToken is set', async () => {
+    hoisted.mockGetSyncState.mockResolvedValueOnce({
+      lastHistoryId: null,
+      lastSyncedAt: null,
+      lastFullSyncAt: null,
+      emailsProcessedTotal: 0,
+      consecutiveFailures: 0,
+      lastError: null,
+      lastErrorAt: null,
+      lockedAt: null,
+      lockedBy: null,
+    });
+    mockFallbackPages(
+      [
+        { messageIds: ['m1', 'm2'], nextPageToken: 'page2' },
+        { messageIds: ['m3'], nextPageToken: null },
+      ],
+      '5000',
+    );
+    for (const id of ['m1', 'm2', 'm3']) {
+      hoisted.mockGetMessage.mockResolvedValueOnce({ id, threadId: 't' });
+      hoisted.mockParseGmailMessage.mockReturnValueOnce(
+        mockParsedEmail({ messageId: id }),
+      );
+    }
+    hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => null);
+
+    const { runSync } = await import('./sync');
+    const result = await runSync({
+      gmailClient: { __brand: 'gmail' } as never,
+      maxBatch: 200,
+    });
+
+    expect(hoisted.mockListMessages).toHaveBeenCalledTimes(2);
+    expect(hoisted.mockListMessages.mock.calls[1][1]).toMatchObject({
+      pageToken: 'page2',
+    });
+    expect(result.stats.fetched).toBe(3);
+    expect(result.pagesFetched).toBe(2);
+    // FALLBACK ALWAYS advances cursor — even if stopped early
+    // (multi-page recovery is the BACKFILL action's job).
+    expect(hoisted.mockAdvanceSyncState).toHaveBeenCalledWith({
+      mode: 'FALLBACK',
+      newHistoryId: '5000',
+      processedCount: 3,
+    });
+  });
+
+  it('FALLBACK with stoppedEarly STILL advances cursor (multi-page recovery → BACKFILL)', async () => {
+    hoisted.mockGetSyncState.mockResolvedValueOnce({
+      lastHistoryId: null,
+      lastSyncedAt: null,
+      lastFullSyncAt: null,
+      emailsProcessedTotal: 0,
+      consecutiveFailures: 0,
+      lastError: null,
+      lastErrorAt: null,
+      lockedAt: null,
+      lockedBy: null,
+    });
+    const idsP1 = Array.from({ length: 100 }, (_, i) => `m${i}`);
+    mockFallbackPages(
+      [{ messageIds: idsP1, nextPageToken: 'page2' }],
+      '5000',
+    );
+    for (const id of idsP1) {
+      hoisted.mockGetMessage.mockResolvedValueOnce({ id, threadId: 't' });
+      hoisted.mockParseGmailMessage.mockReturnValueOnce(
+        mockParsedEmail({ messageId: id }),
+      );
+    }
+    hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => null);
+
+    const { runSync } = await import('./sync');
+    const result = await runSync({
+      gmailClient: { __brand: 'gmail' } as never,
+      maxBatch: 50, // forces stop early
+    });
+
+    expect(result.stoppedEarly).toBe(true);
+    // Despite stopping early, FALLBACK still advances to "now".
+    expect(hoisted.mockAdvanceSyncState).toHaveBeenCalledWith({
+      mode: 'FALLBACK',
+      newHistoryId: '5000',
+      processedCount: 100,
+    });
+  });
+});
+
+/* ============================================================================
+ * runBackfill — Manager-triggered recovery (PR-23)
+ * ========================================================================== */
+
+describe('runBackfill', () => {
+  it('processes messages from date-bounded query without touching cursor', async () => {
+    hoisted.mockListMessages.mockResolvedValueOnce({
+      messageIds: ['m1', 'm2'],
+      nextPageToken: null,
+      resultSizeEstimate: 2,
+    });
+    for (const id of ['m1', 'm2']) {
+      hoisted.mockGetMessage.mockResolvedValueOnce({ id, threadId: 't' });
+      hoisted.mockParseGmailMessage.mockReturnValueOnce(
+        mockParsedEmail({ messageId: id }),
+      );
+    }
+    hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => null);
+
+    const recoverySince = new Date('2026-04-22T00:00:00Z');
+    const { runBackfill } = await import('./sync');
+    const result = await runBackfill({
+      recoverySince,
+      gmailClient: { __brand: 'gmail' } as never,
+    });
+
+    expect(result.complete).toBe(true);
+    expect(result.stats.fetched).toBe(2);
+    expect(result.stats.dropped).toBe(2);
+    expect(result.recoverySince).toEqual(recoverySince);
+
+    // Critical: backfill must NEVER advance the cron cursor or stamp
+    // last_synced_at. Both functions are invariant against backfill.
+    expect(hoisted.mockAdvanceSyncState).not.toHaveBeenCalled();
+    expect(hoisted.mockRecordSyncFailure).not.toHaveBeenCalled();
+
+    // Must NOT call listHistory — backfill is anchored by date, not cursor.
+    expect(hoisted.mockListHistory).not.toHaveBeenCalled();
+
+    // Date-bounded query format check.
+    expect(hoisted.mockListMessages.mock.calls[0][1]).toMatchObject({
+      query: 'in:inbox after:2026/04/22',
+    });
+
+    // sync_logs entry stamped with sync_method='BACKFILL'.
+    expect(hoisted.mockInsertSyncLog).toHaveBeenCalledTimes(1);
+    expect(hoisted.mockInsertSyncLog.mock.calls[0][0]).toMatchObject({
+      syncMethod: 'BACKFILL',
+      emailsFetched: 2,
+      emailsDropped: 2,
+      pagesFetched: 1,
+      stoppedEarly: false,
+      recoverySince,
+    });
+  });
+
+  it('returns complete=false when paginated past BACKFILL_MAX_PAGES (20)', async () => {
+    // 21 pages all set nextPageToken — must stop at 20.
+    for (let i = 0; i < 21; i++) {
+      hoisted.mockListMessages.mockResolvedValueOnce({
+        messageIds: [],
+        nextPageToken: 'keep-going',
+        resultSizeEstimate: 0,
+      });
+    }
+    hoisted.mockCreateSenderResolver.mockReturnValueOnce(() => null);
+
+    const { runBackfill } = await import('./sync');
+    const result = await runBackfill({
+      recoverySince: new Date('2026-04-22T00:00:00Z'),
+      gmailClient: { __brand: 'gmail' } as never,
+    });
+
+    expect(hoisted.mockListMessages).toHaveBeenCalledTimes(20);
+    expect(result.complete).toBe(false);
+    expect(result.pagesFetched).toBe(20);
+  });
+
+  it('throws SyncInProgressError when lock is busy', async () => {
+    hoisted.mockTryAcquireSyncLock.mockResolvedValueOnce(false);
+    const { runBackfill, SyncInProgressError } = await import('./sync');
+    await expect(
+      runBackfill({
+        recoverySince: new Date('2026-04-22T00:00:00Z'),
+        gmailClient: { __brand: 'gmail' } as never,
+      }),
+    ).rejects.toBeInstanceOf(SyncInProgressError);
+    // Failed acquire → no release.
+    expect(hoisted.mockReleaseSyncLock).not.toHaveBeenCalled();
+  });
+
+  it('releases lock + writes sync_logs even when processing throws', async () => {
+    hoisted.mockListMessages.mockRejectedValueOnce(new Error('boom-from-gmail'));
+    const { runBackfill } = await import('./sync');
+    await expect(
+      runBackfill({
+        recoverySince: new Date('2026-04-22T00:00:00Z'),
+        gmailClient: { __brand: 'gmail' } as never,
+      }),
+    ).rejects.toThrow(/boom-from-gmail/);
+    expect(hoisted.mockReleaseSyncLock).toHaveBeenCalledTimes(1);
+    expect(hoisted.mockInsertSyncLog).toHaveBeenCalledTimes(1);
+    expect(hoisted.mockInsertSyncLog.mock.calls[0][0]).toMatchObject({
+      syncMethod: 'BACKFILL',
+      errorMessage: expect.stringMatching(/boom-from-gmail/),
+    });
   });
 });
 

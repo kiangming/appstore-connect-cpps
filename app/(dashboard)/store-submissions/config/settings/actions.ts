@@ -22,11 +22,24 @@ import {
   generateAuthUrl,
   revokeTokens,
 } from '@/lib/store-submissions/gmail/oauth';
+import {
+  GmailNotConnectedError,
+  RefreshTokenInvalidError,
+  SyncInProgressError,
+  runBackfill,
+} from '@/lib/store-submissions/gmail/sync';
+import { getSyncState } from '@/lib/store-submissions/gmail/sync-state';
 
 // -- Shared result shape (matches PR-4/PR-5 pattern) ------------------------
 
 export type SettingsActionError = {
-  code: 'UNAUTHORIZED' | 'FORBIDDEN' | 'NOT_CONNECTED' | 'UNKNOWN';
+  code:
+    | 'UNAUTHORIZED'
+    | 'FORBIDDEN'
+    | 'NOT_CONNECTED'
+    | 'SYNC_IN_PROGRESS'
+    | 'INVALID_INPUT'
+    | 'UNKNOWN';
   message: string;
 };
 
@@ -175,4 +188,168 @@ export async function getGmailStatusAction(): Promise<ActionResult<GmailStatus>>
         : null,
     },
   };
+}
+
+// -- Backfill (PR-23) -------------------------------------------------------
+
+/**
+ * Snapshot of the Gmail sync cursor + last successful full-scan timestamp,
+ * surfaced to the Settings UI to decide whether to show the Backfill
+ * affordance and what window the Manager would be recovering.
+ */
+export interface BackfillStatus {
+  /**
+   * `gmail_sync_state.last_full_sync_at`. The most recent FALLBACK or
+   * BACKFILL run that drained without `stoppedEarly`. NULL on a
+   * never-fully-synced mailbox.
+   */
+  last_full_sync_at: string | null;
+  /** `gmail_sync_state.last_synced_at`. Most recent attempt of any mode. */
+  last_synced_at: string | null;
+  /** `gmail_sync_state.consecutive_failures`. Surfaces ongoing breakage. */
+  consecutive_failures: number;
+  /**
+   * Hint for the UI: when `last_full_sync_at` is older than this many
+   * days, the affordance is highlighted as "recovery suggested". The
+   * button itself is always visible to Managers.
+   */
+  recovery_threshold_days: number;
+}
+
+const BACKFILL_RECOVERY_THRESHOLD_DAYS = 2;
+
+export async function getBackfillStatusAction(): Promise<
+  ActionResult<BackfillStatus>
+> {
+  const guard = await guardAnyStoreUser();
+  if (!guard.ok) return { ok: false, error: guard.error };
+
+  const state = await getSyncState();
+  return {
+    ok: true,
+    data: {
+      last_full_sync_at: state.lastFullSyncAt
+        ? state.lastFullSyncAt.toISOString()
+        : null,
+      last_synced_at: state.lastSyncedAt
+        ? state.lastSyncedAt.toISOString()
+        : null,
+      consecutive_failures: state.consecutiveFailures,
+      recovery_threshold_days: BACKFILL_RECOVERY_THRESHOLD_DAYS,
+    },
+  };
+}
+
+export interface BackfillSummary {
+  complete: boolean;
+  emails_fetched: number;
+  emails_classified: number;
+  emails_unclassified: number;
+  emails_dropped: number;
+  emails_errored: number;
+  pages_fetched: number;
+  recovery_since: string;
+  duration_ms: number;
+}
+
+/**
+ * Manager-triggered recovery for emails missed during an extended sync
+ * outage. Anchors the date-bounded query at `last_full_sync_at - 1 day`
+ * (or `last_synced_at - 1 day` when no full sync has ever completed).
+ *
+ * Runs synchronously in the Server Action — Manager waits up to ~30-60s
+ * for completion. Per-call cap is `BACKFILL_MAX_PAGES * 100` ≈ 2000
+ * emails; for windows beyond that, the response carries `complete=false`
+ * and Manager re-triggers (dedup via UNIQUE(gmail_msg_id) absorbs the
+ * already-processed rows on the second run).
+ *
+ * Does NOT touch `gmail_sync_state.last_history_id` /
+ * `gmail_sync_state.last_synced_at` — those reflect cron sync progress
+ * and must not be retroactively rewritten.
+ */
+export async function runBackfillAction(): Promise<
+  ActionResult<BackfillSummary>
+> {
+  const guard = await guardManager();
+  if (!guard.ok) return { ok: false, error: guard.error };
+
+  // Anchor: last_full_sync_at if present, else last_synced_at, else
+  // refuse — there's no defensible recovery window without one.
+  const state = await getSyncState();
+  const anchor = state.lastFullSyncAt ?? state.lastSyncedAt;
+  if (!anchor) {
+    return {
+      ok: false,
+      error: {
+        code: 'INVALID_INPUT',
+        message:
+          'Cannot determine recovery window: no successful sync has ever completed. Run a manual sync first.',
+      },
+    };
+  }
+
+  // Subtract 1-day buffer for tz drift + same-day in-flight messages.
+  // The orchestrator subtracts again inside fetchMessagesPaginated when
+  // necessary; the explicit buffer here keeps the Manager-facing UI
+  // honest about which window will be queried.
+  const recoverySince = new Date(anchor);
+  recoverySince.setUTCDate(recoverySince.getUTCDate() - 1);
+
+  try {
+    const result = await runBackfill({
+      recoverySince,
+      lockedBy: 'manager-backfill',
+    });
+    revalidatePath(SETTINGS_PATH);
+    return {
+      ok: true,
+      data: {
+        complete: result.complete,
+        emails_fetched: result.stats.fetched,
+        emails_classified: result.stats.classified,
+        emails_unclassified: result.stats.unclassified,
+        emails_dropped: result.stats.dropped,
+        emails_errored: result.stats.errors,
+        pages_fetched: result.pagesFetched,
+        recovery_since: result.recoverySince.toISOString(),
+        duration_ms: result.durationMs,
+      },
+    };
+  } catch (err) {
+    if (err instanceof SyncInProgressError) {
+      return {
+        ok: false,
+        error: {
+          code: 'SYNC_IN_PROGRESS',
+          message: 'Cron sync is currently running. Try again in a minute.',
+        },
+      };
+    }
+    if (err instanceof GmailNotConnectedError) {
+      return {
+        ok: false,
+        error: {
+          code: 'NOT_CONNECTED',
+          message: 'Gmail is not connected. Reconnect before running backfill.',
+        },
+      };
+    }
+    if (err instanceof RefreshTokenInvalidError) {
+      return {
+        ok: false,
+        error: {
+          code: 'NOT_CONNECTED',
+          message: 'Gmail token expired. Reconnect Gmail before running backfill.',
+        },
+      };
+    }
+    console.error('[settings] runBackfillAction failed:', err);
+    return {
+      ok: false,
+      error: {
+        code: 'UNKNOWN',
+        message: 'Backfill failed. Check server logs for details.',
+      },
+    };
+  }
 }

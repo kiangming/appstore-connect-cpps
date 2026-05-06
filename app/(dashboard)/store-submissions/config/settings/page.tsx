@@ -1,19 +1,24 @@
 import { Settings as SettingsIcon } from 'lucide-react';
 import { requireStoreSession } from '@/lib/store-submissions/session-guard';
 import { SettingsClient } from '@/components/store-submissions/settings/SettingsClient';
-import { getGmailStatusAction } from './actions';
+import { getBackfillStatusAction, getGmailStatusAction } from './actions';
 
 export const dynamic = 'force-dynamic';
 
 export default async function SettingsPage() {
   const { storeUser } = await requireStoreSession();
-  const statusResult = await getGmailStatusAction();
-  // The action only fails here on auth — we just passed requireStoreSession,
+  const [statusResult, backfillResult] = await Promise.all([
+    getGmailStatusAction(),
+    getBackfillStatusAction(),
+  ]);
+
+  // The actions only fail here on auth — we just passed requireStoreSession,
   // so `ok: false` would mean the user was disabled between the two calls.
-  // Fall back to "disconnected" so the page still renders something.
+  // Fall back to safe defaults so the page still renders something.
   const status = statusResult.ok
     ? statusResult.data
     : { connected: false as const };
+  const backfillStatus = backfillResult.ok ? backfillResult.data : null;
 
   return (
     <div className="px-8 py-10">
@@ -37,6 +42,7 @@ export default async function SettingsPage() {
 
         <SettingsClient
           initialStatus={status}
+          initialBackfillStatus={backfillStatus}
           isManager={storeUser.role === 'MANAGER'}
         />
       </div>

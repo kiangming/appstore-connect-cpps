@@ -103,11 +103,36 @@ const HARD_CAP_MAX_BATCH = 200;
 /** Gmail fallback query filter: inbox only, no drafts/spam/trash. */
 const FALLBACK_QUERY = 'in:inbox';
 
+/**
+ * Per-tick page cap for `listHistory` / `listMessages` pagination
+ * (PR-23 Bug A + Bug B). At 100 IDs per page, 10 pages = 1000 IDs upper
+ * bound — enough to drain a typical day's submissions traffic in one
+ * tick while keeping a 5-min cron budget achievable. Backfill uses a
+ * higher cap (see `BACKFILL_MAX_PAGES`).
+ */
+const SYNC_MAX_PAGES = 10;
+
+/**
+ * Backfill page cap. Sized so a 14-day failure window (~1200 emails at
+ * ~89/day Apple traffic) can drain in one Manager-triggered click. If
+ * exceeded, the action returns `{complete: false}` and the Manager
+ * triggers again — dedup absorbs already-persisted rows.
+ */
+const BACKFILL_MAX_PAGES = 20;
+
+/**
+ * Date buffer subtracted from `last_synced_at` when constructing the
+ * recovery `after:` query. Gmail's date-only `after:` is timezone-aware
+ * and rounds toward the *start* of the day in the mailbox's tz, so a
+ * 1-day buffer covers tz drift + same-day in-flight messages.
+ */
+const RECOVERY_BUFFER_DAYS = 1;
+
 /* ============================================================================
  * Public types
  * ========================================================================== */
 
-export type SyncMode = 'INCREMENTAL' | 'FALLBACK';
+export type SyncMode = 'INCREMENTAL' | 'FALLBACK' | 'BACKFILL';
 
 export interface SyncStats {
   /** Total messages attempted in this batch (including DROPPED + ERROR). */
@@ -128,6 +153,23 @@ export interface SyncResult {
   durationMs: number;
   stats: SyncStats;
   nextHistoryId: string | null;
+  /** PR-23: number of pages walked across listHistory / listMessages. */
+  pagesFetched: number;
+  /**
+   * PR-23: true when pagination broke out due to per-tick cap (`maxBatch`
+   * or `SYNC_MAX_PAGES`) rather than draining `nextPageToken`. When true
+   * AND mode is INCREMENTAL, the orchestrator preserves `last_history_id`
+   * so the next tick re-fetches the remaining pages (dedup absorbs).
+   * When mode is FALLBACK, cursor still advances to "now" by design —
+   * full multi-page recovery requires a Manager-triggered BACKFILL.
+   */
+  stoppedEarly: boolean;
+  /**
+   * PR-23: anchor date used for the `after:YYYY/MM/DD` query in
+   * recovery FALLBACK / BACKFILL. NULL for first-run FALLBACK and
+   * INCREMENTAL.
+   */
+  recoverySince: Date | null;
 }
 
 export interface RunSyncOptions {
@@ -141,6 +183,29 @@ export interface RunSyncOptions {
    * tests pass a mocked Gmail client here.
    */
   gmailClient?: GmailClient;
+}
+
+export interface RunBackfillOptions {
+  /**
+   * Anchor date for `after:` query. Required — the Server Action
+   * derives this from `gmail_sync_state.last_full_sync_at` (with a
+   * 1-day buffer) so callers don't depend on sync-state in tests.
+   */
+  recoverySince: Date;
+  /** Identifier stamped on the lock row for debugging stale locks. */
+  lockedBy?: string;
+  /** Test/internal injection hook (mirrors `RunSyncOptions.gmailClient`). */
+  gmailClient?: GmailClient;
+}
+
+export interface BackfillResult {
+  success: boolean;
+  /** True iff pagination drained `nextPageToken` within `BACKFILL_MAX_PAGES`. */
+  complete: boolean;
+  durationMs: number;
+  stats: SyncStats;
+  pagesFetched: number;
+  recoverySince: Date;
 }
 
 /* ============================================================================
@@ -165,6 +230,9 @@ export async function runSync(options: RunSyncOptions = {}): Promise<SyncResult>
   };
   let mode: SyncMode = 'INCREMENTAL';
   let nextHistoryId: string | null = null;
+  let pagesFetched = 0;
+  let stoppedEarly = false;
+  let recoverySince: Date | null = null;
   let outerError: Error | undefined;
 
   try {
@@ -175,16 +243,23 @@ export async function runSync(options: RunSyncOptions = {}): Promise<SyncResult>
     const resolvePlatform = createSenderResolver(senders);
     const rulesCache = new Map<string, RulesSnapshot | null>();
 
-    const decided = await decideSyncMode(gmailClient, state.lastHistoryId, maxBatch);
+    const decided = await decideSyncMode(
+      gmailClient,
+      state.lastHistoryId,
+      state.lastSyncedAt,
+      maxBatch,
+    );
     mode = decided.mode;
     nextHistoryId = decided.nextHistoryId;
+    pagesFetched = decided.pagesFetched;
+    stoppedEarly = decided.stoppedEarly;
+    recoverySince = decided.recoverySince;
 
-    // Cap batch to maxBatch — surplus IDs are left for the next tick
-    // (dedup via UNIQUE(gmail_msg_id) protects against double-processing
-    // if we advance the cursor but bounce back later).
-    const batch = decided.messageIds.slice(0, maxBatch);
-
-    for (const msgId of batch) {
+    // PR-23 Bug C fix: process all returned IDs, no slice. The pagination
+    // loop in `decideSyncMode` already bounds `messageIds.length` to
+    // ~`maxBatch + page_size` (~maxBatch + 100); processing the whole
+    // set keeps surplus IDs from being silently discarded.
+    for (const msgId of decided.messageIds) {
       try {
         await processMessage(msgId, {
           gmailClient,
@@ -222,12 +297,22 @@ export async function runSync(options: RunSyncOptions = {}): Promise<SyncResult>
       }
     }
 
-    stats.fetched = batch.length;
+    stats.fetched = decided.messageIds.length;
 
     if (stats.errors === 0) {
+      // PR-23 Bug A fix: when INCREMENTAL pagination stopped early
+      // (per-tick cap hit while `nextPageToken` still set), preserve
+      // `last_history_id` so the next tick re-fetches the remaining
+      // pages. UNIQUE(gmail_msg_id) absorbs the redundancy.
+      //
+      // FALLBACK semantics intentionally differ: we always advance to
+      // "now" because the prior `last_history_id` is already expired
+      // (Gmail 404s on it). Multi-page recovery in FALLBACK requires
+      // an explicit Manager-triggered BACKFILL — see `runBackfill`.
+      const advanceCursor = mode === 'FALLBACK' || !stoppedEarly;
       await advanceSyncState({
-        mode,
-        newHistoryId: nextHistoryId,
+        mode: mode === 'BACKFILL' ? 'FALLBACK' : mode,
+        newHistoryId: advanceCursor ? nextHistoryId : null,
         processedCount: stats.fetched,
       });
     } else {
@@ -244,6 +329,9 @@ export async function runSync(options: RunSyncOptions = {}): Promise<SyncResult>
       durationMs: Date.now() - startMs,
       stats,
       nextHistoryId,
+      pagesFetched,
+      stoppedEarly,
+      recoverySince,
     };
   } catch (err) {
     outerError = err instanceof Error ? err : new Error(String(err));
@@ -273,6 +361,9 @@ export async function runSync(options: RunSyncOptions = {}): Promise<SyncResult>
         emailsDropped: stats.dropped,
         emailsErrored: stats.errors,
         errorMessage: outerError ? outerError.message : null,
+        pagesFetched,
+        stoppedEarly,
+        recoverySince,
       });
     } catch (logErr) {
       console.error('[sync] insertSyncLog failed in finally:', logErr);
@@ -282,41 +373,184 @@ export async function runSync(options: RunSyncOptions = {}): Promise<SyncResult>
 }
 
 /* ============================================================================
+ * Backfill orchestrator (PR-23)
+ *
+ * Manager-triggered recovery for emails missed during an extended sync
+ * outage (e.g. April 22 → May 6 OAuth blackout). Distinct from cron
+ * `runSync` in three ways:
+ *
+ *   1. Anchored by date (`recoverySince`) instead of `last_history_id`,
+ *      so it works even when Gmail's 7-day history retention has expired.
+ *   2. Does NOT touch `gmail_sync_state.last_history_id` /
+ *      `last_synced_at` — those reflect cron sync progress and must not
+ *      be retroactively rewritten by a recovery scan. Cron and backfill
+ *      operate on disjoint cursor namespaces.
+ *   3. Higher per-call page cap (`BACKFILL_MAX_PAGES = 20` ≈ 2000 emails)
+ *      so a 14-day window typically completes in one Manager click.
+ *      When `complete=false`, Manager re-triggers; dedup absorbs the
+ *      already-persisted rows.
+ *
+ * Shares the same advisory lock as `runSync` to serialize against cron
+ * ticks (avoids two parallel `processMessage` runs hammering Gmail with
+ * duplicate `getMessage` calls — UNIQUE(gmail_msg_id) handles correctness
+ * but the wasted Gmail quota would be expensive on a 1000+ row run).
+ * ========================================================================== */
+
+export async function runBackfill(
+  options: RunBackfillOptions,
+): Promise<BackfillResult> {
+  const startMs = Date.now();
+  const recoverySince = options.recoverySince;
+
+  const acquired = await tryAcquireSyncLock({
+    lockedBy: options.lockedBy ?? 'backfill',
+  });
+  if (!acquired) {
+    throw new SyncInProgressError();
+  }
+
+  const stats: SyncStats = {
+    fetched: 0,
+    classified: 0,
+    unclassified: 0,
+    dropped: 0,
+    errors: 0,
+  };
+  let pagesFetched = 0;
+  let stoppedEarly = false;
+  let outerError: Error | undefined;
+
+  try {
+    const gmailClient =
+      options.gmailClient ?? (await createGmailClient());
+    const senders = await loadActiveSenders();
+    const resolvePlatform = createSenderResolver(senders);
+    const rulesCache = new Map<string, RulesSnapshot | null>();
+
+    const fetched = await fetchMessagesPaginated(gmailClient, {
+      query: `in:inbox after:${formatGmailDate(recoverySince)}`,
+      perPage: 100,
+      // Use HARD_CAP_MAX_BATCH so a single backfill click can drain up to
+      // BACKFILL_MAX_PAGES * 100 IDs (= 2000) before "stopping early".
+      // Loop break is governed by maxPages, not maxBatch, here — we want
+      // to drain every event in the recovery window we can reach.
+      maxBatch: BACKFILL_MAX_PAGES * 100,
+      maxPages: BACKFILL_MAX_PAGES,
+    });
+    pagesFetched = fetched.pagesFetched;
+    stoppedEarly = fetched.stoppedEarly;
+
+    for (const msgId of fetched.messageIds) {
+      try {
+        await processMessage(msgId, {
+          gmailClient,
+          resolvePlatform,
+          rulesCache,
+          stats,
+        });
+      } catch (err) {
+        console.error(`[backfill] Unhandled failure processing ${msgId}:`, err);
+        stats.errors++;
+      }
+    }
+
+    stats.fetched = fetched.messageIds.length;
+
+    return {
+      success: stats.errors === 0,
+      complete: !stoppedEarly,
+      durationMs: Date.now() - startMs,
+      stats,
+      pagesFetched,
+      recoverySince,
+    };
+  } catch (err) {
+    outerError = err instanceof Error ? err : new Error(String(err));
+    throw err;
+  } finally {
+    try {
+      await insertSyncLog({
+        syncMethod: 'BACKFILL',
+        durationMs: Date.now() - startMs,
+        emailsFetched: stats.fetched,
+        emailsClassified: stats.classified,
+        emailsUnclassified: stats.unclassified,
+        emailsDropped: stats.dropped,
+        emailsErrored: stats.errors,
+        errorMessage: outerError ? outerError.message : null,
+        pagesFetched,
+        stoppedEarly,
+        recoverySince,
+      });
+    } catch (logErr) {
+      console.error('[backfill] insertSyncLog failed in finally:', logErr);
+    }
+    await releaseSyncLock();
+  }
+}
+
+/* ============================================================================
  * Sync mode decision (INCREMENTAL vs FALLBACK)
+ *
+ * PR-23: both modes paginate (`pageToken` looped) up to `SYNC_MAX_PAGES`
+ * pages or until `maxBatch` IDs accumulate. Conservative cursor strategy
+ * for INCREMENTAL — when stopped early, preserve the inbound cursor so
+ * the next tick re-fetches remaining pages. FALLBACK still advances to
+ * "now"; multi-page recovery in FALLBACK requires `runBackfill`.
  * ========================================================================== */
 
 interface SyncModeDecision {
   mode: SyncMode;
   messageIds: string[];
   nextHistoryId: string | null;
+  pagesFetched: number;
+  stoppedEarly: boolean;
+  recoverySince: Date | null;
 }
 
 async function decideSyncMode(
   client: GmailClient,
   lastHistoryId: string | null,
+  lastSyncedAt: Date | null,
   maxBatch: number,
 ): Promise<SyncModeDecision> {
   if (!lastHistoryId) {
-    // First-run or after reconnect: no cursor yet → fallback.
-    return runFallback(client, maxBatch);
+    // First-run or after reconnect: no cursor yet → fallback. No
+    // recovery date — this is a clean start, the 50-newest cap is fine.
+    return runFallback(client, maxBatch, null);
   }
 
   try {
-    const delta = await listHistory(client, {
+    const fetched = await fetchHistoryPaginated(client, {
       startHistoryId: lastHistoryId,
-      maxResults: 100,
+      perPage: 100,
+      maxBatch,
+      maxPages: SYNC_MAX_PAGES,
     });
     return {
       mode: 'INCREMENTAL',
-      messageIds: delta.messageIds,
-      nextHistoryId: delta.nextHistoryId ?? lastHistoryId,
+      messageIds: fetched.messageIds,
+      // When we stopped early, preserve `lastHistoryId` — the actual
+      // cursor write is gated on `!stoppedEarly` upstream, but we
+      // still pass the inbound cursor through for clarity.
+      nextHistoryId: fetched.stoppedEarly
+        ? lastHistoryId
+        : fetched.nextHistoryId ?? lastHistoryId,
+      pagesFetched: fetched.pagesFetched,
+      stoppedEarly: fetched.stoppedEarly,
+      recoverySince: null,
     };
   } catch (err) {
     if (err instanceof GmailHistoryExpiredError) {
-      // historyId > 7 days stale → Gmail 404s. Fall back, get a fresh
-      // historyId from the profile endpoint so the NEXT tick returns
-      // to incremental mode.
-      return runFallback(client, maxBatch);
+      // historyId > 7 days stale → Gmail 404s. Recover with a
+      // date-bounded fallback anchored at last_synced_at minus a 1-day
+      // buffer (covers tz drift + same-day in-flight messages). When
+      // last_synced_at is null (rare — no sync ever succeeded), fall
+      // through to first-run-style fallback.
+      const recoverySince = lastSyncedAt
+        ? subtractDays(lastSyncedAt, RECOVERY_BUFFER_DAYS)
+        : null;
+      return runFallback(client, maxBatch, recoverySince);
     }
     throw err;
   }
@@ -325,17 +559,146 @@ async function decideSyncMode(
 async function runFallback(
   client: GmailClient,
   maxBatch: number,
+  recoverySince: Date | null,
 ): Promise<SyncModeDecision> {
-  const result = await listMessages(client, {
-    query: FALLBACK_QUERY,
-    maxResults: maxBatch,
+  const query = recoverySince
+    ? `${FALLBACK_QUERY} after:${formatGmailDate(recoverySince)}`
+    : FALLBACK_QUERY;
+
+  const fetched = await fetchMessagesPaginated(client, {
+    query,
+    perPage: 100,
+    maxBatch,
+    maxPages: SYNC_MAX_PAGES,
   });
   const historyId = await getCurrentHistoryId(client);
   return {
     mode: 'FALLBACK',
-    messageIds: result.messageIds,
+    messageIds: fetched.messageIds,
     nextHistoryId: historyId,
+    pagesFetched: fetched.pagesFetched,
+    stoppedEarly: fetched.stoppedEarly,
+    recoverySince,
   };
+}
+
+/* ============================================================================
+ * Pagination helpers
+ *
+ * Two thin loops over `listHistory` / `listMessages` that share a stop
+ * condition (per-tick cap + safety cap on pages walked). Extracted so the
+ * cron sync (`runSync`) and the manual backfill (`runBackfill`) use the
+ * same exhaustion logic. Per-page size is fixed at 100 — Gmail's max
+ * `maxResults` for both endpoints is 500, but 100 matches the orchestrator's
+ * pre-PR-23 implicit cap and keeps single-page response sizes bounded.
+ * ========================================================================== */
+
+interface PaginatedFetch {
+  messageIds: string[];
+  /** Mailbox historyId from the last successful listHistory call. */
+  nextHistoryId: string | null;
+  pagesFetched: number;
+  /** True iff we stopped due to per-tick cap with `nextPageToken` still set. */
+  stoppedEarly: boolean;
+}
+
+async function fetchHistoryPaginated(
+  client: GmailClient,
+  params: {
+    startHistoryId: string;
+    perPage: number;
+    maxBatch: number;
+    maxPages: number;
+  },
+): Promise<PaginatedFetch> {
+  const allIds: string[] = [];
+  let pageToken: string | undefined;
+  let nextHistoryId: string | null = null;
+  let pages = 0;
+  let stoppedEarly = false;
+
+  do {
+    const delta = await listHistory(client, {
+      startHistoryId: params.startHistoryId,
+      pageToken,
+      maxResults: params.perPage,
+    });
+    allIds.push(...delta.messageIds);
+    nextHistoryId = delta.nextHistoryId ?? nextHistoryId;
+    pageToken = delta.nextPageToken ?? undefined;
+    pages++;
+
+    if (allIds.length >= params.maxBatch) {
+      stoppedEarly = !!pageToken;
+      break;
+    }
+  } while (pageToken && pages < params.maxPages);
+
+  // Loop exited naturally (pageToken null) but we hit page cap with
+  // pageToken still set — that's also "stopped early".
+  if (!stoppedEarly && pages >= params.maxPages && pageToken) {
+    stoppedEarly = true;
+  }
+
+  return { messageIds: allIds, nextHistoryId, pagesFetched: pages, stoppedEarly };
+}
+
+async function fetchMessagesPaginated(
+  client: GmailClient,
+  params: {
+    query: string;
+    perPage: number;
+    maxBatch: number;
+    maxPages: number;
+  },
+): Promise<Pick<PaginatedFetch, 'messageIds' | 'pagesFetched' | 'stoppedEarly'>> {
+  const allIds: string[] = [];
+  let pageToken: string | undefined;
+  let pages = 0;
+  let stoppedEarly = false;
+
+  do {
+    const result = await listMessages(client, {
+      query: params.query,
+      pageToken,
+      maxResults: params.perPage,
+    });
+    allIds.push(...result.messageIds);
+    pageToken = result.nextPageToken ?? undefined;
+    pages++;
+
+    if (allIds.length >= params.maxBatch) {
+      stoppedEarly = !!pageToken;
+      break;
+    }
+  } while (pageToken && pages < params.maxPages);
+
+  if (!stoppedEarly && pages >= params.maxPages && pageToken) {
+    stoppedEarly = true;
+  }
+
+  return { messageIds: allIds, pagesFetched: pages, stoppedEarly };
+}
+
+/**
+ * Format a Date as Gmail's `after:` query token (`YYYY/MM/DD`).
+ *
+ * Gmail interprets the date in the mailbox's timezone, rounding toward
+ * the start of the day. We use UTC components for determinism — the
+ * caller is expected to have already subtracted a 1-day buffer
+ * (`RECOVERY_BUFFER_DAYS`) to absorb tz drift.
+ */
+function formatGmailDate(date: Date): string {
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}/${m}/${d}`;
+}
+
+function subtractDays(date: Date, days: number): Date {
+  const out = new Date(date);
+  out.setUTCDate(out.getUTCDate() - days);
+  return out;
 }
 
 /* ============================================================================

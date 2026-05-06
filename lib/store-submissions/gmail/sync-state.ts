@@ -273,7 +273,7 @@ export async function recordSyncFailure(errorMessage: string): Promise<void> {
  * ========================================================================== */
 
 export interface SyncLogInput {
-  syncMethod: 'INCREMENTAL' | 'FALLBACK' | 'MANUAL';
+  syncMethod: 'INCREMENTAL' | 'FALLBACK' | 'MANUAL' | 'BACKFILL';
   durationMs: number;
   emailsFetched: number;
   emailsClassified: number;
@@ -285,6 +285,12 @@ export interface SyncLogInput {
   /** Populated in PR-8. Zero for PR-7. */
   ticketsUpdated?: number;
   errorMessage?: string | null;
+  /** PR-23: pages walked across listHistory/listMessages. */
+  pagesFetched?: number;
+  /** PR-23: per-tick cap hit before pagination drained. */
+  stoppedEarly?: boolean;
+  /** PR-23: anchor for `after:` query (FALLBACK recovery + BACKFILL). */
+  recoverySince?: Date | null;
 }
 
 /**
@@ -309,6 +315,11 @@ export async function insertSyncLog(input: SyncLogInput): Promise<void> {
       tickets_created: input.ticketsCreated ?? 0,
       tickets_updated: input.ticketsUpdated ?? 0,
       error_message: input.errorMessage ?? null,
+      pages_fetched: input.pagesFetched ?? 0,
+      stopped_early: input.stoppedEarly ?? false,
+      recovery_since: input.recoverySince
+        ? input.recoverySince.toISOString()
+        : null,
     });
 
   if (error) {
