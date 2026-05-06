@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useTransition } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { formatDistanceToNow } from 'date-fns';
 import {
@@ -45,6 +45,9 @@ export function SettingsClient({
   const [isConnecting, startConnect] = useTransition();
   const [isDisconnecting, startDisconnect] = useTransition();
   const [isBackfilling, startBackfill] = useTransition();
+  // Persists across renders (router.refresh preserves client state) so
+  // the "more available" hint stays visible until the next click resolves.
+  const [moreEmailsAvailable, setMoreEmailsAvailable] = useState(false);
   const handledQuery = useRef(false);
 
   // One-shot toast on ?gmail=connected|error — then strip the query params so
@@ -99,23 +102,31 @@ export function SettingsClient({
   const handleBackfill = () => {
     if (
       !confirm(
-        'Run backfill? This re-fetches emails from your last full sync. May take 30-60s and is safe to run multiple times — duplicates are skipped.',
+        'Run backfill? This re-fetches up to 300 emails per click; for long windows you will need to click again. Safe to run multiple times — duplicates are skipped.',
       )
     ) {
       return;
     }
     startBackfill(async () => {
+      // Persistent loading toast — dismissed only when the action settles.
+      // The button's spinner state already conveys "in flight"; this toast
+      // tells the Manager *how long* to wait so they don't refresh away.
+      const loadingId = toast.loading(
+        'Running backfill — may take up to 60 seconds. Please wait.',
+      );
       const result = await runBackfillAction();
+      toast.dismiss(loadingId);
       if (!result.ok) {
+        setMoreEmailsAvailable(false);
         toast.error(result.error.message);
         return;
       }
-      const { complete, emails_fetched, emails_classified, pages_fetched } =
-        result.data;
+      const { complete, emails_fetched, emails_classified } = result.data;
+      setMoreEmailsAvailable(!complete);
       toast.success(
         complete
-          ? `Backfill complete: ${emails_fetched} emails scanned (${emails_classified} classified) across ${pages_fetched} page(s).`
-          : `Backfill partial: ${emails_fetched} emails scanned (${emails_classified} classified). Re-run to continue.`,
+          ? `Recovered ${emails_fetched} email(s) (${emails_classified} classified). All caught up.`
+          : `Recovered ${emails_fetched} email(s) (${emails_classified} classified). Click again to fetch more.`,
       );
       router.refresh();
     });
@@ -137,6 +148,7 @@ export function SettingsClient({
         gmailConnected={initialStatus.connected}
         isManager={isManager}
         isBackfilling={isBackfilling}
+        moreEmailsAvailable={moreEmailsAvailable}
         onBackfill={handleBackfill}
       />
       <PlaceholderSections />
@@ -286,10 +298,18 @@ function BackfillSection(props: {
   gmailConnected: boolean;
   isManager: boolean;
   isBackfilling: boolean;
+  /** True when the most recent click returned `complete: false`. */
+  moreEmailsAvailable: boolean;
   onBackfill: () => void;
 }) {
-  const { backfillStatus, gmailConnected, isManager, isBackfilling, onBackfill } =
-    props;
+  const {
+    backfillStatus,
+    gmailConnected,
+    isManager,
+    isBackfilling,
+    moreEmailsAvailable,
+    onBackfill,
+  } = props;
 
   if (!backfillStatus) {
     // Server-side action failed (rare — auth was already validated).
@@ -325,12 +345,17 @@ function BackfillSection(props: {
             </p>
           </div>
         </div>
-        {recoverySuggested && (
+        {moreEmailsAvailable ? (
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-blue-200 bg-blue-50 text-blue-800 text-[11.5px] font-medium">
+            <AlertTriangle className="h-3 w-3" strokeWidth={2} />
+            More emails available — click again
+          </span>
+        ) : recoverySuggested ? (
           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-amber-200 bg-amber-50 text-amber-800 text-[11.5px] font-medium">
             <AlertTriangle className="h-3 w-3" strokeWidth={2} />
             Recovery suggested
           </span>
-        )}
+        ) : null}
       </header>
 
       <div className="space-y-2">
@@ -375,7 +400,9 @@ function BackfillSection(props: {
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-[13px] font-medium bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"
           >
             {isBackfilling && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            Run backfill (recovery from extended failure)
+            {isBackfilling
+              ? 'Running backfill…'
+              : 'Run backfill (re-click for large windows)'}
           </button>
         )}
       </div>

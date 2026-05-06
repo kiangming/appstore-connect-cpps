@@ -113,12 +113,26 @@ const FALLBACK_QUERY = 'in:inbox';
 const SYNC_MAX_PAGES = 10;
 
 /**
- * Backfill page cap. Sized so a 14-day failure window (~1200 emails at
- * ~89/day Apple traffic) can drain in one Manager-triggered click. If
- * exceeded, the action returns `{complete: false}` and the Manager
- * triggers again — dedup absorbs already-persisted rows.
+ * Backfill page cap. Bounded for **reliable client completion** —
+ * 3 pages × 100 emails ≈ 300 messages/click, ~150s worst case for a
+ * fully-new mailbox at ~500ms per Gmail API + DB roundtrip. Trades
+ * single-click throughput for predictable response time so the
+ * success toast actually reaches the Manager.
+ *
+ * Sizing rationale (PR-23.1 hotfix, 2026-05-06): the original 20-page
+ * cap was theoretically sized to drain a 14-day window in one click
+ * (~1200 emails). Production reality showed the request holding open
+ * for ~5 minutes (1248 emails fetched, 307s duration). Some
+ * intermediary along the path (Cloudflare/Railway edge or browser-side
+ * fetch settings) cut the connection before the response landed —
+ * server completed the work, client got nothing. Silent UX failure.
+ *
+ * Manager workflow: re-click 4-5 times to drain a 14-day window on
+ * first fill. Each subsequent click is faster — dedup via
+ * UNIQUE(gmail_msg_id) absorbs already-persisted rows in <30s typical
+ * — so re-clicks aren't proportionally slow.
  */
-const BACKFILL_MAX_PAGES = 20;
+const BACKFILL_MAX_PAGES = 3;
 
 /**
  * Date buffer subtracted from `last_synced_at` when constructing the

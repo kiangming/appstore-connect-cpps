@@ -1460,9 +1460,10 @@ describe('runBackfill', () => {
     });
   });
 
-  it('returns complete=false when paginated past BACKFILL_MAX_PAGES (20)', async () => {
-    // 21 pages all set nextPageToken — must stop at 20.
-    for (let i = 0; i < 21; i++) {
+  it('returns complete=false when paginated past BACKFILL_MAX_PAGES (3)', async () => {
+    // 4 pages all set nextPageToken — must stop at 3 (PR-23.1: cap
+    // lowered from 20 to 3 for reliable client completion).
+    for (let i = 0; i < 4; i++) {
       hoisted.mockListMessages.mockResolvedValueOnce({
         messageIds: [],
         nextPageToken: 'keep-going',
@@ -1477,9 +1478,9 @@ describe('runBackfill', () => {
       gmailClient: { __brand: 'gmail' } as never,
     });
 
-    expect(hoisted.mockListMessages).toHaveBeenCalledTimes(20);
+    expect(hoisted.mockListMessages).toHaveBeenCalledTimes(3);
     expect(result.complete).toBe(false);
-    expect(result.pagesFetched).toBe(20);
+    expect(result.pagesFetched).toBe(3);
   });
 
   it('throws SyncInProgressError when lock is busy', async () => {
