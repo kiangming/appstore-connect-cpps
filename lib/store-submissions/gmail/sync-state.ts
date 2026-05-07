@@ -21,9 +21,61 @@
  * not a degraded success.
  */
 
+import * as Sentry from '@sentry/nextjs';
+
 import { storeDb } from '../db';
 
 const SINGLETON_ID = 1;
+
+/**
+ * Errors that mean "Manager must reconnect Gmail" — distinct from
+ * transient failures (5xx, rate-limit, parse glitches) that bump the
+ * same `consecutive_failures` counter but resolve on their own. Mirrors
+ * the regex used by the Settings banner (PR-24) so the alert surface
+ * and the UI surface fire on the same input.
+ */
+const TERMINAL_ERROR_PATTERN = /invalid_grant|RefreshTokenInvalid/i;
+
+/**
+ * PR-24: fire a Sentry warning when the failure counter crosses 0 → 1
+ * AND the error looks terminal (i.e. the Settings banner is about to
+ * appear because of a token issue, not a transient blip). Idempotent
+ * across the streak: once `prior > 0`, no further alerts fire until
+ * the counter resets back to 0 and breaks again.
+ *
+ * Best-effort only — a Sentry capture failure must never break the
+ * sync run that triggered it.
+ */
+function alertFirstCrossingIfTerminal(
+  prior: number,
+  errorMessage: string,
+): void {
+  if (prior !== 0) return;
+  const isTerminal = TERMINAL_ERROR_PATTERN.test(errorMessage);
+  if (!isTerminal) return;
+
+  try {
+    Sentry.captureMessage('Gmail sync failure streak started', {
+      level: 'warning',
+      tags: {
+        component: 'gmail-sync-state',
+        failure_kind: 'consecutive_failures_first_crossing',
+        terminal: 'true',
+      },
+      extra: {
+        // sync-state already truncates the persisted message to 1000
+        // chars; cap a bit shorter for the Sentry payload to keep the
+        // event lean.
+        errorMessage:
+          errorMessage.length > 500
+            ? `${errorMessage.slice(0, 497)}...`
+            : errorMessage,
+      },
+    });
+  } catch (err) {
+    console.error('[gmail-sync-state] Sentry capture failed:', err);
+  }
+}
 
 /** Default stale-lock threshold passed to the `try_acquire_sync_lock` RPC. */
 export const DEFAULT_LOCK_STALE_MS = 10 * 60 * 1000; // 10 minutes
@@ -60,7 +112,8 @@ export async function bumpConsecutiveFailures(errorMessage: string): Promise<voi
     throw new Error('gmail_sync_state singleton row missing (migration issue).');
   }
 
-  const next = (data.consecutive_failures ?? 0) + 1;
+  const prior = data.consecutive_failures ?? 0;
+  const next = prior + 1;
 
   const { error: writeErr } = await storeDb()
     .from('gmail_sync_state')
@@ -75,6 +128,8 @@ export async function bumpConsecutiveFailures(errorMessage: string): Promise<voi
     console.error('[gmail-sync-state] write failed on bump:', writeErr);
     throw new Error('Failed to update gmail_sync_state.');
   }
+
+  alertFirstCrossingIfTerminal(prior, errorMessage);
 }
 
 /**
@@ -249,6 +304,7 @@ export async function recordSyncFailure(errorMessage: string): Promise<void> {
   // to increment atomically. The advisory lock at the orchestrator level
   // serializes concurrent writers in practice.
   const current = await getSyncState();
+  const prior = current.consecutiveFailures;
   const truncated =
     errorMessage.length > 1000 ? `${errorMessage.slice(0, 997)}...` : errorMessage;
 
@@ -256,7 +312,7 @@ export async function recordSyncFailure(errorMessage: string): Promise<void> {
     .from('gmail_sync_state')
     .update({
       last_synced_at: new Date().toISOString(),
-      consecutive_failures: current.consecutiveFailures + 1,
+      consecutive_failures: prior + 1,
       last_error: truncated,
       last_error_at: new Date().toISOString(),
     })
@@ -266,6 +322,8 @@ export async function recordSyncFailure(errorMessage: string): Promise<void> {
     console.error('[gmail-sync-state] recordSyncFailure failed:', error);
     throw new Error('Failed to record sync failure.');
   }
+
+  alertFirstCrossingIfTerminal(prior, errorMessage);
 }
 
 /* ============================================================================

@@ -209,6 +209,13 @@ export interface BackfillStatus {
   /** `gmail_sync_state.consecutive_failures`. Surfaces ongoing breakage. */
   consecutive_failures: number;
   /**
+   * `gmail_sync_state.last_error`. Last failure message (truncated to
+   * 1000 chars). PR-24 reads this for the smart-threshold banner — a
+   * terminal error (`invalid_grant`) surfaces immediately even if the
+   * counter is at 1, while transient errors wait for the >=3 threshold.
+   */
+  last_error: string | null;
+  /**
    * Hint for the UI: when `last_full_sync_at` is older than this many
    * days, the affordance is highlighted as "recovery suggested". The
    * button itself is always visible to Managers.
@@ -235,6 +242,7 @@ export async function getBackfillStatusAction(): Promise<
         ? state.lastSyncedAt.toISOString()
         : null,
       consecutive_failures: state.consecutiveFailures,
+      last_error: state.lastError,
       recovery_threshold_days: BACKFILL_RECOVERY_THRESHOLD_DAYS,
     },
   };

@@ -10,6 +10,7 @@ const {
   mockExchangeCodeForTokens,
   mockFetchGmailUserEmail,
   mockSaveGmailCredentials,
+  mockResetConsecutiveFailures,
 } = vi.hoisted(() => ({
   mockGetServerSession: vi.fn(),
   mockRequireStoreRole: vi.fn(),
@@ -18,6 +19,7 @@ const {
   mockExchangeCodeForTokens: vi.fn(),
   mockFetchGmailUserEmail: vi.fn(),
   mockSaveGmailCredentials: vi.fn(),
+  mockResetConsecutiveFailures: vi.fn(),
 }));
 
 vi.mock('next-auth', () => ({ getServerSession: mockGetServerSession }));
@@ -49,6 +51,10 @@ vi.mock('@/lib/store-submissions/gmail/oauth', async () => {
 
 vi.mock('@/lib/store-submissions/gmail/credentials', () => ({
   saveGmailCredentials: mockSaveGmailCredentials,
+}));
+
+vi.mock('@/lib/store-submissions/gmail/sync-state', () => ({
+  resetConsecutiveFailures: mockResetConsecutiveFailures,
 }));
 
 // === Imports AFTER mocks ===================================================
@@ -242,6 +248,7 @@ describe('GET /api/store-submissions/gmail/callback', () => {
     mockExchangeCodeForTokens.mockResolvedValueOnce(GOOD_TOKENS);
     mockFetchGmailUserEmail.mockResolvedValueOnce('shared@studio.com');
     mockSaveGmailCredentials.mockResolvedValueOnce(undefined);
+    mockResetConsecutiveFailures.mockResolvedValueOnce(undefined);
 
     const res = await GET(mkRequest({ code: 'one-time', state: 'csrf-state-123' }));
 
@@ -264,5 +271,50 @@ describe('GET /api/store-submissions/gmail/callback', () => {
     );
     expect(savedPayload.token_expires_at).toBeInstanceOf(Date);
     expect(mockCookiesDelete).toHaveBeenCalledWith('gmail_oauth_state');
+  });
+
+  // --- PR-24: failure-counter reset post-reconnect -----------------------
+  //
+  // Without this reset, the resilience banner would stay visible up to
+  // 1 hour after a successful reconnect — until the freshly-saved access
+  // token expires and the next sync's `performRefresh` resets the counter
+  // for the first time. The callback now clears the counter directly.
+
+  it('PR-24: clears consecutive_failures after a successful save', async () => {
+    mockExchangeCodeForTokens.mockResolvedValueOnce(GOOD_TOKENS);
+    mockFetchGmailUserEmail.mockResolvedValueOnce('shared@studio.com');
+    mockSaveGmailCredentials.mockResolvedValueOnce(undefined);
+    mockResetConsecutiveFailures.mockResolvedValueOnce(undefined);
+
+    await GET(mkRequest({ code: 'c', state: 'csrf-state-123' }));
+
+    expect(mockResetConsecutiveFailures).toHaveBeenCalledTimes(1);
+  });
+
+  it('PR-24: still completes the redirect when the reset throws (best-effort)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockExchangeCodeForTokens.mockResolvedValueOnce(GOOD_TOKENS);
+    mockFetchGmailUserEmail.mockResolvedValueOnce('shared@studio.com');
+    mockSaveGmailCredentials.mockResolvedValueOnce(undefined);
+    mockResetConsecutiveFailures.mockRejectedValueOnce(new Error('db blip'));
+
+    const res = await GET(mkRequest({ code: 'c', state: 'csrf-state-123' }));
+
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toContain('gmail=connected');
+    errorSpy.mockRestore();
+  });
+
+  it('PR-24: does NOT call reset when save fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockExchangeCodeForTokens.mockResolvedValueOnce(GOOD_TOKENS);
+    mockFetchGmailUserEmail.mockResolvedValueOnce('shared@studio.com');
+    mockSaveGmailCredentials.mockRejectedValueOnce(new Error('db'));
+
+    const res = await GET(mkRequest({ code: 'c', state: 'csrf-state-123' }));
+
+    expect(res.headers.get('location')).toContain('reason=save_failed');
+    expect(mockResetConsecutiveFailures).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

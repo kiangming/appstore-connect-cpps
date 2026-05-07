@@ -23,6 +23,8 @@ import {
 import {
   classifyStatus,
   messageForReason,
+  shouldShowBanner,
+  truncateError,
   type GmailStatusKind,
 } from './helpers';
 
@@ -134,6 +136,14 @@ export function SettingsClient({
 
   return (
     <div className="mt-8 space-y-6">
+      {initialBackfillStatus && shouldShowBanner(initialBackfillStatus) && (
+        <ResilienceBanner
+          status={initialBackfillStatus}
+          isManager={isManager}
+          isReconnecting={isConnecting}
+          onReconnect={handleConnect}
+        />
+      )}
       <GmailSection
         status={initialStatus}
         kind={kind}
@@ -153,6 +163,65 @@ export function SettingsClient({
       />
       <PlaceholderSections />
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Resilience banner (PR-24) — top-level, conditionally rendered above
+// GmailSection when the smart-threshold helper says the failure pattern
+// looks terminal. Reuses handleConnect (same OAuth consent URL flow).
+// ---------------------------------------------------------------------------
+
+function ResilienceBanner(props: {
+  status: BackfillStatus;
+  isManager: boolean;
+  isReconnecting: boolean;
+  onReconnect: () => void;
+}) {
+  const { status, isManager, isReconnecting, onReconnect } = props;
+  const failures = status.consecutive_failures;
+
+  return (
+    <section
+      role="alert"
+      className="rounded-lg border border-red-200 bg-red-50 p-4"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3 min-w-0">
+          <div className="w-8 h-8 rounded-md bg-red-100 flex items-center justify-center shrink-0">
+            <AlertTriangle
+              className="h-4 w-4 text-red-700"
+              strokeWidth={2}
+            />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-[15px] font-semibold text-red-900">
+              Gmail sync failed
+            </h2>
+            <p className="mt-0.5 text-[13px] text-red-700">
+              {failures} consecutive failure{failures === 1 ? '' : 's'}.
+              Reconnect Gmail to resume sync.
+            </p>
+            {status.last_error && (
+              <p className="mt-1.5 text-[11.5px] text-red-600 font-mono break-all">
+                {truncateError(status.last_error, 140)}
+              </p>
+            )}
+          </div>
+        </div>
+        {isManager && (
+          <button
+            type="button"
+            onClick={onReconnect}
+            disabled={isReconnecting}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-[13px] font-medium bg-red-700 text-white hover:bg-red-800 disabled:opacity-50 shrink-0"
+          >
+            {isReconnecting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Reconnect Gmail
+          </button>
+        )}
+      </div>
+    </section>
   );
 }
 

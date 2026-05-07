@@ -16,6 +16,7 @@ const {
   mockInsert,
   mockRpc,
   mockFrom,
+  mockSentryCaptureMessage,
 } = vi.hoisted(() => ({
   mockMaybeSingle: vi.fn(),
   mockEq: vi.fn(),
@@ -25,10 +26,15 @@ const {
   mockInsert: vi.fn(),
   mockRpc: vi.fn(),
   mockFrom: vi.fn(),
+  mockSentryCaptureMessage: vi.fn(),
 }));
 
 vi.mock('../db', () => ({
   storeDb: () => ({ from: mockFrom, rpc: mockRpc }),
+}));
+
+vi.mock('@sentry/nextjs', () => ({
+  captureMessage: mockSentryCaptureMessage,
 }));
 
 beforeEach(() => {
@@ -149,6 +155,139 @@ describe('bumpConsecutiveFailures', () => {
       /Failed to update gmail_sync_state/,
     );
     errorSpy.mockRestore();
+  });
+});
+
+/* ============================================================================
+ * PR-24 — first-crossing Sentry alert
+ * ========================================================================== */
+
+describe('alertFirstCrossingIfTerminal (via bumpConsecutiveFailures)', () => {
+  it('fires Sentry warning on terminal first-crossing (prior=0, invalid_grant)', async () => {
+    mockMaybeSingle.mockResolvedValueOnce({
+      data: { consecutive_failures: 0 },
+      error: null,
+    });
+    const { bumpConsecutiveFailures } = await import('./sync-state');
+    await bumpConsecutiveFailures('invalid_grant: Token has been expired or revoked.');
+
+    expect(mockSentryCaptureMessage).toHaveBeenCalledTimes(1);
+    const [msg, opts] = mockSentryCaptureMessage.mock.calls[0];
+    expect(msg).toBe('Gmail sync failure streak started');
+    expect(opts.level).toBe('warning');
+    expect(opts.tags).toEqual(
+      expect.objectContaining({
+        component: 'gmail-sync-state',
+        failure_kind: 'consecutive_failures_first_crossing',
+        terminal: 'true',
+      }),
+    );
+    expect(opts.extra.errorMessage).toContain('invalid_grant');
+  });
+
+  it('fires on RefreshTokenInvalidError text too', async () => {
+    mockMaybeSingle.mockResolvedValueOnce({
+      data: { consecutive_failures: 0 },
+      error: null,
+    });
+    const { bumpConsecutiveFailures } = await import('./sync-state');
+    await bumpConsecutiveFailures(
+      'RefreshTokenInvalidError: Reconnect Gmail from Settings.',
+    );
+    expect(mockSentryCaptureMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT fire on transient first-crossing (prior=0, non-terminal error)', async () => {
+    mockMaybeSingle.mockResolvedValueOnce({
+      data: { consecutive_failures: 0 },
+      error: null,
+    });
+    const { bumpConsecutiveFailures } = await import('./sync-state');
+    await bumpConsecutiveFailures('500 Internal Server Error');
+    expect(mockSentryCaptureMessage).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire when prior > 0 even with terminal error (already in streak)', async () => {
+    mockMaybeSingle.mockResolvedValueOnce({
+      data: { consecutive_failures: 1 },
+      error: null,
+    });
+    const { bumpConsecutiveFailures } = await import('./sync-state');
+    await bumpConsecutiveFailures('invalid_grant: revoked');
+    expect(mockSentryCaptureMessage).not.toHaveBeenCalled();
+  });
+
+  it('truncates errorMessage extras to 500 chars in Sentry payload', async () => {
+    mockMaybeSingle.mockResolvedValueOnce({
+      data: { consecutive_failures: 0 },
+      error: null,
+    });
+    const long = `invalid_grant: ${'x'.repeat(1000)}`;
+    const { bumpConsecutiveFailures } = await import('./sync-state');
+    await bumpConsecutiveFailures(long);
+    const opts = mockSentryCaptureMessage.mock.calls[0][1];
+    const extra = opts.extra.errorMessage as string;
+    expect(extra.length).toBeLessThanOrEqual(500);
+    expect(extra.endsWith('...')).toBe(true);
+  });
+
+  it('swallows Sentry capture errors so the bump itself never fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockSentryCaptureMessage.mockImplementationOnce(() => {
+      throw new Error('Sentry transport down');
+    });
+    mockMaybeSingle.mockResolvedValueOnce({
+      data: { consecutive_failures: 0 },
+      error: null,
+    });
+    const { bumpConsecutiveFailures } = await import('./sync-state');
+    await expect(
+      bumpConsecutiveFailures('invalid_grant: revoked'),
+    ).resolves.toBeUndefined();
+    errorSpy.mockRestore();
+  });
+});
+
+describe('alertFirstCrossingIfTerminal (via recordSyncFailure)', () => {
+  function mockSyncStateRow(overrides: Record<string, unknown> = {}): void {
+    mockMaybeSingle.mockResolvedValueOnce({
+      data: {
+        last_history_id: '12345',
+        last_synced_at: null,
+        last_full_sync_at: null,
+        emails_processed_total: 0,
+        consecutive_failures: 0,
+        last_error: null,
+        last_error_at: null,
+        locked_at: null,
+        locked_by: null,
+        ...overrides,
+      },
+      error: null,
+    });
+  }
+
+  it('fires on terminal first-crossing through recordSyncFailure path', async () => {
+    mockSyncStateRow({ consecutive_failures: 0 });
+    const { recordSyncFailure } = await import('./sync-state');
+    await recordSyncFailure('invalid_grant: revoked');
+    expect(mockSentryCaptureMessage).toHaveBeenCalledTimes(1);
+    const [, opts] = mockSentryCaptureMessage.mock.calls[0];
+    expect(opts.tags.terminal).toBe('true');
+  });
+
+  it('does NOT fire on transient first-crossing through recordSyncFailure', async () => {
+    mockSyncStateRow({ consecutive_failures: 0 });
+    const { recordSyncFailure } = await import('./sync-state');
+    await recordSyncFailure('Gmail 503 service unavailable');
+    expect(mockSentryCaptureMessage).not.toHaveBeenCalled();
+  });
+
+  it('does NOT fire when already in a streak (prior > 0)', async () => {
+    mockSyncStateRow({ consecutive_failures: 5 });
+    const { recordSyncFailure } = await import('./sync-state');
+    await recordSyncFailure('invalid_grant: still revoked');
+    expect(mockSentryCaptureMessage).not.toHaveBeenCalled();
   });
 });
 

@@ -35,6 +35,7 @@ import {
   fetchGmailUserEmail,
   resolveBaseUrl,
 } from '@/lib/store-submissions/gmail/oauth';
+import { resetConsecutiveFailures } from '@/lib/store-submissions/gmail/sync-state';
 
 const SETTINGS_PATH = '/store-submissions/config/settings';
 
@@ -153,6 +154,21 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   } catch (err) {
     console.error('[gmail-callback] Save failed:', err);
     return fail('save_failed');
+  }
+
+  // 8. Clear the failure counter so the resilience banner (PR-24)
+  //    disappears immediately on reconnect. Without this, the counter
+  //    would only reset on the next *refresh-required* sync — up to
+  //    1 hour later, since the freshly-saved access_token has ~3600s
+  //    of life and skips `performRefresh` until it expires.
+  //
+  //    Best-effort: a reset failure is logged but does NOT undo the
+  //    successful credential save. The next refresh path will reset
+  //    the counter anyway.
+  try {
+    await resetConsecutiveFailures();
+  } catch (err) {
+    console.error('[gmail-callback] Failure-counter reset failed:', err);
   }
 
   return redirectWith({ gmail: 'connected' });
