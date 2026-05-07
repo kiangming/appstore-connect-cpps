@@ -30,6 +30,7 @@ import {
   exportAppsCsvAction,
   updateAppAction,
 } from '@/app/(dashboard)/store-submissions/config/apps/actions';
+import { FilterPill } from '@/components/store-submissions/ui/FilterPill';
 import { AppDialog } from './AppDialog';
 import { AliasManager } from './AliasManager';
 import { CsvImportDialog } from './CsvImportDialog';
@@ -564,25 +565,6 @@ function StatCard({
       </div>
       {subline && <div className={`text-[11px] mt-1 ${muted ? 'text-slate-400' : 'text-slate-500'}`}>{subline}</div>}
     </div>
-  );
-}
-
-function FilterPill({
-  label,
-  value,
-  children,
-}: {
-  label: string;
-  value: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="relative inline-flex items-center gap-1.5 text-[13px] text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-300 bg-white rounded-lg px-3 py-1.5 cursor-pointer">
-      <span className="font-medium">{label}</span>
-      <span className="text-slate-400 font-normal">{value}</span>
-      <ChevronDown className="w-3 h-3 text-slate-400" strokeWidth={1.8} />
-      {children}
-    </label>
   );
 }
 

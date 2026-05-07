@@ -25,7 +25,6 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import {
   ArrowRight,
   CheckCircle2,
-  ChevronDown,
   ChevronRight,
   Database,
   Lightbulb,
@@ -57,6 +56,7 @@ import {
   getEmptyMessage,
   type InboxTabKey,
 } from '@/lib/store-submissions/inbox/empty-message';
+import { FilterPill } from '@/components/store-submissions/ui/FilterPill';
 import { TicketListTable } from './TicketListTable';
 import { TicketDetailPanel } from './TicketDetailPanel';
 
@@ -1020,53 +1020,6 @@ function Kbd({
     >
       {children}
     </kbd>
-  );
-}
-
-function FilterPill({
-  label,
-  value,
-  children,
-  disabled = false,
-  disabledHint,
-}: {
-  label: string;
-  value: string;
-  children: React.ReactNode;
-  /**
-   * When true the pill renders muted, blocks click-to-open, and surfaces
-   * `disabledHint` as a tooltip. The wrapped `<select>` should also set
-   * its own `disabled` so keyboard-tabbing past the pill skips it.
-   * Used by the Type pill when no platform is active (PR-17.1).
-   */
-  disabled?: boolean;
-  disabledHint?: string;
-}) {
-  // Note: we don't apply `pointer-events-none` so the `title` tooltip
-  // still surfaces on hover. The wrapped <select> being `disabled` is
-  // what actually prevents the dropdown from opening.
-  const stateClasses = disabled
-    ? 'text-slate-300 border-slate-100 bg-slate-50 cursor-not-allowed'
-    : 'text-slate-600 hover:text-slate-900 border-slate-200 hover:border-slate-300 bg-white cursor-pointer';
-  return (
-    <label
-      className={`relative inline-flex items-center gap-1.5 text-[13px] border rounded-lg px-3 py-1.5 ${stateClasses}`}
-      title={disabled ? disabledHint : undefined}
-    >
-      <span className="font-medium">{label}</span>
-      <span
-        className={
-          disabled ? 'text-slate-300 font-normal' : 'text-slate-400 font-normal'
-        }
-      >
-        {value}
-      </span>
-      <ChevronDown
-        className={`w-3 h-3 ${disabled ? 'text-slate-200' : 'text-slate-400'}`}
-        strokeWidth={1.8}
-      />
-      {children}
-    </label>
   );
 }
 
