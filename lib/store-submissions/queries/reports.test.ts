@@ -1,118 +1,266 @@
 /**
- * PR-19 Apple Reports — pure aggregator unit tests.
+ * Apple Reports — pure aggregator unit tests.
+ *
+ * PR-Reports.A: counting source flipped to email_messages with
+ * Apple-burst-aware aggregation. Approved = COUNT(DISTINCT ticket_id);
+ * Rejected = burst-dedup count with BURST_DEDUP_WINDOW_MS window.
+ * Two-clock window model: KPI counts use received_at, avg review time
+ * uses opened_at.
  *
  * Aggregator logic is extracted from the DB fetchers so we can drive
  * synthetic rows without mocking the Supabase client chain. End-to-end
- * fetcher behavior (platform-id resolution, JOIN unfolding) is
- * validated via Manager UAT MV8 post-deploy.
+ * fetcher behavior (platform-id resolution, JOIN unfolding, JSONB
+ * extraction) is validated via Manager UAT MV17 post-deploy.
  */
 
 import { describe, expect, it } from 'vitest';
 
 import {
+  BURST_DEDUP_WINDOW_MS,
   aggregateKpis,
   bucketTrendByDay,
+  dedupBurstByTicket,
   groupByApp,
   truncateExcerpt,
+} from './reports';
+import type {
+  EmailEntryInputRow,
+  ReviewTimeInputRow,
 } from './reports';
 import type { TicketOutcome, TicketState } from '../schemas/ticket';
 
 type ResolutionType = 'APPROVED' | 'DONE' | 'ARCHIVED' | null;
 
-function row(opts: {
-  opened: string;
-  state?: TicketState;
-  latest_outcome?: TicketOutcome | null;
-  resolution_type?: ResolutionType;
-  closed?: string | null;
-  app_id?: string | null;
-  app_name?: string | null;
-}) {
+function emailRow(opts: {
+  ticket_id: string;
+  outcome: TicketOutcome | null;
+  received_at: string;
+}): EmailEntryInputRow {
   return {
-    state: opts.state ?? 'NEW',
-    latest_outcome: opts.latest_outcome ?? null,
-    opened_at: opts.opened,
-    closed_at: opts.closed ?? null,
-    resolution_type: opts.resolution_type ?? null,
-    app_id: opts.app_id ?? null,
-    app_name: opts.app_name ?? null,
+    ticket_id: opts.ticket_id,
+    outcome: opts.outcome,
+    received_at: opts.received_at,
   };
 }
+
+function reviewRow(opts: {
+  opened: string;
+  closed: string;
+}): ReviewTimeInputRow {
+  return { opened_at: opts.opened, closed_at: opts.closed };
+}
+
+describe('dedupBurstByTicket', () => {
+  it('returns empty for empty input', () => {
+    expect(dedupBurstByTicket([])).toEqual([]);
+  });
+
+  it('keeps a single entry as-is', () => {
+    const rows = [
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:00:00Z' }),
+    ];
+    const out = dedupBurstByTicket(rows);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.received_at).toBe('2026-04-10T12:00:00Z');
+  });
+
+  it('collapses two same-ticket entries within 60s window', () => {
+    const rows = [
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:00:00Z' }),
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:00:24Z' }),
+    ];
+    const out = dedupBurstByTicket(rows);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.received_at).toBe('2026-04-10T12:00:00Z'); // earliest kept
+  });
+
+  it('keeps two same-ticket entries spaced beyond 60s window', () => {
+    const rows = [
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:00:00Z' }),
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:01:01Z' }),
+    ];
+    const out = dedupBurstByTicket(rows);
+    expect(out).toHaveLength(2);
+  });
+
+  it('boundary: exactly 60000ms gap collapses (gap not > windowMs)', () => {
+    const rows = [
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:00:00.000Z' }),
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:01:00.000Z' }),
+    ];
+    const out = dedupBurstByTicket(rows);
+    expect(out).toHaveLength(1);
+  });
+
+  it('boundary: 60001ms gap is preserved as separate event', () => {
+    const rows = [
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:00:00.000Z' }),
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:01:00.001Z' }),
+    ];
+    const out = dedupBurstByTicket(rows);
+    expect(out).toHaveLength(2);
+  });
+
+  it('mixed pattern: TICKET-10021 production scenario (4 entries → 2 cycles)', () => {
+    // 2 bursts on same ticket, 3 days apart — each burst collapses to 1.
+    const rows = [
+      emailRow({ ticket_id: 'T21', outcome: 'REJECTED', received_at: '2026-04-28T18:55:05Z' }),
+      emailRow({ ticket_id: 'T21', outcome: 'REJECTED', received_at: '2026-04-28T18:55:29Z' }),
+      emailRow({ ticket_id: 'T21', outcome: 'REJECTED', received_at: '2026-05-01T09:56:08Z' }),
+      emailRow({ ticket_id: 'T21', outcome: 'REJECTED', received_at: '2026-05-01T09:56:17Z' }),
+    ];
+    const out = dedupBurstByTicket(rows);
+    expect(out).toHaveLength(2);
+    expect(out[0]?.received_at).toBe('2026-04-28T18:55:05Z');
+    expect(out[1]?.received_at).toBe('2026-05-01T09:56:08Z');
+  });
+
+  it('isolates ticket buckets — same-time entries on different tickets all kept', () => {
+    const rows = [
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:00:00Z' }),
+      emailRow({ ticket_id: 'T2', outcome: 'REJECTED', received_at: '2026-04-10T12:00:00Z' }),
+      emailRow({ ticket_id: 'T3', outcome: 'REJECTED', received_at: '2026-04-10T12:00:00Z' }),
+    ];
+    const out = dedupBurstByTicket(rows);
+    expect(out).toHaveLength(3);
+  });
+
+  it('handles unsorted input by sorting per-ticket internally', () => {
+    const rows = [
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:00:24Z' }),
+      emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-04-10T12:00:00Z' }),
+    ];
+    const out = dedupBurstByTicket(rows);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.received_at).toBe('2026-04-10T12:00:00Z');
+  });
+
+  it('exposes BURST_DEDUP_WINDOW_MS = 60000 (calibrated against May 2026 production)', () => {
+    expect(BURST_DEDUP_WINDOW_MS).toBe(60_000);
+  });
+});
 
 describe('aggregateKpis', () => {
   const winStart = new Date('2026-04-04T00:00:00Z');
   const winEnd = new Date('2026-05-04T00:00:00Z'); // 30d window
 
-  it('counts total / approved / rejected and computes avg review time (Apple verdict semantic, PR-21)', () => {
-    const rows = [
-      // Current window
-      row({
-        opened: '2026-04-10T00:00:00Z',
-        state: 'APPROVED',
-        latest_outcome: 'APPROVED',
-        resolution_type: 'APPROVED',
-        closed: '2026-04-12T00:00:00Z', // 2-day review
-      }),
-      row({
-        opened: '2026-04-15T00:00:00Z',
-        state: 'DONE',
-        latest_outcome: 'APPROVED',
-        resolution_type: 'APPROVED',
-        closed: '2026-04-19T00:00:00Z', // 4-day review
-      }),
-      row({
-        opened: '2026-04-20T00:00:00Z',
-        state: 'REJECTED',
-        latest_outcome: 'REJECTED',
-      }),
-      row({
-        opened: '2026-04-22T00:00:00Z',
-        state: 'NEW',
-        latest_outcome: null,
-      }),
-      // Previous window — exercised by deltas test below
-      row({
-        opened: '2026-03-10T00:00:00Z',
-        state: 'APPROVED',
-        latest_outcome: 'APPROVED',
-        resolution_type: 'APPROVED',
-        closed: '2026-03-13T00:00:00Z',
-      }),
-      row({
-        opened: '2026-03-20T00:00:00Z',
-        state: 'REJECTED',
-        latest_outcome: 'REJECTED',
-      }),
+  it('counts approved as DISTINCT ticket_id (Manager A2 enforced — Apple bursts collapse)', () => {
+    // TICKET-A: 3 APPROVED emails (Apple burst pattern from production
+    // Q-Anomaly-1, e.g. CookieRun TICKET-10010). DISTINCT collapses to 1.
+    // TICKET-B: 1 APPROVED email. Counts as 1.
+    // Total APPROVED entries = 4, but DISTINCT tickets = 2.
+    const emails: EmailEntryInputRow[] = [
+      emailRow({ ticket_id: 'A', outcome: 'APPROVED', received_at: '2026-04-10T09:40:11Z' }),
+      emailRow({ ticket_id: 'A', outcome: 'APPROVED', received_at: '2026-04-10T09:40:55Z' }),
+      emailRow({ ticket_id: 'A', outcome: 'APPROVED', received_at: '2026-04-10T09:40:56Z' }),
+      emailRow({ ticket_id: 'B', outcome: 'APPROVED', received_at: '2026-04-15T12:00:00Z' }),
     ];
+    const out = aggregateKpis(emails, [], winStart, winEnd);
+    expect(out.approved).toBe(2);
+    expect(out.total).toBe(2);
+  });
 
-    const out = aggregateKpis(rows, winStart, winEnd);
-    expect(out.total).toBe(4);
-    expect(out.approved).toBe(2); // both rows carry latest_outcome='APPROVED'
-    expect(out.rejected).toBe(1);
-    // Avg of (2d + 4d) = 3 days = 3 * 86400000 ms
+  it('counts rejected as burst-dedupped events (Manager A2 cycle semantic)', () => {
+    // TICKET-21 production scenario: 4 entries → 2 cycles (burst dedup).
+    // TICKET-16 burst: 2 entries → 1 cycle.
+    // TICKET-18 spread: 2 entries → 2 cycles (>60s apart).
+    // TICKET-S single reject: 1 cycle.
+    // Total entries = 9, dedupped = 6.
+    const emails: EmailEntryInputRow[] = [
+      emailRow({ ticket_id: 'T21', outcome: 'REJECTED', received_at: '2026-04-28T18:55:05Z' }),
+      emailRow({ ticket_id: 'T21', outcome: 'REJECTED', received_at: '2026-04-28T18:55:29Z' }),
+      emailRow({ ticket_id: 'T21', outcome: 'REJECTED', received_at: '2026-05-01T09:56:08Z' }),
+      emailRow({ ticket_id: 'T21', outcome: 'REJECTED', received_at: '2026-05-01T09:56:17Z' }),
+      emailRow({ ticket_id: 'T16', outcome: 'REJECTED', received_at: '2026-04-24T17:39:52Z' }),
+      emailRow({ ticket_id: 'T16', outcome: 'REJECTED', received_at: '2026-04-24T17:40:16Z' }),
+      emailRow({ ticket_id: 'T18', outcome: 'REJECTED', received_at: '2026-04-30T10:19:52Z' }),
+      emailRow({ ticket_id: 'T18', outcome: 'REJECTED', received_at: '2026-05-02T18:48:49Z' }),
+      emailRow({ ticket_id: 'TS', outcome: 'REJECTED', received_at: '2026-04-15T08:00:00Z' }),
+    ];
+    const out = aggregateKpis(emails, [], winStart, winEnd);
+    expect(out.rejected).toBe(6);
+    expect(out.total).toBe(4); // 4 distinct tickets touched
+  });
+
+  it('total = COUNT(DISTINCT ticket_id) across both APPROVED + REJECTED entries (Q2 Option A)', () => {
+    const emails: EmailEntryInputRow[] = [
+      emailRow({ ticket_id: 'A', outcome: 'APPROVED', received_at: '2026-04-10T12:00:00Z' }),
+      emailRow({ ticket_id: 'A', outcome: 'REJECTED', received_at: '2026-04-09T12:00:00Z' }), // same ticket
+      emailRow({ ticket_id: 'B', outcome: 'APPROVED', received_at: '2026-04-12T12:00:00Z' }),
+      emailRow({ ticket_id: 'C', outcome: 'REJECTED', received_at: '2026-04-13T12:00:00Z' }),
+    ];
+    const out = aggregateKpis(emails, [], winStart, winEnd);
+    expect(out.total).toBe(3); // A, B, C
+  });
+
+  it('IN_REVIEW outcome filtered out of all count predicates', () => {
+    const emails: EmailEntryInputRow[] = [
+      emailRow({ ticket_id: 'A', outcome: 'IN_REVIEW', received_at: '2026-04-10T12:00:00Z' }),
+      emailRow({ ticket_id: 'B', outcome: 'IN_REVIEW', received_at: '2026-04-11T12:00:00Z' }),
+    ];
+    const out = aggregateKpis(emails, [], winStart, winEnd);
+    expect(out.approved).toBe(0);
+    expect(out.rejected).toBe(0);
+    expect(out.total).toBe(0);
+  });
+
+  it('null outcome (DROPPED/ERROR rows that slipped through SQL filter) ignored', () => {
+    const emails: EmailEntryInputRow[] = [
+      emailRow({ ticket_id: 'A', outcome: null, received_at: '2026-04-10T12:00:00Z' }),
+      emailRow({ ticket_id: 'B', outcome: 'APPROVED', received_at: '2026-04-11T12:00:00Z' }),
+    ];
+    const out = aggregateKpis(emails, [], winStart, winEnd);
+    expect(out.approved).toBe(1);
+    expect(out.total).toBe(1);
+  });
+
+  it('avg review time uses opened_at clock, latest_outcome=APPROVED filtered SQL-side', () => {
+    // Caller passes only APPROVED-state review rows; aggregator just averages.
+    const reviews: ReviewTimeInputRow[] = [
+      reviewRow({ opened: '2026-04-10T00:00:00Z', closed: '2026-04-12T00:00:00Z' }), // 2d
+      reviewRow({ opened: '2026-04-15T00:00:00Z', closed: '2026-04-19T00:00:00Z' }), // 4d
+    ];
+    const out = aggregateKpis([], reviews, winStart, winEnd);
     expect(out.avgReviewTimeMs).toBe(3 * 24 * 60 * 60 * 1000);
   });
 
-  it('computes deltas vs previous equally-sized window', () => {
-    const rows = [
-      // Current: 2 total
-      row({ opened: '2026-04-10T00:00:00Z' }),
-      row({ opened: '2026-04-20T00:00:00Z' }),
-      // Previous: 1 total — 100% increase
-      row({ opened: '2026-03-15T00:00:00Z' }),
+  it('two-clock independence: emails partitioned by received_at, reviews by opened_at', () => {
+    // Email arrives in current window for a ticket opened in previous window.
+    // Approved KPI: counts the email (current window).
+    // Avg review time: ticket falls in previous window (opened_at), so its
+    // review time is excluded from the current-window avg.
+    const emails: EmailEntryInputRow[] = [
+      emailRow({ ticket_id: 'A', outcome: 'APPROVED', received_at: '2026-04-15T00:00:00Z' }),
     ];
-    const out = aggregateKpis(rows, winStart, winEnd);
-    expect(out.deltas.total).toBe(100);
+    const reviews: ReviewTimeInputRow[] = [
+      reviewRow({ opened: '2026-03-10T00:00:00Z', closed: '2026-04-15T00:00:00Z' }),
+    ];
+    const out = aggregateKpis(emails, reviews, winStart, winEnd);
+    expect(out.approved).toBe(1);
+    expect(out.avgReviewTimeMs).toBeNull(); // ticket opened outside current window
+  });
+
+  it('computes deltas vs previous equally-sized window (email clock)', () => {
+    const emails: EmailEntryInputRow[] = [
+      emailRow({ ticket_id: 'A', outcome: 'APPROVED', received_at: '2026-04-10T12:00:00Z' }),
+      emailRow({ ticket_id: 'B', outcome: 'APPROVED', received_at: '2026-04-20T12:00:00Z' }),
+      emailRow({ ticket_id: 'C', outcome: 'APPROVED', received_at: '2026-03-15T12:00:00Z' }),
+    ];
+    const out = aggregateKpis(emails, [], winStart, winEnd);
+    expect(out.deltas.approved).toBe(100); // 2 vs 1 = +100%
   });
 
   it('returns null delta when previous window is empty (avoid /0)', () => {
-    const rows = [row({ opened: '2026-04-10T00:00:00Z' })];
-    const out = aggregateKpis(rows, winStart, winEnd);
+    const emails: EmailEntryInputRow[] = [
+      emailRow({ ticket_id: 'A', outcome: 'APPROVED', received_at: '2026-04-10T12:00:00Z' }),
+    ];
+    const out = aggregateKpis(emails, [], winStart, winEnd);
+    expect(out.deltas.approved).toBeNull();
     expect(out.deltas.total).toBeNull();
   });
 
-  it('empty rows produce zero KPIs and null deltas', () => {
-    const out = aggregateKpis([], winStart, winEnd);
+  it('empty inputs produce zero KPIs and null deltas', () => {
+    const out = aggregateKpis([], [], winStart, winEnd);
     expect(out.total).toBe(0);
     expect(out.approved).toBe(0);
     expect(out.rejected).toBe(0);
@@ -120,70 +268,43 @@ describe('aggregateKpis', () => {
     expect(out.deltas.total).toBeNull();
   });
 
-  // PR-21 Apple-verdict edge cases — Reports counts what Apple decided,
-  // not what Manager has confirmed in the workflow. Defensive coverage
-  // so the semantic doesn't silently regress to the old PR-19 lock.
-  describe('Apple verdict semantic (PR-21)', () => {
-    it('counts Apple-approved tickets even when Manager state is still NEW', () => {
-      const rows = [
-        // Apple said APPROVED, Manager hasn't moved the ticket yet.
-        // Old PR-19 logic would NOT count this; PR-21 does.
-        row({
-          opened: '2026-04-10T00:00:00Z',
-          state: 'NEW',
-          latest_outcome: 'APPROVED',
-          closed: null,
-        }),
-      ];
-      const out = aggregateKpis(rows, winStart, winEnd);
-      expect(out.approved).toBe(1);
-    });
+  it('avg review time delta computed when both windows have approved tickets', () => {
+    const reviews: ReviewTimeInputRow[] = [
+      // current: avg = 4d
+      reviewRow({ opened: '2026-04-10T00:00:00Z', closed: '2026-04-14T00:00:00Z' }),
+      // previous: avg = 2d
+      reviewRow({ opened: '2026-03-15T00:00:00Z', closed: '2026-03-17T00:00:00Z' }),
+    ];
+    const out = aggregateKpis([], reviews, winStart, winEnd);
+    expect(out.deltas.avgReviewTime).toBe(100); // 4d vs 2d = +100%
+  });
 
-    it('does NOT count Manager DONE without an Apple verdict', () => {
-      const rows = [
-        // Manager closed the ticket as DONE but no Apple email outcome
-        // ever landed. PR-19 counted this via resolution_type; PR-21
-        // does not — Reports tracks Apple decisions, not workflow.
-        row({
-          opened: '2026-04-10T00:00:00Z',
-          state: 'DONE',
-          resolution_type: 'DONE',
-          latest_outcome: null,
-          closed: '2026-04-12T00:00:00Z',
-        }),
-      ];
-      const out = aggregateKpis(rows, winStart, winEnd);
-      expect(out.approved).toBe(0);
-      expect(out.avgReviewTimeMs).toBeNull();
-    });
-
-    it('does NOT count Manager state=APPROVED when latest_outcome is null', () => {
-      const rows = [
-        // Edge: Manager moved ticket terminal but the Apple email
-        // signal never arrived (or got cleared). PR-19 counted via
-        // state; PR-21 does not.
-        row({
-          opened: '2026-04-10T00:00:00Z',
-          state: 'APPROVED',
-          resolution_type: 'APPROVED',
-          latest_outcome: null,
-          closed: '2026-04-12T00:00:00Z',
-        }),
-      ];
-      const out = aggregateKpis(rows, winStart, winEnd);
-      expect(out.approved).toBe(0);
-      expect(out.avgReviewTimeMs).toBeNull();
-    });
+  it('approved Manager Play Together scenario (production validation)', () => {
+    // TICKET-10018 received reject → reject (cycle) → approve cumulative.
+    // PR-Reports.A intent: Reject KPI counts both reject events
+    // (resubmit cycle visibility); Approve KPI counts the ticket once.
+    const emails: EmailEntryInputRow[] = [
+      emailRow({ ticket_id: 'PT', outcome: 'REJECTED', received_at: '2026-04-30T10:19:52Z' }),
+      emailRow({ ticket_id: 'PT', outcome: 'REJECTED', received_at: '2026-05-02T18:48:49Z' }),
+      emailRow({ ticket_id: 'PT', outcome: 'APPROVED', received_at: '2026-05-03T15:00:00Z' }),
+    ];
+    const out = aggregateKpis(emails, [], winStart, winEnd);
+    expect(out.rejected).toBe(2); // both spread cycles count
+    expect(out.approved).toBe(1); // single distinct ticket
+    expect(out.total).toBe(1); // one distinct submission
   });
 });
 
 describe('bucketTrendByDay', () => {
+  // Trend chart source preserved at tickets.latest_outcome (PR-19/21);
+  // PR-Reports.B will switch this clock to email timeline. Tests below
+  // exercise the legacy semantic that's still in production after PR-Reports.A.
+
   const winStart = new Date('2026-05-01T00:00:00Z');
   const winEnd = new Date('2026-05-04T00:00:00Z'); // 3-day window
 
-  it('seeds zero buckets for empty days and routes outcomes correctly (Apple verdict semantic, PR-21)', () => {
+  it('seeds zero buckets for empty days and routes outcomes correctly', () => {
     const rows = [
-      // Day 1: 1 approved (via latest_outcome), 1 rejected
       {
         opened_at: '2026-05-01T03:00:00Z',
         state: 'DONE' as TicketState,
@@ -196,8 +317,6 @@ describe('bucketTrendByDay', () => {
         resolution_type: null,
         latest_outcome: 'REJECTED' as TicketOutcome,
       },
-      // Day 2: empty (zero bucket)
-      // Day 3: 1 in-review (latest_outcome=null routes to in_review)
       {
         opened_at: '2026-05-03T08:00:00Z',
         state: 'NEW' as TicketState,
@@ -215,10 +334,6 @@ describe('bucketTrendByDay', () => {
 
   it('routes Manager-terminal-without-Apple-verdict rows to in_review (PR-21)', () => {
     const rows = [
-      // Manager moved the ticket terminal but Apple email never arrived.
-      // Old PR-19 logic stacked this in `approved` via state/
-      // resolution_type; PR-21 stacks it as `in_review` because
-      // `latest_outcome` is null (no Apple decision yet).
       {
         opened_at: '2026-05-01T10:00:00Z',
         state: 'APPROVED' as TicketState,
@@ -240,41 +355,174 @@ describe('bucketTrendByDay', () => {
 });
 
 describe('groupByApp', () => {
-  it('groups by app_id, computes rate, sorts by submits desc, drops unclassified', () => {
+  it('submits = COUNT(DISTINCT ticket_id), rejects = burst-dedupped count', () => {
+    // App-A: 2 distinct tickets, ticket-1 has burst (2 within 60s) +
+    // spread (3rd email >60s later) — 1 burst-collapse + 1 spread = 2 rejects.
+    // ticket-2 has 1 approve (no rejects). Submits for App-A: 2.
+    // Total App-A rejects: 2. Rate = 2/2 = 1.0.
     const rows = [
-      { app_id: 'app-a', app_name: 'Skyline', latest_outcome: 'APPROVED' as TicketOutcome },
-      { app_id: 'app-a', app_name: 'Skyline', latest_outcome: 'REJECTED' as TicketOutcome },
-      { app_id: 'app-a', app_name: 'Skyline', latest_outcome: null },
-      { app_id: 'app-b', app_name: 'Dragon', latest_outcome: 'REJECTED' as TicketOutcome },
-      // Unclassified — must be dropped
-      { app_id: null, app_name: null, latest_outcome: null },
+      {
+        ticket_id: 't1',
+        app_id: 'app-a',
+        app_name: 'Skyline',
+        outcome: 'REJECTED' as TicketOutcome,
+        received_at: '2026-04-10T12:00:00Z',
+      },
+      {
+        ticket_id: 't1',
+        app_id: 'app-a',
+        app_name: 'Skyline',
+        outcome: 'REJECTED' as TicketOutcome,
+        received_at: '2026-04-10T12:00:24Z', // burst — collapses
+      },
+      {
+        ticket_id: 't1',
+        app_id: 'app-a',
+        app_name: 'Skyline',
+        outcome: 'REJECTED' as TicketOutcome,
+        received_at: '2026-04-12T12:00:00Z', // spread — separate
+      },
+      {
+        ticket_id: 't2',
+        app_id: 'app-a',
+        app_name: 'Skyline',
+        outcome: 'APPROVED' as TicketOutcome,
+        received_at: '2026-04-15T12:00:00Z',
+      },
     ];
     const out = groupByApp(rows, 5);
-    expect(out.total_apps).toBe(2);
+    expect(out.total_apps).toBe(1);
     expect(out.rows[0]).toMatchObject({
       app_id: 'app-a',
       app_name: 'Skyline',
-      submits: 3,
-      rejects: 1,
-      rate: 1 / 3,
-    });
-    expect(out.rows[1]).toMatchObject({
-      app_id: 'app-b',
-      submits: 1,
-      rejects: 1,
+      submits: 2,
+      rejects: 2,
       rate: 1,
     });
   });
 
+  it('rate can exceed 1.0 when a single ticket has multiple reject cycles', () => {
+    // 1 distinct ticket with 3 cycles of rejects (well-spread) + no approve.
+    // submits=1, rejects=3, rate=3.0 (Manager domain semantic).
+    const rows = [
+      {
+        ticket_id: 't1',
+        app_id: 'app-x',
+        app_name: 'HighRework',
+        outcome: 'REJECTED' as TicketOutcome,
+        received_at: '2026-04-10T12:00:00Z',
+      },
+      {
+        ticket_id: 't1',
+        app_id: 'app-x',
+        app_name: 'HighRework',
+        outcome: 'REJECTED' as TicketOutcome,
+        received_at: '2026-04-13T12:00:00Z',
+      },
+      {
+        ticket_id: 't1',
+        app_id: 'app-x',
+        app_name: 'HighRework',
+        outcome: 'REJECTED' as TicketOutcome,
+        received_at: '2026-04-16T12:00:00Z',
+      },
+    ];
+    const out = groupByApp(rows, 5);
+    expect(out.rows[0]).toMatchObject({ submits: 1, rejects: 3, rate: 3 });
+  });
+
+  it('drops unclassified (app_id=null) rows', () => {
+    const rows = [
+      {
+        ticket_id: 't1',
+        app_id: 'app-a',
+        app_name: 'Skyline',
+        outcome: 'APPROVED' as TicketOutcome,
+        received_at: '2026-04-10T12:00:00Z',
+      },
+      {
+        ticket_id: 't0',
+        app_id: null,
+        app_name: null,
+        outcome: 'APPROVED' as TicketOutcome,
+        received_at: '2026-04-11T12:00:00Z',
+      },
+    ];
+    const out = groupByApp(rows, 5);
+    expect(out.total_apps).toBe(1);
+    expect(out.rows[0]?.app_id).toBe('app-a');
+  });
+
+  it('drops IN_REVIEW and null-outcome rows from app counts', () => {
+    const rows = [
+      {
+        ticket_id: 't1',
+        app_id: 'app-a',
+        app_name: 'Skyline',
+        outcome: 'IN_REVIEW' as TicketOutcome,
+        received_at: '2026-04-10T12:00:00Z',
+      },
+      {
+        ticket_id: 't2',
+        app_id: 'app-a',
+        app_name: 'Skyline',
+        outcome: null,
+        received_at: '2026-04-11T12:00:00Z',
+      },
+    ];
+    const out = groupByApp(rows, 5);
+    expect(out.total_apps).toBe(0); // bucket never created — no APPROVED/REJECTED rows
+  });
+
   it('respects limit (top N) while preserving total_apps for "View all N"', () => {
     const rows = Array.from({ length: 8 }, (_, i) => ({
+      ticket_id: `t-${i}`,
       app_id: `app-${i}`,
       app_name: `App ${i}`,
-      latest_outcome: null,
+      outcome: 'APPROVED' as TicketOutcome,
+      received_at: '2026-04-10T12:00:00Z',
     }));
     const out = groupByApp(rows, 5);
     expect(out.rows).toHaveLength(5);
     expect(out.total_apps).toBe(8);
+  });
+
+  it('sorts by submits desc, ties broken by app_name asc', () => {
+    const rows = [
+      // app-b: 2 submits
+      {
+        ticket_id: 'b1',
+        app_id: 'app-b',
+        app_name: 'Beta',
+        outcome: 'APPROVED' as TicketOutcome,
+        received_at: '2026-04-10T12:00:00Z',
+      },
+      {
+        ticket_id: 'b2',
+        app_id: 'app-b',
+        app_name: 'Beta',
+        outcome: 'APPROVED' as TicketOutcome,
+        received_at: '2026-04-11T12:00:00Z',
+      },
+      // app-a: 1 submit
+      {
+        ticket_id: 'a1',
+        app_id: 'app-a',
+        app_name: 'Alpha',
+        outcome: 'APPROVED' as TicketOutcome,
+        received_at: '2026-04-12T12:00:00Z',
+      },
+      // app-c: 1 submit (tie with app-a; sort by name)
+      {
+        ticket_id: 'c1',
+        app_id: 'app-c',
+        app_name: 'Charlie',
+        outcome: 'APPROVED' as TicketOutcome,
+        received_at: '2026-04-13T12:00:00Z',
+      },
+    ];
+    const out = groupByApp(rows, 5);
+    expect(out.rows.map((r) => r.app_name)).toEqual(['Beta', 'Alpha', 'Charlie']);
   });
 });
 
@@ -288,7 +536,6 @@ describe('truncateExcerpt', () => {
     const out = truncateExcerpt(longText, 50);
     expect(out.endsWith('…')).toBe(true);
     expect(out.length).toBeLessThanOrEqual(51);
-    // Confirm it cut at a space, not mid-word.
     expect(out.slice(0, -1).endsWith(' ')).toBe(false);
     expect(out.slice(0, -1).split(' ').every((w) => w === 'word' || w === '')).toBe(true);
   });

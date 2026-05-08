@@ -46,7 +46,12 @@ export function ByAppTable({ data, typeId }: Props) {
               <th className="text-left font-medium py-2">App</th>
               <th className="text-right font-medium">Submits</th>
               <th className="text-right font-medium">Rejects</th>
-              <th className="text-right font-medium">Rate</th>
+              <th
+                className="text-right font-medium"
+                title="Counts rework cycles (Apple notification bursts dedupped). Rate may exceed 100% when tickets have multiple resubmissions."
+              >
+                Rate
+              </th>
             </tr>
           </thead>
           <tbody>

@@ -1,25 +1,52 @@
 /**
- * PR-19 — Apple Reports MVP query module.
+ * Apple Reports query module.
  *
  * Per-platform dashboard. Manager domain insight: each platform = its own
  * dashboard, no cross-platform aggregation (spec lock Q7). This module
  * is Apple-only by design; Google / Huawei follow the same pattern in
  * future PRs once their extractors ship.
  *
- * Data flow:
- *   page.tsx → server-side Promise.all of the four exported queries
- *            → React Server Components render KPIs + chart + tables
+ * Counting source — production-aware (PR-Reports.A):
+ *   KPI counts read from `email_messages.classification_result` (Apple
+ *   verdict timeline view) instead of `tickets.latest_outcome` (which
+ *   only retains the most-recent verdict and hides resubmit cycles).
+ *   Two-surface separation strict: Inbox keeps reading
+ *   `tickets.latest_outcome` for state-chip filters (PR-13 surface);
+ *   `find_or_create_ticket_tx` write paths are unchanged.
+ *
+ * Apple-burst-aware aggregation (PR-Reports.A):
+ *   Diagnostic Q-Anomaly-1 + Q-Reject-Dedup-1 (production data, May
+ *   2026) revealed Apple sends notification bursts: same ticket, same
+ *   outcome, 2–4 emails within 9–75 seconds. Manager domain rules ("max
+ *   1 approve per ticket"; "rejects count cycles, not notifications")
+ *   are enforced by the aggregator, not assumed of the data:
+ *     Approved = COUNT(DISTINCT ticket_id) where any email outcome=APPROVED
+ *     Rejected = burst-dedup with BURST_DEDUP_WINDOW_MS window per ticket
+ *   Both sides are Apple-burst-aware; the asymmetry is in cycle-counting
+ *   intent (Manager A2): approve has a domain ceiling of 1, rejects do
+ *   not (resubmit cycles all count separately, just not their burst
+ *   notifications).
+ *
+ * Two-clock window model (PR-Reports.A):
+ *   KPI counts use `email_messages.received_at` (Apple verdict timeline,
+ *   Manager Q5). Avg review time uses `tickets.opened_at` (preserves
+ *   PR-19 ticket-lifecycle clock per Manager Q3 Option A). Each clock
+ *   matches the metric's semantic.
+ *
+ * Trend chart + by-platform-id resolution preserved from PR-19/21 —
+ * trend chart bucket clock is deferred to PR-Reports.B.
  *
  * Aggregation strategy: client-side (TS, in-process) on a small row
  * count. Production scale per CLAUDE.md is ~200 submissions/month total
- * across 4 platforms — Apple is <120 rows / 30d. SQL `GROUP BY` is
- * unnecessary at this scale and would split logic across the type-
- * checked TS layer and the untyped SQL layer.
+ * across 4 platforms — Apple is <120 tickets / 30d, ~2-3× emails per
+ * ticket. SQL `GROUP BY` is unnecessary at this scale and would split
+ * logic across the type-checked TS layer and the untyped SQL layer.
  *
  * Pure aggregators (`aggregateKpis`, `bucketTrendByDay`, `groupByApp`,
- * `truncateExcerpt`) are exported separately so unit tests can exercise
- * them with synthetic rows without mocking Supabase chains. The
- * `getApple*` wrappers compose them on top of a single DB fetch.
+ * `truncateExcerpt`, `dedupBurstByTicket`) are exported separately so
+ * unit tests can exercise them with synthetic rows without mocking
+ * Supabase chains. The `getApple*` wrappers compose them on top of
+ * Supabase fetches.
  */
 
 import type { TicketOutcome, TicketState } from '../schemas/ticket';
@@ -58,7 +85,7 @@ export interface AppRow {
   app_name: string;
   submits: number;
   rejects: number;
-  /** rejects / submits, in [0, 1]. */
+  /** rejects / submits. Can exceed 1.0 when tickets have multiple resubmit-cycle rejects (Manager A2 cycle-count semantic). */
   rate: number;
 }
 
@@ -78,72 +105,168 @@ export interface RecentRejected {
 }
 
 // ---------------------------------------------------------------------------
+// Tunables.
+// ---------------------------------------------------------------------------
+
+/**
+ * Time window per ticket within which same-outcome emails collapse to a
+ * single event during burst dedup. Calibrated against May 2026 production
+ * data: observed Apple retry bursts had 9–75s spans; smallest legitimate
+ * spread (genuine resubmit cycle) was 30 minutes. 60s sits cleanly in
+ * that gap. The 75s edge case (TICKET-10019 approve burst) collapses
+ * intentionally — better to trim a single legitimate cycle than to leak
+ * Apple noise into a metric Manager uses for capacity planning.
+ */
+export const BURST_DEDUP_WINDOW_MS = 60_000;
+
+// ---------------------------------------------------------------------------
 // Pure aggregators — testable with synthetic rows.
 // ---------------------------------------------------------------------------
 
-interface KpiInputRow {
-  state: TicketState;
-  latest_outcome: TicketOutcome | null;
+/**
+ * One row per email_messages entry projected to just what aggregators read.
+ * Source: email_messages joined to tickets (platform/type filters happen
+ * SQL-side). `outcome` is extracted from `classification_result->>'outcome'`
+ * and may be null (DROPPED/ERROR rows have no outcome field).
+ */
+export interface EmailEntryInputRow {
+  ticket_id: string;
+  outcome: TicketOutcome | null;
+  received_at: string;
+}
+
+/**
+ * One row per ticket projected to the avg-review-time path. Sourced from
+ * `tickets`, filtered to `latest_outcome='APPROVED'` SQL-side. Separate
+ * clock from email entries (Manager Q3 Option A: avg review measures
+ * ticket lifecycle, not email timeline).
+ */
+export interface ReviewTimeInputRow {
   opened_at: string;
-  closed_at: string | null;
-  resolution_type: 'APPROVED' | 'DONE' | 'ARCHIVED' | null;
+  closed_at: string;
+}
+
+/**
+ * Burst dedup utility: collapse Apple notification bursts on a single
+ * ticket to a single event. For each ticket_id, sort entries by
+ * received_at and keep an entry only if its predecessor on the same
+ * ticket was more than `windowMs` ago.
+ *
+ * Caller MUST pre-filter to a single outcome — the dedup is outcome-
+ * blind, since Apple bursts only occur within same-outcome notifications.
+ * Two opposite-outcome emails arriving within the window represent a
+ * legitimate verdict flip and must NOT collapse.
+ */
+export function dedupBurstByTicket(
+  entries: EmailEntryInputRow[],
+  windowMs: number = BURST_DEDUP_WINDOW_MS,
+): EmailEntryInputRow[] {
+  const byTicket = new Map<string, EmailEntryInputRow[]>();
+  for (const r of entries) {
+    const list = byTicket.get(r.ticket_id);
+    if (list) list.push(r);
+    else byTicket.set(r.ticket_id, [r]);
+  }
+  const kept: EmailEntryInputRow[] = [];
+  for (const list of byTicket.values()) {
+    list.sort(
+      (a, b) => new Date(a.received_at).getTime() - new Date(b.received_at).getTime(),
+    );
+    let prevMs = -Infinity;
+    for (const r of list) {
+      const t = new Date(r.received_at).getTime();
+      if (t - prevMs > windowMs) kept.push(r);
+      prevMs = t;
+    }
+  }
+  return kept;
 }
 
 /**
  * Compute KPIs over the current window plus deltas vs the previous
  * equally-sized window. Pure: takes rows that span both windows and
- * partitions by `opened_at`.
+ * partitions by their respective clocks (emails by received_at,
+ * review-times by opened_at).
  *
- * PR-21 semantic lock — Apple verdict view, symmetric across all KPIs:
- *   Approved = `latest_outcome='APPROVED'`
- *   Rejected = `latest_outcome='REJECTED'`
- * Reports surface = Apple analytics view (counts what Apple decided).
- * Manager workflow view (state/resolution-based) lives in the Inbox
- * state-chip filter (PR-13 surface), not here. Two surfaces, two
- * intentional semantics. Avg review time uses the same predicate as
- * Approved so the metric matches the count.
+ * Production-aware enforcement (Pattern 10 reuse #15):
+ *   Approved = COUNT(DISTINCT ticket_id) where outcome=APPROVED in window
+ *     — Manager A2 ("max 1 approve per ticket") query-enforced. Apple
+ *     sends redundant APPROVED notifications (Q-Anomaly-1).
+ *   Rejected = burst-dedup count of outcome=REJECTED entries in window
+ *     — Manager A2 ("multiple rejects per ticket count separately as
+ *     resubmit cycles") preserved; Apple notification-burst noise
+ *     filtered via BURST_DEDUP_WINDOW_MS (Q-Reject-Dedup-1).
+ *   Total = COUNT(DISTINCT ticket_id) where any outcome'd email in window
+ *     (Q2 Option A — "submissions worked on").
+ *   AvgReviewTime = mean of (closed_at - opened_at) on review-time rows
+ *     opened in window (Q3 Option A — separate ticket-lifecycle clock).
  *
- * Tradeoff vs the prior PR-19 lock: a ticket where Apple said APPROVED
- * but Manager hasn't moved it terminal still counts in Approved here
- * (Apple reality, not workflow progress). A ticket Manager marked DONE
- * post-approval but where `latest_outcome` is somehow null does NOT
- * count.
+ * Outcomes other than APPROVED / REJECTED (IN_REVIEW, null) are ignored
+ * by the count predicates. Avg review time is uncoupled from the email
+ * count source by design — `latest_outcome='APPROVED'` filtering lives
+ * SQL-side on the review query.
  */
 export function aggregateKpis(
-  rows: KpiInputRow[],
+  emailRows: EmailEntryInputRow[],
+  reviewTimeRows: ReviewTimeInputRow[],
   windowStart: Date,
   windowEnd: Date,
 ): ReportsKpis {
   const windowSpanMs = windowEnd.getTime() - windowStart.getTime();
   const prevStart = new Date(windowStart.getTime() - windowSpanMs);
 
-  const isApproved = (r: KpiInputRow): boolean =>
-    r.latest_outcome === 'APPROVED';
-
-  const reviewMs = (r: KpiInputRow): number | null => {
-    if (!isApproved(r) || !r.closed_at) return null;
-    const ms = new Date(r.closed_at).getTime() - new Date(r.opened_at).getTime();
-    return Number.isFinite(ms) && ms >= 0 ? ms : null;
-  };
-
-  const summarize = (subset: KpiInputRow[]) => {
-    const total = subset.length;
-    const approved = subset.filter(isApproved).length;
-    const rejected = subset.filter((r) => r.latest_outcome === 'REJECTED').length;
-    const reviewMsValues = subset.map(reviewMs).filter((v): v is number => v !== null);
-    const avgReviewTimeMs = reviewMsValues.length
-      ? reviewMsValues.reduce((a, b) => a + b, 0) / reviewMsValues.length
-      : null;
-    return { total, approved, rejected, avgReviewTimeMs };
-  };
-
-  const inWindow = (r: KpiInputRow, start: Date, end: Date): boolean => {
-    const t = new Date(r.opened_at).getTime();
+  const inWindow = (tIso: string, start: Date, end: Date): boolean => {
+    const t = new Date(tIso).getTime();
     return t >= start.getTime() && t < end.getTime();
   };
 
-  const cur = summarize(rows.filter((r) => inWindow(r, windowStart, windowEnd)));
-  const prev = summarize(rows.filter((r) => inWindow(r, prevStart, windowStart)));
+  const summarizeEmails = (subset: EmailEntryInputRow[]) => {
+    const approvedTickets = new Set<string>();
+    const outcomedTickets = new Set<string>();
+    const rejectedRows: EmailEntryInputRow[] = [];
+    for (const r of subset) {
+      if (r.outcome === 'APPROVED') {
+        approvedTickets.add(r.ticket_id);
+        outcomedTickets.add(r.ticket_id);
+      } else if (r.outcome === 'REJECTED') {
+        rejectedRows.push(r);
+        outcomedTickets.add(r.ticket_id);
+      }
+      // outcome === 'IN_REVIEW' or null: not counted in KPI predicates.
+    }
+    return {
+      total: outcomedTickets.size,
+      approved: approvedTickets.size,
+      rejected: dedupBurstByTicket(rejectedRows).length,
+    };
+  };
+
+  const summarizeAvgReviewMs = (subset: ReviewTimeInputRow[]): number | null => {
+    if (subset.length === 0) return null;
+    const ms = subset
+      .map((r) => new Date(r.closed_at).getTime() - new Date(r.opened_at).getTime())
+      .filter((v) => Number.isFinite(v) && v >= 0);
+    if (ms.length === 0) return null;
+    return ms.reduce((a, b) => a + b, 0) / ms.length;
+  };
+
+  const curEmails = emailRows.filter((r) =>
+    inWindow(r.received_at, windowStart, windowEnd),
+  );
+  const prevEmails = emailRows.filter((r) =>
+    inWindow(r.received_at, prevStart, windowStart),
+  );
+  const curReview = reviewTimeRows.filter((r) =>
+    inWindow(r.opened_at, windowStart, windowEnd),
+  );
+  const prevReview = reviewTimeRows.filter((r) =>
+    inWindow(r.opened_at, prevStart, windowStart),
+  );
+
+  const cur = summarizeEmails(curEmails);
+  const prev = summarizeEmails(prevEmails);
+  const curAvgMs = summarizeAvgReviewMs(curReview);
+  const prevAvgMs = summarizeAvgReviewMs(prevReview);
 
   const pctDelta = (current: number, previous: number): number | null => {
     if (previous === 0) return null;
@@ -154,14 +277,14 @@ export function aggregateKpis(
     total: cur.total,
     approved: cur.approved,
     rejected: cur.rejected,
-    avgReviewTimeMs: cur.avgReviewTimeMs,
+    avgReviewTimeMs: curAvgMs,
     deltas: {
       total: pctDelta(cur.total, prev.total),
       approved: pctDelta(cur.approved, prev.approved),
       rejected: pctDelta(cur.rejected, prev.rejected),
       avgReviewTime:
-        cur.avgReviewTimeMs !== null && prev.avgReviewTimeMs !== null && prev.avgReviewTimeMs > 0
-          ? ((cur.avgReviewTimeMs - prev.avgReviewTimeMs) / prev.avgReviewTimeMs) * 100
+        curAvgMs !== null && prevAvgMs !== null && prevAvgMs > 0
+          ? ((curAvgMs - prevAvgMs) / prevAvgMs) * 100
           : null,
     },
   };
@@ -178,16 +301,18 @@ interface TrendInputRow {
  * Bucket rows into N daily buckets between windowStart (inclusive) and
  * windowEnd (exclusive). Each bucket is keyed by YYYY-MM-DD in UTC.
  *
- * PR-21 semantic lock — same Apple-verdict view as `aggregateKpis`:
+ * PR-21 semantic lock — Apple verdict view:
  *   - approved  if latest_outcome='APPROVED' (priority 1)
  *   - rejected  if latest_outcome='REJECTED' (priority 2)
  *   - else      in_review (covers latest_outcome=null + 'IN_REVIEW')
  *
- * NULL latest_outcome → in_review by convention (Manager sees all open
- * tickets as "in review" until an email signals otherwise). Note that
- * `state` and `resolution_type` are not consulted here: a ticket
- * Manager moved terminal but lacking an Apple outcome stacks as
- * in_review, not approved. That mirrors the KPI predicate.
+ * NULL latest_outcome → in_review by convention. Note that `state` and
+ * `resolution_type` are not consulted here: a ticket Manager moved
+ * terminal but lacking an Apple outcome stacks as in_review.
+ *
+ * This trend-chart aggregator still reads from `tickets.latest_outcome`
+ * (PR-19/21 source). Switching the trend bucket clock to email entries
+ * is deferred to PR-Reports.B per the multi-PR sequential ship plan.
  */
 export function bucketTrendByDay(
   rows: TrendInputRow[],
@@ -219,39 +344,67 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-interface ByAppInputRow {
+interface ByAppEmailInputRow {
+  ticket_id: string;
   app_id: string | null;
   app_name: string | null;
-  latest_outcome: TicketOutcome | null;
+  outcome: TicketOutcome | null;
+  received_at: string;
 }
 
 /**
- * Group rows by app, count submits + rejects, sort by submits desc, slice
- * to top N. Rows with `app_id=null` (unclassified) are dropped — Reports
- * is about classified Apple submissions per app.
+ * Group rows by app, count distinct submissions + burst-dedupped rejects,
+ * sort by submits desc, slice to top N. Rows with `app_id=null`
+ * (unclassified) are dropped — Reports is about classified Apple
+ * submissions per app. Rows whose outcome is not APPROVED or REJECTED
+ * (IN_REVIEW, null) do not contribute to either count and are filtered.
+ *
+ *   submits(app) = COUNT(DISTINCT ticket_id) where any email outcome'd
+ *   rejects(app) = burst-dedupped REJECTED entries on that app
+ *   rate(app)    = rejects / submits — can exceed 1.0 (Manager A2 cycle
+ *                  semantic; UI tooltip explains)
  */
-export function groupByApp(rows: ByAppInputRow[], limit: number): ByAppResult {
-  const map = new Map<string, AppRow>();
+export function groupByApp(rows: ByAppEmailInputRow[], limit: number): ByAppResult {
+  interface Bucket {
+    app_id: string;
+    app_name: string;
+    ticketIds: Set<string>;
+    rejectRows: EmailEntryInputRow[];
+  }
+  const buckets = new Map<string, Bucket>();
   for (const r of rows) {
     if (!r.app_id || !r.app_name) continue;
-    const existing = map.get(r.app_id);
-    if (existing) {
-      existing.submits++;
-      if (r.latest_outcome === 'REJECTED') existing.rejects++;
-    } else {
-      map.set(r.app_id, {
+    if (r.outcome !== 'APPROVED' && r.outcome !== 'REJECTED') continue;
+    let b = buckets.get(r.app_id);
+    if (!b) {
+      b = {
         app_id: r.app_id,
         app_name: r.app_name,
-        submits: 1,
-        rejects: r.latest_outcome === 'REJECTED' ? 1 : 0,
-        rate: 0,
+        ticketIds: new Set<string>(),
+        rejectRows: [],
+      };
+      buckets.set(r.app_id, b);
+    }
+    b.ticketIds.add(r.ticket_id);
+    if (r.outcome === 'REJECTED') {
+      b.rejectRows.push({
+        ticket_id: r.ticket_id,
+        outcome: r.outcome,
+        received_at: r.received_at,
       });
     }
   }
-  const all = Array.from(map.values()).map((row) => ({
-    ...row,
-    rate: row.submits > 0 ? row.rejects / row.submits : 0,
-  }));
+  const all: AppRow[] = Array.from(buckets.values()).map((b) => {
+    const submits = b.ticketIds.size;
+    const rejects = dedupBurstByTicket(b.rejectRows).length;
+    return {
+      app_id: b.app_id,
+      app_name: b.app_name,
+      submits,
+      rejects,
+      rate: submits > 0 ? rejects / submits : 0,
+    };
+  });
   all.sort((a, b) => b.submits - a.submits || a.app_name.localeCompare(b.app_name));
   return { rows: all.slice(0, limit), total_apps: all.length };
 }
@@ -270,7 +423,7 @@ export function truncateExcerpt(content: string, maxChars = 200): string {
 }
 
 // ---------------------------------------------------------------------------
-// DB fetchers — compose pure aggregators on top of a single Supabase fetch.
+// DB fetchers — compose pure aggregators on top of Supabase fetches.
 // ---------------------------------------------------------------------------
 
 const APPLE_PLATFORM_KEY = 'apple';
@@ -286,13 +439,13 @@ async function getApplePlatformId(): Promise<string | null> {
 }
 
 /**
- * Fetch + aggregate the 4 KPI metrics for a window plus deltas vs the
- * previous equally-sized window. Single Supabase query covers both
- * windows (60-day span when window=30d) — partitioning happens in JS.
+ * Two-clock window model:
+ *   (1) Email-entry rows for KPI counts — clock = received_at.
+ *   (2) Ticket rows for avg review time — clock = opened_at, filter
+ *       latest_outcome='APPROVED' SQL-side (Q3 Option A preserved).
  *
- * `typeId` (PR-22): when provided, scopes results to tickets of that
- * type. Manager flow `Type → App → counts` uses this to dimension
- * the dashboard. Undefined = all Apple types (legacy default).
+ * `typeId` (PR-22) scopes both queries through the tickets relation
+ * (direct on the ticket query, via inner join on the email query).
  */
 export async function getAppleReportsKpis(
   windowStart: Date,
@@ -305,17 +458,46 @@ export async function getAppleReportsKpis(
   const span = windowEnd.getTime() - windowStart.getTime();
   const prevStart = new Date(windowStart.getTime() - span);
 
-  let q = storeDb()
+  let qEmails = storeDb()
+    .from('email_messages')
+    .select(
+      'ticket_id, classification_result, received_at, tickets!inner(platform_id, type_id)',
+    )
+    .eq('tickets.platform_id', apple)
+    .gte('received_at', prevStart.toISOString())
+    .lt('received_at', windowEnd.toISOString())
+    .not('classification_result', 'is', null);
+  if (typeId) qEmails = qEmails.eq('tickets.type_id', typeId);
+
+  let qReview = storeDb()
     .from('tickets')
-    .select('state, latest_outcome, opened_at, closed_at, resolution_type')
+    .select('opened_at, closed_at')
     .eq('platform_id', apple)
+    .eq('latest_outcome', 'APPROVED')
+    .not('closed_at', 'is', null)
     .gte('opened_at', prevStart.toISOString())
     .lt('opened_at', windowEnd.toISOString());
-  if (typeId) q = q.eq('type_id', typeId);
+  if (typeId) qReview = qReview.eq('type_id', typeId);
 
-  const { data, error } = await q;
-  if (error || !data) return emptyKpis();
-  return aggregateKpis(data as KpiInputRow[], windowStart, windowEnd);
+  const [emailRes, reviewRes] = await Promise.all([qEmails, qReview]);
+  if (emailRes.error || !emailRes.data) return emptyKpis();
+  if (reviewRes.error || !reviewRes.data) return emptyKpis();
+
+  const emailRows: EmailEntryInputRow[] = (
+    emailRes.data as Array<{
+      ticket_id: string;
+      classification_result: { outcome?: TicketOutcome } | null;
+      received_at: string;
+    }>
+  ).map((r) => ({
+    ticket_id: r.ticket_id,
+    outcome: (r.classification_result?.outcome ?? null) as TicketOutcome | null,
+    received_at: r.received_at,
+  }));
+
+  const reviewRows = reviewRes.data as ReviewTimeInputRow[];
+
+  return aggregateKpis(emailRows, reviewRows, windowStart, windowEnd);
 }
 
 function emptyKpis(): ReportsKpis {
@@ -332,6 +514,9 @@ function emptyKpis(): ReportsKpis {
  * Daily trend chart data for the current window only (no comparison
  * window — KPI deltas already convey period-over-period change).
  * `typeId` (PR-22) scopes the same way as `getAppleReportsKpis`.
+ *
+ * Source preserved at `tickets.latest_outcome` (PR-19/21). Switching
+ * to email-entry timeline is the PR-Reports.B scope.
  */
 export async function getAppleTrendByDay(
   windowStart: Date,
@@ -355,9 +540,10 @@ export async function getAppleTrendByDay(
 }
 
 /**
- * Top N apps by submit volume in window. Excludes unclassified tickets
- * (app_id IS NULL). `typeId` (PR-22) scopes to a single type so the
- * "Type → App" dimension realizes the Manager flow.
+ * Top N apps by submit volume in window, sourced from email entries
+ * (PR-Reports.A). Excludes unclassified tickets (`tickets.app_id IS
+ * NULL`). `typeId` (PR-22) scopes through `tickets!inner` join so the
+ * "Type → App" Manager flow lands on the same dimension as the KPIs.
  */
 export async function getAppleByAppTable(
   windowStart: Date,
@@ -369,29 +555,51 @@ export async function getAppleByAppTable(
   if (!apple) return { rows: [], total_apps: 0 };
 
   let q = storeDb()
-    .from('tickets')
-    .select('app_id, latest_outcome, apps!inner(name)')
-    .eq('platform_id', apple)
-    .not('app_id', 'is', null)
-    .gte('opened_at', windowStart.toISOString())
-    .lt('opened_at', windowEnd.toISOString());
-  if (typeId) q = q.eq('type_id', typeId);
+    .from('email_messages')
+    .select(
+      'ticket_id, classification_result, received_at, tickets!inner(platform_id, app_id, type_id, apps!inner(name))',
+    )
+    .eq('tickets.platform_id', apple)
+    .not('tickets.app_id', 'is', null)
+    .gte('received_at', windowStart.toISOString())
+    .lt('received_at', windowEnd.toISOString())
+    .not('classification_result', 'is', null);
+  if (typeId) q = q.eq('tickets.type_id', typeId);
 
   const { data, error } = await q;
   if (error || !data) return { rows: [], total_apps: 0 };
 
-  // Supabase nests `apps` as either an object or array depending on join
-  // semantics; flatten to the rows shape `groupByApp` expects.
-  const flat: ByAppInputRow[] = (data as Array<{
-    app_id: string | null;
-    latest_outcome: TicketOutcome | null;
-    apps: { name: string } | { name: string }[] | null;
-  }>).map((r) => {
-    const apps = Array.isArray(r.apps) ? r.apps[0] : r.apps;
+  // Supabase nests `tickets` + `apps` as either object or array
+  // depending on join semantics; flatten to `groupByApp`'s shape.
+  const flat: ByAppEmailInputRow[] = (
+    data as Array<{
+      ticket_id: string;
+      classification_result: { outcome?: TicketOutcome } | null;
+      received_at: string;
+      tickets:
+        | {
+            app_id: string | null;
+            apps: { name: string } | { name: string }[] | null;
+          }
+        | {
+            app_id: string | null;
+            apps: { name: string } | { name: string }[] | null;
+          }[]
+        | null;
+    }>
+  ).map((r) => {
+    const ticket = Array.isArray(r.tickets) ? r.tickets[0] : r.tickets;
+    const apps = ticket?.apps
+      ? Array.isArray(ticket.apps)
+        ? ticket.apps[0]
+        : ticket.apps
+      : null;
     return {
-      app_id: r.app_id,
+      ticket_id: r.ticket_id,
+      app_id: ticket?.app_id ?? null,
       app_name: apps?.name ?? null,
-      latest_outcome: r.latest_outcome,
+      outcome: (r.classification_result?.outcome ?? null) as TicketOutcome | null,
+      received_at: r.received_at,
     };
   });
 
@@ -401,7 +609,10 @@ export async function getAppleByAppTable(
 /**
  * Most recent N reject-reason entries on Apple tickets. Sourced from
  * `ticket_entries.entry_type='REJECT_REASON'` (manually logged free
- * text — no taxonomy yet, that's the deferred Phase-3 scope).
+ * text — no taxonomy yet, that's the deferred Phase-3 scope). Distinct
+ * surface from the email-derived Reject KPI: this is what Managers
+ * typed, not what Apple sent.
+ *
  * `typeId` (PR-22) scopes through the `tickets!inner` join.
  */
 export async function getAppleRecentRejected(
@@ -425,18 +636,32 @@ export async function getAppleRecentRejected(
   const { data, error } = await q;
   if (error || !data) return [];
 
-  return (data as Array<{
-    id: string;
-    content: string | null;
-    created_at: string;
-    ticket_id: string;
-    tickets:
-      | { display_id: string; app_id: string | null; apps: { name: string } | { name: string }[] | null }
-      | { display_id: string; app_id: string | null; apps: { name: string } | { name: string }[] | null }[]
-      | null;
-  }>).map((r) => {
+  return (
+    data as Array<{
+      id: string;
+      content: string | null;
+      created_at: string;
+      ticket_id: string;
+      tickets:
+        | {
+            display_id: string;
+            app_id: string | null;
+            apps: { name: string } | { name: string }[] | null;
+          }
+        | {
+            display_id: string;
+            app_id: string | null;
+            apps: { name: string } | { name: string }[] | null;
+          }[]
+        | null;
+    }>
+  ).map((r) => {
     const ticket = Array.isArray(r.tickets) ? r.tickets[0] : r.tickets;
-    const apps = ticket?.apps ? (Array.isArray(ticket.apps) ? ticket.apps[0] : ticket.apps) : null;
+    const apps = ticket?.apps
+      ? Array.isArray(ticket.apps)
+        ? ticket.apps[0]
+        : ticket.apps
+      : null;
     return {
       ticket_id: r.ticket_id,
       display_id: ticket?.display_id ?? '—',
