@@ -1,20 +1,22 @@
 import Link from 'next/link';
+
 import type { ByAppResult } from '@/lib/store-submissions/queries/reports';
 
 interface Props {
   data: ByAppResult;
   /**
-   * PR-22: when the Reports surface is filtered by a type, the per-app
-   * and "View all" deep links into the Inbox should preserve that scope
-   * so Manager keeps filter context across surfaces.
+   * PR-22: when the Reports surface is filtered by a type, per-app
+   * deep links into the Inbox preserve that scope so Manager keeps
+   * filter context across surfaces.
    */
   typeId?: string;
 }
 
 /**
- * Top N apps by submit volume for the Apple platform window. Each row
- * drills into the Inbox filtered to that app; the "View all" CTA drops
- * the app filter and just scopes by platform.
+ * All apps with submissions in window for the Apple platform. Each row
+ * drills into the Inbox filtered to that app. PR-Reports.A.1 dropped the
+ * top-N truncation + the "View all N" CTA — list now fits all apps
+ * inline (production scale ~14-25/30d).
  */
 export function ByAppTable({ data, typeId }: Props) {
   const typeQs = typeId ? `&type_id=${typeId}` : '';
@@ -25,14 +27,6 @@ export function ByAppTable({ data, typeId }: Props) {
           <div className="text-[13.5px] font-semibold text-slate-900">By app</div>
           <div className="text-[11.5px] text-slate-500">Submit volume & reject rate</div>
         </div>
-        {data.total_apps > data.rows.length && (
-          <Link
-            href={`/store-submissions/inbox?platform_key=apple${typeQs}`}
-            className="text-[12px] text-slate-600 hover:text-slate-900 underline-offset-4 hover:underline"
-          >
-            View all {data.total_apps}
-          </Link>
-        )}
       </div>
 
       {data.rows.length === 0 ? (

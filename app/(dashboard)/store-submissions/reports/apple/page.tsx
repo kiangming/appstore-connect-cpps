@@ -64,7 +64,7 @@ export default async function AppleReportsPage({
   const [kpis, trend, byApp, recentRejected, allTypes] = await Promise.all([
     getAppleReportsKpis(windowStart, windowEnd, typeId),
     getAppleTrendByDay(windowStart, windowEnd, typeId),
-    getAppleByAppTable(windowStart, windowEnd, 5, typeId),
+    getAppleByAppTable(windowStart, windowEnd, typeId),
     getAppleRecentRejected(5, typeId),
     listAllTypes(),
   ]);

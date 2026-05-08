@@ -354,17 +354,26 @@ interface ByAppEmailInputRow {
 
 /**
  * Group rows by app, count distinct submissions + burst-dedupped rejects,
- * sort by submits desc, slice to top N. Rows with `app_id=null`
- * (unclassified) are dropped — Reports is about classified Apple
- * submissions per app. Rows whose outcome is not APPROVED or REJECTED
- * (IN_REVIEW, null) do not contribute to either count and are filtered.
+ * sort by submits desc. Rows with `app_id=null` (unclassified) are dropped
+ * — Reports is about classified Apple submissions per app. Rows whose
+ * outcome is not APPROVED or REJECTED (IN_REVIEW, null) do not contribute
+ * to either count and are filtered.
  *
  *   submits(app) = COUNT(DISTINCT ticket_id) where any email outcome'd
  *   rejects(app) = burst-dedupped REJECTED entries on that app
  *   rate(app)    = rejects / submits — can exceed 1.0 (Manager A2 cycle
  *                  semantic; UI tooltip explains)
+ *
+ * Returns ALL apps in window (no top-N truncation). PR-Reports.A.1
+ * dropped the limit after Manager UAT MV17 surfaced KPI/by-app
+ * inconsistency: reject-having apps with low submit volume were ranked
+ * outside the top-5 view, hiding the only apps with rejects from the
+ * surface even though KPI Reject = 2 (TICKET-10021's 2 burst-dedupped
+ * cycles attributed to Hero Shoot, ranked 8th by submits among 14 apps).
+ * At production scale (~14-25 apps per 30-day window) the unbounded
+ * list fits cleanly.
  */
-export function groupByApp(rows: ByAppEmailInputRow[], limit: number): ByAppResult {
+export function groupByApp(rows: ByAppEmailInputRow[]): ByAppResult {
   interface Bucket {
     app_id: string;
     app_name: string;
@@ -406,7 +415,7 @@ export function groupByApp(rows: ByAppEmailInputRow[], limit: number): ByAppResu
     };
   });
   all.sort((a, b) => b.submits - a.submits || a.app_name.localeCompare(b.app_name));
-  return { rows: all.slice(0, limit), total_apps: all.length };
+  return { rows: all, total_apps: all.length };
 }
 
 /**
@@ -540,15 +549,18 @@ export async function getAppleTrendByDay(
 }
 
 /**
- * Top N apps by submit volume in window, sourced from email entries
+ * All apps with submissions in window, sourced from email entries
  * (PR-Reports.A). Excludes unclassified tickets (`tickets.app_id IS
  * NULL`). `typeId` (PR-22) scopes through `tickets!inner` join so the
  * "Type → App" Manager flow lands on the same dimension as the KPIs.
+ *
+ * Top-N truncation removed in PR-Reports.A.1 — see `groupByApp` doc
+ * for the Manager UAT rationale. Production scale (~14-25 apps/30d)
+ * makes unbounded listing cheap.
  */
 export async function getAppleByAppTable(
   windowStart: Date,
   windowEnd: Date,
-  limit = 5,
   typeId?: string,
 ): Promise<ByAppResult> {
   const apple = await getApplePlatformId();
@@ -603,7 +615,7 @@ export async function getAppleByAppTable(
     };
   });
 
-  return groupByApp(flat, limit);
+  return groupByApp(flat);
 }
 
 /**

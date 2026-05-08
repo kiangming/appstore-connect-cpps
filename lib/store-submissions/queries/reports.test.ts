@@ -390,7 +390,7 @@ describe('groupByApp', () => {
         received_at: '2026-04-15T12:00:00Z',
       },
     ];
-    const out = groupByApp(rows, 5);
+    const out = groupByApp(rows);
     expect(out.total_apps).toBe(1);
     expect(out.rows[0]).toMatchObject({
       app_id: 'app-a',
@@ -427,7 +427,7 @@ describe('groupByApp', () => {
         received_at: '2026-04-16T12:00:00Z',
       },
     ];
-    const out = groupByApp(rows, 5);
+    const out = groupByApp(rows);
     expect(out.rows[0]).toMatchObject({ submits: 1, rejects: 3, rate: 3 });
   });
 
@@ -448,7 +448,7 @@ describe('groupByApp', () => {
         received_at: '2026-04-11T12:00:00Z',
       },
     ];
-    const out = groupByApp(rows, 5);
+    const out = groupByApp(rows);
     expect(out.total_apps).toBe(1);
     expect(out.rows[0]?.app_id).toBe('app-a');
   });
@@ -470,11 +470,16 @@ describe('groupByApp', () => {
         received_at: '2026-04-11T12:00:00Z',
       },
     ];
-    const out = groupByApp(rows, 5);
+    const out = groupByApp(rows);
     expect(out.total_apps).toBe(0); // bucket never created — no APPROVED/REJECTED rows
   });
 
-  it('respects limit (top N) while preserving total_apps for "View all N"', () => {
+  it('returns all apps without truncation; total_apps equals rows.length (PR-Reports.A.1)', () => {
+    // PR-Reports.A.1 dropped the top-N limit after Manager UAT MV17
+    // surfaced KPI/by-app inconsistency: reject-having apps with low
+    // submit volume were ranked outside the top-5 view, hiding the only
+    // apps with rejects. At production scale (~14-25 apps/30d) the
+    // unbounded list fits cleanly.
     const rows = Array.from({ length: 8 }, (_, i) => ({
       ticket_id: `t-${i}`,
       app_id: `app-${i}`,
@@ -482,8 +487,8 @@ describe('groupByApp', () => {
       outcome: 'APPROVED' as TicketOutcome,
       received_at: '2026-04-10T12:00:00Z',
     }));
-    const out = groupByApp(rows, 5);
-    expect(out.rows).toHaveLength(5);
+    const out = groupByApp(rows);
+    expect(out.rows).toHaveLength(8);
     expect(out.total_apps).toBe(8);
   });
 
@@ -521,7 +526,7 @@ describe('groupByApp', () => {
         received_at: '2026-04-13T12:00:00Z',
       },
     ];
-    const out = groupByApp(rows, 5);
+    const out = groupByApp(rows);
     expect(out.rows.map((r) => r.app_name)).toEqual(['Beta', 'Alpha', 'Charlie']);
   });
 });
