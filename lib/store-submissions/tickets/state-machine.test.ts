@@ -51,14 +51,17 @@ describe('deriveStateFromUserAction — FOLLOW_UP', () => {
 });
 
 describe('deriveStateFromUserAction — MARK_DONE', () => {
-  it.each<TicketState>(['NEW', 'IN_REVIEW', 'REJECTED'])(
-    '%s → DONE (any open state)',
+  // PR-Inbox.X: APPROVED added to legal source states (Pattern 10
+  // reuse #17 — APPROVED is intermediate Manager workflow, not
+  // terminal). Manager clicks Mark Done to transition APPROVED → DONE.
+  it.each<TicketState>(['NEW', 'IN_REVIEW', 'REJECTED', 'APPROVED'])(
+    '%s → DONE (open + APPROVED)',
     (from) => {
       expect(deriveStateFromUserAction(from, 'MARK_DONE', null)).toBe('DONE');
     },
   );
 
-  it.each<TicketState>(['APPROVED', 'DONE', 'ARCHIVED'])(
+  it.each<TicketState>(['DONE', 'ARCHIVED'])(
     '%s throws (terminal states cannot mark-done)',
     (from) => {
       expect(() => deriveStateFromUserAction(from, 'MARK_DONE', null)).toThrow(
@@ -107,13 +110,18 @@ describe('deriveStateFromUserAction — error payload', () => {
 // -- isTerminalState -------------------------------------------------------
 
 describe('isTerminalState', () => {
-  it.each<TicketState>(['APPROVED', 'DONE', 'ARCHIVED'])('%s → true', (s) => {
+  // PR-Inbox.X: APPROVED is no longer terminal (Pattern 10 reuse #17 —
+  // intermediate Manager workflow state, awaiting Mark Done).
+  it.each<TicketState>(['DONE', 'ARCHIVED'])('%s → true', (s) => {
     expect(isTerminalState(s)).toBe(true);
   });
 
-  it.each<TicketState>(['NEW', 'IN_REVIEW', 'REJECTED'])('%s → false', (s) => {
-    expect(isTerminalState(s)).toBe(false);
-  });
+  it.each<TicketState>(['NEW', 'IN_REVIEW', 'REJECTED', 'APPROVED'])(
+    '%s → false',
+    (s) => {
+      expect(isTerminalState(s)).toBe(false);
+    },
+  );
 });
 
 // -- canTransition ---------------------------------------------------------
@@ -127,8 +135,11 @@ describe('canTransition', () => {
     ['IN_REVIEW', 'ARCHIVE', false],
     ['IN_REVIEW', 'MARK_DONE', true],
     ['REJECTED', 'MARK_DONE', true],
-    ['APPROVED', 'MARK_DONE', false],
+    // PR-Inbox.X: APPROVED → MARK_DONE now legal (Pattern 10 reuse #17)
+    ['APPROVED', 'MARK_DONE', true],
     ['APPROVED', 'ARCHIVE', false],
+    ['APPROVED', 'FOLLOW_UP', false],
+    ['APPROVED', 'UNARCHIVE', false],
     ['ARCHIVED', 'UNARCHIVE', true],
     ['ARCHIVED', 'ARCHIVE', false],
     ['DONE', 'UNARCHIVE', false],

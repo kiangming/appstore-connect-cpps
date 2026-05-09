@@ -37,24 +37,36 @@ export type UserAction = 'ARCHIVE' | 'FOLLOW_UP' | 'MARK_DONE' | 'UNARCHIVE';
  * Terminal states per invariant #6 (CLAUDE.md) — `state` ↔ `closed_at` ↔
  * `resolution_type` move together. Any transition landing here must set
  * `closed_at = NOW()` and `resolution_type = <new_state>` in the same
- * transaction (enforced by the RPCs in PR-10c.1.3 + the init-migration
- * CHECK constraint).
+ * transaction (enforced by the RPCs in PR-10c.1.3 + the migration CHECK
+ * constraint).
+ *
+ * PR-Inbox.X (Pattern 10 reuse #17): APPROVED is no longer terminal.
+ * It is an intermediate Manager workflow state — Manager clicks Mark
+ * Done to transition APPROVED → DONE. Two-concept naming collision
+ * resolved: state=APPROVED (Manager workflow) vs latest_outcome=
+ * APPROVED (Apple verdict) are now semantically + structurally
+ * distinct.
  */
 const TERMINAL_STATES: ReadonlySet<TicketState> = new Set([
-  'APPROVED',
   'DONE',
   'ARCHIVED',
 ]);
 
 /**
- * "Open" = ticket still needs attention — NEW, IN_REVIEW, REJECTED.
- * Complement of {@link TERMINAL_STATES}. Kept as a set for parity with
- * the Inbox "Open" tab filter (`schemas/ticket.ts#openTicketStateSchema`).
+ * Source states from which MARK_DONE is legal — the open states
+ * (NEW/IN_REVIEW/REJECTED) plus APPROVED. APPROVED is included
+ * post-PR-Inbox.X (Pattern 10 reuse #17) since it's now an
+ * intermediate Manager workflow state — Manager clicks Mark Done
+ * to close a ticket Apple already approved.
+ *
+ * Open states alone (without APPROVED) are mirrored at
+ * `schemas/ticket.ts#openTicketStateSchema` for the Inbox "Open" tab.
  */
-const OPEN_STATES: ReadonlySet<TicketState> = new Set([
+const MARK_DONE_LEGAL_STATES: ReadonlySet<TicketState> = new Set([
   'NEW',
   'IN_REVIEW',
   'REJECTED',
+  'APPROVED',
 ]);
 
 /**
@@ -123,11 +135,11 @@ export function deriveStateFromUserAction(
       return latestOutcome ?? 'IN_REVIEW';
 
     case 'MARK_DONE':
-      if (!OPEN_STATES.has(currentState)) {
+      if (!MARK_DONE_LEGAL_STATES.has(currentState)) {
         throw new InvalidTransitionError(
           currentState,
           action,
-          'Can only mark done open tickets (NEW / IN_REVIEW / REJECTED)',
+          'Can only mark done open tickets or APPROVED (NEW / IN_REVIEW / REJECTED / APPROVED)',
         );
       }
       return 'DONE';

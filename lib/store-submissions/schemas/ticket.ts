@@ -23,9 +23,13 @@ import { platformKeySchema } from './app';
 // -- Core enums -------------------------------------------------------------
 
 /**
- * Ticket lifecycle states — 6 values. Terminal states (APPROVED/DONE/ARCHIVED)
+ * Ticket lifecycle states — 6 values. Terminal states (DONE/ARCHIVED)
  * pair with `closed_at IS NOT NULL` and `resolution_type IS NOT NULL`
- * per invariant #6. Open states are NEW/IN_REVIEW/REJECTED.
+ * per invariant #6. Open states are NEW/IN_REVIEW/REJECTED. APPROVED
+ * is intermediate Manager workflow (PR-Inbox.X) — closed_at NULL
+ * until Manager clicks Mark Done. Two-concept naming: state=APPROVED
+ * (Manager workflow) ≠ latest_outcome=APPROVED (Apple verdict, see
+ * `ticketOutcomeSchema`).
  */
 export const ticketStateSchema = z.enum([
   'NEW',

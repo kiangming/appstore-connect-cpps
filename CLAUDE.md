@@ -277,7 +277,7 @@ Tool quản lý submission app/game lên **multi-platform** (Apple App Store, Go
 
 5. **Gmail tokens encrypted**: AES-256-GCM với `GMAIL_ENCRYPTION_KEY` trước khi insert `store_mgmt.gmail_credentials`.
 
-6. **Terminal state consistency**: `state IN ('APPROVED', 'DONE', 'ARCHIVED')` ↔ `closed_at IS NOT NULL` ↔ `resolution_type IS NOT NULL`.
+6. **Terminal state consistency**: `state IN ('DONE', 'ARCHIVED')` ↔ `closed_at IS NOT NULL` ↔ `resolution_type IS NOT NULL`. `state='APPROVED'` is **intermediate** Manager workflow (closed_at MUST be NULL, resolution_type MUST be NULL); Manager clicks Mark Done to transition APPROVED → DONE. **Two-concept naming, do NOT confuse**: `state=APPROVED` (Manager workflow action — intermediate) ≠ `latest_outcome=APPROVED` (Apple email signal — verdict). Reports surface counts via `latest_outcome` (Apple verdict timeline); Inbox surface filters via `state` (Manager workflow). PR-Inbox.X (May 2026) relaxed this invariant from the original `state IN ('APPROVED', 'DONE', 'ARCHIVED')` after Manager UAT MV17 Issue 4 surfaced the workflow gap.
 
 7. **Forward-only migrations**: Không down migrations. Revert = viết migration mới reverse.
 
