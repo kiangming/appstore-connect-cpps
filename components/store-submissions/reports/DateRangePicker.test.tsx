@@ -24,15 +24,27 @@ import { DateRangePicker } from './DateRangePicker';
 
 const FIXED_NOW = new Date('2026-05-09T12:00:00Z');
 
+// jsdom doesn't ship HTMLInputElement.prototype.showPicker — define + clean
+// up around each test so PR-Reports.C.1's openPicker() path is exercised.
+const showPickerMock = vi.fn();
+
 beforeEach(() => {
   pushMock.mockReset();
+  showPickerMock.mockReset();
   currentSearch = '';
   vi.useFakeTimers();
   vi.setSystemTime(FIXED_NOW);
+  Object.defineProperty(HTMLInputElement.prototype, 'showPicker', {
+    configurable: true,
+    writable: true,
+    value: showPickerMock,
+  });
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  // Remove the prototype patch so it can't leak into unrelated suites.
+  delete (HTMLInputElement.prototype as unknown as { showPicker?: unknown }).showPicker;
 });
 
 describe('DateRangePicker', () => {
@@ -131,5 +143,31 @@ describe('DateRangePicker', () => {
     expect(pushMock).toHaveBeenCalledWith(
       '?type_id=aaaa1111-aaaa-aaaa-aaaa-aaaaaaaaaaaa&from=2026-05-02&to=2026-05-09',
     );
+  });
+
+  // PR-Reports.C.1 — Manager UAT MV20 hotfix. Native <input type="date">
+  // only opens its picker on the calendar icon by default; clicking the
+  // (invisible) field area does nothing. showPicker() forces the picker
+  // open so click anywhere on the FilterPill surface works.
+  it('clicking From input calls showPicker() to open the native picker', () => {
+    render(<DateRangePicker />);
+    fireEvent.click(screen.getByLabelText('From date'));
+    expect(showPickerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('clicking To input calls showPicker() to open the native picker', () => {
+    render(<DateRangePicker />);
+    fireEvent.click(screen.getByLabelText('To date'));
+    expect(showPickerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('swallows showPicker() errors gracefully (unsupported browser fallback)', () => {
+    showPickerMock.mockImplementation(() => {
+      throw new Error('NotSupportedError');
+    });
+    render(<DateRangePicker />);
+    // Should not throw — try/catch is the unsupported-browser fallback.
+    expect(() => fireEvent.click(screen.getByLabelText('From date'))).not.toThrow();
+    expect(showPickerMock).toHaveBeenCalledTimes(1);
   });
 });

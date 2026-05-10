@@ -68,6 +68,26 @@ function diffDays(fromStr: string, toStr: string): number {
   );
 }
 
+/**
+ * Programmatically open the native date picker on input click.
+ *
+ * PR-Reports.C.1 — Manager UAT MV20 found that desktop
+ * <input type="date"> only opens its picker on the small calendar
+ * icon, not the field area. Since our inputs are absolute inset-0
+ * opacity-0 (covering the full FilterPill surface), Manager could
+ * only hit a tiny invisible target. showPicker() forces the picker
+ * open in any user-gesture click. try/catch swallows
+ * SecurityError/NotSupportedError on the <1% browsers without API
+ * support — focus fallback still works there.
+ */
+function openPicker(e: React.MouseEvent<HTMLInputElement>) {
+  try {
+    e.currentTarget.showPicker();
+  } catch {
+    /* unsupported / no user activation — native focus is the fallback */
+  }
+}
+
 export function DateRangePicker({ from, to }: DateRangePickerProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -143,6 +163,7 @@ export function DateRangePicker({ from, to }: DateRangePickerProps) {
           value={effectiveFrom}
           max={effectiveTo}
           onChange={(e) => handleFromChange(e.target.value)}
+          onClick={openPicker}
           aria-label="From date"
           className="absolute inset-0 opacity-0 cursor-pointer"
         />
@@ -154,6 +175,7 @@ export function DateRangePicker({ from, to }: DateRangePickerProps) {
           min={effectiveFrom}
           max={today}
           onChange={(e) => handleToChange(e.target.value)}
+          onClick={openPicker}
           aria-label="To date"
           className="absolute inset-0 opacity-0 cursor-pointer"
         />
