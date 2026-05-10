@@ -27,9 +27,7 @@ import type {
   EmailEntryInputRow,
   ReviewTimeInputRow,
 } from './reports';
-import type { TicketOutcome, TicketState } from '../schemas/ticket';
-
-type ResolutionType = 'APPROVED' | 'DONE' | 'ARCHIVED' | null;
+import type { TicketOutcome } from '../schemas/ticket';
 
 function emailRow(opts: {
   ticket_id: string;
@@ -296,61 +294,190 @@ describe('aggregateKpis', () => {
 });
 
 describe('bucketTrendByDay', () => {
-  // Trend chart source preserved at tickets.latest_outcome (PR-19/21);
-  // PR-Reports.B will switch this clock to email timeline. Tests below
-  // exercise the legacy semantic that's still in production after PR-Reports.A.
+  // PR-Reports.B — Trend bucket clock switched from tickets.opened_at to
+  // email_messages.received_at (4th PR-21 site flipped). Aggregation
+  // mirrors KPI semantic from PR-Reports.A:
+  //   - Approved: first-seen-per-ticket across window (Manager A2 DISTINCT)
+  //   - Rejected: 60s burst-dedupped per ticket (Pattern 10 reuse #15)
+  //   - IN_REVIEW: raw entry count (Manager A5 literal "count by entry")
+  //   - null outcome: skipped
+  //
+  // Granularity adapts to range: ≤90d daily / ≤365d weekly / >365d monthly.
 
-  const winStart = new Date('2026-05-01T00:00:00Z');
-  const winEnd = new Date('2026-05-04T00:00:00Z'); // 3-day window
+  describe('daily granularity (range ≤ 90 days)', () => {
+    const winStart = new Date('2026-05-01T00:00:00Z');
+    const winEnd = new Date('2026-05-04T00:00:00Z'); // 3-day window
 
-  it('seeds zero buckets for empty days and routes outcomes correctly', () => {
-    const rows = [
-      {
-        opened_at: '2026-05-01T03:00:00Z',
-        state: 'DONE' as TicketState,
-        resolution_type: 'APPROVED' as ResolutionType,
-        latest_outcome: 'APPROVED' as TicketOutcome,
-      },
-      {
-        opened_at: '2026-05-01T15:00:00Z',
-        state: 'REJECTED' as TicketState,
-        resolution_type: null,
-        latest_outcome: 'REJECTED' as TicketOutcome,
-      },
-      {
-        opened_at: '2026-05-03T08:00:00Z',
-        state: 'NEW' as TicketState,
-        resolution_type: null,
-        latest_outcome: null,
-      },
-    ];
+    it('seeds zero buckets for empty days and routes outcomes correctly', () => {
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: 'APPROVED', received_at: '2026-05-01T03:00:00Z' }),
+        emailRow({ ticket_id: 'T2', outcome: 'REJECTED', received_at: '2026-05-01T15:00:00Z' }),
+        emailRow({ ticket_id: 'T3', outcome: 'IN_REVIEW', received_at: '2026-05-03T08:00:00Z' }),
+      ];
 
-    const out = bucketTrendByDay(rows, winStart, winEnd);
-    expect(out).toHaveLength(3);
-    expect(out[0]).toEqual({ date: '2026-05-01', approved: 1, in_review: 0, rejected: 1 });
-    expect(out[1]).toEqual({ date: '2026-05-02', approved: 0, in_review: 0, rejected: 0 });
-    expect(out[2]).toEqual({ date: '2026-05-03', approved: 0, in_review: 1, rejected: 0 });
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      expect(out).toHaveLength(3);
+      expect(out[0]).toEqual({ date: '2026-05-01', approved: 1, in_review: 0, rejected: 1 });
+      expect(out[1]).toEqual({ date: '2026-05-02', approved: 0, in_review: 0, rejected: 0 });
+      expect(out[2]).toEqual({ date: '2026-05-03', approved: 0, in_review: 1, rejected: 0 });
+    });
+
+    it('skips null-outcome entries (DROPPED rows never appear in trend)', () => {
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: null, received_at: '2026-05-01T03:00:00Z' }),
+        emailRow({ ticket_id: 'T2', outcome: 'APPROVED', received_at: '2026-05-02T03:00:00Z' }),
+      ];
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      expect(out[0]).toEqual({ date: '2026-05-01', approved: 0, in_review: 0, rejected: 0 });
+      expect(out[1]).toEqual({ date: '2026-05-02', approved: 1, in_review: 0, rejected: 0 });
+    });
+
+    it('dedups approves to first-seen per ticket across window (Manager A2 DISTINCT)', () => {
+      // Same ticket, 2 APPROVED emails on different days → 1 approved
+      // attributed to the EARLIER day. Apple bursts collapse; legitimate
+      // re-approve on same ticket would be a data anomaly anyway.
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: 'APPROVED', received_at: '2026-05-03T10:00:00Z' }),
+        emailRow({ ticket_id: 'T1', outcome: 'APPROVED', received_at: '2026-05-01T10:00:00Z' }),
+      ];
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      expect(out[0]).toEqual({ date: '2026-05-01', approved: 1, in_review: 0, rejected: 0 });
+      expect(out[2]).toEqual({ date: '2026-05-03', approved: 0, in_review: 0, rejected: 0 });
+    });
+
+    it('counts approves on different tickets separately (cross-ticket distinct)', () => {
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: 'APPROVED', received_at: '2026-05-01T10:00:00Z' }),
+        emailRow({ ticket_id: 'T2', outcome: 'APPROVED', received_at: '2026-05-01T11:00:00Z' }),
+      ];
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      expect(out[0]).toEqual({ date: '2026-05-01', approved: 2, in_review: 0, rejected: 0 });
+    });
+
+    it('burst-dedups rejects within 60s on same ticket and bucket', () => {
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-05-01T12:00:00Z' }),
+        emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-05-01T12:00:30Z' }),
+      ];
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      expect(out[0]).toEqual({ date: '2026-05-01', approved: 0, in_review: 0, rejected: 1 });
+    });
+
+    it('keeps reject events spaced > 60s as distinct bucket entries', () => {
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-05-01T12:00:00Z' }),
+        emailRow({ ticket_id: 'T1', outcome: 'REJECTED', received_at: '2026-05-01T12:05:00Z' }),
+      ];
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      expect(out[0]).toEqual({ date: '2026-05-01', approved: 0, in_review: 0, rejected: 2 });
+    });
+
+    it('counts IN_REVIEW raw per entry (Manager A5 — no dedup applied)', () => {
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: 'IN_REVIEW', received_at: '2026-05-01T03:00:00Z' }),
+        emailRow({ ticket_id: 'T1', outcome: 'IN_REVIEW', received_at: '2026-05-01T03:00:10Z' }),
+        emailRow({ ticket_id: 'T1', outcome: 'IN_REVIEW', received_at: '2026-05-01T04:00:00Z' }),
+      ];
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      expect(out[0]).toEqual({ date: '2026-05-01', approved: 0, in_review: 3, rejected: 0 });
+    });
   });
 
-  it('routes Manager-terminal-without-Apple-verdict rows to in_review (PR-21)', () => {
-    const rows = [
-      {
-        opened_at: '2026-05-01T10:00:00Z',
-        state: 'APPROVED' as TicketState,
-        resolution_type: 'APPROVED' as ResolutionType,
-        latest_outcome: null,
-      },
-      {
-        opened_at: '2026-05-02T10:00:00Z',
-        state: 'DONE' as TicketState,
-        resolution_type: 'DONE' as ResolutionType,
-        latest_outcome: null,
-      },
-    ];
+  describe('granularity threshold boundaries', () => {
+    it('uses daily granularity at exactly 90 days', () => {
+      // 2026-02-01 → 2026-05-02 = 90 days exactly.
+      const winStart = new Date('2026-02-01T00:00:00Z');
+      const winEnd = new Date('2026-05-02T00:00:00Z');
+      const out = bucketTrendByDay([], winStart, winEnd);
+      expect(out).toHaveLength(90); // one bucket per day
+      expect(out[0]?.date).toBe('2026-02-01');
+      expect(out[out.length - 1]?.date).toBe('2026-05-01');
+    });
 
-    const out = bucketTrendByDay(rows, winStart, winEnd);
-    expect(out[0]).toEqual({ date: '2026-05-01', approved: 0, in_review: 1, rejected: 0 });
-    expect(out[1]).toEqual({ date: '2026-05-02', approved: 0, in_review: 1, rejected: 0 });
+    it('uses weekly granularity at 91 days (just past daily threshold)', () => {
+      // 2026-02-01 → 2026-05-03 = 91 days. Weekly buckets Monday-aligned.
+      const winStart = new Date('2026-02-01T00:00:00Z'); // Sunday
+      const winEnd = new Date('2026-05-03T00:00:00Z');
+      const out = bucketTrendByDay([], winStart, winEnd);
+      // Span Mondays inclusive: 2026-01-26, 02-02, 02-09, ..., 04-27 — 14 weeks
+      expect(out).toHaveLength(14);
+      // First bucket = Monday containing windowStart (Sunday Feb 1 → Mon Jan 26).
+      expect(out[0]?.date).toBe('2026-01-26');
+    });
+
+    it('uses monthly granularity at 366 days (just past weekly threshold)', () => {
+      // 2025-05-01 → 2026-05-02 = 366 days.
+      const winStart = new Date('2025-05-01T00:00:00Z');
+      const winEnd = new Date('2026-05-02T00:00:00Z');
+      const out = bucketTrendByDay([], winStart, winEnd);
+      // Months May 2025 through May 2026 = 13 buckets
+      expect(out).toHaveLength(13);
+      expect(out[0]?.date).toBe('2025-05-01');
+      expect(out[out.length - 1]?.date).toBe('2026-05-01');
+    });
+  });
+
+  describe('weekly granularity Monday-alignment (range > 90 days)', () => {
+    const winStart = new Date('2026-02-01T00:00:00Z');
+    const winEnd = new Date('2026-05-03T00:00:00Z'); // 91 days → weekly
+
+    it('attributes a Wednesday entry to the Monday-aligned bucket', () => {
+      // 2026-04-15 is a Wednesday. Monday of that week = 2026-04-13.
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: 'APPROVED', received_at: '2026-04-15T10:00:00Z' }),
+      ];
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      const bucket = out.find((b) => b.date === '2026-04-13');
+      expect(bucket).toEqual({ date: '2026-04-13', approved: 1, in_review: 0, rejected: 0 });
+    });
+
+    it('counts entries in the same week into one bucket (cross-day aggregation)', () => {
+      // Mon 2026-04-13 + Wed 2026-04-15 + Fri 2026-04-17 — all attribute to
+      // 2026-04-13 bucket. Different tickets to bypass approve dedup.
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: 'APPROVED', received_at: '2026-04-13T10:00:00Z' }),
+        emailRow({ ticket_id: 'T2', outcome: 'APPROVED', received_at: '2026-04-15T10:00:00Z' }),
+        emailRow({ ticket_id: 'T3', outcome: 'APPROVED', received_at: '2026-04-17T10:00:00Z' }),
+      ];
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      const bucket = out.find((b) => b.date === '2026-04-13');
+      expect(bucket?.approved).toBe(3);
+    });
+  });
+
+  describe('monthly granularity 1st-of-month alignment (range > 365 days)', () => {
+    const winStart = new Date('2025-05-01T00:00:00Z');
+    const winEnd = new Date('2026-05-02T00:00:00Z'); // 366 days → monthly
+
+    it('attributes a mid-month entry to the 1st-of-month bucket', () => {
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: 'APPROVED', received_at: '2025-08-15T10:00:00Z' }),
+      ];
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      const bucket = out.find((b) => b.date === '2025-08-01');
+      expect(bucket).toEqual({ date: '2025-08-01', approved: 1, in_review: 0, rejected: 0 });
+    });
+
+    it('aggregates within-month entries into one bucket', () => {
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: 'IN_REVIEW', received_at: '2025-08-01T03:00:00Z' }),
+        emailRow({ ticket_id: 'T2', outcome: 'IN_REVIEW', received_at: '2025-08-15T10:00:00Z' }),
+        emailRow({ ticket_id: 'T3', outcome: 'IN_REVIEW', received_at: '2025-08-31T23:00:00Z' }),
+      ];
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      const bucket = out.find((b) => b.date === '2025-08-01');
+      expect(bucket?.in_review).toBe(3);
+    });
+
+    it('handles month-boundary correctly (Aug 31 → Aug, Sep 1 → Sep)', () => {
+      const rows = [
+        emailRow({ ticket_id: 'T1', outcome: 'APPROVED', received_at: '2025-08-31T23:59:59Z' }),
+        emailRow({ ticket_id: 'T2', outcome: 'APPROVED', received_at: '2025-09-01T00:00:00Z' }),
+      ];
+      const out = bucketTrendByDay(rows, winStart, winEnd);
+      expect(out.find((b) => b.date === '2025-08-01')?.approved).toBe(1);
+      expect(out.find((b) => b.date === '2025-09-01')?.approved).toBe(1);
+    });
   });
 });
 

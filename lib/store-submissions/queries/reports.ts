@@ -49,7 +49,7 @@
  * Supabase fetches.
  */
 
-import type { TicketOutcome, TicketState } from '../schemas/ticket';
+import type { TicketOutcome } from '../schemas/ticket';
 
 import { storeDb } from '../db';
 
@@ -290,52 +290,134 @@ export function aggregateKpis(
   };
 }
 
-interface TrendInputRow {
-  opened_at: string;
-  latest_outcome: TicketOutcome | null;
-  state: TicketState;
-  resolution_type: 'APPROVED' | 'DONE' | 'ARCHIVED' | null;
+type BucketGranularity = 'daily' | 'weekly' | 'monthly';
+
+const TREND_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Adaptive bucket granularity by window size (PR-Reports.B):
+ *   ≤  90 days → daily   (max 90 bars)
+ *   ≤ 365 days → weekly  Monday-aligned UTC (max 53 bars)
+ *   > 365 days → monthly 1st-of-month UTC (max ~24 bars at the 730-day cap)
+ *
+ * Calendar-natural thresholds chosen over algorithmic `ceil(rangeDays/90)`
+ * so X-axis labels land on intuitive boundaries (Monday, 1st of month).
+ * Resolves the 730d visual degradation acknowledged in PR-Reports.C.
+ */
+function pickGranularity(rangeMs: number): BucketGranularity {
+  const days = Math.ceil(rangeMs / TREND_DAY_MS);
+  if (days <= 90) return 'daily';
+  if (days <= 365) return 'weekly';
+  return 'monthly';
+}
+
+/** UTC start of the bucket containing `d` for the given granularity. */
+function bucketStartOf(d: Date, g: BucketGranularity): Date {
+  if (g === 'daily') {
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  }
+  if (g === 'monthly') {
+    return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+  }
+  // weekly: align to Monday UTC. JS getUTCDay: 0=Sun, 1=Mon, ..., 6=Sat.
+  const dow = d.getUTCDay();
+  const daysFromMonday = (dow + 6) % 7;
+  return new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() - daysFromMonday),
+  );
+}
+
+/** Start of the bucket immediately after `start`. */
+function nextBucketStart(start: Date, g: BucketGranularity): Date {
+  if (g === 'daily') return new Date(start.getTime() + TREND_DAY_MS);
+  if (g === 'weekly') return new Date(start.getTime() + 7 * TREND_DAY_MS);
+  return new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
 }
 
 /**
- * Bucket rows into N daily buckets between windowStart (inclusive) and
- * windowEnd (exclusive). Each bucket is keyed by YYYY-MM-DD in UTC.
+ * Bucket email-entry rows into adaptive periods (daily / weekly / monthly)
+ * between `windowStart` (inclusive) and `windowEnd` (exclusive). Each bucket
+ * keyed by ISO date of the bucket's start (Monday for weekly, 1st of month
+ * for monthly, the day itself for daily).
  *
- * PR-21 semantic lock — Apple verdict view:
- *   - approved  if latest_outcome='APPROVED' (priority 1)
- *   - rejected  if latest_outcome='REJECTED' (priority 2)
- *   - else      in_review (covers latest_outcome=null + 'IN_REVIEW')
+ * PR-Reports.B — Trend chart bucket clock change (4th PR-21 site flipped):
+ *   Source: `email_messages.classification_result` + `received_at`
+ *   (was: `tickets.latest_outcome` + `opened_at`).
+ *   Manager A5 directive: "trend chart should show count by entry in each
+ *   day instead of date of ticket created or closed."
  *
- * NULL latest_outcome → in_review by convention. Note that `state` and
- * `resolution_type` are not consulted here: a ticket Manager moved
- * terminal but lacking an Apple outcome stacks as in_review.
+ * Per-bucket aggregation (Pattern 10 reuse #15 — production-aware
+ * enforcement symmetric với KPI counting from PR-Reports.A):
+ *   - Approved: first-seen email per ticket across the ENTIRE window
+ *     (Manager A2 "max 1 approve per ticket" — DISTINCT semantic, mirrors
+ *     KPI Approved). Apple's burst notifications collapse; resubmit-cycle
+ *     re-approves on a different ticket count separately because A2 is
+ *     per-ticket.
+ *   - Rejected: 60s burst-dedupped events per ticket (mirrors KPI
+ *     Rejected). Each kept canonical event attributes to the bucket
+ *     containing its `received_at`.
+ *   - IN_REVIEW: raw entry count per bucket. Manager A5 literal "count
+ *     by entry"; IN_REVIEW notifications are less burst-prone (typically
+ *     1 per ticket per submission cycle) so dedup adds noise without
+ *     value.
+ *   - null outcome: skipped (DROPPED rows; SQL fetcher pre-filters via
+ *     `.not('classification_result', 'is', null)` but defense-in-depth
+ *     here for synthetic test rows).
  *
- * This trend-chart aggregator still reads from `tickets.latest_outcome`
- * (PR-19/21 source). Switching the trend bucket clock to email entries
- * is deferred to PR-Reports.B per the multi-PR sequential ship plan.
+ * Two-clock window model preserved from PR-Reports.A:
+ *   KPI counts + trend chart  ─→ email_messages.received_at
+ *   Avg review time           ─→ tickets.opened_at (Q3 Option A)
+ *
+ * Function name `bucketTrendByDay` retained intentionally (Pattern 8
+ * minimum blast radius). The "byDay" suffix is now vestigial — granularity
+ * adapts — but renaming would ripple through callers + tests for zero
+ * production benefit.
  */
 export function bucketTrendByDay(
-  rows: TrendInputRow[],
+  entries: EmailEntryInputRow[],
   windowStart: Date,
   windowEnd: Date,
 ): TrendBucket[] {
+  const granularity = pickGranularity(windowEnd.getTime() - windowStart.getTime());
   const buckets = new Map<string, TrendBucket>();
 
-  // Pre-seed every day in window so empty days render as zero bars.
-  const dayMs = 24 * 60 * 60 * 1000;
-  for (let t = windowStart.getTime(); t < windowEnd.getTime(); t += dayMs) {
-    const key = isoDate(new Date(t));
+  // Pre-seed every bucket in window so empty periods render as zero bars.
+  let cursor = bucketStartOf(windowStart, granularity);
+  while (cursor.getTime() < windowEnd.getTime()) {
+    const key = isoDate(cursor);
     buckets.set(key, { date: key, approved: 0, in_review: 0, rejected: 0 });
+    cursor = nextBucketStart(cursor, granularity);
   }
 
-  for (const r of rows) {
-    const date = isoDate(new Date(r.opened_at));
-    const bucket = buckets.get(date);
-    if (!bucket) continue;
-    if (r.latest_outcome === 'APPROVED') bucket.approved++;
-    else if (r.latest_outcome === 'REJECTED') bucket.rejected++;
-    else bucket.in_review++;
+  // Pass 1 — partition by outcome, dedup approves to first-per-ticket.
+  const firstApprovePerTicket = new Map<string, EmailEntryInputRow>();
+  const rejectedRows: EmailEntryInputRow[] = [];
+  const inReviewRows: EmailEntryInputRow[] = [];
+  for (const r of entries) {
+    if (r.outcome === 'APPROVED') {
+      const existing = firstApprovePerTicket.get(r.ticket_id);
+      if (!existing || r.received_at < existing.received_at) {
+        firstApprovePerTicket.set(r.ticket_id, r);
+      }
+    } else if (r.outcome === 'REJECTED') {
+      rejectedRows.push(r);
+    } else if (r.outcome === 'IN_REVIEW') {
+      inReviewRows.push(r);
+    }
+    // null outcome (DROPPED/no Apple verdict) → skipped.
   }
+  const rejectedDedupped = dedupBurstByTicket(rejectedRows);
+
+  // Pass 2 — attribute each canonical entry to its bucket.
+  const attribute = (entry: EmailEntryInputRow, field: 'approved' | 'rejected' | 'in_review') => {
+    const key = isoDate(bucketStartOf(new Date(entry.received_at), granularity));
+    const bucket = buckets.get(key);
+    if (!bucket) return; // outside window — defensive (SQL fetcher pre-filters)
+    bucket[field]++;
+  };
+  for (const r of firstApprovePerTicket.values()) attribute(r, 'approved');
+  for (const r of rejectedDedupped) attribute(r, 'rejected');
+  for (const r of inReviewRows) attribute(r, 'in_review');
 
   return Array.from(buckets.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
@@ -520,12 +602,15 @@ function emptyKpis(): ReportsKpis {
 }
 
 /**
- * Daily trend chart data for the current window only (no comparison
- * window — KPI deltas already convey period-over-period change).
- * `typeId` (PR-22) scopes the same way as `getAppleReportsKpis`.
+ * Trend chart data for the current window only (no comparison window —
+ * KPI deltas already convey period-over-period change). `typeId` (PR-22)
+ * scopes the same way as `getAppleReportsKpis`.
  *
- * Source preserved at `tickets.latest_outcome` (PR-19/21). Switching
- * to email-entry timeline is the PR-Reports.B scope.
+ * PR-Reports.B — sourced from `email_messages` (mirrors
+ * `getAppleReportsKpis` query pattern). Pure aggregation lives in
+ * `bucketTrendByDay`; this fetcher just unfolds the JSONB outcome into
+ * `EmailEntryInputRow` and threads the typeId scope through the
+ * `tickets!inner` join.
  */
 export async function getAppleTrendByDay(
   windowStart: Date,
@@ -536,16 +621,32 @@ export async function getAppleTrendByDay(
   if (!apple) return bucketTrendByDay([], windowStart, windowEnd);
 
   let q = storeDb()
-    .from('tickets')
-    .select('opened_at, latest_outcome, state, resolution_type')
-    .eq('platform_id', apple)
-    .gte('opened_at', windowStart.toISOString())
-    .lt('opened_at', windowEnd.toISOString());
-  if (typeId) q = q.eq('type_id', typeId);
+    .from('email_messages')
+    .select(
+      'ticket_id, classification_result, received_at, tickets!inner(platform_id, type_id)',
+    )
+    .eq('tickets.platform_id', apple)
+    .gte('received_at', windowStart.toISOString())
+    .lt('received_at', windowEnd.toISOString())
+    .not('classification_result', 'is', null);
+  if (typeId) q = q.eq('tickets.type_id', typeId);
 
   const { data, error } = await q;
   if (error || !data) return bucketTrendByDay([], windowStart, windowEnd);
-  return bucketTrendByDay(data as TrendInputRow[], windowStart, windowEnd);
+
+  const entries: EmailEntryInputRow[] = (
+    data as Array<{
+      ticket_id: string;
+      classification_result: { outcome?: TicketOutcome } | null;
+      received_at: string;
+    }>
+  ).map((r) => ({
+    ticket_id: r.ticket_id,
+    outcome: (r.classification_result?.outcome ?? null) as TicketOutcome | null,
+    received_at: r.received_at,
+  }));
+
+  return bucketTrendByDay(entries, windowStart, windowEnd);
 }
 
 /**
