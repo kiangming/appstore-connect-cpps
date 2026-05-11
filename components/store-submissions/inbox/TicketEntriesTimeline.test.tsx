@@ -409,3 +409,60 @@ describe('TicketEntriesTimeline · EmailEntryCard reclassify button', () => {
     ).not.toBeInTheDocument();
   });
 });
+
+// -- ClassificationChip status variants -----------------------------------
+
+/**
+ * ClassificationChip is an internal helper (TicketEntriesTimeline.tsx:354)
+ * rendered inside EmailEntryCard when `metadata.classification_status` is
+ * set. Five inputs are reachable in production per CLAUDE.md Invariant 8:
+ * three resolve to explicit friendly labels, two fall through to a raw
+ * passthrough branch.
+ *
+ * Defensive coverage note: DROPPED and ERROR statuses do not produce an
+ * EMAIL TicketEntry in production (Invariant 8: "KHÔNG tạo ticket" for
+ * both). The tests below document the fallback branch as a safety
+ * contract for any future code path that could surface those values
+ * through a different entry — not a production-realistic shape today.
+ */
+describe('TicketEntriesTimeline · EmailEntryCard ClassificationChip status variants', () => {
+  function emailEntryWithClassification(status: string): TicketEntryRow {
+    return makeEntry({
+      id: 'email-cls-1',
+      entry_type: 'EMAIL',
+      metadata: {
+        email_snapshot: {
+          subject: 'Review of your X submission is complete.',
+          sender: 'no-reply@apple.com',
+          received_at: '2026-04-25T10:00:00Z',
+        },
+        classification_status: status,
+      },
+    });
+  }
+
+  it('renders "Classified" friendly label for CLASSIFIED status', () => {
+    renderTimeline([emailEntryWithClassification('CLASSIFIED')]);
+    expect(screen.getByText('Classified')).toBeInTheDocument();
+  });
+
+  it('renders "Unclassified — app unknown" friendly label for UNCLASSIFIED_APP status', () => {
+    renderTimeline([emailEntryWithClassification('UNCLASSIFIED_APP')]);
+    expect(screen.getByText('Unclassified — app unknown')).toBeInTheDocument();
+  });
+
+  it('renders "Unclassified — type unknown" friendly label for UNCLASSIFIED_TYPE status', () => {
+    renderTimeline([emailEntryWithClassification('UNCLASSIFIED_TYPE')]);
+    expect(screen.getByText('Unclassified — type unknown')).toBeInTheDocument();
+  });
+
+  it('falls through to raw status passthrough for DROPPED (defensive)', () => {
+    renderTimeline([emailEntryWithClassification('DROPPED')]);
+    expect(screen.getByText('DROPPED')).toBeInTheDocument();
+  });
+
+  it('falls through to raw status passthrough for ERROR (defensive)', () => {
+    renderTimeline([emailEntryWithClassification('ERROR')]);
+    expect(screen.getByText('ERROR')).toBeInTheDocument();
+  });
+});
