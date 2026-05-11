@@ -1075,12 +1075,16 @@ for (const row of firstEmailsRes.data) {
   TICKET-10000 then disappears from the inbox listing instead of
   showing as a card with no email preview. RPC change required;
   state-machine semantics + backfill design discussion needed.
-- [ ] **"Reclassified from TICKET-X" annotation on the destination ticket**
-  — mirror of the `STATE_CHANGE 'reclassify_out'` audit entry.
-  Currently `find_or_create_ticket_tx` inserts a generic
-  `STATE_CHANGE` with `trigger='email'`; could augment to detect
-  reclassify-source and label `'reclassify_in'` with the source
-  ticket's display_id for full bidirectional audit visibility.
+- [x] ~~**"Reclassified from TICKET-X" annotation on the destination ticket**~~
+  — ✅ shipped PR-20 (commit `3470c28`): migration
+  [`20260504000003_store_mgmt_reclassify_in_audit.sql`](../../supabase/migrations/20260504000003_store_mgmt_reclassify_in_audit.sql)
+  adds a `STATE_CHANGE` entry with `metadata.type='reclassify_in'`
+  and `from_ticket_id` on the destination ticket inside
+  `reclassify_email_tx`. Renderer at
+  [`TicketEntriesTimeline.tsx`](../../components/store-submissions/inbox/TicketEntriesTimeline.tsx)
+  discriminates both directions and short-id-links the counterpart.
+  Tests cover `reclassify_out`, `reclassify_in`, and legacy-null
+  `to_ticket_id` fallback.
 - [ ] **`entry_count` semantics review** — inbox card's `entry_count`
   counts ALL `ticket_entries` rows including STATE_CHANGE / COMMENT /
   PAYLOAD_ADDED. After this fix TICKET-10000 may show
