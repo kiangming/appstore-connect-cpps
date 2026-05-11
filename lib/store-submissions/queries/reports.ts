@@ -104,6 +104,67 @@ export interface RecentRejected {
   excerpt: string;
 }
 
+/**
+ * PR-Reports.RejectReasons — Apple Guideline frequency analytics.
+ *
+ * Manager directive (verbatim Phase E): extract Guideline headers from
+ * reject-reason free text, group by Guideline code, and count instances
+ * Type → App. Multi-instance same ticket counts each (E.1 verbatim:
+ * "Mỗi 1 reject reason sẽ group và count 1. Không quan tâm là cùng
+ * ticket hay khác ticket").
+ *
+ * Source: `ticket_entries.content` where `entry_type='REJECT_REASON'`
+ * (PR-10c baseline, free-text capture unchanged). Extraction is on-the-
+ * fly TS regex (no schema change) — production scale is tiny
+ * (Q-RejectReason-2 corpus = 2 entries May 2026), regex is cheap, and
+ * the Phase-E LLM commitment comment at reports.ts:725 is intentionally
+ * NOT honored — Manager scope reframed to deterministic regex.
+ */
+export interface GuidelineAppCount {
+  app_id: string;
+  app_name: string;
+  count: number;
+}
+
+export interface GuidelineTypeBreakdown {
+  type_id: string;
+  type_name: string;
+  count: number;
+  apps: GuidelineAppCount[];
+}
+
+export interface GuidelineBreakdown {
+  /** e.g. "4.7.4" — 2-level (X.X) or 3-level (X.X.X). */
+  code: string;
+  /** Canonical description across all instances — most-frequent variant; tiebreak longest. */
+  description: string;
+  /** Sum of instances across all types/apps (Manager E.1 per-entry count). */
+  total: number;
+  types: GuidelineTypeBreakdown[];
+}
+
+export interface RejectReasonBreakdownResult {
+  guidelines: GuidelineBreakdown[];
+  /** Total reject_reason rows processed (parseable + unparseable). */
+  totalReasons: number;
+  /** Rows where `extractGuidelines` returned []. Surfaced as transparency footer. */
+  unparseableReasons: number;
+}
+
+/**
+ * One reject_reason row projected to the breakdown aggregator. `type_id`
+ * + `app_id` may be null (unclassified buckets) — aggregator skips
+ * those rows entirely (no Type/App attribution possible).
+ */
+export interface RejectReasonInputRow {
+  ticket_id: string;
+  content: string;
+  type_id: string | null;
+  type_name: string | null;
+  app_id: string | null;
+  app_name: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Tunables.
 // ---------------------------------------------------------------------------
@@ -513,6 +574,201 @@ export function truncateExcerpt(content: string, maxChars = 200): string {
   return `${cut}…`;
 }
 
+/**
+ * Extract Apple Guideline headers from a reject-reason text block.
+ *
+ * Pattern: a standalone line of the form `Guideline X.X[.X] - <description>`
+ * with these production-data-confirmed properties (Q-RejectReason-1/-2
+ * May 2026):
+ *   - Capital `G` — discriminates the header line from inline lowercase
+ *     mentions ("comply with the requirements in guideline 4.7"), which
+ *     appear in the same Apple email body and would otherwise inflate
+ *     counts.
+ *   - 2 or 3 numeric levels — `4.7`, `4.7.4`. No deeper hierarchy.
+ *   - Dash separator — ASCII hyphen `-` is the production canonical
+ *     (verified TICKET-10012). En-dash `–` and em-dash `—` accepted for
+ *     defensiveness (Apple template variation; CommentForm placeholder
+ *     uses em-dash).
+ *   - Description may itself contain `-` ("Design - Mini apps, mini
+ *     games, …") — captured greedily to end-of-line.
+ *
+ * Line-anchored `^...$` with `/gm` ensures we match only standalone
+ * header lines, not inline body prose containing the word "Guideline".
+ *
+ * Per-entry semantics (Manager E.1 verbatim): within a single reject
+ * reason, if the same code appears more than once (e.g. cited twice in
+ * the same email), it contributes 1 instance for that entry. Caller is
+ * `aggregateByGuideline`, which dedups codes within each row.
+ */
+export function extractGuidelines(
+  text: string,
+): Array<{ code: string; description: string }> {
+  if (!text) return [];
+  const pattern = /^Guideline\s+(\d+(?:\.\d+){1,2})\s*[-–—]\s*(.+?)\s*$/gm;
+  const matches: Array<{ code: string; description: string }> = [];
+  for (const m of text.matchAll(pattern)) {
+    matches.push({ code: m[1], description: m[2] });
+  }
+  return matches;
+}
+
+/**
+ * Aggregate reject-reason rows into Guideline-keyed breakdown with
+ * Type → App hierarchy.
+ *
+ * Counting model (Manager E.1 verbatim, Phase E lock):
+ *   - Each row (ticket_entries REJECT_REASON entry) contributes +1 to
+ *     each UNIQUE Guideline code it cites. TICKET-10012 with 2 entries
+ *     both citing 4.7.4 → code 4.7.4 total = 2.
+ *   - Multi-Guideline entries: if one entry cites 2.3 + 4.7.4, both
+ *     codes += 1 (independently). Future-proof; corpus May 2026 has
+ *     only single-Guideline entries but Apple commonly cites multiple.
+ *   - Same code cited twice in one entry: counted once (within-row
+ *     dedup) — Manager spec "Mỗi 1 reject reason … count 1".
+ *
+ * Type/App attribution: rows missing `type_id` or `app_id` (unclassified
+ * tickets) are excluded entirely — there's no dimension to attribute
+ * them to. The denominator (`totalReasons`) still includes them so the
+ * surface can be honest about coverage.
+ *
+ * Canonical description: collected across all entries; chosen by
+ * frequency (most cited variant wins). Ties broken by longest, then
+ * alphabetical. Stable across runs.
+ *
+ * Sort order:
+ *   guidelines: total DESC, then code ASC
+ *   types     : count DESC, then type_name ASC
+ *   apps      : count DESC, then app_name ASC
+ */
+export function aggregateByGuideline(
+  rows: RejectReasonInputRow[],
+): RejectReasonBreakdownResult {
+  interface AppBucket {
+    app_id: string;
+    app_name: string;
+    count: number;
+  }
+  interface TypeBucket {
+    type_id: string;
+    type_name: string;
+    count: number;
+    apps: Map<string, AppBucket>;
+  }
+  interface CodeBucket {
+    code: string;
+    /** Description frequency tally for canonicalization. */
+    descriptions: Map<string, number>;
+    total: number;
+    types: Map<string, TypeBucket>;
+  }
+
+  const codeBuckets = new Map<string, CodeBucket>();
+  let unparseable = 0;
+
+  for (const row of rows) {
+    const extracted = extractGuidelines(row.content);
+    if (extracted.length === 0) {
+      unparseable += 1;
+      continue;
+    }
+    // Within-row dedup: a single entry citing the same code twice counts once.
+    const codesInRow = new Map<string, string>(); // code -> description (first occurrence wins for that row)
+    for (const { code, description } of extracted) {
+      if (!codesInRow.has(code)) codesInRow.set(code, description);
+    }
+
+    for (const [code, description] of codesInRow) {
+      let codeBucket = codeBuckets.get(code);
+      if (!codeBucket) {
+        codeBucket = {
+          code,
+          descriptions: new Map(),
+          total: 0,
+          types: new Map(),
+        };
+        codeBuckets.set(code, codeBucket);
+      }
+      codeBucket.total += 1;
+      codeBucket.descriptions.set(
+        description,
+        (codeBucket.descriptions.get(description) ?? 0) + 1,
+      );
+
+      // Type/App attribution requires both ids — skip otherwise (still
+      // counted at code-level total above for surface fidelity).
+      if (!row.type_id || !row.type_name || !row.app_id || !row.app_name) {
+        continue;
+      }
+
+      let typeBucket = codeBucket.types.get(row.type_id);
+      if (!typeBucket) {
+        typeBucket = {
+          type_id: row.type_id,
+          type_name: row.type_name,
+          count: 0,
+          apps: new Map(),
+        };
+        codeBucket.types.set(row.type_id, typeBucket);
+      }
+      typeBucket.count += 1;
+
+      let appBucket = typeBucket.apps.get(row.app_id);
+      if (!appBucket) {
+        appBucket = { app_id: row.app_id, app_name: row.app_name, count: 0 };
+        typeBucket.apps.set(row.app_id, appBucket);
+      }
+      appBucket.count += 1;
+    }
+  }
+
+  const guidelines: GuidelineBreakdown[] = Array.from(codeBuckets.values())
+    .map((cb) => ({
+      code: cb.code,
+      description: canonicalDescription(cb.descriptions),
+      total: cb.total,
+      types: Array.from(cb.types.values())
+        .map((tb) => ({
+          type_id: tb.type_id,
+          type_name: tb.type_name,
+          count: tb.count,
+          apps: Array.from(tb.apps.values()).sort(
+            (a, b) => b.count - a.count || a.app_name.localeCompare(b.app_name),
+          ),
+        }))
+        .sort(
+          (a, b) => b.count - a.count || a.type_name.localeCompare(b.type_name),
+        ),
+    }))
+    .sort((a, b) => b.total - a.total || a.code.localeCompare(b.code));
+
+  return {
+    guidelines,
+    totalReasons: rows.length,
+    unparseableReasons: unparseable,
+  };
+}
+
+/**
+ * Pick the canonical description variant for a Guideline code. Most-
+ * frequent wins; ties broken by length (longer wins — more informative),
+ * then alphabetical (stable). Pure helper for `aggregateByGuideline`.
+ */
+function canonicalDescription(descriptions: Map<string, number>): string {
+  let best = '';
+  let bestCount = -1;
+  for (const [desc, count] of descriptions) {
+    if (
+      count > bestCount ||
+      (count === bestCount && desc.length > best.length) ||
+      (count === bestCount && desc.length === best.length && desc < best)
+    ) {
+      best = desc;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
 // ---------------------------------------------------------------------------
 // DB fetchers — compose pure aggregators on top of Supabase fetches.
 // ---------------------------------------------------------------------------
@@ -784,4 +1040,104 @@ export async function getAppleRecentRejected(
       excerpt: truncateExcerpt(r.content ?? ''),
     };
   });
+}
+
+/**
+ * Apple Guideline frequency breakdown over the window. Composes
+ * `aggregateByGuideline` on `ticket_entries.entry_type='REJECT_REASON'`
+ * rows scoped to Apple. PR-Reports.RejectReasons (Phase E commitment).
+ *
+ * Window clock: `ticket_entries.created_at` (when the reject reason was
+ * logged by Manager, not when Apple originally sent the verdict — the
+ * Apple email body inside the content is a Manager paste, the clock is
+ * the audit-trail timestamp). Matches the existing reject-reason surface
+ * `RecentRejectedList` semantics; consistent with the rest of Reports
+ * (date range = "what happened in this window" from our perspective).
+ *
+ * `typeId` (PR-22) scopes through `tickets!inner` join — same pattern
+ * as the 4 other Reports fetchers. Inner join also drops orphan entries
+ * where the parent ticket is gone (shouldn't happen — referential
+ * integrity — but defensive).
+ *
+ * Apps join: prefer `display_name` over `name` for surface labels
+ * (Q-RejectReason-2 verified "Chơi Ngay" short label vs full "Chơi Ngay
+ * Game Vui Vẻ VNG"); falls back to `name` when display_name is null.
+ */
+export async function getAppleRejectReasonBreakdown(
+  windowStart: Date,
+  windowEnd: Date,
+  typeId?: string,
+): Promise<RejectReasonBreakdownResult> {
+  const apple = await getApplePlatformId();
+  if (!apple) {
+    return { guidelines: [], totalReasons: 0, unparseableReasons: 0 };
+  }
+
+  let q = storeDb()
+    .from('ticket_entries')
+    .select(
+      'ticket_id, content, created_at, tickets!inner(platform_id, type_id, app_id, types(id, name), apps(id, name, display_name))',
+    )
+    .eq('entry_type', 'REJECT_REASON')
+    .eq('tickets.platform_id', apple)
+    .gte('created_at', windowStart.toISOString())
+    .lt('created_at', windowEnd.toISOString())
+    .not('content', 'is', null);
+  if (typeId) q = q.eq('tickets.type_id', typeId);
+
+  const { data, error } = await q;
+  if (error || !data) {
+    return { guidelines: [], totalReasons: 0, unparseableReasons: 0 };
+  }
+
+  // Supabase nests joined relations as object-or-array depending on
+  // cardinality — same flattening pattern as `getAppleByAppTable`.
+  const flat: RejectReasonInputRow[] = (
+    data as Array<{
+      ticket_id: string;
+      content: string | null;
+      tickets:
+        | {
+            type_id: string | null;
+            app_id: string | null;
+            types: { id: string; name: string } | { id: string; name: string }[] | null;
+            apps:
+              | { id: string; name: string; display_name: string | null }
+              | { id: string; name: string; display_name: string | null }[]
+              | null;
+          }
+        | {
+            type_id: string | null;
+            app_id: string | null;
+            types: { id: string; name: string } | { id: string; name: string }[] | null;
+            apps:
+              | { id: string; name: string; display_name: string | null }
+              | { id: string; name: string; display_name: string | null }[]
+              | null;
+          }[]
+        | null;
+    }>
+  ).map((r) => {
+    const ticket = Array.isArray(r.tickets) ? r.tickets[0] : r.tickets;
+    const type = ticket?.types
+      ? Array.isArray(ticket.types)
+        ? ticket.types[0]
+        : ticket.types
+      : null;
+    const app = ticket?.apps
+      ? Array.isArray(ticket.apps)
+        ? ticket.apps[0]
+        : ticket.apps
+      : null;
+    return {
+      ticket_id: r.ticket_id,
+      content: r.content ?? '',
+      type_id: type?.id ?? null,
+      type_name: type?.name ?? null,
+      app_id: app?.id ?? null,
+      app_name: app ? (app.display_name ?? app.name) : null,
+    };
+  });
+
+  return aggregateByGuideline(flat);
 }

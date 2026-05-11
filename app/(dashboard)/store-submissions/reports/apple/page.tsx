@@ -5,6 +5,7 @@ import { requireStoreSession } from '@/lib/store-submissions/session-guard';
 import {
   getAppleByAppTable,
   getAppleRecentRejected,
+  getAppleRejectReasonBreakdown,
   getAppleReportsKpis,
   getAppleTrendByDay,
 } from '@/lib/store-submissions/queries/reports';
@@ -13,6 +14,7 @@ import { storeDb } from '@/lib/store-submissions/db';
 import { KpiCards } from '@/components/store-submissions/reports/KpiCards';
 import { TrendChart } from '@/components/store-submissions/reports/TrendChart';
 import { ByAppTable } from '@/components/store-submissions/reports/ByAppTable';
+import { GuidelineBreakdownTable } from '@/components/store-submissions/reports/GuidelineBreakdownTable';
 import { RecentRejectedList } from '@/components/store-submissions/reports/RecentRejectedList';
 import { ReportsFilters } from '@/components/store-submissions/reports/ReportsFilters';
 import { DateRangePicker } from '@/components/store-submissions/reports/DateRangePicker';
@@ -142,13 +144,15 @@ export default async function AppleReportsPage({
     .maybeSingle();
   const applePlatformId = (applePlatformIdRow.data as { id: string } | null)?.id ?? null;
 
-  const [kpis, trend, byApp, recentRejected, allTypes] = await Promise.all([
-    getAppleReportsKpis(windowStart, windowEnd, typeId),
-    getAppleTrendByDay(windowStart, windowEnd, typeId),
-    getAppleByAppTable(windowStart, windowEnd, typeId),
-    getAppleRecentRejected(5, typeId),
-    listAllTypes(),
-  ]);
+  const [kpis, trend, byApp, recentRejected, guidelines, allTypes] =
+    await Promise.all([
+      getAppleReportsKpis(windowStart, windowEnd, typeId),
+      getAppleTrendByDay(windowStart, windowEnd, typeId),
+      getAppleByAppTable(windowStart, windowEnd, typeId),
+      getAppleRecentRejected(5, typeId),
+      getAppleRejectReasonBreakdown(windowStart, windowEnd, typeId),
+      listAllTypes(),
+    ]);
 
   const appleTypes = applePlatformId
     ? allTypes.filter((t) => t.platform_id === applePlatformId)
@@ -192,6 +196,9 @@ export default async function AppleReportsPage({
           <RecentRejectedList rows={recentRejected} />
           <ByAppTable data={byApp} typeId={typeId} />
         </div>
+
+        {/* PR-Reports.RejectReasons (Phase E): Apple Guideline frequency analytics. */}
+        <GuidelineBreakdownTable result={guidelines} />
       </div>
     </div>
   );

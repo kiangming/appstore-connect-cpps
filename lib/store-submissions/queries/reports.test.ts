@@ -17,14 +17,17 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BURST_DEDUP_WINDOW_MS,
+  aggregateByGuideline,
   aggregateKpis,
   bucketTrendByDay,
   dedupBurstByTicket,
+  extractGuidelines,
   groupByApp,
   truncateExcerpt,
 } from './reports';
 import type {
   EmailEntryInputRow,
+  RejectReasonInputRow,
   ReviewTimeInputRow,
 } from './reports';
 import type { TicketOutcome } from '../schemas/ticket';
@@ -670,5 +673,279 @@ describe('truncateExcerpt', () => {
     expect(out.length).toBeLessThanOrEqual(51);
     expect(out.slice(0, -1).endsWith(' ')).toBe(false);
     expect(out.slice(0, -1).split(' ').every((w) => w === 'word' || w === '')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR-Reports.RejectReasons — extractGuidelines + aggregateByGuideline
+// ---------------------------------------------------------------------------
+
+describe('extractGuidelines', () => {
+  it('extracts 3-level X.X.X with ASCII hyphen (Manager spec)', () => {
+    const text = 'Guideline 4.7.4 - Design - Mini apps, mini games';
+    expect(extractGuidelines(text)).toEqual([
+      { code: '4.7.4', description: 'Design - Mini apps, mini games' },
+    ]);
+  });
+
+  it('extracts 2-level X.X', () => {
+    const text = 'Guideline 4.7 - Design - Hardware Compatibility';
+    expect(extractGuidelines(text)).toEqual([
+      { code: '4.7', description: 'Design - Hardware Compatibility' },
+    ]);
+  });
+
+  it('accepts en-dash and em-dash separators', () => {
+    expect(extractGuidelines('Guideline 2.3.10 – Metadata')).toEqual([
+      { code: '2.3.10', description: 'Metadata' },
+    ]);
+    expect(extractGuidelines('Guideline 2.3.10 — Metadata')).toEqual([
+      { code: '2.3.10', description: 'Metadata' },
+    ]);
+  });
+
+  it('handles variable whitespace around the dash', () => {
+    expect(extractGuidelines('Guideline  4.7.4    -    Design')).toEqual([
+      { code: '4.7.4', description: 'Design' },
+    ]);
+  });
+
+  it('does NOT match inline lowercase mentions (Apple email body prose)', () => {
+    const text = 'comply with the requirements in guideline 4.7';
+    expect(extractGuidelines(text)).toEqual([]);
+  });
+
+  it('does NOT match the word Guideline without a numeric code on the line', () => {
+    expect(extractGuidelines('Guideline 4.7.4 details in the next section')).toEqual(
+      [],
+    );
+  });
+
+  it('matches only on standalone lines (multi-paragraph email body)', () => {
+    // Real-shape Apple email body excerpt (Q-RejectReason-1 TICKET-10012).
+    const body = `Hello,
+
+Review Environment
+
+Submission ID: 2e45dd5f-acb5-4d00-b927-70bd3eca962f
+Review date: April 24, 2026
+Version reviewed: 1.4.5 (3)
+
+Guideline 4.7.4 - Design - Mini apps, mini games, streaming games, chatbots, plug-ins, and game emulators
+
+
+Issue Description
+
+The app includes code for games or software not embedded in the binary, but the index you previously provided for the non-embedded games or software is insufficient.
+
+Learn more about requirements for mini apps, mini games, streaming games, chatbots, plug-ins, and game emulators in guideline 4.7.4.`;
+    const out = extractGuidelines(body);
+    expect(out).toEqual([
+      {
+        code: '4.7.4',
+        description:
+          'Design - Mini apps, mini games, streaming games, chatbots, plug-ins, and game emulators',
+      },
+    ]);
+  });
+
+  it('extracts multiple Guidelines cited in one reason', () => {
+    const text = `Guideline 2.3.10 - Performance - Accurate Metadata
+Some prose here.
+
+Guideline 4.7.4 - Design - Mini apps`;
+    const out = extractGuidelines(text);
+    expect(out).toHaveLength(2);
+    expect(out.map((g) => g.code).sort()).toEqual(['2.3.10', '4.7.4']);
+  });
+
+  it('returns empty array on malformed (no Guideline header)', () => {
+    expect(
+      extractGuidelines('Just some rejection text without a header.'),
+    ).toEqual([]);
+  });
+
+  it('handles empty and whitespace-only input', () => {
+    expect(extractGuidelines('')).toEqual([]);
+    expect(extractGuidelines('   \n\n   ')).toEqual([]);
+  });
+});
+
+describe('aggregateByGuideline', () => {
+  function rrRow(opts: {
+    ticket_id?: string;
+    content: string;
+    type_id?: string | null;
+    type_name?: string | null;
+    app_id?: string | null;
+    app_name?: string | null;
+  }): RejectReasonInputRow {
+    // Note: explicit null must be preserved (used by attribution test) —
+    // can't use `??` since it collapses null AND undefined to the default.
+    return {
+      ticket_id: opts.ticket_id ?? 'T1',
+      content: opts.content,
+      type_id: 'type_id' in opts ? (opts.type_id ?? null) : 'type-app',
+      type_name: 'type_name' in opts ? (opts.type_name ?? null) : 'App',
+      app_id: 'app_id' in opts ? (opts.app_id ?? null) : 'app-1',
+      app_name: 'app_name' in opts ? (opts.app_name ?? null) : 'App Alpha',
+    };
+  }
+
+  it('counts each entry separately even on same ticket (Manager E.1 verbatim)', () => {
+    // TICKET-10012 production case: 2 entries both citing 4.7.4 → total = 2.
+    const rows = [
+      rrRow({
+        ticket_id: 'T10012',
+        content: 'Guideline 4.7.4 - Design - Mini apps',
+      }),
+      rrRow({
+        ticket_id: 'T10012',
+        content: 'Guideline 4.7.4 - Design - Mini apps',
+      }),
+    ];
+    const out = aggregateByGuideline(rows);
+    expect(out.guidelines).toHaveLength(1);
+    expect(out.guidelines[0].code).toBe('4.7.4');
+    expect(out.guidelines[0].total).toBe(2);
+    expect(out.totalReasons).toBe(2);
+    expect(out.unparseableReasons).toBe(0);
+  });
+
+  it('dedups same code within a single entry (count = 1 for that row)', () => {
+    const rows = [
+      rrRow({
+        content: `Guideline 4.7.4 - Design - Mini apps
+Then later in the same email:
+Guideline 4.7.4 - Design - Mini apps`,
+      }),
+    ];
+    const out = aggregateByGuideline(rows);
+    expect(out.guidelines[0].total).toBe(1);
+  });
+
+  it('counts multi-Guideline entries against each code independently', () => {
+    const rows = [
+      rrRow({
+        content: `Guideline 2.3.10 - Performance - Accurate Metadata
+Guideline 4.7.4 - Design - Mini apps`,
+      }),
+    ];
+    const out = aggregateByGuideline(rows);
+    expect(out.guidelines).toHaveLength(2);
+    expect(out.guidelines.find((g) => g.code === '2.3.10')?.total).toBe(1);
+    expect(out.guidelines.find((g) => g.code === '4.7.4')?.total).toBe(1);
+  });
+
+  it('groups by Type → App hierarchy', () => {
+    const rows = [
+      rrRow({
+        content: 'Guideline 4.7.4 - Design - X',
+        type_id: 'app',
+        type_name: 'App',
+        app_id: 'a1',
+        app_name: 'Alpha',
+      }),
+      rrRow({
+        content: 'Guideline 4.7.4 - Design - X',
+        type_id: 'app',
+        type_name: 'App',
+        app_id: 'a1',
+        app_name: 'Alpha',
+      }),
+      rrRow({
+        content: 'Guideline 4.7.4 - Design - X',
+        type_id: 'app',
+        type_name: 'App',
+        app_id: 'a2',
+        app_name: 'Beta',
+      }),
+      rrRow({
+        content: 'Guideline 4.7.4 - Design - X',
+        type_id: 'game',
+        type_name: 'Game',
+        app_id: 'a3',
+        app_name: 'Gamma',
+      }),
+    ];
+    const out = aggregateByGuideline(rows);
+    expect(out.guidelines[0].total).toBe(4);
+    expect(out.guidelines[0].types).toHaveLength(2);
+    // App (count=3) sorts before Game (count=1).
+    expect(out.guidelines[0].types[0].type_name).toBe('App');
+    expect(out.guidelines[0].types[0].count).toBe(3);
+    // Within App: Alpha (2) before Beta (1).
+    expect(out.guidelines[0].types[0].apps[0].app_name).toBe('Alpha');
+    expect(out.guidelines[0].types[0].apps[0].count).toBe(2);
+    expect(out.guidelines[0].types[0].apps[1].app_name).toBe('Beta');
+    expect(out.guidelines[0].types[0].apps[1].count).toBe(1);
+  });
+
+  it('sorts guidelines by total DESC, then code ASC', () => {
+    const rows = [
+      rrRow({ content: 'Guideline 4.7.4 - X' }),
+      rrRow({ content: 'Guideline 4.7.4 - X' }),
+      rrRow({ content: 'Guideline 2.3.10 - Y' }),
+      rrRow({ content: 'Guideline 4.7 - Z' }),
+      rrRow({ content: 'Guideline 4.7 - Z' }),
+    ];
+    const out = aggregateByGuideline(rows);
+    // 4.7.4 = 2, 4.7 = 2 (tied), 2.3.10 = 1. Tie-break by code ASC.
+    expect(out.guidelines.map((g) => g.code)).toEqual(['4.7', '4.7.4', '2.3.10']);
+  });
+
+  it('counts unparseable rows separately (transparency footer)', () => {
+    const rows = [
+      rrRow({ content: 'Guideline 4.7.4 - X' }),
+      rrRow({ content: 'No guideline header here' }),
+      rrRow({ content: 'Another reason without header' }),
+    ];
+    const out = aggregateByGuideline(rows);
+    expect(out.guidelines).toHaveLength(1);
+    expect(out.unparseableReasons).toBe(2);
+    expect(out.totalReasons).toBe(3);
+  });
+
+  it('skips Type/App attribution when ids are missing but counts code-level total', () => {
+    const rows = [
+      rrRow({
+        content: 'Guideline 4.7.4 - X',
+        type_id: null,
+        app_id: null,
+        type_name: null,
+        app_name: null,
+      }),
+      rrRow({
+        content: 'Guideline 4.7.4 - X',
+        type_id: 'app',
+        type_name: 'App',
+        app_id: 'a1',
+        app_name: 'Alpha',
+      }),
+    ];
+    const out = aggregateByGuideline(rows);
+    expect(out.guidelines[0].total).toBe(2);
+    // Only the row with attribution shows in types breakdown.
+    expect(out.guidelines[0].types).toHaveLength(1);
+    expect(out.guidelines[0].types[0].count).toBe(1);
+  });
+
+  it('picks canonical description by frequency, tiebreak longest', () => {
+    const rows = [
+      rrRow({ content: 'Guideline 4.7.4 - Short' }),
+      rrRow({ content: 'Guideline 4.7.4 - Longer description here' }),
+      rrRow({ content: 'Guideline 4.7.4 - Longer description here' }),
+    ];
+    const out = aggregateByGuideline(rows);
+    expect(out.guidelines[0].description).toBe('Longer description here');
+  });
+
+  it('returns empty result on empty input', () => {
+    const out = aggregateByGuideline([]);
+    expect(out).toEqual({
+      guidelines: [],
+      totalReasons: 0,
+      unparseableReasons: 0,
+    });
   });
 });
