@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp } from 'lucide-react';
+import { ArrowDown, ArrowUp, Info } from 'lucide-react';
 import type { ReportsKpis } from '@/lib/store-submissions/queries/reports';
 
 interface Props {
@@ -6,6 +6,24 @@ interface Props {
   /** Days in the comparison window — used in the "vs previous Nd" subtitle copy. */
   windowDays: number;
 }
+
+/**
+ * Manager-education tooltips (PR-Reports.Tooltips, MV17 preventive).
+ *
+ * Copy is grounded against the aggregator semantics in
+ * `lib/store-submissions/queries/reports.ts:190-202` + `BURST_DEDUP_WINDOW_MS`
+ * + migration `20260502` (`opened_at = v_now`) + CLAUDE.md Invariant 6
+ * (`closed_at ↔ state IN (DONE, ARCHIVED)` covers auto-done + Manager
+ * Mark Done paths). Verified before ship — Pattern 10 reuse #18.
+ */
+const TOOLTIP_TOTAL =
+  'Tickets with outcome (APPROVED or REJECTED) in window. DISTINCT ticket count — IN_REVIEW and no-outcome tickets excluded.';
+const TOOLTIP_APPROVED =
+  'Apple may send multiple approval emails per ticket. Counted as 1 per ticket (DISTINCT ticket_id).';
+const TOOLTIP_REJECTED =
+  'Apple may retry rejection emails within seconds. 60-second burst dedup collapses each burst to 1; separate resubmit rejections count as separate cycles.';
+const TOOLTIP_AVG_REVIEW =
+  'Mean time from ticket open (opened_at) to Mark Done (closed_at). APPROVED tickets only — closed_at = auto-done moment or Manager Mark Done click.';
 
 /**
  * 4 KPI cards: Total / Approved / Rejected / Avg review time.
@@ -23,6 +41,7 @@ export function KpiCards({ kpis, windowDays }: Props) {
         delta={kpis.deltas.total}
         deltaSemantic="higher-is-better"
         subtitle={`vs previous ${windowDays}d`}
+        tooltip={TOOLTIP_TOTAL}
       />
       <Card
         label="Approved"
@@ -34,6 +53,7 @@ export function KpiCards({ kpis, windowDays }: Props) {
             ? `${((kpis.approved / kpis.total) * 100).toFixed(1)}% approval rate`
             : 'no data'
         }
+        tooltip={TOOLTIP_APPROVED}
       />
       <Card
         label="Rejected"
@@ -46,6 +66,7 @@ export function KpiCards({ kpis, windowDays }: Props) {
             ? `${((kpis.rejected / kpis.total) * 100).toFixed(1)}% reject rate`
             : 'no data'
         }
+        tooltip={TOOLTIP_REJECTED}
       />
       <Card
         label="Avg. review time"
@@ -53,6 +74,7 @@ export function KpiCards({ kpis, windowDays }: Props) {
         delta={kpis.deltas.avgReviewTime}
         deltaSemantic="lower-is-better"
         subtitle="submit → approved"
+        tooltip={TOOLTIP_AVG_REVIEW}
       />
     </div>
   );
@@ -65,13 +87,34 @@ interface CardProps {
   delta: number | null;
   deltaSemantic: 'higher-is-better' | 'lower-is-better';
   subtitle: string;
+  /** Optional Manager-education tooltip; renders an Info icon next to the label. */
+  tooltip?: string;
 }
 
-function Card({ label, value, valueColor, delta, deltaSemantic, subtitle }: CardProps) {
+function Card({
+  label,
+  value,
+  valueColor,
+  delta,
+  deltaSemantic,
+  subtitle,
+  tooltip,
+}: CardProps) {
   const deltaDisplay = formatDelta(delta, deltaSemantic);
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-4">
-      <div className="text-[11.5px] text-slate-500 uppercase tracking-wider">{label}</div>
+      <div className="flex items-center gap-1 text-[11.5px] text-slate-500 uppercase tracking-wider">
+        <span>{label}</span>
+        {tooltip && (
+          <span
+            title={tooltip}
+            aria-label={tooltip}
+            className="cursor-help inline-flex"
+          >
+            <Info className="h-3 w-3 text-slate-400" strokeWidth={2} />
+          </span>
+        )}
+      </div>
       <div className="flex items-baseline gap-2 mt-1">
         <div className={`text-[34px] leading-none font-semibold ${valueColor ?? ''}`}>
           {value}
