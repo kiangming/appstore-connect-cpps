@@ -25,6 +25,7 @@ import { useHotkeys } from 'react-hotkeys-hook';
 import {
   ArrowRight,
   CheckCircle2,
+  ChevronLeft,
   ChevronRight,
   Database,
   Lightbulb,
@@ -423,6 +424,50 @@ export function InboxClient({
 
   const hasActiveFilters = hasOtherFilters || Boolean(initialQuery.outcome);
 
+  // -- Pagination cursor stack (PR-Inbox.Pagination) ----------------------
+  //
+  // Pattern A: encode the back-history as a comma-separated stack of
+  // cursors in the URL (`?cursor=C2&prev=C1,C0`). The server schema
+  // doesn't know about `prev` — `parseTicketsQueryFromSearchParams` only
+  // forwards known keys, so `prev` is purely a client-side affordance.
+  //
+  // `baseParams` builds URLs from scratch (only copies known scalar keys
+  // from `initialQuery`), so filter/tab/chip changes naturally drop the
+  // stack without any extra plumbing.
+  const prevStackRaw = searchParams?.get('prev') ?? '';
+  const prevStack = useMemo(
+    () => prevStackRaw.split(',').filter(Boolean),
+    [prevStackRaw],
+  );
+  const canGoBack = prevStack.length > 0 || Boolean(initialQuery.cursor);
+
+  function goNext() {
+    if (!initialData.next_cursor) return;
+    const p = baseParams([]);
+    // Push current cursor onto the stack if present. Page 1 → page 2 has
+    // no cursor to push, so the stack stays empty on that transition.
+    const newStack = initialQuery.cursor
+      ? [...prevStack, initialQuery.cursor]
+      : prevStack;
+    p.set('cursor', initialData.next_cursor);
+    if (newStack.length > 0) p.set('prev', newStack.join(','));
+    navigate(p);
+  }
+
+  function goBack() {
+    const p = baseParams([]);
+    const newCursor = prevStack[prevStack.length - 1];
+    const newStack = prevStack.slice(0, -1);
+    if (newCursor) {
+      p.set('cursor', newCursor);
+      if (newStack.length > 0) p.set('prev', newStack.join(','));
+    }
+    // newCursor undefined → stack was empty, we're heading back to
+    // page 1: baseParams already produced a clean URL (no cursor, no
+    // prev), so nothing else to set.
+    navigate(p);
+  }
+
   const { tickets, has_more } = initialData;
 
   return (
@@ -704,7 +749,12 @@ export function InboxClient({
         currentUserId={currentUserId}
       />
 
-      {/* -- Pagination footer -- */}
+      {/* -- Pagination footer --
+          Prev/Next pair driven by the URL cursor stack (`?prev=…`). No
+          explicit page number — the stack length is the only "where am I"
+          signal we keep, and surfacing it as "Page N" would imply offset
+          pagination semantics that the keyset cursor doesn't actually
+          provide. Prev is hidden on page 1 (no stack and no cursor). */}
       <div className="flex items-center justify-between text-[12px] text-slate-400">
         <span>
           {tickets.length} {tickets.length === 1 ? 'ticket' : 'tickets'}
@@ -712,21 +762,30 @@ export function InboxClient({
           {' · '}role: <code className="font-mono">{role}</code>
         </span>
 
-        {has_more && initialData.next_cursor && (
-          <button
-            type="button"
-            onClick={() => {
-              const p = baseParams([]);
-              p.set('cursor', initialData.next_cursor as string);
-              navigate(p);
-            }}
-            disabled={isPending}
-            className="inline-flex items-center gap-1 text-[13px] text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-300 bg-white rounded-lg px-3 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Next
-            <ChevronRight className="w-3.5 h-3.5" strokeWidth={1.8} />
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {canGoBack && (
+            <button
+              type="button"
+              onClick={goBack}
+              disabled={isPending}
+              className="inline-flex items-center gap-1 text-[13px] text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-300 bg-white rounded-lg px-3 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft className="w-3.5 h-3.5" strokeWidth={1.8} />
+              Prev
+            </button>
+          )}
+          {has_more && initialData.next_cursor && (
+            <button
+              type="button"
+              onClick={goNext}
+              disabled={isPending}
+              className="inline-flex items-center gap-1 text-[13px] text-slate-600 hover:text-slate-900 border border-slate-200 hover:border-slate-300 bg-white rounded-lg px-3 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Next
+              <ChevronRight className="w-3.5 h-3.5" strokeWidth={1.8} />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
