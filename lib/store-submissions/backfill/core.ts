@@ -116,12 +116,35 @@ export class GmailFetchError extends Error {
   }
 }
 
+/**
+ * PR-Inbox.ForwardDedup. Thrown when backfill is invoked on a row
+ * the dedup gate (or historical backfill migration) marked
+ * `classification_status = 'DUPLICATE_FORWARD'`. Refuse before the
+ * expensive Gmail re-fetch / HTML re-extract / RPC swap — point
+ * Manager at the original instead (Q10 Option I).
+ */
+export class DuplicateForwardRefusedError extends Error {
+  readonly originalEmailId: string | null;
+  constructor(emailId: string, originalEmailId: string | null) {
+    const target = originalEmailId
+      ? `the original email (${originalEmailId})`
+      : 'the original email (no longer available)';
+    super(
+      `This email (${emailId}) was deduplicated as a forwarded copy. To reclassify, action ${target}.`,
+    );
+    this.name = 'DuplicateForwardRefusedError';
+    this.originalEmailId = originalEmailId;
+  }
+}
+
 // -- Internal types ------------------------------------------------------
 
 interface EmailLookupRow {
   id: string;
   gmail_msg_id: string;
   sender_email: string;
+  classification_status: string;
+  duplicate_of_email_id: string | null;
 }
 
 // -- Public pipeline -----------------------------------------------------
@@ -157,7 +180,9 @@ export async function backfillOne(
   //    edited it via Gmail label/reply, though Apple emails are static).
   const { data: rowData, error: rowErr } = await storeDb()
     .from('email_messages')
-    .select('id, gmail_msg_id, sender_email')
+    .select(
+      'id, gmail_msg_id, sender_email, classification_status, duplicate_of_email_id',
+    )
     .eq('id', emailMessageId)
     .maybeSingle();
 
@@ -169,6 +194,18 @@ export async function backfillOne(
   }
 
   const row = rowData as EmailLookupRow;
+
+  // PR-Inbox.ForwardDedup: refuse early. The expensive steps below
+  // (Gmail re-fetch, HTML re-extract, RPC swap) would all be wasted
+  // — reclassifyOne would refuse at the end anyway. Manager Q10
+  // Option I: point at the original instead of silently no-op.
+  if (row.classification_status === 'DUPLICATE_FORWARD') {
+    throw new DuplicateForwardRefusedError(
+      emailMessageId,
+      row.duplicate_of_email_id,
+    );
+  }
+
   if (!ctx.isAppleSender(row.sender_email)) {
     throw new NotApplePlatformError(emailMessageId);
   }
@@ -322,6 +359,11 @@ export function mapErrorToActionError(
       message:
         'This email no longer exists — the list may be stale. Refresh and try again.',
     };
+  }
+  // PR-Inbox.ForwardDedup (Q10 Option I): refuse before Gmail re-fetch,
+  // point Manager at the original.
+  if (err instanceof DuplicateForwardRefusedError) {
+    return { code: 'CONFLICT', message: err.message };
   }
   if (err instanceof NotApplePlatformError) {
     return {

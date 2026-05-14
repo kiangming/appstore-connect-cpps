@@ -29,12 +29,19 @@ const CORRUPT_OR_FILTER =
   `raw_body_text.match.${CORRUPT_REGEX}`;
 
 export async function getCorruptPayloadCount(): Promise<number> {
+  // PR-Inbox.ForwardDedup (DD.8 finding): also exclude
+  // DUPLICATE_FORWARD rows. Their extracted_payload may carry
+  // control-byte residue inherited from the original email, but
+  // they were never wired to a ticket and have no action surface —
+  // re-classifying them would route through the refusal toast.
+  // Inflating the corrupt-payload banner count with un-actionable
+  // rows misleads Manager into thinking maintenance is needed.
   const { count, error } = await storeDb()
     .from('email_messages')
     .select('id', { count: 'exact', head: true })
     .or(CORRUPT_OR_FILTER)
     .not('extracted_payload', 'is', null)
-    .not('classification_status', 'eq', 'DROPPED');
+    .not('classification_status', 'in', '("DROPPED","DUPLICATE_FORWARD")');
 
   if (error) {
     // Page render must not fail on a maintenance probe — degrade to

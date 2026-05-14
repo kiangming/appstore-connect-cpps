@@ -53,6 +53,7 @@ import {
 } from '@/lib/store-submissions/auth';
 import { storeDb } from '@/lib/store-submissions/db';
 import {
+  DuplicateForwardRefusedError,
   EmailNotFoundError,
   ReclassifyValidationError,
   reclassifyOne,
@@ -105,6 +106,12 @@ function mapErrorToActionError(err: unknown, emailId: string): ActionError {
       message:
         'This email no longer exists — the list may be stale. Refresh and try again.',
     };
+  }
+  // PR-Inbox.ForwardDedup (Q10 Option I): predictable refusal toast
+  // points Manager at the original. CONFLICT semantic — row is in
+  // a state that conflicts with reclassify.
+  if (err instanceof DuplicateForwardRefusedError) {
+    return { code: 'CONFLICT', message: err.message };
   }
   if (err instanceof ReclassifyValidationError) {
     return { code: 'VALIDATION', message: err.message };

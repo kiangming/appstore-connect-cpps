@@ -67,6 +67,33 @@ export class ReclassifyValidationError extends Error {
   }
 }
 
+/**
+ * PR-Inbox.ForwardDedup. Thrown when reclassify is invoked on a row
+ * that the upstream dedup gate (or historical backfill migration)
+ * marked `classification_status = 'DUPLICATE_FORWARD'`. The original
+ * (rn=1) row carries the canonical ticket attachment; re-classifying
+ * a duplicate would either no-op (current state is terminal) or
+ * risk creating a divergent reattach path. Manager Q10 LOCKED
+ * Option I: refuse, surface the original's id, point Manager at it.
+ *
+ * `originalEmailId` is the `duplicate_of_email_id` value (NULL only
+ * if a future cleanup cron purged the original — message text
+ * adapts).
+ */
+export class DuplicateForwardRefusedError extends Error {
+  readonly originalEmailId: string | null;
+  constructor(emailId: string, originalEmailId: string | null) {
+    const target = originalEmailId
+      ? `the original email (${originalEmailId})`
+      : 'the original email (no longer available)';
+    super(
+      `This email (${emailId}) was deduplicated as a forwarded copy. To reclassify, action ${target}.`,
+    );
+    this.name = 'DuplicateForwardRefusedError';
+    this.originalEmailId = originalEmailId;
+  }
+}
+
 // -- Internal types ------------------------------------------------------
 
 interface EmailRow {
@@ -77,6 +104,8 @@ interface EmailRow {
   extracted_payload: ExtractedPayload | null;
   classification_result: Record<string, unknown> | null;
   ticket_id: string | null;
+  classification_status: string;
+  duplicate_of_email_id: string | null;
 }
 
 interface RpcReclassifyResult {
@@ -108,7 +137,7 @@ export async function reclassifyOne(
   const { data: rowData, error: rowErr } = await storeDb()
     .from('email_messages')
     .select(
-      'id, sender_email, subject, raw_body_text, extracted_payload, classification_result, ticket_id',
+      'id, sender_email, subject, raw_body_text, extracted_payload, classification_result, ticket_id, classification_status, duplicate_of_email_id',
     )
     .eq('id', emailMessageId)
     .maybeSingle();
@@ -121,6 +150,19 @@ export async function reclassifyOne(
   }
 
   const email = rowData as EmailRow;
+
+  // 1.5 PR-Inbox.ForwardDedup. Refuse before any classifier/RPC work
+  //     on rows the dedup gate marked as forwarded copies. Manager
+  //     Q10 LOCKED Option I — predictable refusal beats surprising
+  //     a Manager who clicked Reclassify expecting "rerun on this
+  //     email" but actually rerunning on a duplicate could attempt
+  //     to reattach the wrong row to a new ticket.
+  if (email.classification_status === 'DUPLICATE_FORWARD') {
+    throw new DuplicateForwardRefusedError(
+      emailMessageId,
+      email.duplicate_of_email_id,
+    );
+  }
 
   // 2. Resolve sender against the *current* registry.
   const senders = await loadActiveSenders();

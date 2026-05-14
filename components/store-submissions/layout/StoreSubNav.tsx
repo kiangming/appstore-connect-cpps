@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Inbox, BarChart3 } from 'lucide-react';
+import { Inbox, BarChart3, Copy } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 interface WorkflowTab {
@@ -29,14 +29,30 @@ const TABS: WorkflowTab[] = [
     icon: BarChart3,
     matchPrefixes: ['/store-submissions/reports'],
   },
+  {
+    key: 'duplicate-forwards',
+    label: 'Duplicates',
+    href: '/store-submissions/duplicate-forwards',
+    icon: Copy,
+    matchPrefixes: ['/store-submissions/duplicate-forwards'],
+  },
 ];
+
+interface Props {
+  /**
+   * Trailing 30-day count of DUPLICATE_FORWARD email rows. Shown as a
+   * compact badge next to the Duplicates tab when > 0. Server-fetched
+   * in the layout to keep the subnav fully static after first paint.
+   */
+  duplicateForwardCount?: number;
+}
 
 /**
  * Workflow-level sub-navigation for Store Management. Renders above
  * Inbox + Reports content; hides on Config routes (which have their
  * own ConfigSubNav at the same vertical position).
  */
-export function StoreSubNav() {
+export function StoreSubNav({ duplicateForwardCount = 0 }: Props) {
   const pathname = usePathname();
 
   // Skip render on Config routes — ConfigSubNav handles that surface.
@@ -47,6 +63,8 @@ export function StoreSubNav() {
       {TABS.map((tab) => {
         const active = tab.matchPrefixes.some((p) => pathname.startsWith(p));
         const Icon = tab.icon;
+        const showBadge =
+          tab.key === 'duplicate-forwards' && duplicateForwardCount > 0;
         return (
           <Link
             key={tab.key}
@@ -60,6 +78,14 @@ export function StoreSubNav() {
           >
             <Icon className="h-4 w-4" strokeWidth={1.8} />
             {tab.label}
+            {showBadge ? (
+              <span
+                className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full bg-indigo-100 text-indigo-700 text-[10.5px] font-semibold tabular-nums"
+                aria-label={`${duplicateForwardCount} forwarded duplicates in the last 30 days`}
+              >
+                {duplicateForwardCount}
+              </span>
+            ) : null}
           </Link>
         );
       })}

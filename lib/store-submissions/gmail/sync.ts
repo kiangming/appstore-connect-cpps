@@ -56,6 +56,8 @@ import type {
   RulesSnapshot,
 } from '../classifier/types';
 import { storeDb } from '../db';
+import { computeFingerprint } from '../dedup/fingerprint';
+import { findFingerprintMatch } from '../dedup/query';
 import { getRulesSnapshotForPlatform } from '../queries/rules';
 import { isTicketableClassification } from '../tickets/types';
 import { associateEmailWithTicket } from '../tickets/wire';
@@ -852,7 +854,59 @@ async function processMessage(
   };
   const classification = classify(classInput, rules);
 
+  // 5.5 PR-Inbox.ForwardDedup gate. Apple structural duplicate fix
+  //     (Manager Q14 LOCKED 2026-05-14). Three admin Gmail accounts
+  //     auto-forward Apple notifications into the shared mailbox; each
+  //     forwarded copy arrives as a distinct gmail_msg_id, bypassing
+  //     UNIQUE(gmail_msg_id), and APPROVED/auto-DONE forwards bypass
+  //     the find_or_create open-states predicate → structural N-way
+  //     ticket duplication.
+  //
+  //     Strategy: pre-wire fingerprint check at email_messages
+  //     ingestion. Fingerprint = computed from classifier outputs +
+  //     extractor submission_id (NOT raw subject — handles Fwd:
+  //     prefix variance). If a CLASSIFIED match exists within ±5min,
+  //     mark current row DUPLICATE_FORWARD with back-reference and
+  //     skip the wire step entirely. RPC contract unchanged.
+  //
+  //     Skip conditions (fingerprint === null): non-Apple platforms,
+  //     non-CLASSIFIED status, missing ext_submission_id. Those
+  //     proceed via the original flow without dedup.
+  //
+  //     Failure handling: a thrown DB error in the lookup falls
+  //     through to normal flow (better to risk one duplicate ticket
+  //     than wedge the entire batch). Logged + Sentry-captured for
+  //     post-mortem.
+  const fingerprint = computeFingerprint({
+    classification,
+    extractedPayload,
+    platformKey: platformRes.platformKey,
+  });
+
+  let duplicateOfEmailId: string | null = null;
+  if (fingerprint !== null) {
+    try {
+      const match = await findFingerprintMatch(fingerprint, parsed.receivedAt);
+      if (match) {
+        duplicateOfEmailId = match.id;
+      }
+    } catch (lookupErr) {
+      console.error(
+        '[sync] fingerprint lookup threw — falling through to normal flow',
+        { fingerprint, error: lookupErr },
+      );
+      Sentry.captureException(lookupErr, {
+        tags: { component: 'forward-dedup', phase: 'lookup' },
+        extra: { fingerprint, gmailMsgId: parsed.messageId },
+      });
+    }
+  }
+
   // 6. Persist with classifier_version stamped onto the JSONB.
+  //    Status flipped to DUPLICATE_FORWARD when the dedup gate fired;
+  //    classification_result intact so the classifier's verdict
+  //    remains an audit-truth field (separate from the row-level
+  //    routing status).
   const errorMsg = extractErrorMessage(classification);
   const inserted = await insertEmailMessageRow({
     gmailMsgId: parsed.messageId,
@@ -862,22 +916,49 @@ async function processMessage(
     senderName: parsed.fromName ?? null,
     receivedAt: parsed.receivedAt,
     bodyText: parsed.body,
-    classificationStatus: classification.status,
+    classificationStatus: duplicateOfEmailId
+      ? 'DUPLICATE_FORWARD'
+      : classification.status,
     classificationResult: {
       ...classification,
       classifier_version: CLASSIFIER_VERSION,
     },
     errorMessage: errorMsg,
     extractedPayload,
+    duplicateFingerprint: fingerprint,
+    duplicateOfEmailId,
   });
 
-  incrementStatsFor(classification.status, ctx.stats);
+  // Stats accounting: skip increments on DUPLICATE_FORWARD. `fetched`
+  // still includes the row (counted at end of batch); the delta
+  // `fetched - (classified + unclassified + dropped + errors)`
+  // becomes the implicit duplicates count for observability. Avoids
+  // a sync_logs schema migration; explicit dedup metrics surface via
+  // the /duplicate-forwards UI query.
+  if (!duplicateOfEmailId) {
+    incrementStatsFor(classification.status, ctx.stats);
+  } else {
+    console.log(
+      '[dedup] forwarded duplicate detected — wire skipped',
+      {
+        emailId: inserted?.id,
+        duplicateOf: duplicateOfEmailId,
+        fingerprint,
+      },
+    );
+  }
 
   // 7. Ticket wire (PR-8). Only ticketable statuses reach the engine;
   //    DROPPED (SUBJECT_NOT_TRACKED) + ERROR (REGEX_TIMEOUT, PARSE_ERROR)
   //    short-circuit via `isTicketableClassification`. `inserted === null`
   //    means the INSERT hit a UNIQUE(gmail_msg_id) race — the winning
   //    run's wire call handles association; we bail to avoid double-wire.
+  //
+  //    PR-Inbox.ForwardDedup: DUPLICATE_FORWARD rows skip wire by
+  //    `duplicateOfEmailId !== null` short-circuit. The classifier
+  //    output is still ticketable in principle; we're suppressing
+  //    the wire for the dedup gate's sake. The original (rn=1) row
+  //    handled the ticket attachment on its own pass.
   //
   //    Wire is GRACEFUL by contract: it swallows engine/UPDATE errors
   //    and returns null. We still wrap with try/catch here as
@@ -889,7 +970,11 @@ async function processMessage(
   //    loop where dedup skips the row forever (ticket_id permanently
   //    NULL). Swallowing preserves cursor progress; the orphan is
   //    recoverable via Manager re-association (PR-9+).
-  if (inserted && isTicketableClassification(classification)) {
+  if (
+    inserted &&
+    !duplicateOfEmailId &&
+    isTicketableClassification(classification)
+  ) {
     try {
       await associateEmailWithTicket(inserted.id, classification);
     } catch (wireErr) {
@@ -958,7 +1043,8 @@ interface EmailMessageRow {
     | 'UNCLASSIFIED_TYPE'
     | 'DROPPED'
     | 'ERROR'
-    | 'PENDING';
+    | 'PENDING'
+    | 'DUPLICATE_FORWARD';
   /** Full classifier output + classifier_version stamp. */
   classificationResult: Record<string, unknown>;
   errorMessage?: string | null;
@@ -971,6 +1057,23 @@ interface EmailMessageRow {
    * `accepted_items` is empty (signals "extraction attempted, no items").
    */
   extractedPayload?: ExtractedPayload | null;
+  /**
+   * PR-Inbox.ForwardDedup. Composed fingerprint string (see
+   * dedup/fingerprint.ts) for Apple CLASSIFIED rows. Stored on
+   * originals AND duplicates so the runtime gate can look up the
+   * canonical original by fingerprint. NULL when the dedup gate
+   * was skipped (non-Apple, non-CLASSIFIED, missing
+   * ext_submission_id).
+   */
+  duplicateFingerprint?: string | null;
+  /**
+   * PR-Inbox.ForwardDedup. Back-reference to the original
+   * (first-by-received_at) email in this row's fingerprint group.
+   * NULL when this row IS the original. Combined with
+   * `classificationStatus = 'DUPLICATE_FORWARD'` to distinguish
+   * forwarded copies from originals.
+   */
+  duplicateOfEmailId?: string | null;
 }
 
 async function emailAlreadyPersisted(gmailMsgId: string): Promise<boolean> {
@@ -1017,8 +1120,16 @@ async function insertEmailMessageRow(
       processed_at: new Date().toISOString(),
       error_message: row.errorMessage ?? null,
       extracted_payload: row.extractedPayload ?? null,
+      // PR-Inbox.ForwardDedup. NULL on rows where the dedup gate
+      // was skipped (non-Apple, non-CLASSIFIED, missing
+      // ext_submission_id) — partial index excludes those.
+      duplicate_fingerprint: row.duplicateFingerprint ?? null,
+      duplicate_of_email_id: row.duplicateOfEmailId ?? null,
       // ticket_id left NULL at INSERT — the PR-8 ticket wire back-fills
       // it via UPDATE for ticketable statuses (CLASSIFIED + UNCLASSIFIED_*).
+      // DUPLICATE_FORWARD rows skip the wire entirely (sync.ts step 7),
+      // so ticket_id stays NULL permanently — the back-reference lives
+      // on `duplicate_of_email_id` instead.
       ticket_id: null,
     })
     .select('id')
