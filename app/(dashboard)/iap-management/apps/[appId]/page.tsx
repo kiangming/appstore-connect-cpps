@@ -3,6 +3,11 @@ import { getApp } from "@/lib/asc-client";
 import { listInAppPurchases } from "@/lib/iap-management/apple/client";
 import { withRetry } from "@/lib/iap-management/apple/fetch";
 import { getActiveAccount } from "@/lib/get-active-account";
+import {
+  findAppByAppleId,
+  listDraftIaps,
+  type IapDbRow,
+} from "@/lib/iap-management/queries/iaps";
 import { IapListClient } from "./IapListClient";
 import type {
   InAppPurchase,
@@ -45,6 +50,7 @@ async function IapListContent({ appId }: { appId: string }) {
   let appName: string | null = null;
   let appBundleId: string | null = null;
   let iaps: InAppPurchase[] = [];
+  let drafts: IapDbRow[] = [];
 
   try {
     const creds = await getActiveAccount();
@@ -57,6 +63,18 @@ async function IapListContent({ appId }: { appId: string }) {
     iaps = iapsRes.data ?? [];
   } catch (e) {
     error = e instanceof Error ? e.message : "Failed to load IAPs";
+  }
+
+  // Drafts are read-only-by-default: only fetch if the app exists in our
+  // schema (= a draft has been saved at least once). findAppByAppleId is a
+  // pure read; it returns null for un-registered apps which is normal.
+  try {
+    const internalAppId = await findAppByAppleId(appId);
+    if (internalAppId) {
+      drafts = (await listDraftIaps(internalAppId)).drafts;
+    }
+  } catch {
+    // drafts are non-essential — degrade silently
   }
 
   if (error) {
@@ -73,6 +91,7 @@ async function IapListContent({ appId }: { appId: string }) {
       appName={appName ?? ""}
       appBundleId={appBundleId ?? ""}
       iaps={iaps}
+      drafts={drafts}
     />
   );
 }
