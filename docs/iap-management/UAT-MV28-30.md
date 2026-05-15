@@ -19,22 +19,44 @@ supabase db push
 supabase migration up
 ```
 
-Two migrations land for this arc:
+Three migrations land for this arc:
 
 | File | Adds |
 |---|---|
-| `supabase/migrations/20260515000000_iap_mgmt_init.sql` | `iap_mgmt` schema + 8 tables + RLS-on-no-policies |
+| `supabase/migrations/20260515000000_iap_mgmt_init.sql` | `iap_mgmt` schema + 8 tables (note: this file enabled RLS without policies + skipped GRANTs — fixed by the third migration below) |
 | `supabase/migrations/20260515010000_iap_mgmt_tier_id_text.sql` | `tier_id` INT → TEXT to support Alternate Tiers (Manager follow-up answer C) |
+| `supabase/migrations/20260515020000_iap_mgmt_rls_grants_fix.sql` | **IAP.o hotfix** — disables RLS + grants `service_role` / `authenticated` + sets default privileges to match the working `store_mgmt` sibling pattern. **Required for the Settings page and any IAP write path to function.** |
 
 Verify post-apply:
 
 ```sql
+-- A. 8 tables present
 SELECT table_name FROM information_schema.tables
 WHERE table_schema = 'iap_mgmt' ORDER BY table_name;
 -- Expected 8 rows:
 --   actions_log, apps, iap_localizations, iap_screenshots,
 --   iaps, import_batches, price_tier_territories, price_tiers
+
+-- B. RLS OFF on all 8 tables (post-IAP.o)
+SELECT relname, relrowsecurity FROM pg_class
+WHERE relnamespace = 'iap_mgmt'::regnamespace AND relkind = 'r'
+ORDER BY relname;
+-- Expected: relrowsecurity = false for all 8 rows.
+
+-- C. service_role has table privileges
+SELECT grantee, COUNT(*) FROM information_schema.role_table_grants
+WHERE table_schema = 'iap_mgmt' GROUP BY grantee ORDER BY grantee;
+-- Expected: at minimum `service_role` and `authenticated` listed
+-- with non-zero counts.
+
+-- D. iap_mgmt schema exposed via PostgREST (Supabase Dashboard config)
+SHOW pgrst.db_schemas;
+-- Expected substring: 'iap_mgmt'.
+-- If missing: Dashboard → Project Settings → API → "Exposed schemas"
+-- → add `iap_mgmt` to the comma-separated list. API hot-reloads.
 ```
+
+If any of A-D fails, the IAP module will surface 500s on first DB query. Verify all four before starting MV29 scenarios.
 
 ### 2. Confirm environment variables
 
