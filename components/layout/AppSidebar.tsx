@@ -7,6 +7,7 @@ import { useState } from "react";
 import { Layers, Inbox, Settings, LogOut } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { getSettingsHref } from "./sidebar-helpers";
+import { ThemeToggle } from "./ThemeToggle";
 
 interface NavItem {
   id: string;
@@ -100,6 +101,9 @@ export function AppSidebar() {
           })}
         </div>
 
+        {/* Theme toggle */}
+        <ThemeToggle variant="icon" />
+
         {/* Settings */}
         <Link
           href={settingsHref}
@@ -153,6 +157,9 @@ export function AppSidebar() {
               );
             })}
           </div>
+
+          {/* Theme toggle (labeled) */}
+          <ThemeToggle variant="row" />
 
           {/* Settings label */}
           <Link

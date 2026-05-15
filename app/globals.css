@@ -27,6 +27,34 @@
     --ring: 213 100% 44.7%;
     --radius: 0.5rem;
   }
+
+  /* IAP.j1: dark-mode palette (Manager Q-IAP.3 lock — token migration
+     approach (a)). next-themes flips the `.dark` class on <html>, which
+     swaps the HSL values for any component that uses semantic tokens
+     (bg-background, text-foreground, …). Component class migration from
+     hardcoded slate/white to semantic tokens lands in IAP.j2 (deferrable
+     per scope lock). */
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 213 100% 60%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 213 100% 60%;
+  }
 }
 
 @layer base {
