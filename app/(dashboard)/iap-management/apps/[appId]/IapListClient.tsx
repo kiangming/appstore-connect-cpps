@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Search, ChevronLeft, Inbox, Plus, Pencil, FileText } from "lucide-react";
+import { Search, ChevronLeft, Inbox, Plus, Pencil, FileText, Upload } from "lucide-react";
 import type {
   InAppPurchase,
   InAppPurchaseType,
@@ -146,6 +146,13 @@ export function IapListClient({
         <span className="ml-auto inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
           {iaps.length} IAP{iaps.length === 1 ? "" : "s"}
         </span>
+        <Link
+          href={`/iap-management/apps/${appId}/bulk-import`}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition"
+        >
+          <Upload className="h-3.5 w-3.5" />
+          Bulk Import
+        </Link>
         <Link
           href={`/iap-management/apps/${appId}/iaps/new`}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition"
