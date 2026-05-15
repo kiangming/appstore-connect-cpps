@@ -57,6 +57,12 @@ import {
   getEmptyMessage,
   type InboxTabKey,
 } from '@/lib/store-submissions/inbox/empty-message';
+import {
+  canGoBackFrom,
+  computeBackParams,
+  computeNextParams,
+  parsePrevStack,
+} from '@/lib/store-submissions/inbox/pagination-stack';
 import { FilterPill } from '@/components/store-submissions/ui/FilterPill';
 import { TicketListTable } from './TicketListTable';
 import { TicketDetailPanel } from './TicketDetailPanel';
@@ -254,7 +260,13 @@ export function InboxClient({
   const baseParams = useCallback(
     (reset: Array<keyof TicketsQuery> = []) => {
       const p = new URLSearchParams();
-      const skip = new Set<string>(['cursor', ...(reset as string[])]);
+      // 'prev' joins 'cursor' as a defensive-in-depth skip entry —
+      // both are client-only pagination keys, not part of the
+      // TicketsQuery scalarKeys whitelist, so filter / tab / chip
+      // changes drop them automatically. Listing them here documents
+      // the intent so a future scalarKeys addition can't silently
+      // promote a stale stack into a fresh filter context.
+      const skip = new Set<string>(['cursor', 'prev', ...(reset as string[])]);
       // state is array-valued; everything else is scalar.
       if (!skip.has('state') && initialQuery.state) {
         if (Array.isArray(initialQuery.state)) {
@@ -424,45 +436,48 @@ export function InboxClient({
 
   const hasActiveFilters = hasOtherFilters || Boolean(initialQuery.outcome);
 
-  // -- Pagination cursor stack (PR-Inbox.Pagination) ----------------------
+  // -- Pagination cursor stack (PR-Inbox.PaginationBack) ------------------
   //
   // Pattern A: encode the back-history as a comma-separated stack of
   // cursors in the URL (`?cursor=C2&prev=C1,C0`). The server schema
   // doesn't know about `prev` — `parseTicketsQueryFromSearchParams` only
   // forwards known keys, so `prev` is purely a client-side affordance.
   //
+  // Stack math lives in `lib/store-submissions/inbox/pagination-stack.ts`
+  // (pure, unit-tested across the MV26 A-K matrix). This component is
+  // responsible only for binding those helpers to the URL via the
+  // existing `baseParams` + `navigate` plumbing.
+  //
   // `baseParams` builds URLs from scratch (only copies known scalar keys
-  // from `initialQuery`), so filter/tab/chip changes naturally drop the
-  // stack without any extra plumbing.
+  // from `initialQuery`) AND lists `prev` in its skip set, so filter /
+  // tab / chip changes naturally drop the stack — no extra plumbing
+  // needed on those mutation paths.
   const prevStackRaw = searchParams?.get('prev') ?? '';
-  const prevStack = useMemo(
-    () => prevStackRaw.split(',').filter(Boolean),
-    [prevStackRaw],
-  );
-  const canGoBack = prevStack.length > 0 || Boolean(initialQuery.cursor);
+  const prevStack = useMemo(() => parsePrevStack(prevStackRaw), [prevStackRaw]);
+  const canGoBack = canGoBackFrom({
+    currentCursor: initialQuery.cursor,
+    prevStack,
+  });
 
   function goNext() {
-    if (!initialData.next_cursor) return;
+    const next = computeNextParams({
+      currentCursor: initialQuery.cursor,
+      prevStack,
+      nextCursor: initialData.next_cursor,
+    });
+    if (!next?.cursor) return;
     const p = baseParams([]);
-    // Push current cursor onto the stack if present. Page 1 → page 2 has
-    // no cursor to push, so the stack stays empty on that transition.
-    const newStack = initialQuery.cursor
-      ? [...prevStack, initialQuery.cursor]
-      : prevStack;
-    p.set('cursor', initialData.next_cursor);
-    if (newStack.length > 0) p.set('prev', newStack.join(','));
+    p.set('cursor', next.cursor);
+    if (next.prev) p.set('prev', next.prev);
     navigate(p);
   }
 
   function goBack() {
+    const back = computeBackParams({ prevStack });
     const p = baseParams([]);
-    const newCursor = prevStack[prevStack.length - 1];
-    const newStack = prevStack.slice(0, -1);
-    if (newCursor) {
-      p.set('cursor', newCursor);
-      if (newStack.length > 0) p.set('prev', newStack.join(','));
-    }
-    // newCursor undefined → stack was empty, we're heading back to
+    if (back.cursor) p.set('cursor', back.cursor);
+    if (back.prev) p.set('prev', back.prev);
+    // back.cursor undefined → stack was empty, we're returning to
     // page 1: baseParams already produced a clean URL (no cursor, no
     // prev), so nothing else to set.
     navigate(p);
