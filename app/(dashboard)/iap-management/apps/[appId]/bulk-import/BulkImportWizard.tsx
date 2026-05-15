@@ -159,8 +159,31 @@ export function BulkImportWizard({
     }
   }
 
+  const tiersEmpty = usdTiers.length === 0;
+
   return (
     <div className="space-y-6">
+      {tiersEmpty && (
+        <div
+          role="alert"
+          className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
+        >
+          <p className="font-medium">No pricing tiers cached.</p>
+          <p className="text-xs mt-0.5">
+            Tier resolution requires the price-tier cache populated first.
+            Bulk-import rows will downgrade to <span className="font-mono">ERROR</span>{" "}
+            until tiers are imported via{" "}
+            <a
+              href="/iap-management/settings/pricing-tiers"
+              className="underline hover:text-amber-700 dark:hover:text-amber-100"
+            >
+              Settings → Pricing Tiers
+            </a>
+            .
+          </p>
+        </div>
+      )}
+
       <Stepper step={step} />
 
       {step === 1 && (

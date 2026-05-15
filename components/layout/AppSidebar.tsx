@@ -74,7 +74,7 @@ export function AppSidebar() {
       }}
     >
       {/* Icon rail — always visible */}
-      <div className="w-[56px] h-full bg-white border-r border-slate-200 flex flex-col items-center py-3 flex-shrink-0">
+      <div className="w-[56px] h-full bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col items-center py-3 flex-shrink-0">
         {/* Logo → Hub */}
         <Link
           href="/"
@@ -94,8 +94,8 @@ export function AppSidebar() {
                 title={item.label}
                 className={`relative w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
                   isActive
-                    ? "text-[#0071E3] bg-blue-50"
-                    : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+                    ? "text-[#0071E3] bg-blue-50 dark:bg-blue-950/40"
+                    : "text-slate-400 hover:text-slate-600 hover:bg-slate-50 dark:text-slate-500 dark:hover:text-slate-300 dark:hover:bg-slate-800"
                 }`}
               >
                 {isActive && (
@@ -116,8 +116,8 @@ export function AppSidebar() {
           title="Settings"
           className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors mb-1 ${
             isSettingsActive
-              ? "text-[#0071E3] bg-blue-50"
-              : "text-slate-400 hover:text-slate-600 hover:bg-slate-50"
+              ? "text-[#0071E3] bg-blue-50 dark:bg-blue-950/40"
+              : "text-slate-400 hover:text-slate-600 hover:bg-slate-50 dark:text-slate-500 dark:hover:text-slate-300 dark:hover:bg-slate-800"
           }`}
         >
           <Settings className="h-[20px] w-[20px]" strokeWidth={1.8} />
@@ -126,7 +126,7 @@ export function AppSidebar() {
         {/* User avatar */}
         <button
           onClick={() => setShowUserMenu((v) => !v)}
-          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg hover:bg-slate-50 transition-colors relative"
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors relative"
           title={email || "User"}
         >
           {userIcon}
@@ -135,10 +135,10 @@ export function AppSidebar() {
 
       {/* Flyout panel — on hover */}
       {hovered && (
-        <div className="w-[180px] h-full bg-white border-r border-slate-200 shadow-md flex flex-col py-3 animate-in slide-in-from-left-2 duration-150">
+        <div className="w-[180px] h-full bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 shadow-md flex flex-col py-3 animate-in slide-in-from-left-2 duration-150">
           {/* Logo label */}
           <div className="px-4 mb-6 flex items-center h-[34px]">
-            <span className="font-semibold text-[13px] text-slate-900 tracking-tight">
+            <span className="font-semibold text-[13px] text-slate-900 dark:text-slate-100 tracking-tight">
               CPP Manager
             </span>
           </div>
@@ -153,8 +153,8 @@ export function AppSidebar() {
                   href={item.href}
                   className={`flex items-center gap-3 h-10 px-4 text-[13px] transition-colors ${
                     isActive
-                      ? "text-[#0071E3] font-semibold bg-blue-50"
-                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+                      ? "text-[#0071E3] font-semibold bg-blue-50 dark:bg-blue-950/40"
+                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-50 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-800"
                   }`}
                 >
                   <item.icon className="h-4 w-4 flex-shrink-0" strokeWidth={1.8} />
@@ -172,8 +172,8 @@ export function AppSidebar() {
             href={settingsHref}
             className={`flex items-center gap-3 h-10 px-4 text-[13px] transition-colors mb-1 ${
               isSettingsActive
-                ? "text-[#0071E3] font-semibold bg-blue-50"
-                : "text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+                ? "text-[#0071E3] font-semibold bg-blue-50 dark:bg-blue-950/40"
+                : "text-slate-600 hover:text-slate-900 hover:bg-slate-50 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-800"
             }`}
           >
             <Settings className="h-4 w-4 flex-shrink-0" strokeWidth={1.8} />
@@ -182,14 +182,14 @@ export function AppSidebar() {
 
           {/* User section */}
           <div className="px-4 flex items-center h-10 relative">
-            <span className="text-xs text-slate-500 truncate flex-1">
+            <span className="text-xs text-slate-500 dark:text-slate-400 truncate flex-1">
               {email || "User"}
             </span>
             <button
               onClick={handleLogout}
               disabled={loggingOut}
               title="Sign out"
-              className="p-1.5 rounded-md text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-50"
+              className="p-1.5 rounded-md text-slate-400 hover:text-red-500 hover:bg-red-50 dark:text-slate-500 dark:hover:text-red-400 dark:hover:bg-red-950/30 transition-colors disabled:opacity-50"
             >
               <LogOut className="h-3.5 w-3.5" />
             </button>
@@ -199,14 +199,14 @@ export function AppSidebar() {
 
       {/* User dropdown — when icon rail avatar clicked (no hover) */}
       {!hovered && showUserMenu && (
-        <div className="absolute left-[56px] bottom-2 w-[200px] bg-white rounded-lg shadow-lg border border-slate-200 p-2 animate-in fade-in duration-100">
-          <div className="px-3 py-2 text-xs text-slate-500 truncate border-b border-slate-100 mb-1">
+        <div className="absolute left-[56px] bottom-2 w-[200px] bg-white dark:bg-slate-900 rounded-lg shadow-lg border border-slate-200 dark:border-slate-800 p-2 animate-in fade-in duration-100">
+          <div className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400 truncate border-b border-slate-100 dark:border-slate-800 mb-1">
             {email}
           </div>
           <button
             onClick={handleLogout}
             disabled={loggingOut}
-            className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors disabled:opacity-50"
+            className="w-full flex items-center gap-2 px-3 py-2 text-[13px] text-slate-600 hover:text-red-600 hover:bg-red-50 dark:text-slate-400 dark:hover:text-red-400 dark:hover:bg-red-950/30 rounded-md transition-colors disabled:opacity-50"
           >
             <LogOut className="h-3.5 w-3.5" />
             Sign out

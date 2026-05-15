@@ -42,7 +42,7 @@ export function ThemeToggle({ variant }: Props) {
         onClick={() => setTheme(next)}
         title={label}
         aria-label={label}
-        className="w-10 h-10 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-50 transition-colors mb-1"
+        className="w-10 h-10 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-50 dark:text-slate-500 dark:hover:text-slate-300 dark:hover:bg-slate-800 transition-colors mb-1"
       >
         {mounted ? (
           <Icon className="h-[20px] w-[20px]" strokeWidth={1.8} />
@@ -57,7 +57,7 @@ export function ThemeToggle({ variant }: Props) {
     <button
       type="button"
       onClick={() => setTheme(next)}
-      className="flex items-center gap-3 h-10 px-4 text-[13px] text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition-colors w-full"
+      className="flex items-center gap-3 h-10 px-4 text-[13px] text-slate-600 hover:text-slate-900 hover:bg-slate-50 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-800 transition-colors w-full"
     >
       {mounted ? (
         <Icon className="h-4 w-4 flex-shrink-0" strokeWidth={1.8} />
