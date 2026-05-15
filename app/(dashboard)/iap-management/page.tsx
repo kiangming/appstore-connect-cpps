@@ -1,9 +1,6 @@
 import { redirect } from "next/navigation";
 
-/**
- * Root /iap-management/ — redirects to Settings until IAP.g lands the
- * apps list as the canonical landing page.
- */
+/** Root /iap-management/ — canonical landing is the apps list. */
 export default function IapManagementRoot() {
-  redirect("/iap-management/settings/pricing-tiers");
+  redirect("/iap-management/apps");
 }
