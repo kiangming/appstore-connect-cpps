@@ -6,10 +6,14 @@
  * Header schema (Manager Q-IAP.5 strict validation):
  *   Col 0: "Product ID"          — string, immutable (Apple regex: [A-Za-z0-9_.-]+)
  *   Col 1: "Reference Name"      — string, max 64 chars (Apple constraint)
- *   Col 2: "Price (USD)"         — numeric, base price for tier resolution
- *   Col 3: "GT Price"            — numeric, base-territory price
- *   Col 4: "GT Currency"         — string, base-territory currency code
- *   Col 5..: locale pairs in this exact order per template:
+ *   Col 2: "Type"                — enum CONSUMABLE / NON_CONSUMABLE /
+ *                                  NON_RENEWING_SUBSCRIPTION. Empty cell →
+ *                                  default CONSUMABLE (Manager IAP.h2 lock).
+ *                                  Invalid value → row error.
+ *   Col 3: "Price (USD)"         — numeric, base price (drives tier inference)
+ *   Col 4: "GT Price"            — numeric, base-territory price
+ *   Col 5: "GT Currency"         — string, base-territory currency code
+ *   Col 6..: locale pairs in this exact order per template:
  *           [Display Name (<Locale Name>), Description (<Locale Name>)]
  *           Locale names are Apple user-friendly format (e.g. "English (U.S.)").
  *           Mapped to BCP-47 codes via lib/locale-utils.localeCodeFromName.
@@ -20,18 +24,31 @@
  *     imported for that row (silent skip — expected behaviour).
  *   - If ONE is empty + ONE filled → validation warning (partial fill),
  *     locale still skipped (paired data integrity preserved).
+ *
+ * Tier inference (Manager IAP.h2 lock) does NOT live in this parser — it
+ * needs DB access to price_tier_territories. Callers run
+ * `resolveTierByUsdPrice(item.price_usd, usdTiers)` (queries/price-tiers.ts)
+ * after parsing.
  */
 
 import { localeCodeFromName } from "@/lib/locale-utils";
+import type { InAppPurchaseType } from "@/types/iap-management/apple";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 const LEAD_HEADERS = [
   "Product ID",
   "Reference Name",
+  "Type",
   "Price (USD)",
   "GT Price",
   "GT Currency",
+] as const;
+
+const TYPE_VALUES: readonly InAppPurchaseType[] = [
+  "CONSUMABLE",
+  "NON_CONSUMABLE",
+  "NON_RENEWING_SUBSCRIPTION",
 ] as const;
 
 const LOCALE_HEADER_RE = /^(Display Name|Description) \((.+)\)$/;
@@ -47,6 +64,8 @@ export interface ParsedIapItem {
   row_index: number;        // 1-based row number in source spreadsheet
   product_id: string;
   reference_name: string;
+  type: InAppPurchaseType;
+  type_source: "COLUMN" | "DEFAULT";  // for audit log (IAP.h2)
   price_usd: number;
   base_price: number;
   base_currency: string;
@@ -211,9 +230,26 @@ export async function parseIapItemsXlsx(
       );
     }
 
-    const priceUsd = readCellNumber(row[2], "Price (USD)", r);
-    const basePrice = readCellNumber(row[3], "GT Price", r);
-    const baseCurrency = readCellString(row[4]);
+    // Col 2: Type (Manager IAP.h2 lock). Empty → default CONSUMABLE.
+    // Invalid value → row error (not silent default).
+    const typeRaw = readCellString(row[2]);
+    let type: InAppPurchaseType;
+    let typeSource: "COLUMN" | "DEFAULT";
+    if (typeRaw === "") {
+      type = "CONSUMABLE";
+      typeSource = "DEFAULT";
+    } else if ((TYPE_VALUES as readonly string[]).includes(typeRaw)) {
+      type = typeRaw as InAppPurchaseType;
+      typeSource = "COLUMN";
+    } else {
+      throw new Error(
+        `Row ${r + 1}: Invalid Type value "${typeRaw}". Expected ${TYPE_VALUES.join(" / ")}.`,
+      );
+    }
+
+    const priceUsd = readCellNumber(row[3], "Price (USD)", r);
+    const basePrice = readCellNumber(row[4], "GT Price", r);
+    const baseCurrency = readCellString(row[5]);
     if (!baseCurrency) {
       throw new Error(
         `Row ${r + 1}: GT Currency is required for product "${productId}".`,
@@ -250,6 +286,8 @@ export async function parseIapItemsXlsx(
       row_index: r + 1,
       product_id: productId,
       reference_name: referenceName,
+      type,
+      type_source: typeSource,
       price_usd: priceUsd,
       base_price: basePrice,
       base_currency: baseCurrency,

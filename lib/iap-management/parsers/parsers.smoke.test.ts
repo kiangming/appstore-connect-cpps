@@ -99,7 +99,7 @@ describe("parsePriceTiersXlsx — Manager template", () => {
   });
 });
 
-describe("parseIapItemsXlsx — Manager template", () => {
+describe("parseIapItemsXlsx — Manager template (post-IAP.h2 Type column)", () => {
   it("parses sample row with productId, reference name, prices", async () => {
     const file = loadTemplate("item-iap-template.xlsx");
     const result = await parseIapItemsXlsx(file);
@@ -111,6 +111,15 @@ describe("parseIapItemsXlsx — Manager template", () => {
     expect(sample.price_usd).toBe(0.99);
     expect(sample.base_price).toBe(23000);
     expect(sample.base_currency).toBe("VND");
+  });
+
+  it("Type column empty in samples → defaults to CONSUMABLE with type_source=DEFAULT", async () => {
+    const file = loadTemplate("item-iap-template.xlsx");
+    const result = await parseIapItemsXlsx(file);
+    for (const item of result.items) {
+      expect(item.type).toBe("CONSUMABLE");
+      expect(item.type_source).toBe("DEFAULT");
+    }
   });
 
   it("detects 39 locale pairs and surfaces 0 skipped (locale-map coverage)", async () => {

@@ -23,15 +23,18 @@ import {
 } from "@/lib/iap-management/parsers/screenshot-matcher";
 import {
   resolveConflicts,
+  enrichWithTiers,
   type ConflictMode,
   type ConflictDecision,
   type ResolveResult,
 } from "@/lib/iap-management/bulk-import/conflict-resolution";
+import type { UsdTierEntry } from "@/lib/iap-management/queries/price-tiers";
 
 interface Props {
   appId: string;
   appName: string;
   existingProductIds: string[];
+  usdTiers: UsdTierEntry[];
 }
 
 type Step = 1 | 2 | 3 | 4;
@@ -64,6 +67,7 @@ export function BulkImportWizard({
   appId,
   appName,
   existingProductIds,
+  usdTiers,
 }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>(1);
@@ -83,13 +87,25 @@ export function BulkImportWizard({
 
   const resolved: ResolveResult | null = useMemo(() => {
     if (!parsed) return null;
-    return resolveConflicts({
+    const conflicts = resolveConflicts({
       parsed: parsed.items,
       existing_product_ids: existingSet,
       default_mode: conflictMode,
       overrides,
     });
-  }, [parsed, existingSet, conflictMode, overrides]);
+    return enrichWithTiers(conflicts, usdTiers);
+  }, [parsed, existingSet, conflictMode, overrides, usdTiers]);
+
+  const typeColumnPopulated = useMemo(() => {
+    if (!parsed) return { fromColumn: 0, defaulted: 0 };
+    let fromColumn = 0;
+    let defaulted = 0;
+    for (const it of parsed.items) {
+      if (it.type_source === "COLUMN") fromColumn++;
+      else defaulted++;
+    }
+    return { fromColumn, defaulted };
+  }, [parsed]);
 
   function toggleOverride(productId: string) {
     setOverrides((prev) => {
@@ -151,6 +167,7 @@ export function BulkImportWizard({
         <Step1Excel
           file={excelFile}
           parsed={parsed}
+          typeColumnPopulated={typeColumnPopulated}
           onParsed={(file, parseResult) => {
             setExcelFile(file);
             setParsed(parseResult);
@@ -293,11 +310,13 @@ function Stepper({ step }: { step: Step }) {
 function Step1Excel({
   file,
   parsed,
+  typeColumnPopulated,
   onParsed,
   onClear,
 }: {
   file: File | null;
   parsed: IapItemsParseResult | null;
+  typeColumnPopulated: { fromColumn: number; defaulted: number };
   onParsed: (file: File, result: IapItemsParseResult) => void;
   onClear: () => void;
 }) {
@@ -385,6 +404,11 @@ function Step1Excel({
               Replace
             </button>
           </div>
+          <p className="mt-1 text-[11px] text-emerald-700">
+            Type source: <strong>{typeColumnPopulated.fromColumn}</strong> from
+            column, <strong>{typeColumnPopulated.defaulted}</strong> defaulted
+            to Consumable.
+          </p>
           {parsed.warnings.length > 0 && (
             <div className="mt-2 text-[11px] text-amber-700">
               {parsed.warnings.length} parse warning(s) — open with caution.
@@ -636,10 +660,12 @@ function Step3Preview({
             <tr className="text-left text-[10px] uppercase text-slate-500 tracking-wide">
               <th className="px-3 py-2">Product ID</th>
               <th className="px-3 py-2">Reference Name</th>
-              <th className="px-3 py-2 w-16">Locales</th>
-              <th className="px-3 py-2 w-16">Screenshot</th>
-              <th className="px-3 py-2 w-28">Disposition</th>
-              <th className="px-3 py-2 w-24">Action</th>
+              <th className="px-3 py-2 w-32">Type</th>
+              <th className="px-3 py-2 w-24">Tier</th>
+              <th className="px-3 py-2 w-14">Loc</th>
+              <th className="px-3 py-2 w-14">Scr</th>
+              <th className="px-3 py-2 w-24">Disposition</th>
+              <th className="px-3 py-2 w-20">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -655,6 +681,25 @@ function Step3Preview({
                   </td>
                   <td className="px-3 py-2 truncate max-w-[200px]">
                     {d.source.reference_name}
+                  </td>
+                  <td className="px-3 py-2 text-[11px]">
+                    <span className="text-slate-700">
+                      {d.source.type.replace(/_/g, " ").toLowerCase()}
+                    </span>
+                    <span
+                      className={`ml-1.5 text-[9px] px-1 py-0.5 rounded ${
+                        d.source.type_source === "COLUMN"
+                          ? "bg-blue-50 text-blue-700"
+                          : "bg-slate-100 text-slate-500"
+                      }`}
+                    >
+                      {d.source.type_source.toLowerCase()}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 font-mono text-[10px] text-slate-600">
+                    {d.resolved_tier_id ?? (
+                      <span className="text-amber-600">—</span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-center">{localesFilled}</td>
                   <td className="px-3 py-2 text-center">

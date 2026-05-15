@@ -6,6 +6,7 @@ import { getApp } from "@/lib/asc-client";
 import { listInAppPurchases } from "@/lib/iap-management/apple/client";
 import { withRetry } from "@/lib/iap-management/apple/fetch";
 import { getActiveAccount } from "@/lib/get-active-account";
+import { listUsdTiers } from "@/lib/iap-management/queries/price-tiers";
 import { BulkImportWizard } from "./BulkImportWizard";
 
 export const dynamic = "force-dynamic";
@@ -24,18 +25,21 @@ export default async function BulkImportPage({ params }: PageProps) {
 
   let appName = "";
   let existingProductIds: string[] = [];
+  let usdTiers: Awaited<ReturnType<typeof listUsdTiers>> = [];
   try {
     const creds = await getActiveAccount();
-    const [appRes, iapsRes] = await Promise.all([
+    const [appRes, iapsRes, tiersRes] = await Promise.all([
       getApp(creds, params.appId),
       withRetry(() => listInAppPurchases(creds, params.appId)),
+      listUsdTiers(),
     ]);
     appName = appRes.data.attributes.name;
     existingProductIds = (iapsRes.data ?? []).map(
       (iap) => iap.attributes.productId,
     );
+    usdTiers = tiersRes;
   } catch {
-    // The wizard can still render; conflict detection degrades to "all new"
+    // The wizard can still render; conflict + tier detection degrade.
   }
 
   return (
@@ -59,6 +63,7 @@ export default async function BulkImportPage({ params }: PageProps) {
         appId={params.appId}
         appName={appName}
         existingProductIds={existingProductIds}
+        usdTiers={usdTiers}
       />
     </div>
   );

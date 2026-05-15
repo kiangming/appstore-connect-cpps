@@ -1,15 +1,19 @@
 import { describe, it, expect } from "vitest";
 import {
   resolveConflicts,
+  enrichWithTiers,
   type ConflictMode,
 } from "./conflict-resolution";
 import type { ParsedIapItem } from "../parsers/iap-items";
+import type { UsdTierEntry } from "../queries/price-tiers";
 
 function row(overrides: Partial<ParsedIapItem> = {}): ParsedIapItem {
   return {
     row_index: 2,
     product_id: "com.vng.app.product1",
     reference_name: "Product 1",
+    type: "CONSUMABLE",
+    type_source: "DEFAULT",
     price_usd: 0.99,
     base_price: 23000,
     base_currency: "VND",
@@ -133,5 +137,83 @@ describe("ConflictMode type", () => {
   it("admits only OVERWRITE and SKIP", () => {
     const modes: ConflictMode[] = ["OVERWRITE", "SKIP"];
     expect(modes).toHaveLength(2);
+  });
+});
+
+describe("enrichWithTiers — IAP.h2 tier inference pass", () => {
+  const tiers: UsdTierEntry[] = [
+    { tier_id: "FREE", customer_price: 0 },
+    { tier_id: "TIER_1", customer_price: 0.99 },
+    { tier_id: "TIER_5", customer_price: 4.99 },
+  ];
+
+  it("attaches resolved_tier_id to CREATE rows", () => {
+    const initial = resolveConflicts({
+      parsed: [row({ price_usd: 0.99 })],
+      existing_product_ids: new Set(),
+      default_mode: "OVERWRITE",
+    });
+    const enriched = enrichWithTiers(initial, tiers);
+    expect(enriched.decisions[0].disposition).toBe("CREATE");
+    expect(enriched.decisions[0].resolved_tier_id).toBe("TIER_1");
+  });
+
+  it("attaches resolved_tier_id to OVERWRITE rows", () => {
+    const initial = resolveConflicts({
+      parsed: [row({ price_usd: 4.99 })],
+      existing_product_ids: new Set(["com.vng.app.product1"]),
+      default_mode: "OVERWRITE",
+    });
+    const enriched = enrichWithTiers(initial, tiers);
+    expect(enriched.decisions[0].disposition).toBe("OVERWRITE");
+    expect(enriched.decisions[0].resolved_tier_id).toBe("TIER_5");
+  });
+
+  it("downgrades CREATE → ERROR when price has no tier match", () => {
+    const initial = resolveConflicts({
+      parsed: [row({ price_usd: 1.5 })],
+      existing_product_ids: new Set(),
+      default_mode: "OVERWRITE",
+    });
+    const enriched = enrichWithTiers(initial, tiers);
+    expect(enriched.decisions[0].disposition).toBe("ERROR");
+    expect(enriched.decisions[0].reason).toMatch(/\$1\.5/);
+    expect(enriched.decisions[0].resolved_tier_id).toBeNull();
+  });
+
+  it("passes SKIP rows through unchanged (tier irrelevant)", () => {
+    const initial = resolveConflicts({
+      parsed: [row({ price_usd: 1.5 })], // would fail tier
+      existing_product_ids: new Set(["com.vng.app.product1"]),
+      default_mode: "SKIP",
+    });
+    const enriched = enrichWithTiers(initial, tiers);
+    expect(enriched.decisions[0].disposition).toBe("SKIP");
+    expect(enriched.decisions[0].resolved_tier_id).toBeUndefined();
+  });
+
+  it("passes existing ERROR rows through unchanged", () => {
+    const initial = resolveConflicts({
+      parsed: [row({ product_id: "bad id" })], // fails validation
+      existing_product_ids: new Set(),
+      default_mode: "OVERWRITE",
+    });
+    const enriched = enrichWithTiers(initial, tiers);
+    expect(enriched.decisions[0].disposition).toBe("ERROR");
+    expect(enriched.decisions[0].reason).toMatch(/invalid characters/);
+  });
+
+  it("tally counts reflect post-enrichment dispositions", () => {
+    const initial = resolveConflicts({
+      parsed: [
+        row({ product_id: "com.vng.app.a", price_usd: 0.99 }),
+        row({ product_id: "com.vng.app.b", price_usd: 4.99 }),
+        row({ product_id: "com.vng.app.c", price_usd: 7.77 }), // no match
+      ],
+      existing_product_ids: new Set(),
+      default_mode: "OVERWRITE",
+    });
+    const enriched = enrichWithTiers(initial, tiers);
+    expect(enriched.counts).toEqual({ create: 2, overwrite: 0, skip: 0, error: 1 });
   });
 });

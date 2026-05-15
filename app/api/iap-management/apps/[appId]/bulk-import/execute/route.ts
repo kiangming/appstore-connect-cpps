@@ -57,9 +57,11 @@ import { parseIapItemsXlsx } from "@/lib/iap-management/parsers/iap-items";
 import { matchScreenshotToProductId } from "@/lib/iap-management/parsers/screenshot-matcher";
 import {
   resolveConflicts,
+  enrichWithTiers,
   type ConflictMode,
   type ConflictDecision,
 } from "@/lib/iap-management/bulk-import/conflict-resolution";
+import { listUsdTiers } from "@/lib/iap-management/queries/price-tiers";
 import { withConcurrency } from "@/lib/iap-management/concurrency";
 import { log } from "@/lib/logger";
 import type {
@@ -185,13 +187,21 @@ export async function POST(
     return NextResponse.json({ error: msg }, { status: 502 });
   }
 
-  // ── Conflict resolution ─────────────────────────────────────────────────
-  const resolved = resolveConflicts({
+  // ── Conflict resolution + tier inference (IAP.h2) ───────────────────────
+  const conflicts = resolveConflicts({
     parsed: parsed.items,
     existing_product_ids: new Set(existingByProductId.keys()),
     default_mode: config.default_mode,
     overrides: config.overrides,
   });
+  let usdTiers: Awaited<ReturnType<typeof listUsdTiers>>;
+  try {
+    usdTiers = await listUsdTiers();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "USD tiers fetch failed";
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+  const resolved = enrichWithTiers(conflicts, usdTiers);
 
   // ── Open audit batch ────────────────────────────────────────────────────
   const db = iapDb();
@@ -321,14 +331,15 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   const item = decision.source;
   let appleIapId = "";
 
-  // 1. Create shell on Apple
+  // 1. Create shell on Apple — type comes from the parser (IAP.h2 Type
+  //    column with COLUMN/DEFAULT source tracking, surfaced in audit log).
   try {
     const created = await withRetry(() =>
       createInAppPurchase(creds, {
         appId: appleAppId,
         name: item.reference_name,
         productId: item.product_id,
-        inAppPurchaseType: "CONSUMABLE", // Excel template doesn't expose type — Manager confirms IAP.i v1 defaults
+        inAppPurchaseType: item.type,
       }),
     );
     appleIapId = created.data.id;
@@ -529,10 +540,11 @@ async function persistResult(
   result: PerIapResult,
 ): Promise<PerIapResult> {
   const db = iapDb();
+  const item = args.decision.source;
+
   if (result.status === "SUCCESS" && result.apple_iap_id) {
     // Upsert into iaps table — best-effort, surface only via log on conflict.
     try {
-      const item = args.decision.source;
       await db
         .from("iaps")
         .upsert(
@@ -541,7 +553,8 @@ async function persistResult(
             apple_iap_id: result.apple_iap_id,
             product_id: item.product_id,
             reference_name: item.reference_name,
-            type: "CONSUMABLE",
+            type: item.type,
+            tier_id: args.decision.resolved_tier_id ?? null,
             state: result.submitted ? "WAITING_FOR_REVIEW" : "READY_TO_SUBMIT",
             synced_at: new Date().toISOString(),
           },
@@ -563,6 +576,10 @@ async function persistResult(
     payload: {
       ...result,
       app_id: args.internalAppId,
+      type_source: item.type_source,
+      tier_source:
+        args.decision.resolved_tier_id !== undefined ? "PRICE_USD_LOOKUP" : null,
+      resolved_tier_id: args.decision.resolved_tier_id ?? null,
     },
   });
   return result;

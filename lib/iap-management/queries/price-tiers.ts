@@ -68,6 +68,55 @@ export async function getImportSummary(): Promise<ImportSummary> {
   };
 }
 
+// ─── Tier inference by USD price (Manager IAP.h2 lock) ──────────────────────
+
+export interface UsdTierEntry {
+  tier_id: string;
+  customer_price: number;
+}
+
+/**
+ * Server-side: returns the USA/USD subset of the price tier cache (~95 rows).
+ * Used by the bulk-import wizard server page to pass to the client for
+ * preview-time tier resolution + by the execute orchestration to re-validate.
+ */
+export async function listUsdTiers(): Promise<UsdTierEntry[]> {
+  const db = iapDb();
+  const res = await db
+    .from("price_tier_territories")
+    .select("tier_id, customer_price")
+    .eq("territory_code", "USA")
+    .eq("currency_code", "USD")
+    .order("customer_price", { ascending: true });
+  if (res.error) {
+    throw new Error(`USD tiers fetch failed: ${res.error.message}`);
+  }
+  return (res.data ?? []) as UsdTierEntry[];
+}
+
+/**
+ * Pure tier resolver (no DB) — usable from client wizard for preview.
+ *
+ * Rule (Manager IAP.h2 lock):
+ *   - Price 0 → "FREE" (whether or not the cache has the row).
+ *   - Else: exact-match against customer_price. Multiple matches resolved
+ *     by tier_id ASC (Manager's SQL: ORDER BY tier_id ASC LIMIT 1).
+ *   - No match → null (caller surfaces "Price doesn't match any tier" error).
+ */
+export function resolveTierByUsdPrice(
+  priceUsd: number,
+  tiers: readonly UsdTierEntry[],
+): string | null {
+  if (priceUsd === 0) return "FREE";
+  const matches = tiers.filter((t) => t.customer_price === priceUsd);
+  if (matches.length === 0) return null;
+  // Manager spec: ORDER BY tier_id ASC LIMIT 1
+  const sorted = [...matches].sort((a, b) =>
+    a.tier_id.localeCompare(b.tier_id),
+  );
+  return sorted[0].tier_id;
+}
+
 export async function listTiers(): Promise<PriceTierRow[]> {
   const db = iapDb();
   const res = await db

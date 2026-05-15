@@ -9,9 +9,16 @@
  *   3. Conflict + global mode = SKIP → skip.
  *   4. Conflict + global mode = OVERWRITE → overwrite (re-push to Apple).
  *   5. No conflict → create.
+ *
+ * The `enrichWithTiers` second pass (IAP.h2 lock) resolves tier_id from
+ * Price (USD) for every CREATE/OVERWRITE row. Rows whose price doesn't
+ * match any cached tier are downgraded to ERROR. Pure — testable with a
+ * synthetic UsdTierEntry list.
  */
 
 import type { ParsedIapItem } from "../parsers/iap-items";
+import type { UsdTierEntry } from "../queries/price-tiers";
+import { resolveTierByUsdPrice } from "../queries/price-tiers";
 
 export type ConflictMode = "OVERWRITE" | "SKIP";
 
@@ -25,6 +32,9 @@ export interface ConflictDecision {
   conflict: boolean;
   /** Source row in the original parsed list (for re-index after resolution). */
   source: ParsedIapItem;
+  /** Tier id resolved from Price (USD); null when no match (CREATE/OVERWRITE
+   *  rows lacking a tier match get downgraded to ERROR by enrichWithTiers). */
+  resolved_tier_id?: string | null;
 }
 
 export interface ResolveInput {
@@ -113,6 +123,12 @@ export function resolveConflicts(input: ResolveInput): ResolveResult {
     };
   });
 
+  return { decisions, counts: tallyDispositions(decisions) };
+}
+
+function tallyDispositions(
+  decisions: readonly ConflictDecision[],
+): ResolveResult["counts"] {
   const counts = { create: 0, overwrite: 0, skip: 0, error: 0 };
   for (const d of decisions) {
     if (d.disposition === "CREATE") counts.create++;
@@ -120,6 +136,35 @@ export function resolveConflicts(input: ResolveInput): ResolveResult {
     else if (d.disposition === "SKIP") counts.skip++;
     else counts.error++;
   }
+  return counts;
+}
 
-  return { decisions, counts };
+/**
+ * Second pass: resolve tier_id from Price (USD) for every CREATE/OVERWRITE
+ * decision. Rows whose price doesn't match any cached USD tier are
+ * downgraded to ERROR. SKIP and existing ERROR rows pass through unchanged
+ * (tier irrelevant).
+ *
+ * Pure — testable with a synthetic UsdTierEntry list.
+ */
+export function enrichWithTiers(
+  result: ResolveResult,
+  usdTiers: readonly UsdTierEntry[],
+): ResolveResult {
+  const enriched = result.decisions.map((d) => {
+    if (d.disposition !== "CREATE" && d.disposition !== "OVERWRITE") {
+      return d;
+    }
+    const tier_id = resolveTierByUsdPrice(d.source.price_usd, usdTiers);
+    if (tier_id === null) {
+      return {
+        ...d,
+        disposition: "ERROR" as Disposition,
+        reason: `Price $${d.source.price_usd} does not match any Apple tier.`,
+        resolved_tier_id: null,
+      };
+    }
+    return { ...d, resolved_tier_id: tier_id };
+  });
+  return { decisions: enriched, counts: tallyDispositions(enriched) };
 }
