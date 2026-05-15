@@ -31,19 +31,20 @@ function loadTemplate(filename: string): File {
 }
 
 describe("parsePriceTiersXlsx — Manager template", () => {
-  it("parses 88 standard tiers (Free + Tier 1..87)", async () => {
+  it("parses 95 tiers total (88 standard + 7 alternate, per Q-IAP follow-up C)", async () => {
     const file = loadTemplate("price-tiers-template.xlsx");
     const result = await parsePriceTiersXlsx(file);
 
-    expect(result.tiers.length).toBe(88);
+    expect(result.tiers.length).toBe(95);
     expect(result.tiers[0]).toMatchObject({
-      tier_id: 0,
+      tier_id: "FREE",
       tier_name: "Free Tier",
+      is_alternate: false,
     });
-    expect(result.tiers[1]).toMatchObject({ tier_id: 1, tier_name: "Tier 1" });
-    expect(result.tiers.at(-1)).toMatchObject({
-      tier_id: 87,
-      tier_name: "Tier 87",
+    expect(result.tiers[1]).toMatchObject({
+      tier_id: "TIER_1",
+      tier_name: "Tier 1",
+      is_alternate: false,
     });
   });
 
@@ -53,18 +54,33 @@ describe("parsePriceTiersXlsx — Manager template", () => {
     expect(result.territory_count).toBe(175);
   });
 
-  it("skips alternate tiers but surfaces them", async () => {
+  it("includes alternate tiers with is_alternate=true and ALT_ prefix", async () => {
     const file = loadTemplate("price-tiers-template.xlsx");
     const result = await parsePriceTiersXlsx(file);
-    expect(result.skipped_alternate_tiers).toHaveLength(7);
-    expect(result.skipped_alternate_tiers).toContain("Alternate Tier A");
-    expect(result.skipped_alternate_tiers).toContain("Alternate Tier 1");
+    expect(result.alternate_tier_count).toBe(7);
+    const alt1 = result.tiers.find((t) => t.tier_id === "ALT_1");
+    expect(alt1).toBeDefined();
+    expect(alt1!.is_alternate).toBe(true);
+    expect(alt1!.tier_name).toBe("Alternate Tier 1");
+    const altA = result.tiers.find((t) => t.tier_id === "ALT_A");
+    expect(altA).toBeDefined();
+    expect(altA!.tier_name).toBe("Alternate Tier A");
+  });
+
+  it("tier_id values all match the DB CHECK regex", async () => {
+    const file = loadTemplate("price-tiers-template.xlsx");
+    const result = await parsePriceTiersXlsx(file);
+    const re = /^(FREE|TIER_[0-9]+|ALT_[0-9A-Z]+)$/;
+    for (const tier of result.tiers) {
+      expect(tier.tier_id, `tier_id "${tier.tier_id}" must match DB CHECK`)
+        .toMatch(re);
+    }
   });
 
   it("extracts Tier 1 USA price + proceeds + currency", async () => {
     const file = loadTemplate("price-tiers-template.xlsx");
     const result = await parsePriceTiersXlsx(file);
-    const tier1 = result.tiers.find((t) => t.tier_id === 1);
+    const tier1 = result.tiers.find((t) => t.tier_id === "TIER_1");
     expect(tier1).toBeDefined();
     const usa = tier1!.territories.find((t) => t.territory_code === "USA");
     expect(usa).toBeDefined();
@@ -76,7 +92,7 @@ describe("parsePriceTiersXlsx — Manager template", () => {
   it("extracts Tier 1 Vietnam (VNM_VND)", async () => {
     const file = loadTemplate("price-tiers-template.xlsx");
     const result = await parsePriceTiersXlsx(file);
-    const tier1 = result.tiers.find((t) => t.tier_id === 1)!;
+    const tier1 = result.tiers.find((t) => t.tier_id === "TIER_1")!;
     const vnm = tier1.territories.find((t) => t.territory_code === "VNM")!;
     expect(vnm.currency_code).toBe("VND");
     expect(vnm.customer_price).toBe(25000);

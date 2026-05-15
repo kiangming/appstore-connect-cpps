@@ -13,18 +13,18 @@
  *                price/proceeds pairs.
  *
  * Tier types observed in real artifact:
- *   - "Free Tier"       → tier_id = 0
- *   - "Tier N"          → tier_id = N (standard paid, e.g. "Tier 1"..."Tier 87")
- *   - "Alternate Tier *" → SKIPPED (not in Q-IAP scope; numeric and letter
- *                         variants like "Alternate Tier 1" / "Alternate Tier A"
- *                         observed in real file but Manager scope was
- *                         "Tier 1-95"). Surfaced in parse result for UI display.
+ *   - "Free Tier"         → tier_id = "FREE"
+ *   - "Tier N"            → tier_id = "TIER_N" (e.g. "TIER_1"..."TIER_87")
+ *   - "Alternate Tier X"  → tier_id = "ALT_X" (numeric "ALT_1".."ALT_5" or
+ *                           letter "ALT_A"/"ALT_B"). Included as first-class
+ *                           tiers per Manager follow-up answer (C) to the
+ *                           IAP.e finding. `is_alternate: true` flag on the
+ *                           parsed row lets UI render them distinctly.
  *
  * Validation policy (Q-IAP.5 strict):
  *   - Hard error: missing sheet, malformed territory headers, non-numeric
  *     price/proceeds cells, file > 10MB, file not a valid .xlsx.
- *   - Soft warning: alternate tier rows (skipped + counted), territories
- *     where currency code looks unusual.
+ *   - Soft warning: territories where Price/Proceeds sub-headers don't match.
  */
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -39,15 +39,19 @@ export interface ParsedTerritoryPrice {
 }
 
 export interface ParsedPriceTier {
-  tier_id: number;
+  /** Encoded ID matching DB CHECK regex: FREE | TIER_<digits> | ALT_<alnum> */
+  tier_id: string;
   tier_name: string;
+  /** True for "Alternate Tier *" rows so UI can render them distinctly. */
+  is_alternate: boolean;
   territories: ParsedTerritoryPrice[];
 }
 
 export interface PriceTiersParseResult {
   tiers: ParsedPriceTier[];
   territory_count: number;
-  skipped_alternate_tiers: string[];
+  /** Count of alternate tiers within `tiers` (already included). */
+  alternate_tier_count: number;
   warnings: string[];
 }
 
@@ -58,11 +62,32 @@ interface TerritorySpec {
   proceeds_col: number;
 }
 
-/** Extract numeric tier_id from a tier name. Returns null for skip-able rows. */
-function tierIdFromName(name: string): number | null {
-  if (name === "Free Tier") return 0;
-  const m = /^Tier (\d+)$/.exec(name);
-  if (m) return Number(m[1]);
+interface TierIdDecoded {
+  tier_id: string;
+  is_alternate: boolean;
+}
+
+/**
+ * Encode a tier name into the DB tier_id format (matches the CHECK regex
+ * `^(FREE|TIER_[0-9]+|ALT_[0-9A-Z]+)$` defined in the tier_id_text migration).
+ * Returns null for unrecognised tier-name shapes — those rows are dropped
+ * with a warning.
+ */
+function tierIdFromName(name: string): TierIdDecoded | null {
+  if (name === "Free Tier") {
+    return { tier_id: "FREE", is_alternate: false };
+  }
+  const standard = /^Tier (\d+)$/.exec(name);
+  if (standard) {
+    return { tier_id: `TIER_${standard[1]}`, is_alternate: false };
+  }
+  const alternate = /^Alternate Tier (\w+)$/.exec(name);
+  if (alternate) {
+    return {
+      tier_id: `ALT_${alternate[1].toUpperCase()}`,
+      is_alternate: true,
+    };
+  }
   return null;
 }
 
@@ -172,17 +197,16 @@ export async function parsePriceTiersXlsx(
 
   // ── Parse data rows (row 2+) ─────────────────────────────────────────────
   const tiers: ParsedPriceTier[] = [];
-  const skippedAlternates: string[] = [];
+  let alternateCount = 0;
 
   for (let r = 2; r < rows.length; r++) {
     const row = rows[r];
     const tierName = String(row[0] ?? "").trim();
     if (!tierName) continue; // blank tier name → skip
 
-    const tierId = tierIdFromName(tierName);
-    if (tierId === null) {
-      // Alternate Tier rows + any other unknown tier-name shape land here.
-      skippedAlternates.push(tierName);
+    const decoded = tierIdFromName(tierName);
+    if (decoded === null) {
+      warnings.push(`Row ${r + 1}: unrecognised tier name "${tierName}" — skipped.`);
       continue;
     }
 
@@ -199,24 +223,27 @@ export async function parsePriceTiersXlsx(
       ),
     }));
 
+    if (decoded.is_alternate) alternateCount++;
+
     tiers.push({
-      tier_id: tierId,
+      tier_id: decoded.tier_id,
       tier_name: tierName,
+      is_alternate: decoded.is_alternate,
       territories: territoryRows,
     });
   }
 
   if (tiers.length === 0) {
     throw new Error(
-      "Price-tiers template contained no recognisable standard tiers " +
-        '(Free Tier or "Tier N"). Verify the template format.',
+      "Price-tiers template contained no recognisable tier rows " +
+        '(Free Tier, "Tier N", or "Alternate Tier X"). Verify the template format.',
     );
   }
 
   return {
     tiers,
     territory_count: territories.length,
-    skipped_alternate_tiers: skippedAlternates,
+    alternate_tier_count: alternateCount,
     warnings,
   };
 }
