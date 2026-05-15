@@ -1,0 +1,1466 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IAP Management — Mockup</title>
+<style>
+  :root {
+    --bg: #f5f5f4;
+    --surface: #ffffff;
+    --surface-2: #fafaf9;
+    --border: #e7e5e4;
+    --border-strong: #d6d3d1;
+    --text: #1c1917;
+    --text-muted: #57534e;
+    --text-subtle: #78716c;
+    --primary: #0c447c;
+    --primary-hover: #185fa5;
+    --primary-bg: #e6f1fb;
+    --success: #27500a;
+    --success-bg: #eaf3de;
+    --warning: #633806;
+    --warning-bg: #faeeda;
+    --danger: #791f1f;
+    --danger-bg: #fcebeb;
+    --purple: #3c3489;
+    --purple-bg: #eeedfe;
+    --teal: #085041;
+    --teal-bg: #e1f5ee;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  /* Layout */
+  .app {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    min-height: 100vh;
+  }
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 20px 0;
+  }
+  .sidebar-header {
+    padding: 0 20px 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 20px;
+  }
+  .sidebar-title {
+    font-weight: 600;
+    font-size: 16px;
+    color: var(--text);
+  }
+  .sidebar-subtitle {
+    font-size: 12px;
+    color: var(--text-subtle);
+    margin-top: 4px;
+  }
+  .nav-section {
+    padding: 8px 12px;
+  }
+  .nav-section-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-subtle);
+    padding: 8px 8px 4px;
+    letter-spacing: 0.5px;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-radius: 6px;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 14px;
+    margin-bottom: 2px;
+  }
+  .nav-item:hover {
+    background: var(--bg);
+  }
+  .nav-item.active {
+    background: var(--primary-bg);
+    color: var(--primary);
+    font-weight: 500;
+  }
+  .nav-badge {
+    background: var(--border-strong);
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-weight: 500;
+  }
+  .nav-item.active .nav-badge {
+    background: var(--primary);
+    color: white;
+  }
+  .main {
+    overflow-x: hidden;
+  }
+  .header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .breadcrumb {
+    font-size: 13px;
+    color: var(--text-subtle);
+  }
+  .breadcrumb span {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .header-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .user-badge {
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--bg);
+    padding: 4px 10px;
+    border-radius: 12px;
+  }
+  /* Content */
+  .content {
+    padding: 24px;
+  }
+  .page-title {
+    font-size: 22px;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .page-subtitle {
+    color: var(--text-subtle);
+    margin-bottom: 24px;
+  }
+  /* Tabs */
+  .tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 24px;
+  }
+  .tab {
+    padding: 10px 16px;
+    cursor: pointer;
+    font-size: 14px;
+    color: var(--text-muted);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    font-weight: 500;
+  }
+  .tab:hover {
+    color: var(--text);
+  }
+  .tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+  }
+  .tab-content {
+    display: none;
+  }
+  .tab-content.active {
+    display: block;
+  }
+  /* Filters bar */
+  .filters {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .filter-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .filter-label {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  select, input[type="text"], input[type="number"], input[type="date"], textarea {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-family: inherit;
+    color: var(--text);
+  }
+  select:focus, input:focus, textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-bg);
+  }
+  .search-input {
+    min-width: 240px;
+  }
+  /* Buttons */
+  .btn {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 500;
+    color: var(--text);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn:hover {
+    background: var(--bg);
+  }
+  .btn-primary {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+  }
+  .btn-primary:hover {
+    background: var(--primary-hover);
+  }
+  .btn-danger {
+    color: var(--danger);
+    border-color: var(--danger);
+  }
+  .btn-danger:hover {
+    background: var(--danger-bg);
+  }
+  .btn-sm {
+    padding: 4px 8px;
+    font-size: 12px;
+  }
+  .btn-group {
+    display: flex;
+    gap: 6px;
+  }
+  /* Table */
+  .table-container {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .table-meta {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface-2);
+  }
+  .table-meta-info {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  thead {
+    background: var(--surface-2);
+  }
+  th {
+    text-align: left;
+    padding: 10px 12px;
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    letter-spacing: 0.3px;
+  }
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  tr:last-child td {
+    border-bottom: none;
+  }
+  tr:hover td {
+    background: var(--surface-2);
+  }
+  .product-id {
+    font-family: "SF Mono", Monaco, monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  /* Badges */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    font-size: 11px;
+    border-radius: 10px;
+    font-weight: 500;
+  }
+  .badge-consumable { background: var(--purple-bg); color: var(--purple); }
+  .badge-non-consumable { background: var(--teal-bg); color: var(--teal); }
+  .badge-non-renewing { background: var(--warning-bg); color: var(--warning); }
+  .badge-approved { background: var(--success-bg); color: var(--success); }
+  .badge-waiting { background: var(--warning-bg); color: var(--warning); }
+  .badge-rejected { background: var(--danger-bg); color: var(--danger); }
+  .badge-missing { background: var(--border); color: var(--text-muted); }
+  .badge-ready { background: var(--primary-bg); color: var(--primary); }
+  /* Modal */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal-overlay.show {
+    display: flex;
+  }
+  .modal {
+    background: var(--surface);
+    border-radius: 12px;
+    width: 600px;
+    max-width: 90vw;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+  }
+  .modal-large {
+    width: 900px;
+  }
+  .modal-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .modal-title {
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .modal-close {
+    background: none;
+    border: none;
+    font-size: 22px;
+    cursor: pointer;
+    color: var(--text-muted);
+    line-height: 1;
+  }
+  .modal-body {
+    padding: 24px;
+  }
+  .modal-footer {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    background: var(--surface-2);
+  }
+  /* Forms */
+  .form-row {
+    margin-bottom: 16px;
+  }
+  .form-row-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .form-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+  .form-help {
+    font-size: 12px;
+    color: var(--text-subtle);
+    margin-top: 4px;
+  }
+  .form-input, .form-select, .form-textarea {
+    width: 100%;
+  }
+  .form-section {
+    margin-bottom: 24px;
+  }
+  .form-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  /* Localization tabs */
+  .locale-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+  .locale-tab {
+    padding: 8px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    margin-bottom: -1px;
+  }
+  .locale-tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+    font-weight: 500;
+  }
+  .locale-tab-content {
+    display: none;
+  }
+  .locale-tab-content.active {
+    display: block;
+  }
+  /* Stats cards */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .stat-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    margin-bottom: 6px;
+  }
+  .stat-value {
+    font-size: 24px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .stat-meta {
+    font-size: 12px;
+    color: var(--text-subtle);
+    margin-top: 4px;
+  }
+  /* Drop zone */
+  .drop-zone {
+    border: 2px dashed var(--border-strong);
+    border-radius: 8px;
+    padding: 40px;
+    text-align: center;
+    background: var(--surface-2);
+    cursor: pointer;
+  }
+  .drop-zone:hover {
+    border-color: var(--primary);
+    background: var(--primary-bg);
+  }
+  .drop-zone-icon {
+    font-size: 32px;
+    margin-bottom: 8px;
+  }
+  .drop-zone-text {
+    font-size: 14px;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .drop-zone-help {
+    font-size: 12px;
+    color: var(--text-subtle);
+  }
+  /* Price territory list */
+  .territory-list {
+    max-height: 360px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .territory-row {
+    display: grid;
+    grid-template-columns: 60px 1fr 100px 100px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    font-size: 13px;
+  }
+  .territory-row:last-child {
+    border-bottom: none;
+  }
+  .territory-row.header {
+    background: var(--surface-2);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    position: sticky;
+    top: 0;
+  }
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--text);
+    color: white;
+    padding: 12px 18px;
+    border-radius: 8px;
+    font-size: 14px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+    display: none;
+    z-index: 200;
+  }
+  .toast.show {
+    display: block;
+    animation: slideIn 0.3s ease;
+  }
+  @keyframes slideIn {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  /* Sync status */
+  .sync-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--success);
+  }
+  .sync-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--success);
+  }
+  /* Empty state */
+  .empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-subtle);
+  }
+  .empty-icon {
+    font-size: 40px;
+    margin-bottom: 12px;
+  }
+  /* Action menu */
+  .action-icons {
+    display: flex;
+    gap: 4px;
+  }
+  .icon-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 6px;
+    border-radius: 4px;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+  .icon-btn:hover {
+    background: var(--bg);
+    color: var(--text);
+  }
+  /* Progress for bulk operations */
+  .progress-bar {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 8px 0;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--primary);
+    width: 60%;
+    transition: width 0.3s;
+  }
+  /* Code block */
+  .code-block {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    font-family: "SF Mono", Monaco, monospace;
+    font-size: 12px;
+    overflow-x: auto;
+    color: var(--text);
+  }
+  /* Pagination */
+  .pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--surface-2);
+  }
+  .pagination-info {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-title">AppStore CPP</div>
+      <div class="sidebar-subtitle">VNG Game Studios</div>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-section-label">Store Submissions</div>
+      <div class="nav-item">📥 Inbox <span class="nav-badge">12</span></div>
+      <div class="nav-item">📊 Reports</div>
+      <div class="nav-item">🔁 Duplicate Forwards <span class="nav-badge">22</span></div>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-section-label">IAP Management</div>
+      <div class="nav-item active">💎 In-App Purchases</div>
+      <div class="nav-item">💰 Pricing Points</div>
+      <div class="nav-item">📤 Bulk Import/Export</div>
+      <div class="nav-item">🔄 Sync History</div>
+    </div>
+
+    <div class="nav-section">
+      <div class="nav-section-label">Configuration</div>
+      <div class="nav-item">📱 Apps</div>
+      <div class="nav-item">🔑 Apple API Keys</div>
+      <div class="nav-item">⚙️ Settings</div>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <main class="main">
+    <header class="header">
+      <div class="breadcrumb">IAP Management / <span>In-App Purchases</span></div>
+      <div class="header-actions">
+        <div class="sync-status">
+          <div class="sync-dot"></div>
+          Last sync 3 min ago
+        </div>
+        <span class="user-badge">minhgv@vng.com.vn</span>
+      </div>
+    </header>
+
+    <div class="content">
+      <h1 class="page-title">In-App Purchases</h1>
+      <p class="page-subtitle">Manage IAP items across all Apple apps. Sync with App Store Connect API in real-time.</p>
+
+      <!-- Stats -->
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Total IAPs</div>
+          <div class="stat-value">347</div>
+          <div class="stat-meta">across 12 apps</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Approved</div>
+          <div class="stat-value" style="color: var(--success)">298</div>
+          <div class="stat-meta">live on App Store</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">In Review</div>
+          <div class="stat-value" style="color: var(--warning)">24</div>
+          <div class="stat-meta">waiting Apple review</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Missing Metadata</div>
+          <div class="stat-value" style="color: var(--text-muted)">25</div>
+          <div class="stat-meta">needs attention</div>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab(this, 'tab-list')">All IAPs</div>
+        <div class="tab" onclick="switchTab(this, 'tab-by-app')">By App</div>
+        <div class="tab" onclick="switchTab(this, 'tab-actions-log')">Actions Log</div>
+      </div>
+
+      <!-- Tab: List -->
+      <div id="tab-list" class="tab-content active">
+        <!-- Filters -->
+        <div class="filters">
+          <input type="text" class="search-input" placeholder="🔍 Search by name, product ID...">
+          <div class="filter-group">
+            <span class="filter-label">App:</span>
+            <select>
+              <option>All apps</option>
+              <option>Lineage W</option>
+              <option>Roblox VN</option>
+              <option>Play Together VNG</option>
+              <option>Arena Breakout VNG</option>
+              <option>PUBG Mobile VN</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">Type:</span>
+            <select>
+              <option>All types</option>
+              <option>Consumable</option>
+              <option>Non-Consumable</option>
+              <option>Non-Renewing Subscription</option>
+            </select>
+          </div>
+          <div class="filter-group">
+            <span class="filter-label">State:</span>
+            <select>
+              <option>All states</option>
+              <option>Approved</option>
+              <option>Waiting for Review</option>
+              <option>Ready to Submit</option>
+              <option>Missing Metadata</option>
+              <option>Rejected</option>
+            </select>
+          </div>
+          <div style="margin-left: auto;" class="btn-group">
+            <button class="btn" onclick="showModal('modal-export')">📤 Export</button>
+            <button class="btn" onclick="showModal('modal-bulk-import')">📥 Bulk Import</button>
+            <button class="btn btn-primary" onclick="showModal('modal-create-iap')">+ Create IAP</button>
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div class="table-container">
+          <div class="table-meta">
+            <div class="table-meta-info">Showing 1-10 of 347 IAPs · Filter: All apps · All types · All states</div>
+            <div class="btn-group">
+              <button class="btn btn-sm">🔄 Refresh from Apple</button>
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th><input type="checkbox"></th>
+                <th>Name</th>
+                <th>Product ID</th>
+                <th>App</th>
+                <th>Type</th>
+                <th>State</th>
+                <th>Price (USD)</th>
+                <th>Last Sync</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><input type="checkbox"></td>
+                <td><strong>Diamond Pack S</strong></td>
+                <td class="product-id">com.vng.lineagew.diamond_s</td>
+                <td>Lineage W</td>
+                <td><span class="badge badge-consumable">Consumable</span></td>
+                <td><span class="badge badge-approved">Approved</span></td>
+                <td>$0.99 (Tier 1)</td>
+                <td>2 min ago</td>
+                <td>
+                  <div class="action-icons">
+                    <button class="icon-btn" title="Edit" onclick="showModal('modal-edit-iap')">✏️</button>
+                    <button class="icon-btn" title="View pricing" onclick="showModal('modal-pricing-detail')">💰</button>
+                    <button class="icon-btn" title="Delete">🗑️</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td><input type="checkbox"></td>
+                <td><strong>Diamond Pack M</strong></td>
+                <td class="product-id">com.vng.lineagew.diamond_m</td>
+                <td>Lineage W</td>
+                <td><span class="badge badge-consumable">Consumable</span></td>
+                <td><span class="badge badge-approved">Approved</span></td>
+                <td>$4.99 (Tier 5)</td>
+                <td>2 min ago</td>
+                <td>
+                  <div class="action-icons">
+                    <button class="icon-btn" title="Edit">✏️</button>
+                    <button class="icon-btn" title="View pricing">💰</button>
+                    <button class="icon-btn" title="Delete">🗑️</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td><input type="checkbox"></td>
+                <td><strong>VIP Membership 30d</strong></td>
+                <td class="product-id">com.vng.lineagew.vip30</td>
+                <td>Lineage W</td>
+                <td><span class="badge badge-non-renewing">Non-Renewing Sub</span></td>
+                <td><span class="badge badge-waiting">Waiting for Review</span></td>
+                <td>$9.99 (Tier 10)</td>
+                <td>5 hours ago</td>
+                <td>
+                  <div class="action-icons">
+                    <button class="icon-btn" title="Edit">✏️</button>
+                    <button class="icon-btn" title="View pricing">💰</button>
+                    <button class="icon-btn" title="Delete">🗑️</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td><input type="checkbox"></td>
+                <td><strong>Remove Ads</strong></td>
+                <td class="product-id">com.vng.roblox.removeads</td>
+                <td>Roblox VN</td>
+                <td><span class="badge badge-non-consumable">Non-Consumable</span></td>
+                <td><span class="badge badge-approved">Approved</span></td>
+                <td>$2.99 (Tier 3)</td>
+                <td>10 min ago</td>
+                <td>
+                  <div class="action-icons">
+                    <button class="icon-btn" title="Edit">✏️</button>
+                    <button class="icon-btn" title="View pricing">💰</button>
+                    <button class="icon-btn" title="Delete">🗑️</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td><input type="checkbox"></td>
+                <td><strong>Robux 100</strong></td>
+                <td class="product-id">com.vng.roblox.robux100</td>
+                <td>Roblox VN</td>
+                <td><span class="badge badge-consumable">Consumable</span></td>
+                <td><span class="badge badge-missing">Missing Metadata</span></td>
+                <td>$0.99 (Tier 1)</td>
+                <td>1 day ago</td>
+                <td>
+                  <div class="action-icons">
+                    <button class="icon-btn" title="Edit">✏️</button>
+                    <button class="icon-btn" title="View pricing">💰</button>
+                    <button class="icon-btn" title="Delete">🗑️</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td><input type="checkbox"></td>
+                <td><strong>Battle Pass S1</strong></td>
+                <td class="product-id">com.vng.arena.bp_s1</td>
+                <td>Arena Breakout VNG</td>
+                <td><span class="badge badge-non-renewing">Non-Renewing Sub</span></td>
+                <td><span class="badge badge-ready">Ready to Submit</span></td>
+                <td>$9.99 (Tier 10)</td>
+                <td>30 min ago</td>
+                <td>
+                  <div class="action-icons">
+                    <button class="icon-btn" title="Edit">✏️</button>
+                    <button class="icon-btn" title="View pricing">💰</button>
+                    <button class="icon-btn" title="Delete">🗑️</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td><input type="checkbox"></td>
+                <td><strong>Golden Coins x500</strong></td>
+                <td class="product-id">com.vng.playtogether.gold500</td>
+                <td>Play Together VNG</td>
+                <td><span class="badge badge-consumable">Consumable</span></td>
+                <td><span class="badge badge-rejected">Rejected</span></td>
+                <td>$1.99 (Tier 2)</td>
+                <td>2 days ago</td>
+                <td>
+                  <div class="action-icons">
+                    <button class="icon-btn" title="Edit">✏️</button>
+                    <button class="icon-btn" title="View pricing">💰</button>
+                    <button class="icon-btn" title="Delete">🗑️</button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="pagination">
+            <div class="pagination-info">Page 1 of 35</div>
+            <div class="btn-group">
+              <button class="btn btn-sm" disabled>← Prev</button>
+              <button class="btn btn-sm">Next →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: By App -->
+      <div id="tab-by-app" class="tab-content">
+        <div class="table-container">
+          <div class="table-meta">
+            <div class="table-meta-info">12 apps · 347 IAPs total</div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>App</th>
+                <th>Total IAPs</th>
+                <th>Approved</th>
+                <th>In Review</th>
+                <th>Missing Metadata</th>
+                <th>Last IAP Updated</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Lineage W</strong></td>
+                <td>45</td>
+                <td style="color: var(--success)">42</td>
+                <td style="color: var(--warning)">2</td>
+                <td>1</td>
+                <td>3 hours ago</td>
+                <td><button class="btn btn-sm">View IAPs →</button></td>
+              </tr>
+              <tr>
+                <td><strong>Roblox VN</strong></td>
+                <td>28</td>
+                <td style="color: var(--success)">24</td>
+                <td style="color: var(--warning)">3</td>
+                <td>1</td>
+                <td>1 hour ago</td>
+                <td><button class="btn btn-sm">View IAPs →</button></td>
+              </tr>
+              <tr>
+                <td><strong>Arena Breakout VNG</strong></td>
+                <td>52</td>
+                <td style="color: var(--success)">48</td>
+                <td style="color: var(--warning)">3</td>
+                <td>1</td>
+                <td>5 hours ago</td>
+                <td><button class="btn btn-sm">View IAPs →</button></td>
+              </tr>
+              <tr>
+                <td><strong>Play Together VNG</strong></td>
+                <td>67</td>
+                <td style="color: var(--success)">59</td>
+                <td style="color: var(--warning)">4</td>
+                <td>4</td>
+                <td>30 min ago</td>
+                <td><button class="btn btn-sm">View IAPs →</button></td>
+              </tr>
+              <tr>
+                <td><strong>PUBG Mobile VN</strong></td>
+                <td>89</td>
+                <td style="color: var(--success)">76</td>
+                <td style="color: var(--warning)">8</td>
+                <td>5</td>
+                <td>2 hours ago</td>
+                <td><button class="btn btn-sm">View IAPs →</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Tab: Actions Log -->
+      <div id="tab-actions-log" class="tab-content">
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Actor</th>
+                <th>Action</th>
+                <th>Target</th>
+                <th>Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>2 min ago</td>
+                <td>minhgv@vng.com.vn</td>
+                <td>Update Price</td>
+                <td>Diamond Pack S (Lineage W)</td>
+                <td><span class="badge badge-approved">Success</span></td>
+              </tr>
+              <tr>
+                <td>15 min ago</td>
+                <td>SYSTEM (cron)</td>
+                <td>Sync from Apple</td>
+                <td>All apps (347 IAPs scanned)</td>
+                <td><span class="badge badge-approved">Success</span></td>
+              </tr>
+              <tr>
+                <td>1 hour ago</td>
+                <td>minhgv@vng.com.vn</td>
+                <td>Bulk Import</td>
+                <td>Roblox VN (15 IAPs)</td>
+                <td><span class="badge badge-approved">14 created, 1 conflict</span></td>
+              </tr>
+              <tr>
+                <td>3 hours ago</td>
+                <td>minhgv@vng.com.vn</td>
+                <td>Create IAP</td>
+                <td>VIP Membership 30d (Lineage W)</td>
+                <td><span class="badge badge-waiting">Waiting Apple review</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Modal: Create IAP -->
+<div id="modal-create-iap" class="modal-overlay">
+  <div class="modal modal-large">
+    <div class="modal-header">
+      <div class="modal-title">Create In-App Purchase</div>
+      <button class="modal-close" onclick="hideModal('modal-create-iap')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-section">
+        <div class="form-section-title">Basic Information</div>
+        <div class="form-row-grid">
+          <div>
+            <label class="form-label">App *</label>
+            <select class="form-select">
+              <option>Lineage W</option>
+              <option>Roblox VN</option>
+              <option>Arena Breakout VNG</option>
+              <option>Play Together VNG</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Type *</label>
+            <select class="form-select">
+              <option>Consumable</option>
+              <option>Non-Consumable</option>
+              <option>Non-Renewing Subscription</option>
+            </select>
+            <div class="form-help">Auto-renewable subscriptions managed separately</div>
+          </div>
+        </div>
+        <div class="form-row-grid">
+          <div>
+            <label class="form-label">Reference Name *</label>
+            <input type="text" class="form-input" placeholder="Diamond Pack Small">
+            <div class="form-help">Internal name (max 64 chars)</div>
+          </div>
+          <div>
+            <label class="form-label">Product ID *</label>
+            <input type="text" class="form-input" placeholder="com.vng.lineagew.diamond_s">
+            <div class="form-help">Immutable after creation</div>
+          </div>
+        </div>
+        <div class="form-row">
+          <label class="form-label">Review Notes</label>
+          <textarea class="form-textarea" rows="2" placeholder="Information for Apple reviewers..."></textarea>
+        </div>
+        <div class="form-row-grid">
+          <div>
+            <label>
+              <input type="checkbox"> Family Sharable
+            </label>
+          </div>
+          <div>
+            <label>
+              <input type="checkbox"> Available in all territories
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Pricing</div>
+        <div class="form-row-grid">
+          <div>
+            <label class="form-label">Base Territory *</label>
+            <select class="form-select">
+              <option>USA (USD)</option>
+              <option>Vietnam (VND)</option>
+              <option>Japan (JPY)</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Price Tier *</label>
+            <select class="form-select">
+              <option>Tier 1 — $0.99</option>
+              <option>Tier 2 — $1.99</option>
+              <option>Tier 3 — $2.99</option>
+              <option>Tier 5 — $4.99</option>
+              <option>Tier 10 — $9.99</option>
+              <option>Tier 20 — $19.99</option>
+            </select>
+            <div class="form-help">Apple auto-calculates territory prices from base</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Localizations</div>
+        <div class="locale-tabs">
+          <div class="locale-tab active" onclick="switchLocale(this, 'locale-en')">🇺🇸 English (default) *</div>
+          <div class="locale-tab" onclick="switchLocale(this, 'locale-vi')">🇻🇳 Vietnamese</div>
+          <div class="locale-tab" onclick="switchLocale(this, 'locale-ko')">🇰🇷 Korean</div>
+          <div class="locale-tab" onclick="switchLocale(this, 'locale-zh')">🇨🇳 Chinese (Simplified)</div>
+          <div class="locale-tab" onclick="switchLocale(this, 'locale-ja')">🇯🇵 Japanese</div>
+        </div>
+        <div id="locale-en" class="locale-tab-content active">
+          <div class="form-row">
+            <label class="form-label">Display Name *</label>
+            <input type="text" class="form-input" placeholder="Small Diamond Pack">
+          </div>
+          <div class="form-row">
+            <label class="form-label">Description *</label>
+            <textarea class="form-textarea" rows="3" placeholder="Get 100 diamonds for in-game purchases..."></textarea>
+          </div>
+        </div>
+        <div id="locale-vi" class="locale-tab-content">
+          <div class="form-row">
+            <label class="form-label">Display Name</label>
+            <input type="text" class="form-input" placeholder="Gói Kim Cương Nhỏ">
+          </div>
+          <div class="form-row">
+            <label class="form-label">Description</label>
+            <textarea class="form-textarea" rows="3" placeholder="Nhận 100 kim cương để mua sắm trong game..."></textarea>
+          </div>
+        </div>
+        <div id="locale-ko" class="locale-tab-content">
+          <div class="form-row">
+            <label class="form-label">Display Name</label>
+            <input type="text" class="form-input" placeholder="작은 다이아몬드 팩">
+          </div>
+        </div>
+        <div id="locale-zh" class="locale-tab-content">
+          <div class="form-row">
+            <label class="form-label">Display Name</label>
+            <input type="text" class="form-input" placeholder="小钻石包">
+          </div>
+        </div>
+        <div id="locale-ja" class="locale-tab-content">
+          <div class="form-row">
+            <label class="form-label">Display Name</label>
+            <input type="text" class="form-input" placeholder="ダイヤモンドパック (小)">
+          </div>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Review Screenshot</div>
+        <div class="drop-zone">
+          <div class="drop-zone-icon">📸</div>
+          <div class="drop-zone-text">Drop screenshot here or click to upload</div>
+          <div class="drop-zone-help">PNG/JPEG · max 8MB · required by Apple before submission</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="hideModal('modal-create-iap')">Cancel</button>
+      <button class="btn">Save as Draft</button>
+      <button class="btn btn-primary" onclick="createIAP()">Create & Submit to Apple</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Edit IAP -->
+<div id="modal-edit-iap" class="modal-overlay">
+  <div class="modal modal-large">
+    <div class="modal-header">
+      <div class="modal-title">Edit: Diamond Pack S</div>
+      <button class="modal-close" onclick="hideModal('modal-edit-iap')">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="background: var(--warning-bg); padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 13px; color: var(--warning);">
+        ⚠️ Product ID is immutable. Other fields can be edited and will sync to Apple on save.
+      </div>
+      <div class="form-row-grid">
+        <div>
+          <label class="form-label">Reference Name</label>
+          <input type="text" class="form-input" value="Diamond Pack S">
+        </div>
+        <div>
+          <label class="form-label">Product ID (locked)</label>
+          <input type="text" class="form-input" value="com.vng.lineagew.diamond_s" disabled>
+        </div>
+      </div>
+      <div class="form-row-grid">
+        <div>
+          <label class="form-label">Type (locked)</label>
+          <input type="text" class="form-input" value="Consumable" disabled>
+        </div>
+        <div>
+          <label class="form-label">Current State</label>
+          <span class="badge badge-approved">Approved</span>
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Review Notes</label>
+        <textarea class="form-textarea" rows="2">Standard diamond pack for in-game currency.</textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="hideModal('modal-edit-iap')">Cancel</button>
+      <button class="btn btn-primary">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Pricing Detail -->
+<div id="modal-pricing-detail" class="modal-overlay">
+  <div class="modal modal-large">
+    <div class="modal-header">
+      <div class="modal-title">Pricing: Diamond Pack S</div>
+      <button class="modal-close" onclick="hideModal('modal-pricing-detail')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row-grid">
+        <div>
+          <label class="form-label">Base Territory</label>
+          <select class="form-select">
+            <option>USA (USD)</option>
+            <option>Vietnam (VND)</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">Price Tier</label>
+          <select class="form-select">
+            <option>Tier 1 — $0.99</option>
+            <option>Tier 2 — $1.99</option>
+            <option selected>Tier 5 — $4.99</option>
+            <option>Tier 10 — $9.99</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Territory Prices (auto-calculated from base by Apple)</label>
+        <div class="territory-list">
+          <div class="territory-row header">
+            <div>Code</div>
+            <div>Territory</div>
+            <div>Customer Price</div>
+            <div>Proceeds</div>
+          </div>
+          <div class="territory-row">
+            <div>USA</div>
+            <div>United States</div>
+            <div>$0.99</div>
+            <div>$0.70</div>
+          </div>
+          <div class="territory-row">
+            <div>VNM</div>
+            <div>Vietnam</div>
+            <div>₫24,000</div>
+            <div>₫16,800</div>
+          </div>
+          <div class="territory-row">
+            <div>JPN</div>
+            <div>Japan</div>
+            <div>¥160</div>
+            <div>¥112</div>
+          </div>
+          <div class="territory-row">
+            <div>KOR</div>
+            <div>Korea</div>
+            <div>₩1,400</div>
+            <div>₩980</div>
+          </div>
+          <div class="territory-row">
+            <div>CHN</div>
+            <div>China Mainland</div>
+            <div>¥6.00</div>
+            <div>¥4.20</div>
+          </div>
+          <div class="territory-row">
+            <div>...</div>
+            <div>170 more territories</div>
+            <div>—</div>
+            <div>—</div>
+          </div>
+        </div>
+      </div>
+      <div class="form-section">
+        <div class="form-section-title">Schedule Price Change (optional)</div>
+        <div class="form-row-grid">
+          <div>
+            <label class="form-label">New Tier</label>
+            <select class="form-select">
+              <option>Tier 6 — $5.99</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Effective Date</label>
+            <input type="date" class="form-input">
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="hideModal('modal-pricing-detail')">Cancel</button>
+      <button class="btn btn-primary">Update Pricing</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Bulk Import -->
+<div id="modal-bulk-import" class="modal-overlay">
+  <div class="modal modal-large">
+    <div class="modal-header">
+      <div class="modal-title">Bulk Import IAPs</div>
+      <button class="modal-close" onclick="hideModal('modal-bulk-import')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <label class="form-label">Target App *</label>
+        <select class="form-select">
+          <option>Lineage W</option>
+          <option>Roblox VN</option>
+          <option>Arena Breakout VNG</option>
+        </select>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Step 1 — Download Template</div>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 8px;">
+          Download Excel template with all required columns + sample data.
+        </p>
+        <button class="btn">📥 Download iap-template.xlsx</button>
+        <p style="font-size: 12px; color: var(--text-subtle); margin-top: 8px;">
+          Columns: name, productId, type, price_tier, family_sharable, review_note,
+          locale_en_name, locale_en_desc, locale_vi_name, locale_vi_desc, ... screenshot_filename
+        </p>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Step 2 — Upload Filled Template</div>
+        <div class="drop-zone">
+          <div class="drop-zone-icon">📤</div>
+          <div class="drop-zone-text">Drop your filled iap-template.xlsx here</div>
+          <div class="drop-zone-help">Maximum 100 IAPs per import · Screenshots in companion ZIP</div>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Step 3 — Validate & Preview</div>
+        <div style="background: var(--surface-2); padding: 12px; border-radius: 6px; border: 1px solid var(--border);">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span style="font-size: 13px; font-weight: 500;">Validation results</span>
+            <span style="font-size: 12px; color: var(--text-muted);">Last validated 2 min ago</span>
+          </div>
+          <ul style="list-style: none; font-size: 13px;">
+            <li style="color: var(--success); margin-bottom: 4px;">✅ 14 rows valid, ready to create</li>
+            <li style="color: var(--warning); margin-bottom: 4px;">⚠️ 1 row conflict: productId "com.vng.lineagew.diamond_s" already exists</li>
+            <li style="color: var(--danger);">❌ 0 errors</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Step 4 — Conflict Resolution</div>
+        <label>
+          <input type="radio" name="conflict" checked> Skip conflicting rows (recommended)
+        </label><br>
+        <label>
+          <input type="radio" name="conflict"> Overwrite existing IAPs with new data
+        </label><br>
+        <label>
+          <input type="radio" name="conflict"> Stop import on first conflict
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="hideModal('modal-bulk-import')">Cancel</button>
+      <button class="btn">Re-validate</button>
+      <button class="btn btn-primary">Import 14 IAPs to Apple</button>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Export -->
+<div id="modal-export" class="modal-overlay">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Export IAPs</div>
+      <button class="modal-close" onclick="hideModal('modal-export')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row">
+        <label class="form-label">Scope</label>
+        <select class="form-select">
+          <option>All IAPs (347 items)</option>
+          <option>Current filter results (8 items)</option>
+          <option>Selected only (0 items)</option>
+          <option>By app — Lineage W (45 items)</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label class="form-label">Format</label>
+        <select class="form-select">
+          <option>Excel (.xlsx) — full data</option>
+          <option>CSV (.csv) — basic data</option>
+          <option>JSON (.json) — for re-import</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <label>
+          <input type="checkbox" checked> Include all localizations
+        </label><br>
+        <label>
+          <input type="checkbox" checked> Include pricing details (current tier)
+        </label><br>
+        <label>
+          <input type="checkbox"> Include screenshots (ZIP companion file)
+        </label><br>
+        <label>
+          <input type="checkbox"> Include sync history
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="hideModal('modal-export')">Cancel</button>
+      <button class="btn btn-primary">Export</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast">IAP created successfully · Syncing to Apple...</div>
+
+<script>
+function switchTab(el, contentId) {
+  el.parentElement.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById(contentId).classList.add('active');
+}
+function switchLocale(el, contentId) {
+  el.parentElement.querySelectorAll('.locale-tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('.locale-tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById(contentId).classList.add('active');
+}
+function showModal(id) {
+  document.getElementById(id).classList.add('show');
+}
+function hideModal(id) {
+  document.getElementById(id).classList.remove('show');
+}
+function createIAP() {
+  hideModal('modal-create-iap');
+  const toast = document.getElementById('toast');
+  toast.classList.add('show');
+  setTimeout(() => toast.classList.remove('show'), 3000);
+}
+</script>
+
+</body>
+</html>
