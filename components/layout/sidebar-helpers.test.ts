@@ -18,6 +18,22 @@ describe('getSettingsHref', () => {
     );
   });
 
+  it('routes to IAP Management Pricing Tiers when inside /iap-management/*', () => {
+    expect(getSettingsHref('/iap-management/apps')).toBe(
+      '/iap-management/settings/pricing-tiers',
+    );
+    expect(getSettingsHref('/iap-management/apps/123/bulk-import')).toBe(
+      '/iap-management/settings/pricing-tiers',
+    );
+    expect(getSettingsHref('/iap-management/settings/pricing-tiers')).toBe(
+      '/iap-management/settings/pricing-tiers',
+    );
+    // Module root
+    expect(getSettingsHref('/iap-management')).toBe(
+      '/iap-management/settings/pricing-tiers',
+    );
+  });
+
   it('routes to global /settings everywhere else', () => {
     expect(getSettingsHref('/apps/123')).toBe('/settings');
     expect(getSettingsHref('/apps')).toBe('/settings');

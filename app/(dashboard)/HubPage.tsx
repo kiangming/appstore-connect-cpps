@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { Layers, Inbox, ArrowRight } from "lucide-react";
+import { Layers, Inbox, ShoppingBag, ArrowRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 interface ToolCard {
@@ -27,6 +27,13 @@ const TOOLS: ToolCard[] = [
     description: "Track app submission status across stores from email",
     icon: Inbox,
     href: "/store-submissions",
+  },
+  {
+    id: "iap-management",
+    name: "IAP Management",
+    description: "Create + bulk-import In-App Purchases on App Store Connect",
+    icon: ShoppingBag,
+    href: "/iap-management",
   },
 ];
 
@@ -54,7 +61,7 @@ export function HubPage() {
         </p>
 
         {/* Tool grid */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
           {TOOLS.map((tool) => (
             <Link
               key={tool.id}

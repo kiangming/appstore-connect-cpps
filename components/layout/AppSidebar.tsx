@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { useState } from "react";
-import { Layers, Inbox, Settings, LogOut } from "lucide-react";
+import { Layers, Inbox, ShoppingBag, Settings, LogOut } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { getSettingsHref } from "./sidebar-helpers";
 import { ThemeToggle } from "./ThemeToggle";
@@ -28,6 +28,12 @@ const NAV_ITEMS: NavItem[] = [
     label: "Store Management",
     icon: Inbox,
     href: "/store-submissions",
+  },
+  {
+    id: "iap-management",
+    label: "IAP Management",
+    icon: ShoppingBag,
+    href: "/iap-management",
   },
 ];
 
