@@ -175,4 +175,30 @@ describe("validateIapFormState — 6-prerequisite checklist (Q-IAP.h.3)", () => 
     const result = validateIapFormState(form);
     expect(result.items.find((i) => i.key === "localization")!.detail).toBe("2 filled");
   });
+
+  it("rejects whitespace-only reference name", () => {
+    const form = fullyValidForm();
+    form.reference_name = "   \t  ";
+    const result = validateIapFormState(form);
+    expect(result.items.find((i) => i.key === "reference_name")!.passed).toBe(false);
+  });
+
+  it("rejects whitespace-only product_id", () => {
+    const form = fullyValidForm();
+    form.product_id = "   ";
+    const result = validateIapFormState(form);
+    expect(result.items.find((i) => i.key === "product_id")!.passed).toBe(false);
+  });
+
+  it("returns exactly 6 checklist items in stable order", () => {
+    const result = validateIapFormState(emptyIapForm());
+    expect(result.items.map((i) => i.key)).toEqual([
+      "reference_name",
+      "product_id",
+      "type",
+      "tier",
+      "localization",
+      "screenshot",
+    ]);
+  });
 });

@@ -44,4 +44,44 @@ describe("withConcurrency", () => {
       }),
     ).rejects.toThrow(/boom/);
   });
+
+  it("caps worker count at items.length when limit > items.length", async () => {
+    let peakActive = 0;
+    let active = 0;
+    const items = [1, 2, 3]; // 3 items, limit 100
+
+    await withConcurrency(items, 100, async (n) => {
+      active++;
+      peakActive = Math.max(peakActive, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+      return n;
+    });
+
+    expect(peakActive).toBe(3); // not 100
+  });
+
+  it("does not start new tasks after the first error fires", async () => {
+    const started: number[] = [];
+    const items = [1, 2, 3, 4, 5, 6, 7, 8];
+
+    await expect(
+      withConcurrency(items, 2, async (n) => {
+        started.push(n);
+        if (n === 1) {
+          // Make item 1 fail quickly — Promise.all rejects on first failure;
+          // the helper awaits all workers, but new tasks past the failing
+          // one's cursor advance only if the worker hasn't thrown yet.
+          throw new Error("fail-1");
+        }
+        await new Promise((r) => setTimeout(r, 10));
+        return n;
+      }),
+    ).rejects.toThrow();
+
+    // We can't strictly bound "started" because parallel workers race, but
+    // we can assert that not ALL items started (otherwise the limit is
+    // meaningless on error).
+    expect(started.length).toBeLessThan(items.length);
+  });
 });
