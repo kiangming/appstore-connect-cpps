@@ -69,6 +69,13 @@ interface ExecuteResult {
     stage?: string;
     failed_locales?: string[];
     screenshot_uploaded?: boolean;
+    /** IAP.o.8a — OVERWRITE-only outcome for the screenshot path. */
+    screenshot_note?:
+      | "replaced"
+      | "uploaded-new"
+      | "no-file"
+      | "delete-locked"
+      | "failed";
     submitted?: boolean;
   }>;
 }
@@ -1047,9 +1054,13 @@ function Step4Result({
                       ? `${r.stage ?? ""}: ${r.error.slice(0, 120)}`
                       : r.failed_locales && r.failed_locales.length > 0
                         ? `Failed locales: ${r.failed_locales.join(", ")}`
-                        : r.apple_iap_id
-                          ? `apple_iap_id ${r.apple_iap_id.slice(0, 12)}…`
-                          : "—"}
+                        : r.screenshot_note === "delete-locked"
+                          ? "Apple wouldn't let us swap the screenshot — IAP is in review or approved. Swap manually in App Store Connect."
+                          : r.screenshot_note === "failed"
+                            ? "Screenshot upload failed — check the file and re-run the import row."
+                            : r.apple_iap_id
+                              ? `apple_iap_id ${r.apple_iap_id.slice(0, 12)}…`
+                              : "—"}
                   </td>
                 </tr>
               );
@@ -1080,9 +1091,27 @@ function OutcomeBadge({
   }
   // For overwrite path: no submission, but localizations replaced.
   if (result.disposition === "OVERWRITE") {
+    // IAP.o.8a — Manager MV30 Issue 1: silent screenshot deferral was the
+    // critical loss. The badge now suffixes the screenshot outcome so the
+    // happy and locked/failed paths can't be mistaken for each other.
+    const note = result.screenshot_note;
+    let suffix = "";
+    let cls = "bg-amber-50 text-amber-700 border-amber-200";
+    if (note === "replaced" || note === "uploaded-new") {
+      suffix = " · screenshot updated";
+      cls = "bg-emerald-50 text-emerald-700 border-emerald-200";
+    } else if (note === "delete-locked") {
+      suffix = " · screenshot locked";
+      cls = "bg-orange-50 text-orange-700 border-orange-200";
+    } else if (note === "failed") {
+      suffix = " · screenshot failed";
+      cls = "bg-red-50 text-red-700 border-red-200";
+    }
     return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-amber-50 text-amber-700 border-amber-200">
-        Overwritten
+      <span
+        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${cls}`}
+      >
+        Overwritten{suffix}
       </span>
     );
   }

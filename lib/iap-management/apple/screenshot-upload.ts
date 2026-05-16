@@ -19,6 +19,8 @@ import {
   reserveInAppPurchaseScreenshot,
   uploadScreenshotToOperations,
   confirmInAppPurchaseScreenshot,
+  deleteInAppPurchaseScreenshot,
+  getInAppPurchase,
 } from "./client";
 import { withRetry, AppleApiError } from "./fetch";
 
@@ -115,6 +117,97 @@ export async function uploadScreenshotToApple(
     file_size: file.size,
   };
 }
+
+/**
+ * IAP.o.8a — replace-or-upload orchestration for the bulk-import OVERWRITE
+ * path. Mirrors the CPP "swap screenshot of existing approved asset" pattern.
+ *
+ * Steps:
+ *   1. GET the IAP with `?include=reviewScreenshot` to discover whether a
+ *      screenshot is currently attached.
+ *   2. If one exists, DELETE it. If Apple returns 409 (IAP in review /
+ *      waiting-for-review / approved-but-locked), surface a non-fatal
+ *      `delete-locked` failure so the caller can mark the row with a hint
+ *      instead of aborting the import.
+ *   3. Run the standard 3-step upload via `uploadScreenshotToApple`.
+ *
+ * Returns the same `ScreenshotUploadResult` shape as the upload-only path,
+ * with one extra stage tag `delete-locked` for the 409 case.
+ */
+export async function replaceScreenshotOnApple(
+  creds: AscCredentials,
+  appleIapId: string,
+  file: File,
+): Promise<ScreenshotReplaceResult> {
+  let existingScreenshotId: string | undefined;
+  try {
+    const res = await withRetry(() => getInAppPurchase(creds, appleIapId));
+    existingScreenshotId = extractReviewScreenshotId(res);
+  } catch (err) {
+    return {
+      ok: false,
+      stage: "lookup",
+      error: errMsg(err),
+    };
+  }
+
+  if (existingScreenshotId) {
+    try {
+      await withRetry(() =>
+        deleteInAppPurchaseScreenshot(creds, existingScreenshotId!),
+      );
+    } catch (err) {
+      // Apple returns 409 when the IAP is locked (in review / approved). Surface
+      // as a typed non-fatal so the bulk-import caller can mark the row with a
+      // human-readable hint instead of failing the whole orchestration.
+      if (err instanceof AppleApiError && err.status === 409) {
+        return {
+          ok: false,
+          stage: "delete-locked",
+          error: errMsg(err),
+          apple_screenshot_id: existingScreenshotId,
+        };
+      }
+      return {
+        ok: false,
+        stage: "delete",
+        error: errMsg(err),
+        apple_screenshot_id: existingScreenshotId,
+      };
+    }
+  }
+
+  return await uploadScreenshotToApple(creds, appleIapId, file);
+}
+
+/**
+ * Extract the id of the `reviewScreenshot` to-one relationship from a
+ * `getInAppPurchase` response. Returns undefined when no screenshot is
+ * currently attached — that is the common case for OVERWRITE imports where
+ * the original IAP was created without one.
+ *
+ * The shape lives in `data.relationships.reviewScreenshot.data.id` per Apple
+ * JSON:API; defensive optional chaining keeps the helper resilient to Apple
+ * returning the relationship object without `data` (links-only).
+ */
+function extractReviewScreenshotId(
+  res: { data?: { relationships?: Record<string, unknown> } },
+): string | undefined {
+  const rel = res.data?.relationships?.reviewScreenshot as
+    | { data?: { id?: string } | null }
+    | undefined;
+  return rel?.data?.id;
+}
+
+export type ScreenshotReplaceResult =
+  | ScreenshotUploadSuccess
+  | ScreenshotUploadFailure
+  | {
+      ok: false;
+      stage: "lookup" | "delete" | "delete-locked";
+      error: string;
+      apple_screenshot_id?: string;
+    };
 
 function errMsg(err: unknown): string {
   if (err instanceof AppleApiError) {

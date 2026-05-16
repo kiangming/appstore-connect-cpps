@@ -44,6 +44,7 @@ import {
   submitInAppPurchase,
   updateInAppPurchase,
 } from "@/lib/iap-management/apple/client";
+import { replaceScreenshotOnApple } from "@/lib/iap-management/apple/screenshot-upload";
 import {
   withRetry,
   AppleApiError,
@@ -79,6 +80,15 @@ interface PerIapResult {
   apple_iap_id?: string;
   failed_locales?: string[];
   screenshot_uploaded?: boolean;
+  /** OVERWRITE-only — explains the screenshot outcome when a companion file
+   *  was present. Surfaces in Step 4 results so Manager sees why an Apple
+   *  screenshot did/didn't change. (IAP.o.8a) */
+  screenshot_note?:
+    | "replaced"
+    | "uploaded-new"
+    | "no-file"
+    | "delete-locked"
+    | "failed";
   submitted?: boolean;
   stage?: string;
   error?: string;
@@ -470,7 +480,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
 }
 
 async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
-  const { creds, decision, existingByProductId } = args;
+  const { creds, decision, existingByProductId, screenshots } = args;
   const item = decision.source;
   const appleIapId = existingByProductId.get(item.product_id)!;
 
@@ -543,16 +553,86 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
-  // Screenshot preservation: skip replacement on overwrite (v1 limitation —
-  // documented in commit body).
-  return await persistResult(args, {
+  // Screenshot replace (IAP.o.8a). Manager MV30 Issue 1: re-importing an IAP
+  // that originally had no screenshot used to silently leave Apple's slot
+  // empty. New behavior: if the batch ships a companion file for this
+  // productId, delete the existing screenshot (if any) then run the 3-step
+  // upload. If Apple returns 409 (IAP locked in WAITING_FOR_REVIEW / IN_REVIEW),
+  // surface a non-fatal `delete-locked` note so the row remains SUCCESS but
+  // Manager sees the screenshot couldn't be swapped.
+  let screenshotOk = false;
+  let screenshotNote: PerIapResult["screenshot_note"] = "no-file";
+  let screenshotFile: File | undefined;
+  for (const [fname, file] of screenshots.entries()) {
+    const match = matchScreenshotToProductId(fname, [item.product_id]);
+    if (match.kind === "matched" && match.productId === item.product_id) {
+      screenshotFile = file;
+      break;
+    }
+  }
+  if (screenshotFile) {
+    const replace = await replaceScreenshotOnApple(
+      creds,
+      appleIapId,
+      screenshotFile,
+    );
+    if (replace.ok) {
+      screenshotOk = true;
+      // The lookup phase doesn't tell us whether a prior screenshot existed
+      // when it succeeded — but Manager's primary complaint was the
+      // "originally none → import added one" case, so the audit log infers
+      // by stage: if replace.ok was reached with no upstream delete failure
+      // and lookup returned nothing, it's an "uploaded-new"; we can't cheaply
+      // distinguish here without plumbing the prior-id back, so default to
+      // `replaced` (covers both cases without misreporting outcome).
+      screenshotNote = "replaced";
+    } else if (replace.stage === "delete-locked") {
+      screenshotNote = "delete-locked";
+      await log(
+        "iap-bulk-execute",
+        `screenshot delete locked on product=${item.product_id}: ${replace.error}`,
+        "WARN",
+      );
+    } else {
+      screenshotNote = "failed";
+      await log(
+        "iap-bulk-execute",
+        `screenshot replace fail on product=${item.product_id} (${replace.stage}): ${replace.error}`,
+        "WARN",
+      );
+    }
+  }
+
+  const overwriteResult: PerIapResult = {
     product_id: item.product_id,
     disposition: "OVERWRITE",
     status: "SUCCESS",
     apple_iap_id: appleIapId,
     failed_locales: failedLocales,
-    screenshot_uploaded: false,
-  });
+    screenshot_uploaded: screenshotOk,
+    screenshot_note: screenshotNote,
+  };
+
+  // Dedicated audit row for the screenshot replace outcome so Manager-side
+  // log queries can find IAPs whose screenshot was/wasn't replaced without
+  // re-parsing the bulk-create payload. Mirrors how BULK_IMPORT_SUBMIT is
+  // split out from BULK_IMPORT_CREATE.
+  if (screenshotFile) {
+    await iapDb().from("actions_log").insert({
+      batch_id: args.batchId,
+      actor: args.actor,
+      action_type: "BULK_IMPORT_OVERWRITE_SCREENSHOT",
+      payload: {
+        product_id: item.product_id,
+        apple_iap_id: appleIapId,
+        app_id: args.internalAppId,
+        outcome: screenshotNote,
+        screenshot_uploaded: screenshotOk,
+      },
+    });
+  }
+
+  return await persistResult(args, overwriteResult);
 }
 
 // ─── Persistence helpers ────────────────────────────────────────────────────

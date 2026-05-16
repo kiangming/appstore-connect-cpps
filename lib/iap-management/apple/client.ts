@@ -285,6 +285,27 @@ export async function confirmInAppPurchaseScreenshot(
 }
 
 /**
+ * Delete an existing review screenshot. Used by the bulk-import OVERWRITE
+ * path (IAP.o.8a) to replace a previously-uploaded screenshot — Apple's
+ * `reviewScreenshot` relationship is to-one, so a fresh upload must be
+ * preceded by a DELETE when one already exists.
+ *
+ * Apple returns 409 when the IAP is in WAITING_FOR_REVIEW / IN_REVIEW —
+ * callers should catch `AppleApiError` with `status === 409` and surface a
+ * non-fatal warning rather than failing the whole import.
+ */
+export async function deleteInAppPurchaseScreenshot(
+  creds: AscCredentials,
+  screenshotId: string,
+): Promise<void> {
+  return iapFetch<void>(
+    creds,
+    "DELETE",
+    `/v1/inAppPurchaseReviewScreenshots/${screenshotId}`,
+  );
+}
+
+/**
  * Upload bytes directly to Apple's CDN via the presigned operations returned
  * by `reserveInAppPurchaseScreenshot`. No creds needed — operations are
  * pre-signed. Mirrors lib/asc-client.ts `uploadAssetToOperations`.

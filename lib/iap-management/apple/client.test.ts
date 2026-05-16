@@ -14,6 +14,7 @@ import {
   updateInAppPurchaseLocalization,
   reserveInAppPurchaseScreenshot,
   confirmInAppPurchaseScreenshot,
+  deleteInAppPurchaseScreenshot,
   submitInAppPurchase,
   listInAppPurchases,
   listAllInAppPurchases,
@@ -219,6 +220,20 @@ describe("confirmInAppPurchaseScreenshot", () => {
         attributes: { uploaded: true, sourceFileChecksum: "abc123md5" },
       },
     });
+  });
+});
+
+// IAP.o.8a — overwrite path needs to drop a stale screenshot before
+// uploading a replacement, since Apple's reviewScreenshot relationship is
+// to-one. The wrapper is a thin DELETE; the orchestration logic lives in
+// replaceScreenshotOnApple (see screenshot-upload.test.ts).
+describe("deleteInAppPurchaseScreenshot", () => {
+  it("DELETEs /v1/inAppPurchaseReviewScreenshots/{id} with no body", async () => {
+    await deleteInAppPurchaseScreenshot(creds, "scr-99");
+    const [, method, endpoint, body] = iapFetch.mock.calls[0];
+    expect(method).toBe("DELETE");
+    expect(endpoint).toBe("/v1/inAppPurchaseReviewScreenshots/scr-99");
+    expect(body).toBeUndefined();
   });
 });
 
