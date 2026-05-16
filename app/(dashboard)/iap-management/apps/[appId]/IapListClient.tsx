@@ -16,6 +16,7 @@ import {
   Send,
   Loader2,
   ChevronRight,
+  Eye,
 } from "lucide-react";
 import type {
   InAppPurchase,
@@ -457,7 +458,7 @@ export function IapListClient({
                 <th className="px-4 py-3">Reference Name</th>
                 <th className="px-4 py-3 w-36">Type</th>
                 <th className="px-4 py-3 w-44">State</th>
-                <th className="px-4 py-3 w-20"></th>
+                <th className="px-4 py-3 w-32 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -468,16 +469,31 @@ export function IapListClient({
                 const viewHref = internalId
                   ? `/iap-management/apps/${appId}/iaps/${internalId}/view`
                   : undefined;
-                // IAP.o.8c — row click → real-time /view page. Edit button at
-                // the row tail preserves direct access to the existing edit
-                // route. Stub-less Apple rows (no internal UUID) stay non-
-                // clickable until Refresh from Apple seeds the local cache.
+                // IAP.o.8c → IAP.o.10b — row-wide click navigates to /view, AND
+                // an explicit eye-icon "View" button sits next to Edit so
+                // Manager doesn't have to discover the row-click affordance.
+                // Stub-less Apple rows (no internal UUID) stay non-clickable
+                // until Refresh from Apple seeds the local cache.
                 return (
                   <tr
                     key={iap.id}
                     onClick={() => {
                       if (viewHref) router.push(viewHref);
                     }}
+                    role={viewHref ? "button" : undefined}
+                    tabIndex={viewHref ? 0 : undefined}
+                    onKeyDown={(e) => {
+                      if (!viewHref) return;
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        router.push(viewHref);
+                      }
+                    }}
+                    aria-label={
+                      viewHref
+                        ? `View details for ${iap.attributes.productId}`
+                        : undefined
+                    }
                     className={`hover:bg-slate-50 transition ${isSelected ? "bg-blue-50/40" : ""} ${viewHref ? "cursor-pointer" : ""}`}
                   >
                     <td
@@ -522,13 +538,24 @@ export function IapListClient({
                       onClick={(e) => e.stopPropagation()}
                     >
                       {internalId ? (
-                        <Link
-                          href={`/iap-management/apps/${appId}/iaps/${internalId}`}
-                          className="inline-flex items-center gap-1 text-[#0071E3] hover:underline text-xs"
-                        >
-                          <Pencil className="h-3 w-3" />
-                          Edit
-                        </Link>
+                        <div className="inline-flex items-center gap-3">
+                          <Link
+                            href={viewHref!}
+                            aria-label={`View details for ${iap.attributes.productId}`}
+                            className="inline-flex items-center gap-1 text-[#0071E3] hover:underline text-xs"
+                          >
+                            <Eye className="h-3 w-3" />
+                            View
+                          </Link>
+                          <Link
+                            href={`/iap-management/apps/${appId}/iaps/${internalId}`}
+                            aria-label={`Edit ${iap.attributes.productId}`}
+                            className="inline-flex items-center gap-1 text-slate-600 hover:text-[#0071E3] hover:underline text-xs"
+                          >
+                            <Pencil className="h-3 w-3" />
+                            Edit
+                          </Link>
+                        </div>
                       ) : null}
                     </td>
                   </tr>
