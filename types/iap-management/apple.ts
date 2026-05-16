@@ -70,7 +70,7 @@ export type InAppPurchaseLocalization = AscResource<
 
 // ─── Review Screenshot ───────────────────────────────────────────────────────
 
-export interface InAppPurchaseReviewScreenshotAttributes {
+export interface InAppPurchaseAppStoreReviewScreenshotAttributes {
   fileName: string;
   fileSize: number;
   sourceFileChecksum?: string;
@@ -88,9 +88,9 @@ export interface InAppPurchaseReviewScreenshotAttributes {
   };
 }
 
-export type InAppPurchaseReviewScreenshot = AscResource<
-  "inAppPurchaseReviewScreenshots",
-  InAppPurchaseReviewScreenshotAttributes
+export type InAppPurchaseAppStoreReviewScreenshot = AscResource<
+  "inAppPurchaseAppStoreReviewScreenshots",
+  InAppPurchaseAppStoreReviewScreenshotAttributes
 >;
 
 // ─── Payloads ────────────────────────────────────────────────────────────────

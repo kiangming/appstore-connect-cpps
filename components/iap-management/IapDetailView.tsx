@@ -17,7 +17,7 @@ import { localeNameFromCode } from "@/lib/locale-utils";
 import type {
   InAppPurchase,
   InAppPurchaseLocalization,
-  InAppPurchaseReviewScreenshot,
+  InAppPurchaseAppStoreReviewScreenshot,
   InAppPurchaseType,
 } from "@/types/iap-management/apple";
 
@@ -69,7 +69,7 @@ interface Props {
   internalIapId: string;
   iap: InAppPurchase;
   localizations: InAppPurchaseLocalization[];
-  screenshot: InAppPurchaseReviewScreenshot | null;
+  screenshot: InAppPurchaseAppStoreReviewScreenshot | null;
   /** ISO timestamp captured by the server when this snapshot was fetched —
    *  surfaces "Real-time as of …" so Manager knows the data is fresh. */
   fetchedAt: string;

@@ -4,9 +4,9 @@
  *   • Bulk-import /execute endpoint (IAP.i, refactored in IAP.o.6c)
  *
  * Steps (per Apple ASC API contract):
- *   1. POST /v1/inAppPurchaseReviewScreenshots — reserve, get uploadOperations.
+ *   1. POST /v1/inAppPurchaseAppStoreReviewScreenshots — reserve, get uploadOperations.
  *   2. PUT each presigned chunk — uploadScreenshotToOperations.
- *   3. PATCH /v1/inAppPurchaseReviewScreenshots/{id} — confirm with md5.
+ *   3. PATCH /v1/inAppPurchaseAppStoreReviewScreenshots/{id} — confirm with md5.
  *
  * Each Apple call is wrapped in withRetry (429-aware). Errors are caught and
  * returned as a typed result so callers can decide whether to fail the whole
@@ -123,8 +123,8 @@ export async function uploadScreenshotToApple(
  * path. Mirrors the CPP "swap screenshot of existing approved asset" pattern.
  *
  * Steps:
- *   1. GET the IAP with `?include=reviewScreenshot` to discover whether a
- *      screenshot is currently attached.
+ *   1. GET the IAP with `?include=appStoreReviewScreenshot` to discover
+ *      whether a screenshot is currently attached.
  *   2. If one exists, DELETE it. If Apple returns 409 (IAP in review /
  *      waiting-for-review / approved-but-locked), surface a non-fatal
  *      `delete-locked` failure so the caller can mark the row with a hint
@@ -142,7 +142,7 @@ export async function replaceScreenshotOnApple(
   let existingScreenshotId: string | undefined;
   try {
     const res = await withRetry(() => getInAppPurchase(creds, appleIapId));
-    existingScreenshotId = extractReviewScreenshotId(res);
+    existingScreenshotId = extractAppStoreReviewScreenshotId(res);
   } catch (err) {
     return {
       ok: false,
@@ -181,19 +181,19 @@ export async function replaceScreenshotOnApple(
 }
 
 /**
- * Extract the id of the `reviewScreenshot` to-one relationship from a
+ * Extract the id of the `appStoreReviewScreenshot` to-one relationship from a
  * `getInAppPurchase` response. Returns undefined when no screenshot is
  * currently attached — that is the common case for OVERWRITE imports where
  * the original IAP was created without one.
  *
- * The shape lives in `data.relationships.reviewScreenshot.data.id` per Apple
- * JSON:API; defensive optional chaining keeps the helper resilient to Apple
- * returning the relationship object without `data` (links-only).
+ * The shape lives in `data.relationships.appStoreReviewScreenshot.data.id`
+ * per Apple JSON:API; defensive optional chaining keeps the helper resilient
+ * to Apple returning the relationship object without `data` (links-only).
  */
-function extractReviewScreenshotId(
+function extractAppStoreReviewScreenshotId(
   res: { data?: { relationships?: Record<string, unknown> } },
 ): string | undefined {
-  const rel = res.data?.relationships?.reviewScreenshot as
+  const rel = res.data?.relationships?.appStoreReviewScreenshot as
     | { data?: { id?: string } | null }
     | undefined;
   return rel?.data?.id;

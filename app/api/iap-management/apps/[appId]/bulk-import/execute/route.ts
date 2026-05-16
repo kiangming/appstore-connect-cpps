@@ -9,7 +9,7 @@
  * Per-IAP steps (CREATE path):
  *   1. POST /v2/inAppPurchases — create shell on Apple.
  *   2. POST /v1/inAppPurchaseLocalizations — one per filled locale.
- *   3. POST /v1/inAppPurchaseReviewScreenshots reserve + PUT chunks + PATCH
+ *   3. POST /v1/inAppPurchaseAppStoreReviewScreenshots reserve + PUT chunks + PATCH
  *      confirm (deferral 1 absorbed).
  *   4. (optional, when submit_on_create=true) POST /v1/inAppPurchaseSubmissions.
  *   5. Insert iap_mgmt.iaps + iap_localizations + iap_screenshots audit rows.

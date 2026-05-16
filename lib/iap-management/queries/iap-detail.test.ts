@@ -63,7 +63,7 @@ describe("splitIncluded", () => {
       data: baseIap(),
       included: [
         {
-          type: "inAppPurchaseReviewScreenshots",
+          type: "inAppPurchaseAppStoreReviewScreenshots",
           id: "scr-1",
           attributes: {
             fileName: "diamond.png",
@@ -87,7 +87,7 @@ describe("splitIncluded", () => {
           attributes: { locale: "en-US", name: "Diamonds" },
         },
         {
-          type: "inAppPurchaseReviewScreenshots",
+          type: "inAppPurchaseAppStoreReviewScreenshots",
           id: "scr-1",
           attributes: { fileName: "x.png", fileSize: 100 },
         },

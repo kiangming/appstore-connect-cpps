@@ -21,7 +21,7 @@ import type {
   AscApiResponse,
   InAppPurchase,
   InAppPurchaseLocalization,
-  InAppPurchaseReviewScreenshot,
+  InAppPurchaseAppStoreReviewScreenshot,
   CreateInAppPurchasePayload,
   UpdateInAppPurchasePayload,
   CreateInAppPurchaseLocalizationPayload,
@@ -114,7 +114,7 @@ export async function getInAppPurchase(
   return iapFetch<AscApiResponse<InAppPurchase>>(
     creds,
     "GET",
-    `/v2/inAppPurchases/${iapId}?include=inAppPurchaseLocalizations,reviewScreenshot`,
+    `/v2/inAppPurchases/${iapId}?include=inAppPurchaseLocalizations,appStoreReviewScreenshot`,
   );
 }
 
@@ -246,14 +246,14 @@ export async function reserveInAppPurchaseScreenshot(
   iapId: string,
   fileName: string,
   fileSize: number,
-): Promise<AscApiResponse<InAppPurchaseReviewScreenshot>> {
-  return iapFetch<AscApiResponse<InAppPurchaseReviewScreenshot>>(
+): Promise<AscApiResponse<InAppPurchaseAppStoreReviewScreenshot>> {
+  return iapFetch<AscApiResponse<InAppPurchaseAppStoreReviewScreenshot>>(
     creds,
     "POST",
-    "/v1/inAppPurchaseReviewScreenshots",
+    "/v1/inAppPurchaseAppStoreReviewScreenshots",
     {
       data: {
-        type: "inAppPurchaseReviewScreenshots",
+        type: "inAppPurchaseAppStoreReviewScreenshots",
         attributes: { fileName, fileSize },
         relationships: {
           inAppPurchaseV2: {
@@ -269,14 +269,14 @@ export async function confirmInAppPurchaseScreenshot(
   creds: AscCredentials,
   screenshotId: string,
   sourceFileChecksum: string,
-): Promise<AscApiResponse<InAppPurchaseReviewScreenshot>> {
-  return iapFetch<AscApiResponse<InAppPurchaseReviewScreenshot>>(
+): Promise<AscApiResponse<InAppPurchaseAppStoreReviewScreenshot>> {
+  return iapFetch<AscApiResponse<InAppPurchaseAppStoreReviewScreenshot>>(
     creds,
     "PATCH",
-    `/v1/inAppPurchaseReviewScreenshots/${screenshotId}`,
+    `/v1/inAppPurchaseAppStoreReviewScreenshots/${screenshotId}`,
     {
       data: {
-        type: "inAppPurchaseReviewScreenshots",
+        type: "inAppPurchaseAppStoreReviewScreenshots",
         id: screenshotId,
         attributes: { uploaded: true, sourceFileChecksum },
       },
@@ -287,8 +287,8 @@ export async function confirmInAppPurchaseScreenshot(
 /**
  * Delete an existing review screenshot. Used by the bulk-import OVERWRITE
  * path (IAP.o.8a) to replace a previously-uploaded screenshot — Apple's
- * `reviewScreenshot` relationship is to-one, so a fresh upload must be
- * preceded by a DELETE when one already exists.
+ * `appStoreReviewScreenshot` relationship is to-one, so a fresh upload must
+ * be preceded by a DELETE when one already exists.
  *
  * Apple returns 409 when the IAP is in WAITING_FOR_REVIEW / IN_REVIEW —
  * callers should catch `AppleApiError` with `status === 409` and surface a
@@ -301,7 +301,7 @@ export async function deleteInAppPurchaseScreenshot(
   return iapFetch<void>(
     creds,
     "DELETE",
-    `/v1/inAppPurchaseReviewScreenshots/${screenshotId}`,
+    `/v1/inAppPurchaseAppStoreReviewScreenshots/${screenshotId}`,
   );
 }
 

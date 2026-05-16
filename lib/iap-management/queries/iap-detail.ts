@@ -3,8 +3,8 @@
  *
  * Used by the /view detail route — Manager wants the canonical Apple state
  * (not the local cache) when inspecting an IAP. The wrapped endpoint already
- * includes localizations + reviewScreenshot via `?include=...`, so this
- * helper just unpacks the JSON:API `included` array into typed buckets.
+ * includes localizations + appStoreReviewScreenshot via `?include=...`, so
+ * this helper just unpacks the JSON:API `included` array into typed buckets.
  *
  * Pricing schedule is intentionally not fetched here — its endpoint isn't
  * wrapped yet (Risk F4 deferral). The view page surfaces the local cached
@@ -16,14 +16,14 @@ import { getInAppPurchase } from "@/lib/iap-management/apple/client";
 import type {
   InAppPurchase,
   InAppPurchaseLocalization,
-  InAppPurchaseReviewScreenshot,
+  InAppPurchaseAppStoreReviewScreenshot,
   AscApiResponse,
 } from "@/types/iap-management/apple";
 
 export interface IapDetailFromApple {
   iap: InAppPurchase;
   localizations: InAppPurchaseLocalization[];
-  screenshot: InAppPurchaseReviewScreenshot | null;
+  screenshot: InAppPurchaseAppStoreReviewScreenshot | null;
 }
 
 export async function getIapDetailFromApple(
@@ -43,13 +43,13 @@ export function splitIncluded(
   res: AscApiResponse<InAppPurchase>,
 ): IapDetailFromApple {
   const localizations: InAppPurchaseLocalization[] = [];
-  let screenshot: InAppPurchaseReviewScreenshot | null = null;
+  let screenshot: InAppPurchaseAppStoreReviewScreenshot | null = null;
 
   for (const item of res.included ?? []) {
     if (item.type === "inAppPurchaseLocalizations") {
       localizations.push(item as unknown as InAppPurchaseLocalization);
-    } else if (item.type === "inAppPurchaseReviewScreenshots") {
-      screenshot = item as unknown as InAppPurchaseReviewScreenshot;
+    } else if (item.type === "inAppPurchaseAppStoreReviewScreenshots") {
+      screenshot = item as unknown as InAppPurchaseAppStoreReviewScreenshot;
     }
   }
 

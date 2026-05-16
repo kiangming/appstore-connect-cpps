@@ -194,10 +194,10 @@ describe("reserveInAppPurchaseScreenshot", () => {
     await reserveInAppPurchaseScreenshot(creds, "iap-1", "shot.png", 4096);
     const [, method, endpoint, body] = iapFetch.mock.calls[0];
     expect(method).toBe("POST");
-    expect(endpoint).toBe("/v1/inAppPurchaseReviewScreenshots");
+    expect(endpoint).toBe("/v1/inAppPurchaseAppStoreReviewScreenshots");
     expect(body).toMatchObject({
       data: {
-        type: "inAppPurchaseReviewScreenshots",
+        type: "inAppPurchaseAppStoreReviewScreenshots",
         attributes: { fileName: "shot.png", fileSize: 4096 },
         relationships: {
           inAppPurchaseV2: {
@@ -214,7 +214,7 @@ describe("confirmInAppPurchaseScreenshot", () => {
     await confirmInAppPurchaseScreenshot(creds, "scr-1", "abc123md5");
     const [, method, endpoint, body] = iapFetch.mock.calls[0];
     expect(method).toBe("PATCH");
-    expect(endpoint).toBe("/v1/inAppPurchaseReviewScreenshots/scr-1");
+    expect(endpoint).toBe("/v1/inAppPurchaseAppStoreReviewScreenshots/scr-1");
     expect(body).toMatchObject({
       data: {
         attributes: { uploaded: true, sourceFileChecksum: "abc123md5" },
@@ -224,15 +224,15 @@ describe("confirmInAppPurchaseScreenshot", () => {
 });
 
 // IAP.o.8a — overwrite path needs to drop a stale screenshot before
-// uploading a replacement, since Apple's reviewScreenshot relationship is
-// to-one. The wrapper is a thin DELETE; the orchestration logic lives in
+// uploading a replacement, since Apple's appStoreReviewScreenshot relationship
+// is to-one. The wrapper is a thin DELETE; the orchestration logic lives in
 // replaceScreenshotOnApple (see screenshot-upload.test.ts).
 describe("deleteInAppPurchaseScreenshot", () => {
-  it("DELETEs /v1/inAppPurchaseReviewScreenshots/{id} with no body", async () => {
+  it("DELETEs /v1/inAppPurchaseAppStoreReviewScreenshots/{id} with no body", async () => {
     await deleteInAppPurchaseScreenshot(creds, "scr-99");
     const [, method, endpoint, body] = iapFetch.mock.calls[0];
     expect(method).toBe("DELETE");
-    expect(endpoint).toBe("/v1/inAppPurchaseReviewScreenshots/scr-99");
+    expect(endpoint).toBe("/v1/inAppPurchaseAppStoreReviewScreenshots/scr-99");
     expect(body).toBeUndefined();
   });
 });
@@ -265,11 +265,13 @@ describe("listInAppPurchases / getInAppPurchase URL shape", () => {
     expect(endpoint).toBe("/v1/apps/app-id-1/inAppPurchasesV2?limit=200");
   });
 
-  it("getInAppPurchase includes localizations + reviewScreenshot", async () => {
+  it("getInAppPurchase includes localizations + appStoreReviewScreenshot", async () => {
     await getInAppPurchase(creds, "iap-1");
     const [, , endpoint] = iapFetch.mock.calls[0];
     expect(endpoint).toContain("/v2/inAppPurchases/iap-1");
-    expect(endpoint).toContain("include=inAppPurchaseLocalizations,reviewScreenshot");
+    expect(endpoint).toContain(
+      "include=inAppPurchaseLocalizations,appStoreReviewScreenshot",
+    );
   });
 });
 

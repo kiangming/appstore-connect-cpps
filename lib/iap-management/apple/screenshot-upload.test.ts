@@ -189,8 +189,13 @@ describe("replaceScreenshotOnApple", () => {
         type: "inAppPurchases",
         attributes: {},
         relationships: {
-          reviewScreenshot: screenshotId
-            ? { data: { type: "inAppPurchaseReviewScreenshots", id: screenshotId } }
+          appStoreReviewScreenshot: screenshotId
+            ? {
+                data: {
+                  type: "inAppPurchaseAppStoreReviewScreenshots",
+                  id: screenshotId,
+                },
+              }
             : { data: null },
         },
       },
@@ -239,7 +244,7 @@ describe("replaceScreenshotOnApple", () => {
       new AppleApiError(
         409,
         "DELETE",
-        "/v1/inAppPurchaseReviewScreenshots/scr-old",
+        "/v1/inAppPurchaseAppStoreReviewScreenshots/scr-old",
         "IAP is in review",
       ),
     );
@@ -265,7 +270,7 @@ describe("replaceScreenshotOnApple", () => {
       new AppleApiError(
         500,
         "DELETE",
-        "/v1/inAppPurchaseReviewScreenshots/scr-old",
+        "/v1/inAppPurchaseAppStoreReviewScreenshots/scr-old",
         "Internal Server Error",
       ),
     );
