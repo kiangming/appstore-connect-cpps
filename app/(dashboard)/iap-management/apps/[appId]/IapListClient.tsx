@@ -457,18 +457,33 @@ export function IapListClient({
                 <th className="px-4 py-3">Reference Name</th>
                 <th className="px-4 py-3 w-36">Type</th>
                 <th className="px-4 py-3 w-44">State</th>
+                <th className="px-4 py-3 w-20"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paginated.map((iap) => {
                 const eligible = Boolean(appleToInternal[iap.id]);
                 const isSelected = selected.has(iap.id);
+                const internalId = appleToInternal[iap.id];
+                const viewHref = internalId
+                  ? `/iap-management/apps/${appId}/iaps/${internalId}/view`
+                  : undefined;
+                // IAP.o.8c — row click → real-time /view page. Edit button at
+                // the row tail preserves direct access to the existing edit
+                // route. Stub-less Apple rows (no internal UUID) stay non-
+                // clickable until Refresh from Apple seeds the local cache.
                 return (
                   <tr
                     key={iap.id}
-                    className={`hover:bg-slate-50 transition ${isSelected ? "bg-blue-50/40" : ""}`}
+                    onClick={() => {
+                      if (viewHref) router.push(viewHref);
+                    }}
+                    className={`hover:bg-slate-50 transition ${isSelected ? "bg-blue-50/40" : ""} ${viewHref ? "cursor-pointer" : ""}`}
                   >
-                    <td className="px-3 py-2.5">
+                    <td
+                      className="px-3 py-2.5"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <input
                         type="checkbox"
                         checked={isSelected}
@@ -501,6 +516,20 @@ export function IapListClient({
                       >
                         {stateLabel(iap.attributes.state)}
                       </span>
+                    </td>
+                    <td
+                      className="px-4 py-2.5 text-right"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {internalId ? (
+                        <Link
+                          href={`/iap-management/apps/${appId}/iaps/${internalId}`}
+                          className="inline-flex items-center gap-1 text-[#0071E3] hover:underline text-xs"
+                        >
+                          <Pencil className="h-3 w-3" />
+                          Edit
+                        </Link>
+                      ) : null}
                     </td>
                   </tr>
                 );
