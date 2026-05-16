@@ -138,6 +138,8 @@ export async function POST(
   let config: {
     default_mode: ConflictMode;
     overrides?: Record<string, ConflictMode>;
+    /** Per-productId tier_id override from the Manager (IAP.o.5 Issue C). */
+    tier_overrides?: Record<string, string>;
     submit_on_create?: boolean;
   };
   try {
@@ -201,7 +203,25 @@ export async function POST(
     const msg = err instanceof Error ? err.message : "USD tiers fetch failed";
     return NextResponse.json({ error: msg }, { status: 500 });
   }
-  const resolved = enrichWithTiers(conflicts, usdTiers);
+  const enriched = enrichWithTiers(conflicts, usdTiers);
+
+  // Apply Manager's per-row tier overrides (IAP.o.5 Issue C). Wins over the
+  // auto-resolved tier from enrichWithTiers. tier_source surfaces in the
+  // audit log via persistResult when the override is present.
+  const tierOverrides = config.tier_overrides ?? {};
+  const resolved = {
+    ...enriched,
+    decisions: enriched.decisions.map((d) => {
+      const override = tierOverrides[d.product_id];
+      if (
+        override &&
+        (d.disposition === "CREATE" || d.disposition === "OVERWRITE")
+      ) {
+        return { ...d, resolved_tier_id: override };
+      }
+      return d;
+    }),
+  };
 
   // ── Open audit batch ────────────────────────────────────────────────────
   const db = iapDb();
@@ -239,6 +259,7 @@ export async function POST(
       internalAppId,
       batchId,
       actor,
+      tierOverrides,
     }),
   );
 
@@ -297,6 +318,9 @@ interface OrchestrateArgs {
   internalAppId: string;
   batchId: string;
   actor: string;
+  /** Per-productId tier override map (IAP.o.5 Issue C). Used by persistResult
+   *  to label tier_source as MANUAL_OVERRIDE in the audit log. */
+  tierOverrides: Record<string, string>;
 }
 
 async function orchestrateOne(args: OrchestrateArgs): Promise<PerIapResult> {
@@ -577,8 +601,11 @@ async function persistResult(
       ...result,
       app_id: args.internalAppId,
       type_source: item.type_source,
-      tier_source:
-        args.decision.resolved_tier_id !== undefined ? "PRICE_USD_LOOKUP" : null,
+      tier_source: args.tierOverrides[item.product_id]
+        ? "MANUAL_OVERRIDE"
+        : args.decision.resolved_tier_id !== undefined
+          ? "PRICE_USD_LOOKUP"
+          : null,
       resolved_tier_id: args.decision.resolved_tier_id ?? null,
     },
   });

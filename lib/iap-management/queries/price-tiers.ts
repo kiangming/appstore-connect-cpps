@@ -19,6 +19,40 @@ export interface PriceTierRow {
   tier_id: string;
   tier_name: string;
   is_alternate: boolean;
+  /** USA/USD customer price for the tier — null if not in the USD cache. */
+  usd_price: number | null;
+}
+
+export interface TierTerritoryDetail {
+  tier_id: string;
+  tier_name: string;
+  is_alternate: boolean;
+  territories: Array<{
+    territory_code: string;
+    currency_code: string;
+    customer_price: number;
+    proceeds: number;
+  }>;
+}
+
+/**
+ * Format a tier_id + optional USD price into a human-friendly label.
+ * Shape: "Free Tier" / "Tier 1 ($0.99)" / "Alt Tier A ($0.69)".
+ * Used in form selectors, list rows, and bulk-wizard preview rows.
+ */
+export function formatTierWithPrice(
+  tier_id: string,
+  usd_price: number | null | undefined,
+): string {
+  let label: string;
+  if (tier_id === "FREE") label = "Free Tier";
+  else if (tier_id.startsWith("TIER_")) label = `Tier ${tier_id.slice(5)}`;
+  else if (tier_id.startsWith("ALT_")) label = `Alt Tier ${tier_id.slice(4)}`;
+  else label = tier_id;
+
+  if (typeof usd_price !== "number" || !Number.isFinite(usd_price)) return label;
+  if (usd_price === 0) return label;
+  return `${label} ($${usd_price.toFixed(2)})`;
 }
 
 export interface ImportSummary {
@@ -119,18 +153,84 @@ export function resolveTierByUsdPrice(
 
 export async function listTiers(): Promise<PriceTierRow[]> {
   const db = iapDb();
-  const res = await db
-    .from("price_tiers")
-    .select("tier_id, tier_name");
-  if (res.error) {
-    throw new Error(`Failed to list tiers: ${res.error.message}`);
+  const [tiersRes, usdRes] = await Promise.all([
+    db.from("price_tiers").select("tier_id, tier_name"),
+    db
+      .from("price_tier_territories")
+      .select("tier_id, customer_price")
+      .eq("territory_code", "USA")
+      .eq("currency_code", "USD"),
+  ]);
+  if (tiersRes.error) throw new Error(`Failed to list tiers: ${tiersRes.error.message}`);
+  if (usdRes.error) throw new Error(`Failed to fetch USD prices: ${usdRes.error.message}`);
+
+  const usdMap = new Map<string, number>();
+  for (const row of (usdRes.data ?? []) as Array<{
+    tier_id: string;
+    customer_price: number;
+  }>) {
+    usdMap.set(row.tier_id, row.customer_price);
   }
-  const rows = (res.data ?? []) as Array<{ tier_id: string; tier_name: string }>;
+
+  const rows = (tiersRes.data ?? []) as Array<{ tier_id: string; tier_name: string }>;
   return rows
     .map((r) => ({
       tier_id: r.tier_id,
       tier_name: r.tier_name,
       is_alternate: r.tier_id.startsWith("ALT_"),
+      usd_price: usdMap.get(r.tier_id) ?? null,
+    }))
+    .sort((a, b) => sortTierId(a.tier_id, b.tier_id));
+}
+
+/**
+ * Fetch every tier with its full territory list. Used by the Settings page
+ * expandable-row UI (Manager IAP.o.5 Issue A — per-country audit).
+ * Returns one row per tier, each with a sorted `territories` array.
+ */
+export async function listTiersWithTerritories(): Promise<TierTerritoryDetail[]> {
+  const db = iapDb();
+  const [tiersRes, terrRes] = await Promise.all([
+    db.from("price_tiers").select("tier_id, tier_name"),
+    db
+      .from("price_tier_territories")
+      .select("tier_id, territory_code, currency_code, customer_price, proceeds"),
+  ]);
+  if (tiersRes.error)
+    throw new Error(`Failed to list tiers: ${tiersRes.error.message}`);
+  if (terrRes.error)
+    throw new Error(`Failed to list territories: ${terrRes.error.message}`);
+
+  const byTier = new Map<string, TierTerritoryDetail["territories"]>();
+  for (const row of (terrRes.data ?? []) as Array<{
+    tier_id: string;
+    territory_code: string;
+    currency_code: string;
+    customer_price: number;
+    proceeds: number;
+  }>) {
+    if (!byTier.has(row.tier_id)) byTier.set(row.tier_id, []);
+    byTier.get(row.tier_id)!.push({
+      territory_code: row.territory_code,
+      currency_code: row.currency_code,
+      customer_price: row.customer_price,
+      proceeds: row.proceeds,
+    });
+  }
+  for (const arr of byTier.values()) {
+    arr.sort((a, b) => a.territory_code.localeCompare(b.territory_code));
+  }
+
+  const tierRows = (tiersRes.data ?? []) as Array<{
+    tier_id: string;
+    tier_name: string;
+  }>;
+  return tierRows
+    .map((r) => ({
+      tier_id: r.tier_id,
+      tier_name: r.tier_name,
+      is_alternate: r.tier_id.startsWith("ALT_"),
+      territories: byTier.get(r.tier_id) ?? [],
     }))
     .sort((a, b) => sortTierId(a.tier_id, b.tier_id));
 }

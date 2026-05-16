@@ -14,14 +14,14 @@ interface Props {
  */
 export function SubmitChecklist({ state }: Props) {
   return (
-    <div className="border border-slate-200 rounded-lg bg-white p-4">
+    <div className="border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-900 p-4">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400 dark:text-slate-500">
           Submit checklist
         </h3>
         <span
           className={`text-xs font-medium ${
-            state.allPassed ? "text-emerald-600" : "text-slate-500"
+            state.allPassed ? "text-emerald-600" : "text-slate-500 dark:text-slate-400 dark:text-slate-500"
           }`}
         >
           {state.passedCount} / {state.items.length} met
@@ -34,7 +34,7 @@ export function SubmitChecklist({ state }: Props) {
               className={`flex-shrink-0 mt-0.5 w-4 h-4 rounded-full flex items-center justify-center ${
                 item.passed
                   ? "bg-emerald-100 text-emerald-700"
-                  : "bg-slate-100 text-slate-400"
+                  : "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500"
               }`}
             >
               {item.passed ? (
@@ -45,12 +45,12 @@ export function SubmitChecklist({ state }: Props) {
             </span>
             <span
               className={`${
-                item.passed ? "text-slate-700" : "text-slate-500"
+                item.passed ? "text-slate-700 dark:text-slate-300" : "text-slate-500 dark:text-slate-400 dark:text-slate-500"
               } flex-1`}
             >
               {item.label}
               {item.detail && (
-                <span className="ml-1.5 text-[10px] text-slate-400">
+                <span className="ml-1.5 text-[10px] text-slate-400 dark:text-slate-500">
                   ({item.detail})
                 </span>
               )}

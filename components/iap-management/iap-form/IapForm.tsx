@@ -198,8 +198,8 @@ export function IapForm({
       {/* Main column */}
       <div className="space-y-6 min-w-0">
         {/* Basic Information */}
-        <section className="bg-white border border-slate-200 rounded-xl p-6">
-          <h2 className="text-sm font-semibold text-slate-900 mb-4 pb-2 border-b border-slate-100">
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
             Basic Information
           </h2>
           <div className="grid grid-cols-2 gap-4 mb-4">
@@ -212,7 +212,7 @@ export function IapForm({
               maxLength={64}
             />
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-slate-700">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
                 Product ID *{productIdLocked && " (locked)"}
               </label>
               <input
@@ -221,13 +221,13 @@ export function IapForm({
                 onChange={(e) => patchForm({ product_id: e.target.value })}
                 placeholder="com.vng.app.product1"
                 disabled={productIdLocked}
-                className={`w-full rounded-md border px-3 py-2 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition ${
+                className={`w-full rounded-md border px-3 py-2 text-sm font-mono text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition ${
                   productIdLocked
-                    ? "border-slate-200 bg-slate-50 cursor-not-allowed text-slate-500"
+                    ? "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/30 cursor-not-allowed text-slate-500 dark:text-slate-500"
                     : "border-slate-300"
                 }`}
               />
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-slate-400 dark:text-slate-500">
                 {productIdLocked
                   ? "Immutable after creation"
                   : "Alphanumeric + . _ -  · Cannot be changed later"}
@@ -236,7 +236,7 @@ export function IapForm({
           </div>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-slate-700">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
                 Type *{typeLocked && " (locked)"}
               </label>
               <select
@@ -247,7 +247,7 @@ export function IapForm({
                 disabled={typeLocked}
                 className={`w-full rounded-md border px-3 py-2 text-sm transition ${
                   typeLocked
-                    ? "border-slate-200 bg-slate-50 cursor-not-allowed text-slate-500"
+                    ? "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/30 cursor-not-allowed text-slate-500 dark:text-slate-500"
                     : "border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent"
                 }`}
               >
@@ -258,7 +258,7 @@ export function IapForm({
                   </option>
                 ))}
               </select>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-slate-400 dark:text-slate-500">
                 Auto-renewable subscriptions are managed separately (Q1 lock).
               </p>
             </div>
@@ -274,13 +274,13 @@ export function IapForm({
         </section>
 
         {/* Pricing */}
-        <section className="bg-white border border-slate-200 rounded-xl p-6">
-          <h2 className="text-sm font-semibold text-slate-900 mb-4 pb-2 border-b border-slate-100">
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
             Pricing
           </h2>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-slate-700">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
                 Base Territory *
               </label>
               <select
@@ -290,12 +290,12 @@ export function IapForm({
               >
                 <option>United States (USD)</option>
               </select>
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-slate-400 dark:text-slate-500">
                 USA / USD only in v1 — multi-base in a follow-up.
               </p>
             </div>
             <div className="space-y-1.5">
-              <label className="block text-xs font-medium text-slate-700">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
                 Price Tier *
               </label>
               <select
@@ -303,16 +303,36 @@ export function IapForm({
                 onChange={(e) =>
                   patchForm({ tier_id: e.target.value || null })
                 }
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition"
+                className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition"
               >
                 <option value="">— Select tier —</option>
                 {tiers.map((t) => (
                   <option key={t.tier_id} value={t.tier_id}>
-                    {t.tier_name} {t.is_alternate ? "· Alt" : ""}
+                    {t.tier_name}
+                    {t.usd_price !== null && t.usd_price > 0
+                      ? ` — $${t.usd_price.toFixed(2)}`
+                      : t.usd_price === 0
+                        ? " — Free"
+                        : ""}
+                    {t.is_alternate ? " · Alt" : ""}
                   </option>
                 ))}
               </select>
-              <p className="text-[11px] text-slate-400">
+              {form.tier_id && (() => {
+                const selected = tiers.find((t) => t.tier_id === form.tier_id);
+                if (!selected) return null;
+                return (
+                  <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium">
+                    Selected: {selected.tier_name}
+                    {selected.usd_price !== null && selected.usd_price > 0
+                      ? ` · base USD $${selected.usd_price.toFixed(2)}`
+                      : selected.usd_price === 0
+                        ? " · Free Tier"
+                        : ""}
+                  </p>
+                );
+              })()}
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 dark:text-slate-500">
                 Apple auto-calculates territory prices from the base tier.
                 {tiers.length === 0 && (
                   <>
@@ -332,8 +352,8 @@ export function IapForm({
         </section>
 
         {/* Localizations */}
-        <section className="bg-white border border-slate-200 rounded-xl p-6">
-          <h2 className="text-sm font-semibold text-slate-900 mb-4 pb-2 border-b border-slate-100">
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
             Localizations
           </h2>
           <div className="flex gap-4">
@@ -351,8 +371,8 @@ export function IapForm({
         </section>
 
         {/* Review Screenshot */}
-        <section className="bg-white border border-slate-200 rounded-xl p-6">
-          <h2 className="text-sm font-semibold text-slate-900 mb-4 pb-2 border-b border-slate-100">
+        <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
             Review Screenshot
           </h2>
           <ScreenshotUpload
@@ -380,7 +400,7 @@ export function IapForm({
             type="button"
             onClick={handleSaveDraft}
             disabled={saving || submitting}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition disabled:opacity-50"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg transition disabled:opacity-50"
           >
             {saving ? (
               <Loader2 className="h-4 w-4 animate-spin" />
@@ -461,7 +481,7 @@ function FieldText({
 }) {
   return (
     <div className="space-y-1.5">
-      <label className="block text-xs font-medium text-slate-700">{label}</label>
+      <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">{label}</label>
       <input
         type="text"
         value={value}
@@ -469,13 +489,13 @@ function FieldText({
         placeholder={placeholder}
         disabled={disabled}
         maxLength={maxLength}
-        className={`w-full rounded-md border px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition ${
+        className={`w-full rounded-md border px-3 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition ${
           disabled
-            ? "border-slate-200 bg-slate-50 cursor-not-allowed text-slate-500"
+            ? "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/30 cursor-not-allowed text-slate-500 dark:text-slate-500"
             : "border-slate-300"
         }`}
       />
-      {help && <p className="text-[11px] text-slate-400">{help}</p>}
+      {help && <p className="text-[11px] text-slate-400 dark:text-slate-500">{help}</p>}
     </div>
   );
 }

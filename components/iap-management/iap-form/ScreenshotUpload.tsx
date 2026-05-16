@@ -74,9 +74,9 @@ export function ScreenshotUpload({
 
   if (!iapPersisted) {
     return (
-      <div className="rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center">
+      <div className="rounded-lg border-2 border-dashed border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/30 p-8 text-center">
         <ImageIcon className="mx-auto h-7 w-7 text-slate-300 mb-2" />
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-500 dark:text-slate-400 dark:text-slate-500">
           Save as Draft first to enable screenshot upload.
         </p>
       </div>
@@ -117,8 +117,8 @@ export function ScreenshotUpload({
           isDragActive
             ? "border-[#0071E3] bg-blue-50"
             : uploading
-              ? "border-slate-300 bg-slate-50 cursor-wait"
-              : "border-slate-300 hover:border-slate-400 bg-white"
+              ? "border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/30 cursor-wait"
+              : "border-slate-300 dark:border-slate-700 hover:border-slate-400 bg-white dark:bg-slate-900"
         }`}
       >
         <input {...getInputProps()} />
@@ -129,13 +129,13 @@ export function ScreenshotUpload({
           </>
         ) : (
           <>
-            <Upload className="mx-auto h-7 w-7 text-slate-400 mb-2" />
-            <p className="text-xs font-medium text-slate-700">
+            <Upload className="mx-auto h-7 w-7 text-slate-400 dark:text-slate-500 mb-2" />
+            <p className="text-xs font-medium text-slate-700 dark:text-slate-300">
               {isDragActive
                 ? "Drop screenshot here"
                 : "Drag & drop a screenshot or click to upload"}
             </p>
-            <p className="text-[11px] text-slate-400 mt-1">
+            <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
               PNG/JPEG · max 8 MB · required by Apple before submission
             </p>
           </>

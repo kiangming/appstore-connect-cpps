@@ -3,6 +3,7 @@ import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
 import {
   getImportSummary,
   listTiers,
+  listTiersWithTerritories,
 } from "@/lib/iap-management/queries/price-tiers";
 import { PricingTiersClient } from "./PricingTiersClient";
 
@@ -18,10 +19,17 @@ export default async function PricingTiersPage() {
     throw err;
   }
 
-  const [summary, tiers] = await Promise.all([
+  const [summary, tiers, tiersDetail] = await Promise.all([
     getImportSummary(),
     listTiers(),
+    listTiersWithTerritories(),
   ]);
 
-  return <PricingTiersClient summary={summary} tiers={tiers} />;
+  return (
+    <PricingTiersClient
+      summary={summary}
+      tiers={tiers}
+      tiersDetail={tiersDetail}
+    />
+  );
 }

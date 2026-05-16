@@ -28,7 +28,10 @@ import {
   type ConflictDecision,
   type ResolveResult,
 } from "@/lib/iap-management/bulk-import/conflict-resolution";
-import type { UsdTierEntry } from "@/lib/iap-management/queries/price-tiers";
+import {
+  formatTierWithPrice,
+  type UsdTierEntry,
+} from "@/lib/iap-management/queries/price-tiers";
 
 interface Props {
   appId: string;
@@ -76,6 +79,10 @@ export function BulkImportWizard({
   const [screenshots, setScreenshots] = useState<ScreenshotEntry[]>([]);
   const [conflictMode, setConflictMode] = useState<ConflictMode>("OVERWRITE");
   const [overrides, setOverrides] = useState<Record<string, ConflictMode>>({});
+  /** Per-productId tier override (Manager IAP.o.5 Issue C). Wins over the
+   *  auto-resolved tier from enrichWithTiers; surfaces to /execute as
+   *  `tier_overrides` so the server applies the same picked tier. */
+  const [tierOverrides, setTierOverrides] = useState<Record<string, string>>({});
   const [submitOnCreate, setSubmitOnCreate] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<ExecuteResult | null>(null);
@@ -131,6 +138,7 @@ export function BulkImportWizard({
         JSON.stringify({
           default_mode: conflictMode,
           overrides,
+          tier_overrides: tierOverrides,
           submit_on_create: submitOnCreate,
         }),
       );
@@ -237,6 +245,11 @@ export function BulkImportWizard({
           submitOnCreate={submitOnCreate}
           onSubmitOnCreateChange={setSubmitOnCreate}
           parsedSkippedLocales={parsed.skipped_locales}
+          usdTiers={usdTiers}
+          tierOverrides={tierOverrides}
+          onTierOverride={(productId, tier_id) =>
+            setTierOverrides((prev) => ({ ...prev, [productId]: tier_id }))
+          }
         />
       )}
 
@@ -368,11 +381,11 @@ function Step1Excel({
   });
 
   return (
-    <section className="bg-white border border-slate-200 rounded-xl p-6">
-      <h2 className="text-sm font-semibold text-slate-900 mb-1">
+    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
+      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
         Step 1 — Upload Excel template
       </h2>
-      <p className="text-xs text-slate-500 mb-4">
+      <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
         Drop the Manager-provided item-iap-template.xlsx. Headers validated
         strictly (Q-IAP.5).
       </p>
@@ -481,11 +494,11 @@ function Step2Screenshots({
     .filter((id) => !matchedProductIds.has(id));
 
   return (
-    <section className="bg-white border border-slate-200 rounded-xl p-6">
-      <h2 className="text-sm font-semibold text-slate-900 mb-1">
+    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
+      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
         Step 2 — Upload review screenshots
       </h2>
-      <p className="text-xs text-slate-500 mb-4">
+      <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
         Multi-file drop. Filenames auto-match to productId — both literal and
         dots-as-underscores forms accepted (Q-IAP convention C).
       </p>
@@ -527,17 +540,17 @@ function Step2Screenshots({
       {screenshots.length > 0 && (
         <div className="mt-4 max-h-72 overflow-y-auto border border-slate-200 rounded-lg">
           <table className="w-full text-xs">
-            <thead className="bg-slate-50 border-b border-slate-200 sticky top-0">
-              <tr className="text-left text-[10px] uppercase text-slate-500 tracking-wide">
+            <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 sticky top-0">
+              <tr className="text-left text-[10px] uppercase text-slate-500 dark:text-slate-400 tracking-wide">
                 <th className="px-3 py-2">Filename</th>
                 <th className="px-3 py-2">Matched ProductId</th>
                 <th className="px-3 py-2 w-20">Method</th>
                 <th className="px-3 py-2 w-10"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {screenshots.map((s) => (
-                <tr key={s.file.name} className="hover:bg-slate-50">
+                <tr key={s.file.name} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                   <td className="px-3 py-2 font-mono text-[11px] truncate max-w-[260px]">
                     {s.file.name}
                   </td>
@@ -608,6 +621,9 @@ function Step3Preview({
   submitOnCreate,
   onSubmitOnCreateChange,
   parsedSkippedLocales,
+  usdTiers,
+  tierOverrides,
+  onTierOverride,
 }: {
   decisions: ConflictDecision[];
   counts: ResolveResult["counts"];
@@ -620,6 +636,9 @@ function Step3Preview({
   submitOnCreate: boolean;
   onSubmitOnCreateChange: (v: boolean) => void;
   parsedSkippedLocales: string[];
+  usdTiers: UsdTierEntry[];
+  tierOverrides: Record<string, string>;
+  onTierOverride: (productId: string, tier_id: string) => void;
 }) {
   const matchedProductIds = new Set(
     screenshots
@@ -627,11 +646,11 @@ function Step3Preview({
       .map((s) => (s.match.kind === "matched" ? s.match.productId : "")),
   );
   return (
-    <section className="bg-white border border-slate-200 rounded-xl p-6">
-      <h2 className="text-sm font-semibold text-slate-900 mb-1">
+    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
+      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
         Step 3 — Preview &amp; conflict resolution
       </h2>
-      <p className="text-xs text-slate-500 mb-4">
+      <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
         Toggle per-row to override the global conflict policy. Validation
         errors are excluded and cannot be retried — fix the source data.
       </p>
@@ -677,10 +696,10 @@ function Step3Preview({
         </p>
       )}
 
-      <div className="border border-slate-200 rounded-lg overflow-hidden max-h-[420px] overflow-y-auto">
+      <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden max-h-[420px] overflow-y-auto">
         <table className="w-full text-xs">
-          <thead className="bg-slate-50 border-b border-slate-200 sticky top-0">
-            <tr className="text-left text-[10px] uppercase text-slate-500 tracking-wide">
+          <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 sticky top-0">
+            <tr className="text-left text-[10px] uppercase text-slate-500 dark:text-slate-400 tracking-wide">
               <th className="px-3 py-2">Product ID</th>
               <th className="px-3 py-2">Reference Name</th>
               <th className="px-3 py-2 w-32">Type</th>
@@ -691,14 +710,14 @@ function Step3Preview({
               <th className="px-3 py-2 w-20">Action</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {decisions.map((d) => {
               const localesFilled = d.source.localizations.length;
               const screenshotPresent = matchedProductIds.has(d.product_id);
               const isConflict = existingSet.has(d.product_id);
               const overridden = overrides[d.product_id];
               return (
-                <tr key={d.product_id} className="hover:bg-slate-50">
+                <tr key={d.product_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                   <td className="px-3 py-2 font-mono text-[11px] text-slate-700">
                     {d.product_id}
                   </td>
@@ -719,10 +738,15 @@ function Step3Preview({
                       {d.source.type_source.toLowerCase()}
                     </span>
                   </td>
-                  <td className="px-3 py-2 font-mono text-[10px] text-slate-600">
-                    {d.resolved_tier_id ?? (
-                      <span className="text-amber-600">—</span>
-                    )}
+                  <td className="px-3 py-2 text-[11px]">
+                    <TierCell
+                      productId={d.product_id}
+                      priceUsd={d.source.price_usd}
+                      autoTierId={d.resolved_tier_id ?? null}
+                      overrideTierId={tierOverrides[d.product_id]}
+                      usdTiers={usdTiers}
+                      onChange={(t) => onTierOverride(d.product_id, t)}
+                    />
                   </td>
                   <td className="px-3 py-2 text-center">{localesFilled}</td>
                   <td className="px-3 py-2 text-center">
@@ -758,6 +782,70 @@ function Step3Preview({
   );
 }
 
+/**
+ * Per-row tier cell (Manager IAP.o.5 Issue C). Shows the auto-resolved tier
+ * with its USD price ("Tier 1 ($0.99)") and, when 2+ tiers share the same
+ * USD price (theoretical e.g. TIER_5 vs ALT_5 both at $4.99), surfaces a
+ * dropdown so Manager can pick the intended tier. Override persists into
+ * `tier_overrides` config sent to /execute.
+ */
+function TierCell({
+  priceUsd,
+  autoTierId,
+  overrideTierId,
+  usdTiers,
+  onChange,
+}: {
+  productId: string;
+  priceUsd: number;
+  autoTierId: string | null;
+  overrideTierId: string | undefined;
+  usdTiers: UsdTierEntry[];
+  onChange: (tier_id: string) => void;
+}) {
+  // Candidates = all tiers matching the row's price.
+  const candidates = useMemo(() => {
+    if (priceUsd === 0) {
+      return usdTiers.filter((t) => t.tier_id === "FREE");
+    }
+    return usdTiers.filter((t) => t.customer_price === priceUsd);
+  }, [priceUsd, usdTiers]);
+
+  const selected = overrideTierId ?? autoTierId;
+  const ambiguous = candidates.length > 1;
+
+  if (!selected) {
+    return <span className="text-amber-600 dark:text-amber-400">—</span>;
+  }
+
+  if (!ambiguous) {
+    return (
+      <span className="font-mono text-slate-700 dark:text-slate-300">
+        {formatTierWithPrice(selected, priceUsd)}
+      </span>
+    );
+  }
+
+  return (
+    <select
+      value={selected}
+      onChange={(e) => onChange(e.target.value)}
+      className={`w-full text-[11px] font-mono rounded border px-1.5 py-0.5 transition ${
+        overrideTierId
+          ? "border-[#0071E3] bg-blue-50 dark:bg-blue-950/40 text-[#0071E3]"
+          : "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200"
+      }`}
+      title={`Same USD price matches ${candidates.length} tiers — pick one`}
+    >
+      {candidates.map((c) => (
+        <option key={c.tier_id} value={c.tier_id}>
+          {formatTierWithPrice(c.tier_id, c.customer_price)}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 function DispositionBadge({ disposition }: { disposition: string }) {
   const colors: Record<string, string> = {
     CREATE: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -786,11 +874,11 @@ function Step4Result({
   appName: string;
 }) {
   return (
-    <section className="bg-white border border-slate-200 rounded-xl p-6">
-      <h2 className="text-sm font-semibold text-slate-900 mb-1">
+    <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
+      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
         Step 4 — Result
       </h2>
-      <p className="text-xs text-slate-500 mb-4">
+      <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
         Batch{" "}
         <span className="font-mono text-slate-700">{result.batch_id}</span>{" "}
         completed. Audit rows written to{" "}
@@ -803,19 +891,19 @@ function Step4Result({
         <Tally label="Failed" value={result.failed} color="amber" />
       </div>
 
-      <div className="border border-slate-200 rounded-lg overflow-hidden max-h-[420px] overflow-y-auto">
+      <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden max-h-[420px] overflow-y-auto">
         <table className="w-full text-xs">
-          <thead className="bg-slate-50 border-b border-slate-200 sticky top-0">
-            <tr className="text-left text-[10px] uppercase text-slate-500 tracking-wide">
+          <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 sticky top-0">
+            <tr className="text-left text-[10px] uppercase text-slate-500 dark:text-slate-400 tracking-wide">
               <th className="px-3 py-2">Product ID</th>
               <th className="px-3 py-2 w-24">Status</th>
               <th className="px-3 py-2 w-24">Disposition</th>
               <th className="px-3 py-2">Notes</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {result.results.map((r) => (
-              <tr key={r.product_id} className="hover:bg-slate-50">
+              <tr key={r.product_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
                 <td className="px-3 py-2 font-mono text-[11px] text-slate-700">
                   {r.product_id}
                 </td>

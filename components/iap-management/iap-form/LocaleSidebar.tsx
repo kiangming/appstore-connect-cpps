@@ -38,26 +38,26 @@ export function LocaleSidebar({
   }, [query]);
 
   return (
-    <aside className="w-[240px] flex-shrink-0 border border-slate-200 rounded-lg bg-white flex flex-col">
-      <div className="p-3 border-b border-slate-200">
+    <aside className="w-[240px] flex-shrink-0 border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-900 flex flex-col">
+      <div className="p-3 border-b border-slate-200 dark:border-slate-800">
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400 dark:text-slate-500" />
           <input
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search locales…"
-            className="w-full pl-8 pr-2 py-1.5 rounded-md border border-slate-200 bg-white text-xs placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition"
+            className="w-full pl-8 pr-2 py-1.5 rounded-md border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs placeholder:text-slate-400 dark:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition"
           />
         </div>
-        <p className="mt-2 text-[10px] text-slate-400 uppercase tracking-wide">
+        <p className="mt-2 text-[10px] text-slate-400 dark:text-slate-500 uppercase tracking-wide">
           {filledCount} / {ALL_APPLE_LOCALES.length} filled
         </p>
       </div>
 
       <div className="flex-1 overflow-y-auto max-h-[480px]">
         {filtered.length === 0 ? (
-          <p className="p-3 text-xs text-slate-400 text-center">No matches.</p>
+          <p className="p-3 text-xs text-slate-400 dark:text-slate-500 text-center">No matches.</p>
         ) : (
           <ul className="py-1">
             {filtered.map((locale) => {
@@ -78,7 +78,7 @@ export function LocaleSidebar({
                     className={`w-full flex items-center justify-between px-3 py-1.5 text-left text-xs transition ${
                       active
                         ? "bg-blue-50 text-[#0071E3] font-medium"
-                        : "text-slate-700 hover:bg-slate-50"
+                        : "text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/50"
                     }`}
                   >
                     <span className="truncate flex-1">{locale.label}</span>
