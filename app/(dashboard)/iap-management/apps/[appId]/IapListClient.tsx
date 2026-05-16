@@ -215,14 +215,30 @@ export function IapListClient({
       }
       const data = (await res.json()) as {
         synced_count: number;
+        unchanged_count: number;
+        inserted_count?: number;
+        updated_count?: number;
         errors: string[];
       };
+      // IAP.o.8b — Manager MV30 Issue 2 fix surfaces inserted vs updated
+      // separately so the first-sync "discovered N new IAPs" path is
+      // explicit. Falls back to the legacy "Refreshed N" toast when both
+      // counters are zero (older API shape).
+      const parts: string[] = [];
+      if (data.inserted_count && data.inserted_count > 0) {
+        parts.push(`${data.inserted_count} discovered`);
+      }
+      if (data.updated_count && data.updated_count > 0) {
+        parts.push(`${data.updated_count} state changed`);
+      }
+      const summary =
+        parts.length > 0
+          ? parts.join(" · ")
+          : `${data.synced_count} refreshed`;
       if (data.errors && data.errors.length > 0) {
-        toast.warning(
-          `Synced ${data.synced_count} · ${data.errors.length} error(s).`,
-        );
+        toast.warning(`${summary} · ${data.errors.length} error(s).`);
       } else {
-        toast.success(`Refreshed ${data.synced_count} IAP(s) from Apple.`);
+        toast.success(summary);
       }
       router.refresh();
     } catch (err) {
@@ -461,7 +477,7 @@ export function IapListClient({
                         title={
                           eligible
                             ? "Toggle selection"
-                            : "Not in local cache — refresh from Apple to enable."
+                            : "Click Refresh from Apple — this IAP will become selectable on the next render."
                         }
                         className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
                       />

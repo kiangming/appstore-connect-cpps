@@ -947,12 +947,23 @@ function Step4Result({
       }
       const data = (await res.json()) as {
         synced_count: number;
+        inserted_count?: number;
+        updated_count?: number;
         errors: string[];
       };
+      const parts: string[] = [];
+      if (data.inserted_count && data.inserted_count > 0) {
+        parts.push(`${data.inserted_count} discovered`);
+      }
+      if (data.updated_count && data.updated_count > 0) {
+        parts.push(`${data.updated_count} state changed`);
+      }
+      const summary =
+        parts.length > 0 ? parts.join(" · ") : `${data.synced_count} refreshed`;
       if (data.errors && data.errors.length > 0) {
-        toast.warning(`Synced ${data.synced_count} · ${data.errors.length} error(s).`);
+        toast.warning(`${summary} · ${data.errors.length} error(s).`);
       } else {
-        toast.success(`Refreshed ${data.synced_count} IAP(s) from Apple.`);
+        toast.success(summary);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Network error");

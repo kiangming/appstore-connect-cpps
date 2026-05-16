@@ -2,15 +2,29 @@
  * POST /api/iap-management/apps/[appId]/iaps/sync-states
  *
  * IAP.o.6c — Manager-triggered Apple state refresh.
+ * IAP.o.8b — Manager MV30 Issue 2: when an app's IAPs were authored on
+ * Apple Connect before this tool ever touched them, the local cache was
+ * empty and the legacy UPDATE-only flow silently no-op'd. Every per-row
+ * checkbox in the IAP list stayed disabled because `appleToInternal` was
+ * empty → "Submit Selected" was invisible.
  *
- * Calls `listInAppPurchases` for the app and mirrors the fresh state of every
- * returned IAP into `iap_mgmt.iaps.state` (matched by apple_iap_id).
+ * New behavior: each Apple IAP is mirrored into `iap_mgmt.iaps` as an UPSERT
+ * — existing rows get state + synced_at; missing rows get a minimal stub
+ * insert (apple_iap_id, product_id, reference_name = Apple name, type,
+ * state, base_territory). Stub rows are eligible for Submit Selected /
+ * single-IAP submit immediately on the next render.
  *
- * The list-page Refresh button hits this — keeps Apple as source of truth
- * without users needing to trigger a manual reload of the page itself.
+ * Stub-row caveats:
+ *   • `iap_localizations` + `iap_screenshots` start empty for stubs — the
+ *     edit page renders them via the `syncedToApple=true` read-only gate,
+ *     and bulk-import will overwrite them when Manager re-imports.
+ *   • `listDraftIaps` filters `apple_iap_id IS NULL`, so stubs (which have
+ *     an apple_iap_id) don't pollute the Drafts section.
+ *   • `listSyncedAppleIapMap` returns stubs by design — that's the whole
+ *     point of the fix.
  *
- * Audit log: single action_type='SYNC_STATE_FROM_APPLE' row per call (the
- * per-IAP detail is in the payload to avoid log explosion for large apps).
+ * Audit log: single SYNC_STATE_FROM_APPLE row per call (the per-IAP detail
+ * is in the payload to avoid log explosion for large apps).
  */
 
 import { NextResponse } from "next/server";
@@ -20,20 +34,31 @@ import {
   IapUnauthorizedError,
 } from "@/lib/iap-management/auth";
 import { iapDb } from "@/lib/iap-management/db";
-import { findAppByAppleId } from "@/lib/iap-management/queries/iaps";
+import { ensureAppRegistered } from "@/lib/iap-management/queries/iaps";
 import { getActiveAccount } from "@/lib/get-active-account";
-import { listInAppPurchases } from "@/lib/iap-management/apple/client";
+import { listAllInAppPurchases } from "@/lib/iap-management/apple/client";
+import { getApp } from "@/lib/asc-client";
 import {
   withRetry,
   AppleApiError,
 } from "@/lib/iap-management/apple/fetch";
+import { classifySyncStates } from "@/lib/iap-management/sync-states/classify";
 import { log } from "@/lib/logger";
 
 export const runtime = "nodejs";
 
 interface SyncResponse {
-  synced_count: number;
+  /** Rows where Apple's state differed from the cache and were UPDATEd. */
+  updated_count: number;
+  /** Rows present locally with state already matching Apple. synced_at touched. */
   unchanged_count: number;
+  /** Rows that didn't exist locally and were INSERTed as stubs. */
+  inserted_count: number;
+  /**
+   * Backwards-compatible alias for callers still reading `synced_count`.
+   * Equals `updated_count + inserted_count` — rows whose payload changed.
+   */
+  synced_count: number;
   errors: string[];
 }
 
@@ -56,12 +81,24 @@ export async function POST(
   const actor = session.user.email ?? "unknown";
   const appleAppId = ctx.params.appId;
 
-  // Fresh Apple list
+  // Apple list + app meta (paginated) — IAP.o.7a established `listAllIn
+  // AppPurchases` as the canonical wrapper so apps with >200 IAPs aren't
+  // silently truncated. `getApp` gives us bundle_id + name needed by
+  // `ensureAppRegistered` on first sync of a never-touched app.
   let appleIaps;
+  let internalAppId: string;
   try {
     const creds = await getActiveAccount();
-    const res = await withRetry(() => listInAppPurchases(creds, appleAppId));
-    appleIaps = res.data ?? [];
+    const [appRes, iapsRes] = await Promise.all([
+      getApp(creds, appleAppId),
+      withRetry(() => listAllInAppPurchases(creds, appleAppId)),
+    ]);
+    internalAppId = await ensureAppRegistered({
+      apple_app_id: appleAppId,
+      bundle_id: appRes.data.attributes.bundleId,
+      name: appRes.data.attributes.name,
+    });
+    appleIaps = iapsRes.data ?? [];
   } catch (err) {
     const msg = errMsg(err);
     await log("iap-sync-states", `apple list failed: ${msg}`, "ERROR");
@@ -71,12 +108,11 @@ export async function POST(
     );
   }
 
-  // Read current local cache for the app — used to count "unchanged"
-  // vs "synced" (state mismatch).
+  // Snapshot current local rows for the app so we can classify each Apple
+  // IAP as INSERT / UPDATE-state / UNCHANGED without doing a per-row SELECT.
   const db = iapDb();
-  const internalAppId = await findAppByAppleId(appleAppId);
   const currentByAppleId = new Map<string, string>();
-  if (internalAppId) {
+  {
     const localRes = await db
       .from("iaps")
       .select("apple_iap_id, state")
@@ -92,39 +128,63 @@ export async function POST(
     }
   }
 
-  let synced = 0;
+  // Pure classification (see lib/iap-management/sync-states/classify.ts) —
+  // separates the decision matrix from the DB I/O so the per-row routing
+  // can be unit-tested without mocking Supabase.
+  const { decisions } = classifySyncStates(appleIaps, currentByAppleId);
+
+  let updated = 0;
+  let inserted = 0;
   let unchanged = 0;
   const errors: string[] = [];
   const now = new Date().toISOString();
+  const productIdByAppleId = new Map(
+    appleIaps.map((iap) => [iap.id, iap.attributes.productId]),
+  );
 
-  for (const iap of appleIaps) {
-    const appleState = iap.attributes.state;
-    const localState = currentByAppleId.get(iap.id);
-    if (localState === appleState) {
-      // Still touch synced_at so the row reflects a fresh check.
+  for (const decision of decisions) {
+    const productId = productIdByAppleId.get(decision.apple_iap_id) ?? "?";
+    if (decision.kind === "INSERT") {
+      const payload = decision.insert_payload!;
+      const ins = await db.from("iaps").insert({
+        app_id: internalAppId,
+        apple_iap_id: payload.apple_iap_id,
+        product_id: payload.product_id,
+        reference_name: payload.reference_name,
+        type: payload.type,
+        state: payload.state,
+        synced_at: now,
+      });
+      if (ins.error) {
+        errors.push(`${productId}: ${ins.error.message}`);
+        continue;
+      }
+      inserted++;
+    } else if (decision.kind === "UNCHANGED") {
       const res = await db
         .from("iaps")
         .update({ synced_at: now })
-        .eq("apple_iap_id", iap.id);
+        .eq("apple_iap_id", decision.apple_iap_id);
       if (res.error) {
-        errors.push(`${iap.attributes.productId}: ${res.error.message}`);
+        errors.push(`${productId}: ${res.error.message}`);
       } else {
         unchanged++;
       }
-      continue;
+    } else {
+      // UPDATE_STATE
+      const res = await db
+        .from("iaps")
+        .update({ state: decision.state, synced_at: now })
+        .eq("apple_iap_id", decision.apple_iap_id);
+      if (res.error) {
+        errors.push(`${productId}: ${res.error.message}`);
+        continue;
+      }
+      updated++;
     }
-    const res = await db
-      .from("iaps")
-      .update({ state: appleState, synced_at: now })
-      .eq("apple_iap_id", iap.id);
-    if (res.error) {
-      errors.push(`${iap.attributes.productId}: ${res.error.message}`);
-      continue;
-    }
-    // Update issued — counts as "synced" whether the row existed locally
-    // or not (PostgreSQL no-ops the match-zero case silently).
-    synced++;
   }
+
+  const synced = updated + inserted;
 
   await db.from("actions_log").insert({
     actor,
@@ -132,15 +192,18 @@ export async function POST(
     payload: {
       apple_app_id: appleAppId,
       apple_count: appleIaps.length,
-      synced_count: synced,
+      inserted_count: inserted,
+      updated_count: updated,
       unchanged_count: unchanged,
       error_count: errors.length,
     },
   });
 
   const response: SyncResponse = {
-    synced_count: synced,
+    updated_count: updated,
     unchanged_count: unchanged,
+    inserted_count: inserted,
+    synced_count: synced,
     errors,
   };
   return NextResponse.json(response);
