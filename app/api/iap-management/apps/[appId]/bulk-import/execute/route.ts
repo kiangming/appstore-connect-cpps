@@ -36,7 +36,7 @@ import { getActiveAccount } from "@/lib/get-active-account";
 import {
   createInAppPurchase,
   createInAppPurchaseLocalization,
-  listInAppPurchases,
+  listAllInAppPurchases,
   listInAppPurchaseLocalizations,
   reserveInAppPurchaseScreenshot,
   uploadScreenshotToOperations,
@@ -177,9 +177,7 @@ export async function POST(
       bundle_id: appRes.data.attributes.bundleId,
       name: appRes.data.attributes.name,
     });
-    const existingRes = await withRetry(() =>
-      listInAppPurchases(creds, ctx.params.appId),
-    );
+    const existingRes = await listAllInAppPurchases(creds, ctx.params.appId);
     existingByProductId = new Map(
       (existingRes.data ?? []).map((iap) => [iap.attributes.productId, iap.id]),
     );

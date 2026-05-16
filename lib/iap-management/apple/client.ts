@@ -15,7 +15,8 @@
  */
 
 import type { AscCredentials } from "@/lib/asc-jwt";
-import { iapFetch } from "./fetch";
+import { iapFetch, withRetry } from "./fetch";
+import { log } from "@/lib/logger";
 import type {
   AscApiResponse,
   InAppPurchase,
@@ -30,6 +31,12 @@ import type {
 
 // ─── IAP CRUD ────────────────────────────────────────────────────────────────
 
+/**
+ * Single-page fetch (cap 200). Preserved as-is for callers that explicitly
+ * want one page — most callers should use `listAllInAppPurchases` instead,
+ * which follows Apple's `links.next` until exhausted. Hard-coded 200 was the
+ * source of IAP.o.7 Issues 2+3 when apps exceeded that count.
+ */
 export async function listInAppPurchases(
   creds: AscCredentials,
   appAppleId: string,
@@ -39,6 +46,65 @@ export async function listInAppPurchases(
     "GET",
     `/v1/apps/${appAppleId}/inAppPurchasesV2?limit=200`,
   );
+}
+
+/**
+ * Fetch the FULL list of IAPs for an app, following Apple's `links.next`
+ * pagination until exhausted (Manager IAP.o.7 lock — apps with >200 IAPs
+ * silently truncated under the legacy single-page wrapper, breaking the
+ * bulk-import conflict resolution and IAP list UI).
+ *
+ * Per-page retry is composed via `withRetry` inside this function: a 429 on
+ * page N retries that page only, not the whole iteration. Callers MUST NOT
+ * wrap this in their own `withRetry`.
+ *
+ * Returns an `AscApiResponse<InAppPurchase[]>` with `data` accumulated across
+ * pages; `links` and `meta` are intentionally dropped because they describe a
+ * specific page, not the aggregate.
+ */
+export async function listAllInAppPurchases(
+  creds: AscCredentials,
+  appAppleId: string,
+): Promise<AscApiResponse<InAppPurchase[]>> {
+  const accumulated: InAppPurchase[] = [];
+  let next: string | undefined = `/v1/apps/${appAppleId}/inAppPurchasesV2?limit=200`;
+  let pageCount = 0;
+
+  while (next) {
+    const path = next;
+    const page = await withRetry(() =>
+      iapFetch<AscApiResponse<InAppPurchase[]>>(creds, "GET", path),
+    );
+    pageCount++;
+    if (page.data && page.data.length > 0) {
+      accumulated.push(...page.data);
+    }
+    next = extractNextPagePath(page.links?.next);
+  }
+
+  await log(
+    "iap-apple",
+    `listAllInAppPurchases app=${appAppleId} pages=${pageCount} total=${accumulated.length}`,
+  );
+
+  return { data: accumulated };
+}
+
+/**
+ * Extract the path-and-query portion of an Apple `links.next` URL so it can
+ * be fed back to `iapFetch` (which prepends ASC_BASE_URL). Apple returns a
+ * fully-qualified URL; we strip the origin defensively in case Apple ever
+ * changes the host. Returns `undefined` for missing or malformed inputs so
+ * the pagination loop terminates cleanly.
+ */
+function extractNextPagePath(nextUrl: string | undefined): string | undefined {
+  if (!nextUrl) return undefined;
+  try {
+    const url = new URL(nextUrl);
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function getInAppPurchase(

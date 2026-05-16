@@ -1,7 +1,6 @@
 import { Suspense } from "react";
 import { getApp } from "@/lib/asc-client";
-import { listInAppPurchases } from "@/lib/iap-management/apple/client";
-import { withRetry } from "@/lib/iap-management/apple/fetch";
+import { listAllInAppPurchases } from "@/lib/iap-management/apple/client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import {
   findAppByAppleId,
@@ -58,7 +57,7 @@ async function IapListContent({ appId }: { appId: string }) {
     const creds = await getActiveAccount();
     const [appRes, iapsRes] = await Promise.all([
       getApp(creds, appId),
-      withRetry(() => listInAppPurchases(creds, appId)),
+      listAllInAppPurchases(creds, appId),
     ]);
     appName = appRes.data.attributes.name;
     appBundleId = appRes.data.attributes.bundleId;

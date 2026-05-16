@@ -3,8 +3,7 @@ import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
 import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
 import { getApp } from "@/lib/asc-client";
-import { listInAppPurchases } from "@/lib/iap-management/apple/client";
-import { withRetry } from "@/lib/iap-management/apple/fetch";
+import { listAllInAppPurchases } from "@/lib/iap-management/apple/client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { listUsdTiers } from "@/lib/iap-management/queries/price-tiers";
 import { BulkImportWizard } from "./BulkImportWizard";
@@ -30,7 +29,7 @@ export default async function BulkImportPage({ params }: PageProps) {
     const creds = await getActiveAccount();
     const [appRes, iapsRes, tiersRes] = await Promise.all([
       getApp(creds, params.appId),
-      withRetry(() => listInAppPurchases(creds, params.appId)),
+      listAllInAppPurchases(creds, params.appId),
       listUsdTiers(),
     ]);
     appName = appRes.data.attributes.name;

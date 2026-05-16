@@ -16,6 +16,7 @@ import {
   confirmInAppPurchaseScreenshot,
   submitInAppPurchase,
   listInAppPurchases,
+  listAllInAppPurchases,
   getInAppPurchase,
 } from "./client";
 import type { AscCredentials } from "@/lib/asc-jwt";
@@ -254,5 +255,135 @@ describe("listInAppPurchases / getInAppPurchase URL shape", () => {
     const [, , endpoint] = iapFetch.mock.calls[0];
     expect(endpoint).toContain("/v2/inAppPurchases/iap-1");
     expect(endpoint).toContain("include=inAppPurchaseLocalizations,reviewScreenshot");
+  });
+});
+
+// IAP.o.7a — Apple's `links.next` pagination wrapper. Single-page legacy
+// `listInAppPurchases` truncated at 200, which broke conflict resolution +
+// IAP list UI for apps with >200 IAPs (Manager MV30 surfaced 409 ENTITY_ERROR
+// + IAP-list truncation). Tests pin the iteration shape, accumulation, and
+// terminal conditions so regressions are caught at unit-test time.
+describe("listAllInAppPurchases (paginated)", () => {
+  function makeIap(id: string, productId: string) {
+    return {
+      type: "inAppPurchases",
+      id,
+      attributes: {
+        productId,
+        name: productId,
+        inAppPurchaseType: "CONSUMABLE",
+        state: "READY_TO_SUBMIT",
+      },
+    };
+  }
+
+  it("returns single-page data when `links.next` is absent", async () => {
+    iapFetch.mockResolvedValueOnce({
+      data: [makeIap("1", "p.a"), makeIap("2", "p.b")],
+    });
+
+    const res = await listAllInAppPurchases(creds, "app-id-1");
+    expect(res.data).toHaveLength(2);
+    expect(res.data.map((d) => d.id)).toEqual(["1", "2"]);
+    expect(iapFetch).toHaveBeenCalledOnce();
+    const [, method, endpoint] = iapFetch.mock.calls[0];
+    expect(method).toBe("GET");
+    expect(endpoint).toBe("/v1/apps/app-id-1/inAppPurchasesV2?limit=200");
+  });
+
+  it("accumulates across two pages and stops when `links.next` clears", async () => {
+    iapFetch
+      .mockResolvedValueOnce({
+        data: [makeIap("1", "p.a"), makeIap("2", "p.b")],
+        links: {
+          self: "https://api.appstoreconnect.apple.com/v1/apps/app-id-1/inAppPurchasesV2?limit=200",
+          next: "https://api.appstoreconnect.apple.com/v1/apps/app-id-1/inAppPurchasesV2?cursor=PAGE2&limit=200",
+        },
+      })
+      .mockResolvedValueOnce({
+        data: [makeIap("3", "p.c")],
+        // No `links.next` → terminate
+      });
+
+    const res = await listAllInAppPurchases(creds, "app-id-1");
+    expect(res.data).toHaveLength(3);
+    expect(res.data.map((d) => d.id)).toEqual(["1", "2", "3"]);
+    expect(iapFetch).toHaveBeenCalledTimes(2);
+
+    // Page 2 call uses the path+query extracted from Apple's absolute URL.
+    const [, method2, endpoint2] = iapFetch.mock.calls[1];
+    expect(method2).toBe("GET");
+    expect(endpoint2).toBe("/v1/apps/app-id-1/inAppPurchasesV2?cursor=PAGE2&limit=200");
+  });
+
+  it("accumulates across three pages", async () => {
+    iapFetch
+      .mockResolvedValueOnce({
+        data: [makeIap("1", "p.a")],
+        links: {
+          self: "https://api.appstoreconnect.apple.com/v1/apps/app/inAppPurchasesV2?limit=200",
+          next: "https://api.appstoreconnect.apple.com/v1/apps/app/inAppPurchasesV2?cursor=P2",
+        },
+      })
+      .mockResolvedValueOnce({
+        data: [makeIap("2", "p.b"), makeIap("3", "p.c")],
+        links: {
+          self: "https://api.appstoreconnect.apple.com/v1/apps/app/inAppPurchasesV2?cursor=P2",
+          next: "https://api.appstoreconnect.apple.com/v1/apps/app/inAppPurchasesV2?cursor=P3",
+        },
+      })
+      .mockResolvedValueOnce({
+        data: [makeIap("4", "p.d")],
+      });
+
+    const res = await listAllInAppPurchases(creds, "app");
+    expect(res.data).toHaveLength(4);
+    expect(iapFetch).toHaveBeenCalledTimes(3);
+    // Page 3 call uses path-and-query stripped from absolute URL.
+    expect(iapFetch.mock.calls[2][2]).toBe(
+      "/v1/apps/app/inAppPurchasesV2?cursor=P3",
+    );
+  });
+
+  it("returns empty data when first page is empty (no IAPs registered)", async () => {
+    iapFetch.mockResolvedValueOnce({ data: [] });
+
+    const res = await listAllInAppPurchases(creds, "empty-app");
+    expect(res.data).toEqual([]);
+    expect(iapFetch).toHaveBeenCalledOnce();
+  });
+
+  it("tolerates missing `data` field on page response without crashing", async () => {
+    iapFetch.mockResolvedValueOnce({});
+
+    const res = await listAllInAppPurchases(creds, "weird-app");
+    expect(res.data).toEqual([]);
+  });
+
+  it("terminates when `links.next` is malformed (not a parseable URL)", async () => {
+    iapFetch.mockResolvedValueOnce({
+      data: [makeIap("1", "p.a")],
+      links: {
+        self: "https://api.appstoreconnect.apple.com/...",
+        next: "not-a-url-at-all",
+      },
+    });
+
+    const res = await listAllInAppPurchases(creds, "app");
+    expect(res.data).toHaveLength(1);
+    // No infinite loop: only the first call fires.
+    expect(iapFetch).toHaveBeenCalledOnce();
+  });
+
+  it("aggregate response drops per-page `links` and `meta`", async () => {
+    iapFetch.mockResolvedValueOnce({
+      data: [makeIap("1", "p.a")],
+      links: { self: "x" },
+      meta: { paging: { total: 1, limit: 200 } },
+    });
+
+    const res = await listAllInAppPurchases(creds, "app");
+    expect(res.links).toBeUndefined();
+    expect(res.meta).toBeUndefined();
   });
 });
