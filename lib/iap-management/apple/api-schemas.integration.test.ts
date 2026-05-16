@@ -47,7 +47,11 @@ import {
   deleteInAppPurchaseScreenshot,
   submitInAppPurchase,
 } from "./client";
-import { listPricePointsForIap } from "./price-points";
+import {
+  listPricePointsForIap,
+  findPricePointByUsdPrice,
+  type InAppPurchasePricePoint,
+} from "./price-points";
 import { setPriceSchedule } from "./price-schedules";
 
 const creds: AscCredentials = {
@@ -283,6 +287,49 @@ describe("API schema: pricing endpoints", () => {
       type: "inAppPurchases",
       id: "iap-1",
     });
+  });
+});
+
+// ─── IAP.o.10a — customerPrice match across Apple's 2024 tier rollover ──────
+
+describe("API schema: customerPrice matching (IAP.o.10a)", () => {
+  // Apple's developer forum thread 728081 confirmed priceTier numbering
+  // changed from "1, 2, 3..." to "10000, 10001, ..." in 2024, with some
+  // legacy IAPs still on the old numbering. customerPrice is the only
+  // stable join key — pin this contract here.
+
+  const mixed: InAppPurchasePricePoint[] = [
+    {
+      type: "inAppPurchasePricePoints",
+      id: "pp-new-099",
+      attributes: { customerPrice: "0.99", proceeds: "0.7", priceTier: "10000" },
+    },
+    {
+      type: "inAppPurchasePricePoints",
+      id: "pp-legacy-099",
+      attributes: { customerPrice: "0.99", proceeds: "0.7", priceTier: "1" },
+    },
+    {
+      type: "inAppPurchasePricePoints",
+      id: "pp-new-499",
+      attributes: { customerPrice: "4.99", proceeds: "3.49", priceTier: "10004" },
+    },
+  ];
+
+  it("matches USD 0.99 on Apple's new (10000+) priceTier numbering", () => {
+    expect(findPricePointByUsdPrice(mixed, 0.99)?.id).toBe("pp-new-099");
+  });
+
+  it("matches USD 4.99 to the only Apple price point at that price", () => {
+    expect(findPricePointByUsdPrice(mixed, 4.99)?.id).toBe("pp-new-499");
+  });
+
+  it("surfaces null (NOT a silent match) when USD price has no Apple counterpart", () => {
+    // Manager's IAP.o.9a → IAP.o.10a root cause: silent null caused the
+    // pricing POST to skip. The orchestration test layer asserts the result
+    // surfaces as skipped-no-match — this test pins the contract at the
+    // matcher level so a regression can't reintroduce a silent fallthrough.
+    expect(findPricePointByUsdPrice(mixed, 99.99)).toBeNull();
   });
 });
 

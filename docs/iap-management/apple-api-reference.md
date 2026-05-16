@@ -98,19 +98,26 @@ Critical pairing rules:
 - `startDate: null` → effective immediately. Future-dated pricing is not
   exercised by the Manager workflow.
 
-## Local tier_id → Apple priceTier mapping
+## Local tier → Apple price-point mapping
 
-| Local format | Apple `priceTier` attribute |
-|---|---|
-| `TIER_5` | `"5"` |
-| `TIER_10` | `"10"` |
-| `FREE` | `"0"` |
-| `ALT_1` | `"1"` (best-effort — Apple's alternate-tier representation may differ) |
-| `5` (bare integer) | `"5"` |
+**IAP.o.10a:** Match by USA/USD `customerPrice` string, NOT `priceTier`.
 
-Apple returns `priceTier` as a string-typed integer on each price point. The
-mapper at `lib/iap-management/apple/price-points.ts:findPricePointByTier`
-strips the local prefix and does a literal string match.
+Apple changed `priceTier` numbering from "1, 2, 3, …" to "10000, 10001, …"
+silently in 2024 (developer forum thread 728081), with legacy IAPs still
+returning the old numbering. The `priceTier` attribute is unsafe as a join
+key — `customerPrice` is the only stable identifier.
+
+Match strategy:
+
+1. Resolve local `tier_id` → `customer_price` via `getTierUsdPrice(tier_id)`
+   (reads `iap_mgmt.price_tier_territories` WHERE territory_code='USA').
+2. Filter Apple's `pricePoints` where `attributes.customerPrice === priceUsd.toFixed(2)`
+   (epsilon 0.001 in `findPricePointByUsdPrice` to defeat IEEE-754 noise).
+3. Use the matched price point's id in the schedule POST.
+
+`findPricePointByTier` (legacy) is kept in the codebase for fallback callers
+but is documented as legacy in JSDoc — production code calls
+`findPricePointByUsdPrice`.
 
 ## Known gotchas
 
@@ -131,6 +138,14 @@ strips the local prefix and does a literal string match.
    productId reserved on Apple's side. UAT cycles MUST use a fresh
    namespace (`com.vng.test.iap.YYYYMMDD.vN.NNN`) to avoid 409 collisions
    against ghost IAPs.
+7. **`priceTier` numbering UNSTABLE (IAP.o.10a)** — Apple changed integer
+   tier numbering from "1, 2, 3, …" to "10000, 10001, …" silently in 2024
+   (dev forum thread 728081). Legacy IAPs still on old numbering. NEVER
+   match by `priceTier` — always match by `customerPrice` string.
+8. **Apple's intermittent 500 UNEXPECTED_ERROR on `/v1/inAppPurchasePriceSchedules`**
+   — known Apple bug per forum 728081. Tool retries up to 3× with
+   exponential backoff (500 → 1500 → 4000 ms). 4xx errors (409, 422)
+   propagate immediately since retry can't fix a payload mismatch.
 
 ## Test enforcement
 
