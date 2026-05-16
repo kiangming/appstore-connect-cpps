@@ -596,7 +596,7 @@ async function persistResult(
   await db.from("actions_log").insert({
     batch_id: args.batchId,
     actor: args.actor,
-    action_type: "CREATE_IAP",
+    action_type: "BULK_IMPORT_CREATE",
     payload: {
       ...result,
       app_id: args.internalAppId,
@@ -609,6 +609,23 @@ async function persistResult(
       resolved_tier_id: args.decision.resolved_tier_id ?? null,
     },
   });
+
+  // Separate audit row when the row also reached the SUBMIT stage. Keeps
+  // bulk-wizard submit signals queryable independently of the per-row
+  // create entry (Manager IAP.o.6c audit log discipline).
+  if (result.status === "SUCCESS" && result.submitted) {
+    await db.from("actions_log").insert({
+      batch_id: args.batchId,
+      actor: args.actor,
+      action_type: "BULK_IMPORT_SUBMIT",
+      payload: {
+        product_id: result.product_id,
+        apple_iap_id: result.apple_iap_id,
+        app_id: args.internalAppId,
+        via: "bulk",
+      },
+    });
+  }
   return result;
 }
 

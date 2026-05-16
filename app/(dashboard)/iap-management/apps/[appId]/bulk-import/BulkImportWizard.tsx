@@ -28,6 +28,7 @@ import {
   type ConflictDecision,
   type ResolveResult,
 } from "@/lib/iap-management/bulk-import/conflict-resolution";
+import { computeWillSubmitCount } from "@/lib/iap-management/bulk-import/will-submit";
 import {
   formatTierWithPrice,
   type UsdTierEntry,
@@ -645,6 +646,11 @@ function Step3Preview({
       .filter((s) => s.match.kind === "matched")
       .map((s) => (s.match.kind === "matched" ? s.match.productId : "")),
   );
+  const willSubmitCount = computeWillSubmitCount(
+    decisions,
+    matchedProductIds,
+    submitOnCreate,
+  );
   return (
     <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
       <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
@@ -662,6 +668,23 @@ function Step3Preview({
         <Tally label="Skip" value={counts.skip} color="slate" />
         <Tally label="Error" value={counts.error} color="amber" />
       </div>
+
+      {/* Outcome bifurcation — only show when the Create bucket is non-empty
+          so unrelated bulk-only flows (e.g. all-overwrite) don't see noise. */}
+      {counts.create > 0 && (
+        <div className="grid grid-cols-2 gap-3 mb-4 text-xs">
+          <Tally
+            label="Will create only"
+            value={counts.create - willSubmitCount}
+            color="slate"
+          />
+          <Tally
+            label="Will create + submit"
+            value={willSubmitCount}
+            color="emerald"
+          />
+        </div>
+      )}
 
       {/* Global toggles */}
       <div className="flex items-center gap-6 mb-4">
@@ -898,6 +921,7 @@ function Step4Result({
               <th className="px-3 py-2">Product ID</th>
               <th className="px-3 py-2 w-24">Status</th>
               <th className="px-3 py-2 w-24">Disposition</th>
+              <th className="px-3 py-2 w-32">Outcome</th>
               <th className="px-3 py-2">Notes</th>
             </tr>
           </thead>
@@ -913,16 +937,17 @@ function Step4Result({
                 <td className="px-3 py-2 text-[11px] text-slate-600">
                   {r.disposition.toLowerCase()}
                 </td>
+                <td className="px-3 py-2">
+                  <OutcomeBadge result={r} />
+                </td>
                 <td className="px-3 py-2 text-[11px] text-slate-500">
                   {r.error
                     ? `${r.stage ?? ""}: ${r.error.slice(0, 120)}`
                     : r.failed_locales && r.failed_locales.length > 0
                       ? `Failed locales: ${r.failed_locales.join(", ")}`
-                      : r.submitted
-                        ? "Submitted for review"
-                        : r.apple_iap_id
-                          ? `apple_iap_id ${r.apple_iap_id.slice(0, 12)}…`
-                          : "—"}
+                      : r.apple_iap_id
+                        ? `apple_iap_id ${r.apple_iap_id.slice(0, 12)}…`
+                        : "—"}
                 </td>
               </tr>
             ))}
@@ -939,6 +964,37 @@ function Step4Result({
         </a>
       </div>
     </section>
+  );
+}
+
+function OutcomeBadge({
+  result,
+}: {
+  result: ExecuteResult["results"][number];
+}) {
+  if (result.status !== "SUCCESS") {
+    return <span className="text-[10px] text-slate-300">—</span>;
+  }
+  // For overwrite path: no submission, but localizations replaced.
+  if (result.disposition === "OVERWRITE") {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-amber-50 text-amber-700 border-amber-200">
+        Overwritten
+      </span>
+    );
+  }
+  // Create path: bifurcate by submitted state.
+  if (result.submitted) {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-emerald-50 text-emerald-700 border-emerald-200">
+        Created + submitted
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-slate-100 text-slate-600 border-slate-200">
+      Created only
+    </span>
   );
 }
 
