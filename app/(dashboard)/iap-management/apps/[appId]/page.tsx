@@ -6,6 +6,7 @@ import { getActiveAccount } from "@/lib/get-active-account";
 import {
   findAppByAppleId,
   listDraftIaps,
+  listSyncedAppleIapMap,
   type IapDbRow,
 } from "@/lib/iap-management/queries/iaps";
 import { IapListClient } from "./IapListClient";
@@ -51,6 +52,7 @@ async function IapListContent({ appId }: { appId: string }) {
   let appBundleId: string | null = null;
   let iaps: InAppPurchase[] = [];
   let drafts: IapDbRow[] = [];
+  let appleToInternal: Record<string, string> = {};
 
   try {
     const creds = await getActiveAccount();
@@ -72,9 +74,10 @@ async function IapListContent({ appId }: { appId: string }) {
     const internalAppId = await findAppByAppleId(appId);
     if (internalAppId) {
       drafts = (await listDraftIaps(internalAppId)).drafts;
+      appleToInternal = await listSyncedAppleIapMap(internalAppId);
     }
   } catch {
-    // drafts are non-essential — degrade silently
+    // drafts + synced map are non-essential — degrade silently
   }
 
   if (error) {
@@ -92,6 +95,7 @@ async function IapListContent({ appId }: { appId: string }) {
       appBundleId={appBundleId ?? ""}
       iaps={iaps}
       drafts={drafts}
+      appleToInternal={appleToInternal}
     />
   );
 }

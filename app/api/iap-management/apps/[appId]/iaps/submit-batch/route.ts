@@ -1,0 +1,311 @@
+/**
+ * POST /api/iap-management/apps/[appId]/iaps/submit-batch
+ *
+ * IAP.o.6b — list-page multi-select Submit Selected flow.
+ *
+ * Two phases controlled by body.execute:
+ *
+ *   • Phase 1 (preflight, default): one Apple `listInAppPurchases` call,
+ *     fresh state bucketed per selected IAP. Returns ready / missing_metadata
+ *     / other / not_on_apple lists for the Manager preview modal.
+ *
+ *   • Phase 2 (execute, body.execute=true): submits the supplied iap_ids in
+ *     parallel via `submitInAppPurchase` (concurrency 5). Each result is
+ *     audit-logged with action_type=SUBMIT_APPLE_REVIEW.
+ *
+ * Apple state is canonical — the local cache (iap_mgmt.iaps.state) is the
+ * mirror, refreshed by both phases (post-listInAppPurchases for preflight,
+ * post-submitInAppPurchase GET for execute).
+ *
+ * Body shape:
+ *   { iap_ids: string[]; execute?: boolean }
+ */
+
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import {
+  requireIapAdmin,
+  IapForbiddenError,
+  IapUnauthorizedError,
+} from "@/lib/iap-management/auth";
+import { iapDb } from "@/lib/iap-management/db";
+import { getActiveAccount } from "@/lib/get-active-account";
+import {
+  listInAppPurchases,
+  submitInAppPurchase,
+  getInAppPurchase,
+} from "@/lib/iap-management/apple/client";
+import {
+  withRetry,
+  AppleApiError,
+} from "@/lib/iap-management/apple/fetch";
+import { withConcurrency } from "@/lib/iap-management/concurrency";
+import {
+  bucketSelection,
+  type AppleStateRow,
+  type NotOnAppleRow,
+  type PreflightRow,
+} from "@/lib/iap-management/submit-batch/bucket";
+import { log } from "@/lib/logger";
+
+export const runtime = "nodejs";
+
+const SUBMIT_CONCURRENCY = 5;
+
+const BodySchema = z.object({
+  iap_ids: z.array(z.string().uuid()).min(1).max(200),
+  execute: z.boolean().optional().default(false),
+});
+
+interface PreflightResponse {
+  phase: "preflight";
+  total: number;
+  ready: PreflightRow[];
+  missing_metadata: PreflightRow[];
+  other: PreflightRow[];
+  not_on_apple: NotOnAppleRow[];
+}
+
+interface ExecuteResultRow {
+  iap_id: string;
+  apple_iap_id: string;
+  status: "SUCCESS" | "ERROR";
+  state?: string;
+  error?: string;
+}
+
+interface ExecuteResponse {
+  phase: "execute";
+  submitted: number;
+  failed: number;
+  results: ExecuteResultRow[];
+}
+
+export async function POST(
+  req: Request,
+  ctx: { params: { appId: string } },
+) {
+  let session;
+  try {
+    session = await requireIapAdmin();
+  } catch (err) {
+    if (err instanceof IapUnauthorizedError) {
+      return NextResponse.json({ error: err.message }, { status: 401 });
+    }
+    if (err instanceof IapForbiddenError) {
+      return NextResponse.json({ error: err.message }, { status: 403 });
+    }
+    throw err;
+  }
+  const actor = session.user.email ?? "unknown";
+  const appleAppId = ctx.params.appId;
+
+  // Parse + validate body
+  let body: z.infer<typeof BodySchema>;
+  try {
+    const raw = await req.json();
+    body = BodySchema.parse(raw);
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Invalid body" },
+      { status: 400 },
+    );
+  }
+
+  // Load local rows for the selected IAPs (need apple_iap_id mapping + names).
+  const db = iapDb();
+  const localRes = await db
+    .from("iaps")
+    .select("id, apple_iap_id, product_id, reference_name")
+    .in("id", body.iap_ids);
+  if (localRes.error) {
+    return NextResponse.json(
+      { error: `iaps lookup failed: ${localRes.error.message}` },
+      { status: 500 },
+    );
+  }
+  const localRows = (localRes.data ?? []) as Array<{
+    id: string;
+    apple_iap_id: string | null;
+    product_id: string;
+    reference_name: string;
+  }>;
+
+  // ─── Phase 1 — preflight ─────────────────────────────────────────────────
+  if (!body.execute) {
+    return await runPreflight(appleAppId, localRows);
+  }
+
+  // ─── Phase 2 — execute ───────────────────────────────────────────────────
+  return await runExecute(appleAppId, localRows, actor);
+}
+
+async function runPreflight(
+  appleAppId: string,
+  localRows: Array<{
+    id: string;
+    apple_iap_id: string | null;
+    product_id: string;
+    reference_name: string;
+  }>,
+): Promise<NextResponse> {
+  const appleIdsToFetch = new Set<string>();
+  for (const row of localRows) {
+    if (row.apple_iap_id) appleIdsToFetch.add(row.apple_iap_id);
+  }
+
+  // Fresh Apple state — single batch call.
+  let appleByAppleId: Map<string, AppleStateRow>;
+  try {
+    const creds = await getActiveAccount();
+    const res = await withRetry(() =>
+      listInAppPurchases(creds, appleAppId),
+    );
+    appleByAppleId = new Map(
+      (res.data ?? [])
+        .filter((iap) => appleIdsToFetch.has(iap.id))
+        .map((iap) => [
+          iap.id,
+          { apple_iap_id: iap.id, state: iap.attributes.state },
+        ]),
+    );
+  } catch (err) {
+    return NextResponse.json(
+      { error: errMsg(err) },
+      { status: err instanceof AppleApiError && err.status < 500 ? err.status : 502 },
+    );
+  }
+
+  // Mirror fresh states back to local cache (best-effort).
+  const db = iapDb();
+  for (const apple of appleByAppleId.values()) {
+    await db
+      .from("iaps")
+      .update({ state: apple.state, synced_at: new Date().toISOString() })
+      .eq("apple_iap_id", apple.apple_iap_id);
+  }
+
+  const buckets = bucketSelection(
+    localRows.map((r) => ({
+      id: r.id,
+      apple_iap_id: r.apple_iap_id,
+      product_id: r.product_id,
+      reference_name: r.reference_name,
+    })),
+    appleByAppleId,
+  );
+
+  const response: PreflightResponse = {
+    phase: "preflight",
+    total: localRows.length,
+    ready: buckets.ready,
+    missing_metadata: buckets.missing_metadata,
+    other: buckets.other,
+    not_on_apple: buckets.not_on_apple,
+  };
+  return NextResponse.json(response);
+}
+
+async function runExecute(
+  appleAppId: string,
+  localRows: Array<{
+    id: string;
+    apple_iap_id: string | null;
+    product_id: string;
+    reference_name: string;
+  }>,
+  actor: string,
+): Promise<NextResponse> {
+  void appleAppId; // included for future scoping/logging
+  const eligible = localRows.filter((r) => r.apple_iap_id);
+  if (eligible.length === 0) {
+    return NextResponse.json(
+      { error: "No selected IAPs are on Apple — Create on Apple first." },
+      { status: 422 },
+    );
+  }
+
+  const creds = await getActiveAccount();
+  const db = iapDb();
+
+  const results: ExecuteResultRow[] = await withConcurrency(
+    eligible,
+    SUBMIT_CONCURRENCY,
+    async (row) => {
+      const appleIapId = row.apple_iap_id!;
+      try {
+        await withRetry(() => submitInAppPurchase(creds, appleIapId));
+        // Fetch post-submit authoritative state.
+        let finalState = "WAITING_FOR_REVIEW";
+        try {
+          const fresh = await withRetry(() =>
+            getInAppPurchase(creds, appleIapId),
+          );
+          finalState = fresh.data.attributes.state ?? finalState;
+        } catch (err) {
+          await log(
+            "iap-submit-batch",
+            `post-submit GET failed iap=${row.id}: ${errMsg(err)}`,
+            "WARN",
+          );
+        }
+        await db
+          .from("iaps")
+          .update({ state: finalState, synced_at: new Date().toISOString() })
+          .eq("id", row.id);
+        await db.from("actions_log").insert({
+          iap_id: row.id,
+          actor,
+          action_type: "SUBMIT_APPLE_REVIEW",
+          payload: {
+            apple_iap_id: appleIapId,
+            result: "SUCCESS",
+            state: finalState,
+            via: "batch",
+          },
+        });
+        return {
+          iap_id: row.id,
+          apple_iap_id: appleIapId,
+          status: "SUCCESS" as const,
+          state: finalState,
+        };
+      } catch (err) {
+        await db.from("actions_log").insert({
+          iap_id: row.id,
+          actor,
+          action_type: "SUBMIT_APPLE_REVIEW",
+          payload: {
+            apple_iap_id: appleIapId,
+            result: "ERROR",
+            error: errMsg(err),
+            via: "batch",
+          },
+        });
+        return {
+          iap_id: row.id,
+          apple_iap_id: appleIapId,
+          status: "ERROR" as const,
+          error: errMsg(err),
+        };
+      }
+    },
+  );
+
+  const submitted = results.filter((r) => r.status === "SUCCESS").length;
+  const failed = results.filter((r) => r.status === "ERROR").length;
+  const response: ExecuteResponse = {
+    phase: "execute",
+    submitted,
+    failed,
+    results,
+  };
+  return NextResponse.json(response);
+}
+
+function errMsg(err: unknown): string {
+  if (err instanceof AppleApiError) {
+    return `${err.status}: ${err.body.slice(0, 500)}`;
+  }
+  return err instanceof Error ? err.message : String(err);
+}

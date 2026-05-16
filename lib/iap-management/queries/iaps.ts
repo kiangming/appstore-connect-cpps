@@ -298,3 +298,30 @@ export async function listDraftIaps(appId: string): Promise<ListDraftsResult> {
   if (res.error) throw new Error(`drafts list failed: ${res.error.message}`);
   return { drafts: (res.data ?? []) as IapDbRow[] };
 }
+
+/**
+ * Apple-IAP-id → internal-UUID map for the synced rows of an app. Used by
+ * the list-page multi-select flow to translate Apple-side checkbox selections
+ * into the internal UUIDs the submit-batch endpoint expects.
+ */
+export async function listSyncedAppleIapMap(
+  internalAppId: string,
+): Promise<Record<string, string>> {
+  const db = iapDb();
+  const res = await db
+    .from("iaps")
+    .select("id, apple_iap_id")
+    .eq("app_id", internalAppId)
+    .not("apple_iap_id", "is", null);
+  if (res.error) {
+    throw new Error(`synced map fetch failed: ${res.error.message}`);
+  }
+  const map: Record<string, string> = {};
+  for (const row of (res.data ?? []) as Array<{
+    id: string;
+    apple_iap_id: string | null;
+  }>) {
+    if (row.apple_iap_id) map[row.apple_iap_id] = row.id;
+  }
+  return map;
+}

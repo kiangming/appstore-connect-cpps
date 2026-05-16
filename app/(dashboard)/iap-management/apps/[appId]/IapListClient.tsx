@@ -2,13 +2,27 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Search, ChevronLeft, Inbox, Plus, Pencil, FileText, Upload } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import {
+  Search,
+  ChevronLeft,
+  Inbox,
+  Plus,
+  Pencil,
+  FileText,
+  Upload,
+  RefreshCw,
+  Send,
+  Loader2,
+} from "lucide-react";
 import type {
   InAppPurchase,
   InAppPurchaseType,
 } from "@/types/iap-management/apple";
 import type { IapDbRow } from "@/lib/iap-management/queries/iaps";
 import { useAppIcon, getAvatarColor, getInitials } from "@/lib/use-app-icon";
+import { SubmitBatchModal } from "@/components/iap-management/SubmitBatchModal";
 
 interface Props {
   appId: string;
@@ -17,6 +31,8 @@ interface Props {
   iaps: InAppPurchase[];
   /** Local-only drafts (apple_iap_id NULL). Editable; Apple-synced IAPs are read-only in v1. */
   drafts?: IapDbRow[];
+  /** Apple-IAP-id → internal-UUID map for synced rows. Required for multi-select submit. */
+  appleToInternal: Record<string, string>;
 }
 
 const TYPE_LABEL: Record<InAppPurchaseType, string> = {
@@ -92,10 +108,15 @@ export function IapListClient({
   appBundleId,
   iaps,
   drafts = [],
+  appleToInternal,
 }: Props) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<InAppPurchaseType | "ALL">("ALL");
   const [stateFilter, setStateFilter] = useState<string>("ALL");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [modalOpen, setModalOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   const allStates = useMemo(() => {
     const s = new Set<string>();
@@ -120,6 +141,79 @@ export function IapListClient({
       return true;
     });
   }, [iaps, query, typeFilter, stateFilter]);
+
+  // Internal UUIDs corresponding to the currently-selected Apple-side IAPs.
+  const selectedInternalIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const appleId of selected) {
+      const internal = appleToInternal[appleId];
+      if (internal) ids.push(internal);
+    }
+    return ids;
+  }, [selected, appleToInternal]);
+
+  const selectableAppleIds = useMemo(
+    () => filtered.filter((iap) => appleToInternal[iap.id]).map((iap) => iap.id),
+    [filtered, appleToInternal],
+  );
+
+  function toggleOne(appleIapId: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(appleIapId)) next.delete(appleIapId);
+      else next.add(appleIapId);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (selectableAppleIds.every((id) => selected.has(id))) {
+      // All selected → deselect
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(selectableAppleIds));
+    }
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+  }
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    try {
+      const res = await fetch(
+        `/api/iap-management/apps/${appId}/iaps/sync-states`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        toast.error(data.error ?? `Refresh failed (${res.status})`);
+        return;
+      }
+      const data = (await res.json()) as {
+        synced_count: number;
+        errors: string[];
+      };
+      if (data.errors && data.errors.length > 0) {
+        toast.warning(
+          `Synced ${data.synced_count} · ${data.errors.length} error(s).`,
+        );
+      } else {
+        toast.success(`Refreshed ${data.synced_count} IAP(s) from Apple.`);
+      }
+      router.refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  const allSelected =
+    selectableAppleIds.length > 0 &&
+    selectableAppleIds.every((id) => selected.has(id));
+  const someSelected = selected.size > 0 && !allSelected;
 
   return (
     <div className="space-y-6">
@@ -146,6 +240,20 @@ export function IapListClient({
         <span className="ml-auto inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
           {iaps.length} IAP{iaps.length === 1 ? "" : "s"}
         </span>
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition disabled:opacity-50"
+          title="Re-fetch state from Apple"
+        >
+          {refreshing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5" />
+          )}
+          Refresh from Apple
+        </button>
         <Link
           href={`/iap-management/apps/${appId}/bulk-import`}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition"
@@ -161,6 +269,32 @@ export function IapListClient({
           Create IAP
         </Link>
       </div>
+
+      {/* Bulk action bar */}
+      {selected.size > 0 && (
+        <div className="rounded-xl border border-[#0071E3] bg-blue-50 px-4 py-2.5 flex items-center justify-between gap-4 sticky top-0 z-10">
+          <p className="text-sm font-medium text-blue-900">
+            {selected.size} IAP{selected.size === 1 ? "" : "s"} selected
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={clearSelection}
+              className="text-xs text-blue-700 hover:underline"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => setModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Submit Selected
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Drafts section (local-only, editable) */}
       {drafts.length > 0 && (
@@ -260,8 +394,7 @@ export function IapListClient({
           </p>
           {iaps.length === 0 && (
             <p className="text-xs text-slate-400 mt-1">
-              Use Bulk Import (coming in IAP.i) or Create IAP (coming in IAP.h)
-              to populate.
+              Use Bulk Import or Create IAP to populate.
             </p>
           )}
         </div>
@@ -270,6 +403,18 @@ export function IapListClient({
           <table className="w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr className="text-left text-xs font-medium text-slate-500 uppercase tracking-wide">
+                <th className="px-3 py-3 w-10">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someSelected;
+                    }}
+                    onChange={toggleAll}
+                    aria-label="Select all"
+                    className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
+                  />
+                </th>
                 <th className="px-4 py-3">Product ID</th>
                 <th className="px-4 py-3">Reference Name</th>
                 <th className="px-4 py-3 w-36">Type</th>
@@ -277,42 +422,62 @@ export function IapListClient({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((iap) => (
-                <tr
-                  key={iap.id}
-                  className="hover:bg-slate-50 transition cursor-default"
-                >
-                  <td className="px-4 py-2.5 font-mono text-xs text-slate-700">
-                    {iap.attributes.productId}
-                  </td>
-                  <td className="px-4 py-2.5 text-slate-800 truncate max-w-[260px]">
-                    {iap.attributes.name}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${TYPE_BADGE[iap.attributes.inAppPurchaseType]}`}
-                    >
-                      {TYPE_LABEL[iap.attributes.inAppPurchaseType]}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${stateBadge(iap.attributes.state)}`}
-                    >
-                      {stateLabel(iap.attributes.state)}
-                    </span>
-                  </td>
-                </tr>
-              ))}
+              {filtered.map((iap) => {
+                const eligible = Boolean(appleToInternal[iap.id]);
+                const isSelected = selected.has(iap.id);
+                return (
+                  <tr
+                    key={iap.id}
+                    className={`hover:bg-slate-50 transition ${isSelected ? "bg-blue-50/40" : ""}`}
+                  >
+                    <td className="px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleOne(iap.id)}
+                        disabled={!eligible}
+                        title={
+                          eligible
+                            ? "Toggle selection"
+                            : "Not in local cache — refresh from Apple to enable."
+                        }
+                        className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
+                      />
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-xs text-slate-700">
+                      {iap.attributes.productId}
+                    </td>
+                    <td className="px-4 py-2.5 text-slate-800 truncate max-w-[260px]">
+                      {iap.attributes.name}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${TYPE_BADGE[iap.attributes.inAppPurchaseType]}`}
+                      >
+                        {TYPE_LABEL[iap.attributes.inAppPurchaseType]}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span
+                        className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${stateBadge(iap.attributes.state)}`}
+                      >
+                        {stateLabel(iap.attributes.state)}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
-      {/* Hidden — referenced by appId in URL; placeholder marker for IAP.h */}
-      <div className="text-xs text-slate-400" data-app-id={appId}>
-        {/* IAP.h will add Create button here */}
-      </div>
+      <SubmitBatchModal
+        open={modalOpen}
+        appAppleId={appId}
+        selectedIapIds={selectedInternalIds}
+        onClose={() => setModalOpen(false)}
+      />
     </div>
   );
 }
