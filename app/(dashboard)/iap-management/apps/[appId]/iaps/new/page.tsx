@@ -46,8 +46,9 @@ export default async function NewIapPage({ params }: PageProps) {
         New In-App Purchase
       </h1>
       <p className="text-sm text-slate-500 mb-6">
-        Save as Draft to persist locally. Submit to Apple after the 6
-        prerequisites are met.
+        Save as Draft to persist locally. Create on Apple after the 5
+        Group A prerequisites pass; Submit for Review lives on the IAP
+        list page.
       </p>
       <IapForm
         mode="create"

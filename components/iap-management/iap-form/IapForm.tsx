@@ -9,7 +9,7 @@ import { LocaleEditor } from "./LocaleEditor";
 import { SubmitChecklist } from "./SubmitChecklist";
 import { ScreenshotUpload } from "./ScreenshotUpload";
 import {
-  validateIapFormState,
+  validateIapFormGrouped,
   type IapFormState,
   type FormLocalization,
 } from "@/lib/iap-management/validation";
@@ -49,13 +49,14 @@ export function IapForm({
 }: IapFormProps) {
   const router = useRouter();
   const [form, setForm] = useState<IapFormState>(initial);
+  const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
   const [activeLocale, setActiveLocale] = useState<string>(DEFAULT_LOCALE);
   const [saving, setSaving] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [, startTransition] = useTransition();
 
-  const checklist = useMemo(() => validateIapFormState(form), [form]);
+  const checklist = useMemo(() => validateIapFormGrouped(form), [form]);
 
   function patchForm(updates: Partial<IapFormState>) {
     setForm((prev) => ({ ...prev, ...updates }));
@@ -66,6 +67,16 @@ export function IapForm({
       ...prev,
       localizations: { ...prev.localizations, [next.locale]: next },
     }));
+  }
+
+  function handleScreenshotStaged(file: File) {
+    setScreenshotFile(file);
+    patchForm({ screenshot_filename: file.name });
+  }
+
+  function handleScreenshotRemove() {
+    setScreenshotFile(null);
+    patchForm({ screenshot_filename: null });
   }
 
   function saveBody() {
@@ -131,40 +142,57 @@ export function IapForm({
     }
   }
 
-  async function handleSubmit() {
+  async function handleCreateOnApple() {
     if (!iapId) return;
-    if (!checklist.allPassed) {
-      toast.error("Submit checklist incomplete");
+    if (!checklist.createReady) {
+      toast.error("Complete Group A prerequisites first.");
       return;
     }
-    setSubmitting(true);
+    setCreating(true);
     try {
+      const body = new FormData();
+      body.append("form", JSON.stringify(saveBody().form));
+      if (screenshotFile) {
+        body.append("screenshot", screenshotFile);
+      }
       const res = await fetch(
-        `/api/iap-management/iaps/${iapId}/submit`,
-        { method: "POST" },
+        `/api/iap-management/apps/${appAppleId}/iaps/${iapId}/create-on-apple`,
+        { method: "POST", body },
       );
       const data = (await res.json()) as
-        | { ok: boolean; apple_iap_id: string; partial?: boolean; failed_locales?: string[] }
+        | {
+            ok: boolean;
+            apple_iap_id: string;
+            state: string;
+            failed_locales: string[];
+            screenshot_uploaded: boolean;
+            screenshot_error?: string;
+          }
         | { error: string };
 
       if (!res.ok) {
-        toast.error("error" in data ? data.error : `Submit failed (${res.status})`);
+        toast.error("error" in data ? data.error : `Create failed (${res.status})`);
         return;
       }
       if ("ok" in data) {
-        if (data.partial && data.failed_locales && data.failed_locales.length > 0) {
-          toast.warning(
-            `Submitted; ${data.failed_locales.length} locale(s) failed: ${data.failed_locales.join(", ")}`,
-          );
-        } else {
-          toast.success("Submitted to Apple Review");
+        const parts: string[] = [`State: ${data.state}`];
+        if (data.failed_locales.length > 0) {
+          parts.push(`${data.failed_locales.length} locale(s) failed`);
         }
-        startTransition(() => router.refresh());
+        if (screenshotFile && !data.screenshot_uploaded) {
+          parts.push("screenshot upload failed");
+        }
+        if (data.failed_locales.length === 0 && (!screenshotFile || data.screenshot_uploaded)) {
+          toast.success(`Created on Apple · ${parts.join(" · ")}`);
+        } else {
+          toast.warning(`Created on Apple with warnings · ${parts.join(" · ")}`);
+        }
+        router.push(`/iap-management/apps/${appAppleId}`);
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Network error");
     } finally {
-      setSubmitting(false);
+      setCreating(false);
     }
   }
 
@@ -192,6 +220,7 @@ export function IapForm({
 
   const productIdLocked = mode === "edit";
   const typeLocked = mode === "edit";
+  const canCreate = mode === "edit" && !syncedToApple;
 
   return (
     <div className="grid grid-cols-[1fr_320px] gap-6">
@@ -377,16 +406,9 @@ export function IapForm({
           </h2>
           <ScreenshotUpload
             filename={form.screenshot_filename}
-            iapPersisted={mode === "edit" && iapId !== null}
-            uploadEndpoint={
-              iapId
-                ? `/api/iap-management/iaps/${iapId}/screenshot`
-                : ""
-            }
-            onUploaded={(filename) =>
-              patchForm({ screenshot_filename: filename })
-            }
-            onRemove={() => patchForm({ screenshot_filename: null })}
+            syncedToApple={syncedToApple}
+            onFileStaged={handleScreenshotStaged}
+            onRemove={handleScreenshotRemove}
           />
         </section>
       </div>
@@ -399,7 +421,7 @@ export function IapForm({
           <button
             type="button"
             onClick={handleSaveDraft}
-            disabled={saving || submitting}
+            disabled={saving || creating}
             className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-lg transition disabled:opacity-50"
           >
             {saving ? (
@@ -410,28 +432,24 @@ export function IapForm({
             {saving ? "Saving…" : "Save as Draft"}
           </button>
 
-          {mode === "edit" && (
+          {canCreate && (
             <button
               type="button"
-              onClick={handleSubmit}
-              disabled={!checklist.allPassed || submitting || saving}
+              onClick={handleCreateOnApple}
+              disabled={!checklist.createReady || creating || saving}
               className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
               title={
-                checklist.allPassed
-                  ? "Push to Apple Review"
-                  : "Complete the checklist first"
+                checklist.createReady
+                  ? "Push to Apple Connect (Submit for Review is a separate action on the IAP list page)"
+                  : "Complete Group A first"
               }
             >
-              {submitting ? (
+              {creating ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Send className="h-4 w-4" />
               )}
-              {submitting
-                ? "Submitting…"
-                : syncedToApple
-                  ? "Re-submit to Apple"
-                  : "Submit to Apple"}
+              {creating ? "Creating…" : "Create on Apple"}
             </button>
           )}
 
@@ -439,8 +457,13 @@ export function IapForm({
             <button
               type="button"
               onClick={handleDelete}
-              disabled={deleting || saving || submitting}
+              disabled={deleting || saving || creating || syncedToApple}
               className="w-full flex items-center justify-center gap-2 px-4 py-2 text-xs font-medium text-red-600 hover:bg-red-50 rounded-lg transition disabled:opacity-50"
+              title={
+                syncedToApple
+                  ? "Synced IAPs cannot be deleted from this tool — manage via Apple Connect."
+                  : "Delete this local draft."
+              }
             >
               {deleting ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -452,9 +475,16 @@ export function IapForm({
           )}
         </div>
 
-        {!checklist.allPassed && mode === "edit" && (
-          <p className="text-[11px] text-slate-500 px-2">
-            Submit unlocks when all checklist items are green.
+        {canCreate && !checklist.createReady && (
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 px-2">
+            Create unlocks when all Group A items are green. Screenshot is
+            optional at create — Apple flips to MISSING_METADATA without it.
+          </p>
+        )}
+        {syncedToApple && (
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 px-2">
+            This IAP is on Apple. Submit for Review lives on the IAP list page
+            (multi-select → Submit Selected).
           </p>
         )}
       </aside>

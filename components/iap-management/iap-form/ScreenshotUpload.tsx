@@ -1,67 +1,58 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { useDropzone } from "react-dropzone";
-import { Upload, Image as ImageIcon, X, Loader2, CheckCircle } from "lucide-react";
+import { useDropzone, type FileRejection } from "react-dropzone";
+import { Upload, Image as ImageIcon, X, CheckCircle } from "lucide-react";
 
 interface Props {
-  /** Current screenshot filename (server-side state). Null when no screenshot. */
+  /** Current staged filename (parent state). Null when no screenshot. */
   filename: string | null;
-  /** Whether the user has already saved the IAP as a draft (gate for upload). */
-  iapPersisted: boolean;
-  /** Called after successful upload — parent updates form state. */
-  onUploaded: (filename: string) => void;
-  /** Optional remove-screenshot handler. */
+  /** Whether the IAP has already been pushed to Apple. When true, the screenshot
+   *  upload is owned by Apple's side and managed via Apple Connect; this
+   *  component renders a read-only summary instead. */
+  syncedToApple: boolean;
+  /** Called when the user stages a new file (drag-drop or click).
+   *  Parent stores the File reference for the create-on-apple FormData payload. */
+  onFileStaged: (file: File) => void;
+  /** Called when the user clears the staged file. */
   onRemove?: () => void;
-  /** Endpoint to POST the file to. Server orchestrates Apple 3-step. */
-  uploadEndpoint: string;
 }
 
-const MAX_SIZE = 8 * 1024 * 1024; // 8MB per Apple constraint
+const MAX_SIZE = 8 * 1024 * 1024;
 
+/**
+ * Staging-only screenshot input (IAP.o.6a).
+ *
+ * Bytes stay client-side in the parent form's state until the user clicks
+ * "Create on Apple", at which point the file is sent as part of the
+ * /create-on-apple multipart FormData. No upfront server round-trip.
+ */
 export function ScreenshotUpload({
   filename,
-  iapPersisted,
-  onUploaded,
+  syncedToApple,
+  onFileStaged,
   onRemove,
-  uploadEndpoint,
 }: Props) {
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleDrop = useCallback(
-    async (accepted: File[]) => {
+    (accepted: File[], rejected: FileRejection[]) => {
       const file = accepted[0];
-      if (!file) return;
-      setError(null);
-      setUploading(true);
-
-      try {
-        const form = new FormData();
-        form.append("file", file);
-
-        const res = await fetch(uploadEndpoint, {
-          method: "POST",
-          body: form,
-        });
-        const data = (await res.json()) as
-          | { filename: string }
-          | { error: string };
-
-        if (!res.ok) {
-          setError("error" in data ? data.error : `Upload failed (${res.status})`);
-          return;
+      if (!file) {
+        const rej = rejected[0]?.errors[0];
+        if (rej?.code === "file-too-large") {
+          setError("File exceeds 8MB limit.");
+        } else if (rej?.code === "file-invalid-type") {
+          setError("PNG or JPEG required.");
+        } else if (rej) {
+          setError(rej.message);
         }
-        if ("filename" in data) {
-          onUploaded(data.filename);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Upload failed");
-      } finally {
-        setUploading(false);
+        return;
       }
+      setError(null);
+      onFileStaged(file);
     },
-    [uploadEndpoint, onUploaded],
+    [onFileStaged],
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -69,16 +60,21 @@ export function ScreenshotUpload({
     accept: { "image/png": [".png"], "image/jpeg": [".jpg", ".jpeg"] },
     maxSize: MAX_SIZE,
     multiple: false,
-    disabled: !iapPersisted || uploading,
+    disabled: syncedToApple,
   });
 
-  if (!iapPersisted) {
+  if (syncedToApple) {
     return (
-      <div className="rounded-lg border-2 border-dashed border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/30 p-8 text-center">
-        <ImageIcon className="mx-auto h-7 w-7 text-slate-300 mb-2" />
-        <p className="text-xs text-slate-500 dark:text-slate-400 dark:text-slate-500">
-          Save as Draft first to enable screenshot upload.
-        </p>
+      <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/30 p-4 flex items-center gap-3">
+        <ImageIcon className="h-5 w-5 text-slate-400 dark:text-slate-500 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-medium text-slate-700 dark:text-slate-300">
+            Screenshot managed on Apple Connect
+          </p>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+            {filename ?? "Edit via App Store Connect web UI."}
+          </p>
+        </div>
       </div>
     );
   }
@@ -89,7 +85,7 @@ export function ScreenshotUpload({
         <CheckCircle className="h-5 w-5 text-emerald-600 flex-shrink-0" />
         <div className="flex-1 min-w-0">
           <p className="text-xs font-medium text-emerald-800">
-            Screenshot uploaded
+            Screenshot staged
           </p>
           <p className="text-[11px] font-mono text-emerald-700 truncate">
             {filename}
@@ -100,7 +96,7 @@ export function ScreenshotUpload({
             type="button"
             onClick={onRemove}
             className="p-1.5 rounded text-emerald-700 hover:bg-emerald-100 transition"
-            title="Remove + re-upload"
+            title="Remove + re-stage"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -116,30 +112,19 @@ export function ScreenshotUpload({
         className={`rounded-lg border-2 border-dashed p-8 text-center cursor-pointer transition ${
           isDragActive
             ? "border-[#0071E3] bg-blue-50"
-            : uploading
-              ? "border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/30 cursor-wait"
-              : "border-slate-300 dark:border-slate-700 hover:border-slate-400 bg-white dark:bg-slate-900"
+            : "border-slate-300 dark:border-slate-700 hover:border-slate-400 bg-white dark:bg-slate-900"
         }`}
       >
         <input {...getInputProps()} />
-        {uploading ? (
-          <>
-            <Loader2 className="mx-auto h-7 w-7 text-[#0071E3] mb-2 animate-spin" />
-            <p className="text-xs text-slate-600">Uploading…</p>
-          </>
-        ) : (
-          <>
-            <Upload className="mx-auto h-7 w-7 text-slate-400 dark:text-slate-500 mb-2" />
-            <p className="text-xs font-medium text-slate-700 dark:text-slate-300">
-              {isDragActive
-                ? "Drop screenshot here"
-                : "Drag & drop a screenshot or click to upload"}
-            </p>
-            <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
-              PNG/JPEG · max 8 MB · required by Apple before submission
-            </p>
-          </>
-        )}
+        <Upload className="mx-auto h-7 w-7 text-slate-400 dark:text-slate-500 mb-2" />
+        <p className="text-xs font-medium text-slate-700 dark:text-slate-300">
+          {isDragActive
+            ? "Drop screenshot here"
+            : "Drag & drop a screenshot or click to stage"}
+        </p>
+        <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+          PNG/JPEG · max 8 MB · optional at create · Apple requires before submit
+        </p>
       </div>
       {error && (
         <p className="mt-2 text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">

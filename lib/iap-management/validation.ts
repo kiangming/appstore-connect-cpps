@@ -1,9 +1,14 @@
 /**
- * IAP form validation (Q-IAP.h.3 lock — hybrid live checklist + Apple safety net).
+ * IAP form validation (IAP.o.6a — Manager Apple workflow alignment).
  *
- * Six prerequisites surfaced as a live checklist on the form. Submit button
- * enables only when all six are green. Apple-side validation (the safety net)
- * still applies at submit time and any 4xx response is surfaced via toast.
+ * Two-stage Apple workflow:
+ *   • Group A — Create on Apple (5 items): refName + productId + type + tier + ≥1 localization
+ *   • Group B — Additional for Submit (1 item): screenshot
+ *
+ * The single-IAP form gates the "Create on Apple" button on Group A.
+ * The list-page "Submit Selected" flow uses Apple's GET state as source of
+ * truth — local Group B is informational only (Apple may flip MISSING_METADATA
+ * even with screenshot if other Apple-side requirements miss).
  */
 
 import type { InAppPurchaseType } from "@/types/iap-management/apple";
@@ -29,13 +34,6 @@ export interface IapFormState {
   screenshot_filename: string | null;
 }
 
-export interface ChecklistItem {
-  key: ChecklistKey;
-  label: string;
-  passed: boolean;
-  detail?: string;
-}
-
 export type ChecklistKey =
   | "reference_name"
   | "product_id"
@@ -44,11 +42,29 @@ export type ChecklistKey =
   | "localization"
   | "screenshot";
 
+export interface ChecklistItem {
+  key: ChecklistKey;
+  label: string;
+  passed: boolean;
+  detail?: string;
+}
+
 export interface ChecklistState {
   items: ChecklistItem[];
-  /** Total green count (0..6). Submit button enables iff allPassed. */
   allPassed: boolean;
   passedCount: number;
+}
+
+export interface GroupedChecklistState {
+  /** Group A — 5 prerequisites for Create on Apple. */
+  createItems: ChecklistItem[];
+  /** Group B — additional prerequisites for Submit (screenshot, currently 1 item). */
+  submitOnlyItems: ChecklistItem[];
+  createReady: boolean;
+  /** True iff every Group A and Group B item passes. */
+  submitReady: boolean;
+  createPassedCount: number;
+  submitPassedCount: number;
 }
 
 export function filledLocalizationCount(
@@ -61,10 +77,9 @@ export function filledLocalizationCount(
   return n;
 }
 
-export function validateIapFormState(form: IapFormState): ChecklistState {
+function buildCreateItems(form: IapFormState): ChecklistItem[] {
   const items: ChecklistItem[] = [];
 
-  // 1. Reference name
   const refName = form.reference_name.trim();
   items.push({
     key: "reference_name",
@@ -78,7 +93,6 @@ export function validateIapFormState(form: IapFormState): ChecklistState {
           : undefined,
   });
 
-  // 2. Product ID
   const productId = form.product_id.trim();
   items.push({
     key: "product_id",
@@ -92,7 +106,6 @@ export function validateIapFormState(form: IapFormState): ChecklistState {
           : undefined,
   });
 
-  // 3. Type
   items.push({
     key: "type",
     label: "Type assigned",
@@ -100,7 +113,6 @@ export function validateIapFormState(form: IapFormState): ChecklistState {
     detail: form.type === "" ? "required" : undefined,
   });
 
-  // 4. Pricing tier
   items.push({
     key: "tier",
     label: "Pricing tier set",
@@ -108,7 +120,6 @@ export function validateIapFormState(form: IapFormState): ChecklistState {
     detail: !form.tier_id ? "required" : undefined,
   });
 
-  // 5. ≥1 localization filled (both Display Name + Description)
   const filledCount = filledLocalizationCount(form.localizations);
   items.push({
     key: "localization",
@@ -117,19 +128,67 @@ export function validateIapFormState(form: IapFormState): ChecklistState {
     detail: filledCount > 0 ? `${filledCount} filled` : "required",
   });
 
-  // 6. Screenshot
-  items.push({
-    key: "screenshot",
-    label: "Review screenshot uploaded",
-    passed: form.screenshot_filename !== null && form.screenshot_filename !== "",
-    detail: form.screenshot_filename ? undefined : "required",
-  });
+  return items;
+}
 
+function buildSubmitOnlyItems(form: IapFormState): ChecklistItem[] {
+  return [
+    {
+      key: "screenshot",
+      label: "Review screenshot uploaded",
+      passed:
+        form.screenshot_filename !== null && form.screenshot_filename !== "",
+      detail: form.screenshot_filename ? undefined : "required",
+    },
+  ];
+}
+
+function toState(items: ChecklistItem[]): ChecklistState {
   const passedCount = items.filter((i) => i.passed).length;
   return {
     items,
     allPassed: passedCount === items.length,
     passedCount,
+  };
+}
+
+/**
+ * Group A — minimum prerequisites for "Create on Apple". Five items;
+ * screenshot deliberately excluded — Apple accepts IAP creation without it
+ * and reports MISSING_METADATA on the resulting resource.
+ */
+export function validateIapFormForCreate(form: IapFormState): ChecklistState {
+  return toState(buildCreateItems(form));
+}
+
+/**
+ * Group A + B — full prerequisite set for Submit for Apple Review. Six items.
+ * Used for read-only display: the actual submit gate is Apple's per-IAP state
+ * (READY_TO_SUBMIT vs MISSING_METADATA), surfaced via the list-page batch flow.
+ */
+export function validateIapFormForSubmit(form: IapFormState): ChecklistState {
+  return toState([...buildCreateItems(form), ...buildSubmitOnlyItems(form)]);
+}
+
+/**
+ * Grouped view for the SubmitChecklist component. Renders Group A and Group B
+ * as visually distinct sections (5/5 Create-ready · 1/1 additional for review).
+ */
+export function validateIapFormGrouped(
+  form: IapFormState,
+): GroupedChecklistState {
+  const createItems = buildCreateItems(form);
+  const submitOnlyItems = buildSubmitOnlyItems(form);
+  const createPassedCount = createItems.filter((i) => i.passed).length;
+  const submitPassedCount = submitOnlyItems.filter((i) => i.passed).length;
+  const createReady = createPassedCount === createItems.length;
+  return {
+    createItems,
+    submitOnlyItems,
+    createReady,
+    submitReady: createReady && submitPassedCount === submitOnlyItems.length,
+    createPassedCount,
+    submitPassedCount,
   };
 }
 

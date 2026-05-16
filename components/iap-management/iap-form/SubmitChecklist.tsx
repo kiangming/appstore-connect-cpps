@@ -1,34 +1,70 @@
 "use client";
 
 import { Check, AlertCircle } from "lucide-react";
-import type { ChecklistState } from "@/lib/iap-management/validation";
+import type {
+  ChecklistItem,
+  GroupedChecklistState,
+} from "@/lib/iap-management/validation";
 
 interface Props {
-  state: ChecklistState;
+  state: GroupedChecklistState;
 }
 
 /**
- * Live submit-prerequisite checklist (Q-IAP.h.3). Six items render in fixed
- * order matching validation.ts. Submit button (rendered by the parent) is
- * gated by `state.allPassed`.
+ * Grouped live checklist (IAP.o.6a Manager Apple workflow alignment).
+ *
+ * Two-stage layout:
+ *   • Group A — required for Create on Apple (5 items)
+ *   • Group B — additional for Submit for Apple Review (currently 1: screenshot)
+ *
+ * Apple's per-IAP state (READY_TO_SUBMIT vs MISSING_METADATA) remains the
+ * authoritative gate for the list-page Submit Selected flow; this checklist is
+ * the local hint surfacing what Apple is likely to require.
  */
 export function SubmitChecklist({ state }: Props) {
   return (
-    <div className="border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-900 p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400 dark:text-slate-500">
-          Submit checklist
+    <div className="border border-slate-200 dark:border-slate-800 rounded-lg bg-white dark:bg-slate-900 p-4 space-y-4">
+      <Group
+        title="Create on Apple"
+        subtitle={`${state.createPassedCount} / ${state.createItems.length} ready`}
+        allPassed={state.createReady}
+        items={state.createItems}
+      />
+      <div className="border-t border-slate-100 dark:border-slate-800" />
+      <Group
+        title="Additional for Submit"
+        subtitle={`${state.submitPassedCount} / ${state.submitOnlyItems.length} extra`}
+        allPassed={state.submitReady}
+        items={state.submitOnlyItems}
+      />
+    </div>
+  );
+}
+
+interface GroupProps {
+  title: string;
+  subtitle: string;
+  allPassed: boolean;
+  items: ChecklistItem[];
+}
+
+function Group({ title, subtitle, allPassed, items }: GroupProps) {
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">
+          {title}
         </h3>
         <span
           className={`text-xs font-medium ${
-            state.allPassed ? "text-emerald-600" : "text-slate-500 dark:text-slate-400 dark:text-slate-500"
+            allPassed ? "text-emerald-600" : "text-slate-500 dark:text-slate-400"
           }`}
         >
-          {state.passedCount} / {state.items.length} met
+          {subtitle}
         </span>
       </div>
       <ul className="space-y-1.5">
-        {state.items.map((item) => (
+        {items.map((item) => (
           <li key={item.key} className="flex items-start gap-2 text-xs">
             <span
               className={`flex-shrink-0 mt-0.5 w-4 h-4 rounded-full flex items-center justify-center ${
@@ -45,7 +81,9 @@ export function SubmitChecklist({ state }: Props) {
             </span>
             <span
               className={`${
-                item.passed ? "text-slate-700 dark:text-slate-300" : "text-slate-500 dark:text-slate-400 dark:text-slate-500"
+                item.passed
+                  ? "text-slate-700 dark:text-slate-300"
+                  : "text-slate-500 dark:text-slate-400"
               } flex-1`}
             >
               {item.label}
