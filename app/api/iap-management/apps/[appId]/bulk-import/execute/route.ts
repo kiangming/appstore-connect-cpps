@@ -9,17 +9,16 @@
  * Per-IAP steps (CREATE path):
  *   1. POST /v2/inAppPurchases — create shell on Apple.
  *   2. POST /v1/inAppPurchaseLocalizations — one per filled locale.
- *   3. POST /v1/inAppPurchaseAppStoreReviewScreenshots reserve + PUT chunks + PATCH
- *      confirm (deferral 1 absorbed).
- *   4. (optional, when submit_on_create=true) POST /v1/inAppPurchaseSubmissions.
- *   5. Insert iap_mgmt.iaps + iap_localizations + iap_screenshots audit rows.
+ *   3. POST /v1/inAppPurchasePriceSchedules (IAP.o.9a) — map local tier_id
+ *      to Apple price-point id and set the manual price (non-fatal).
+ *   4. POST /v1/inAppPurchaseAppStoreReviewScreenshots reserve + PUT chunks
+ *      + PATCH confirm (deferral 1 absorbed).
+ *   5. (optional, when submit_on_create=true) POST /v1/inAppPurchaseSubmissions.
+ *   6. Insert iap_mgmt.iaps + iap_localizations + iap_screenshots audit rows.
  *
- * OVERWRITE path: PATCH attributes + DELETE existing localizations + POST new.
- * Screenshot is NOT replaced on overwrite (deferred — Manager uses Apple
- * Connect UI to swap the screenshot of an existing approved IAP).
- *
- * Pricing schedule (deferral 2): wired into CREATE path only — Apple Connect
- * defaults apply on OVERWRITE since price changes mid-import are atypical.
+ * OVERWRITE path: PATCH attributes + DELETE existing localizations + POST new
+ * + (IAP.o.9a) re-set price schedule when the resolved tier differs from the
+ * locally cached row. Screenshot replace path runs unchanged (IAP.o.8a).
  *
  * The response is the full result summary; no polling endpoint in v1.
  */
@@ -45,6 +44,10 @@ import {
   updateInAppPurchase,
 } from "@/lib/iap-management/apple/client";
 import { replaceScreenshotOnApple } from "@/lib/iap-management/apple/screenshot-upload";
+import {
+  applyPricingSchedule,
+  type PricingOutcome,
+} from "@/lib/iap-management/apple/pricing-orchestration";
 import {
   withRetry,
   AppleApiError,
@@ -89,6 +92,12 @@ interface PerIapResult {
     | "no-file"
     | "delete-locked"
     | "failed";
+  /** IAP.o.9a — set when pricing schedule was applied. False covers both the
+   *  "no tier resolved" and "Apple-side mismatch" paths; `pricing_outcome`
+   *  narrows the reason for UI surface + audit. */
+  price_schedule_set?: boolean;
+  pricing_outcome?: PricingOutcome["kind"];
+  pricing_error?: string;
   submitted?: boolean;
   stage?: string;
   error?: string;
@@ -231,8 +240,32 @@ export async function POST(
     }),
   };
 
-  // ── Open audit batch ────────────────────────────────────────────────────
   const db = iapDb();
+
+  // Pre-load existing local tier_id per productId so the OVERWRITE pricing
+  // conditional can compare without an extra round-trip per row (IAP.o.9a).
+  // Failing this query is non-fatal — overwrite pricing then re-applies
+  // unconditionally, which is idempotent on Apple's side (replace-all POST).
+  let existingTierByProductId: Map<string, string | null> = new Map();
+  try {
+    const existingLocal = await db
+      .from("iaps")
+      .select("product_id, tier_id")
+      .eq("app_id", internalAppId);
+    if (existingLocal.data) {
+      existingTierByProductId = new Map(
+        (existingLocal.data as Array<{ product_id: string; tier_id: string | null }>)
+          .map((row) => [row.product_id, row.tier_id]),
+      );
+    }
+  } catch (err) {
+    await log(
+      "iap-bulk-execute",
+      `existing tier cache lookup failed (non-fatal): ${err instanceof Error ? err.message : err}`,
+      "WARN",
+    );
+  }
+
   const batchIns = await db
     .from("import_batches")
     .insert({
@@ -263,6 +296,7 @@ export async function POST(
       screenshots,
       submit: Boolean(config.submit_on_create),
       existingByProductId,
+      existingTierByProductId,
       appleAppId: ctx.params.appId,
       internalAppId,
       batchId,
@@ -317,6 +351,10 @@ export async function POST(
 interface OrchestrateArgs {
   creds: AscCredentials;
   decision: ConflictDecision;
+  /** Pre-loaded local tier_id keyed by product_id (IAP.o.9a OVERWRITE
+   *  conditional). Missing key = no local cache available, treat as "differs"
+   *  and re-apply unconditionally (idempotent on Apple). */
+  existingTierByProductId: Map<string, string | null>;
   screenshots: Map<string, File>;
   submit: boolean;
   existingByProductId: Map<string, string>;
@@ -407,7 +445,17 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
-  // 3. Screenshot 3-step (deferral 1 absorbed). Walk screenshot files;
+  // 3. Pricing schedule (IAP.o.9a). Map local tier_id → Apple price-point id
+  // and POST the schedule. Non-fatal — Manager can fix in Apple Connect if
+  // the local tier doesn't map (ALT_* edge case).
+  const pricing = await applyPricingSchedule({
+    creds,
+    appleIapId,
+    localTierId: decision.resolved_tier_id ?? null,
+  });
+  await recordPricingAudit(args, item.product_id, appleIapId, pricing);
+
+  // 4. Screenshot 3-step (deferral 1 absorbed). Walk screenshot files;
   //    first filename matching productId (literal OR dots→underscores) wins.
   let screenshotOk = false;
   let screenshotFile: File | undefined;
@@ -448,7 +496,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
-  // 4. Optional submit
+  // 5. Optional submit
   let submitted = false;
   if (submit && screenshotOk && failedLocales.length === 0) {
     try {
@@ -463,6 +511,11 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
         apple_iap_id: appleIapId,
         failed_locales: failedLocales,
         screenshot_uploaded: screenshotOk,
+        price_schedule_set: pricing.kind === "set",
+        pricing_outcome: pricing.kind,
+        ...(pricing.kind === "failed-lookup" || pricing.kind === "failed-set"
+          ? { pricing_error: pricing.error }
+          : {}),
         error: errMsg(err),
       });
     }
@@ -476,6 +529,11 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     failed_locales: failedLocales,
     screenshot_uploaded: screenshotOk,
     submitted,
+    price_schedule_set: pricing.kind === "set",
+    pricing_outcome: pricing.kind,
+    ...(pricing.kind === "failed-lookup" || pricing.kind === "failed-set"
+      ? { pricing_error: pricing.error }
+      : {}),
   });
 }
 
@@ -603,6 +661,22 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
+  // Pricing schedule conditional (IAP.o.9a). Only re-apply when the resolved
+  // tier differs from the locally cached row — skips work when the import
+  // didn't change pricing intent. Missing-from-cache is treated as "differs"
+  // so the pricing stays in sync even if the local cache is incomplete.
+  const resolvedTier = decision.resolved_tier_id ?? null;
+  const cachedTier = args.existingTierByProductId.get(item.product_id) ?? null;
+  let pricing: PricingOutcome | null = null;
+  if (resolvedTier && resolvedTier !== cachedTier) {
+    pricing = await applyPricingSchedule({
+      creds,
+      appleIapId,
+      localTierId: resolvedTier,
+    });
+    await recordPricingAudit(args, item.product_id, appleIapId, pricing);
+  }
+
   const overwriteResult: PerIapResult = {
     product_id: item.product_id,
     disposition: "OVERWRITE",
@@ -611,6 +685,15 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     failed_locales: failedLocales,
     screenshot_uploaded: screenshotOk,
     screenshot_note: screenshotNote,
+    ...(pricing
+      ? {
+          price_schedule_set: pricing.kind === "set",
+          pricing_outcome: pricing.kind,
+          ...(pricing.kind === "failed-lookup" || pricing.kind === "failed-set"
+            ? { pricing_error: pricing.error }
+            : {}),
+        }
+      : {}),
   };
 
   // Dedicated audit row for the screenshot replace outcome so Manager-side
@@ -712,4 +795,38 @@ function errMsg(err: unknown): string {
     return `${err.status}: ${err.body.slice(0, 500)}`;
   }
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Append a SET_PRICE_SCHEDULE row to `actions_log` for each pricing attempt
+ * (success or non-fatal failure). Keeps the audit timeline queryable per IAP
+ * without re-parsing the BULK_IMPORT_CREATE payload.
+ */
+async function recordPricingAudit(
+  args: OrchestrateArgs,
+  productId: string,
+  appleIapId: string,
+  outcome: PricingOutcome,
+): Promise<void> {
+  await iapDb().from("actions_log").insert({
+    batch_id: args.batchId,
+    actor: args.actor,
+    action_type: "SET_PRICE_SCHEDULE",
+    payload: {
+      product_id: productId,
+      apple_iap_id: appleIapId,
+      app_id: args.internalAppId,
+      tier_id: args.decision.resolved_tier_id ?? null,
+      outcome: outcome.kind,
+      price_point_id:
+        outcome.kind === "set" || outcome.kind === "failed-set"
+          ? outcome.price_point_id
+          : null,
+      schedule_id: outcome.kind === "set" ? outcome.schedule_id : null,
+      error:
+        outcome.kind === "failed-lookup" || outcome.kind === "failed-set"
+          ? outcome.error
+          : null,
+    },
+  });
 }

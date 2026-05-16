@@ -6,9 +6,11 @@
  * Pushes a local-only draft IAP up to Apple Connect:
  *   1. POST /v2/inAppPurchases  — create shell, capture apple_iap_id.
  *   2. POST /v1/inAppPurchaseLocalizations — one per filled locale.
- *   3. (optional) Screenshot 3-step via lib/iap-management/apple/screenshot-upload.
- *   4. GET /v2/inAppPurchases/{id} — fetch authoritative state.
- *   5. Mirror apple_iap_id + state + synced_at into iap_mgmt.iaps.
+ *   3. POST /v1/inAppPurchasePriceSchedules (IAP.o.9a) — map local tier_id
+ *      to Apple price-point id and set the manual price (non-fatal).
+ *   4. (optional) Screenshot 3-step via lib/iap-management/apple/screenshot-upload.
+ *   5. GET /v2/inAppPurchases/{id} — fetch authoritative state.
+ *   6. Mirror apple_iap_id + state + synced_at into iap_mgmt.iaps.
  *
  * Screenshot deliberately optional — Apple will return MISSING_METADATA when
  * absent and the Manager fixes it later via the IAP detail page. Submit for
@@ -41,6 +43,7 @@ import {
   AppleApiError,
 } from "@/lib/iap-management/apple/fetch";
 import { uploadScreenshotToApple } from "@/lib/iap-management/apple/screenshot-upload";
+import { applyPricingSchedule } from "@/lib/iap-management/apple/pricing-orchestration";
 import {
   validateIapFormForCreate,
   type IapFormState,
@@ -60,6 +63,14 @@ interface SuccessResponse {
   failed_locales: string[];
   screenshot_uploaded: boolean;
   screenshot_error?: string;
+  price_schedule_set: boolean;
+  price_schedule_note?:
+    | "set"
+    | "skipped-no-tier"
+    | "skipped-no-match"
+    | "failed-lookup"
+    | "failed-set";
+  price_schedule_error?: string;
 }
 
 export async function POST(
@@ -228,7 +239,54 @@ export async function POST(
     }
   }
 
-  // 10. OPTIONAL screenshot 3-step
+  // 10. Pricing schedule (IAP.o.9a). Manager workflow: set Apple's manual
+  // price immediately after CREATE so the IAP doesn't stay stuck at
+  // MISSING_METADATA awaiting a manual price set on Apple Connect. Non-fatal
+  // — Manager can fix in App Store Connect if the local tier doesn't map to
+  // an Apple priceTier (rare, surfaces only for ALT_* tiers where Apple's
+  // representation may differ).
+  const pricing = await applyPricingSchedule({
+    creds,
+    appleIapId,
+    localTierId: form.tier_id,
+  });
+  const priceScheduleSet = pricing.kind === "set";
+  let priceScheduleError: string | undefined;
+  if (pricing.kind === "failed-lookup" || pricing.kind === "failed-set") {
+    priceScheduleError = pricing.error;
+    await log(
+      "iap-create-on-apple",
+      `pricing ${pricing.kind} iap=${iapId} tier=${form.tier_id}: ${pricing.error}`,
+      "WARN",
+    );
+  } else if (pricing.kind === "skipped-no-match") {
+    await log(
+      "iap-create-on-apple",
+      `pricing no-match iap=${iapId} tier=${form.tier_id}`,
+      "WARN",
+    );
+  }
+  await db.from("actions_log").insert({
+    iap_id: iapId,
+    actor,
+    action_type: "SET_PRICE_SCHEDULE",
+    payload: {
+      apple_iap_id: appleIapId,
+      tier_id: form.tier_id,
+      outcome: pricing.kind,
+      price_point_id:
+        pricing.kind === "set" || pricing.kind === "failed-set"
+          ? pricing.price_point_id
+          : null,
+      schedule_id: pricing.kind === "set" ? pricing.schedule_id : null,
+      error:
+        pricing.kind === "failed-lookup" || pricing.kind === "failed-set"
+          ? pricing.error
+          : null,
+    },
+  });
+
+  // 11. OPTIONAL screenshot 3-step
   let screenshotUploaded = false;
   let screenshotError: string | undefined;
   if (screenshot) {
@@ -257,7 +315,7 @@ export async function POST(
     }
   }
 
-  // 11. GET authoritative Apple state
+  // 12. GET authoritative Apple state
   let finalState = "MISSING_METADATA";
   try {
     const fresh = await withRetry(() => getInAppPurchase(creds, appleIapId));
@@ -278,7 +336,7 @@ export async function POST(
     })
     .eq("id", iapId);
 
-  // 12. Audit log
+  // 13. Audit log
   await db.from("actions_log").insert({
     iap_id: iapId,
     actor,
@@ -300,6 +358,9 @@ export async function POST(
     failed_locales: failedLocales,
     screenshot_uploaded: screenshotUploaded,
     ...(screenshotError ? { screenshot_error: screenshotError } : {}),
+    price_schedule_set: priceScheduleSet,
+    price_schedule_note: pricing.kind,
+    ...(priceScheduleError ? { price_schedule_error: priceScheduleError } : {}),
   };
   return NextResponse.json(response);
 }

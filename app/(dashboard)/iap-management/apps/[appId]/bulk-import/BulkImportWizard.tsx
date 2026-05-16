@@ -76,6 +76,16 @@ interface ExecuteResult {
       | "no-file"
       | "delete-locked"
       | "failed";
+    /** IAP.o.9a — pricing schedule outcome (CREATE always, OVERWRITE only
+     *  when resolved tier differs from cached). */
+    price_schedule_set?: boolean;
+    pricing_outcome?:
+      | "set"
+      | "skipped-no-tier"
+      | "skipped-no-match"
+      | "failed-lookup"
+      | "failed-set";
+    pricing_error?: string;
     submitted?: boolean;
   }>;
 }
@@ -1034,6 +1044,7 @@ function Step4Result({
               <th className="px-3 py-2 w-24">Status</th>
               <th className="px-3 py-2 w-24">Disposition</th>
               <th className="px-3 py-2 w-32">Outcome</th>
+              <th className="px-3 py-2 w-28">Price</th>
               <th className="px-3 py-2">Notes</th>
             </tr>
           </thead>
@@ -1059,6 +1070,9 @@ function Step4Result({
                   </td>
                   <td className="px-3 py-2">
                     <OutcomeBadge result={r} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <PriceBadge result={r} />
                   </td>
                   <td className="px-3 py-2 text-[11px] text-slate-500">
                     {r.error
@@ -1137,6 +1151,68 @@ function OutcomeBadge({
   return (
     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-slate-100 text-slate-600 border-slate-200">
       Created only
+    </span>
+  );
+}
+
+/**
+ * IAP.o.9a — surfaces the pricing schedule outcome per row. The OVERWRITE
+ * path may have `pricing_outcome` absent (cached tier matched, no re-apply
+ * needed) — we render a neutral "Unchanged" pill so Manager isn't left
+ * guessing whether pricing was attempted.
+ */
+function PriceBadge({
+  result,
+}: {
+  result: ExecuteResult["results"][number];
+}) {
+  if (result.status !== "SUCCESS") {
+    return <span className="text-[10px] text-slate-300">—</span>;
+  }
+  const outcome = result.pricing_outcome;
+  if (!outcome) {
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-slate-50 text-slate-500 border-slate-200"
+        title="Local tier matches Apple — no re-apply needed."
+      >
+        Unchanged
+      </span>
+    );
+  }
+  if (outcome === "set") {
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-emerald-50 text-emerald-700 border-emerald-200">
+        Price set
+      </span>
+    );
+  }
+  if (outcome === "skipped-no-tier") {
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-slate-100 text-slate-600 border-slate-200"
+        title="Row had no resolved tier — Apple defaults apply."
+      >
+        No tier
+      </span>
+    );
+  }
+  if (outcome === "skipped-no-match") {
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-amber-50 text-amber-700 border-amber-200"
+        title="Local tier didn't map to an Apple price point — set manually in App Store Connect."
+      >
+        No match
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-red-50 text-red-700 border-red-200"
+      title={result.pricing_error ?? "Apple rejected the price schedule."}
+    >
+      Price failed
     </span>
   );
 }

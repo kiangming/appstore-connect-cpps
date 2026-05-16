@@ -167,6 +167,14 @@ export function IapForm({
             failed_locales: string[];
             screenshot_uploaded: boolean;
             screenshot_error?: string;
+            price_schedule_set?: boolean;
+            price_schedule_note?:
+              | "set"
+              | "skipped-no-tier"
+              | "skipped-no-match"
+              | "failed-lookup"
+              | "failed-set";
+            price_schedule_error?: string;
           }
         | { error: string };
 
@@ -182,7 +190,20 @@ export function IapForm({
         if (screenshotFile && !data.screenshot_uploaded) {
           parts.push("screenshot upload failed");
         }
-        if (data.failed_locales.length === 0 && (!screenshotFile || data.screenshot_uploaded)) {
+        const pricingFailed =
+          data.price_schedule_note === "skipped-no-match" ||
+          data.price_schedule_note === "failed-lookup" ||
+          data.price_schedule_note === "failed-set";
+        if (data.price_schedule_set) {
+          parts.push("price set");
+        } else if (pricingFailed) {
+          parts.push("price not set — check App Store Connect");
+        }
+        const allClean =
+          data.failed_locales.length === 0 &&
+          (!screenshotFile || data.screenshot_uploaded) &&
+          !pricingFailed;
+        if (allClean) {
           toast.success(`Created on Apple · ${parts.join(" · ")}`);
         } else {
           toast.warning(`Created on Apple with warnings · ${parts.join(" · ")}`);
