@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Send,
   Loader2,
+  ChevronRight,
 } from "lucide-react";
 import type {
   InAppPurchase,
@@ -22,7 +23,10 @@ import type {
 } from "@/types/iap-management/apple";
 import type { IapDbRow } from "@/lib/iap-management/queries/iaps";
 import { useAppIcon, getAvatarColor, getInitials } from "@/lib/use-app-icon";
+import { computePageMeta } from "@/lib/iap-management/pagination/page-slice";
 import { SubmitBatchModal } from "@/components/iap-management/SubmitBatchModal";
+
+const PAGE_SIZE = 100;
 
 interface Props {
   appId: string;
@@ -117,6 +121,7 @@ export function IapListClient({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [modalOpen, setModalOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [page, setPage] = useState(1);
 
   const allStates = useMemo(() => {
     const s = new Set<string>();
@@ -141,6 +146,23 @@ export function IapListClient({
       return true;
     });
   }, [iaps, query, typeFilter, stateFilter]);
+
+  // IAP.o.7b — Filter changes reset to page 1. computePageMeta clamps if
+  // page > totalPages, but resetting on filter change gives the Manager a
+  // predictable "see the top of the new result set" experience.
+  useEffect(() => {
+    setPage(1);
+  }, [query, typeFilter, stateFilter]);
+
+  const pageMeta = useMemo(
+    () => computePageMeta(filtered.length, page, PAGE_SIZE),
+    [filtered.length, page],
+  );
+
+  const paginated = useMemo(
+    () => filtered.slice(pageMeta.startIndex, pageMeta.endIndex),
+    [filtered, pageMeta.startIndex, pageMeta.endIndex],
+  );
 
   // Internal UUIDs corresponding to the currently-selected Apple-side IAPs.
   const selectedInternalIds = useMemo(() => {
@@ -422,7 +444,7 @@ export function IapListClient({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((iap) => {
+              {paginated.map((iap) => {
                 const eligible = Boolean(appleToInternal[iap.id]);
                 const isSelected = selected.has(iap.id);
                 return (
@@ -469,6 +491,60 @@ export function IapListClient({
               })}
             </tbody>
           </table>
+          {/* Pagination footer — IAP.o.7b. Hidden when ≤1 page so small
+              lists stay visually clean (Manager apps with <100 IAPs). */}
+          {pageMeta.totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-2.5 border-t border-slate-200 bg-slate-50">
+              <p className="text-xs text-slate-500">
+                Showing{" "}
+                <span className="font-medium text-slate-700">
+                  {pageMeta.displayStart}–{pageMeta.displayEnd}
+                </span>{" "}
+                of{" "}
+                <span className="font-medium text-slate-700">{filtered.length}</span>
+                {filtered.length !== iaps.length && (
+                  <>
+                    {" "}
+                    <span className="text-slate-400">
+                      (filtered from {iaps.length})
+                    </span>
+                  </>
+                )}
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={pageMeta.page <= 1}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                  Prev
+                </button>
+                <span className="text-xs text-slate-500 tabular-nums">
+                  Page{" "}
+                  <span className="font-medium text-slate-700">{pageMeta.page}</span>{" "}
+                  of{" "}
+                  <span className="font-medium text-slate-700">
+                    {pageMeta.totalPages}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPage((p) => Math.min(pageMeta.totalPages, p + 1))
+                  }
+                  disabled={pageMeta.page >= pageMeta.totalPages}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
+                  aria-label="Next page"
+                >
+                  Next
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
