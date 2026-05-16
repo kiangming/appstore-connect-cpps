@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useDropzone } from "react-dropzone";
 import { toast } from "sonner";
@@ -14,6 +14,8 @@ import {
   ArrowRight,
   ArrowLeft,
   Play,
+  Info,
+  RefreshCw,
 } from "lucide-react";
 import { parseIapItemsXlsx } from "@/lib/iap-management/parsers/iap-items";
 import type { ParsedIapItem, IapItemsParseResult } from "@/lib/iap-management/parsers/iap-items";
@@ -29,6 +31,10 @@ import {
   type ResolveResult,
 } from "@/lib/iap-management/bulk-import/conflict-resolution";
 import { computeWillSubmitCount } from "@/lib/iap-management/bulk-import/will-submit";
+import {
+  bulkImportToastSeverity,
+  hasNonRenewingSub,
+} from "@/lib/iap-management/bulk-import/result-hints";
 import {
   formatTierWithPrice,
   type UsdTierEntry,
@@ -157,8 +163,11 @@ export function BulkImportWizard({
         setResult(data);
         setStep(4);
         const msg = `${data.succeeded} created · ${data.skipped} skipped · ${data.failed} failed`;
-        if (data.failed === 0) toast.success(msg);
-        else toast.warning(msg);
+        // IAP.o.7c — failed rows now escalate to error toast (previously
+        // .warning, which Manager missed during MV30). Success path
+        // unchanged when no rows failed.
+        if (bulkImportToastSeverity(data) === "success") toast.success(msg);
+        else toast.error(msg);
         router.refresh();
       }
     } catch (err) {
@@ -255,7 +264,12 @@ export function BulkImportWizard({
       )}
 
       {step === 4 && result && (
-        <Step4Result result={result} appId={appId} appName={appName} />
+        <Step4Result
+          result={result}
+          appId={appId}
+          appName={appName}
+          batchHasNrs={parsed ? hasNonRenewingSub(parsed.items) : false}
+        />
       )}
 
       {/* Navigation */}
@@ -891,22 +905,102 @@ function Step4Result({
   result,
   appId,
   appName,
+  batchHasNrs,
 }: {
   result: ExecuteResult;
   appId: string;
   appName: string;
+  batchHasNrs: boolean;
 }) {
+  // IAP.o.7c — auto-scroll to the first ERROR row when the batch had any
+  // failures. Manager MV30 surfaced that warning toasts + small "Failed"
+  // tally counters are easy to miss; the table is 420px scrollable so
+  // failures past the fold went unnoticed. Scroll-into-view of the first
+  // failure row + the escalated error toast together make failures
+  // unmissable.
+  const firstErrorRef = useRef<HTMLTableRowElement | null>(null);
+  useEffect(() => {
+    if (result.failed > 0 && firstErrorRef.current) {
+      firstErrorRef.current.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [result.failed]);
+
+  const [refreshing, setRefreshing] = useState(false);
+  async function handleRefresh() {
+    setRefreshing(true);
+    try {
+      const res = await fetch(
+        `/api/iap-management/apps/${appId}/iaps/sync-states`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        toast.error(data.error ?? `Refresh failed (${res.status})`);
+        return;
+      }
+      const data = (await res.json()) as {
+        synced_count: number;
+        errors: string[];
+      };
+      if (data.errors && data.errors.length > 0) {
+        toast.warning(`Synced ${data.synced_count} · ${data.errors.length} error(s).`);
+      } else {
+        toast.success(`Refreshed ${data.synced_count} IAP(s) from Apple.`);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  let firstErrorSeen = false;
+
   return (
     <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
-      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-        Step 4 — Result
-      </h2>
-      <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-        Batch{" "}
-        <span className="font-mono text-slate-700">{result.batch_id}</span>{" "}
-        completed. Audit rows written to{" "}
-        <span className="font-mono">iap_mgmt.actions_log</span>.
-      </p>
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <div className="min-w-0">
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
+            Step 4 — Result
+          </h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Batch{" "}
+            <span className="font-mono text-slate-700">{result.batch_id}</span>{" "}
+            completed. Audit rows written to{" "}
+            <span className="font-mono">iap_mgmt.actions_log</span>.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition disabled:opacity-50 flex-shrink-0"
+          title="Re-fetch state from Apple to verify ground truth"
+        >
+          {refreshing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <RefreshCw className="h-3.5 w-3.5" />
+          )}
+          Refresh from Apple
+        </button>
+      </div>
+
+      {batchHasNrs && result.succeeded > 0 && (
+        <div
+          role="note"
+          className="mb-4 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900"
+        >
+          <Info className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <p>
+            <span className="font-medium">NON_RENEWING_SUBSCRIPTION items</span>{" "}
+            appear in Apple Connect&apos;s{" "}
+            <span className="font-medium">Subscriptions</span> tab, not the{" "}
+            <span className="font-medium">In-App Purchases</span> tab. If
+            successful rows look missing in App Store Connect, check both tabs.
+          </p>
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-3 mb-4">
         <Tally label="Succeeded" value={result.succeeded} color="emerald" />
@@ -926,31 +1020,40 @@ function Step4Result({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-            {result.results.map((r) => (
-              <tr key={r.product_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                <td className="px-3 py-2 font-mono text-[11px] text-slate-700">
-                  {r.product_id}
-                </td>
-                <td className="px-3 py-2">
-                  <StatusBadge status={r.status} />
-                </td>
-                <td className="px-3 py-2 text-[11px] text-slate-600">
-                  {r.disposition.toLowerCase()}
-                </td>
-                <td className="px-3 py-2">
-                  <OutcomeBadge result={r} />
-                </td>
-                <td className="px-3 py-2 text-[11px] text-slate-500">
-                  {r.error
-                    ? `${r.stage ?? ""}: ${r.error.slice(0, 120)}`
-                    : r.failed_locales && r.failed_locales.length > 0
-                      ? `Failed locales: ${r.failed_locales.join(", ")}`
-                      : r.apple_iap_id
-                        ? `apple_iap_id ${r.apple_iap_id.slice(0, 12)}…`
-                        : "—"}
-                </td>
-              </tr>
-            ))}
+            {result.results.map((r) => {
+              const isError = r.status === "ERROR";
+              const attachRef = isError && !firstErrorSeen;
+              if (attachRef) firstErrorSeen = true;
+              return (
+                <tr
+                  key={r.product_id}
+                  ref={attachRef ? firstErrorRef : undefined}
+                  className="hover:bg-slate-50 dark:hover:bg-slate-800/50"
+                >
+                  <td className="px-3 py-2 font-mono text-[11px] text-slate-700">
+                    {r.product_id}
+                  </td>
+                  <td className="px-3 py-2">
+                    <StatusBadge status={r.status} />
+                  </td>
+                  <td className="px-3 py-2 text-[11px] text-slate-600">
+                    {r.disposition.toLowerCase()}
+                  </td>
+                  <td className="px-3 py-2">
+                    <OutcomeBadge result={r} />
+                  </td>
+                  <td className="px-3 py-2 text-[11px] text-slate-500">
+                    {r.error
+                      ? `${r.stage ?? ""}: ${r.error.slice(0, 120)}`
+                      : r.failed_locales && r.failed_locales.length > 0
+                        ? `Failed locales: ${r.failed_locales.join(", ")}`
+                        : r.apple_iap_id
+                          ? `apple_iap_id ${r.apple_iap_id.slice(0, 12)}…`
+                          : "—"}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
