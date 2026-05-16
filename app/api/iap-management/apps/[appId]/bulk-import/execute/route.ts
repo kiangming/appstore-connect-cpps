@@ -286,6 +286,15 @@ export async function POST(
   }
   const batchId = (batchIns.data as { id: string }).id;
 
+  // Build tier_id → USA/USD customer_price lookup once (IAP.o.10a). Apple
+  // price-point matching switched from priceTier integer (volatile across
+  // Apple's 2024 numbering rollover) to customerPrice string — local USD is
+  // the canonical match key.
+  const usdPriceByTier = new Map<string, number>();
+  for (const t of usdTiers) {
+    usdPriceByTier.set(t.tier_id, t.customer_price);
+  }
+
   // ── Orchestrate per-IAP with bounded concurrency ────────────────────────
   const results: PerIapResult[] = await withConcurrency(
     resolved.decisions,
@@ -297,6 +306,7 @@ export async function POST(
       submit: Boolean(config.submit_on_create),
       existingByProductId,
       existingTierByProductId,
+      usdPriceByTier,
       appleAppId: ctx.params.appId,
       internalAppId,
       batchId,
@@ -355,6 +365,9 @@ interface OrchestrateArgs {
    *  conditional). Missing key = no local cache available, treat as "differs"
    *  and re-apply unconditionally (idempotent on Apple). */
   existingTierByProductId: Map<string, string | null>;
+  /** Pre-loaded tier_id → USA/USD customer_price (IAP.o.10a). Source of
+   *  truth for matching against Apple's price-point customerPrice attribute. */
+  usdPriceByTier: Map<string, number>;
   screenshots: Map<string, File>;
   submit: boolean;
   existingByProductId: Map<string, string>;
@@ -445,13 +458,16 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
-  // 3. Pricing schedule (IAP.o.9a). Map local tier_id → Apple price-point id
-  // and POST the schedule. Non-fatal — Manager can fix in Apple Connect if
-  // the local tier doesn't map (ALT_* edge case).
+  // 3. Pricing schedule (IAP.o.10a). Resolve tier_id → USA/USD customer
+  // price, then match against Apple's customerPrice attribute. Non-fatal —
+  // Manager fixes manually if the tier isn't in the local cache.
+  const resolvedTier = decision.resolved_tier_id ?? null;
+  const usdPrice = resolvedTier ? args.usdPriceByTier.get(resolvedTier) ?? null : null;
   const pricing = await applyPricingSchedule({
     creds,
     appleIapId,
-    localTierId: decision.resolved_tier_id ?? null,
+    localTierId: resolvedTier,
+    usdPrice,
   });
   await recordPricingAudit(args, item.product_id, appleIapId, pricing);
 
@@ -661,18 +677,21 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
-  // Pricing schedule conditional (IAP.o.9a). Only re-apply when the resolved
-  // tier differs from the locally cached row — skips work when the import
-  // didn't change pricing intent. Missing-from-cache is treated as "differs"
-  // so the pricing stays in sync even if the local cache is incomplete.
+  // Pricing schedule conditional (IAP.o.9a + IAP.o.10a). Only re-apply when
+  // the resolved tier differs from the locally cached row — skips work when
+  // the import didn't change pricing intent. Missing-from-cache is treated
+  // as "differs" so the pricing stays in sync even if the local cache is
+  // incomplete.
   const resolvedTier = decision.resolved_tier_id ?? null;
   const cachedTier = args.existingTierByProductId.get(item.product_id) ?? null;
   let pricing: PricingOutcome | null = null;
   if (resolvedTier && resolvedTier !== cachedTier) {
+    const usdPrice = args.usdPriceByTier.get(resolvedTier) ?? null;
     pricing = await applyPricingSchedule({
       creds,
       appleIapId,
       localTierId: resolvedTier,
+      usdPrice,
     });
     await recordPricingAudit(args, item.product_id, appleIapId, pricing);
   }
@@ -808,6 +827,7 @@ async function recordPricingAudit(
   appleIapId: string,
   outcome: PricingOutcome,
 ): Promise<void> {
+  const tierId = args.decision.resolved_tier_id ?? null;
   await iapDb().from("actions_log").insert({
     batch_id: args.batchId,
     actor: args.actor,
@@ -816,13 +836,18 @@ async function recordPricingAudit(
       product_id: productId,
       apple_iap_id: appleIapId,
       app_id: args.internalAppId,
-      tier_id: args.decision.resolved_tier_id ?? null,
+      tier_id: tierId,
+      usd_price: tierId ? args.usdPriceByTier.get(tierId) ?? null : null,
       outcome: outcome.kind,
       price_point_id:
         outcome.kind === "set" || outcome.kind === "failed-set"
           ? outcome.price_point_id
           : null,
       schedule_id: outcome.kind === "set" ? outcome.schedule_id : null,
+      attempts:
+        outcome.kind === "set" || outcome.kind === "failed-set"
+          ? outcome.attempts
+          : null,
       error:
         outcome.kind === "failed-lookup" || outcome.kind === "failed-set"
           ? outcome.error

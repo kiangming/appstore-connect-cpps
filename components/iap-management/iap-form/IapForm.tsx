@@ -171,10 +171,12 @@ export function IapForm({
             price_schedule_note?:
               | "set"
               | "skipped-no-tier"
+              | "skipped-no-usd-price"
               | "skipped-no-match"
               | "failed-lookup"
               | "failed-set";
             price_schedule_error?: string;
+            price_usd?: number;
           }
         | { error: string };
 
@@ -191,13 +193,22 @@ export function IapForm({
           parts.push("screenshot upload failed");
         }
         const pricingFailed =
+          data.price_schedule_note === "skipped-no-usd-price" ||
           data.price_schedule_note === "skipped-no-match" ||
           data.price_schedule_note === "failed-lookup" ||
           data.price_schedule_note === "failed-set";
-        if (data.price_schedule_set) {
+        if (data.price_schedule_set && typeof data.price_usd === "number") {
+          parts.push(`price set ($${data.price_usd.toFixed(2)})`);
+        } else if (data.price_schedule_set) {
           parts.push("price set");
         } else if (pricingFailed) {
-          parts.push("price not set — check App Store Connect");
+          const reason =
+            data.price_schedule_note === "skipped-no-usd-price"
+              ? "tier not in USA/USD cache — re-import pricing tiers"
+              : data.price_schedule_note === "skipped-no-match"
+                ? "USD price didn't match any Apple price point"
+                : "Apple rejected the price schedule";
+          parts.push(`price not set (${reason}) — check App Store Connect`);
         }
         const allClean =
           data.failed_locales.length === 0 &&

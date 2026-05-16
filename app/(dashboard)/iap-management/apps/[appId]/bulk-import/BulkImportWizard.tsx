@@ -76,12 +76,13 @@ interface ExecuteResult {
       | "no-file"
       | "delete-locked"
       | "failed";
-    /** IAP.o.9a — pricing schedule outcome (CREATE always, OVERWRITE only
-     *  when resolved tier differs from cached). */
+    /** IAP.o.9a + IAP.o.10a — pricing schedule outcome (CREATE always,
+     *  OVERWRITE only when resolved tier differs from cached). */
     price_schedule_set?: boolean;
     pricing_outcome?:
       | "set"
       | "skipped-no-tier"
+      | "skipped-no-usd-price"
       | "skipped-no-match"
       | "failed-lookup"
       | "failed-set";
@@ -1197,11 +1198,21 @@ function PriceBadge({
       </span>
     );
   }
+  if (outcome === "skipped-no-usd-price") {
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-amber-50 text-amber-700 border-amber-200"
+        title="Tier isn't in the local USA/USD cache. Re-import pricing tiers from Settings, or set the price manually in App Store Connect."
+      >
+        No USD
+      </span>
+    );
+  }
   if (outcome === "skipped-no-match") {
     return (
       <span
         className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-amber-50 text-amber-700 border-amber-200"
-        title="Local tier didn't map to an Apple price point — set manually in App Store Connect."
+        title="Local USD price didn't match any Apple price point — set manually in App Store Connect."
       >
         No match
       </span>

@@ -13,33 +13,54 @@
  */
 import { randomUUID } from "crypto";
 import type { AscCredentials } from "@/lib/asc-jwt";
-import { iapFetch } from "./fetch";
+import { iapFetch, AppleApiError } from "./fetch";
 
 export interface SetPriceScheduleArgs {
   appleIapId: string;
   applePricePointId: string;
   baseTerritory?: string;
+  /** Test seam: deterministic sleep + override delays. Defaults to setTimeout. */
+  retryConfig?: {
+    delaysMs?: readonly number[];
+    sleep?: (ms: number) => Promise<void>;
+  };
 }
 
 export interface SetPriceScheduleSuccess {
   ok: true;
   schedule_id: string;
+  attempts: number;
 }
 
 export interface SetPriceScheduleFailure {
   ok: false;
   error: string;
+  attempts: number;
 }
 
 export type SetPriceScheduleResult =
   | SetPriceScheduleSuccess
   | SetPriceScheduleFailure;
 
+/** Default exponential backoff for Apple's intermittent 500 UNEXPECTED_ERROR
+ *  (developer forum confirms this as a known Apple bug — retry works). */
+const DEFAULT_RETRY_DELAYS_MS = [500, 1500, 4000] as const;
+
+const defaultSleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
 /**
  * Set a single manual price effective immediately. Returns a typed result so
  * callers can surface "price not set" without aborting the orchestration —
  * Apple's defaults will leave the IAP at the same MISSING_METADATA state
  * until the price is set later via Apple Connect.
+ *
+ * Retry semantics (IAP.o.10a): Apple's `/v1/inAppPurchasePriceSchedules` is
+ * known to return 500 UNEXPECTED_ERROR intermittently (developer forum
+ * thread 728081). We retry up to 3 times with exponential backoff
+ * (500ms → 1500ms → 4000ms) on 500 specifically. Other 4xx errors (409,
+ * 422 — wrong payload) propagate on first throw since retrying can't fix
+ * a payload mismatch.
  */
 export async function setPriceSchedule(
   creds: AscCredentials,
@@ -82,12 +103,27 @@ export async function setPriceSchedule(
     ],
   };
 
-  try {
-    const res = await iapFetch<{
-      data: { id: string; type: string };
-    }>(creds, "POST", "/v1/inAppPurchasePriceSchedules", body);
-    return { ok: true, schedule_id: res.data.id };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  const delays = args.retryConfig?.delaysMs ?? DEFAULT_RETRY_DELAYS_MS;
+  const sleep = args.retryConfig?.sleep ?? defaultSleep;
+  let attempts = 0;
+  let lastError = "Apple price schedule POST failed";
+
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    attempts = attempt + 1;
+    try {
+      const res = await iapFetch<{
+        data: { id: string; type: string };
+      }>(creds, "POST", "/v1/inAppPurchasePriceSchedules", body);
+      return { ok: true, schedule_id: res.data.id, attempts };
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      const isRetriable = err instanceof AppleApiError && err.status >= 500;
+      if (!isRetriable || attempt === delays.length) {
+        return { ok: false, error: lastError, attempts };
+      }
+      await sleep(delays[attempt]);
+    }
   }
+
+  return { ok: false, error: lastError, attempts };
 }

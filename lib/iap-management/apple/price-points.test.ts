@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   listPricePointsForIap,
   findPricePointByTier,
+  findPricePointByUsdPrice,
   type InAppPurchasePricePoint,
 } from "./price-points";
 
@@ -87,7 +88,68 @@ describe("listPricePointsForIap", () => {
   });
 });
 
-describe("findPricePointByTier", () => {
+describe("findPricePointByUsdPrice", () => {
+  // Apple's 2024 numbering rollover left some IAPs on old priceTier integers
+  // (1, 2, 3) and others on new ones (10000, 10001, …). customerPrice stays
+  // stable, so it's the only safe match key.
+  const points: InAppPurchasePricePoint[] = [
+    {
+      type: "inAppPurchasePricePoints",
+      id: "pp-099",
+      attributes: { customerPrice: "0.99", proceeds: "0.7", priceTier: "10000" },
+    },
+    {
+      type: "inAppPurchasePricePoints",
+      id: "pp-199",
+      attributes: { customerPrice: "1.99", proceeds: "1.4", priceTier: "10001" },
+    },
+    {
+      type: "inAppPurchasePricePoints",
+      id: "pp-legacy-099",
+      attributes: { customerPrice: "0.99", proceeds: "0.7", priceTier: "1" },
+    },
+  ];
+
+  it("matches the first customerPrice equal to the USD target", () => {
+    const out = findPricePointByUsdPrice(points, 0.99);
+    expect(out?.id).toBe("pp-099");
+  });
+
+  it("returns null when no customerPrice matches", () => {
+    expect(findPricePointByUsdPrice(points, 9.99)).toBeNull();
+  });
+
+  it("returns null on null/undefined/NaN input", () => {
+    expect(findPricePointByUsdPrice(points, null)).toBeNull();
+    expect(findPricePointByUsdPrice(points, undefined)).toBeNull();
+    expect(findPricePointByUsdPrice(points, NaN)).toBeNull();
+  });
+
+  it("matches across float-rounding noise (0.10 + 0.20 vs 0.30)", () => {
+    const target = 0.1 + 0.2; // 0.30000000000000004
+    const localized: InAppPurchasePricePoint[] = [
+      {
+        type: "inAppPurchasePricePoints",
+        id: "pp-030",
+        attributes: { customerPrice: "0.30", proceeds: "0.21", priceTier: "0030" },
+      },
+    ];
+    expect(findPricePointByUsdPrice(localized, target)?.id).toBe("pp-030");
+  });
+
+  it("treats free tier (0) as a normal price match", () => {
+    const free: InAppPurchasePricePoint[] = [
+      {
+        type: "inAppPurchasePricePoints",
+        id: "pp-free",
+        attributes: { customerPrice: "0.00", proceeds: "0", priceTier: "0" },
+      },
+    ];
+    expect(findPricePointByUsdPrice(free, 0)?.id).toBe("pp-free");
+  });
+});
+
+describe("findPricePointByTier (legacy, IAP.o.9a)", () => {
   const points: InAppPurchasePricePoint[] = [
     pricePoint("0", "0.00"),
     pricePoint("1", "0.99"),

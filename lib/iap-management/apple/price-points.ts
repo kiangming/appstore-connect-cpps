@@ -68,22 +68,45 @@ function extractNextPagePath(nextUrl: string | undefined): string | undefined {
 }
 
 /**
- * Map a local `tier_id` (`"TIER_5"`, `"TIER_10"`, `"FREE"`, `"ALT_1"`) to the
- * Apple-side price-point id by matching the `priceTier` attribute Apple
- * surfaces on each price point.
+ * Map a USA/USD customer price (e.g. 0.99) to the Apple-side price-point id
+ * by matching the `customerPrice` attribute (IAP.o.10a).
  *
- * Returns `null` when no price point matches — callers should surface this as
- * a non-fatal warning ("price not set; check Apple Connect"), NOT fail the
- * whole orchestration. Apple's defaults will leave the IAP in
- * MISSING_METADATA until the price is set manually.
+ * This is the canonical matcher — Apple's `priceTier` attribute changed
+ * numbering scheme in 2024 (developer forum thread 728081: tiers "1,2,3..."
+ * → "10000,10001,..." silently rolled out, with legacy IAPs still on the
+ * old numbering). `customerPrice` is stable across the rollover.
  *
- * Edge cases:
- * - `FREE` → matches `priceTier === "0"` (Apple's free tier).
- * - `ALT_*` (alternate tier set) → behavior depends on whether Apple returns
- *   the alt tier in the same priceTier integer space. Strip the `ALT_` prefix
- *   and match against the integer string; if Apple uses a different format
- *   the lookup will simply miss and surface as "price not set" — Manager can
- *   then set it manually via Apple Connect for that single row.
+ * Returns `null` when no price point matches — callers must surface this
+ * loudly. Silent fallthrough means the IAP ships to Apple with no price,
+ * which was the IAP.o.9 → IAP.o.10 root cause.
+ *
+ * Float comparison: Apple returns `customerPrice` as a string ("0.99",
+ * "1.99"). Convert to Number and compare with a small epsilon to defeat
+ * IEEE-754 rounding (0.1 + 0.2 ≠ 0.3 etc.) — Apple's prices are 2-decimal,
+ * so 0.001 is safe.
+ */
+export function findPricePointByUsdPrice(
+  pricePoints: InAppPurchasePricePoint[],
+  usdPrice: number | null | undefined,
+): InAppPurchasePricePoint | null {
+  if (usdPrice === null || usdPrice === undefined || !Number.isFinite(usdPrice)) {
+    return null;
+  }
+  for (const pp of pricePoints) {
+    const candidate = Number(pp.attributes.customerPrice);
+    if (Number.isFinite(candidate) && Math.abs(candidate - usdPrice) < 0.001) {
+      return pp;
+    }
+  }
+  return null;
+}
+
+/**
+ * Legacy: map a local `tier_id` to the Apple-side price-point id by matching
+ * the `priceTier` attribute. Kept for tests + fallback callers but the
+ * canonical matcher is `findPricePointByUsdPrice` after IAP.o.10a — Apple
+ * changed the priceTier numbering scheme in 2024 (forum thread 728081),
+ * breaking the IAP.o.9a tier-id match strategy.
  */
 export function findPricePointByTier(
   pricePoints: InAppPurchasePricePoint[],

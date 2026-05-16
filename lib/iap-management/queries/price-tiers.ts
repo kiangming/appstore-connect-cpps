@@ -110,6 +110,37 @@ export interface UsdTierEntry {
 }
 
 /**
+ * Resolve a local `tier_id` to its USA/USD `customer_price` (IAP.o.10a).
+ *
+ * Manager's pricing schedule wire matches Apple price points by the USD
+ * customerPrice string — robust against Apple's tier-numbering churn
+ * (Apple changed integer priceTier from "1,2,3..." to "10000,10001..." in
+ * 2024 per developer forum thread 728081, breaking the IAP.o.9a tier-id
+ * match strategy).
+ *
+ * Returns `null` when the tier isn't in the cache (Manager hasn't imported
+ * tiers yet, or tier_id is malformed). Callers must surface this loudly —
+ * silent fallthrough means the IAP ships to Apple with no price.
+ */
+export async function getTierUsdPrice(
+  tier_id: string,
+): Promise<number | null> {
+  const db = iapDb();
+  const res = await db
+    .from("price_tier_territories")
+    .select("customer_price")
+    .eq("territory_code", "USA")
+    .eq("currency_code", "USD")
+    .eq("tier_id", tier_id)
+    .maybeSingle();
+  if (res.error) {
+    throw new Error(`USD tier lookup failed for ${tier_id}: ${res.error.message}`);
+  }
+  if (!res.data) return null;
+  return (res.data as { customer_price: number }).customer_price;
+}
+
+/**
  * Server-side: returns the USA/USD subset of the price tier cache (~95 rows).
  * Used by the bulk-import wizard server page to pass to the client for
  * preview-time tier resolution + by the execute orchestration to re-validate.

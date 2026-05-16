@@ -44,6 +44,7 @@ import {
 } from "@/lib/iap-management/apple/fetch";
 import { uploadScreenshotToApple } from "@/lib/iap-management/apple/screenshot-upload";
 import { applyPricingSchedule } from "@/lib/iap-management/apple/pricing-orchestration";
+import { getTierUsdPrice } from "@/lib/iap-management/queries/price-tiers";
 import {
   validateIapFormForCreate,
   type IapFormState,
@@ -67,10 +68,12 @@ interface SuccessResponse {
   price_schedule_note?:
     | "set"
     | "skipped-no-tier"
+    | "skipped-no-usd-price"
     | "skipped-no-match"
     | "failed-lookup"
     | "failed-set";
   price_schedule_error?: string;
+  price_usd?: number;
 }
 
 export async function POST(
@@ -239,16 +242,30 @@ export async function POST(
     }
   }
 
-  // 10. Pricing schedule (IAP.o.9a). Manager workflow: set Apple's manual
-  // price immediately after CREATE so the IAP doesn't stay stuck at
-  // MISSING_METADATA awaiting a manual price set on Apple Connect. Non-fatal
-  // — Manager can fix in App Store Connect if the local tier doesn't map to
-  // an Apple priceTier (rare, surfaces only for ALT_* tiers where Apple's
-  // representation may differ).
+  // 10. Pricing schedule (IAP.o.9a → IAP.o.10a). Manager workflow: set
+  // Apple's manual price immediately after CREATE so the IAP doesn't stay
+  // stuck at MISSING_METADATA awaiting a manual price set on Apple Connect.
+  // Match by USA/USD customerPrice (Apple priceTier numbering changed in
+  // 2024, dev forum 728081 — only customerPrice is stable). Non-fatal —
+  // Manager can fix in App Store Connect if the local tier_id is missing
+  // from the cache or has no Apple counterpart.
+  let usdPrice: number | null = null;
+  if (form.tier_id) {
+    try {
+      usdPrice = await getTierUsdPrice(form.tier_id);
+    } catch (err) {
+      await log(
+        "iap-create-on-apple",
+        `usd price lookup failed iap=${iapId} tier=${form.tier_id}: ${err instanceof Error ? err.message : err}`,
+        "WARN",
+      );
+    }
+  }
   const pricing = await applyPricingSchedule({
     creds,
     appleIapId,
     localTierId: form.tier_id,
+    usdPrice,
   });
   const priceScheduleSet = pricing.kind === "set";
   let priceScheduleError: string | undefined;
@@ -256,13 +273,16 @@ export async function POST(
     priceScheduleError = pricing.error;
     await log(
       "iap-create-on-apple",
-      `pricing ${pricing.kind} iap=${iapId} tier=${form.tier_id}: ${pricing.error}`,
+      `pricing ${pricing.kind} iap=${iapId} tier=${form.tier_id} usd=${usdPrice}: ${pricing.error}`,
       "WARN",
     );
-  } else if (pricing.kind === "skipped-no-match") {
+  } else if (
+    pricing.kind === "skipped-no-match" ||
+    pricing.kind === "skipped-no-usd-price"
+  ) {
     await log(
       "iap-create-on-apple",
-      `pricing no-match iap=${iapId} tier=${form.tier_id}`,
+      `pricing ${pricing.kind} iap=${iapId} tier=${form.tier_id} usd=${usdPrice}`,
       "WARN",
     );
   }
@@ -273,12 +293,17 @@ export async function POST(
     payload: {
       apple_iap_id: appleIapId,
       tier_id: form.tier_id,
+      usd_price: usdPrice,
       outcome: pricing.kind,
       price_point_id:
         pricing.kind === "set" || pricing.kind === "failed-set"
           ? pricing.price_point_id
           : null,
       schedule_id: pricing.kind === "set" ? pricing.schedule_id : null,
+      attempts:
+        pricing.kind === "set" || pricing.kind === "failed-set"
+          ? pricing.attempts
+          : null,
       error:
         pricing.kind === "failed-lookup" || pricing.kind === "failed-set"
           ? pricing.error
@@ -361,6 +386,7 @@ export async function POST(
     price_schedule_set: priceScheduleSet,
     price_schedule_note: pricing.kind,
     ...(priceScheduleError ? { price_schedule_error: priceScheduleError } : {}),
+    ...(usdPrice !== null ? { price_usd: usdPrice } : {}),
   };
   return NextResponse.json(response);
 }

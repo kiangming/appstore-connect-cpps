@@ -7,9 +7,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { setPriceSchedule } from "./price-schedules";
 
 const iapFetch = vi.hoisted(() => vi.fn());
-vi.mock("./fetch", () => ({
-  iapFetch,
-}));
+vi.mock("./fetch", async () => {
+  const actual = await vi.importActual<typeof import("./fetch")>("./fetch");
+  return {
+    ...actual,
+    iapFetch,
+  };
+});
+
+import { AppleApiError } from "./fetch";
 
 import type { AscCredentials } from "@/lib/asc-jwt";
 
@@ -33,7 +39,10 @@ describe("setPriceSchedule", () => {
       applePricePointId: "pp-5",
     });
     expect(out.ok).toBe(true);
-    if (out.ok) expect(out.schedule_id).toBe("sched-1");
+    if (out.ok) {
+      expect(out.schedule_id).toBe("sched-1");
+      expect(out.attempts).toBe(1);
+    }
     const [, method, endpoint, body] = iapFetch.mock.calls[0];
     expect(method).toBe("POST");
     expect(endpoint).toBe("/v1/inAppPurchasePriceSchedules");
@@ -90,6 +99,81 @@ describe("setPriceSchedule", () => {
       applePricePointId: "pp-bad",
     });
     expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.error).toContain("422");
+    if (!out.ok) {
+      expect(out.error).toContain("422");
+      expect(out.attempts).toBe(1);
+    }
+  });
+
+  it("retries on Apple 500 UNEXPECTED_ERROR and returns success when the retry succeeds (IAP.o.10a)", async () => {
+    iapFetch
+      .mockRejectedValueOnce(
+        new AppleApiError(
+          500,
+          "POST",
+          "/v1/inAppPurchasePriceSchedules",
+          "UNEXPECTED_ERROR",
+        ),
+      )
+      .mockResolvedValueOnce({
+        data: { id: "sched-2", type: "inAppPurchasePriceSchedules" },
+      });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const out = await setPriceSchedule(creds, {
+      appleIapId: "iap-1",
+      applePricePointId: "pp-1",
+      retryConfig: { delaysMs: [0, 0, 0], sleep },
+    });
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.attempts).toBe(2);
+    expect(iapFetch).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns failure after exhausting retries on persistent 500", async () => {
+    const make500 = () =>
+      new AppleApiError(
+        500,
+        "POST",
+        "/v1/inAppPurchasePriceSchedules",
+        "UNEXPECTED_ERROR",
+      );
+    iapFetch
+      .mockRejectedValueOnce(make500())
+      .mockRejectedValueOnce(make500())
+      .mockRejectedValueOnce(make500())
+      .mockRejectedValueOnce(make500());
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const out = await setPriceSchedule(creds, {
+      appleIapId: "iap-1",
+      applePricePointId: "pp-1",
+      retryConfig: { delaysMs: [0, 0, 0], sleep },
+    });
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.attempts).toBe(4);
+      expect(out.error).toContain("500");
+    }
+  });
+
+  it("does NOT retry on 4xx (payload errors aren't intermittent)", async () => {
+    iapFetch.mockRejectedValueOnce(
+      new AppleApiError(
+        409,
+        "POST",
+        "/v1/inAppPurchasePriceSchedules",
+        "ENTITY_ERROR",
+      ),
+    );
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const out = await setPriceSchedule(creds, {
+      appleIapId: "iap-1",
+      applePricePointId: "pp-1",
+      retryConfig: { delaysMs: [0, 0, 0], sleep },
+    });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.attempts).toBe(1);
+    expect(iapFetch).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 });
