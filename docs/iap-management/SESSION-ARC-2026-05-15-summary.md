@@ -1,9 +1,9 @@
 # Session arc summary — IAP Management strategic implementation
 
-**Date**: 2026-05-15 (IAP.c – IAP.n) → 2026-05-16 (IAP.o.1 – IAP.o.5 post-UAT)
+**Date**: 2026-05-15 (IAP.c – IAP.n) → 2026-05-16 (IAP.o.1 – IAP.o.5 UAT MV29 hotfixes) → 2026-05-16/17 (IAP.o.6 – IAP.o.11 MV30 hotfix run)
 **Arc name**: IAP Management module — 3rd strategic delivery
-**Status**: CLOSED COHESIVELY (functional MVP). Visual polish (dark mode component refactor) deferred to backlog by Manager.
-**Final commit**: `a5503ad` IAP.o.5 — UX refinements + dark-shim extension
+**Status**: Functional MVP shipped. Post-UAT MV30 surfaced an Apple-side pricing path silent-fail symptom; IAP.o.11 added comprehensive instrumentation so the next re-test (v5) localizes the failure conclusively.
+**Latest commit**: `9f35df7` IAP.o.11b — pricing diagnostic SQL runbook (was `a5503ad` IAP.o.5 at first arc close)
 
 ---
 
@@ -31,17 +31,34 @@
 | 16 | `bc0da34` | **IAP.o.1** hotfix | RLS off + GRANT alignment with store_mgmt |
 | 17 | `0a2e72b` | **IAP.o.3+4** hotfix | Shell dark shim + empty-tiers warning |
 | 18 | `a5503ad` | **IAP.o.5** refinements | Pricing Tiers expandable · tier picker price · bulk tier override · dark shim extension |
+| 19 | `f31cdbd` | **IAP.o.6a** Apple 2-stage workflow | Create + Submit separation per Manager workflow lock |
+| 20 | `3fbdcda` | **IAP.o.6b** | List-page multi-select Submit Selected flow |
+| 21 | `cc49a0f` | **IAP.o.6c** | Apple state sync + bulk polish + audit vocabulary |
+| 22 | `f11ce98` | **IAP.o.7a** | Apple `listInAppPurchases` pagination (MV30 Issues 2+3) |
+| 23 | `0e6bb85` | **IAP.o.7b** | IAP list client-side pagination 100/page |
+| 24 | `0fe2032` | **IAP.o.7c** | Bulk-import Step 4 UX hardening (Issue 1 prevention) |
+| 25 | `6e7d7a0` | **IAP.o.8a** | Bulk-import overwrite syncs screenshots (MV30 Issue 1) |
+| 26 | `4a0c82e` | **IAP.o.8b** | sync-states UPSERT unlocks Submit Selected (Issue 2) |
+| 27 | `db71162` | **IAP.o.8c** | View detail page with Apple real-time fetch (Issue 3) |
+| 28 | `7e1df4b` | **IAP.o.9b** fix | Screenshot endpoint family rename to `appStoreReviewScreenshot` |
+| 29 | `567f02b` | **IAP.o.9c** docs | Post-deploy verification checklist |
+| 30 | `c10c6e3` | **IAP.o.9a** | Wire Apple pricing schedule into create + bulk-import |
+| 31 | `0391d66` | **IAP.o.9d** | Apple API schema integration pin + reference docs |
+| 32 | `e9ffd14` | **IAP.o.10a** fix | Pricing match by USD `customerPrice` + 500 retry (Apple 2024 tier rollover) |
+| 33 | `e127d63` | **IAP.o.10b** fix | View detail click defensive triple-fix |
+| 34 | `e986585` | **IAP.o.10c** | Integration tests + docs reflect USD match strategy |
+| 35 | `45a2e2f` | **IAP.o.11a** fix | Instrument pricing path · Stage 1→2 poll · retry 5+jitter · audit-write in orchestrator · UI severity escalate |
+| 36 | `9f35df7` | **IAP.o.11b** docs | Pricing diagnostic SQL runbook (Q1–Q4 + Railway log tail) |
 
-### Cumulative metrics (this arc)
+### Cumulative metrics (this arc — through IAP.o.11)
 
-- **Lines added**: ~9,400 net
-- **Migrations**: 3 (`20260515000000_iap_mgmt_init.sql`, `20260515010000_iap_mgmt_tier_id_text.sql`, `20260515020000_iap_mgmt_rls_grants_fix.sql`)
-- **Routes**: 13 (7 pages + 6 API)
-- **Tests**: 1346 → 1455 (+109 new)
-- **Gauntlet 4/4 ✅** at every sub-chunk
+- **Lines added**: ~11,700 net (IAP.o.6–o.11 contributed ~2,300)
+- **Migrations**: 3 (no schema change in IAP.o.6–o.11 — audit log writes use existing `iap_mgmt.actions_log`)
+- **Routes**: 14 (added `/iaps/[iapId]/create-on-apple` at IAP.o.6a)
+- **Tests**: 1346 → 1590 (+244 new total; +135 since first close)
+- **Gauntlet 4/4 ✅** at every sub-chunk through IAP.o.11b
 - **Dependencies added**: `next-themes ^0.4.6`. No `p-limit` (hand-rolled `withConcurrency`).
-- **Mid-flow Manager decisions**: 10+ (full log below)
-- **Hotfix sub-chunks**: 4 post-UAT (IAP.o.1, o.3, o.4, o.5) — 0 hotfixes mid-implementation
+- **Hotfix sub-chunks**: 18 post-UAT (IAP.o.1 → IAP.o.11b). The IAP.o.6 → IAP.o.11 run was the post-MV30 cycle addressing 2-stage workflow alignment + Apple integration silent-fail mitigation.
 
 ---
 
@@ -262,8 +279,7 @@ Manager's standard scope-investigation protocol applies — read CLAUDE.md, surf
 ## Sign-off
 
 - **3 strategic arcs delivered cohesively this trajectory**: Phase E (PR-Reports.RejectReasons) → ForwardDedup (PR-Inbox.ForwardDedup) → IAP Management. Manager-stated milestone achieved.
-- **IAP Management arc**: CLOSED COHESIVELY (functional MVP). Visual polish remains in backlog.
-- **Pattern 10 reuse #19 cycle 29**: CLOSED. Discipline preserved through 18 commits, 10+ mid-flow Manager refinement iterations, 0 mid-implementation hotfixes (4 post-UAT hotfixes only).
-- **Session close**: natural boundary. Next session = strategic kickoff = fresh session per Manager's context-budget protocol.
-
-End of arc.
+- **IAP Management arc**: Functional MVP shipped at IAP.o.5; IAP.o.6 → IAP.o.11 hotfix run addressed UAT MV30 2-stage workflow + Apple-side pricing silent-fail. Visual polish (dark mode full migration) remains in backlog.
+- **Pattern 10 reuse #19 cycle 29**: ongoing through IAP.o.11. Discipline preserved through 36 commits (18 strategic + 18 hotfix), Manager refinement iterations 35+, 0 mid-implementation hotfixes (all hotfixes post-UAT).
+- **IAP.o.11 status**: instrumentation + retry/poll hardening shipped; Manager v5 re-test will surface root cause via Railway logs + `pricing-diagnostic.sql` runbook. If v5 still fails silently, the orchestration code path is the next suspect (audit log + Railway tail will pinpoint exit point).
+- **Next session boundary**: post-v5 re-test verdict. If green, IAP arc closes definitively. If amber, IAP.o.12 = surgical fix based on instrumentation findings.

@@ -21,8 +21,9 @@ screenshots, price schedules, submissions) still use v1.
 | Create localization | POST | `/v1/inAppPurchaseLocalizations` | Relationship: `inAppPurchaseV2` (NOT `inAppPurchase`). |
 | Update localization | PATCH | `/v1/inAppPurchaseLocalizations/{id}` | |
 | Delete localization | DELETE | `/v1/inAppPurchaseLocalizations/{id}` | Bulk-import OVERWRITE path. |
-| List price points | GET | `/v2/inAppPurchases/{id}/pricePoints?filter[territory]=USA&limit=200` | Per-IAP scope — no /apps/{id}/pricePoints endpoint exists. |
+| List price points | GET | `/v2/inAppPurchases/{id}/pricePoints?filter[territory]=USA&limit=1000` | Per-IAP scope — no /apps/{id}/pricePoints endpoint exists. IAP.o.11a bumped limit 200→1000 (OpenAPI spec max 8000). |
 | Set price schedule | POST | `/v1/inAppPurchasePriceSchedules` | Replace-all semantic; relationships + included (see below). |
+| Poll IAP ready (Stage 1→2 guard) | GET | `/v2/inAppPurchases/{id}` | IAP.o.11a — invoked between CREATE and pricing POST to confirm Apple has propagated the new IAP. Polls 200 ms × 10 max = 2 s budget. |
 | Reserve screenshot | POST | `/v1/inAppPurchaseAppStoreReviewScreenshots` | Relationship: `inAppPurchaseV2`. Returns `uploadOperations[]`. |
 | Confirm screenshot | PATCH | `/v1/inAppPurchaseAppStoreReviewScreenshots/{id}` | `uploaded: true` + `sourceFileChecksum` (MD5 hex). |
 | Delete screenshot | DELETE | `/v1/inAppPurchaseAppStoreReviewScreenshots/{id}` | OVERWRITE replace path. |
@@ -143,9 +144,23 @@ but is documented as legacy in JSDoc — production code calls
    (dev forum thread 728081). Legacy IAPs still on old numbering. NEVER
    match by `priceTier` — always match by `customerPrice` string.
 8. **Apple's intermittent 500 UNEXPECTED_ERROR on `/v1/inAppPurchasePriceSchedules`**
-   — known Apple bug per forum 728081. Tool retries up to 3× with
-   exponential backoff (500 → 1500 → 4000 ms). 4xx errors (409, 422)
-   propagate immediately since retry can't fix a payload mismatch.
+   — known Apple bug per forum 728081. IAP.o.11a extended retry budget
+   to 5 attempts (was 3) with backoff `500 → 1500 → 4000 → 10000 → 30000 ms`
+   plus ±20% jitter to de-thunder concurrent bulk-import retries. 4xx
+   errors (409, 422) propagate immediately since retry can't fix a
+   payload mismatch.
+9. **Stage 1 → Stage 2 propagation race** — IAP.o.11a inserted a poll
+   (`pollIapReadyForPricing`, 200 ms × 10 max) between IAP CREATE and
+   pricing POST so a freshly-created IAP doesn't race against Apple's
+   service propagation. Poll-timeout falls through to `skipped-not-ready`
+   outcome with a distinct audit log row.
+10. **Pricing audit log written inside the orchestrator** — IAP.o.11a
+    moved the `SET_PRICE_SCHEDULE` audit insert from each route into
+    `applyPricingSchedule`. Wrapped in try/catch so audit-write failures
+    surface to Railway console explicitly rather than silently dropping
+    the trace. Every outcome (`set` / `skipped-*` / `failed-*`) writes
+    exactly one row; failures carry `result='ERROR'` per Manager Q-F
+    severity policy.
 
 ## Test enforcement
 
