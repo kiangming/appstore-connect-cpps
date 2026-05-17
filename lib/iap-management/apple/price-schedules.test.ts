@@ -176,4 +176,124 @@ describe("setPriceSchedule", () => {
     expect(iapFetch).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
   });
+
+  // ─── IAP.o.11a — extended retry budget (5 attempts) + jitter ─────────────
+
+  it("retries up to 5 attempts on persistent 500s (IAP.o.11a budget bump from 3)", async () => {
+    const make500 = () =>
+      new AppleApiError(
+        500,
+        "POST",
+        "/v1/inAppPurchasePriceSchedules",
+        "UNEXPECTED_ERROR",
+      );
+    iapFetch
+      .mockRejectedValueOnce(make500())
+      .mockRejectedValueOnce(make500())
+      .mockRejectedValueOnce(make500())
+      .mockRejectedValueOnce(make500())
+      .mockRejectedValueOnce(make500());
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const out = await setPriceSchedule(creds, {
+      appleIapId: "iap-1",
+      applePricePointId: "pp-1",
+      // Pass the IAP.o.11a default-shaped delays so the budget surfaces.
+      retryConfig: { delaysMs: [0, 0, 0, 0], sleep, jitterRatio: 0 },
+    });
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.attempts).toBe(5);
+      expect(out.error).toContain("500");
+    }
+    expect(iapFetch).toHaveBeenCalledTimes(5);
+    expect(sleep).toHaveBeenCalledTimes(4);
+  });
+
+  it("succeeds at attempt 5 after four 500s (covers the new tail delays)", async () => {
+    const make500 = () =>
+      new AppleApiError(
+        500,
+        "POST",
+        "/v1/inAppPurchasePriceSchedules",
+        "UNEXPECTED_ERROR",
+      );
+    iapFetch
+      .mockRejectedValueOnce(make500())
+      .mockRejectedValueOnce(make500())
+      .mockRejectedValueOnce(make500())
+      .mockRejectedValueOnce(make500())
+      .mockResolvedValueOnce({
+        data: { id: "sched-late", type: "inAppPurchasePriceSchedules" },
+      });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const out = await setPriceSchedule(creds, {
+      appleIapId: "iap-1",
+      applePricePointId: "pp-1",
+      retryConfig: { delaysMs: [0, 0, 0, 0], sleep, jitterRatio: 0 },
+    });
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.attempts).toBe(5);
+      expect(out.schedule_id).toBe("sched-late");
+    }
+  });
+
+  it("applies ±jitterRatio to each backoff (deterministic with injected rng)", async () => {
+    const make500 = () =>
+      new AppleApiError(
+        500,
+        "POST",
+        "/v1/inAppPurchasePriceSchedules",
+        "UNEXPECTED_ERROR",
+      );
+    iapFetch
+      .mockRejectedValueOnce(make500())
+      .mockResolvedValueOnce({
+        data: { id: "s", type: "inAppPurchasePriceSchedules" },
+      });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    // rng = 1.0 → +20% upper bound on base 1000 → 1200ms.
+    const out = await setPriceSchedule(creds, {
+      appleIapId: "iap-1",
+      applePricePointId: "pp-1",
+      retryConfig: {
+        delaysMs: [1000],
+        sleep,
+        jitterRatio: 0.2,
+        rng: () => 1.0,
+      },
+    });
+    expect(out.ok).toBe(true);
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(1200);
+  });
+
+  it("jitter floor at 0 — rng=0 (lower bound) cannot produce negative sleep", async () => {
+    const make500 = () =>
+      new AppleApiError(
+        500,
+        "POST",
+        "/v1/inAppPurchasePriceSchedules",
+        "UNEXPECTED_ERROR",
+      );
+    iapFetch
+      .mockRejectedValueOnce(make500())
+      .mockResolvedValueOnce({
+        data: { id: "s", type: "inAppPurchasePriceSchedules" },
+      });
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    // rng = 0 → -20% lower bound on base 500 → 400ms (still positive).
+    const out = await setPriceSchedule(creds, {
+      appleIapId: "iap-1",
+      applePricePointId: "pp-1",
+      retryConfig: {
+        delaysMs: [500],
+        sleep,
+        jitterRatio: 0.2,
+        rng: () => 0,
+      },
+    });
+    expect(out.ok).toBe(true);
+    expect(sleep).toHaveBeenCalledWith(400);
+  });
 });

@@ -219,13 +219,13 @@ describe("API schema: screenshot endpoints (appStoreReviewScreenshot family)", (
 // ─── Pricing (IAP.o.9a) ──────────────────────────────────────────────────────
 
 describe("API schema: pricing endpoints", () => {
-  it("list price points → GET /v2/inAppPurchases/{id}/pricePoints?filter[territory]=USA", async () => {
+  it("list price points → GET /v2/inAppPurchases/{id}/pricePoints?filter[territory]=USA&limit=1000 (IAP.o.11a)", async () => {
     iapFetch.mockResolvedValueOnce({ data: [] });
     await listPricePointsForIap(creds, "iap-1", "USA");
     const { method, endpoint } = callArgs();
     expect(method).toBe("GET");
     expect(endpoint).toBe(
-      "/v2/inAppPurchases/iap-1/pricePoints?filter[territory]=USA&limit=200",
+      "/v2/inAppPurchases/iap-1/pricePoints?filter[territory]=USA&limit=1000",
     );
   });
 

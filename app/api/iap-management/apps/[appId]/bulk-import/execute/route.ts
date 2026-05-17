@@ -48,6 +48,7 @@ import {
   applyPricingSchedule,
   type PricingOutcome,
 } from "@/lib/iap-management/apple/pricing-orchestration";
+import { pollIapReadyForPricing } from "@/lib/iap-management/apple/poll-iap-ready";
 import {
   withRetry,
   AppleApiError,
@@ -458,18 +459,46 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
-  // 3. Pricing schedule (IAP.o.10a). Resolve tier_id → USA/USD customer
-  // price, then match against Apple's customerPrice attribute. Non-fatal —
-  // Manager fixes manually if the tier isn't in the local cache.
+  // 3. Pricing schedule (IAP.o.10a → IAP.o.11a). Resolve tier_id → USA/USD
+  // customer price, then poll Apple IAP state once (Manager Q-B race guard),
+  // then orchestrate. Orchestrator owns the SET_PRICE_SCHEDULE audit log so
+  // every outcome (set/skipped/failed) is recorded centrally.
   const resolvedTier = decision.resolved_tier_id ?? null;
   const usdPrice = resolvedTier ? args.usdPriceByTier.get(resolvedTier) ?? null : null;
+  console.log(
+    `[bulk-execute] Stage 2 precheck poll starting product_id=${item.product_id} apple_iap_id=${appleIapId}`,
+  );
+  const pollResult = await pollIapReadyForPricing({ creds, appleIapId });
+  console.log(
+    `[bulk-execute] Stage 2 precheck poll result product_id=${item.product_id} ready=${pollResult.ready} attempts=${pollResult.attempts} total_ms=${pollResult.total_ms}`,
+  );
+  console.log(
+    `[bulk-execute] Stage 2 pricing starting product_id=${item.product_id} apple_iap_id=${appleIapId} tier_id=${resolvedTier ?? "<null>"} usd=${usdPrice}`,
+  );
   const pricing = await applyPricingSchedule({
     creds,
     appleIapId,
     localTierId: resolvedTier,
     usdPrice,
+    precheck: {
+      ready: pollResult.ready,
+      reason: pollResult.ready ? undefined : pollResult.reason,
+      attempts: pollResult.attempts,
+      total_ms: pollResult.total_ms,
+    },
+    audit: {
+      // CREATE path: iap_mgmt.iaps row not yet persisted — use null and
+      // rely on batch_id + product_id + apple_iap_id for correlation.
+      iapId: null,
+      actor: args.actor,
+      batchId: args.batchId,
+      productId: item.product_id,
+      internalAppId: args.internalAppId,
+    },
   });
-  await recordPricingAudit(args, item.product_id, appleIapId, pricing);
+  console.log(
+    `[bulk-execute] Stage 2 pricing result product_id=${item.product_id} outcome=${pricing.kind}`,
+  );
 
   // 4. Screenshot 3-step (deferral 1 absorbed). Walk screenshot files;
   //    first filename matching productId (literal OR dots→underscores) wins.
@@ -529,7 +558,9 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
         screenshot_uploaded: screenshotOk,
         price_schedule_set: pricing.kind === "set",
         pricing_outcome: pricing.kind,
-        ...(pricing.kind === "failed-lookup" || pricing.kind === "failed-set"
+        ...(pricing.kind === "failed-lookup" ||
+        pricing.kind === "failed-set" ||
+        pricing.kind === "failed-exception"
           ? { pricing_error: pricing.error }
           : {}),
         error: errMsg(err),
@@ -547,7 +578,9 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     submitted,
     price_schedule_set: pricing.kind === "set",
     pricing_outcome: pricing.kind,
-    ...(pricing.kind === "failed-lookup" || pricing.kind === "failed-set"
+    ...(pricing.kind === "failed-lookup" ||
+    pricing.kind === "failed-set" ||
+    pricing.kind === "failed-exception"
       ? { pricing_error: pricing.error }
       : {}),
   });
@@ -677,23 +710,35 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
-  // Pricing schedule conditional (IAP.o.9a + IAP.o.10a). Only re-apply when
-  // the resolved tier differs from the locally cached row — skips work when
-  // the import didn't change pricing intent. Missing-from-cache is treated
-  // as "differs" so the pricing stays in sync even if the local cache is
-  // incomplete.
+  // Pricing schedule conditional (IAP.o.9a + IAP.o.10a → IAP.o.11a). Only
+  // re-apply when the resolved tier differs from the locally cached row.
+  // Missing-from-cache treated as "differs" so pricing stays in sync. No
+  // poll on OVERWRITE — IAP already exists on Apple (state has long since
+  // propagated). Orchestrator owns the SET_PRICE_SCHEDULE audit log.
   const resolvedTier = decision.resolved_tier_id ?? null;
   const cachedTier = args.existingTierByProductId.get(item.product_id) ?? null;
   let pricing: PricingOutcome | null = null;
   if (resolvedTier && resolvedTier !== cachedTier) {
     const usdPrice = args.usdPriceByTier.get(resolvedTier) ?? null;
+    console.log(
+      `[bulk-execute] OVERWRITE pricing starting product_id=${item.product_id} apple_iap_id=${appleIapId} tier_id=${resolvedTier} cached=${cachedTier ?? "<null>"} usd=${usdPrice}`,
+    );
     pricing = await applyPricingSchedule({
       creds,
       appleIapId,
       localTierId: resolvedTier,
       usdPrice,
+      audit: {
+        iapId: args.existingByProductId.get(item.product_id) ?? null,
+        actor: args.actor,
+        batchId: args.batchId,
+        productId: item.product_id,
+        internalAppId: args.internalAppId,
+      },
     });
-    await recordPricingAudit(args, item.product_id, appleIapId, pricing);
+    console.log(
+      `[bulk-execute] OVERWRITE pricing result product_id=${item.product_id} outcome=${pricing.kind}`,
+    );
   }
 
   const overwriteResult: PerIapResult = {
@@ -708,7 +753,9 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
       ? {
           price_schedule_set: pricing.kind === "set",
           pricing_outcome: pricing.kind,
-          ...(pricing.kind === "failed-lookup" || pricing.kind === "failed-set"
+          ...(pricing.kind === "failed-lookup" ||
+          pricing.kind === "failed-set" ||
+          pricing.kind === "failed-exception"
             ? { pricing_error: pricing.error }
             : {}),
         }
@@ -816,42 +863,3 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/**
- * Append a SET_PRICE_SCHEDULE row to `actions_log` for each pricing attempt
- * (success or non-fatal failure). Keeps the audit timeline queryable per IAP
- * without re-parsing the BULK_IMPORT_CREATE payload.
- */
-async function recordPricingAudit(
-  args: OrchestrateArgs,
-  productId: string,
-  appleIapId: string,
-  outcome: PricingOutcome,
-): Promise<void> {
-  const tierId = args.decision.resolved_tier_id ?? null;
-  await iapDb().from("actions_log").insert({
-    batch_id: args.batchId,
-    actor: args.actor,
-    action_type: "SET_PRICE_SCHEDULE",
-    payload: {
-      product_id: productId,
-      apple_iap_id: appleIapId,
-      app_id: args.internalAppId,
-      tier_id: tierId,
-      usd_price: tierId ? args.usdPriceByTier.get(tierId) ?? null : null,
-      outcome: outcome.kind,
-      price_point_id:
-        outcome.kind === "set" || outcome.kind === "failed-set"
-          ? outcome.price_point_id
-          : null,
-      schedule_id: outcome.kind === "set" ? outcome.schedule_id : null,
-      attempts:
-        outcome.kind === "set" || outcome.kind === "failed-set"
-          ? outcome.attempts
-          : null,
-      error:
-        outcome.kind === "failed-lookup" || outcome.kind === "failed-set"
-          ? outcome.error
-          : null,
-    },
-  });
-}

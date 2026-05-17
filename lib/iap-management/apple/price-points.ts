@@ -42,18 +42,31 @@ export async function listPricePointsForIap(
   territory = "USA",
 ): Promise<InAppPurchasePricePoint[]> {
   const accumulated: InAppPurchasePricePoint[] = [];
+  // IAP.o.11a: bumped limit 200→1000. OpenAPI spec allows up to 8000
+  // (docs/iap-management/openapi.oas.json:152835) and Apple's USA catalog
+  // is ~600 price points, so 1000 should fit in one page with headroom.
+  // links.next follow remains for future-proofing.
   let next: string | undefined =
-    `/v2/inAppPurchases/${appleIapId}/pricePoints?filter[territory]=${territory}&limit=200`;
+    `/v2/inAppPurchases/${appleIapId}/pricePoints?filter[territory]=${territory}&limit=1000`;
+  let pageCount = 0;
   while (next) {
     const path = next;
+    pageCount += 1;
     const page = await withRetry(() =>
       iapFetch<AscApiResponse<InAppPurchasePricePoint[]>>(creds, "GET", path),
+    );
+    const rows = page.data?.length ?? 0;
+    console.log(
+      `[price-points] fetched page=${pageCount} apple_iap_id=${appleIapId} territory=${territory} rows=${rows}`,
     );
     if (page.data && page.data.length > 0) {
       accumulated.push(...(page.data as InAppPurchasePricePoint[]));
     }
     next = extractNextPagePath(page.links?.next);
   }
+  console.log(
+    `[price-points] total apple_iap_id=${appleIapId} territory=${territory} pages=${pageCount} count=${accumulated.length}`,
+  );
   return accumulated;
 }
 

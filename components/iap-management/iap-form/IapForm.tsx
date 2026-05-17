@@ -173,8 +173,10 @@ export function IapForm({
               | "skipped-no-tier"
               | "skipped-no-usd-price"
               | "skipped-no-match"
+              | "skipped-not-ready"
               | "failed-lookup"
-              | "failed-set";
+              | "failed-set"
+              | "failed-exception";
             price_schedule_error?: string;
             price_usd?: number;
           }
@@ -195,8 +197,10 @@ export function IapForm({
         const pricingFailed =
           data.price_schedule_note === "skipped-no-usd-price" ||
           data.price_schedule_note === "skipped-no-match" ||
+          data.price_schedule_note === "skipped-not-ready" ||
           data.price_schedule_note === "failed-lookup" ||
-          data.price_schedule_note === "failed-set";
+          data.price_schedule_note === "failed-set" ||
+          data.price_schedule_note === "failed-exception";
         if (data.price_schedule_set && typeof data.price_usd === "number") {
           parts.push(`price set ($${data.price_usd.toFixed(2)})`);
         } else if (data.price_schedule_set) {
@@ -207,15 +211,25 @@ export function IapForm({
               ? "tier not in USA/USD cache — re-import pricing tiers"
               : data.price_schedule_note === "skipped-no-match"
                 ? "USD price didn't match any Apple price point"
-                : "Apple rejected the price schedule";
+                : data.price_schedule_note === "skipped-not-ready"
+                  ? "Apple IAP not ready for pricing — try again in a moment"
+                  : data.price_schedule_note === "failed-exception"
+                    ? "unexpected pricing error — check Railway logs"
+                    : "Apple rejected the price schedule";
           parts.push(`price not set (${reason}) — check App Store Connect`);
         }
         const allClean =
           data.failed_locales.length === 0 &&
           (!screenshotFile || data.screenshot_uploaded) &&
           !pricingFailed;
+        // IAP.o.11a Q-F: pricing failures escalate to hard error toast so
+        // Manager doesn't miss the silent-fail symptom that triggered the
+        // hotfix cycle. Other warnings (failed locales, screenshot) remain
+        // warning-severity since they don't block the Manager workflow.
         if (allClean) {
           toast.success(`Created on Apple · ${parts.join(" · ")}`);
+        } else if (pricingFailed) {
+          toast.error(`Created on Apple — pricing failed · ${parts.join(" · ")}`);
         } else {
           toast.warning(`Created on Apple with warnings · ${parts.join(" · ")}`);
         }

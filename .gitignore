@@ -40,3 +40,7 @@ next-env.d.ts
 
 # release packages
 /dist
+
+# Apple App Store Connect OpenAPI spec — 6.6 MB, fetched locally for
+# IAP.o.11 investigation (reference only, not source). Do not commit.
+docs/iap-management/openapi.oas.json

@@ -44,6 +44,7 @@ import {
 } from "@/lib/iap-management/apple/fetch";
 import { uploadScreenshotToApple } from "@/lib/iap-management/apple/screenshot-upload";
 import { applyPricingSchedule } from "@/lib/iap-management/apple/pricing-orchestration";
+import { pollIapReadyForPricing } from "@/lib/iap-management/apple/poll-iap-ready";
 import { getTierUsdPrice } from "@/lib/iap-management/queries/price-tiers";
 import {
   validateIapFormForCreate,
@@ -70,8 +71,10 @@ interface SuccessResponse {
     | "skipped-no-tier"
     | "skipped-no-usd-price"
     | "skipped-no-match"
+    | "skipped-not-ready"
     | "failed-lookup"
-    | "failed-set";
+    | "failed-set"
+    | "failed-exception";
   price_schedule_error?: string;
   price_usd?: number;
 }
@@ -242,13 +245,16 @@ export async function POST(
     }
   }
 
-  // 10. Pricing schedule (IAP.o.9a → IAP.o.10a). Manager workflow: set
-  // Apple's manual price immediately after CREATE so the IAP doesn't stay
+  // 10. Pricing schedule (IAP.o.9a → IAP.o.10a → IAP.o.11a). Manager workflow:
+  // set Apple's manual price immediately after CREATE so the IAP doesn't stay
   // stuck at MISSING_METADATA awaiting a manual price set on Apple Connect.
   // Match by USA/USD customerPrice (Apple priceTier numbering changed in
-  // 2024, dev forum 728081 — only customerPrice is stable). Non-fatal —
-  // Manager can fix in App Store Connect if the local tier_id is missing
-  // from the cache or has no Apple counterpart.
+  // 2024, dev forum 728081 — only customerPrice is stable).
+  //
+  // IAP.o.11a: poll Apple state once before pricing so a propagation race
+  // can't silently fail the pricing POST (Manager Q-B). Orchestrator owns the
+  // SET_PRICE_SCHEDULE audit log — every outcome (set/skipped/failed) is
+  // recorded inside `applyPricingSchedule`, so no separate insert here.
   let usdPrice: number | null = null;
   if (form.tier_id) {
     try {
@@ -261,55 +267,40 @@ export async function POST(
       );
     }
   }
+  console.log(
+    `[create-on-apple] Stage 2 precheck poll starting apple_iap_id=${appleIapId}`,
+  );
+  const pollResult = await pollIapReadyForPricing({ creds, appleIapId });
+  console.log(
+    `[create-on-apple] Stage 2 precheck poll result apple_iap_id=${appleIapId} ready=${pollResult.ready} attempts=${pollResult.attempts} total_ms=${pollResult.total_ms}`,
+  );
+
+  console.log(
+    `[create-on-apple] Stage 2 pricing starting apple_iap_id=${appleIapId} tier_id=${form.tier_id ?? "<null>"} usd=${usdPrice}`,
+  );
   const pricing = await applyPricingSchedule({
     creds,
     appleIapId,
     localTierId: form.tier_id,
     usdPrice,
-  });
-  const priceScheduleSet = pricing.kind === "set";
-  let priceScheduleError: string | undefined;
-  if (pricing.kind === "failed-lookup" || pricing.kind === "failed-set") {
-    priceScheduleError = pricing.error;
-    await log(
-      "iap-create-on-apple",
-      `pricing ${pricing.kind} iap=${iapId} tier=${form.tier_id} usd=${usdPrice}: ${pricing.error}`,
-      "WARN",
-    );
-  } else if (
-    pricing.kind === "skipped-no-match" ||
-    pricing.kind === "skipped-no-usd-price"
-  ) {
-    await log(
-      "iap-create-on-apple",
-      `pricing ${pricing.kind} iap=${iapId} tier=${form.tier_id} usd=${usdPrice}`,
-      "WARN",
-    );
-  }
-  await db.from("actions_log").insert({
-    iap_id: iapId,
-    actor,
-    action_type: "SET_PRICE_SCHEDULE",
-    payload: {
-      apple_iap_id: appleIapId,
-      tier_id: form.tier_id,
-      usd_price: usdPrice,
-      outcome: pricing.kind,
-      price_point_id:
-        pricing.kind === "set" || pricing.kind === "failed-set"
-          ? pricing.price_point_id
-          : null,
-      schedule_id: pricing.kind === "set" ? pricing.schedule_id : null,
-      attempts:
-        pricing.kind === "set" || pricing.kind === "failed-set"
-          ? pricing.attempts
-          : null,
-      error:
-        pricing.kind === "failed-lookup" || pricing.kind === "failed-set"
-          ? pricing.error
-          : null,
+    precheck: {
+      ready: pollResult.ready,
+      reason: pollResult.ready ? undefined : pollResult.reason,
+      attempts: pollResult.attempts,
+      total_ms: pollResult.total_ms,
     },
+    audit: { iapId, actor },
   });
+  console.log(
+    `[create-on-apple] Stage 2 pricing result apple_iap_id=${appleIapId} outcome=${pricing.kind}`,
+  );
+  const priceScheduleSet = pricing.kind === "set";
+  const priceScheduleError =
+    pricing.kind === "failed-lookup" ||
+    pricing.kind === "failed-set" ||
+    pricing.kind === "failed-exception"
+      ? pricing.error
+      : undefined;
 
   // 11. OPTIONAL screenshot 3-step
   let screenshotUploaded = false;

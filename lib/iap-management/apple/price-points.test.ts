@@ -54,13 +54,13 @@ function pricePoint(priceTier: string, customerPrice: string): InAppPurchasePric
 describe("listPricePointsForIap", () => {
   beforeEach(() => iapFetch.mockReset());
 
-  it("hits the v2 endpoint with USA territory filter + limit=200", async () => {
+  it("hits the v2 endpoint with USA territory filter + limit=1000 (IAP.o.11a bump)", async () => {
     iapFetch.mockResolvedValueOnce({ data: [pricePoint("1", "0.99")] });
     await listPricePointsForIap(creds, "iap-1");
     const [, method, endpoint] = iapFetch.mock.calls[0];
     expect(method).toBe("GET");
     expect(endpoint).toBe(
-      "/v2/inAppPurchases/iap-1/pricePoints?filter[territory]=USA&limit=200",
+      "/v2/inAppPurchases/iap-1/pricePoints?filter[territory]=USA&limit=1000",
     );
   });
 

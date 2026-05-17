@@ -84,8 +84,10 @@ interface ExecuteResult {
       | "skipped-no-tier"
       | "skipped-no-usd-price"
       | "skipped-no-match"
+      | "skipped-not-ready"
       | "failed-lookup"
-      | "failed-set";
+      | "failed-set"
+      | "failed-exception";
     pricing_error?: string;
     submitted?: boolean;
   }>;
@@ -1198,10 +1200,13 @@ function PriceBadge({
       </span>
     );
   }
+  // IAP.o.11a Q-F: pricing failures escalate to red error severity. Before,
+  // "No USD" and "No match" rendered amber (warning); Manager surfaced these
+  // as easy-to-miss in Step 4 results, which was the v4 silent-symptom.
   if (outcome === "skipped-no-usd-price") {
     return (
       <span
-        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-amber-50 text-amber-700 border-amber-200"
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-red-50 text-red-700 border-red-200"
         title="Tier isn't in the local USA/USD cache. Re-import pricing tiers from Settings, or set the price manually in App Store Connect."
       >
         No USD
@@ -1211,10 +1216,20 @@ function PriceBadge({
   if (outcome === "skipped-no-match") {
     return (
       <span
-        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-amber-50 text-amber-700 border-amber-200"
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-red-50 text-red-700 border-red-200"
         title="Local USD price didn't match any Apple price point — set manually in App Store Connect."
       >
         No match
+      </span>
+    );
+  }
+  if (outcome === "skipped-not-ready") {
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-red-50 text-red-700 border-red-200"
+        title="Apple IAP wasn't ready for pricing within the poll window — set manually in App Store Connect."
+      >
+        Not ready
       </span>
     );
   }
