@@ -77,6 +77,12 @@ describe("setPriceSchedule", () => {
     expect(payload.included[0].attributes.startDate).toBeNull();
     expect(payload.included[0].relationships.inAppPurchasePricePoint.data.id).toBe("pp-5");
     expect(payload.included[0].relationships.inAppPurchaseV2.data.id).toBe("iap-1");
+
+    // IAP.o.11d: Apple rejects plain UUIDs with
+    // ENTITY_ERROR.INCLUDED.INVALID_ID — required format is "${...}" (JSON:API
+    // compound-document "lid" syntax). Pin the contract so a regression to
+    // randomUUID cannot ship silently again.
+    expect(manualId).toMatch(/^\$\{.+\}$/);
   });
 
   it("honors a custom baseTerritory", async () => {

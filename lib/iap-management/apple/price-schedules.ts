@@ -1,5 +1,5 @@
 /**
- * Apple price-schedule POST wrapper (IAP.o.9a).
+ * Apple price-schedule POST wrapper (IAP.o.9a → IAP.o.11d).
  *
  * Apple's price-schedule endpoint is "replace-all" — every POST replaces the
  * entire current schedule, there is no PATCH. We only ever set a single
@@ -7,11 +7,14 @@
  * the Manager's bulk-import + create-on-apple flows. Scheduled pricing
  * (future startDate) is out of scope for IAP.o.9.
  *
- * The payload requires an arbitrary local reference id that links the
- * `manualPrices.data[].id` array entry to the matching `included[].id`. We
- * use `randomUUID()` to generate it.
+ * The payload requires a "local id" reference that links the
+ * `manualPrices.data[].id` array entry to the matching `included[].id`.
+ * IAP.o.11d (Apple instrumentation log): Apple rejects plain UUIDs with
+ * `ENTITY_ERROR.INCLUDED.INVALID_ID` — "the id must be a local id with the
+ * format '${local-id}'". The literal `${...}` syntax is required (JSON:API
+ * compound-document "lid" convention). We use `${price-1}` since we only
+ * ever send one price entry per request.
  */
-import { randomUUID } from "crypto";
 import type { AscCredentials } from "@/lib/asc-jwt";
 import { iapFetch, AppleApiError } from "./fetch";
 
@@ -84,7 +87,10 @@ export async function setPriceSchedule(
   args: SetPriceScheduleArgs,
 ): Promise<SetPriceScheduleResult> {
   const baseTerritory = args.baseTerritory ?? "USA";
-  const priceRefId = randomUUID();
+  // IAP.o.11d: literal "${...}" lid syntax required by Apple per
+  // ENTITY_ERROR.INCLUDED.INVALID_ID surfaced by IAP.o.11a instrumentation.
+  // Single price entry per request → "${price-1}" is sufficient.
+  const priceRefId = "${price-1}";
   const body = {
     data: {
       type: "inAppPurchasePriceSchedules",

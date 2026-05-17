@@ -287,6 +287,10 @@ describe("API schema: pricing endpoints", () => {
       type: "inAppPurchases",
       id: "iap-1",
     });
+
+    // IAP.o.11d: Apple rejects plain UUIDs with
+    // ENTITY_ERROR.INCLUDED.INVALID_ID — required format is "${...}" lid.
+    expect(refId).toMatch(/^\$\{.+\}$/);
   });
 });
 
