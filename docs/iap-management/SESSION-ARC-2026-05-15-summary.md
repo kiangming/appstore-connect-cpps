@@ -53,6 +53,8 @@
 | 38 | `b85c73c` | **IAP.o.11d** fix | Apple `${local-id}` lid format + actions_log CHECK constraint expansion (H4 root cause) |
 | 39 | `f6d4961` | **IAP.o.12a** feat | Update-on-Apple orchestration · diff-detector · state-edit-blocked helper · update-on-apple route · 5 new audit `*_ON_APPLE` action_types migration |
 | 40 | `855d957` | **IAP.o.12b** feat | Update on Apple UI: button + diff modal + reviewNote enabled + familySharable checkbox + pre-warn banner |
+| 41 | `6deac97` | **IAP.o.12c** docs | apple-api-reference + SESSION-ARC reflect edit-on-Apple flow; D2/D3 marked resolved; IAP.o.13 candidate documented |
+| 42 | `(this commit)` | **IAP.o.13a** fix | Screenshot edit UI exposed — placeholder "Edit via App Store Connect web UI" removed; ScreenshotUpload now renders cached-on-Apple state + drop area to replace; handleScreenshotRemove reverts to cached in edit mode |
 
 ### Cumulative metrics (this arc — through IAP.o.12)
 

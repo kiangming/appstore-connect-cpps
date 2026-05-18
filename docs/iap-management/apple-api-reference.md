@@ -180,7 +180,7 @@ The full editable surface Apple's public OpenAPI exposes for a synced IAP:
 | Localization (per locale) | `PATCH /v1/inAppPurchaseLocalizations/{id}` | `name`, `description` |
 | Locale add | `POST /v1/inAppPurchaseLocalizations` | full create payload |
 | Locale remove | `DELETE /v1/inAppPurchaseLocalizations/{id}` | — |
-| Screenshot | IAP.o.8a `replaceScreenshotOnApple` (GET + DELETE + 3-step upload) | — |
+| Screenshot | IAP.o.8a `replaceScreenshotOnApple` (GET + DELETE + 3-step upload). UI exposed at IAP.o.13a — drop a new file onto the edit form to stage a replace. | — |
 | Pricing schedule | IAP.o.11d `applyPricingSchedule` → `POST /v1/inAppPurchasePriceSchedules` | replace-all; tier change ⇒ full schedule replace |
 
 State-edit constraints (not enumerated in OpenAPI — observed behavior):

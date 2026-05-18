@@ -117,7 +117,15 @@ export function IapForm({
 
   function handleScreenshotRemove() {
     setScreenshotFile(null);
-    patchForm({ screenshot_filename: null });
+    // IAP.o.13a: edit-mode synced IAPs revert to the cached Apple-side
+    // filename so the form goes back to "current screenshot on Apple"
+    // instead of dropping to no-screenshot. Create-mode (no cached) goes
+    // to null as before.
+    if (syncedToApple && initial.screenshot_filename) {
+      patchForm({ screenshot_filename: initial.screenshot_filename });
+    } else {
+      patchForm({ screenshot_filename: null });
+    }
   }
 
   function saveBody() {
@@ -591,6 +599,7 @@ export function IapForm({
           <ScreenshotUpload
             filename={form.screenshot_filename}
             syncedToApple={syncedToApple}
+            cachedFilename={initial.screenshot_filename}
             onFileStaged={handleScreenshotStaged}
             onRemove={handleScreenshotRemove}
           />
