@@ -197,6 +197,34 @@ export function UpdateChangesPreviewModal(props: UpdateChangesPreviewModalProps)
               </p>
             </section>
           )}
+
+          {/* IAP.p1.h — pricing source banner. Surfaces when Manager picked a
+              template-backed source so they know per-territory overrides
+              will be re-applied even if tier didn't change. APPLE source
+              with no tier change → nothing to show. */}
+          {(form.pricing_source === "DEFAULT_TEMPLATE" ||
+            form.pricing_source === "APP_TEMPLATE") && (
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
+                Pricing source
+              </h3>
+              <p className="text-xs">
+                <span className="font-medium">
+                  {form.pricing_source === "APP_TEMPLATE"
+                    ? "App-specific template"
+                    : "Default Template"}
+                </span>{" "}
+                will be applied — per-territory overrides re-POSTed for the
+                current tier.
+              </p>
+              {!diff.tier_changed && (
+                <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+                  Tier unchanged; pricing stage still runs because the source
+                  is template-backed.
+                </p>
+              )}
+            </section>
+          )}
         </div>
 
         <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50">

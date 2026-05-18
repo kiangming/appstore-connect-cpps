@@ -172,16 +172,23 @@ export async function POST(
     } satisfies UpdateIapOutcome);
   }
 
-  // 6. Resolve USD price when the tier changed (orchestrator pricing stage
-  //    needs it for the customerPrice match against Apple).
+  // 6. Resolve USD price when pricing stage will run.
+  //    IAP.p1.h: pricing stage runs when tier_changed OR when source is
+  //    template-backed (Q-J — Manager re-selects source each Update). For
+  //    the source-only path we look up USD against the current tier_id.
+  const formPricingSource =
+    (form as IapFormState & { pricing_source?: "APPLE" | "DEFAULT_TEMPLATE" | "APP_TEMPLATE" })
+      .pricing_source ?? "APPLE";
+  const sourceTierId =
+    diff.tier_changed?.new_tier_id ?? form.tier_id ?? cached.tier_id;
   let newUsdPrice: number | null = null;
-  if (diff.tier_changed) {
+  if (sourceTierId && (diff.tier_changed || formPricingSource !== "APPLE")) {
     try {
-      newUsdPrice = await getTierUsdPrice(diff.tier_changed.new_tier_id);
+      newUsdPrice = await getTierUsdPrice(sourceTierId);
     } catch (err) {
       await log(
         "iap-update-on-apple",
-        `usd price lookup failed iap=${iapId} tier=${diff.tier_changed.new_tier_id}: ${err instanceof Error ? err.message : err}`,
+        `usd price lookup failed iap=${iapId} tier=${sourceTierId}: ${err instanceof Error ? err.message : err}`,
         "WARN",
       );
     }
@@ -196,6 +203,13 @@ export async function POST(
     ...(screenshot ? { screenshotFile: screenshot } : {}),
     newUsdPrice,
     audit: { iapId, actor },
+    source:
+      formPricingSource === "APP_TEMPLATE"
+        ? { kind: "APP_TEMPLATE", app_id: existing.iap.app_id }
+        : formPricingSource === "DEFAULT_TEMPLATE"
+          ? { kind: "DEFAULT_TEMPLATE" }
+          : { kind: "APPLE" },
+    currentTierId: sourceTierId,
   });
 
   // 8. Mirror successful stages into local DB so the cache stays in sync.

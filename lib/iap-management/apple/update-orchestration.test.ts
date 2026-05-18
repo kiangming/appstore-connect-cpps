@@ -356,6 +356,49 @@ describe("updateIapOnApple — pricing stage (delegated)", () => {
     expect(out.stages.pricing.outcome?.kind).toBe("set");
     expect(out.overall).toBe("SUCCESS");
   });
+
+  // IAP.p1.h — pricing stage runs for template-backed source even when tier
+  // didn't change, so per-territory overrides re-apply for the current tier.
+  it("runs pricing stage on source-only change (DEFAULT_TEMPLATE + tier unchanged)", async () => {
+    applyPricingSchedule.mockResolvedValueOnce({
+      kind: "set",
+      price_point_id: "pp-1",
+      schedule_id: "sched-1",
+      usd_price: 1.99,
+      attempts: 1,
+      source_kind: "DEFAULT_TEMPLATE",
+      overridden_territory_count: 3,
+    });
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: emptyDiff(),
+      newUsdPrice: 1.99,
+      source: { kind: "DEFAULT_TEMPLATE" },
+      currentTierId: "TIER_5",
+      audit: baseAudit,
+    });
+    expect(applyPricingSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localTierId: "TIER_5",
+        usdPrice: 1.99,
+        source: { kind: "DEFAULT_TEMPLATE" },
+      }),
+    );
+    expect(out.stages.pricing.changed).toBe(true);
+  });
+
+  it("APPLE source + tier unchanged → pricing stage stays a no-op", async () => {
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: emptyDiff(),
+      source: { kind: "APPLE" },
+      audit: baseAudit,
+    });
+    expect(applyPricingSchedule).not.toHaveBeenCalled();
+    expect(out.stages.pricing.changed).toBe(false);
+  });
 });
 
 describe("updateIapOnApple — aggregation", () => {

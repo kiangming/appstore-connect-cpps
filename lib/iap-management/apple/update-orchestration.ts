@@ -33,6 +33,7 @@ import { replaceScreenshotOnApple } from "./screenshot-upload";
 import {
   applyPricingSchedule,
   type PricingOutcome,
+  type PricingSource,
 } from "./pricing-orchestration";
 import type { IapDiff } from "./diff-detector";
 import { iapDb } from "@/lib/iap-management/db";
@@ -52,6 +53,14 @@ export interface UpdateIapOnAppleArgs {
    *  route handler so this module stays free of DB coupling for pricing. */
   newUsdPrice?: number | null;
   audit: UpdateAuditContext;
+  /** IAP.p1.h: pricing source applied by Stage 4. Defaults to APPLE. When
+   *  the source is template-backed, the stage runs even if `diff.tier_changed`
+   *  is null so per-territory overrides get re-applied for the current tier. */
+  source?: PricingSource;
+  /** IAP.p1.h: current tier_id from the form, used when source is
+   *  template-backed and tier didn't change (the pricing stage still needs
+   *  a tier to look up USD + match Apple's price-point). */
+  currentTierId?: string | null;
 }
 
 // ─── Stage result shapes ─────────────────────────────────────────────────────
@@ -480,22 +489,37 @@ async function runScreenshotStage(
 async function runPricingStage(
   args: UpdateIapOnAppleArgs,
 ): Promise<StagePricingResult> {
-  const { creds, appleIapId, diff, newUsdPrice, audit } = args;
-  if (!diff.tier_changed) {
+  const { creds, appleIapId, diff, newUsdPrice, audit, source, currentTierId } = args;
+  const effectiveSource: PricingSource = source ?? { kind: "APPLE" };
+  // IAP.p1.h: run pricing stage either when the tier changed (legacy
+  // behavior) OR when the Manager picked a template-backed source — for the
+  // latter we re-apply per-territory overrides for the current tier.
+  const shouldRun =
+    diff.tier_changed !== null || effectiveSource.kind !== "APPLE";
+  if (!shouldRun) {
+    return { changed: false };
+  }
+  const tierId = diff.tier_changed?.new_tier_id ?? currentTierId ?? null;
+  if (!tierId) {
+    // Source-only change without a tier in the form — nothing to apply.
+    console.log(
+      `[update-on-apple] stage=pricing skip apple_iap_id=${appleIapId} source=${effectiveSource.kind} reason=no-tier`,
+    );
     return { changed: false };
   }
   console.log(
-    `[update-on-apple] stage=pricing start apple_iap_id=${appleIapId} old=${diff.tier_changed.old_tier_id} new=${diff.tier_changed.new_tier_id} usd=${newUsdPrice}`,
+    `[update-on-apple] stage=pricing start apple_iap_id=${appleIapId} tier=${tierId} source=${effectiveSource.kind} usd=${newUsdPrice}`,
   );
   // Reuse the IAP.o.11d pricing orchestrator wholesale — it owns its own
   // audit log (SET_PRICE_SCHEDULE) with the result severity convention,
-  // retry budget, and instrumentation. Manager Q-IAP.o.12 emphasis on
-  // pricing means using the proven path verbatim, not a re-implementation.
+  // retry budget, and instrumentation. p1.e extended the orchestrator with
+  // the 3-source model; we just thread the chosen source through.
   const outcome = await applyPricingSchedule({
     creds,
     appleIapId,
-    localTierId: diff.tier_changed.new_tier_id,
+    localTierId: tierId,
     usdPrice: newUsdPrice ?? null,
+    source: effectiveSource,
     // Precheck already done in Stage 0; pass ready so the pricing
     // orchestrator doesn't poll twice.
     precheck: { ready: true, attempts: 1, total_ms: 0 },
