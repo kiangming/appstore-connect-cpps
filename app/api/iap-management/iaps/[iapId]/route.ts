@@ -30,6 +30,12 @@ const PatchSchema = z.object({
       }),
     )
     .optional(),
+  // IAP.p1.j Issue 1: persist source choice on edit-mode Save Draft so
+  // the form reload doesn't fall back to Q-D default.
+  pricing_source: z
+    .enum(["APPLE", "DEFAULT_TEMPLATE", "APP_TEMPLATE"])
+    .nullable()
+    .optional(),
 });
 
 async function authAdmin(): Promise<
@@ -77,6 +83,7 @@ export async function PATCH(
         tier_id: patch.tier_id,
         family_sharable: patch.family_sharable,
         review_note: patch.review_note,
+        pricing_source: patch.pricing_source,
       },
       auth.session.user.email ?? "unknown",
     );

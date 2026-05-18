@@ -113,6 +113,33 @@ The audit log (`iap_mgmt.actions_log` WHERE `action_type='SET_PRICE_SCHEDULE'`)
 captures `payload.source`, `payload.overridden_territory_count`, and
 `payload.missing_price_points` so you can verify without leaving the Tool.
 
+## ASC account in the Per-App table (IAP.p1.j)
+
+The **Apps with custom templates** table on Settings → Pricing Templates →
+Per-App Templates shows an **ASC Account** column. Tool captures which
+ASC account was active at the moment Manager first registered the app
+(via Save Draft, Bulk Import, or template upload) and shows that
+account's display name from CPP Setting.
+
+- Pre-IAP.p1.j rows display "—" until Manager touches them again — the
+  next ensureAppRegistered call backfills the column (we never overwrite
+  an already-captured value).
+- The "Upload for an app" dropdown is live-fetched from Apple under the
+  **currently selected** ASC account every time you open it. Switch the
+  account in the TopNav AccountSwitcher and reopen the dropdown to see
+  the new account's catalog. The dropdown helper line shows which
+  account it's reading from.
+
+## Pricing-source persistence (IAP.p1.j)
+
+The Manager's explicit source choice on the Create / Edit IAP form is
+persisted to the IAP row (`iap_mgmt.iaps.pricing_source`). Save Draft +
+reload preserves the choice — Tool will NOT silently re-derive a
+template default when you explicitly picked Apple base.
+
+Bulk Import remains batch-level (Q-E): every row in the same execute
+call shares one source.
+
 ## Replace vs Remove
 
 - **Replace** = upload a new file. Old entries are deleted and the new

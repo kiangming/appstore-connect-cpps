@@ -27,6 +27,11 @@ export interface IapDbRow {
   synced_at: string | null;
   created_at: string;
   updated_at: string;
+  /** IAP.p1.j: persisted pricing-source selection so Save Draft / reload
+   *  round-trip preserves the Manager's choice instead of re-deriving
+   *  Q-D most-specific default. NULL = pre-IAP.p1.j row (defaults handled
+   *  at the form layer). */
+  pricing_source: "APPLE" | "DEFAULT_TEMPLATE" | "APP_TEMPLATE" | null;
 }
 
 export interface IapLocalizationRow {
@@ -56,6 +61,12 @@ export interface IapAppInfo {
   apple_app_id: string;
   bundle_id: string;
   name: string;
+  /** IAP.p1.j Issue 4: ASC account that owns this app, captured at first
+   *  registration so the "Apps with custom templates" table can surface
+   *  the account name. Optional for backward compatibility — pre-IAP.p1.j
+   *  rows land with NULL and display as "—" until Manager re-saves a
+   *  draft / re-uploads a template. */
+  asc_account_id?: string | null;
 }
 
 /**
@@ -88,7 +99,7 @@ export async function ensureAppRegistered(info: IapAppInfo): Promise<string> {
 
   const existing = await db
     .from("apps")
-    .select("id")
+    .select("id, asc_account_id")
     .eq("apple_app_id", info.apple_app_id)
     .maybeSingle();
 
@@ -96,7 +107,23 @@ export async function ensureAppRegistered(info: IapAppInfo): Promise<string> {
     throw new Error(`apps lookup failed: ${existing.error.message}`);
   }
   if (existing.data) {
-    return (existing.data as { id: string }).id;
+    const row = existing.data as { id: string; asc_account_id: string | null };
+    // IAP.p1.j Issue 4: backfill asc_account_id when an existing row was
+    // registered before the column existed (or under a NULL account) but
+    // a caller now knows which account owns it. We never overwrite a
+    // populated value — a different caller seeing the same apple_app_id
+    // under a different ASC account is ambiguous and out of scope for p1.j.
+    if (!row.asc_account_id && info.asc_account_id) {
+      const upd = await db
+        .from("apps")
+        .update({ asc_account_id: info.asc_account_id })
+        .eq("id", row.id)
+        .is("asc_account_id", null);
+      if (upd.error) {
+        throw new Error(`apps backfill failed: ${upd.error.message}`);
+      }
+    }
+    return row.id;
   }
 
   const ins = await db
@@ -105,6 +132,7 @@ export async function ensureAppRegistered(info: IapAppInfo): Promise<string> {
       apple_app_id: info.apple_app_id,
       bundle_id: info.bundle_id,
       name: info.name,
+      asc_account_id: info.asc_account_id ?? null,
     })
     .select("id")
     .single();
@@ -134,6 +162,9 @@ export async function createDraftIap(input: CreateDraftInput): Promise<IapDbRow>
       tier_id: input.form.tier_id,
       family_sharable: false,
       review_note: null,
+      // IAP.p1.j Issue 1: persist the Manager's explicit pricing-source
+      // choice so reload doesn't re-derive Q-D default.
+      pricing_source: input.form.pricing_source ?? null,
     })
     .select("*")
     .single();
@@ -186,6 +217,8 @@ export interface UpdateDraftInput {
   tier_id?: string | null;
   family_sharable?: boolean;
   review_note?: string | null;
+  /** IAP.p1.j: optional patch on Save Draft from edit page. */
+  pricing_source?: "APPLE" | "DEFAULT_TEMPLATE" | "APP_TEMPLATE" | null;
 }
 
 export async function updateIap(
@@ -201,6 +234,8 @@ export async function updateIap(
   if (patch.family_sharable !== undefined)
     updates.family_sharable = patch.family_sharable;
   if (patch.review_note !== undefined) updates.review_note = patch.review_note;
+  if (patch.pricing_source !== undefined)
+    updates.pricing_source = patch.pricing_source;
 
   if (Object.keys(updates).length === 0) return;
 

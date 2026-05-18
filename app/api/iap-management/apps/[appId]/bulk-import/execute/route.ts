@@ -200,6 +200,7 @@ export async function POST(
       apple_app_id: ctx.params.appId,
       bundle_id: appRes.data.attributes.bundleId,
       name: appRes.data.attributes.name,
+      asc_account_id: creds.id,
     });
     const existingRes = await listAllInAppPurchases(creds, ctx.params.appId);
     existingByProductId = new Map(

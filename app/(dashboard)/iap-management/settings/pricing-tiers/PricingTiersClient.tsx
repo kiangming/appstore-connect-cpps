@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import type {
-  AppOption,
   AppTemplateSummary,
   TemplateOverview,
 } from "@/lib/iap-management/queries/templates";
@@ -12,7 +11,6 @@ import { PerAppTemplateTab } from "./PerAppTemplateTab";
 interface Props {
   defaultOverview: TemplateOverview;
   appsWithTemplates: AppTemplateSummary[];
-  activeApps: AppOption[];
 }
 
 type Tab = "default" | "per-app";
@@ -20,7 +18,6 @@ type Tab = "default" | "per-app";
 export function PricingTiersClient({
   defaultOverview,
   appsWithTemplates,
-  activeApps,
 }: Props) {
   const [tab, setTab] = useState<Tab>("default");
 
@@ -57,10 +54,7 @@ export function PricingTiersClient({
       {tab === "default" ? (
         <DefaultTemplateTab overview={defaultOverview} />
       ) : (
-        <PerAppTemplateTab
-          appsWithTemplates={appsWithTemplates}
-          activeApps={activeApps}
-        />
+        <PerAppTemplateTab appsWithTemplates={appsWithTemplates} />
       )}
     </div>
   );

@@ -29,6 +29,24 @@ export function defaultPricingSource(
 }
 
 /**
+ * IAP.p1.j Issue 1: resolve the form's initial pricing source so a stored
+ * Manager choice from a prior Save-Draft round trip wins over the Q-D
+ * most-specific default. Used by IapForm's useState initialiser.
+ *
+ * Invariant: a non-null `stored` value is ALWAYS preserved — even APPLE
+ * when the Manager has uploaded a template (which would have otherwise
+ * fired Q-D to DEFAULT_TEMPLATE / APP_TEMPLATE).
+ */
+export function resolveInitialPricingSource(
+  stored: PricingSourceKind | null | undefined,
+  defaultTemplateAvailable: boolean,
+  appTemplateAvailable: boolean,
+): PricingSourceKind {
+  if (stored) return stored;
+  return defaultPricingSource(defaultTemplateAvailable, appTemplateAvailable);
+}
+
+/**
  * 3-radio pricing source selector. Gray-out disabled options with a helper
  * line explaining why; clicking a disabled radio is a no-op so the
  * keyboard-only path matches click semantics.

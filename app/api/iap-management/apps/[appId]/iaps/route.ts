@@ -29,6 +29,12 @@ const FormSchema = z.object({
     }),
   ),
   screenshot_filename: z.string().nullable(),
+  // IAP.p1.j Issue 1: persist Manager's explicit pricing-source choice
+  // so reload doesn't re-derive Q-D default. Optional for forward-compat
+  // with any older clients still on the IAP.p1.f payload shape.
+  pricing_source: z
+    .enum(["APPLE", "DEFAULT_TEMPLATE", "APP_TEMPLATE"])
+    .optional(),
 });
 
 const BodySchema = z.object({
@@ -76,6 +82,7 @@ export async function POST(
       apple_app_id: ctx.params.appId,
       bundle_id: appRes.data.attributes.bundleId,
       name: appRes.data.attributes.name,
+      asc_account_id: creds.id,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Failed to resolve app";

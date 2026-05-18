@@ -11,7 +11,7 @@ import { ScreenshotUpload } from "./ScreenshotUpload";
 import { UpdateChangesPreviewModal } from "./UpdateChangesPreviewModal";
 import {
   PricingSourceSelector,
-  defaultPricingSource,
+  resolveInitialPricingSource,
 } from "./PricingSourceSelector";
 import {
   validateIapFormGrouped,
@@ -77,12 +77,14 @@ export function IapForm({
   appTemplateEntryCount,
 }: IapFormProps) {
   const router = useRouter();
-  // Resolve the initial pricing-source: explicit prop wins; otherwise Q-D
-  // most-specific available source. Skipped when the form already carries
-  // a stored selection (edit mode).
-  const initialPricingSource: PricingSourceKind =
-    initial.pricing_source ??
-    defaultPricingSource(defaultTemplateAvailable, appTemplateAvailable);
+  // Resolve the initial pricing-source: stored Manager choice wins (Q-J
+  // explicit + IAP.p1.j Issue 1 round-trip invariant); else fall back to
+  // Q-D most-specific available source.
+  const initialPricingSource: PricingSourceKind = resolveInitialPricingSource(
+    initial.pricing_source,
+    defaultTemplateAvailable,
+    appTemplateAvailable,
+  );
   const [form, setForm] = useState<IapFormState>({
     ...initial,
     pricing_source: initialPricingSource,
@@ -200,6 +202,8 @@ export function IapForm({
             reference_name: form.reference_name.trim(),
             tier_id: form.tier_id,
             localizations: form.localizations,
+            // IAP.p1.j Issue 1: persist source on edit-mode Save Draft.
+            pricing_source: form.pricing_source ?? "APPLE",
           }),
         });
         const data = (await res.json()) as

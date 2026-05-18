@@ -9,6 +9,9 @@ import {
   replaceTemplate,
   type TemplateScope,
 } from "@/lib/iap-management/queries/templates";
+import { ensureAppRegistered } from "@/lib/iap-management/queries/iaps";
+import { getActiveAccount } from "@/lib/get-active-account";
+import { getApp } from "@/lib/asc-client";
 import { log } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -44,6 +47,7 @@ export async function POST(req: Request) {
   let file: File | null = null;
   let scopeField: string | null = null;
   let appIdField: string | null = null;
+  let appleAppIdField: string | null = null;
   try {
     const form = await req.formData();
     const candidate = form.get("file");
@@ -52,6 +56,13 @@ export async function POST(req: Request) {
     if (typeof scopeRaw === "string") scopeField = scopeRaw;
     const appIdRaw = form.get("app_id");
     if (typeof appIdRaw === "string") appIdField = appIdRaw;
+    // IAP.p1.j Issue 3: Settings → Per-App tab live-fetches Apple's app
+    // catalog and sends the Apple numeric ID; the route resolves to the
+    // internal iap_mgmt.apps UUID via ensureAppRegistered (auto-registers
+    // apps the Manager hasn't yet drafted an IAP for). The App detail
+    // section continues to send the resolved internal UUID directly.
+    const appleAppIdRaw = form.get("apple_app_id");
+    if (typeof appleAppIdRaw === "string") appleAppIdField = appleAppIdRaw;
   } catch {
     return NextResponse.json(
       { error: "Invalid multipart request body." },
@@ -69,13 +80,31 @@ export async function POST(req: Request) {
   if (scopeField === "GLOBAL") {
     scope = { kind: "GLOBAL" };
   } else if (scopeField === "APP") {
-    if (!appIdField) {
+    let internalAppId = appIdField;
+    if (!internalAppId && appleAppIdField) {
+      try {
+        const creds = await getActiveAccount();
+        const appRes = await getApp(creds, appleAppIdField);
+        internalAppId = await ensureAppRegistered({
+          apple_app_id: appleAppIdField,
+          bundle_id: appRes.data.attributes.bundleId,
+          name: appRes.data.attributes.name,
+          // IAP.p1.j Issue 4: capture the ASC account at first registration.
+          asc_account_id: creds.id,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Apple lookup failed";
+        await log("iap-pricing-templates", `apple_app_id resolve failed: ${msg}`, "ERROR");
+        return NextResponse.json({ error: msg }, { status: 502 });
+      }
+    }
+    if (!internalAppId) {
       return NextResponse.json(
-        { error: 'scope=APP requires "app_id" in form data.' },
+        { error: 'scope=APP requires "app_id" (internal UUID) or "apple_app_id" in form data.' },
         { status: 400 },
       );
     }
-    scope = { kind: "APP", app_id: appIdField };
+    scope = { kind: "APP", app_id: internalAppId };
   } else {
     return NextResponse.json(
       { error: 'scope must be "GLOBAL" or "APP".' },

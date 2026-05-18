@@ -63,17 +63,18 @@
 | 48 | `a64146a` | **IAP.p1.f** feat | `PricingSourceSelector` on Create / Edit IAP form (Q-D most-specific default); Create-on-Apple route consumes the source as a typed `PricingSource` union |
 | 49 | `f8ce9a3` | **IAP.p1.g** feat | Bulk Import wizard Step 3 source selector (Q-E batch-level); execute route threads source into every CREATE / OVERWRITE row; Step 4 surfaces applied source |
 | 50 | `dbd9bd9` | **IAP.p1.h** feat | Update-on-Apple `UpdateIapOnAppleArgs.source` + currentTierId; pricing stage runs on source-only change when template-backed; UpdateChangesPreviewModal source banner |
-| 51 | `(this commit)` | **IAP.p1.i** docs | apple-api-reference Pricing Template System section + Manager-facing `pricing-templates-guide.md` + SESSION-ARC roll-up + integration test |
+| 51 | `79db4c6` | **IAP.p1.i** docs | apple-api-reference Pricing Template System section + Manager-facing `pricing-templates-guide.md` + SESSION-ARC roll-up + integration test |
+| 52 | `(this commit)` | **IAP.p1.j** hotfix | MV30 v9 4-issue bundle: (1) persist `iaps.pricing_source` so Save Draft round-trip preserves Manager's explicit choice; (2) accurate entry count via dedicated `count: 'exact'` + range-paginated `fetchEntries` (Supabase 1000-row cap fix; also restored full template iteration in the pricing orchestrator); (3) live `/api/iap-management/asc-apps` Apple fetch behind the Per-App tab dropdown, refetch on open; (4) new `iap_mgmt.apps.asc_account_id` column captured by `ensureAppRegistered`, ASC Account column rendered on "Apps with custom templates" |
 
-### Cumulative metrics (this arc — through IAP.p1)
+### Cumulative metrics (this arc — through IAP.p1.j)
 
-- **Lines added**: ~16,500 net (IAP.p1 alone ~3,000 across migration + parser + UI + orchestration + docs)
-- **Migrations**: 6 (added `20260519000000_iap_mgmt_pricing_templates` for IAP.p1.a)
-- **Routes**: 17 (added `/api/iap-management/pricing-templates` POST + `/pricing-templates/[templateId]` DELETE at IAP.p1.c)
-- **Tests**: 1346 → 1657 (+311 new total; +27 in IAP.p1 alone)
-- **Gauntlet 4/4 ✅** at every sub-chunk through IAP.p1.i
+- **Lines added**: ~17,000 net (IAP.p1 alone ~3,500 across migration + parser + UI + orchestration + docs + MV30 v9 hotfix)
+- **Migrations**: 7 (added `20260520000000_iap_mgmt_p1j_hotfix` for the `iaps.pricing_source` + `apps.asc_account_id` columns)
+- **Routes**: 18 (added `/api/iap-management/asc-apps` at IAP.p1.j)
+- **Tests**: 1346 → 1665 (+319 new total; +31 in IAP.p1 alone)
+- **Gauntlet 4/4 ✅** at every sub-chunk through IAP.p1.j
 - **Dependencies added**: none in IAP.p1.
-- **Hotfix + extension sub-chunks**: 29 post-UAT total. The o.6 → o.11 run was the post-MV30 cycle; o.12 closed Deferral 3 (edit-of-synced-IAP); p1.a–i closed the strategic upgrade for Manager's 3-source per-territory pricing model.
+- **Hotfix + extension sub-chunks**: 30 post-UAT total. The o.6 → o.11 run was the post-MV30 cycle; o.12 closed Deferral 3 (edit-of-synced-IAP); p1.a–i shipped the strategic upgrade for Manager's 3-source per-territory pricing model; p1.j hot-fixed 4 UX/data issues surfaced by MV30 v9.
 
 ---
 

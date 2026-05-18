@@ -9,8 +9,7 @@ import {
   type IapDbRow,
 } from "@/lib/iap-management/queries/iaps";
 import {
-  getAppTemplate,
-  getTemplateOverview,
+  getTemplateSummary,
   type TemplateHeader,
 } from "@/lib/iap-management/queries/templates";
 import { IapListClient } from "./IapListClient";
@@ -84,14 +83,14 @@ async function IapListContent({ appId }: { appId: string }) {
     if (internalAppId) {
       drafts = (await listDraftIaps(internalAppId)).drafts;
       appleToInternal = await listSyncedAppleIapMap(internalAppId);
-      const tmpl = await getAppTemplate(internalAppId);
-      if (tmpl) {
-        appTemplate = tmpl.template;
-        appTemplateEntryCount = tmpl.entries.length;
+      const summary = await getTemplateSummary({ kind: "APP", app_id: internalAppId });
+      if (summary) {
+        appTemplate = summary.template;
+        appTemplateEntryCount = summary.entry_count;
       }
     }
-    const def = await getTemplateOverview({ kind: "GLOBAL" });
-    defaultTemplateExists = def.template !== null;
+    const def = await getTemplateSummary({ kind: "GLOBAL" });
+    defaultTemplateExists = def !== null;
   } catch {
     // drafts + synced map + template lookups are non-essential — degrade silently
   }

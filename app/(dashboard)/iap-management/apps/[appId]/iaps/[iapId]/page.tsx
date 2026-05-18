@@ -4,10 +4,7 @@ import { ChevronLeft } from "lucide-react";
 import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
 import { listTiers } from "@/lib/iap-management/queries/price-tiers";
 import { getIapWithRelations } from "@/lib/iap-management/queries/iaps";
-import {
-  getAppTemplate,
-  getTemplateOverview,
-} from "@/lib/iap-management/queries/templates";
+import { getTemplateSummary } from "@/lib/iap-management/queries/templates";
 import { getApp } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { IapForm } from "@/components/iap-management/iap-form/IapForm";
@@ -65,6 +62,9 @@ export default async function EditIapPage({ params }: PageProps) {
     screenshot_filename: screenshot?.file_name ?? null,
     review_note: data.iap.review_note ?? null,
     family_sharable: Boolean(data.iap.family_sharable),
+    // IAP.p1.j Issue 1: hydrate persisted pricing-source so the form
+    // doesn't re-derive Q-D default and override the Manager's choice.
+    pricing_source: data.iap.pricing_source ?? undefined,
   };
 
   // IAP.p1.f: per-edit pricing-source selection. Defaults to most-specific
@@ -75,15 +75,15 @@ export default async function EditIapPage({ params }: PageProps) {
   let appTemplateAvailable = false;
   let appTemplateEntryCount = 0;
   try {
-    const def = await getTemplateOverview({ kind: "GLOBAL" });
-    if (def.template) {
+    const def = await getTemplateSummary({ kind: "GLOBAL" });
+    if (def) {
       defaultTemplateAvailable = true;
-      defaultTemplateEntryCount = def.populated_entry_count;
+      defaultTemplateEntryCount = def.entry_count;
     }
-    const app = await getAppTemplate(data.iap.app_id);
+    const app = await getTemplateSummary({ kind: "APP", app_id: data.iap.app_id });
     if (app) {
       appTemplateAvailable = true;
-      appTemplateEntryCount = app.entries.length;
+      appTemplateEntryCount = app.entry_count;
     }
   } catch {
     // non-essential

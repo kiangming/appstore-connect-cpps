@@ -19,6 +19,7 @@ import type {
   PriceTiersParseResult,
 } from "../parsers/price-tiers";
 import { flattenTemplateEntries } from "../parsers/price-tiers";
+import { findAllAccounts } from "@/lib/asc-account-repository";
 
 const ENTRY_BATCH_SIZE = 1000;
 
@@ -44,32 +45,22 @@ export interface AppTemplateSummary {
   app_id: string;
   app_name: string;
   bundle_id: string;
+  /** IAP.p1.j: Apple's numeric ID surfaced so the Per-App tab's dropdown
+   *  speaks one ID format (apple_app_id) across "No template" + "Has
+   *  template" groups. */
+  apple_app_id: string;
+  /** IAP.p1.j: ASC account that owns this app, captured at
+   *  ensureAppRegistered time. Null for pre-IAP.p1.j rows. */
+  asc_account_id: string | null;
+  asc_account_name: string | null;
   template: TemplateHeader;
   entry_count: number;
 }
 
-export interface AppOption {
-  id: string;
-  name: string;
-  bundle_id: string;
-}
-
-/**
- * List every active app, used by the Settings "Per-App Templates" tab to
- * power the "Upload for app" dropdown.
- */
-export async function listActiveAppsForTemplateUpload(): Promise<AppOption[]> {
-  const db = iapDb();
-  const res = await db
-    .from("apps")
-    .select("id, name, bundle_id")
-    .eq("active", true)
-    .order("name", { ascending: true });
-  if (res.error) {
-    throw new Error(`Active apps fetch failed: ${res.error.message}`);
-  }
-  return (res.data ?? []) as AppOption[];
-}
+// IAP.p1.j Issue 3: the legacy listActiveAppsForTemplateUpload helper
+// queried iap_mgmt.apps (locally-registered only) and was retired in
+// favour of the live Apple fetch at /api/iap-management/asc-apps. Removed
+// to avoid a stale data path tempting future callers.
 
 export interface TemplateTierDetail {
   tier_id: string;
@@ -117,16 +108,34 @@ async function fetchTemplateHeader(
 
 async function fetchEntries(templateId: string): Promise<FlatTemplateEntry[]> {
   const db = iapDb();
-  const res = await db
+  // IAP.p1.j Issue 2: Supabase default page size is 1000 — without range
+  // pagination a 16,800-entry Default Template would silently truncate.
+  // The truncation also affected pricing-orchestration (only first 1000
+  // template entries were iterated). Range-paginate to fix both surfaces.
+  const countRes = await db
     .from("price_tier_template_entries")
-    .select("tier_id, territory_code, currency_code, customer_price, proceeds")
-    .eq("template_id", templateId)
-    .order("tier_id", { ascending: true })
-    .order("territory_code", { ascending: true });
-  if (res.error) {
-    throw new Error(`Template entries fetch failed: ${res.error.message}`);
+    .select("template_id", { count: "exact", head: true })
+    .eq("template_id", templateId);
+  if (countRes.error) {
+    throw new Error(`Template entries count failed: ${countRes.error.message}`);
   }
-  return (res.data ?? []) as FlatTemplateEntry[];
+  const total = countRes.count ?? 0;
+  const PAGE_SIZE = 1000;
+  const entries: FlatTemplateEntry[] = [];
+  for (let offset = 0; offset < total; offset += PAGE_SIZE) {
+    const pageRes = await db
+      .from("price_tier_template_entries")
+      .select("tier_id, territory_code, currency_code, customer_price, proceeds")
+      .eq("template_id", templateId)
+      .order("tier_id", { ascending: true })
+      .order("territory_code", { ascending: true })
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (pageRes.error) {
+      throw new Error(`Template entries page fetch failed: ${pageRes.error.message}`);
+    }
+    entries.push(...((pageRes.data ?? []) as FlatTemplateEntry[]));
+  }
+  return entries;
 }
 
 /**
@@ -140,6 +149,34 @@ export async function getDefaultTemplate(): Promise<TemplateWithEntries | null> 
   if (!template) return null;
   const entries = await fetchEntries(template.id);
   return { template, entries };
+}
+
+export interface TemplateSummary {
+  template: TemplateHeader;
+  entry_count: number;
+}
+
+/**
+ * IAP.p1.j: lightweight "exists + count" variant of getDefaultTemplate /
+ * getAppTemplate. Used by page servers (App detail, New IAP) that only
+ * need the existence flag and a stat-card count — calling the full
+ * entries loader for a 16,800-row template just to compute `.length`
+ * was paying a needless O(N) cost on every render.
+ */
+export async function getTemplateSummary(
+  scope: TemplateScope,
+): Promise<TemplateSummary | null> {
+  const template = await fetchTemplateHeader(scope);
+  if (!template) return null;
+  const db = iapDb();
+  const countRes = await db
+    .from("price_tier_template_entries")
+    .select("template_id", { count: "exact", head: true })
+    .eq("template_id", template.id);
+  if (countRes.error) {
+    throw new Error(`Template entry count failed: ${countRes.error.message}`);
+  }
+  return { template, entry_count: countRes.count ?? 0 };
 }
 
 /**
@@ -178,15 +215,28 @@ export async function listAppsWithTemplates(): Promise<AppTemplateSummary[]> {
     .filter((v): v is string => v !== null);
   const appsRes = await db
     .from("apps")
-    .select("id, name, bundle_id")
+    .select("id, name, bundle_id, apple_app_id, asc_account_id")
     .in("id", appIds);
   if (appsRes.error) {
     throw new Error(`Apps lookup failed: ${appsRes.error.message}`);
   }
   const appById = new Map(
-    ((appsRes.data ?? []) as Array<{ id: string; name: string; bundle_id: string }>)
-      .map((a) => [a.id, a]),
+    (
+      (appsRes.data ?? []) as Array<{
+        id: string;
+        name: string;
+        bundle_id: string;
+        apple_app_id: string;
+        asc_account_id: string | null;
+      }>
+    ).map((a) => [a.id, a]),
   );
+
+  // IAP.p1.j Issue 4: surface ASC account name on the "Apps with custom
+  // templates" table. asc_accounts lives in public schema (the shared
+  // CPP/IAP credential store); read via the existing repository helper.
+  const accounts = await findAllAccounts();
+  const accountNameById = new Map(accounts.map((a) => [a.id, a.name]));
 
   const counts = new Map<string, number>();
   for (const t of templates) {
@@ -209,6 +259,11 @@ export async function listAppsWithTemplates(): Promise<AppTemplateSummary[]> {
       app_id: t.scope_app_id,
       app_name: app.name,
       bundle_id: app.bundle_id,
+      apple_app_id: app.apple_app_id,
+      asc_account_id: app.asc_account_id,
+      asc_account_name: app.asc_account_id
+        ? accountNameById.get(app.asc_account_id) ?? null
+        : null,
       template: t,
       entry_count: counts.get(t.id) ?? 0,
     });
@@ -239,19 +294,36 @@ export async function getTemplateOverview(
   }
 
   const db = iapDb();
-  const [entriesRes, tiersRes] = await Promise.all([
-    db
-      .from("price_tier_template_entries")
-      .select("tier_id, territory_code, currency_code, customer_price, proceeds")
-      .eq("template_id", header.id),
-    db.from("price_tiers").select("tier_id, tier_name"),
-  ]);
-  if (entriesRes.error)
-    throw new Error(`Template entries fetch failed: ${entriesRes.error.message}`);
+  // IAP.p1.j Issue 2: Supabase's `.select()` default page size is 1000 —
+  // for a 16,800-entry migrated Default Template `entries.length` was
+  // saturating at 1000 and Manager saw "1000" on the Settings stat card.
+  // Two fixes: (a) request an accurate count via `count: 'exact', head:
+  // true` separately, then (b) range-fetch the full set in 1000-row
+  // chunks so the per-tier detail view stays complete.
+  const countRes = await db
+    .from("price_tier_template_entries")
+    .select("template_id", { count: "exact", head: true })
+    .eq("template_id", header.id);
+  if (countRes.error)
+    throw new Error(`Template entries count failed: ${countRes.error.message}`);
+  const totalEntries = countRes.count ?? 0;
+
+  const tiersRes = await db.from("price_tiers").select("tier_id, tier_name");
   if (tiersRes.error)
     throw new Error(`Tier metadata fetch failed: ${tiersRes.error.message}`);
 
-  const entries = (entriesRes.data ?? []) as FlatTemplateEntry[];
+  const PAGE_SIZE = 1000;
+  const entries: FlatTemplateEntry[] = [];
+  for (let offset = 0; offset < totalEntries; offset += PAGE_SIZE) {
+    const pageRes = await db
+      .from("price_tier_template_entries")
+      .select("tier_id, territory_code, currency_code, customer_price, proceeds")
+      .eq("template_id", header.id)
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (pageRes.error)
+      throw new Error(`Template entries page fetch failed: ${pageRes.error.message}`);
+    entries.push(...((pageRes.data ?? []) as FlatTemplateEntry[]));
+  }
   const tierMeta = new Map(
     ((tiersRes.data ?? []) as Array<{ tier_id: string; tier_name: string }>).map(
       (t) => [t.tier_id, t.tier_name],
@@ -293,7 +365,9 @@ export async function getTemplateOverview(
     template: header,
     tiers,
     territory_count: territories.size,
-    populated_entry_count: entries.length,
+    // Authoritative count comes from the exact-count query above so the
+    // Settings stat card is accurate even when entries > 1000.
+    populated_entry_count: totalEntries,
   };
 }
 

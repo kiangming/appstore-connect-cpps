@@ -4,10 +4,7 @@ import { ChevronLeft } from "lucide-react";
 import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
 import { listTiers } from "@/lib/iap-management/queries/price-tiers";
 import { findAppByAppleId } from "@/lib/iap-management/queries/iaps";
-import {
-  getAppTemplate,
-  getTemplateOverview,
-} from "@/lib/iap-management/queries/templates";
+import { getTemplateSummary } from "@/lib/iap-management/queries/templates";
 import { getApp } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { emptyIapForm } from "@/lib/iap-management/validation";
@@ -45,17 +42,17 @@ export default async function NewIapPage({ params }: PageProps) {
   let appTemplateAvailable = false;
   let appTemplateEntryCount = 0;
   try {
-    const def = await getTemplateOverview({ kind: "GLOBAL" });
-    if (def.template) {
+    const def = await getTemplateSummary({ kind: "GLOBAL" });
+    if (def) {
       defaultTemplateAvailable = true;
-      defaultTemplateEntryCount = def.populated_entry_count;
+      defaultTemplateEntryCount = def.entry_count;
     }
     const internalAppId = await findAppByAppleId(params.appId);
     if (internalAppId) {
-      const app = await getAppTemplate(internalAppId);
+      const app = await getTemplateSummary({ kind: "APP", app_id: internalAppId });
       if (app) {
         appTemplateAvailable = true;
-        appTemplateEntryCount = app.entries.length;
+        appTemplateEntryCount = app.entry_count;
       }
     }
   } catch {

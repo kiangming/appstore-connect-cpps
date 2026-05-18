@@ -97,6 +97,7 @@ export async function POST(
       apple_app_id: appleAppId,
       bundle_id: appRes.data.attributes.bundleId,
       name: appRes.data.attributes.name,
+      asc_account_id: creds.id,
     });
     appleIaps = iapsRes.data ?? [];
   } catch (err) {

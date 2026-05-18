@@ -1,17 +1,19 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Upload, RefreshCw, Trash2 } from "lucide-react";
-import type {
-  AppOption,
-  AppTemplateSummary,
-} from "@/lib/iap-management/queries/templates";
+import { Upload, RefreshCw, Trash2, Loader2 } from "lucide-react";
+import type { AppTemplateSummary } from "@/lib/iap-management/queries/templates";
+
+interface AscApp {
+  id: string;
+  name: string;
+  bundle_id: string;
+}
 
 interface Props {
   appsWithTemplates: AppTemplateSummary[];
-  activeApps: AppOption[];
 }
 
 function formatTimestamp(iso: string): string {
@@ -22,19 +24,74 @@ function formatTimestamp(iso: string): string {
   }
 }
 
-export function PerAppTemplateTab({ appsWithTemplates, activeApps }: Props) {
+export function PerAppTemplateTab({ appsWithTemplates }: Props) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedAppId, setSelectedAppId] = useState<string>("");
   const [uploading, setUploading] = useState(false);
   const [, startTransition] = useTransition();
 
-  async function handleFile(file: File, appId: string) {
+  // IAP.p1.j Issue 3: live-fetch the app list from the active ASC account
+  // every time the dropdown is opened. The previous behavior queried
+  // iap_mgmt.apps (only locally-registered apps) which excluded apps the
+  // Manager had never saved a draft for. Live fetch hits Apple via
+  // /api/iap-management/asc-apps under the active getActiveAccount creds
+  // so an account switch + reopen surfaces the new account's catalog.
+  const [ascApps, setAscApps] = useState<AscApp[]>([]);
+  const [ascAccountName, setAscAccountName] = useState<string | null>(null);
+  const [ascAppsLoading, setAscAppsLoading] = useState(false);
+  const [ascAppsError, setAscAppsError] = useState<string | null>(null);
+  const fetchInFlight = useRef<Promise<void> | null>(null);
+
+  async function refreshAscApps() {
+    if (fetchInFlight.current) return fetchInFlight.current;
+    setAscAppsLoading(true);
+    setAscAppsError(null);
+    const p = (async () => {
+      try {
+        const res = await fetch("/api/iap-management/asc-apps", {
+          cache: "no-store",
+        });
+        const data = (await res.json()) as
+          | { apps: AscApp[]; account_name?: string }
+          | { error: string };
+        if (!res.ok) {
+          setAscAppsError("error" in data ? data.error : `Fetch failed (${res.status})`);
+          return;
+        }
+        if ("apps" in data) {
+          setAscApps(data.apps);
+          setAscAccountName(data.account_name ?? null);
+        }
+      } catch (err) {
+        setAscAppsError(err instanceof Error ? err.message : "Network error");
+      } finally {
+        setAscAppsLoading(false);
+      }
+    })();
+    fetchInFlight.current = p;
+    try {
+      await p;
+    } finally {
+      fetchInFlight.current = null;
+    }
+  }
+
+  // Initial hydration once on mount; subsequent fetches fire on dropdown
+  // open (mousedown / focus) so an account switch picked up live.
+  useEffect(() => {
+    void refreshAscApps();
+  }, []);
+
+  async function handleFile(file: File, appleAppId: string) {
     setUploading(true);
     const form = new FormData();
     form.append("file", file);
     form.append("scope", "APP");
-    form.append("app_id", appId);
+    // IAP.p1.j Issue 3: dropdown carries Apple's numeric ID; the upload
+    // endpoint resolves to the internal iap_mgmt.apps UUID via
+    // ensureAppRegistered (auto-registers if not yet known locally).
+    form.append("apple_app_id", appleAppId);
 
     try {
       const res = await fetch("/api/iap-management/pricing-templates", {
@@ -105,8 +162,14 @@ export function PerAppTemplateTab({ appsWithTemplates, activeApps }: Props) {
     }
   }
 
-  const appsWithoutTemplates = activeApps.filter(
-    (a) => !appsWithTemplates.some((t) => t.app_id === a.id),
+  // ASC IDs are Apple's numeric strings; iap_mgmt.apps stores them under
+  // `apple_app_id` (NOT the internal UUID). The dropdown carries the
+  // Apple ID as the value, and the upload endpoint resolves to internal
+  // via ensureAppRegistered — see /api/iap-management/pricing-templates.
+  // For now we exclude apps that already have a per-app template by
+  // matching against the existing AppTemplateSummary.bundle_id.
+  const appsWithoutTemplates = ascApps.filter(
+    (a) => !appsWithTemplates.some((t) => t.bundle_id === a.bundle_id),
   );
 
   return (
@@ -130,9 +193,20 @@ export function PerAppTemplateTab({ appsWithTemplates, activeApps }: Props) {
             <select
               value={selectedAppId}
               onChange={(e) => setSelectedAppId(e.target.value)}
+              onMouseDown={() => {
+                // IAP.p1.j Issue 3: refetch on every dropdown open so an
+                // account switch picked up live without page reload.
+                void refreshAscApps();
+              }}
               className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[#0071E3]"
             >
-              <option value="">— Select an app —</option>
+              <option value="">
+                {ascAppsLoading
+                  ? "Loading apps…"
+                  : ascAppsError
+                    ? `Failed: ${ascAppsError}`
+                    : "— Select an app —"}
+              </option>
               {appsWithoutTemplates.length > 0 && (
                 <optgroup label="No template yet">
                   {appsWithoutTemplates.map((a) => (
@@ -145,13 +219,24 @@ export function PerAppTemplateTab({ appsWithTemplates, activeApps }: Props) {
               {appsWithTemplates.length > 0 && (
                 <optgroup label="Has template (will replace)">
                   {appsWithTemplates.map((a) => (
-                    <option key={a.app_id} value={a.app_id}>
+                    <option key={a.apple_app_id} value={a.apple_app_id}>
                       {a.app_name} ({a.bundle_id})
                     </option>
                   ))}
                 </optgroup>
               )}
             </select>
+            {ascAccountName && (
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+                Apps from ASC account:{" "}
+                <span className="font-medium text-slate-600 dark:text-slate-400">
+                  {ascAccountName}
+                </span>
+                {ascAppsLoading && (
+                  <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
+                )}
+              </p>
+            )}
           </div>
           <button
             onClick={() => fileInputRef.current?.click()}
@@ -197,6 +282,7 @@ export function PerAppTemplateTab({ appsWithTemplates, activeApps }: Props) {
               <tr className="text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wide">
                 <th className="px-6 py-3">App</th>
                 <th className="px-6 py-3">Bundle ID</th>
+                <th className="px-6 py-3">ASC Account</th>
                 <th className="px-6 py-3 text-right">Entries</th>
                 <th className="px-6 py-3">Uploaded</th>
                 <th className="px-6 py-3 w-12"></th>
@@ -210,6 +296,13 @@ export function PerAppTemplateTab({ appsWithTemplates, activeApps }: Props) {
                   </td>
                   <td className="px-6 py-3 font-mono text-xs text-slate-500 dark:text-slate-400">
                     {a.bundle_id}
+                  </td>
+                  <td className="px-6 py-3 text-xs text-slate-600 dark:text-slate-400">
+                    {a.asc_account_name ? (
+                      a.asc_account_name
+                    ) : (
+                      <span className="text-slate-400 dark:text-slate-600">—</span>
+                    )}
                   </td>
                   <td className="px-6 py-3 text-right text-slate-700 dark:text-slate-300">
                     {a.entry_count}
