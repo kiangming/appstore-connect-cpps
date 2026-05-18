@@ -52,7 +52,7 @@ import {
   findPricePointByUsdPrice,
   type InAppPurchasePricePoint,
 } from "./price-points";
-import { setPriceSchedule } from "./price-schedules";
+import { setPriceSchedule, getPriceScheduleForIap } from "./price-schedules";
 
 const creds: AscCredentials = {
   id: "test",
@@ -291,6 +291,16 @@ describe("API schema: pricing endpoints", () => {
     // IAP.o.11d: Apple rejects plain UUIDs with
     // ENTITY_ERROR.INCLUDED.INVALID_ID — required format is "${...}" lid.
     expect(refId).toMatch(/^\$\{.+\}$/);
+  });
+
+  it("get schedule → GET /v2/inAppPurchases/{id}/inAppPurchasePriceSchedule with full include chain (IAP.p2.a)", async () => {
+    iapFetch.mockResolvedValueOnce({ data: { id: "sched-1", type: "inAppPurchasePriceSchedules" } });
+    await getPriceScheduleForIap(creds, "iap-1");
+    const { method, endpoint } = callArgs();
+    expect(method).toBe("GET");
+    expect(endpoint).toBe(
+      "/v2/inAppPurchases/iap-1/inAppPurchasePriceSchedule?include=baseTerritory,manualPrices.inAppPurchasePricePoint.territory",
+    );
   });
 });
 

@@ -16,7 +16,11 @@
  * ever send one price entry per request.
  */
 import type { AscCredentials } from "@/lib/asc-jwt";
-import { iapFetch, AppleApiError } from "./fetch";
+import { iapFetch, withRetry, AppleApiError } from "./fetch";
+import type {
+  AscApiResponse,
+  InAppPurchasePriceSchedule,
+} from "@/types/iap-management/apple";
 
 export interface SetPriceScheduleArgs {
   appleIapId: string;
@@ -182,4 +186,40 @@ export async function setPriceSchedule(
   }
 
   return { ok: false, error: lastError, attempts };
+}
+
+/**
+ * IAP.p2.a — fetch the current price schedule for a synced IAP for the
+ * read-only View Detail page.
+ *
+ * Uses the relationship-traversal endpoint so the full schedule + base
+ * territory + every manual-price + each price point + each territory return
+ * in a single round trip. The by-id endpoint
+ * (`/v1/inAppPurchasePriceSchedules/{id}`) would require fetching the
+ * schedule id from the parent IAP first; the traversal path collapses the
+ * two-step into one and lets the view page render with the same latency.
+ *
+ * Include hierarchy (manualPrices.inAppPurchasePricePoint.territory) returns:
+ *   - inAppPurchasePriceSchedules → top-level data
+ *   - territories                  → baseTerritory + per-point territory
+ *   - inAppPurchasePrices          → manualPrices entries
+ *   - inAppPurchasePricePoints     → price point per manualPrice
+ *
+ * Apple returns 404 when no schedule exists yet (Manager-created IAP that
+ * never had pricing pushed). Callers should catch `AppleApiError` with
+ * `status === 404` and render the empty-state placeholder.
+ *
+ * Wrapped in `withRetry` for Apple's intermittent 429s on the read path.
+ * Apple has not historically returned 500s for the GET, but the same retry
+ * budget applies because Manager workflow tolerance trumps fail-fast on a
+ * read.
+ */
+export async function getPriceScheduleForIap(
+  creds: AscCredentials,
+  appleIapId: string,
+): Promise<AscApiResponse<InAppPurchasePriceSchedule>> {
+  const path = `/v2/inAppPurchases/${appleIapId}/inAppPurchasePriceSchedule?include=baseTerritory,manualPrices.inAppPurchasePricePoint.territory`;
+  return withRetry(() =>
+    iapFetch<AscApiResponse<InAppPurchasePriceSchedule>>(creds, "GET", path),
+  );
 }

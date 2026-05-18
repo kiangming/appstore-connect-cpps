@@ -121,3 +121,42 @@ export interface UpdateInAppPurchaseLocalizationPayload {
   name?: string;
   description?: string;
 }
+
+// ─── Pricing — Price Schedule (IAP.p2.a) ─────────────────────────────────────
+//
+// Apple exposes the price schedule for an IAP via the relationship-traversal
+// endpoint /v2/inAppPurchases/{id}/inAppPurchasePriceSchedule. The schedule
+// resource itself carries no attributes — every field comes from the
+// `included[]` block (territories + inAppPurchasePrices + price points).
+
+export type Territory = AscResource<"territories", Record<string, never>>;
+
+export interface InAppPurchasePriceAttributes {
+  /** ISO date when the price becomes effective. `null` means "active now". */
+  startDate: string | null;
+  /** ISO date when the price stops being effective (optional, future-dated). */
+  endDate?: string | null;
+}
+
+export type InAppPurchasePrice = AscResource<
+  "inAppPurchasePrices",
+  InAppPurchasePriceAttributes
+>;
+
+export interface InAppPurchasePricePointAttributes {
+  customerPrice: string;
+  proceeds: string;
+  currency?: string;
+  priceTier?: string;
+}
+
+export type InAppPurchasePricePointResource = AscResource<
+  "inAppPurchasePricePoints",
+  InAppPurchasePricePointAttributes
+>;
+
+/** Schedule resource has no attributes — everything lives in relationships. */
+export type InAppPurchasePriceSchedule = AscResource<
+  "inAppPurchasePriceSchedules",
+  Record<string, never>
+>;
