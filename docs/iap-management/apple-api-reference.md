@@ -15,12 +15,12 @@ screenshots, price schedules, submissions) still use v1.
 | List IAPs (paginated) | GET | `/v1/apps/{appAppleId}/inAppPurchasesV2?limit=200` | Follow `links.next` for full enumeration (IAP.o.7a). |
 | Get IAP (with relations) | GET | `/v2/inAppPurchases/{id}?include=inAppPurchaseLocalizations,appStoreReviewScreenshot` | Include both relations in one request. |
 | Create IAP | POST | `/v2/inAppPurchases` | Body: `data.type=inAppPurchases`, relationship `app`. |
-| Update IAP | PATCH | `/v2/inAppPurchases/{id}` | Partial update via `data.attributes`. |
+| Update IAP | PATCH | `/v2/inAppPurchases/{id}` | Partial update via `data.attributes`. IAP.o.12 PATCH-able attributes: `name`, `reviewNote`, `familySharable` only — all other attributes are immutable per OpenAPI. |
 | Delete IAP | DELETE | `/v2/inAppPurchases/{id}` | No body. |
 | List localizations | GET | `/v2/inAppPurchases/{id}/inAppPurchaseLocalizations?limit=200` | |
 | Create localization | POST | `/v1/inAppPurchaseLocalizations` | Relationship: `inAppPurchaseV2` (NOT `inAppPurchase`). |
-| Update localization | PATCH | `/v1/inAppPurchaseLocalizations/{id}` | |
-| Delete localization | DELETE | `/v1/inAppPurchaseLocalizations/{id}` | Bulk-import OVERWRITE path. |
+| Update localization | PATCH | `/v1/inAppPurchaseLocalizations/{id}` | IAP.o.12 PATCH-able attributes: `name`, `description` only. Locale itself is immutable — locale change = DELETE + POST. |
+| Delete localization | DELETE | `/v1/inAppPurchaseLocalizations/{id}` | Bulk-import OVERWRITE path + IAP.o.12 update-on-Apple locale removal. |
 | List price points | GET | `/v2/inAppPurchases/{id}/pricePoints?filter[territory]=USA&limit=1000` | Per-IAP scope — no /apps/{id}/pricePoints endpoint exists. IAP.o.11a bumped limit 200→1000 (OpenAPI spec max 8000). |
 | Set price schedule | POST | `/v1/inAppPurchasePriceSchedules` | Replace-all semantic; relationships + included (see below). |
 | Poll IAP ready (Stage 1→2 guard) | GET | `/v2/inAppPurchases/{id}` | IAP.o.11a — invoked between CREATE and pricing POST to confirm Apple has propagated the new IAP. Polls 200 ms × 10 max = 2 s budget. |
@@ -169,3 +169,34 @@ but is documented as legacy in JSDoc — production code calls
 - When Apple's docs change, expect the integration test to fail first; fix
   it together with the wrapper, then update this reference table in the
   same commit.
+
+## Update-on-Apple flow (IAP.o.12)
+
+The full editable surface Apple's public OpenAPI exposes for a synced IAP:
+
+| Bucket | Endpoint | Patchable fields |
+|---|---|---|
+| IAP attributes | `PATCH /v2/inAppPurchases/{id}` | `name`, `reviewNote`, `familySharable` |
+| Localization (per locale) | `PATCH /v1/inAppPurchaseLocalizations/{id}` | `name`, `description` |
+| Locale add | `POST /v1/inAppPurchaseLocalizations` | full create payload |
+| Locale remove | `DELETE /v1/inAppPurchaseLocalizations/{id}` | — |
+| Screenshot | IAP.o.8a `replaceScreenshotOnApple` (GET + DELETE + 3-step upload) | — |
+| Pricing schedule | IAP.o.11d `applyPricingSchedule` → `POST /v1/inAppPurchasePriceSchedules` | replace-all; tier change ⇒ full schedule replace |
+
+State-edit constraints (not enumerated in OpenAPI — observed behavior):
+- `MISSING_METADATA`, `READY_TO_SUBMIT`, `REJECTED`, `READY_FOR_SALE` —
+  PATCH accepted at the attribute level.
+- `WAITING_FOR_REVIEW`, `IN_REVIEW` — PATCH typically rejected with 409 /
+  422 `STATE_ERROR.*`. Tool surfaces a pre-warn banner via
+  `isStateEditLikelyBlocked` but does NOT pre-block (Q-IAP.o.12.C).
+
+Diff strategy (Q-IAP.o.12.B): per-field. `detectIapChanges` trims text
+fields, collapses null vs empty, and emits nullable buckets so the
+orchestrator skips stages with no change.
+
+### Deferred to IAP.o.13+
+
+`contentHosting` and `availableInAllTerritories` are NOT in the
+`InAppPurchaseV2UpdateRequest` schema — Apple exposes them via dedicated
+child endpoints (e.g. `/v1/inAppPurchaseAvailabilities`) which are not
+yet wrapped. Manager surfaces these on demand in a future cycle.

@@ -1,9 +1,9 @@
 # Session arc summary — IAP Management strategic implementation
 
-**Date**: 2026-05-15 (IAP.c – IAP.n) → 2026-05-16 (IAP.o.1 – IAP.o.5 UAT MV29 hotfixes) → 2026-05-16/17 (IAP.o.6 – IAP.o.11 MV30 hotfix run)
+**Date**: 2026-05-15 (IAP.c – IAP.n) → 2026-05-16 (IAP.o.1 – IAP.o.5 UAT MV29 hotfixes) → 2026-05-16/17 (IAP.o.6 – IAP.o.11 MV30 hotfix run + pricing-silent-fail closure) → 2026-05-18 (IAP.o.12 edit-on-Apple)
 **Arc name**: IAP Management module — 3rd strategic delivery
-**Status**: Functional MVP shipped. Post-UAT MV30 surfaced an Apple-side pricing path silent-fail symptom; IAP.o.11 added comprehensive instrumentation so the next re-test (v5) localizes the failure conclusively.
-**Latest commit**: `9f35df7` IAP.o.11b — pricing diagnostic SQL runbook (was `a5503ad` IAP.o.5 at first arc close)
+**Status**: Functional MVP + edit-on-Apple shipped. IAP.o.11d verified pricing single + bulk Apple-side; IAP.o.12 closes the Deferral 3 gap by adding the full Apple-supported edit surface (attributes + localizations + screenshot + pricing replace).
+**Latest commit**: `855d957` IAP.o.12b — Update on Apple UI (was `9f35df7` IAP.o.11b at the previous close)
 
 ---
 
@@ -49,16 +49,20 @@
 | 34 | `e986585` | **IAP.o.10c** | Integration tests + docs reflect USD match strategy |
 | 35 | `45a2e2f` | **IAP.o.11a** fix | Instrument pricing path · Stage 1→2 poll · retry 5+jitter · audit-write in orchestrator · UI severity escalate |
 | 36 | `9f35df7` | **IAP.o.11b** docs | Pricing diagnostic SQL runbook (Q1–Q4 + Railway log tail) |
+| 37 | `5ded834` | **IAP.o.11c** docs | apple-api-reference + SESSION-ARC reflect IAP.o.11 |
+| 38 | `b85c73c` | **IAP.o.11d** fix | Apple `${local-id}` lid format + actions_log CHECK constraint expansion (H4 root cause) |
+| 39 | `f6d4961` | **IAP.o.12a** feat | Update-on-Apple orchestration · diff-detector · state-edit-blocked helper · update-on-apple route · 5 new audit `*_ON_APPLE` action_types migration |
+| 40 | `855d957` | **IAP.o.12b** feat | Update on Apple UI: button + diff modal + reviewNote enabled + familySharable checkbox + pre-warn banner |
 
-### Cumulative metrics (this arc — through IAP.o.11)
+### Cumulative metrics (this arc — through IAP.o.12)
 
-- **Lines added**: ~11,700 net (IAP.o.6–o.11 contributed ~2,300)
-- **Migrations**: 3 (no schema change in IAP.o.6–o.11 — audit log writes use existing `iap_mgmt.actions_log`)
-- **Routes**: 14 (added `/iaps/[iapId]/create-on-apple` at IAP.o.6a)
-- **Tests**: 1346 → 1590 (+244 new total; +135 since first close)
-- **Gauntlet 4/4 ✅** at every sub-chunk through IAP.o.11b
+- **Lines added**: ~14,100 net (IAP.o.6–o.12 contributed ~4,700; o.12 alone ~2,400)
+- **Migrations**: 5 (added `20260517000000_iap_mgmt_actions_log_action_type_expand` for IAP.o.11d + `20260518000000_iap_mgmt_actions_log_update_on_apple` for IAP.o.12a)
+- **Routes**: 15 (added `/iaps/[iapId]/update-on-apple` at IAP.o.12a)
+- **Tests**: 1346 → 1630 (+284 new total; +40 in IAP.o.12 alone)
+- **Gauntlet 4/4 ✅** at every sub-chunk through IAP.o.12b
 - **Dependencies added**: `next-themes ^0.4.6`. No `p-limit` (hand-rolled `withConcurrency`).
-- **Hotfix sub-chunks**: 18 post-UAT (IAP.o.1 → IAP.o.11b). The IAP.o.6 → IAP.o.11 run was the post-MV30 cycle addressing 2-stage workflow alignment + Apple integration silent-fail mitigation.
+- **Hotfix + extension sub-chunks**: 20 post-UAT (IAP.o.1 → IAP.o.12b). The o.6 → o.11 run was the post-MV30 cycle; o.12 closed Deferral 3 (edit-of-synced-IAP) with maximum Apple-supported edit scope.
 
 ---
 
@@ -111,8 +115,8 @@
 | ID | Limitation | Status |
 |---|---|---|
 | **D1** | Screenshot 3-step Apple upload | ✅ **Absorbed into IAP.i** (bulk path) — single-IAP submit path still skips Apple upload (catch-22: reserve needs apple_iap_id) |
-| **D2** | Pricing schedule POST `/v1/inAppPurchasePriceSchedules` | ⏸️ **Partial** — `tier_id` captured locally + per-IAP audit log; not yet POSTed to Apple |
-| **D3** | Edit-of-synced-IAP PATCH propagation | ✅ **Bulk OVERWRITE absorbed**; single-IAP edit remains local-only (deferred post-MVP) |
+| **D2** | Pricing schedule POST `/v1/inAppPurchasePriceSchedules` | ✅ **RESOLVED at IAP.o.11d** — POST wired into single-IAP create-on-Apple + bulk-import + IAP.o.12 update-on-Apple paths; Manager v6 verified Apple-side. |
+| **D3** | Edit-of-synced-IAP PATCH propagation | ✅ **RESOLVED at IAP.o.12** — single-IAP "Update on Apple" pushes attributes + localizations + screenshot + pricing via diff-driven orchestration. |
 | **D4** | Dark mode full token migration | ⏸️ **IAP.j2 backlog** — IAP.o.3 + IAP.o.5 ship a dual-class shim covering: dashboard wrapper, AppSidebar, IAP form components, BulkImportWizard, PricingTiersClient. CPP + Store modules + HubPage tool cards still light-only. |
 
 ---
@@ -221,8 +225,9 @@ In Manager-stated priority order:
 
 1. **Next feature (Manager will signal)** — fresh strategic kickoff.
 2. **Dark mode polish** — IAP.j2 component refactor full cross-tool (apps grid, IAP list table, HubPage cards, TopNav, CPP modules, Store Submission modules). Effort: ~3-4h. Dual-class shim approach proven; mechanical.
-3. **D2 — Per-IAP pricing schedule POST** — wire `inAppPurchasePriceSchedules` into Submit + Bulk orchestration. Effort: ~1.5h.
-4. **D3 — Edit-of-synced-IAP PATCH propagation** — single-IAP edits push to Apple. Effort: ~2h.
+3. ~~**D2 — Per-IAP pricing schedule POST**~~ — ✅ resolved at IAP.o.11d.
+4. ~~**D3 — Edit-of-synced-IAP PATCH propagation**~~ — ✅ resolved at IAP.o.12.
+5. **IAP.o.13 candidate — `contentHosting` + `availableInAllTerritories` edit support.** These attributes are NOT in `InAppPurchaseV2UpdateRequest`; Apple exposes them via dedicated child endpoints (e.g. `/v1/inAppPurchaseAvailabilities`). Investigation: ~2-3 h OpenAPI audit + Manager workflow priority assessment; implementation: ~3-4 h. Manager to surface explicit need.
 5. **D1 polish — single-IAP Submit screenshot upload** — currently catch-22; resolution = same multi-step orchestration the bulk path uses (~1h to extract + share).
 6. **Integration test layer** — Playwright or similar for the post-token-migration E2E coverage gap surfaced at IAP.l.
 
