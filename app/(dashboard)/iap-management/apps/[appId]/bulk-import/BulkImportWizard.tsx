@@ -39,12 +39,23 @@ import {
   formatTierWithPrice,
   type UsdTierEntry,
 } from "@/lib/iap-management/queries/price-tiers";
+import {
+  PricingSourceSelector,
+  defaultPricingSource,
+} from "@/components/iap-management/iap-form/PricingSourceSelector";
+import type { PricingSourceKind } from "@/lib/iap-management/validation";
 
 interface Props {
   appId: string;
   appName: string;
   existingProductIds: string[];
   usdTiers: UsdTierEntry[];
+  /** IAP.p1.g: Manager-uploaded global Default Template availability. */
+  defaultTemplateAvailable?: boolean;
+  /** IAP.p1.g: this app has its own pricing template. */
+  appTemplateAvailable?: boolean;
+  defaultTemplateEntryCount?: number;
+  appTemplateEntryCount?: number;
 }
 
 type Step = 1 | 2 | 3 | 4;
@@ -81,6 +92,7 @@ interface ExecuteResult {
     price_schedule_set?: boolean;
     pricing_outcome?:
       | "set"
+      | "partial-template-fail"
       | "skipped-no-tier"
       | "skipped-no-usd-price"
       | "skipped-no-match"
@@ -98,9 +110,19 @@ export function BulkImportWizard({
   appName,
   existingProductIds,
   usdTiers,
+  defaultTemplateAvailable = false,
+  appTemplateAvailable = false,
+  defaultTemplateEntryCount,
+  appTemplateEntryCount,
 }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>(1);
+  // IAP.p1.g: batch-level pricing source (Q-E). Initialised to the most
+  // specific available source per Q-D and applied to every CREATE/OVERWRITE
+  // row in the execute call.
+  const [pricingSource, setPricingSource] = useState<PricingSourceKind>(() =>
+    defaultPricingSource(defaultTemplateAvailable, appTemplateAvailable),
+  );
   const [excelFile, setExcelFile] = useState<File | null>(null);
   const [parsed, setParsed] = useState<IapItemsParseResult | null>(null);
   const [screenshots, setScreenshots] = useState<ScreenshotEntry[]>([]);
@@ -167,6 +189,7 @@ export function BulkImportWizard({
           overrides,
           tier_overrides: tierOverrides,
           submit_on_create: submitOnCreate,
+          pricing_source: pricingSource,
         }),
       );
 
@@ -277,6 +300,12 @@ export function BulkImportWizard({
           parsedSkippedLocales={parsed.skipped_locales}
           usdTiers={usdTiers}
           tierOverrides={tierOverrides}
+          pricingSource={pricingSource}
+          onPricingSourceChange={setPricingSource}
+          defaultTemplateAvailable={defaultTemplateAvailable}
+          appTemplateAvailable={appTemplateAvailable}
+          defaultTemplateEntryCount={defaultTemplateEntryCount}
+          appTemplateEntryCount={appTemplateEntryCount}
           onTierOverride={(productId, tier_id) =>
             setTierOverrides((prev) => ({ ...prev, [productId]: tier_id }))
           }
@@ -289,6 +318,7 @@ export function BulkImportWizard({
           appId={appId}
           appName={appName}
           batchHasNrs={parsed ? hasNonRenewingSub(parsed.items) : false}
+          pricingSource={pricingSource}
         />
       )}
 
@@ -659,6 +689,12 @@ function Step3Preview({
   usdTiers,
   tierOverrides,
   onTierOverride,
+  pricingSource,
+  onPricingSourceChange,
+  defaultTemplateAvailable,
+  appTemplateAvailable,
+  defaultTemplateEntryCount,
+  appTemplateEntryCount,
 }: {
   decisions: ConflictDecision[];
   counts: ResolveResult["counts"];
@@ -674,6 +710,12 @@ function Step3Preview({
   usdTiers: UsdTierEntry[];
   tierOverrides: Record<string, string>;
   onTierOverride: (productId: string, tier_id: string) => void;
+  pricingSource: PricingSourceKind;
+  onPricingSourceChange: (next: PricingSourceKind) => void;
+  defaultTemplateAvailable: boolean;
+  appTemplateAvailable: boolean;
+  defaultTemplateEntryCount?: number;
+  appTemplateEntryCount?: number;
 }) {
   const matchedProductIds = new Set(
     screenshots
@@ -745,6 +787,18 @@ function Step3Preview({
           />
           Submit to Apple Review after create
         </label>
+      </div>
+
+      {/* IAP.p1.g: batch-level pricing source (Q-E applies to every row) */}
+      <div className="mb-4">
+        <PricingSourceSelector
+          value={pricingSource}
+          onChange={onPricingSourceChange}
+          defaultTemplateAvailable={defaultTemplateAvailable}
+          appTemplateAvailable={appTemplateAvailable}
+          defaultTemplateEntryCount={defaultTemplateEntryCount}
+          appTemplateEntryCount={appTemplateEntryCount}
+        />
       </div>
 
       {parsedSkippedLocales.length > 0 && (
@@ -926,11 +980,13 @@ function Step4Result({
   appId,
   appName,
   batchHasNrs,
+  pricingSource,
 }: {
   result: ExecuteResult;
   appId: string;
   appName: string;
   batchHasNrs: boolean;
+  pricingSource: PricingSourceKind;
 }) {
   // IAP.o.7c — auto-scroll to the first ERROR row when the batch had any
   // failures. Manager MV30 surfaced that warning toasts + small "Failed"
@@ -999,6 +1055,16 @@ function Step4Result({
             <span className="font-mono text-slate-700">{result.batch_id}</span>{" "}
             completed. Audit rows written to{" "}
             <span className="font-mono">iap_mgmt.actions_log</span>.
+          </p>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+            Pricing source applied:{" "}
+            <span className="font-mono text-slate-700 dark:text-slate-300">
+              {pricingSource === "APPLE"
+                ? "Apple base"
+                : pricingSource === "DEFAULT_TEMPLATE"
+                  ? "Default template"
+                  : "App-specific template"}
+            </span>
           </p>
         </div>
         <button

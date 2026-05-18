@@ -46,6 +46,7 @@ import {
 import { replaceScreenshotOnApple } from "@/lib/iap-management/apple/screenshot-upload";
 import {
   applyPricingSchedule,
+  type PricingSource,
   type PricingOutcome,
 } from "@/lib/iap-management/apple/pricing-orchestration";
 import { pollIapReadyForPricing } from "@/lib/iap-management/apple/poll-iap-ready";
@@ -161,6 +162,9 @@ export async function POST(
     /** Per-productId tier_id override from the Manager (IAP.o.5 Issue C). */
     tier_overrides?: Record<string, string>;
     submit_on_create?: boolean;
+    /** IAP.p1.g: batch-level pricing source per Q-E. APP_TEMPLATE resolves
+     *  to the bulk-import's app_id server-side; client only sends the kind. */
+    pricing_source?: PricingSource["kind"];
   };
   try {
     config = JSON.parse(
@@ -296,6 +300,18 @@ export async function POST(
     usdPriceByTier.set(t.tier_id, t.customer_price);
   }
 
+  // ── IAP.p1.g: resolve pricing source — Q-E batch-level applies to every row.
+  const pricingSourceKind: PricingSource["kind"] = config.pricing_source ?? "APPLE";
+  const pricingSource: PricingSource =
+    pricingSourceKind === "APP_TEMPLATE"
+      ? { kind: "APP_TEMPLATE", app_id: internalAppId }
+      : pricingSourceKind === "DEFAULT_TEMPLATE"
+        ? { kind: "DEFAULT_TEMPLATE" }
+        : { kind: "APPLE" };
+  console.log(
+    `[bulk-execute] pricing source=${pricingSource.kind} batch=${batchId}`,
+  );
+
   // ── Orchestrate per-IAP with bounded concurrency ────────────────────────
   const results: PerIapResult[] = await withConcurrency(
     resolved.decisions,
@@ -313,6 +329,7 @@ export async function POST(
       batchId,
       actor,
       tierOverrides,
+      pricingSource,
     }),
   );
 
@@ -381,6 +398,10 @@ interface OrchestrateArgs {
   /** Per-productId tier override map (IAP.o.5 Issue C). Used by persistResult
    *  to label tier_source as MANUAL_OVERRIDE in the audit log. */
   tierOverrides: Record<string, string>;
+  /** IAP.p1.g: batch-level pricing source applied to every CREATE/OVERWRITE
+   *  row. Already discriminated server-side (APP_TEMPLATE carries the
+   *  internal app_id). */
+  pricingSource: PricingSource;
 }
 
 async function orchestrateOne(args: OrchestrateArgs): Promise<PerIapResult> {
@@ -480,6 +501,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     appleIapId,
     localTierId: resolvedTier,
     usdPrice,
+    source: args.pricingSource,
     precheck: {
       ready: pollResult.ready,
       reason: pollResult.ready ? undefined : pollResult.reason,
@@ -728,6 +750,7 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
       appleIapId,
       localTierId: resolvedTier,
       usdPrice,
+      source: args.pricingSource,
       audit: {
         iapId: args.existingByProductId.get(item.product_id) ?? null,
         actor: args.actor,
