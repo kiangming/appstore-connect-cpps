@@ -3,7 +3,7 @@ import { redirect, notFound } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
 import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
 import { getIapWithRelations } from "@/lib/iap-management/queries/iaps";
-import { getIapDetailFromApple } from "@/lib/iap-management/queries/iap-detail";
+import { getIapViewData } from "@/lib/iap-management/queries/iap-detail";
 import { getApp } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { IapDetailView } from "@/components/iap-management/IapDetailView";
@@ -58,7 +58,7 @@ export default async function ViewIapPage({ params }: PageProps) {
   const fetchedAt = new Date().toISOString();
   let detail;
   try {
-    detail = await getIapDetailFromApple(creds, local.iap.apple_iap_id);
+    detail = await getIapViewData(creds, local.iap.apple_iap_id);
   } catch (err) {
     return (
       <div className="p-8 max-w-3xl mx-auto">
@@ -102,8 +102,9 @@ export default async function ViewIapPage({ params }: PageProps) {
         iap={detail.iap}
         localizations={detail.localizations}
         screenshot={detail.screenshot}
+        priceSchedule={detail.priceSchedule}
+        priceScheduleError={detail.priceScheduleError}
         fetchedAt={fetchedAt}
-        cachedTierId={local.iap.tier_id}
       />
     </div>
   );
