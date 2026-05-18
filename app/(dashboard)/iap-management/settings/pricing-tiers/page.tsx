@@ -1,10 +1,10 @@
 import { redirect } from "next/navigation";
 import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
 import {
-  getImportSummary,
-  listTiers,
-  listTiersWithTerritories,
-} from "@/lib/iap-management/queries/price-tiers";
+  getTemplateOverview,
+  listActiveAppsForTemplateUpload,
+  listAppsWithTemplates,
+} from "@/lib/iap-management/queries/templates";
 import { PricingTiersClient } from "./PricingTiersClient";
 
 export const dynamic = "force-dynamic";
@@ -19,17 +19,17 @@ export default async function PricingTiersPage() {
     throw err;
   }
 
-  const [summary, tiers, tiersDetail] = await Promise.all([
-    getImportSummary(),
-    listTiers(),
-    listTiersWithTerritories(),
+  const [defaultOverview, appsWithTemplates, activeApps] = await Promise.all([
+    getTemplateOverview({ kind: "GLOBAL" }),
+    listAppsWithTemplates(),
+    listActiveAppsForTemplateUpload(),
   ]);
 
   return (
     <PricingTiersClient
-      summary={summary}
-      tiers={tiers}
-      tiersDetail={tiersDetail}
+      defaultOverview={defaultOverview}
+      appsWithTemplates={appsWithTemplates}
+      activeApps={activeApps}
     />
   );
 }
