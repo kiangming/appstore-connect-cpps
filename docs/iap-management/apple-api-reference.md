@@ -200,3 +200,96 @@ orchestrator skips stages with no change.
 `InAppPurchaseV2UpdateRequest` schema — Apple exposes them via dedicated
 child endpoints (e.g. `/v1/inAppPurchaseAvailabilities`) which are not
 yet wrapped. Manager surfaces these on demand in a future cycle.
+
+## Pricing Template System (IAP.p1)
+
+Manager scope (Q-IAP.p1.A..K, May 2026): three pricing sources usable on
+every CREATE / OVERWRITE / UPDATE flow. The orchestrator preserves IAP.o.11d
+APPLE-source behavior bit-for-bit (F8 nuance) and adds two template-backed
+paths layered on top of the same `POST /v1/inAppPurchasePriceSchedules`.
+
+### Sources
+
+| Source | Behavior |
+|---|---|
+| `APPLE` | Single USA price-point in `manualPrices`. Apple auto-equalizes every other territory from the USA base. Existing IAP.o.11d behavior, no regression surface. |
+| `DEFAULT_TEMPLATE` | Global template entries (one row in `iap_mgmt.price_tier_templates` with `scope_type='GLOBAL'`). Per-territory overrides re-POSTed on top of the USA base; missing territories fall through to Apple auto-equalization. |
+| `APP_TEMPLATE` | Per-app template entries (`scope_type='APP'` + `scope_app_id`). Same shape, but only IAPs in this app use it; everything else falls back to DEFAULT (and ultimately Apple). |
+
+Template format identical to the Manager-provided
+`docs/iap-management/templates/price-tiers-template.xlsx` Tier × Territory
+matrix — empty cells are skipped (Q-I sparse). Cell value = `customer_price`
+in the territory's currency. A blank `customer_price` cell means
+"no override for this (tier, territory) — defer to Apple equalization."
+
+### Per-territory override payload
+
+`setPriceSchedule` grew an optional `additionalPricePointIds` array
+(IAP.p1.e). When non-empty, the POST payload's `manualPrices.data` and
+`included[]` carry one entry per overridden territory plus the USA base.
+Apple's lid syntax (`${price-1}`, `${price-2}`, …) per IAP.o.11d remains
+required — refIds are generated as `\${price-${i+1}}`.
+
+Apple's `automaticPrices` relationship implicitly covers every territory
+NOT in `manualPrices` — no enumeration of all 175 territories is needed
+(verified against `docs/iap-management/sample_flow_create_price.md`).
+
+### Per-territory price-point lookup
+
+Each (territory, customer_price) override pair maps to an opaque Apple
+`price_point_id` only obtainable from
+`GET /v2/inAppPurchases/{appleIapId}/pricePoints?filter[territory]=X`.
+`createTerritoryPricePointsCache()` wraps this fetch per orchestration with
+in-flight dedup so two tiers referencing the same territory only fetch once,
+and exposes a `prime()` seam so the USA fetch done by the canonical
+USD-matcher feeds the cache for free.
+
+### Q-K fail-soft
+
+If a template entry references a `customer_price` that has no matching
+Apple catalog entry for that territory (rare: Manager template drifts from
+Apple's actual catalog), the orchestrator:
+
+1. Logs the miss to Railway console (`[pricing] no Apple catalog match`).
+2. Continues with whatever overrides DID resolve — POST still happens.
+3. Returns `kind: 'partial-template-fail'` with `missing_price_points` list
+   populated, surfaced via `actions_log.payload.missing_price_points` for
+   Manager diagnostic queries.
+
+This matches Manager Q-K's "continue-on-fail semantics — Manager workflow
+tolerant" directive. POST failures (5xx, 4xx) still hit the existing
+`failed-set` / `failed-lookup` / `failed-exception` outcomes.
+
+### Source selection UI
+
+Selection lives in three surfaces:
+
+| Surface | Component | Scope |
+|---|---|---|
+| Create / Edit form | `PricingSourceSelector` above tier picker | Per-IAP (Q-J explicit). Default = Q-D most-specific (`APP_TEMPLATE → DEFAULT_TEMPLATE → APPLE`). |
+| Bulk Import wizard Step 3 | Same `PricingSourceSelector` | Per-batch (Q-E batch-level). Applies to every CREATE / OVERWRITE row. |
+| Update on Apple modal | Source banner inside `UpdateChangesPreviewModal` | Per-update; pricing stage runs on source-only change when template-backed. |
+
+Unavailable options gray out with a helper line pointing Manager to the
+upload surface (Settings → Pricing Templates for Default; App detail page →
+Pricing Template for per-app).
+
+### Schema
+
+Two new tables, replace-only via partial unique indexes (Q-A):
+
+```sql
+iap_mgmt.price_tier_templates
+  (id, scope_type, scope_app_id, uploaded_at, uploaded_by, source_filename)
+  -- UNIQUE WHERE scope_type='GLOBAL'  → at most one Default
+  -- UNIQUE (scope_app_id) WHERE scope_type='APP' → at most one per app
+
+iap_mgmt.price_tier_template_entries
+  (template_id, tier_id, territory_code, currency_code, customer_price, proceeds)
+  -- ON DELETE CASCADE wipes entries when template header is replaced
+```
+
+The legacy `iap_mgmt.price_tier_territories` table is retained as
+defensive backup (Q-B). The init migration auto-promotes existing rows
+into a `GLOBAL` Default Template so the Manager's pre-IAP.p1 grid keeps
+working without re-upload.

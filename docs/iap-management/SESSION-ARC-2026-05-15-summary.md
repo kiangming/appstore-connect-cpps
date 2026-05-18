@@ -54,17 +54,26 @@
 | 39 | `f6d4961` | **IAP.o.12a** feat | Update-on-Apple orchestration · diff-detector · state-edit-blocked helper · update-on-apple route · 5 new audit `*_ON_APPLE` action_types migration |
 | 40 | `855d957` | **IAP.o.12b** feat | Update on Apple UI: button + diff modal + reviewNote enabled + familySharable checkbox + pre-warn banner |
 | 41 | `6deac97` | **IAP.o.12c** docs | apple-api-reference + SESSION-ARC reflect edit-on-Apple flow; D2/D3 marked resolved; IAP.o.13 candidate documented |
-| 42 | `(this commit)` | **IAP.o.13a** fix | Screenshot edit UI exposed — placeholder "Edit via App Store Connect web UI" removed; ScreenshotUpload now renders cached-on-Apple state + drop area to replace; handleScreenshotRemove reverts to cached in edit mode |
+| 42 | `848dae0` | **IAP.o.13a** fix | Screenshot edit UI exposed — placeholder "Edit via App Store Connect web UI" removed; ScreenshotUpload now renders cached-on-Apple state + drop area to replace; handleScreenshotRemove reverts to cached in edit mode |
+| 43 | `62618c7` | **IAP.p1.a** feat | Pricing-templates schema (`price_tier_templates` + `price_tier_template_entries`) + Q-B auto-migration from legacy `price_tier_territories` to GLOBAL Default Template |
+| 44 | `573079e` | **IAP.p1.b** feat | Sparse-template parser (blank cells = no-override) + `flattenTemplateEntries` helper for the entries persister |
+| 45 | `8e82f81` | **IAP.p1.c** feat | Settings → Pricing Templates 2-tab restructure (Default + Per-App) backed by new template tables + scope-aware POST / DELETE endpoints |
+| 46 | `d933e06` | **IAP.p1.d** feat | App detail page `AppPricingTemplateSection` — empty / populated states, inline upload/replace/remove |
+| 47 | `9869f2c` | **IAP.p1.e** feat | Pricing orchestration 3-source model (`APPLE` / `DEFAULT_TEMPLATE` / `APP_TEMPLATE`) + `territory-price-points-cache` + Q-K `partial-template-fail` outcome; F8 nuance preserved (APPLE path bit-for-bit identical) |
+| 48 | `a64146a` | **IAP.p1.f** feat | `PricingSourceSelector` on Create / Edit IAP form (Q-D most-specific default); Create-on-Apple route consumes the source as a typed `PricingSource` union |
+| 49 | `f8ce9a3` | **IAP.p1.g** feat | Bulk Import wizard Step 3 source selector (Q-E batch-level); execute route threads source into every CREATE / OVERWRITE row; Step 4 surfaces applied source |
+| 50 | `dbd9bd9` | **IAP.p1.h** feat | Update-on-Apple `UpdateIapOnAppleArgs.source` + currentTierId; pricing stage runs on source-only change when template-backed; UpdateChangesPreviewModal source banner |
+| 51 | `(this commit)` | **IAP.p1.i** docs | apple-api-reference Pricing Template System section + Manager-facing `pricing-templates-guide.md` + SESSION-ARC roll-up + integration test |
 
-### Cumulative metrics (this arc — through IAP.o.12)
+### Cumulative metrics (this arc — through IAP.p1)
 
-- **Lines added**: ~14,100 net (IAP.o.6–o.12 contributed ~4,700; o.12 alone ~2,400)
-- **Migrations**: 5 (added `20260517000000_iap_mgmt_actions_log_action_type_expand` for IAP.o.11d + `20260518000000_iap_mgmt_actions_log_update_on_apple` for IAP.o.12a)
-- **Routes**: 15 (added `/iaps/[iapId]/update-on-apple` at IAP.o.12a)
-- **Tests**: 1346 → 1630 (+284 new total; +40 in IAP.o.12 alone)
-- **Gauntlet 4/4 ✅** at every sub-chunk through IAP.o.12b
-- **Dependencies added**: `next-themes ^0.4.6`. No `p-limit` (hand-rolled `withConcurrency`).
-- **Hotfix + extension sub-chunks**: 20 post-UAT (IAP.o.1 → IAP.o.12b). The o.6 → o.11 run was the post-MV30 cycle; o.12 closed Deferral 3 (edit-of-synced-IAP) with maximum Apple-supported edit scope.
+- **Lines added**: ~16,500 net (IAP.p1 alone ~3,000 across migration + parser + UI + orchestration + docs)
+- **Migrations**: 6 (added `20260519000000_iap_mgmt_pricing_templates` for IAP.p1.a)
+- **Routes**: 17 (added `/api/iap-management/pricing-templates` POST + `/pricing-templates/[templateId]` DELETE at IAP.p1.c)
+- **Tests**: 1346 → 1657 (+311 new total; +27 in IAP.p1 alone)
+- **Gauntlet 4/4 ✅** at every sub-chunk through IAP.p1.i
+- **Dependencies added**: none in IAP.p1.
+- **Hotfix + extension sub-chunks**: 29 post-UAT total. The o.6 → o.11 run was the post-MV30 cycle; o.12 closed Deferral 3 (edit-of-synced-IAP); p1.a–i closed the strategic upgrade for Manager's 3-source per-territory pricing model.
 
 ---
 
