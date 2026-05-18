@@ -343,6 +343,11 @@ export async function replacePriceTiers(
     }
 
     // 4. Insert territories in 1000-row batches (≈ 16,800 rows total).
+    // IAP.p1.b: parser now returns proceeds: number | null for sparse
+    // templates. price_tier_territories has NOT NULL proceeds (legacy
+    // Apple-base table — kept as defensive backup per Q-B). Coalesce null
+    // → 0 so legacy callers keep working; the new template_entries table
+    // accepts null directly.
     const territoryRows: Array<{
       tier_id: string;
       territory_code: string;
@@ -357,7 +362,7 @@ export async function replacePriceTiers(
           territory_code: t.territory_code,
           currency_code: t.currency_code,
           customer_price: t.customer_price,
-          proceeds: t.proceeds,
+          proceeds: t.proceeds ?? 0,
         });
       }
     }

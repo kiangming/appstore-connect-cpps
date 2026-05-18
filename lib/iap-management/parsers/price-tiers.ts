@@ -21,10 +21,15 @@
  *                           IAP.e finding. `is_alternate: true` flag on the
  *                           parsed row lets UI render them distinctly.
  *
- * Validation policy (Q-IAP.5 strict):
- *   - Hard error: missing sheet, malformed territory headers, non-numeric
- *     price/proceeds cells, file > 10MB, file not a valid .xlsx.
- *   - Soft warning: territories where Price/Proceeds sub-headers don't match.
+ * IAP.p1.b — sparse-template support (Manager Q-I + Q-F):
+ *   The template is now treated as a sparse override grid. Empty
+ *   `customer_price` cells mean "no override for this (tier, territory)" —
+ *   the orchestrator falls back to Apple's auto-equalization. The previous
+ *   hard error on empty cells is downgraded to silent skip. Hard errors
+ *   remain for: malformed headers, non-numeric cells where present, file
+ *   > 10MB, invalid .xlsx. Soft warnings for: unrecognised tier-name shapes,
+ *   sub-header mismatches, partial entries (price filled but proceeds blank
+ *   or vice versa — still parsed, but flagged).
  */
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
@@ -35,7 +40,9 @@ export interface ParsedTerritoryPrice {
   territory_code: string;
   currency_code: string;
   customer_price: number;
-  proceeds: number;
+  /** Sparse-template: proceeds may be omitted by Manager — kept null when
+   *  the cell is blank. Existing full-grid templates always populate it. */
+  proceeds: number | null;
 }
 
 export interface ParsedPriceTier {
@@ -44,14 +51,21 @@ export interface ParsedPriceTier {
   tier_name: string;
   /** True for "Alternate Tier *" rows so UI can render them distinctly. */
   is_alternate: boolean;
+  /** Sparse: only territories Manager populated. Empty array when the row
+   *  exists in the sheet but has no values (e.g. tier-name only). */
   territories: ParsedTerritoryPrice[];
 }
 
 export interface PriceTiersParseResult {
   tiers: ParsedPriceTier[];
+  /** Number of unique territory columns observed in the header row. */
   territory_count: number;
   /** Count of alternate tiers within `tiers` (already included). */
   alternate_tier_count: number;
+  /** Total (tier, territory) entries with a populated customer_price across
+   *  all tiers. For a full-grid template this equals tier_count *
+   *  territory_count; for a sparse template it's strictly less. */
+  populated_entry_count: number;
   warnings: string[];
 }
 
@@ -89,6 +103,13 @@ function tierIdFromName(name: string): TierIdDecoded | null {
     };
   }
   return null;
+}
+
+/** Distinguish blank-cell (sparse skip) from filled-cell (must be numeric). */
+function isBlankCell(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string" && value.trim() === "") return true;
+  return false;
 }
 
 function readNumericCell(value: unknown, where: string): number {
@@ -198,6 +219,7 @@ export async function parsePriceTiersXlsx(
   // ── Parse data rows (row 2+) ─────────────────────────────────────────────
   const tiers: ParsedPriceTier[] = [];
   let alternateCount = 0;
+  let populatedEntries = 0;
 
   for (let r = 2; r < rows.length; r++) {
     const row = rows[r];
@@ -210,18 +232,44 @@ export async function parsePriceTiersXlsx(
       continue;
     }
 
-    const territoryRows: ParsedTerritoryPrice[] = territories.map((t) => ({
-      territory_code: t.territory_code,
-      currency_code: t.currency_code,
-      customer_price: readNumericCell(
-        row[t.price_col],
+    const territoryRows: ParsedTerritoryPrice[] = [];
+    for (const t of territories) {
+      const priceCell = row[t.price_col];
+      const proceedsCell = row[t.proceeds_col];
+      const priceBlank = isBlankCell(priceCell);
+      const proceedsBlank = isBlankCell(proceedsCell);
+
+      // Sparse: both cells blank → no override for this (tier, territory).
+      if (priceBlank && proceedsBlank) continue;
+
+      // Partial cell — Manager filled one but not the other. Still parse the
+      // populated side, but flag it so UI surfaces the inconsistency.
+      if (priceBlank && !proceedsBlank) {
+        warnings.push(
+          `Row ${r + 1} ${t.territory_code}: proceeds filled but price blank — entry skipped.`,
+        );
+        continue;
+      }
+
+      const customer_price = readNumericCell(
+        priceCell,
         `row ${r + 1} col ${t.price_col + 1} (${t.territory_code} Price)`,
-      ),
-      proceeds: readNumericCell(
-        row[t.proceeds_col],
-        `row ${r + 1} col ${t.proceeds_col + 1} (${t.territory_code} Proceeds)`,
-      ),
-    }));
+      );
+      const proceeds = proceedsBlank
+        ? null
+        : readNumericCell(
+            proceedsCell,
+            `row ${r + 1} col ${t.proceeds_col + 1} (${t.territory_code} Proceeds)`,
+          );
+
+      territoryRows.push({
+        territory_code: t.territory_code,
+        currency_code: t.currency_code,
+        customer_price,
+        proceeds,
+      });
+      populatedEntries += 1;
+    }
 
     if (decoded.is_alternate) alternateCount++;
 
@@ -244,6 +292,42 @@ export async function parsePriceTiersXlsx(
     tiers,
     territory_count: territories.length,
     alternate_tier_count: alternateCount,
+    populated_entry_count: populatedEntries,
     warnings,
   };
+}
+
+/** Flat row used by the template-entries persister + the orchestration
+ *  lookup. Mirrors `iap_mgmt.price_tier_template_entries` minus the
+ *  template_id (assigned by the persister). */
+export interface FlatTemplateEntry {
+  tier_id: string;
+  territory_code: string;
+  currency_code: string;
+  customer_price: number;
+  proceeds: number | null;
+}
+
+/**
+ * Flatten the nested parse result into per-(tier, territory) rows suitable
+ * for `iap_mgmt.price_tier_template_entries`. Empty `territories` arrays
+ * contribute nothing; sparse templates produce strictly fewer rows than
+ * tier_count * territory_count.
+ */
+export function flattenTemplateEntries(
+  parsed: PriceTiersParseResult,
+): FlatTemplateEntry[] {
+  const out: FlatTemplateEntry[] = [];
+  for (const tier of parsed.tiers) {
+    for (const t of tier.territories) {
+      out.push({
+        tier_id: tier.tier_id,
+        territory_code: t.territory_code,
+        currency_code: t.currency_code,
+        customer_price: t.customer_price,
+        proceeds: t.proceeds,
+      });
+    }
+  }
+  return out;
 }
