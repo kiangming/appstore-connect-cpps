@@ -199,6 +199,13 @@ export async function setPriceSchedule(
  * schedule id from the parent IAP first; the traversal path collapses the
  * two-step into one and lets the view page render with the same latency.
  *
+ * IAP.p2.i fix: the path segment is `iapPriceSchedule` (the V2 relationship
+ * name), NOT `inAppPurchasePriceSchedule` (the resource type). Apple uses
+ * the short name in URL segments — same naming inconsistency that bit
+ * IAP.o.9b (screenshot rename to `appStoreReviewScreenshot`). Sending the
+ * wrong path returns Apple 404, which the view layer rendered as "No
+ * pricing has been set on Apple yet." even when pricing existed on Apple.
+ *
  * Include hierarchy (manualPrices.inAppPurchasePricePoint.territory) returns:
  *   - inAppPurchasePriceSchedules → top-level data
  *   - territories                  → baseTerritory + per-point territory
@@ -218,7 +225,7 @@ export async function getPriceScheduleForIap(
   creds: AscCredentials,
   appleIapId: string,
 ): Promise<AscApiResponse<InAppPurchasePriceSchedule>> {
-  const path = `/v2/inAppPurchases/${appleIapId}/inAppPurchasePriceSchedule?include=baseTerritory,manualPrices.inAppPurchasePricePoint.territory`;
+  const path = `/v2/inAppPurchases/${appleIapId}/iapPriceSchedule?include=baseTerritory,manualPrices.inAppPurchasePricePoint.territory`;
   return withRetry(() =>
     iapFetch<AscApiResponse<InAppPurchasePriceSchedule>>(creds, "GET", path),
   );

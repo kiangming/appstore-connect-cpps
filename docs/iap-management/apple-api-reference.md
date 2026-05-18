@@ -23,6 +23,7 @@ screenshots, price schedules, submissions) still use v1.
 | Delete localization | DELETE | `/v1/inAppPurchaseLocalizations/{id}` | Bulk-import OVERWRITE path + IAP.o.12 update-on-Apple locale removal. |
 | List price points | GET | `/v2/inAppPurchases/{id}/pricePoints?filter[territory]=USA&limit=1000` | Per-IAP scope — no /apps/{id}/pricePoints endpoint exists. IAP.o.11a bumped limit 200→1000 (OpenAPI spec max 8000). |
 | Set price schedule | POST | `/v1/inAppPurchasePriceSchedules` | Replace-all semantic; relationships + included (see below). |
+| Get price schedule (View Detail) | GET | `/v2/inAppPurchases/{id}/iapPriceSchedule?include=baseTerritory,manualPrices.inAppPurchasePricePoint.territory` | Relationship-traversal endpoint. Path segment is the **relationship name** (`iapPriceSchedule`), NOT the resource type (`inAppPurchasePriceSchedule`) — sending the type returns 404. Side-loads schedule + base territory + every manual price + price points + their territories in one round trip. 404 = no schedule yet (Manager-created IAP never had pricing pushed). |
 | Poll IAP ready (Stage 1→2 guard) | GET | `/v2/inAppPurchases/{id}` | IAP.o.11a — invoked between CREATE and pricing POST to confirm Apple has propagated the new IAP. Polls 200 ms × 10 max = 2 s budget. |
 | Reserve screenshot | POST | `/v1/inAppPurchaseAppStoreReviewScreenshots` | Relationship: `inAppPurchaseV2`. Returns `uploadOperations[]`. |
 | Confirm screenshot | PATCH | `/v1/inAppPurchaseAppStoreReviewScreenshots/{id}` | `uploaded: true` + `sourceFileChecksum` (MD5 hex). |
@@ -39,7 +40,7 @@ workflow inspects:
 | `app` | `apps` | Parent app on the IAP CREATE payload. |
 | `inAppPurchaseLocalizations` | `inAppPurchaseLocalizations` (to-many) | Side-loaded via `?include=`. |
 | `appStoreReviewScreenshot` | `inAppPurchaseAppStoreReviewScreenshots` (to-one) | **NOT** `reviewScreenshot` (community-source naming guess). |
-| `inAppPurchasePriceSchedule` | `inAppPurchasePriceSchedules` | Not currently fetched — local cache surfaces tier. |
+| `iapPriceSchedule` | `inAppPurchasePriceSchedules` | **NOT** `inAppPurchasePriceSchedule` (the resource type). Apple uses the short relationship name in URL segments — same trap as `appStoreReviewScreenshot`. Read path: `GET /v2/inAppPurchases/{id}/iapPriceSchedule` (IAP.p2.a + p2.i path-name fix). |
 
 ## Pricing schedule POST shape
 
@@ -161,6 +162,16 @@ but is documented as legacy in JSDoc — production code calls
     the trace. Every outcome (`set` / `skipped-*` / `failed-*`) writes
     exactly one row; failures carry `result='ERROR'` per Manager Q-F
     severity policy.
+11. **`iapPriceSchedule` short relationship name in V2 URL segments
+    (IAP.p2.i)** — the path segment for the GET read endpoint is the
+    relationship NAME (`iapPriceSchedule`), NOT the resource type
+    (`inAppPurchasePriceSchedule`). Apple's V2 IAP API uses the short
+    relationship name in URL segments — same trap as IAP.o.9b's
+    `appStoreReviewScreenshot` rename. Sending the wrong path returns
+    404 even when the schedule exists; the View Detail page then renders
+    "No pricing has been set on Apple yet." even when pricing IS set
+    on Apple. Detected: Manager UAT post-p2.h ship. Path-shape pin lives
+    in `api-schemas.integration.test.ts` to prevent recurrence.
 
 ## Test enforcement
 
@@ -304,7 +315,7 @@ fans out two Apple fetches in parallel and assembles the page view-model:
 ```ts
 const [iapRes, scheduleSettled] = await Promise.all([
   getInAppPurchase(creds, appleIapId),                        // /v2/inAppPurchases/{id}?include=…
-  getPriceScheduleForIap(creds, appleIapId).then(ok, err),    // /v2/.../inAppPurchasePriceSchedule
+  getPriceScheduleForIap(creds, appleIapId).then(ok, err),    // /v2/inAppPurchases/{id}/iapPriceSchedule
 ]);
 ```
 

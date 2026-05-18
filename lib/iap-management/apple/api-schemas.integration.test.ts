@@ -293,13 +293,19 @@ describe("API schema: pricing endpoints", () => {
     expect(refId).toMatch(/^\$\{.+\}$/);
   });
 
-  it("get schedule → GET /v2/inAppPurchases/{id}/inAppPurchasePriceSchedule with full include chain (IAP.p2.a)", async () => {
+  it("get schedule → GET /v2/inAppPurchases/{id}/iapPriceSchedule with full include chain (IAP.p2.a + p2.i path-name fix)", async () => {
+    // IAP.p2.i: the path segment is the relationship NAME (`iapPriceSchedule`),
+    // not the resource TYPE (`inAppPurchasePriceSchedule`). Confirmed against
+    // Apple's OpenAPI spec (operationId `inAppPurchasesV2_iapPriceSchedule_getToOneRelated`).
+    // Sending the type as the path returns Apple 404 even when the schedule
+    // exists — the V2 IAP API uses the short relationship name in URL
+    // segments (same trap as IAP.o.9b's `appStoreReviewScreenshot` rename).
     iapFetch.mockResolvedValueOnce({ data: { id: "sched-1", type: "inAppPurchasePriceSchedules" } });
     await getPriceScheduleForIap(creds, "iap-1");
     const { method, endpoint } = callArgs();
     expect(method).toBe("GET");
     expect(endpoint).toBe(
-      "/v2/inAppPurchases/iap-1/inAppPurchasePriceSchedule?include=baseTerritory,manualPrices.inAppPurchasePricePoint.territory",
+      "/v2/inAppPurchases/iap-1/iapPriceSchedule?include=baseTerritory,manualPrices.inAppPurchasePricePoint.territory",
     );
   });
 });

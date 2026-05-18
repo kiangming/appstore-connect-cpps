@@ -125,9 +125,12 @@ export interface UpdateInAppPurchaseLocalizationPayload {
 // ─── Pricing — Price Schedule (IAP.p2.a) ─────────────────────────────────────
 //
 // Apple exposes the price schedule for an IAP via the relationship-traversal
-// endpoint /v2/inAppPurchases/{id}/inAppPurchasePriceSchedule. The schedule
-// resource itself carries no attributes — every field comes from the
-// `included[]` block (territories + inAppPurchasePrices + price points).
+// endpoint /v2/inAppPurchases/{id}/iapPriceSchedule. The path segment uses
+// the SHORT relationship name (`iapPriceSchedule`), NOT the resource type
+// (`inAppPurchasePriceSchedule`) — same Apple naming inconsistency as
+// `appStoreReviewScreenshot` (IAP.o.9b). The schedule resource itself
+// carries no attributes — every field comes from the `included[]` block
+// (territories + inAppPurchasePrices + price points).
 
 export type Territory = AscResource<"territories", Record<string, never>>;
 
