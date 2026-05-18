@@ -185,11 +185,14 @@ export function PerAppTemplateTab({ appsWithTemplates }: Props) {
           (and unmatched territories fall through to Apple&apos;s
           auto-equalization).
         </p>
-        <div className="flex items-end gap-3">
-          <div className="flex-1">
-            <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
-              App
-            </label>
+        <div>
+          <label className="block text-xs text-slate-500 dark:text-slate-400 mb-1">
+            App
+          </label>
+          {/* Row aligns the select + button along their shared baseline.
+              The "Apps from ASC account:" helper renders BELOW the row so
+              it doesn't push the button out of line with the select. */}
+          <div className="flex items-center gap-3">
             <select
               value={selectedAppId}
               onChange={(e) => setSelectedAppId(e.target.value)}
@@ -198,7 +201,7 @@ export function PerAppTemplateTab({ appsWithTemplates }: Props) {
                 // account switch picked up live without page reload.
                 void refreshAscApps();
               }}
-              className="w-full px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[#0071E3]"
+              className="flex-1 min-w-0 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[#0071E3]"
             >
               <option value="">
                 {ascAppsLoading
@@ -226,37 +229,37 @@ export function PerAppTemplateTab({ appsWithTemplates }: Props) {
                 </optgroup>
               )}
             </select>
-            {ascAccountName && (
-              <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
-                Apps from ASC account:{" "}
-                <span className="font-medium text-slate-600 dark:text-slate-400">
-                  {ascAccountName}
-                </span>
-                {ascAppsLoading && (
-                  <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
-                )}
-              </p>
-            )}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading || !selectedAppId}
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-50 shrink-0"
+            >
+              {uploading ? (
+                <RefreshCw className="h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="h-4 w-4" />
+              )}
+              {uploading ? "Uploading…" : "Upload .xlsx"}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx"
+              onChange={handleFileChange}
+              className="hidden"
+            />
           </div>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading || !selectedAppId}
-            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-50"
-          >
-            {uploading ? (
-              <RefreshCw className="h-4 w-4 animate-spin" />
-            ) : (
-              <Upload className="h-4 w-4" />
-            )}
-            {uploading ? "Uploading…" : "Upload .xlsx"}
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx"
-            onChange={handleFileChange}
-            className="hidden"
-          />
+          {ascAccountName && (
+            <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+              Apps from ASC account:{" "}
+              <span className="font-medium text-slate-600 dark:text-slate-400">
+                {ascAccountName}
+              </span>
+              {ascAppsLoading && (
+                <Loader2 className="inline h-3 w-3 ml-1 animate-spin" />
+              )}
+            </p>
+          )}
         </div>
       </div>
 
