@@ -3,7 +3,7 @@
 **Date**: 2026-05-15 (IAP.c – IAP.n) → 2026-05-16 (IAP.o.1 – IAP.o.5 UAT MV29 hotfixes) → 2026-05-16/17 (IAP.o.6 – IAP.o.11 MV30 hotfix run + pricing-silent-fail closure) → 2026-05-18 (IAP.o.12 edit-on-Apple)
 **Arc name**: IAP Management module — 3rd strategic delivery
 **Status**: Functional MVP + edit-on-Apple shipped. IAP.o.11d verified pricing single + bulk Apple-side; IAP.o.12 closes the Deferral 3 gap by adding the full Apple-supported edit surface (attributes + localizations + screenshot + pricing replace).
-**Latest commit**: `855d957` IAP.o.12b — Update on Apple UI (was `9f35df7` IAP.o.11b at the previous close)
+**Latest commit**: `(this commit)` IAP.p2.h — View Detail UI sections 3-4 + composition + docs (was `f3271d0` IAP.p2.d at the previous sub-chunk close)
 
 ---
 
@@ -64,17 +64,23 @@
 | 49 | `f8ce9a3` | **IAP.p1.g** feat | Bulk Import wizard Step 3 source selector (Q-E batch-level); execute route threads source into every CREATE / OVERWRITE row; Step 4 surfaces applied source |
 | 50 | `dbd9bd9` | **IAP.p1.h** feat | Update-on-Apple `UpdateIapOnAppleArgs.source` + currentTierId; pricing stage runs on source-only change when template-backed; UpdateChangesPreviewModal source banner |
 | 51 | `79db4c6` | **IAP.p1.i** docs | apple-api-reference Pricing Template System section + Manager-facing `pricing-templates-guide.md` + SESSION-ARC roll-up + integration test |
-| 52 | `(this commit)` | **IAP.p1.j** hotfix | MV30 v9 4-issue bundle: (1) persist `iaps.pricing_source` so Save Draft round-trip preserves Manager's explicit choice; (2) accurate entry count via dedicated `count: 'exact'` + range-paginated `fetchEntries` (Supabase 1000-row cap fix; also restored full template iteration in the pricing orchestrator); (3) live `/api/iap-management/asc-apps` Apple fetch behind the Per-App tab dropdown, refetch on open; (4) new `iap_mgmt.apps.asc_account_id` column captured by `ensureAppRegistered`, ASC Account column rendered on "Apps with custom templates" |
+| 52 | `099bfd2` | **IAP.p1.j** hotfix | MV30 v9 4-issue bundle: (1) persist `iaps.pricing_source` so Save Draft round-trip preserves Manager's explicit choice; (2) accurate entry count via dedicated `count: 'exact'` + range-paginated `fetchEntries` (Supabase 1000-row cap fix; also restored full template iteration in the pricing orchestrator); (3) live `/api/iap-management/asc-apps` Apple fetch behind the Per-App tab dropdown, refetch on open; (4) new `iap_mgmt.apps.asc_account_id` column captured by `ensureAppRegistered`, ASC Account column rendered on "Apps with custom templates" |
+| 53 | `dc13a08` | **IAP.p1.j.UI** fix | Per-App upload row select + button baseline alignment |
+| 54 | `3bac4e4` | **IAP.p2.a** feat | Apple price-schedule fetch (`getPriceScheduleForIap`) + `getIapViewData` composer with per-stage error boundaries; `unpackPriceSchedule` resolves manualPrice → price-point → territory chain |
+| 55 | `9106c01` | **IAP.p2.b** feat | View-detail UI primitives: `StatusDot` (Q-D 5-tone), `TooltipBadge`, `LabeledField`, `SectionShell`, `DataTable`, `ExpandablePanel`, `ScreenshotPreview` (Q-E enlarge modal) + tooltips string-map (Q-I) |
+| 56 | `acaad56` | **IAP.p2.c** feat | Header section — status row + 2-col grid (Product ID / Apple ID / Reference Name + 64-char counter / Type) |
+| 57 | `f3271d0` | **IAP.p2.d** feat | Price Schedule section (Q-K) — base territory + current prices summary + upcoming changes split; degraded inline notice on Apple error |
+| 58 | `(this commit)` | **IAP.p2.e–h** feat | App Store Localization section (DataTable with locale links + status dots) + Review Information section (Screenshot + Notes with counter) + Page composition with sticky action bar (Q-G/Q-H Apple Connect deep link) + per-section `SectionErrorBoundary` + docs (apple-api-reference IAP View Detail composition section) + IapDetailView integration tests |
 
-### Cumulative metrics (this arc — through IAP.p1.j)
+### Cumulative metrics (this arc — through IAP.p2.h)
 
-- **Lines added**: ~17,000 net (IAP.p1 alone ~3,500 across migration + parser + UI + orchestration + docs + MV30 v9 hotfix)
-- **Migrations**: 7 (added `20260520000000_iap_mgmt_p1j_hotfix` for the `iaps.pricing_source` + `apps.asc_account_id` columns)
-- **Routes**: 18 (added `/api/iap-management/asc-apps` at IAP.p1.j)
-- **Tests**: 1346 → 1665 (+319 new total; +31 in IAP.p1 alone)
-- **Gauntlet 4/4 ✅** at every sub-chunk through IAP.p1.j
-- **Dependencies added**: none in IAP.p1.
-- **Hotfix + extension sub-chunks**: 30 post-UAT total. The o.6 → o.11 run was the post-MV30 cycle; o.12 closed Deferral 3 (edit-of-synced-IAP); p1.a–i shipped the strategic upgrade for Manager's 3-source per-territory pricing model; p1.j hot-fixed 4 UX/data issues surfaced by MV30 v9.
+- **Lines added**: ~18,500 net (IAP.p2 alone ~1,500 across composer + primitives + 4 sections + docs)
+- **Migrations**: 7 (unchanged)
+- **Routes**: 18 (unchanged — view route was added at IAP.o.8c)
+- **Tests**: 1346 → ~1754 (+408 new total; +89 in IAP.p2 alone)
+- **Gauntlet 4/4 ✅** at every sub-chunk through IAP.p2.h
+- **Dependencies added**: none in IAP.p2.
+- **Hotfix + extension sub-chunks**: 30 post-UAT total. The o.6 → o.11 run was the post-MV30 cycle; o.12 closed Deferral 3 (edit-of-synced-IAP); p1.a–j shipped the strategic upgrade for Manager's 3-source per-territory pricing model + MV30 v9 hotfix; p2.a–h closed Pattern 10 reuse #19 cycle 31 (IAP View Detail UI Apple parity).
 
 ---
 

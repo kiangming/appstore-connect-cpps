@@ -293,3 +293,59 @@ The legacy `iap_mgmt.price_tier_territories` table is retained as
 defensive backup (Q-B). The init migration auto-promotes existing rows
 into a `GLOBAL` Default Template so the Manager's pre-IAP.p1 grid keeps
 working without re-upload.
+
+## IAP View Detail — Apple data composition (IAP.p2)
+
+The `/iap-management/apps/{appId}/iaps/{iapId}/view` route reads Apple
+canonical state in a single composed call. `getIapViewData` (in
+[lib/iap-management/queries/iap-detail.ts](../../lib/iap-management/queries/iap-detail.ts))
+fans out two Apple fetches in parallel and assembles the page view-model:
+
+```ts
+const [iapRes, scheduleSettled] = await Promise.all([
+  getInAppPurchase(creds, appleIapId),                        // /v2/inAppPurchases/{id}?include=…
+  getPriceScheduleForIap(creds, appleIapId).then(ok, err),    // /v2/.../inAppPurchasePriceSchedule
+]);
+```
+
+### Per-stage error boundaries
+
+| Stage | Failure behavior |
+|---|---|
+| `getInAppPurchase` | Critical path. Throws propagate to the route's outer try/catch → friendly red card. |
+| `getPriceScheduleForIap` 404 | `priceSchedule: null` + `priceScheduleError: null`. The Price Schedule section renders the empty placeholder ("Use Edit to set a price"). |
+| `getPriceScheduleForIap` other | `priceSchedule: null` + `priceScheduleError: <message>`. The Price Schedule section renders an amber inline notice; **other sections still render**. |
+| Section-level render throw | Caught by `SectionErrorBoundary`. Replaces the offending section with an amber notice + message; the rest of the page is unaffected. |
+
+This three-layer boundary (route-level → composer-level → render-level)
+matches the "instrumentation-first when a silent prod report lands" feedback
+captured during IAP.o.11 — Manager sees what's wrong, not a blank page.
+
+### View-model shape
+
+```ts
+interface IapViewData {
+  iap: InAppPurchase;
+  localizations: InAppPurchaseLocalization[];
+  screenshot: InAppPurchaseAppStoreReviewScreenshot | null;
+  priceSchedule: PriceScheduleView | null;       // 404 + parse-fail both null
+  priceScheduleError: string | null;             // populated on non-404
+}
+```
+
+`PriceScheduleView.entries` is sorted oldest-startDate first (null/now
+bucket → territory ASC) so the UI can partition into "current" and
+"upcoming" by a single `entry.startDate > now()` walk.
+
+### Apple Connect deep link
+
+The "View on Apple Connect" affordance in the action bar (Q-H lock — single
+canonical deep link, no per-section links) targets:
+
+```
+https://appstoreconnect.apple.com/apps/{appAppleId}/inappPurchases/{iapAppleId}
+```
+
+`appAppleId` is the numeric Apple ID of the parent app (route param `appId`);
+`iapAppleId` is the IAP's Apple opaque id from `iap.id`.
+
