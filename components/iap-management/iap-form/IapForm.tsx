@@ -10,9 +10,14 @@ import { SubmitChecklist } from "./SubmitChecklist";
 import { ScreenshotUpload } from "./ScreenshotUpload";
 import { UpdateChangesPreviewModal } from "./UpdateChangesPreviewModal";
 import {
+  PricingSourceSelector,
+  defaultPricingSource,
+} from "./PricingSourceSelector";
+import {
   validateIapFormGrouped,
   type IapFormState,
   type FormLocalization,
+  type PricingSourceKind,
 } from "@/lib/iap-management/validation";
 import {
   detectIapChanges,
@@ -41,6 +46,13 @@ export interface IapFormProps {
   initial: IapFormState;
   /** Tier rows from iap_mgmt.price_tiers cache. */
   tiers: PriceTierRow[];
+  /** IAP.p1.f: Manager has uploaded a global Default Template. */
+  defaultTemplateAvailable?: boolean;
+  /** IAP.p1.f: this app has its own pricing template. */
+  appTemplateAvailable?: boolean;
+  /** Entry counts surfaced in PricingSourceSelector helper copy. */
+  defaultTemplateEntryCount?: number;
+  appTemplateEntryCount?: number;
 }
 
 const TYPES: { value: InAppPurchaseType; label: string }[] = [
@@ -59,9 +71,22 @@ export function IapForm({
   appleState,
   initial,
   tiers,
+  defaultTemplateAvailable = false,
+  appTemplateAvailable = false,
+  defaultTemplateEntryCount,
+  appTemplateEntryCount,
 }: IapFormProps) {
   const router = useRouter();
-  const [form, setForm] = useState<IapFormState>(initial);
+  // Resolve the initial pricing-source: explicit prop wins; otherwise Q-D
+  // most-specific available source. Skipped when the form already carries
+  // a stored selection (edit mode).
+  const initialPricingSource: PricingSourceKind =
+    initial.pricing_source ??
+    defaultPricingSource(defaultTemplateAvailable, appTemplateAvailable);
+  const [form, setForm] = useState<IapFormState>({
+    ...initial,
+    pricing_source: initialPricingSource,
+  });
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
   const [activeLocale, setActiveLocale] = useState<string>(DEFAULT_LOCALE);
   const [saving, setSaving] = useState(false);
@@ -139,6 +164,7 @@ export function IapForm({
         screenshot_filename: form.screenshot_filename,
         review_note: form.review_note ?? null,
         family_sharable: form.family_sharable ?? false,
+        pricing_source: form.pricing_source ?? "APPLE",
       },
     };
   }
@@ -221,6 +247,7 @@ export function IapForm({
             price_schedule_set?: boolean;
             price_schedule_note?:
               | "set"
+              | "partial-template-fail"
               | "skipped-no-tier"
               | "skipped-no-usd-price"
               | "skipped-no-match"
@@ -499,6 +526,16 @@ export function IapForm({
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
             Pricing
           </h2>
+          <div className="mb-4">
+            <PricingSourceSelector
+              value={form.pricing_source ?? "APPLE"}
+              onChange={(next) => patchForm({ pricing_source: next })}
+              defaultTemplateAvailable={defaultTemplateAvailable}
+              appTemplateAvailable={appTemplateAvailable}
+              defaultTemplateEntryCount={defaultTemplateEntryCount}
+              appTemplateEntryCount={appTemplateEntryCount}
+            />
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">

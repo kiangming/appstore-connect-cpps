@@ -23,6 +23,12 @@ export interface FormLocalization {
   description: string;
 }
 
+/** IAP.p1.f: pricing source chosen by Manager at create/edit time.
+ *  Mirrors `lib/iap-management/apple/pricing-orchestration.PricingSource`
+ *  but without the optional `app_id` (resolved server-side from the route
+ *  params). */
+export type PricingSourceKind = "APPLE" | "DEFAULT_TEMPLATE" | "APP_TEMPLATE";
+
 export interface IapFormState {
   reference_name: string;
   product_id: string;
@@ -38,6 +44,10 @@ export interface IapFormState {
   /** IAP.o.12: Apple `familySharable` — Family Sharing eligibility.
    *  PATCH-able via `/v2/inAppPurchases/{id}`. Defaults to false at create. */
   family_sharable?: boolean;
+  /** IAP.p1.f: pricing-source selection per Q-J (per-creation explicit).
+   *  Defaults to APPLE; UI gates DEFAULT_TEMPLATE / APP_TEMPLATE by
+   *  template availability (Q-D most-specific selection). */
+  pricing_source?: PricingSourceKind;
 }
 
 export type ChecklistKey =
@@ -209,5 +219,6 @@ export function emptyIapForm(): IapFormState {
     screenshot_filename: null,
     review_note: null,
     family_sharable: false,
+    pricing_source: "APPLE",
   };
 }

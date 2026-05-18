@@ -3,6 +3,11 @@ import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
 import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
 import { listTiers } from "@/lib/iap-management/queries/price-tiers";
+import { findAppByAppleId } from "@/lib/iap-management/queries/iaps";
+import {
+  getAppTemplate,
+  getTemplateOverview,
+} from "@/lib/iap-management/queries/templates";
 import { getApp } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { emptyIapForm } from "@/lib/iap-management/validation";
@@ -33,6 +38,30 @@ export default async function NewIapPage({ params }: PageProps) {
 
   const tiers = await listTiers();
 
+  // IAP.p1.f: surface pricing-template availability so the selector can
+  // gray-out unavailable options + pick the most-specific default (Q-D).
+  let defaultTemplateAvailable = false;
+  let defaultTemplateEntryCount = 0;
+  let appTemplateAvailable = false;
+  let appTemplateEntryCount = 0;
+  try {
+    const def = await getTemplateOverview({ kind: "GLOBAL" });
+    if (def.template) {
+      defaultTemplateAvailable = true;
+      defaultTemplateEntryCount = def.populated_entry_count;
+    }
+    const internalAppId = await findAppByAppleId(params.appId);
+    if (internalAppId) {
+      const app = await getAppTemplate(internalAppId);
+      if (app) {
+        appTemplateAvailable = true;
+        appTemplateEntryCount = app.entries.length;
+      }
+    }
+  } catch {
+    // template lookups are non-essential — degrade silently to APPLE-only
+  }
+
   return (
     <div className="p-8 max-w-6xl mx-auto">
       <Link
@@ -57,6 +86,10 @@ export default async function NewIapPage({ params }: PageProps) {
         syncedToApple={false}
         initial={emptyIapForm()}
         tiers={tiers}
+        defaultTemplateAvailable={defaultTemplateAvailable}
+        appTemplateAvailable={appTemplateAvailable}
+        defaultTemplateEntryCount={defaultTemplateEntryCount}
+        appTemplateEntryCount={appTemplateEntryCount}
       />
     </div>
   );

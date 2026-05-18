@@ -4,6 +4,10 @@ import { ChevronLeft } from "lucide-react";
 import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
 import { listTiers } from "@/lib/iap-management/queries/price-tiers";
 import { getIapWithRelations } from "@/lib/iap-management/queries/iaps";
+import {
+  getAppTemplate,
+  getTemplateOverview,
+} from "@/lib/iap-management/queries/templates";
 import { getApp } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { IapForm } from "@/components/iap-management/iap-form/IapForm";
@@ -63,6 +67,28 @@ export default async function EditIapPage({ params }: PageProps) {
     family_sharable: Boolean(data.iap.family_sharable),
   };
 
+  // IAP.p1.f: per-edit pricing-source selection. Defaults to most-specific
+  // available (Q-D) since edit-time the previous source isn't persisted
+  // (Q-J per-creation explicit). Manager re-selects each Update-on-Apple.
+  let defaultTemplateAvailable = false;
+  let defaultTemplateEntryCount = 0;
+  let appTemplateAvailable = false;
+  let appTemplateEntryCount = 0;
+  try {
+    const def = await getTemplateOverview({ kind: "GLOBAL" });
+    if (def.template) {
+      defaultTemplateAvailable = true;
+      defaultTemplateEntryCount = def.populated_entry_count;
+    }
+    const app = await getAppTemplate(data.iap.app_id);
+    if (app) {
+      appTemplateAvailable = true;
+      appTemplateEntryCount = app.entries.length;
+    }
+  } catch {
+    // non-essential
+  }
+
   return (
     <div className="p-8 max-w-6xl mx-auto">
       <Link
@@ -104,6 +130,10 @@ export default async function EditIapPage({ params }: PageProps) {
         appleState={data.iap.state}
         initial={initial}
         tiers={tiers}
+        defaultTemplateAvailable={defaultTemplateAvailable}
+        appTemplateAvailable={appTemplateAvailable}
+        defaultTemplateEntryCount={defaultTemplateEntryCount}
+        appTemplateEntryCount={appTemplateEntryCount}
       />
     </div>
   );

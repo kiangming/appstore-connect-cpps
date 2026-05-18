@@ -43,7 +43,10 @@ import {
   AppleApiError,
 } from "@/lib/iap-management/apple/fetch";
 import { uploadScreenshotToApple } from "@/lib/iap-management/apple/screenshot-upload";
-import { applyPricingSchedule } from "@/lib/iap-management/apple/pricing-orchestration";
+import {
+  applyPricingSchedule,
+  type PricingSource,
+} from "@/lib/iap-management/apple/pricing-orchestration";
 import { pollIapReadyForPricing } from "@/lib/iap-management/apple/poll-iap-ready";
 import { getTierUsdPrice } from "@/lib/iap-management/queries/price-tiers";
 import {
@@ -279,18 +282,34 @@ export async function POST(
   console.log(
     `[create-on-apple] Stage 2 pricing starting apple_iap_id=${appleIapId} tier_id=${form.tier_id ?? "<null>"} usd=${usdPrice}`,
   );
+  // IAP.p1.f: resolve the pricing source from the form. APPLE is the safe
+  // default; APP_TEMPLATE needs the internal app_id (existing.iap.app_id is
+  // the iap_mgmt.apps UUID, already on the loaded row).
+  const formPricingSource =
+    (form as IapFormState & { pricing_source?: PricingSource["kind"] })
+      .pricing_source ?? "APPLE";
+  const source: PricingSource =
+    formPricingSource === "APP_TEMPLATE"
+      ? { kind: "APP_TEMPLATE", app_id: existing.iap.app_id }
+      : formPricingSource === "DEFAULT_TEMPLATE"
+        ? { kind: "DEFAULT_TEMPLATE" }
+        : { kind: "APPLE" };
+  console.log(
+    `[create-on-apple] Stage 2 pricing source=${source.kind} apple_iap_id=${appleIapId}`,
+  );
   const pricing = await applyPricingSchedule({
     creds,
     appleIapId,
     localTierId: form.tier_id,
     usdPrice,
+    source,
     precheck: {
       ready: pollResult.ready,
       reason: pollResult.ready ? undefined : pollResult.reason,
       attempts: pollResult.attempts,
       total_ms: pollResult.total_ms,
     },
-    audit: { iapId, actor },
+    audit: { iapId, actor, internalAppId: existing.iap.app_id },
   });
   console.log(
     `[create-on-apple] Stage 2 pricing result apple_iap_id=${appleIapId} outcome=${pricing.kind}`,
