@@ -59,6 +59,8 @@ export default async function EditIapPage({ params }: PageProps) {
     tier_id: data.iap.tier_id,
     localizations,
     screenshot_filename: screenshot?.file_name ?? null,
+    review_note: data.iap.review_note ?? null,
+    family_sharable: Boolean(data.iap.family_sharable),
   };
 
   return (
@@ -99,6 +101,7 @@ export default async function EditIapPage({ params }: PageProps) {
         appAppleId={params.appId}
         iapId={params.iapId}
         syncedToApple={data.iap.apple_iap_id !== null}
+        appleState={data.iap.state}
         initial={initial}
         tiers={tiers}
       />

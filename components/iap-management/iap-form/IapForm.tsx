@@ -3,17 +3,27 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Save, Send, Trash2, Loader2 } from "lucide-react";
+import { Save, Send, Trash2, Loader2, AlertTriangle, UploadCloud } from "lucide-react";
 import { LocaleSidebar } from "./LocaleSidebar";
 import { LocaleEditor } from "./LocaleEditor";
 import { SubmitChecklist } from "./SubmitChecklist";
 import { ScreenshotUpload } from "./ScreenshotUpload";
+import { UpdateChangesPreviewModal } from "./UpdateChangesPreviewModal";
 import {
   validateIapFormGrouped,
   type IapFormState,
   type FormLocalization,
 } from "@/lib/iap-management/validation";
-import type { InAppPurchaseType } from "@/types/iap-management/apple";
+import {
+  detectIapChanges,
+  isEmptyDiff,
+  type CachedIapState,
+} from "@/lib/iap-management/apple/diff-detector";
+import { isStateEditLikelyBlocked } from "@/lib/iap-management/apple/state-edit-blocked";
+import type {
+  InAppPurchaseType,
+  InAppPurchaseState,
+} from "@/types/iap-management/apple";
 import type { PriceTierRow } from "@/lib/iap-management/queries/price-tiers";
 
 export interface IapFormProps {
@@ -25,6 +35,8 @@ export interface IapFormProps {
   iapId: string | null;
   /** True when apple_iap_id is populated → editing a synced IAP. */
   syncedToApple: boolean;
+  /** Apple state (IAP.o.12: drives the pre-warn banner for edit mode). */
+  appleState?: InAppPurchaseState | string | null;
   /** Prefill values; empty form for create mode. */
   initial: IapFormState;
   /** Tier rows from iap_mgmt.price_tiers cache. */
@@ -44,6 +56,7 @@ export function IapForm({
   appAppleId,
   iapId,
   syncedToApple,
+  appleState,
   initial,
   tiers,
 }: IapFormProps) {
@@ -54,9 +67,37 @@ export function IapForm({
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [updating, setUpdating] = useState(false);
+  const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [, startTransition] = useTransition();
 
   const checklist = useMemo(() => validateIapFormGrouped(form), [form]);
+
+  // IAP.o.12: snapshot of cached state (the `initial` prop is the server's
+  // last-synced view) used by the client-side diff for the preview modal.
+  const cachedForDiff: CachedIapState = useMemo(
+    () => ({
+      reference_name: initial.reference_name,
+      review_note: initial.review_note ?? null,
+      family_sharable: initial.family_sharable ?? false,
+      tier_id: initial.tier_id,
+      localizations: Object.fromEntries(
+        Object.entries(initial.localizations).map(([locale, l]) => [
+          locale,
+          {
+            locale: l.locale,
+            display_name: l.display_name,
+            description: l.description,
+          },
+        ]),
+      ),
+      screenshot_apple_id: null,
+      screenshot_file_name: initial.screenshot_filename,
+    }),
+    [initial],
+  );
+
+  const editableStateBlockedLikely = isStateEditLikelyBlocked(appleState);
 
   function patchForm(updates: Partial<IapFormState>) {
     setForm((prev) => ({ ...prev, ...updates }));
@@ -88,6 +129,8 @@ export function IapForm({
         tier_id: form.tier_id,
         localizations: form.localizations,
         screenshot_filename: form.screenshot_filename,
+        review_note: form.review_note ?? null,
+        family_sharable: form.family_sharable ?? false,
       },
     };
   }
@@ -242,6 +285,62 @@ export function IapForm({
     }
   }
 
+  /** IAP.o.12: open the diff preview modal (or no-op toast if nothing changed). */
+  function handleUpdateOnAppleClick() {
+    if (!iapId || !syncedToApple) return;
+    const diff = detectIapChanges({
+      form,
+      cached: cachedForDiff,
+      hasNewScreenshotFile: screenshotFile !== null,
+    });
+    if (isEmptyDiff(diff)) {
+      toast.message("No changes detected — nothing to push to Apple.");
+      return;
+    }
+    setUpdateModalOpen(true);
+  }
+
+  async function handleUpdateOnAppleConfirm() {
+    if (!iapId || !syncedToApple) return;
+    setUpdating(true);
+    try {
+      const body = new FormData();
+      body.append("form", JSON.stringify(saveBody().form));
+      if (screenshotFile) body.append("screenshot", screenshotFile);
+      const res = await fetch(
+        `/api/iap-management/apps/${appAppleId}/iaps/${iapId}/update-on-apple`,
+        { method: "POST", body },
+      );
+      const data = (await res.json()) as
+        | {
+            overall: "SUCCESS" | "PARTIAL" | "FAILURE" | "NO_CHANGES";
+            summary: string;
+          }
+        | { error: string };
+      if (!res.ok) {
+        toast.error("error" in data ? data.error : `Update failed (${res.status})`);
+        return;
+      }
+      if ("overall" in data) {
+        if (data.overall === "SUCCESS") {
+          toast.success(`Updated on Apple · ${data.summary}`);
+        } else if (data.overall === "PARTIAL") {
+          toast.warning(`Updated on Apple with warnings · ${data.summary}`);
+        } else if (data.overall === "FAILURE") {
+          toast.error(`Update failed · ${data.summary}`);
+        } else {
+          toast.message(data.summary);
+        }
+        setUpdateModalOpen(false);
+        startTransition(() => router.refresh());
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setUpdating(false);
+    }
+  }
+
   async function handleDelete() {
     if (!iapId) return;
     if (!confirm("Delete this draft IAP? This cannot be undone.")) return;
@@ -272,6 +371,20 @@ export function IapForm({
     <div className="grid grid-cols-[1fr_320px] gap-6">
       {/* Main column */}
       <div className="space-y-6 min-w-0">
+        {/* IAP.o.12 Q-IAP.o.12.C — pre-warn banner for likely-blocked Apple states. */}
+        {syncedToApple && editableStateBlockedLikely && (
+          <div className="flex gap-3 items-start rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-900 p-3">
+            <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-900 dark:text-amber-200">
+              <p className="font-medium">
+                This IAP is in {appleState ?? "review"} — Apple may reject edits.
+              </p>
+              <p className="text-amber-700 dark:text-amber-300/80 mt-0.5">
+                You can still try Update on Apple; if Apple rejects, wait for the review verdict and retry.
+              </p>
+            </div>
+          </div>
+        )}
         {/* Basic Information */}
         <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-4 pb-2 border-b border-slate-100 dark:border-slate-800">
@@ -337,14 +450,39 @@ export function IapForm({
                 Auto-renewable subscriptions are managed separately (Q1 lock).
               </p>
             </div>
-            <FieldText
-              label="Review Note (optional)"
-              value={""}
-              onChange={() => {}}
-              placeholder="Reviewer guidance (out of scope for v1)"
-              help="Notes shown to Apple reviewers — managed in IAP detail editor."
-              disabled
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium text-slate-700 dark:text-slate-300">
+                Review Note (optional)
+              </label>
+              <textarea
+                value={form.review_note ?? ""}
+                onChange={(e) => patchForm({ review_note: e.target.value })}
+                placeholder="Guidance for Apple's reviewer team (test accounts, in-app context…)"
+                rows={2}
+                className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0071E3] focus:border-transparent transition"
+              />
+              <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                Shown to Apple reviewers · PATCH-able post-create.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <input
+              id="family_sharable"
+              type="checkbox"
+              checked={form.family_sharable ?? false}
+              onChange={(e) => patchForm({ family_sharable: e.target.checked })}
+              className="h-4 w-4 rounded border-slate-300 text-[#0071E3] focus:ring-[#0071E3]"
             />
+            <label
+              htmlFor="family_sharable"
+              className="text-xs font-medium text-slate-700 dark:text-slate-300 select-none"
+            >
+              Family Sharing eligible
+              <span className="ml-1 font-normal text-slate-400 dark:text-slate-500">
+                · users who buy this can share with their Family
+              </span>
+            </label>
           </div>
         </section>
 
@@ -499,6 +637,29 @@ export function IapForm({
             </button>
           )}
 
+          {/* IAP.o.12 — Update on Apple for synced IAPs. Always enabled per
+              Q-IAP.o.12.C; the pre-warn banner above carries the state warning. */}
+          {mode === "edit" && syncedToApple && (
+            <button
+              type="button"
+              onClick={handleUpdateOnAppleClick}
+              disabled={updating || saving}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+              title={
+                editableStateBlockedLikely
+                  ? `Apple may reject edits while the IAP is in ${appleState ?? "review"}. Try anyway?`
+                  : "Push edited fields to Apple Connect"
+              }
+            >
+              {updating ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <UploadCloud className="h-4 w-4" />
+              )}
+              {updating ? "Updating…" : "Update on Apple"}
+            </button>
+          )}
+
           {mode === "edit" && (
             <button
               type="button"
@@ -534,6 +695,18 @@ export function IapForm({
           </p>
         )}
       </aside>
+
+      {/* IAP.o.12 — diff preview modal for Update on Apple. */}
+      <UpdateChangesPreviewModal
+        open={updateModalOpen}
+        onClose={() => setUpdateModalOpen(false)}
+        onConfirm={handleUpdateOnAppleConfirm}
+        confirmInFlight={updating}
+        form={form}
+        cached={cachedForDiff}
+        hasNewScreenshotFile={screenshotFile !== null}
+        tiers={tiers}
+      />
     </div>
   );
 }
