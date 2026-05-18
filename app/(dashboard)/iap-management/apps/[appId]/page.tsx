@@ -8,7 +8,13 @@ import {
   listSyncedAppleIapMap,
   type IapDbRow,
 } from "@/lib/iap-management/queries/iaps";
+import {
+  getAppTemplate,
+  getTemplateOverview,
+  type TemplateHeader,
+} from "@/lib/iap-management/queries/templates";
 import { IapListClient } from "./IapListClient";
+import { AppPricingTemplateSection } from "@/components/iap-management/pricing-tiers/AppPricingTemplateSection";
 import type {
   InAppPurchase,
 } from "@/types/iap-management/apple";
@@ -69,14 +75,25 @@ async function IapListContent({ appId }: { appId: string }) {
   // Drafts are read-only-by-default: only fetch if the app exists in our
   // schema (= a draft has been saved at least once). findAppByAppleId is a
   // pure read; it returns null for un-registered apps which is normal.
+  let internalAppId: string | null = null;
+  let appTemplate: TemplateHeader | null = null;
+  let appTemplateEntryCount = 0;
+  let defaultTemplateExists = false;
   try {
-    const internalAppId = await findAppByAppleId(appId);
+    internalAppId = await findAppByAppleId(appId);
     if (internalAppId) {
       drafts = (await listDraftIaps(internalAppId)).drafts;
       appleToInternal = await listSyncedAppleIapMap(internalAppId);
+      const tmpl = await getAppTemplate(internalAppId);
+      if (tmpl) {
+        appTemplate = tmpl.template;
+        appTemplateEntryCount = tmpl.entries.length;
+      }
     }
+    const def = await getTemplateOverview({ kind: "GLOBAL" });
+    defaultTemplateExists = def.template !== null;
   } catch {
-    // drafts + synced map are non-essential — degrade silently
+    // drafts + synced map + template lookups are non-essential — degrade silently
   }
 
   if (error) {
@@ -88,14 +105,22 @@ async function IapListContent({ appId }: { appId: string }) {
   }
 
   return (
-    <IapListClient
-      appId={appId}
-      appName={appName ?? ""}
-      appBundleId={appBundleId ?? ""}
-      iaps={iaps}
-      drafts={drafts}
-      appleToInternal={appleToInternal}
-    />
+    <>
+      <AppPricingTemplateSection
+        internalAppId={internalAppId}
+        template={appTemplate}
+        entryCount={appTemplateEntryCount}
+        defaultTemplateExists={defaultTemplateExists}
+      />
+      <IapListClient
+        appId={appId}
+        appName={appName ?? ""}
+        appBundleId={appBundleId ?? ""}
+        iaps={iaps}
+        drafts={drafts}
+        appleToInternal={appleToInternal}
+      />
+    </>
   );
 }
 
