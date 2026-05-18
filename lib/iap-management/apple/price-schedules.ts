@@ -20,8 +20,18 @@ import { iapFetch, AppleApiError } from "./fetch";
 
 export interface SetPriceScheduleArgs {
   appleIapId: string;
+  /** Base territory price-point (USA in practice). Apple equalizes the
+   *  remaining territories from this one unless overridden by
+   *  `additionalPricePointIds`. */
   applePricePointId: string;
   baseTerritory?: string;
+  /**
+   * IAP.p1.e — additional per-territory price-point overrides included in
+   * the same POST. Each id is an opaque Apple identifier resolved by the
+   * orchestrator from a per-territory pricePoints fetch. Empty array (the
+   * default) preserves the single-price behavior of IAP.o.11d.
+   */
+  additionalPricePointIds?: readonly string[];
   /** Test seam: deterministic sleep + override delays + jitter. Defaults to
    *  IAP.o.11a budget (500 → 1500 → 4000 → 10000 → 30000 ms + ±20% jitter). */
   retryConfig?: {
@@ -89,8 +99,15 @@ export async function setPriceSchedule(
   const baseTerritory = args.baseTerritory ?? "USA";
   // IAP.o.11d: literal "${...}" lid syntax required by Apple per
   // ENTITY_ERROR.INCLUDED.INVALID_ID surfaced by IAP.o.11a instrumentation.
-  // Single price entry per request → "${price-1}" is sufficient.
-  const priceRefId = "${price-1}";
+  // IAP.p1.e: when additionalPricePointIds is non-empty, each price-point
+  // gets its own lid (`${price-1}`, `${price-2}`, …) referenced from
+  // manualPrices.data so Apple knows the manual schedule for those
+  // territories. Apple auto-equalizes the territories not in the array.
+  const allPricePointIds: string[] = [
+    args.applePricePointId,
+    ...(args.additionalPricePointIds ?? []),
+  ];
+  const refIds = allPricePointIds.map((_, i) => `\${price-${i + 1}}`);
   const body = {
     data: {
       type: "inAppPurchasePriceSchedules",
@@ -102,28 +119,26 @@ export async function setPriceSchedule(
           data: { type: "territories", id: baseTerritory },
         },
         manualPrices: {
-          data: [{ type: "inAppPurchasePrices", id: priceRefId }],
+          data: refIds.map((id) => ({ type: "inAppPurchasePrices", id })),
         },
       },
     },
-    included: [
-      {
-        type: "inAppPurchasePrices",
-        id: priceRefId,
-        attributes: { startDate: null },
-        relationships: {
-          inAppPurchasePricePoint: {
-            data: {
-              type: "inAppPurchasePricePoints",
-              id: args.applePricePointId,
-            },
-          },
-          inAppPurchaseV2: {
-            data: { type: "inAppPurchases", id: args.appleIapId },
+    included: allPricePointIds.map((pricePointId, idx) => ({
+      type: "inAppPurchasePrices",
+      id: refIds[idx],
+      attributes: { startDate: null },
+      relationships: {
+        inAppPurchasePricePoint: {
+          data: {
+            type: "inAppPurchasePricePoints",
+            id: pricePointId,
           },
         },
+        inAppPurchaseV2: {
+          data: { type: "inAppPurchases", id: args.appleIapId },
+        },
       },
-    ],
+    })),
   };
 
   const delays = args.retryConfig?.delaysMs ?? DEFAULT_RETRY_DELAYS_MS;

@@ -2,38 +2,64 @@
  * Pricing-schedule orchestration shared by single-IAP /create-on-apple and
  * the bulk-import /execute route.
  *
- * IAP.o.11a refactor — Manager MV30 v4 surfaced "pricing always failed but no
- * log or error in Railway console". Section 2 audit confirmed payload schema
- * is correct against OpenAPI public-spec; the silent failure must be in a
- * code path that doesn't log. This refactor:
+ * IAP.p1.e — 3-source pricing model (Manager Q-A..Q-K):
  *
- *   1. Adds `[pricing]` console.log at every decision point so Railway captures
- *      the exact branch taken.
- *   2. Moves audit-log writes INTO the orchestrator with try/catch so an
- *      audit-log INSERT failure (RLS, schema, etc.) surfaces explicitly to
- *      Railway console instead of silently dropping the trace.
- *   3. Wraps the whole orchestration in try/catch with a `failed-exception`
- *      outcome so an unexpected throw cannot silently exit the function.
+ *   APPLE             — single USA price-point POST; Apple auto-equalizes
+ *                       the remaining territories (= behavior pinned by
+ *                       IAP.o.11d, F8 nuance preserves backward compat).
+ *   DEFAULT_TEMPLATE  — USA base + per-territory overrides from the global
+ *                       price_tier_templates entry set for the IAP's tier.
+ *   APP_TEMPLATE      — same shape, but entries scoped to the app's own
+ *                       template (overrides Default for that app).
  *
- * IAP.o.10a inheritance: match by USA/USD `customerPrice` (Apple priceTier
- * numbering changed in 2024, dev forum 728081 — `customerPrice` is the only
- * stable join key). `priceTier` is not in the OpenAPI public spec's field
- * enum for `/v2/inAppPurchases/{id}/pricePoints`, confirming customerPrice as
- * canonical.
+ * Sparse templates (Manager Q-I/Q-K): territories absent from the template's
+ * entries for this tier fall back to Apple's auto-equalization. Entries that
+ * reference a customer_price not present in Apple's per-territory catalog
+ * produce a `partial-template-fail` outcome — the POST still happens with
+ * the resolved overrides (fail-soft per Q-K) and the missing entries are
+ * surfaced in the audit log.
+ *
+ * IAP.o.11a refactor inheritance — instrumentation parity preserved:
+ *   1. `[pricing]` console.log at every decision point.
+ *   2. Audit-log writes live INSIDE the orchestrator (try/catch) so an
+ *      INSERT failure can't silently lose the trace.
+ *   3. The whole orchestration is wrapped in try/catch with
+ *      `failed-exception` so an unexpected throw is captured.
+ *
+ * IAP.o.10a inheritance — match by USA/USD customerPrice (Apple's priceTier
+ * numbering changed in 2024, dev forum 728081). customerPrice remains the
+ * canonical join key.
  *
  * Failures are NEVER fatal — Manager workflow is "IAP created on Apple,
  * Manager fixes pricing later if needed." The orchestrator's job is to set
- * the price when possible, otherwise surface a precise reason so audit logs
- * + UI can show why.
+ * the price when possible, otherwise surface a precise reason.
  */
 import type { AscCredentials } from "@/lib/asc-jwt";
 import {
   listPricePointsForIap,
   findPricePointByUsdPrice,
+  type InAppPurchasePricePoint,
 } from "./price-points";
 import { setPriceSchedule } from "./price-schedules";
 import { AppleApiError } from "./fetch";
 import { iapDb } from "@/lib/iap-management/db";
+import {
+  getDefaultTemplate,
+  getAppTemplate,
+  type TemplateWithEntries,
+} from "@/lib/iap-management/queries/templates";
+import { createTerritoryPricePointsCache } from "./territory-price-points-cache";
+
+export type PricingSource =
+  | { kind: "APPLE" }
+  | { kind: "DEFAULT_TEMPLATE" }
+  | { kind: "APP_TEMPLATE"; app_id: string };
+
+export interface MissingPricePoint {
+  tier_id: string;
+  territory_code: string;
+  customer_price: number;
+}
 
 export type PricingOutcome =
   | {
@@ -42,6 +68,18 @@ export type PricingOutcome =
       schedule_id: string;
       usd_price: number;
       attempts: number;
+      source_kind: PricingSource["kind"];
+      overridden_territory_count: number;
+    }
+  | {
+      /** Q-K fail-soft: schedule POSTed with the entries we could resolve,
+       *  but some template entries had no matching Apple price-point. */
+      kind: "partial-template-fail";
+      schedule_id: string;
+      attempts: number;
+      source_kind: PricingSource["kind"];
+      overridden_territory_count: number;
+      missing_price_points: MissingPricePoint[];
     }
   | { kind: "skipped-no-tier" }
   | { kind: "skipped-no-usd-price"; tier_id: string }
@@ -63,54 +101,34 @@ export interface ApplyPricingArgs {
   appleIapId: string;
   /** Local tier id surfaced in audit log only — not the match key. */
   localTierId: string | null | undefined;
-  /** USA/USD customer_price resolved by the caller from
-   *  iap_mgmt.price_tier_territories. Canonical match key against Apple's
-   *  customerPrice attribute. Null when the tier isn't in the local cache. */
+  /** USA/USD customer_price resolved by the caller. Canonical match key
+   *  against Apple's customerPrice attribute. */
   usdPrice: number | null | undefined;
   baseTerritory?: string;
-  /** Optional pre-flight poll result. If supplied AND `ready === false`, the
-   *  orchestrator short-circuits to `skipped-not-ready` without calling
-   *  Apple. Keeps poll-failure audit writes consolidated with the pricing
-   *  audit log writes so Manager queries hit a single action_type. */
+  /** Pricing source — defaults to APPLE for backward compat. */
+  source?: PricingSource;
+  /** Optional pre-flight poll result. */
   precheck?: { ready: boolean; reason?: string; attempts?: number; total_ms?: number };
-  /** Audit log context — required so the orchestrator can write a
-   *  SET_PRICE_SCHEDULE row at every outcome path. Threading this through the
-   *  args (vs the route handler writing) means a silent return-early cannot
-   *  leave the audit log empty. */
   audit: {
-    /** Local iap_mgmt.iaps.id. Optional for bulk-import CREATE path where the
-     *  local row may not exist yet at the time of pricing — orchestrator
-     *  falls back to batch_id + apple_iap_id correlation in that case. */
     iapId?: string | null;
     actor: string;
-    /** Optional bulk-import batch correlation. */
     batchId?: string;
-    /** Optional product_id correlation (bulk-import). */
     productId?: string;
-    /** Optional internal app_id correlation (bulk-import). */
     internalAppId?: string;
   };
 }
 
-/**
- * Apply the resolved USD price as Apple's manual price for the IAP. The
- * result `kind` discriminates the outcome — callers map it to a UI badge and
- * the audit log row is written here unconditionally.
- *
- * Instrumentation: every branch hits a `[pricing]` console.log so Railway log
- * tail shows which path was taken. The audit-log write is try/catch wrapped
- * so a write failure does not silently lose the trace.
- */
 export async function applyPricingSchedule(
   args: ApplyPricingArgs,
 ): Promise<PricingOutcome> {
+  const source: PricingSource = args.source ?? { kind: "APPLE" };
   console.log(
-    `[pricing] start apple_iap_id=${args.appleIapId} tier_id=${args.localTierId ?? "<null>"} usd_price=${args.usdPrice ?? "<null>"}`,
+    `[pricing] start apple_iap_id=${args.appleIapId} tier_id=${args.localTierId ?? "<null>"} usd_price=${args.usdPrice ?? "<null>"} source=${source.kind}`,
   );
 
   let outcome: PricingOutcome;
   try {
-    outcome = await runPricingFlow(args);
+    outcome = await runPricingFlow(args, source);
   } catch (err) {
     const errStr =
       err instanceof AppleApiError
@@ -127,11 +145,14 @@ export async function applyPricingSchedule(
   console.log(
     `[pricing] complete apple_iap_id=${args.appleIapId} outcome=${outcome.kind}`,
   );
-  await writePricingAuditLog(args, outcome);
+  await writePricingAuditLog(args, source, outcome);
   return outcome;
 }
 
-async function runPricingFlow(args: ApplyPricingArgs): Promise<PricingOutcome> {
+async function runPricingFlow(
+  args: ApplyPricingArgs,
+  source: PricingSource,
+): Promise<PricingOutcome> {
   if (args.precheck && args.precheck.ready === false) {
     const reason = args.precheck.reason ?? "precheck-not-ready";
     console.warn(
@@ -159,7 +180,7 @@ async function runPricingFlow(args: ApplyPricingArgs): Promise<PricingOutcome> {
   console.log(
     `[pricing] fetching price points apple_iap_id=${args.appleIapId} territory=${baseTerritory}`,
   );
-  let pricePoints;
+  let pricePoints: InAppPurchasePricePoint[];
   try {
     pricePoints = await listPricePointsForIap(
       args.creds,
@@ -201,12 +222,82 @@ async function runPricingFlow(args: ApplyPricingArgs): Promise<PricingOutcome> {
     `[pricing] match found apple_iap_id=${args.appleIapId} price_point_id=${match.id} usd_price=${args.usdPrice}`,
   );
 
+  // ── Template branch: resolve per-territory overrides ───────────────────
+  const additionalPricePointIds: string[] = [];
+  const missing: MissingPricePoint[] = [];
+
+  if (source.kind !== "APPLE") {
+    const template: TemplateWithEntries | null =
+      source.kind === "DEFAULT_TEMPLATE"
+        ? await getDefaultTemplate()
+        : await getAppTemplate(source.app_id);
+
+    if (!template) {
+      // Manager selected a template source but no template exists for this
+      // scope. Fall back to APPLE behavior — don't fail the create flow.
+      console.warn(
+        `[pricing] template missing source=${source.kind} apple_iap_id=${args.appleIapId} → falling back to APPLE`,
+      );
+    } else {
+      const tierEntries = template.entries.filter(
+        (e) => e.tier_id === args.localTierId && e.territory_code !== baseTerritory,
+      );
+      console.log(
+        `[pricing] template entries source=${source.kind} tier=${args.localTierId} count=${tierEntries.length} apple_iap_id=${args.appleIapId}`,
+      );
+      const cache = createTerritoryPricePointsCache(args.creds, args.appleIapId);
+      cache.prime(baseTerritory, pricePoints);
+      for (const entry of tierEntries) {
+        let pointsForTerritory: InAppPurchasePricePoint[];
+        try {
+          pointsForTerritory = await cache.get(entry.territory_code);
+        } catch (err) {
+          const errStr =
+            err instanceof AppleApiError
+              ? `${err.status}: ${err.body.slice(0, 200)}`
+              : err instanceof Error
+                ? err.message
+                : String(err);
+          console.warn(
+            `[pricing] territory fetch failed apple_iap_id=${args.appleIapId} territory=${entry.territory_code}: ${errStr}`,
+          );
+          missing.push({
+            tier_id: entry.tier_id,
+            territory_code: entry.territory_code,
+            customer_price: entry.customer_price,
+          });
+          continue;
+        }
+        const territoryMatch = findPricePointByUsdPrice(
+          pointsForTerritory,
+          entry.customer_price,
+        );
+        if (territoryMatch) {
+          additionalPricePointIds.push(territoryMatch.id);
+        } else {
+          console.warn(
+            `[pricing] no Apple catalog match apple_iap_id=${args.appleIapId} territory=${entry.territory_code} customer_price=${entry.customer_price}`,
+          );
+          missing.push({
+            tier_id: entry.tier_id,
+            territory_code: entry.territory_code,
+            customer_price: entry.customer_price,
+          });
+        }
+      }
+      console.log(
+        `[pricing] template overrides resolved apple_iap_id=${args.appleIapId} matched=${additionalPricePointIds.length} missing=${missing.length} cache_size=${cache.size()}`,
+      );
+    }
+  }
+
   console.log(
-    `[pricing] POST schedule starting apple_iap_id=${args.appleIapId} price_point_id=${match.id}`,
+    `[pricing] POST schedule starting apple_iap_id=${args.appleIapId} price_point_id=${match.id} additional=${additionalPricePointIds.length}`,
   );
   const setResult = await setPriceSchedule(args.creds, {
     appleIapId: args.appleIapId,
     applePricePointId: match.id,
+    additionalPricePointIds,
     baseTerritory,
   });
   if (!setResult.ok) {
@@ -225,25 +316,38 @@ async function runPricingFlow(args: ApplyPricingArgs): Promise<PricingOutcome> {
   console.log(
     `[pricing] POST schedule success apple_iap_id=${args.appleIapId} schedule_id=${setResult.schedule_id} attempts=${setResult.attempts}`,
   );
+
+  if (missing.length > 0) {
+    return {
+      kind: "partial-template-fail",
+      schedule_id: setResult.schedule_id,
+      attempts: setResult.attempts,
+      source_kind: source.kind,
+      overridden_territory_count: additionalPricePointIds.length,
+      missing_price_points: missing,
+    };
+  }
+
   return {
     kind: "set",
     price_point_id: match.id,
     schedule_id: setResult.schedule_id,
     usd_price: args.usdPrice,
     attempts: setResult.attempts,
+    source_kind: source.kind,
+    overridden_territory_count: additionalPricePointIds.length,
   };
 }
 
-/**
- * Map outcome.kind → audit-log severity. Per Manager IAP.o.11 Q-F: pricing
- * failures escalate to ERROR (was previously implicit WARN). Intentional
- * skip (no tier configured) stays INFO; data-integrity skips and Apple
- * failures all carry ERROR so Manager surfaces them in diagnostic queries.
- */
+/** Map outcome.kind → audit-log severity. */
 function severityFor(kind: PricingOutcome["kind"]): "SUCCESS" | "INFO" | "ERROR" {
   switch (kind) {
     case "set":
       return "SUCCESS";
+    case "partial-template-fail":
+      // Q-K fail-soft: surface as ERROR so Manager queries can find rows
+      // with missing Apple catalog matches without filtering on a sub-field.
+      return "ERROR";
     case "skipped-no-tier":
       return "INFO";
     case "skipped-no-usd-price":
@@ -256,15 +360,9 @@ function severityFor(kind: PricingOutcome["kind"]): "SUCCESS" | "INFO" | "ERROR"
   }
 }
 
-/**
- * Write the SET_PRICE_SCHEDULE audit row. Wrapped in try/catch because per
- * IAP.o.11 H4 hypothesis an INSERT failure (RLS, schema, supabase outage)
- * could silently drop the only persistent trace of the pricing attempt. If
- * the write fails, the failure surfaces to Railway console so it can never
- * disappear without leaving a footprint somewhere.
- */
 async function writePricingAuditLog(
   args: ApplyPricingArgs,
+  source: PricingSource,
   outcome: PricingOutcome,
 ): Promise<void> {
   const result = severityFor(outcome.kind);
@@ -280,16 +378,31 @@ async function writePricingAuditLog(
           apple_iap_id: args.appleIapId,
           tier_id: args.localTierId ?? null,
           usd_price: args.usdPrice ?? null,
+          source: source.kind,
+          source_app_id: source.kind === "APP_TEMPLATE" ? source.app_id : null,
           outcome: outcome.kind,
           result,
           price_point_id:
             outcome.kind === "set" || outcome.kind === "failed-set"
               ? outcome.price_point_id
               : null,
-          schedule_id: outcome.kind === "set" ? outcome.schedule_id : null,
+          schedule_id:
+            outcome.kind === "set" || outcome.kind === "partial-template-fail"
+              ? outcome.schedule_id
+              : null,
           attempts:
-            outcome.kind === "set" || outcome.kind === "failed-set"
+            outcome.kind === "set" ||
+            outcome.kind === "failed-set" ||
+            outcome.kind === "partial-template-fail"
               ? outcome.attempts
+              : null,
+          overridden_territory_count:
+            outcome.kind === "set" || outcome.kind === "partial-template-fail"
+              ? outcome.overridden_territory_count
+              : null,
+          missing_price_points:
+            outcome.kind === "partial-template-fail"
+              ? outcome.missing_price_points
               : null,
           error:
             outcome.kind === "failed-lookup" ||

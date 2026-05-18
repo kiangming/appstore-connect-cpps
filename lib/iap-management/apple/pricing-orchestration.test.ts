@@ -25,6 +25,15 @@ vi.mock("./price-schedules", () => ({
   setPriceSchedule,
 }));
 
+// IAP.p1.e: orchestration now consults the template tables for non-APPLE
+// pricing sources. Mock the loaders so tests stay hermetic.
+const getDefaultTemplate = vi.hoisted(() => vi.fn());
+const getAppTemplate = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/iap-management/queries/templates", () => ({
+  getDefaultTemplate,
+  getAppTemplate,
+}));
+
 vi.mock("./fetch", () => ({
   AppleApiError: class extends Error {
     status: number;
@@ -233,6 +242,7 @@ describe("applyPricingSchedule", () => {
     expect(setPriceSchedule).toHaveBeenCalledWith(creds, {
       appleIapId: "iap-1",
       applePricePointId: "pp-499",
+      additionalPricePointIds: [],
       baseTerritory: "VNM",
     });
   });
@@ -393,5 +403,230 @@ describe("applyPricingSchedule", () => {
     expect(auditInsert).toHaveBeenCalledTimes(1);
     expect(lastAuditPayload().outcome).toBe("failed-exception");
     expect(lastAuditPayload().result).toBe("ERROR");
+  });
+});
+
+// IAP.p1.e — three-source pricing model. The APPLE path preserves IAP.o.11d
+// behavior (F8 nuance: backward compat). DEFAULT_TEMPLATE / APP_TEMPLATE
+// paths fetch per-territory price points and assemble a multi-entry
+// manualPrices payload.
+describe("applyPricingSchedule — three-source pricing model (IAP.p1.e)", () => {
+  beforeEach(() => {
+    listPricePointsForIap.mockReset();
+    setPriceSchedule.mockReset();
+    auditInsert.mockReset();
+    getDefaultTemplate.mockReset();
+    getAppTemplate.mockReset();
+  });
+
+  // ── APPLE source — unchanged behavior ─────────────────────────────────
+  it("APPLE source: emits empty additionalPricePointIds (preserves IAP.o.11d shape)", async () => {
+    listPricePointsForIap.mockResolvedValueOnce(POINTS);
+    setPriceSchedule.mockResolvedValueOnce({
+      ok: true,
+      schedule_id: "sched-apple",
+      attempts: 1,
+    });
+    const out = await applyPricingSchedule({
+      creds,
+      appleIapId: "iap-1",
+      localTierId: "TIER_5",
+      usdPrice: 4.99,
+      source: { kind: "APPLE" },
+      audit: baseAudit,
+    });
+    expect(out.kind).toBe("set");
+    if (out.kind === "set") {
+      expect(out.source_kind).toBe("APPLE");
+      expect(out.overridden_territory_count).toBe(0);
+    }
+    expect(setPriceSchedule.mock.calls[0][1].additionalPricePointIds).toEqual([]);
+    // No template loader consulted on APPLE path.
+    expect(getDefaultTemplate).not.toHaveBeenCalled();
+    expect(getAppTemplate).not.toHaveBeenCalled();
+  });
+
+  // ── DEFAULT_TEMPLATE source — overrides applied per territory ────────
+  it("DEFAULT_TEMPLATE: resolves per-territory overrides and POSTs multi-entry schedule", async () => {
+    listPricePointsForIap
+      .mockResolvedValueOnce(POINTS) // USA base
+      .mockResolvedValueOnce([
+        // VNM territory price points
+        {
+          type: "inAppPurchasePricePoints",
+          id: "pp-vnm-25000",
+          attributes: { customerPrice: "25000", proceeds: "17500", priceTier: "10000" },
+        },
+      ]);
+    getDefaultTemplate.mockResolvedValueOnce({
+      template: {
+        id: "tmpl-default",
+        scope_type: "GLOBAL",
+        scope_app_id: null,
+        uploaded_at: "2026-05-18T00:00:00Z",
+        uploaded_by: "tester",
+        source_filename: null,
+      },
+      entries: [
+        // USA entry is filtered out (baseTerritory) inside orchestrator.
+        { tier_id: "TIER_5", territory_code: "USA", currency_code: "USD", customer_price: 4.99, proceeds: 3.49 },
+        { tier_id: "TIER_5", territory_code: "VNM", currency_code: "VND", customer_price: 25000, proceeds: 17500 },
+        // Different tier ignored.
+        { tier_id: "TIER_1", territory_code: "VNM", currency_code: "VND", customer_price: 5000, proceeds: 3500 },
+      ],
+    });
+    setPriceSchedule.mockResolvedValueOnce({
+      ok: true,
+      schedule_id: "sched-default",
+      attempts: 1,
+    });
+    const out = await applyPricingSchedule({
+      creds,
+      appleIapId: "iap-1",
+      localTierId: "TIER_5",
+      usdPrice: 4.99,
+      source: { kind: "DEFAULT_TEMPLATE" },
+      audit: baseAudit,
+    });
+    expect(out.kind).toBe("set");
+    if (out.kind === "set") {
+      expect(out.source_kind).toBe("DEFAULT_TEMPLATE");
+      expect(out.overridden_territory_count).toBe(1);
+    }
+    // USA fetched first as the base; VNM fetched as override.
+    expect(listPricePointsForIap.mock.calls[0][2]).toBe("USA");
+    expect(listPricePointsForIap.mock.calls[1][2]).toBe("VNM");
+    expect(setPriceSchedule.mock.calls[0][1].additionalPricePointIds).toEqual([
+      "pp-vnm-25000",
+    ]);
+  });
+
+  // ── APP_TEMPLATE source — scoped to the app id ────────────────────────
+  it("APP_TEMPLATE: consults getAppTemplate with the provided app_id", async () => {
+    listPricePointsForIap.mockResolvedValueOnce(POINTS); // USA only — no overrides
+    getAppTemplate.mockResolvedValueOnce({
+      template: {
+        id: "tmpl-app",
+        scope_type: "APP",
+        scope_app_id: "app-uuid-123",
+        uploaded_at: "2026-05-18T00:00:00Z",
+        uploaded_by: "tester",
+        source_filename: null,
+      },
+      entries: [],
+    });
+    setPriceSchedule.mockResolvedValueOnce({
+      ok: true,
+      schedule_id: "sched-app",
+      attempts: 1,
+    });
+    const out = await applyPricingSchedule({
+      creds,
+      appleIapId: "iap-1",
+      localTierId: "TIER_5",
+      usdPrice: 4.99,
+      source: { kind: "APP_TEMPLATE", app_id: "app-uuid-123" },
+      audit: baseAudit,
+    });
+    expect(out.kind).toBe("set");
+    expect(getAppTemplate).toHaveBeenCalledWith("app-uuid-123");
+    expect(getDefaultTemplate).not.toHaveBeenCalled();
+  });
+
+  // ── Q-K fail-soft: template entry with no Apple catalog match ─────────
+  it("DEFAULT_TEMPLATE: missing Apple match → partial-template-fail, POST still happens", async () => {
+    listPricePointsForIap
+      .mockResolvedValueOnce(POINTS)
+      .mockResolvedValueOnce([
+        // VNM territory points — only 50000 available, template asks for 25000.
+        {
+          type: "inAppPurchasePricePoints",
+          id: "pp-vnm-50000",
+          attributes: { customerPrice: "50000", proceeds: "35000", priceTier: "10001" },
+        },
+      ]);
+    getDefaultTemplate.mockResolvedValueOnce({
+      template: {
+        id: "tmpl-default",
+        scope_type: "GLOBAL",
+        scope_app_id: null,
+        uploaded_at: "2026-05-18T00:00:00Z",
+        uploaded_by: "tester",
+        source_filename: null,
+      },
+      entries: [
+        { tier_id: "TIER_5", territory_code: "VNM", currency_code: "VND", customer_price: 25000, proceeds: 17500 },
+      ],
+    });
+    setPriceSchedule.mockResolvedValueOnce({
+      ok: true,
+      schedule_id: "sched-partial",
+      attempts: 1,
+    });
+    const out = await applyPricingSchedule({
+      creds,
+      appleIapId: "iap-1",
+      localTierId: "TIER_5",
+      usdPrice: 4.99,
+      source: { kind: "DEFAULT_TEMPLATE" },
+      audit: baseAudit,
+    });
+    expect(out.kind).toBe("partial-template-fail");
+    if (out.kind === "partial-template-fail") {
+      expect(out.missing_price_points).toEqual([
+        { tier_id: "TIER_5", territory_code: "VNM", customer_price: 25000 },
+      ]);
+      expect(out.overridden_territory_count).toBe(0);
+    }
+    expect(lastAuditPayload().outcome).toBe("partial-template-fail");
+    expect(lastAuditPayload().missing_price_points).toEqual([
+      { tier_id: "TIER_5", territory_code: "VNM", customer_price: 25000 },
+    ]);
+  });
+
+  // ── Template source selected but no template exists ──────────────────
+  it("DEFAULT_TEMPLATE selected but no template exists → falls back to APPLE behavior", async () => {
+    listPricePointsForIap.mockResolvedValueOnce(POINTS);
+    getDefaultTemplate.mockResolvedValueOnce(null);
+    setPriceSchedule.mockResolvedValueOnce({
+      ok: true,
+      schedule_id: "sched-fallback",
+      attempts: 1,
+    });
+    const out = await applyPricingSchedule({
+      creds,
+      appleIapId: "iap-1",
+      localTierId: "TIER_5",
+      usdPrice: 4.99,
+      source: { kind: "DEFAULT_TEMPLATE" },
+      audit: baseAudit,
+    });
+    expect(out.kind).toBe("set");
+    if (out.kind === "set") {
+      expect(out.source_kind).toBe("DEFAULT_TEMPLATE");
+      expect(out.overridden_territory_count).toBe(0);
+    }
+    expect(setPriceSchedule.mock.calls[0][1].additionalPricePointIds).toEqual([]);
+  });
+
+  // ── Audit log records the source on every outcome ────────────────────
+  it("audit payload includes source + source_app_id", async () => {
+    listPricePointsForIap.mockResolvedValueOnce(POINTS);
+    getAppTemplate.mockResolvedValueOnce(null);
+    setPriceSchedule.mockResolvedValueOnce({
+      ok: true,
+      schedule_id: "sched-1",
+      attempts: 1,
+    });
+    await applyPricingSchedule({
+      creds,
+      appleIapId: "iap-1",
+      localTierId: "TIER_5",
+      usdPrice: 4.99,
+      source: { kind: "APP_TEMPLATE", app_id: "app-xyz" },
+      audit: baseAudit,
+    });
+    expect(lastAuditPayload().source).toBe("APP_TEMPLATE");
+    expect(lastAuditPayload().source_app_id).toBe("app-xyz");
   });
 });

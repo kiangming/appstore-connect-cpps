@@ -68,6 +68,7 @@ interface SuccessResponse {
   price_schedule_set: boolean;
   price_schedule_note?:
     | "set"
+    | "partial-template-fail"
     | "skipped-no-tier"
     | "skipped-no-usd-price"
     | "skipped-no-match"
