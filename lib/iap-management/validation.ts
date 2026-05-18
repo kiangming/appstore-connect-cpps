@@ -32,6 +32,12 @@ export interface IapFormState {
   localizations: Record<string, FormLocalization>;
   /** Screenshot file_name once the file is staged client-side. */
   screenshot_filename: string | null;
+  /** IAP.o.12: Apple `reviewNote` — guidance shown to Apple reviewers.
+   *  Optional; empty/null = unset. PATCH-able via `/v2/inAppPurchases/{id}`. */
+  review_note?: string | null;
+  /** IAP.o.12: Apple `familySharable` — Family Sharing eligibility.
+   *  PATCH-able via `/v2/inAppPurchases/{id}`. Defaults to false at create. */
+  family_sharable?: boolean;
 }
 
 export type ChecklistKey =
@@ -201,5 +207,7 @@ export function emptyIapForm(): IapFormState {
     tier_id: null,
     localizations: {},
     screenshot_filename: null,
+    review_note: null,
+    family_sharable: false,
   };
 }

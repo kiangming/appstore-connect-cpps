@@ -57,7 +57,7 @@ format data như sau:
     }
   }
 
-step 2: appstore sẽ load list price của all  country  https://appstoreconnect.apple.com/iris/v1/inAppPurchasePricePoints/eyJzIjoiNjc3MDAyOTExMCIsInQiOiJVU0EiLCJwIjoiMTAwMTAifQ/equalizations?include=territory&limit=200
+step 2: appstore sẽ load list price của all  country https://appstoreconnect.apple.com/iris/v1/inAppPurchasePricePoints/eyJzIjoiNjc3MDAyOTExMCIsInQiOiJVU0EiLCJwIjoiMTAwMTAifQ/equalizations?include=territory&limit=200
 
 format data có dạng:
 "data" :  {

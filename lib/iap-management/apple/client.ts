@@ -239,6 +239,19 @@ export async function updateInAppPurchaseLocalization(
   );
 }
 
+/** IAP.o.12a — DELETE a localization. Used by update-orchestration when the
+ *  Manager removes a locale from the edit form. */
+export async function deleteInAppPurchaseLocalization(
+  creds: AscCredentials,
+  localizationId: string,
+): Promise<void> {
+  return iapFetch<void>(
+    creds,
+    "DELETE",
+    `/v1/inAppPurchaseLocalizations/${localizationId}`,
+  );
+}
+
 // ─── Review Screenshots (3-step upload, mirrors CPP pattern) ────────────────
 
 export async function reserveInAppPurchaseScreenshot(
