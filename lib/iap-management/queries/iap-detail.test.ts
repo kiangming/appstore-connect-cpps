@@ -38,9 +38,11 @@ import {
   getIapViewData,
 } from "./iap-detail";
 import { AppleApiError } from "@/lib/iap-management/apple/fetch";
+import type { PriceScheduleFetchResult } from "@/lib/iap-management/apple/price-schedules";
 import type {
   AscApiResponse,
   InAppPurchase,
+  InAppPurchasePrice,
   InAppPurchasePriceSchedule,
 } from "@/types/iap-management/apple";
 
@@ -152,6 +154,19 @@ describe("splitIncluded", () => {
 
 // ─── IAP.p2.a — Price schedule unpack ────────────────────────────────────────
 
+/**
+ * Test-fixture builder mirroring Apple's actual JSON:API shape per
+ * IAP.p2.k corrections:
+ *   - InAppPurchasePrice has its OWN `relationships.territory` (Apple
+ *     side-loads it via Stage 2/3 `?include=…,territory`).
+ *   - Territory resources carry `attributes.currency` (per OpenAPI
+ *     `fields[territories]: [currency]`).
+ *   - InAppPurchasePricePoint has NO `currency` attribute and NO
+ *     `relationships.territory.data` side-loaded (per OpenAPI
+ *     `fields[inAppPurchasePricePoints]: [customerPrice, proceeds,
+ *     territory, equalizations]` — `territory` here is a field selector
+ *     not a side-load).
+ */
 function priceScheduleResponse(opts: {
   baseTerritory?: string;
   manualPrices?: Array<{
@@ -163,9 +178,10 @@ function priceScheduleResponse(opts: {
     startDate?: string | null;
     endDate?: string | null;
   }>;
-}): AscApiResponse<InAppPurchasePriceSchedule> {
+}): PriceScheduleFetchResult {
   const manuals = opts.manualPrices ?? [];
   const included: AscApiResponse<InAppPurchasePriceSchedule>["included"] = [];
+  const seenTerritories = new Set<string>();
   for (const m of manuals) {
     included.push({
       type: "inAppPurchasePrices",
@@ -178,6 +194,8 @@ function priceScheduleResponse(opts: {
         inAppPurchasePricePoint: {
           data: { type: "inAppPurchasePricePoints", id: m.pricePointId },
         },
+        // FIX A: territory lives on the price entry itself, not the price point.
+        territory: { data: { type: "territories", id: m.territory } },
       },
     });
     included.push({
@@ -186,14 +204,24 @@ function priceScheduleResponse(opts: {
       attributes: {
         customerPrice: m.customerPrice,
         proceeds: "0.7",
-        ...(m.currency ? { currency: m.currency } : {}),
+        // Note: no `currency` here — Apple doesn't put it on price points.
       },
-      relationships: {
-        territory: { data: { type: "territories", id: m.territory } },
-      },
+      // Note: no relationships block — Stage 2 doesn't side-load price-point
+      // relationships, the resource arrives shell-only.
     });
+    // FIX B: each unique territory contributes a Territory resource
+    // with currency attribute (deduped — multiple prices can share territory
+    // in theory, but Apple's data doesn't in practice).
+    if (m.currency && !seenTerritories.has(m.territory)) {
+      seenTerritories.add(m.territory);
+      included.push({
+        type: "territories",
+        id: m.territory,
+        attributes: { currency: m.currency },
+      });
+    }
   }
-  return {
+  const schedule: AscApiResponse<InAppPurchasePriceSchedule> = {
     data: {
       type: "inAppPurchasePriceSchedules",
       id: "sched-1",
@@ -211,6 +239,52 @@ function priceScheduleResponse(opts: {
       },
     } as unknown as InAppPurchasePriceSchedule,
     included,
+  };
+  return { schedule, basePrice: null };
+}
+
+/** Helper to build a Stage 3 single-row response for a base-territory
+ *  automaticPrice (`/v1/inAppPurchasePriceSchedules/{id}/automaticPrices
+ *  ?filter[territory]=<base>&limit=1`). */
+function basePriceResponse(opts: {
+  priceId: string;
+  pricePointId: string;
+  territory: string;
+  customerPrice: string;
+  currency?: string;
+}): AscApiResponse<InAppPurchasePrice[]> {
+  return {
+    data: [
+      {
+        type: "inAppPurchasePrices",
+        id: opts.priceId,
+        attributes: { startDate: null },
+        relationships: {
+          inAppPurchasePricePoint: {
+            data: { type: "inAppPurchasePricePoints", id: opts.pricePointId },
+          },
+          territory: {
+            data: { type: "territories", id: opts.territory },
+          },
+        },
+      } as unknown as InAppPurchasePrice,
+    ],
+    included: [
+      {
+        type: "inAppPurchasePricePoints",
+        id: opts.pricePointId,
+        attributes: { customerPrice: opts.customerPrice, proceeds: "0.7" },
+      },
+      ...(opts.currency
+        ? [
+            {
+              type: "territories",
+              id: opts.territory,
+              attributes: { currency: opts.currency },
+            },
+          ]
+        : []),
+    ],
   };
 }
 
@@ -290,7 +364,7 @@ describe("unpackPriceSchedule", () => {
       ],
     });
     // simulate Apple returning the price resource but not the price point
-    res.included = res.included!.filter(
+    res.schedule.included = res.schedule.included!.filter(
       (r) => r.type !== "inAppPurchasePricePoints",
     );
     const out = unpackPriceSchedule(res);
@@ -299,8 +373,97 @@ describe("unpackPriceSchedule", () => {
 
   it("falls back to USA when baseTerritory relationship is missing", () => {
     const res = priceScheduleResponse({});
-    delete (res.data.relationships as { baseTerritory?: unknown }).baseTerritory;
+    delete (res.schedule.data.relationships as { baseTerritory?: unknown }).baseTerritory;
     expect(unpackPriceSchedule(res).baseTerritory).toBe("USA");
+  });
+
+  // ── IAP.p2.k regressions ─────────────────────────────────────────────────
+  it("reads territory from InAppPurchasePrice.relationships.territory (FIX A)", () => {
+    const out = unpackPriceSchedule(
+      priceScheduleResponse({
+        manualPrices: [
+          {
+            priceId: "p-vn",
+            pricePointId: "pp-vn",
+            territory: "VNM",
+            customerPrice: "89000",
+            currency: "VND",
+          },
+        ],
+      }),
+    );
+    expect(out.entries).toHaveLength(1);
+    expect(out.entries[0].territory).toBe("VNM");
+  });
+
+  it("reads currency from Territory.attributes.currency (FIX B)", () => {
+    const out = unpackPriceSchedule(
+      priceScheduleResponse({
+        manualPrices: [
+          {
+            priceId: "p-jp",
+            pricePointId: "pp-jp",
+            territory: "JPN",
+            customerPrice: "150",
+            currency: "JPY",
+          },
+        ],
+      }),
+    );
+    expect(out.entries[0].currency).toBe("JPY");
+  });
+
+  it("returns currency=null when the Territory resource isn't side-loaded", () => {
+    const res = priceScheduleResponse({
+      manualPrices: [
+        {
+          priceId: "p-1",
+          pricePointId: "pp-1",
+          territory: "USA",
+          customerPrice: "0.99",
+          // currency intentionally omitted → no Territory resource included
+        },
+      ],
+    });
+    const out = unpackPriceSchedule(res);
+    expect(out.entries[0].currency).toBeNull();
+  });
+
+  // ── IAP.p2.k basePrice (Stage 3) ─────────────────────────────────────────
+  it("returns basePrice=null when no Stage 3 response is provided", () => {
+    const out = unpackPriceSchedule(
+      priceScheduleResponse({ baseTerritory: "USA" }),
+    );
+    expect(out.basePrice).toBeNull();
+  });
+
+  it("unpacks the base price from a Stage 3 automaticPrices response", () => {
+    const schedule = priceScheduleResponse({ baseTerritory: "USA" });
+    const out = unpackPriceSchedule({
+      schedule: schedule.schedule,
+      basePrice: basePriceResponse({
+        priceId: "p-base",
+        pricePointId: "pp-base",
+        territory: "USA",
+        customerPrice: "0.99",
+        currency: "USD",
+      }),
+    });
+    expect(out.basePrice).not.toBeNull();
+    expect(out.basePrice).toMatchObject({
+      territory: "USA",
+      customerPrice: "0.99",
+      currency: "USD",
+    });
+  });
+
+  it("returns basePrice=null when Stage 3 returns an empty data array", () => {
+    const schedule = priceScheduleResponse({ baseTerritory: "USA" });
+    const out = unpackPriceSchedule({
+      schedule: schedule.schedule,
+      basePrice: { data: [], included: [] },
+    });
+    expect(out.basePrice).toBeNull();
   });
 });
 

@@ -113,41 +113,82 @@ function fullIapResponse(): AscApiResponse<InAppPurchase> {
   };
 }
 
-function priceScheduleResponse(): AscApiResponse<InAppPurchasePriceSchedule> {
+/**
+ * IAP.p2.k: schedule fixture mirrors Apple's actual JSON:API shape:
+ *   - InAppPurchasePrice carries its OWN `relationships.territory`
+ *   - Territory resources carry `attributes.currency`
+ *   - InAppPurchasePricePoints have NO `currency` (it's a Territory attribute)
+ *   - The fetch result is { schedule, basePrice } since p2.k 3-stage.
+ */
+function priceScheduleFetchResult(): {
+  schedule: AscApiResponse<InAppPurchasePriceSchedule>;
+  basePrice: AscApiResponse<unknown> | null;
+} {
   return {
-    data: {
-      type: "inAppPurchasePriceSchedules",
-      id: "sched-1",
-      attributes: {},
-      relationships: {
-        baseTerritory: {
-          data: { type: "territories", id: "USA" },
-        },
-        manualPrices: {
-          data: [{ type: "inAppPurchasePrices", id: "p-usa" }],
-        },
-      },
-    } as unknown as InAppPurchasePriceSchedule,
-    included: [
-      {
-        type: "inAppPurchasePrices",
-        id: "p-usa",
-        attributes: { startDate: null },
+    schedule: {
+      data: {
+        type: "inAppPurchasePriceSchedules",
+        id: "sched-1",
+        attributes: {},
         relationships: {
-          inAppPurchasePricePoint: {
-            data: { type: "inAppPurchasePricePoints", id: "pp-usa" },
+          baseTerritory: { data: { type: "territories", id: "USA" } },
+          manualPrices: {
+            data: [{ type: "inAppPurchasePrices", id: "p-vn" }],
           },
         },
-      },
-      {
-        type: "inAppPurchasePricePoints",
-        id: "pp-usa",
-        attributes: { customerPrice: "0.99", proceeds: "0.7", currency: "USD" },
-        relationships: {
-          territory: { data: { type: "territories", id: "USA" } },
+      } as unknown as InAppPurchasePriceSchedule,
+      included: [
+        {
+          type: "inAppPurchasePrices",
+          id: "p-vn",
+          attributes: { startDate: null },
+          relationships: {
+            inAppPurchasePricePoint: {
+              data: { type: "inAppPurchasePricePoints", id: "pp-vn" },
+            },
+            territory: { data: { type: "territories", id: "VNM" } },
+          },
         },
-      },
-    ],
+        {
+          type: "inAppPurchasePricePoints",
+          id: "pp-vn",
+          attributes: { customerPrice: "89000", proceeds: "62300" },
+        },
+        {
+          type: "territories",
+          id: "VNM",
+          attributes: { currency: "VND" },
+        },
+      ],
+    },
+    // Stage 3 single-row response — the base US price.
+    basePrice: {
+      data: [
+        {
+          type: "inAppPurchasePrices",
+          id: "p-base",
+          attributes: { startDate: null },
+          relationships: {
+            inAppPurchasePricePoint: {
+              data: { type: "inAppPurchasePricePoints", id: "pp-base" },
+            },
+            territory: { data: { type: "territories", id: "USA" } },
+          },
+        },
+      ],
+      included: [
+        {
+          type: "inAppPurchasePricePoints",
+          id: "pp-base",
+          attributes: { customerPrice: "0.99", proceeds: "0.7" },
+        },
+        {
+          type: "territories",
+          id: "USA",
+          attributes: { currency: "USD" },
+        },
+      ],
+    },
   };
 }
 
@@ -176,7 +217,7 @@ describe("IAP View Detail — integration", () => {
 
   it("renders all 4 sections end-to-end with full Apple data", async () => {
     getInAppPurchase.mockResolvedValueOnce(fullIapResponse());
-    getPriceScheduleForIap.mockResolvedValueOnce(priceScheduleResponse());
+    getPriceScheduleForIap.mockResolvedValueOnce(priceScheduleFetchResult());
 
     await renderPage();
 
@@ -209,7 +250,7 @@ describe("IAP View Detail — integration", () => {
       (r) => r.type !== "inAppPurchaseLocalizations",
     );
     getInAppPurchase.mockResolvedValueOnce(res);
-    getPriceScheduleForIap.mockResolvedValueOnce(priceScheduleResponse());
+    getPriceScheduleForIap.mockResolvedValueOnce(priceScheduleFetchResult());
 
     await renderPage();
     expect(
@@ -223,7 +264,7 @@ describe("IAP View Detail — integration", () => {
       (r) => r.type !== "inAppPurchaseAppStoreReviewScreenshots",
     );
     getInAppPurchase.mockResolvedValueOnce(res);
-    getPriceScheduleForIap.mockResolvedValueOnce(priceScheduleResponse());
+    getPriceScheduleForIap.mockResolvedValueOnce(priceScheduleFetchResult());
 
     await renderPage();
     expect(screen.getByText("No screenshot on Apple.")).toBeInTheDocument();
@@ -301,7 +342,7 @@ describe("IAP View Detail — integration", () => {
       },
     ];
     getInAppPurchase.mockResolvedValueOnce(res);
-    getPriceScheduleForIap.mockResolvedValueOnce(priceScheduleResponse());
+    getPriceScheduleForIap.mockResolvedValueOnce(priceScheduleFetchResult());
 
     const { container } = await (async () => {
       const view = await getIapViewData(CREDS, APPLE_IAP_ID);
@@ -342,7 +383,7 @@ describe("IAP View Detail — integration", () => {
 
   it("renders the Apple Connect deep link with the correct path", async () => {
     getInAppPurchase.mockResolvedValueOnce(fullIapResponse());
-    getPriceScheduleForIap.mockResolvedValueOnce(priceScheduleResponse());
+    getPriceScheduleForIap.mockResolvedValueOnce(priceScheduleFetchResult());
 
     await renderPage();
     const link = screen.getByRole("link", { name: /View on Apple Connect/i });

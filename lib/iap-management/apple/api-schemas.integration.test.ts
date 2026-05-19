@@ -293,22 +293,55 @@ describe("API schema: pricing endpoints", () => {
     expect(refId).toMatch(/^\$\{.+\}$/);
   });
 
-  it("get schedule Stage 1 → GET /v2/inAppPurchases/{id}/iapPriceSchedule with top-level includes only (IAP.p2.j)", async () => {
-    // IAP.p2.i: the path segment is the relationship NAME (`iapPriceSchedule`),
-    // not the resource TYPE (`inAppPurchasePriceSchedule`).
-    // IAP.p2.j: Apple enforces a strict include whitelist on this endpoint —
-    // `baseTerritory`, `manualPrices`, `automaticPrices` only (per OpenAPI
-    // operationId `inAppPurchasesV2_iapPriceSchedule_getToOneRelated`). Any
-    // nested include (`manualPrices.inAppPurchasePricePoint.territory`) is
-    // rejected with Apple 400 `PARAMETER_ERROR.INVALID`. Deeper traversal has
-    // to happen via Stage 2 on the v1 `/manualPrices` sub-endpoint.
-    iapFetch.mockResolvedValueOnce({
+  /**
+   * Per-stage helpers + reusable Stage 1 / 2 / 3 fixtures.
+   *
+   * Call ordering when manualPrices.length ≥ 1 AND baseTerritory is set
+   * (the common case): Stage 1 → [Stage 2, Stage 3] in parallel. The
+   * Stage 2/3 calls are *initiated* in code order (Stage 2 first), so
+   * `iapFetch.mock.calls` indices [1] = Stage 2 page 1, [2] = Stage 3
+   * (and [3+] = Stage 2 subsequent pages if pagination kicks in).
+   */
+  function stage1Response(opts: {
+    scheduleId?: string;
+    manualPriceIds?: string[];
+    baseTerritory?: string | null;
+  }) {
+    const baseTerritory =
+      opts.baseTerritory === null ? undefined : opts.baseTerritory ?? "USA";
+    return {
       data: {
-        id: "sched-1",
+        id: opts.scheduleId ?? "sched-1",
         type: "inAppPurchasePriceSchedules",
-        relationships: { manualPrices: { data: [] } },
+        relationships: {
+          ...(baseTerritory
+            ? {
+                baseTerritory: {
+                  data: { type: "territories", id: baseTerritory },
+                },
+              }
+            : {}),
+          manualPrices: {
+            data: (opts.manualPriceIds ?? []).map((id) => ({
+              type: "inAppPurchasePrices",
+              id,
+            })),
+          },
+        },
       },
-    });
+    };
+  }
+
+  it("get schedule Stage 1 → GET /v2/inAppPurchases/{id}/iapPriceSchedule with top-level includes only (IAP.p2.j)", async () => {
+    // IAP.p2.i: path segment is the relationship NAME (`iapPriceSchedule`),
+    // not the resource TYPE (`inAppPurchasePriceSchedule`).
+    // IAP.p2.j: Apple enforces a strict include whitelist —
+    // `baseTerritory,manualPrices,automaticPrices` only (per OpenAPI
+    // operationId `inAppPurchasesV2_iapPriceSchedule_getToOneRelated`).
+    // Nested includes return Apple 400 `PARAMETER_ERROR.INVALID`.
+    iapFetch.mockResolvedValueOnce(
+      stage1Response({ manualPriceIds: [], baseTerritory: null }),
+    );
     await getPriceScheduleForIap(creds, "iap-1");
     const { method, endpoint } = callArgs();
     expect(method).toBe("GET");
@@ -318,21 +351,19 @@ describe("API schema: pricing endpoints", () => {
   });
 
   it("get schedule Stage 2 → GET /v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices with deep include (IAP.p2.j)", async () => {
-    // Stage 2 fires only when Stage 1 returns ≥1 manualPrice. Endpoint per
+    // Stage 2 fires when Stage 1 returns ≥1 manualPrice. Endpoint per
     // OpenAPI operationId `inAppPurchasePriceSchedules_manualPrices_getToManyRelated`
-    // accepts `include=inAppPurchasePricePoint,territory` (no nesting needed
-    // — these are direct relationships on InAppPurchasePrice).
+    // accepts `include=inAppPurchasePricePoint,territory` (direct
+    // relationships on InAppPurchasePrice — no nesting).
     iapFetch
-      .mockResolvedValueOnce({
-        data: {
-          id: "sched-42",
-          type: "inAppPurchasePriceSchedules",
-          relationships: {
-            manualPrices: { data: [{ type: "inAppPurchasePrices", id: "p-1" }] },
-          },
-        },
-      })
-      .mockResolvedValueOnce({ data: [] }); // Stage 2 — empty page, no `links.next`
+      .mockResolvedValueOnce(
+        stage1Response({
+          scheduleId: "sched-42",
+          manualPriceIds: ["p-1"],
+          baseTerritory: null, // skip Stage 3 — keeps this test focused on Stage 2
+        }),
+      )
+      .mockResolvedValueOnce({ data: [] }); // Stage 2 — empty page, no next
 
     await getPriceScheduleForIap(creds, "iap-1");
     expect(iapFetch.mock.calls.length).toBe(2);
@@ -344,33 +375,92 @@ describe("API schema: pricing endpoints", () => {
   });
 
   it("get schedule short-circuits Stage 2 when Stage 1 has no manualPrices (IAP.p2.j)", async () => {
-    iapFetch.mockResolvedValueOnce({
-      data: {
-        id: "sched-empty",
-        type: "inAppPurchasePriceSchedules",
-        relationships: { manualPrices: { data: [] } },
-      },
-    });
+    iapFetch.mockResolvedValueOnce(
+      stage1Response({ manualPriceIds: [], baseTerritory: null }),
+    );
     await getPriceScheduleForIap(creds, "iap-1");
     expect(iapFetch.mock.calls.length).toBe(1);
   });
 
-  it("get schedule follows links.next when Stage 2 paginates (IAP.p2.j)", async () => {
+  it("get schedule Stage 3 → GET /v1/inAppPurchasePriceSchedules/{scheduleId}/automaticPrices filter+limit=1 (IAP.p2.k)", async () => {
+    // Stage 3 fires when Stage 1 carries a baseTerritory. Apple stores the
+    // base price in `automaticPrices` (NOT manualPrices) so this filtered
+    // single-row fetch resolves the base price + its currency. Without
+    // Stage 3 the view fell back to current[0] and surfaced HK's price
+    // as the "United States" base.
     iapFetch
-      .mockResolvedValueOnce({
-        data: {
-          id: "sched-99",
-          type: "inAppPurchasePriceSchedules",
-          relationships: {
-            manualPrices: {
-              data: [
-                { type: "inAppPurchasePrices", id: "p-1" },
-                { type: "inAppPurchasePrices", id: "p-2" },
-              ],
-            },
-          },
-        },
-      })
+      .mockResolvedValueOnce(
+        stage1Response({
+          scheduleId: "sched-7",
+          manualPriceIds: [], // skip Stage 2
+          baseTerritory: "USA",
+        }),
+      )
+      .mockResolvedValueOnce({ data: [] }); // Stage 3 — empty single-row page
+
+    await getPriceScheduleForIap(creds, "iap-1");
+    expect(iapFetch.mock.calls.length).toBe(2);
+    const [, method2, endpoint2] = iapFetch.mock.calls[1];
+    expect(method2).toBe("GET");
+    expect(endpoint2).toBe(
+      "/v1/inAppPurchasePriceSchedules/sched-7/automaticPrices?filter[territory]=USA&include=inAppPurchasePricePoint,territory&limit=1",
+    );
+  });
+
+  it("get schedule Stage 3 failure is swallowed (basePrice=null) without breaking Stage 1+2 (IAP.p2.k)", async () => {
+    // Stage 3 is best-effort — a 500 / 404 on automaticPrices must NOT
+    // poison the whole fetch since manualPrices already rendered.
+    iapFetch
+      .mockResolvedValueOnce(
+        stage1Response({
+          scheduleId: "sched-7",
+          manualPriceIds: [],
+          baseTerritory: "USA",
+        }),
+      )
+      .mockRejectedValueOnce(new Error("Apple 500 on automaticPrices"));
+
+    const out = await getPriceScheduleForIap(creds, "iap-1");
+    expect(out.basePrice).toBeNull();
+    // Stage 1 result still surfaced.
+    expect(out.schedule.data.id).toBe("sched-7");
+  });
+
+  it("get schedule fires Stage 2 + Stage 3 in parallel when both gates open (IAP.p2.k)", async () => {
+    iapFetch
+      .mockResolvedValueOnce(
+        stage1Response({
+          scheduleId: "sched-7",
+          manualPriceIds: ["p-1"],
+          baseTerritory: "USA",
+        }),
+      )
+      // Stage 2 fires first (synchronous code order in getPriceScheduleForIap).
+      .mockResolvedValueOnce({ data: [] })
+      // Stage 3 second.
+      .mockResolvedValueOnce({ data: [] });
+
+    await getPriceScheduleForIap(creds, "iap-1");
+    expect(iapFetch.mock.calls.length).toBe(3);
+    const [, , endpoint2] = iapFetch.mock.calls[1];
+    const [, , endpoint3] = iapFetch.mock.calls[2];
+    expect(endpoint2).toContain("/manualPrices");
+    expect(endpoint3).toContain("/automaticPrices");
+  });
+
+  it("get schedule follows links.next when Stage 2 paginates — absolute URL (IAP.p2.k)", async () => {
+    // Vietnam-missing bug at MV30 post-p2.j: 11-row schedule lost the
+    // alphabetically-last entry because Apple paginated at 10 and our
+    // links.next follow was brittle. URL-parser approach handles
+    // both absolute + relative cursors.
+    iapFetch
+      .mockResolvedValueOnce(
+        stage1Response({
+          scheduleId: "sched-99",
+          manualPriceIds: ["p-1", "p-2"],
+          baseTerritory: null, // skip Stage 3 for clarity
+        }),
+      )
       .mockResolvedValueOnce({
         data: [],
         links: {
@@ -382,10 +472,58 @@ describe("API schema: pricing endpoints", () => {
     await getPriceScheduleForIap(creds, "iap-1");
     expect(iapFetch.mock.calls.length).toBe(3);
     const [, , endpoint3] = iapFetch.mock.calls[2];
-    // Cursor URL is followed after stripping the absolute ASC base prefix.
     expect(endpoint3).toBe(
       "/v1/inAppPurchasePriceSchedules/sched-99/manualPrices?cursor=PAGE2",
     );
+  });
+
+  it("get schedule follows links.next when Stage 2 paginates — relative URL (IAP.p2.k)", async () => {
+    // Apple's pagination format isn't documented; cover the relative-URL
+    // case too so a future Apple change doesn't silently break us.
+    iapFetch
+      .mockResolvedValueOnce(
+        stage1Response({
+          scheduleId: "sched-99",
+          manualPriceIds: ["p-1"],
+          baseTerritory: null,
+        }),
+      )
+      .mockResolvedValueOnce({
+        data: [],
+        links: { next: "/v1/inAppPurchasePriceSchedules/sched-99/manualPrices?cursor=REL" },
+      })
+      .mockResolvedValueOnce({ data: [] });
+
+    await getPriceScheduleForIap(creds, "iap-1");
+    expect(iapFetch.mock.calls.length).toBe(3);
+    const [, , endpoint3] = iapFetch.mock.calls[2];
+    expect(endpoint3).toBe(
+      "/v1/inAppPurchasePriceSchedules/sched-99/manualPrices?cursor=REL",
+    );
+  });
+
+  it("get schedule respects MAX_STAGE2_PAGES safety cap (IAP.p2.k)", async () => {
+    // Bounded loop guard against malformed cursors that link back to
+    // themselves. Stage 1 + 20 Stage 2 pages = 21 total calls; we stop
+    // after page 20 even if Apple keeps offering `links.next`.
+    iapFetch.mockResolvedValueOnce(
+      stage1Response({
+        scheduleId: "sched-loop",
+        manualPriceIds: ["p-1"],
+        baseTerritory: null,
+      }),
+    );
+    // Every Stage 2 page returns a next link → forces hitting the cap.
+    for (let i = 0; i < 25; i++) {
+      iapFetch.mockResolvedValueOnce({
+        data: [],
+        links: { next: `/v1/inAppPurchasePriceSchedules/sched-loop/manualPrices?cursor=LOOP${i}` },
+      });
+    }
+
+    await getPriceScheduleForIap(creds, "iap-1");
+    // 1 Stage-1 + 20 Stage-2 pages (cap MAX_STAGE2_PAGES).
+    expect(iapFetch.mock.calls.length).toBe(21);
   });
 });
 

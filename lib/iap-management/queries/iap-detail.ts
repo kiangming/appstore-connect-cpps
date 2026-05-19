@@ -18,13 +18,13 @@ import type { AscCredentials } from "@/lib/asc-jwt";
 import { getInAppPurchase } from "@/lib/iap-management/apple/client";
 import {
   getPriceScheduleForIap,
+  type PriceScheduleFetchResult,
 } from "@/lib/iap-management/apple/price-schedules";
 import { AppleApiError } from "@/lib/iap-management/apple/fetch";
 import type {
   InAppPurchase,
   InAppPurchaseLocalization,
   InAppPurchaseAppStoreReviewScreenshot,
-  InAppPurchasePriceSchedule,
   InAppPurchasePrice,
   InAppPurchasePricePointResource,
   Territory,
@@ -91,31 +91,32 @@ export interface PriceScheduleEntry {
 }
 
 export interface PriceScheduleView {
-  /** Base territory (always present after Apple's POST). */
+  /** Base territory ID (always present after Apple's POST). */
   baseTerritory: string;
+  /**
+   * Apple stores the base price in `automaticPrices`, NOT `manualPrices`.
+   * `basePrice` is resolved separately via Stage 3 of `getPriceScheduleForIap`
+   * and lives outside the `entries` array (`entries` only enumerates manual
+   * overrides). `null` when Apple has no base price or the Stage 3 fetch
+   * failed — the section renders the territory name without a price.
+   */
+  basePrice: PriceScheduleEntry | null;
   /** Every manual-price entry, oldest-startDate first. */
   entries: PriceScheduleEntry[];
 }
 
 /**
- * Unpack Apple's price schedule include[] block into a flat array the UI
- * can render. Exported for unit-testing the JSON:API plumbing without a
- * live Apple call.
- *
- * Resolves the manual-price → price-point → territory chain by looking up
- * resources in `included`. Manual-prices Apple didn't include (links-only
- * mode) are skipped — the UI surfaces what we know rather than failing.
+ * Build a per-type index over a JSON:API `included[]` block. O(1) lookup
+ * by (type, id) — reused by `unpackPriceSchedule` for both Stage 1+2's
+ * merged schedule and Stage 3's standalone base-price response.
  */
-export function unpackPriceSchedule(
-  res: AscApiResponse<InAppPurchasePriceSchedule>,
-): PriceScheduleView {
-  const included = res.included ?? [];
-
-  // Index `included` by (type, id) for O(1) lookup. Two resources can
-  // share an id across types (Apple's price point id is a base64 blob
-  // that doesn't collide with the 3-letter territory codes in practice,
-  // but a per-type map is cheap and bulletproof).
-  const byType = new Map<string, Map<string, AscResource<string, Record<string, unknown>>>>();
+function indexIncluded(
+  included: readonly AscResource<string, Record<string, unknown>>[],
+): Map<string, Map<string, AscResource<string, Record<string, unknown>>>> {
+  const byType = new Map<
+    string,
+    Map<string, AscResource<string, Record<string, unknown>>>
+  >();
   for (const item of included) {
     let bucket = byType.get(item.type);
     if (!bucket) {
@@ -124,17 +125,90 @@ export function unpackPriceSchedule(
     }
     bucket.set(item.id, item);
   }
+  return byType;
+}
 
-  const priceBucket = byType.get("inAppPurchasePrices");
-  const pricePointBucket = byType.get("inAppPurchasePricePoints");
+/**
+ * Resolve a single InAppPurchasePrice resource into the flat
+ * PriceScheduleEntry shape the UI renders.
+ *
+ * IAP.p2.k bug fixes:
+ *   - territory: read from `priceRes.relationships.territory.data.id`
+ *     (the InAppPurchasePrice's OWN relationship, side-loaded by both
+ *     Stage 2 and Stage 3 `?include=…,territory`). Pre-p2.k read it from
+ *     `pricePoint.relationships.territory.data.id` — that relationship
+ *     is NOT side-loaded by our include chain, so every entry's territory
+ *     came back blank → no country column AND no base-price match.
+ *   - currency: read from the Territory resource's `attributes.currency`
+ *     (per Apple OpenAPI `fields[territories]: [currency]`). Pre-p2.k read
+ *     it from `pricePoint.attributes.currency` — `currency` is NOT a
+ *     price-point attribute (price-point attributes per Apple OpenAPI:
+ *     `[customerPrice, proceeds, territory, equalizations]`), so every
+ *     entry's currency came back null → no currency symbol in the UI.
+ *
+ * Returns null when essential links are missing (no price-point relationship,
+ * no price-point in `included`). The caller's loop then `continue`s.
+ */
+function unpackPriceEntry(
+  priceRes: InAppPurchasePrice,
+  buckets: Map<
+    string,
+    Map<string, AscResource<string, Record<string, unknown>>>
+  >,
+): PriceScheduleEntry | null {
+  const pricePointId = (priceRes.relationships as
+    | { inAppPurchasePricePoint?: { data?: { id?: string } } }
+    | undefined)?.inAppPurchasePricePoint?.data?.id;
+  if (!pricePointId) return null;
+
+  const pricePoint = buckets.get("inAppPurchasePricePoints")?.get(
+    pricePointId,
+  ) as InAppPurchasePricePointResource | undefined;
+  if (!pricePoint) return null;
+
+  // FIX A: territory from the price entry's own relationship.
+  const territoryId =
+    ((priceRes.relationships as
+      | { territory?: { data?: { id?: string } } }
+      | undefined)?.territory?.data?.id as Territory["id"] | undefined) ?? "";
+
+  // FIX B: currency from the Territory resource's attributes.
+  const territoryRes = buckets.get("territories")?.get(territoryId);
+  const currency =
+    (territoryRes?.attributes?.currency as string | undefined) ?? null;
+
+  return {
+    priceId: priceRes.id,
+    startDate: priceRes.attributes.startDate ?? null,
+    endDate: priceRes.attributes.endDate ?? null,
+    territory: territoryId,
+    customerPrice: pricePoint.attributes.customerPrice,
+    currency,
+  };
+}
+
+/**
+ * Unpack Apple's price-schedule fetch result into a flat view-model the UI
+ * can render. Exported for unit-testing the JSON:API plumbing without a
+ * live Apple call.
+ *
+ * Walks Stage 1+2's merged `included[]` for the manualPrice entries and
+ * Stage 3's standalone response for the base price (Apple stores base in
+ * `automaticPrices`, NOT in `manualPrices`).
+ */
+export function unpackPriceSchedule(
+  fetchResult: PriceScheduleFetchResult,
+): PriceScheduleView {
+  const { schedule: res, basePrice: basePriceRes } = fetchResult;
+  const scheduleBuckets = indexIncluded(res.included ?? []);
 
   // Base territory id sits on the schedule's relationships. Defensive
   // fallback to "USA" matches the bulk-import default — every Apple POST
   // we've ever sent uses USA as the base.
-  const baseTerritoryRel = (res.data.relationships as
-    | { baseTerritory?: { data?: { id?: string } } }
-    | undefined)?.baseTerritory?.data?.id;
-  const baseTerritory = baseTerritoryRel ?? "USA";
+  const baseTerritory =
+    ((res.data.relationships as
+      | { baseTerritory?: { data?: { id?: string } } }
+      | undefined)?.baseTerritory?.data?.id as string | undefined) ?? "USA";
 
   // manualPrices.data is a JSON:API list of {type, id} pointers; resolve each
   // pointer through the typed buckets above.
@@ -142,32 +216,15 @@ export function unpackPriceSchedule(
     | { manualPrices?: { data?: Array<{ id: string }> } }
     | undefined)?.manualPrices?.data ?? [];
 
+  const priceBucket = scheduleBuckets.get("inAppPurchasePrices");
   const entries: PriceScheduleEntry[] = [];
   for (const ref of manualRel) {
     const priceRes = priceBucket?.get(ref.id) as
       | InAppPurchasePrice
       | undefined;
     if (!priceRes) continue;
-    const pricePointId = (priceRes.relationships as
-      | { inAppPurchasePricePoint?: { data?: { id?: string } } }
-      | undefined)?.inAppPurchasePricePoint?.data?.id;
-    if (!pricePointId) continue;
-    const pricePoint = pricePointBucket?.get(pricePointId) as
-      | InAppPurchasePricePointResource
-      | undefined;
-    if (!pricePoint) continue;
-    const territoryRel = (pricePoint.relationships as
-      | { territory?: { data?: { id?: string } } }
-      | undefined)?.territory?.data?.id;
-    const territory = (territoryRel as Territory["id"] | undefined) ?? "";
-    entries.push({
-      priceId: priceRes.id,
-      startDate: priceRes.attributes.startDate ?? null,
-      endDate: priceRes.attributes.endDate ?? null,
-      territory,
-      customerPrice: pricePoint.attributes.customerPrice,
-      currency: pricePoint.attributes.currency ?? null,
-    });
+    const entry = unpackPriceEntry(priceRes, scheduleBuckets);
+    if (entry) entries.push(entry);
   }
 
   // Stable order: startDate ASC with nulls (effective-now) first, then by
@@ -184,7 +241,15 @@ export function unpackPriceSchedule(
     return a.territory.localeCompare(b.territory);
   });
 
-  return { baseTerritory, entries };
+  // Stage 3 — unpack the base price (single-row response from
+  // automaticPrices?filter[territory]=<base>&limit=1).
+  let basePrice: PriceScheduleEntry | null = null;
+  if (basePriceRes && Array.isArray(basePriceRes.data) && basePriceRes.data.length > 0) {
+    const baseBuckets = indexIncluded(basePriceRes.included ?? []);
+    basePrice = unpackPriceEntry(basePriceRes.data[0], baseBuckets);
+  }
+
+  return { baseTerritory, basePrice, entries };
 }
 
 export interface IapViewData {
@@ -215,7 +280,7 @@ export async function getIapViewData(
   const [iapRes, scheduleSettled] = await Promise.all([
     getInAppPurchase(creds, appleIapId),
     getPriceScheduleForIap(creds, appleIapId).then(
-      (res): { ok: true; res: AscApiResponse<InAppPurchasePriceSchedule> } => ({
+      (res): { ok: true; res: PriceScheduleFetchResult } => ({
         ok: true,
         res,
       }),

@@ -11,8 +11,9 @@ import type {
 function makeSchedule(
   entries: PriceScheduleEntry[] = [],
   baseTerritory = "USA",
+  basePrice: PriceScheduleEntry | null = null,
 ): PriceScheduleView {
-  return { baseTerritory, entries };
+  return { baseTerritory, basePrice, entries };
 }
 
 const NOW = new Date("2026-05-20T00:00:00.000Z");
@@ -42,26 +43,47 @@ describe("IapPriceScheduleSection", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders the Base Country row from the priceSchedule entries", () => {
+  it("renders the Base Country row from priceSchedule.basePrice (IAP.p2.k Stage 3)", () => {
+    // IAP.p2.k: base price comes from Stage 3 (automaticPrices filtered by
+    // base territory), NOT from manualPrices entries — Apple stores base
+    // separately. Pre-p2.k fell back to current[0] which surfaced the wrong
+    // price (HK's $23 as the "United States" base).
     render(
       <IapPriceScheduleSection
-        priceSchedule={makeSchedule([
+        priceSchedule={makeSchedule(
+          [],
+          "USA",
           {
-            priceId: "p-1",
+            priceId: "p-base",
             startDate: null,
             endDate: null,
             territory: "USA",
             customerPrice: "0.99",
             currency: "USD",
           },
-        ])}
+        )}
         now={NOW}
       />,
     );
     expect(screen.getByText("United States")).toBeInTheDocument();
-    // currency badge text appears as " (USD)" with a leading space — flexible match
     expect(screen.getByText((c) => c.includes("(USD)"))).toBeInTheDocument();
     expect(screen.getByText("0.99")).toBeInTheDocument();
+  });
+
+  it("renders the Base Country territory name even when basePrice is null (Stage 3 fail)", () => {
+    // Stage 3 is best-effort — when it fails or returns no row, still
+    // surface the territory name so Manager sees the base location.
+    render(
+      <IapPriceScheduleSection
+        priceSchedule={makeSchedule([], "USA", null)}
+        now={NOW}
+      />,
+    );
+    expect(screen.getByText("United States")).toBeInTheDocument();
+    // No currency badge and no price block rendered.
+    expect(
+      screen.queryByText((c) => c.includes("(USD)")),
+    ).not.toBeInTheDocument();
   });
 
   it("partitions future-dated entries into Upcoming Changes", () => {

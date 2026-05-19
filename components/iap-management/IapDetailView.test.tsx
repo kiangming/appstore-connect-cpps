@@ -50,6 +50,7 @@ function makeLocalizations(): InAppPurchaseLocalization[] {
 function makeSchedule(): PriceScheduleView {
   return {
     baseTerritory: "USA",
+    basePrice: null,
     entries: [
       {
         priceId: "p1",

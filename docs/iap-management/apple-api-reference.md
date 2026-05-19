@@ -24,7 +24,8 @@ screenshots, price schedules, submissions) still use v1.
 | List price points | GET | `/v2/inAppPurchases/{id}/pricePoints?filter[territory]=USA&limit=1000` | Per-IAP scope — no /apps/{id}/pricePoints endpoint exists. IAP.o.11a bumped limit 200→1000 (OpenAPI spec max 8000). |
 | Set price schedule | POST | `/v1/inAppPurchasePriceSchedules` | Replace-all semantic; relationships + included (see below). |
 | Get price schedule Stage 1 (View Detail) | GET | `/v2/inAppPurchases/{id}/iapPriceSchedule?include=baseTerritory,manualPrices` | Relationship-traversal endpoint. Path segment is the **relationship name** (`iapPriceSchedule`), NOT the resource type — sending the type returns 404 (IAP.p2.i). Apple enforces a **strict include whitelist** — only `baseTerritory`, `manualPrices`, `automaticPrices` are accepted; nested includes like `manualPrices.inAppPurchasePricePoint.territory` return 400 `PARAMETER_ERROR.INVALID` (IAP.p2.j). Returns schedule id + baseTerritory + manualPrice ID stubs. 404 = no schedule yet. |
-| Get price schedule Stage 2 (View Detail) | GET | `/v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices?include=inAppPurchasePricePoint,territory&limit=200` | Deep-traversal endpoint that side-loads `inAppPurchasePricePoint` + `territory` per manual price — the only path that allows these includes (per OpenAPI). Skipped when Stage 1 returns 0 manualPrices (Apple-equalized everything). Paginated via `links.next`. |
+| Get price schedule Stage 2 (View Detail) | GET | `/v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices?include=inAppPurchasePricePoint,territory&limit=200` | Deep-traversal endpoint that side-loads `inAppPurchasePricePoint` + `territory` per manual price — the only path that allows these includes (per OpenAPI). Skipped when Stage 1 returns 0 manualPrices (Apple-equalized everything). Paginated via `links.next`; we follow up to `MAX_STAGE2_PAGES=20` with a URL parser that handles both absolute + relative cursors. Apple's default page size has been observed to be smaller than our requested `limit` (10-row default seen post-p2.j MV30 test). |
+| Get price schedule Stage 3 (View Detail) | GET | `/v1/inAppPurchasePriceSchedules/{scheduleId}/automaticPrices?filter[territory]=<base>&include=inAppPurchasePricePoint,territory&limit=1` | Resolves the **base territory's actual price** — Apple stores the base in `automaticPrices`, NOT `manualPrices` (despite our POST shape sending the base AS a manualPrice; Apple unfolds it on storage). Without Stage 3 the View Detail had to fall back to `current[0]` which surfaced the wrong territory's price as the "base" (IAP.p2.k). Best-effort: a Stage 3 failure leaves `basePrice = null` and the section renders the territory name without a price. |
 | Poll IAP ready (Stage 1→2 guard) | GET | `/v2/inAppPurchases/{id}` | IAP.o.11a — invoked between CREATE and pricing POST to confirm Apple has propagated the new IAP. Polls 200 ms × 10 max = 2 s budget. |
 | Reserve screenshot | POST | `/v1/inAppPurchaseAppStoreReviewScreenshots` | Relationship: `inAppPurchaseV2`. Returns `uploadOperations[]`. |
 | Confirm screenshot | PATCH | `/v1/inAppPurchaseAppStoreReviewScreenshots/{id}` | `uploaded: true` + `sourceFileChecksum` (MD5 hex). |
@@ -188,6 +189,35 @@ but is documented as legacy in JSDoc — production code calls
     path therefore requires the 2-stage fetch documented in the endpoint
     table above. Detected: Manager UAT post-p2.i ship. Both stage
     path-shape pins live in `api-schemas.integration.test.ts`.
+13. **Price-point ≠ currency carrier — currency lives on Territory
+    (IAP.p2.k FIX B)** — Apple's
+    `fields[inAppPurchasePricePoints]` enum is
+    `[customerPrice, proceeds, territory, equalizations]`. **`currency`
+    is NOT a price-point attribute.** It lives on the `Territory`
+    resource (`fields[territories]: [currency]`). Reading
+    `pricePoint.attributes.currency` silently yields `undefined` for
+    every row → no currency symbol in the View Detail rendering.
+    Always look up the matching Territory in `included[]` and read
+    `attributes.currency` from there.
+14. **InAppPurchasePrice carries its OWN `territory` relationship —
+    NOT the price-point's territory (IAP.p2.k FIX A)** — Apple's
+    `fields[inAppPurchasePrices]` enum lists `territory` as a direct
+    relationship on the price entry itself. Our Stage 2 / Stage 3
+    `?include=inAppPurchasePricePoint,territory` side-loads BOTH of
+    these via the `InAppPurchasePrice` resource. The `InAppPurchasePricePoint`'s
+    own `territory` relationship is NOT side-loaded by this include
+    chain — reading `pricePoint.relationships.territory.data.id` always
+    returned `undefined`, surfacing as a blank country column in the
+    View Detail table and a failed base-territory match in the section
+    header. Always read territory from `priceRes.relationships.territory`.
+15. **Apple stores the base price in `automaticPrices`, NOT
+    `manualPrices` (IAP.p2.k Stage 3)** — even when our POST shape sends
+    the base territory as part of `manualPrices`, Apple unfolds it
+    server-side: the base lives in `automaticPrices`, the explicit
+    overrides live in `manualPrices`. Reading the schedule's
+    manualPrices alone never surfaces the base territory's price.
+    Use the dedicated filter fetch documented in the Stage 3 endpoint
+    row above.
 
 ## Test enforcement
 
@@ -335,13 +365,32 @@ const [iapRes, scheduleSettled] = await Promise.all([
 ]);
 ```
 
-`getPriceScheduleForIap` internally does a 2-stage fetch (Stage 1 — V2
+`getPriceScheduleForIap` internally does a 3-stage fetch (Stage 1 — V2
 schedule + manualPrice ID stubs; Stage 2 — V1 manualPrices with
-inAppPurchasePricePoint + territory side-loaded) then merges the
-responses into a single AscApiResponse so the consumer
-(`unpackPriceSchedule`) sees the shape it expects. See Gotcha 12 + the
+inAppPurchasePricePoint + territory side-loaded, paginated; Stage 3 — V1
+automaticPrices filtered by base territory to resolve the base price)
+then returns `{ schedule, basePrice }`. The consumer
+(`unpackPriceSchedule`) walks both response shells and produces the
+`PriceScheduleView` with separate `entries[]` (manual overrides) and
+`basePrice` (base territory). See Gotchas 12 + 13 + 14 + 15 + the
 endpoint table above for why the single-round-trip approach the original
 p2.a shipped with doesn't work against Apple's actual API.
+
+**View-model fields:**
+
+```ts
+interface PriceScheduleView {
+  baseTerritory: string;                  // Apple's baseTerritory id ("USA")
+  basePrice: PriceScheduleEntry | null;   // Stage 3 result; null on fetch fail
+  entries: PriceScheduleEntry[];          // Stage 2 manualPrices, sorted
+}
+```
+
+**Observability:** every stage logs `[get-schedule] stage<N> …` lines to
+console — `stage1 schedule_id=… manualRel_count=N`, `stage2 page=N
+got=N has_next=…`, `stage3 base_territory=… got=N`, plus warn lines for
+Stage 2 cap-hits and Stage 3 failures. Manager UAT failures can be
+traced through Railway logs without rerunning.
 
 ### Per-stage error boundaries
 

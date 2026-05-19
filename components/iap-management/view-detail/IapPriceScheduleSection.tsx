@@ -100,9 +100,6 @@ export function IapPriceScheduleSection({
   }
 
   const { current, upcoming } = partition(priceSchedule.entries, now);
-  const baseEntry =
-    current.find((e) => e.territory === priceSchedule.baseTerritory) ??
-    current[0];
 
   return (
     <SectionShell
@@ -130,18 +127,26 @@ export function IapPriceScheduleSection({
             label="Base Country or Region"
             tip={tooltipFor("base-territory")}
           >
+            {/* IAP.p2.k: base price is resolved via Stage 3 (automaticPrices
+                filtered by base territory) — Apple stores the base in
+                automaticPrices, NOT manualPrices. `basePrice` may be null
+                when Stage 3 fails or returns no row; we still render the
+                territory name so Manager sees the base location. */}
             <p>
               <span className="font-medium">
                 {territoryName(priceSchedule.baseTerritory)}
               </span>
-              {baseEntry?.currency && (
-                <span className="text-slate-400"> ({baseEntry.currency})</span>
+              {priceSchedule.basePrice?.currency && (
+                <span className="text-slate-400">
+                  {" "}
+                  ({priceSchedule.basePrice.currency})
+                </span>
               )}
-              {baseEntry && (
+              {priceSchedule.basePrice && (
                 <>
                   <span className="text-slate-400 mx-2">·</span>
                   <span className="font-mono text-slate-600">
-                    {baseEntry.customerPrice}
+                    {priceSchedule.basePrice.customerPrice}
                   </span>
                 </>
               )}
