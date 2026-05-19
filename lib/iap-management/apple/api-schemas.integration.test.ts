@@ -346,7 +346,7 @@ describe("API schema: pricing endpoints", () => {
     const { method, endpoint } = callArgs();
     expect(method).toBe("GET");
     expect(endpoint).toBe(
-      "/v2/inAppPurchases/iap-1/iapPriceSchedule?include=baseTerritory,manualPrices",
+      "/v2/inAppPurchases/iap-1/iapPriceSchedule?include=baseTerritory,manualPrices&limit[manualPrices]=50",
     );
   });
 
@@ -465,81 +465,44 @@ describe("API schema: pricing endpoints", () => {
     expect(iapFetch.mock.calls.length).toBe(21);
   });
 
-  // ── IAP.p2.l — per-ID recovery ─────────────────────────────────────────
-  it("get schedule fetches missing manualRel ids individually when Stage 2 silently drops rows (IAP.p2.l)", async () => {
-    // Manager UAT MV30 ground truth: Apple's iris API returned 12 rows
-    // but the public API returned ≤11. Stage 1's manualRel is treated
-    // as the canonical expected-id list — anything missing from Stage 2
-    // pages gets fetched individually via /v1/inAppPurchasePrices/{id}.
+  // ── IAP.p2.m — Stage 1 truncation tolerance ────────────────────────────
+  it("get schedule succeeds when Stage 1's manualRel is truncated by Apple (IAP.p2.m)", async () => {
+    // Manager UAT MV30 Railway logs: Apple's V2
+    // `/iapPriceSchedule?include=manualPrices` returns only 10 of 12
+    // manualPrice IDs even with `limit[manualPrices]=50` requested.
+    // Stage 2 returns the full 12. The fetcher does NOT trust Stage 1's
+    // manualRel as canonical — it just gates on `manualRefs.length > 0`
+    // and lets Stage 2's data flow through. The unpacker (tested
+    // separately in iap-detail.test) iterates Stage 2's prices, not
+    // Stage 1's manualRel.
     iapFetch
       .mockResolvedValueOnce(
         stage1Response({
-          scheduleId: "sched-recovery",
-          manualPriceIds: ["p-1", "p-2", "p-VNM"],
+          scheduleId: "sched-trunc",
+          // Stage 1 enumerates only 10 IDs — truncated by Apple.
+          manualPriceIds: Array.from({ length: 10 }, (_, i) => `p-${i + 1}`),
           baseTerritory: null,
         }),
       )
-      // Stage 2 page 1 returns only p-1 and p-2, no `links.next` —
-      // p-VNM is missing.
+      // Stage 2 returns the full 12 (including the 2 IDs missing from
+      // Stage 1's enumeration).
       .mockResolvedValueOnce({
-        data: [
-          { type: "inAppPurchasePrices", id: "p-1" },
-          { type: "inAppPurchasePrices", id: "p-2" },
-        ],
-        meta: { paging: { total: 3, limit: 200 } },
-      })
-      // Recovery fetch for the missing p-VNM id.
-      .mockResolvedValueOnce({
-        data: { type: "inAppPurchasePrices", id: "p-VNM" },
+        data: Array.from({ length: 12 }, (_, i) => ({
+          type: "inAppPurchasePrices",
+          id: `p-${i + 1}`,
+        })),
+        meta: { paging: { total: 12, limit: 200 } },
       });
 
-    await getPriceScheduleForIap(creds, "iap-1");
-    expect(iapFetch.mock.calls.length).toBe(3);
-    const [, method3, endpoint3] = iapFetch.mock.calls[2];
-    expect(method3).toBe("GET");
-    expect(endpoint3).toBe(
-      "/v1/inAppPurchasePrices/p-VNM?include=inAppPurchasePricePoint,territory",
-    );
-  });
-
-  it("get schedule skips recovery when all manualRel ids are present in pages (IAP.p2.l)", async () => {
-    iapFetch
-      .mockResolvedValueOnce(
-        stage1Response({
-          scheduleId: "sched-ok",
-          manualPriceIds: ["p-1", "p-2"],
-          baseTerritory: null,
-        }),
-      )
-      .mockResolvedValueOnce({
-        data: [
-          { type: "inAppPurchasePrices", id: "p-1" },
-          { type: "inAppPurchasePrices", id: "p-2" },
-        ],
-      });
-
-    await getPriceScheduleForIap(creds, "iap-1");
-    // Stage 1 + Stage 2 only — no recovery call.
-    expect(iapFetch.mock.calls.length).toBe(2);
-  });
-
-  it("get schedule swallows recovery-fetch failures and continues (IAP.p2.l)", async () => {
-    iapFetch
-      .mockResolvedValueOnce(
-        stage1Response({
-          scheduleId: "sched-rec-fail",
-          manualPriceIds: ["p-1", "p-missing"],
-          baseTerritory: null,
-        }),
-      )
-      .mockResolvedValueOnce({
-        data: [{ type: "inAppPurchasePrices", id: "p-1" }],
-      })
-      .mockRejectedValueOnce(new Error("Apple 404 on individual fetch"));
-
-    // Should not throw — recovery failures are swallowed.
     const out = await getPriceScheduleForIap(creds, "iap-1");
-    expect(out.data.id).toBe("sched-rec-fail");
+    // Stage 1 + Stage 2 only (no recovery — that strategy was removed
+    // since Stage 1's manualRel can't be trusted as canonical).
+    expect(iapFetch.mock.calls.length).toBe(2);
+    // All 12 prices made it through the merge.
+    const prices = (out.included ?? []).filter(
+      (r) => r.type === "inAppPurchasePrices",
+    );
+    expect(prices).toHaveLength(12);
   });
 });
 

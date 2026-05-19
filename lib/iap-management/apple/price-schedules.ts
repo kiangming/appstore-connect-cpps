@@ -191,42 +191,34 @@ export async function setPriceSchedule(
 }
 
 /**
- * IAP.p2.l — fetch the full Apple price schedule for the View Detail page.
+ * IAP.p2.m — fetch the full Apple price schedule for the View Detail page.
  *
- * Two-stage fetch (corrected at p2.l after Manager UAT iris-API ground truth):
+ * Two-stage fetch:
  *
  *   Stage 1: GET /v2/inAppPurchases/{id}/iapPriceSchedule
- *            ?include=baseTerritory,manualPrices
+ *            ?include=baseTerritory,manualPrices&limit[manualPrices]=50
  *     → schedule id + baseTerritory + manualPrice ID stubs.
+ *     **WARNING**: Manager UAT MV30 logs proved Apple's V2 relationship
+ *     enumeration truncates `manualPrices.data` even when explicit
+ *     `limit[manualPrices]=50` is requested (observed 10 IDs returned
+ *     against a 12-row schedule). Treat this list as advisory only —
+ *     the unpacker iterates Stage 2's prices directly.
  *
  *   Stage 2: GET /v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices
  *            ?include=inAppPurchasePricePoint,territory&limit=200
- *     → the actual manualPrice entries with their price-points + territories.
- *     Paginated via `links.next`. **Recovery step**: Apple's public API has
- *     been observed to silently return fewer rows than Stage 1's `manualRel`
- *     enumerates (Manager MV30: 12 IDs in Stage 1, 11 in Stage 2 — Vietnam
- *     dropped). We compare collected IDs against Stage 1's expectation and
- *     fetch any missing entries individually via `/v1/inAppPurchasePrices/{id}`.
+ *     → the actual manualPrice entries (full count) with their
+ *     price-points + territories. Paginated via `links.next`;
+ *     `meta.paging.total` is the canonical count. If pagination collects
+ *     fewer entries than `apple_total`, a warn surfaces in Railway logs.
  *
- * Stage 3 was REMOVED at p2.l. The p2.k Stage 3 hypothesis (base in
- * automaticPrices) was disproved by Apple Connect Web's iris-API
- * ground-truth response — the base territory's price IS part of
- * `manualPrices`. The base is resolved in the unpacker by finding the
- * entry whose territory matches `baseTerritory`.
+ * Stage 3 was removed at p2.l (base IS in manualPrices, not automatic).
+ * Per-ID recovery was removed at p2.m (Stage 1's manualRel is unreliable
+ * — it truncates — so we can't use it as a canonical expected-ID list.
+ * `apple_total` from Stage 2 is the trustworthy count).
  *
  * Path-name trap reminders:
- *   - IAP.p2.i: V2 path segment is `iapPriceSchedule` (relationship name),
- *     NOT `inAppPurchasePriceSchedule` (resource type).
- *   - IAP.p2.j: V2 include enum is strict — only `baseTerritory`,
- *     `manualPrices`, `automaticPrices`. Nested chains are rejected.
- *
- * Failure modes:
- *   - Stage 1 404 → no schedule exists; throws and the route maps to the
- *     empty-state placeholder.
- *   - Stage 2 pagination → MAX_PAGES safety cap with a console.warn;
- *     better to render N pages than spin forever on a malformed cursor.
- *   - Per-ID recovery → individual fetch errors are swallowed with a warn;
- *     a single recovery failure shouldn't block rendering the rest.
+ *   - IAP.p2.i: V2 path segment is `iapPriceSchedule` (relationship name).
+ *   - IAP.p2.j: V2 include enum is strict — no nested chains.
  *
  * Instrumentation: every stage logs `[get-schedule] stage<N> …` so Manager
  * UAT failures can be traced through Railway logs without re-running.
@@ -238,8 +230,7 @@ type ManualPricesPage = AscApiResponse<InAppPurchasePrice[]> & {
 };
 
 /** Convert Apple's `links.next` (absolute URL) to the relative endpoint
- *  shape iapFetch expects. Tolerant of both absolute and relative inputs —
- *  the previous regex-strip approach only handled the absolute case. */
+ *  shape iapFetch expects. Tolerant of both absolute and relative inputs. */
 function nextPathFromLink(nextLink: string): string {
   try {
     const url = new URL(nextLink);
@@ -250,18 +241,12 @@ function nextPathFromLink(nextLink: string): string {
 }
 
 /** Hard cap on Stage 2 pagination iterations. Bounds the loop in case
- *  Apple returns a malformed cursor that links back to itself — rather
- *  spin out with a render than hang the page-load forever. */
+ *  Apple returns a malformed cursor that links back to itself. */
 const MAX_STAGE2_PAGES = 20;
-
-/** Hard cap on per-ID recovery fetches. Bounded against runaway loops
- *  if Stage 1 somehow returns a huge `manualRel` list. */
-const MAX_RECOVERY_FETCHES = 50;
 
 async function fetchManualPricesPaginated(
   creds: AscCredentials,
   scheduleId: string,
-  expectedIds: readonly string[],
 ): Promise<{
   data: InAppPurchasePrice[];
   included: Array<AscResource<string, Record<string, unknown>>>;
@@ -301,43 +286,21 @@ async function fetchManualPricesPaginated(
     );
   }
 
-  // ── Recovery step (IAP.p2.l) ──────────────────────────────────────────
-  // Apple's public API has been observed to silently omit rows even when
-  // pagination doesn't trigger (no `links.next`) and our requested limit
-  // exceeds the apple_total. Trust Stage 1's manualRel as the canonical
-  // list of expected IDs; fetch any missing one individually.
-  const collectedIdSet = new Set(collectedPrices.map((p) => p.id));
-  const missingIds = expectedIds.filter((id) => !collectedIdSet.has(id));
-
-  if (missingIds.length > 0) {
-    const toFetch = missingIds.slice(0, MAX_RECOVERY_FETCHES);
+  // Trust `apple_total` (meta.paging.total) as the canonical count from
+  // Apple. If pagination + collection still falls short, log loudly —
+  // there's no individual-ID recovery to lean on (Stage 1's manualRel is
+  // truncated, so we have no canonical ID list to compare against).
+  if (
+    typeof lastPagingTotal === "number" &&
+    collectedPrices.length < lastPagingTotal
+  ) {
     console.warn(
-      `[get-schedule] stage2 recovery: ${missingIds.length} ids missing from pages (stage1=${expectedIds.length}, collected=${collectedPrices.length}, apple_total=${lastPagingTotal ?? "?"}); fetching ${toFetch.length} individually schedule_id=${scheduleId}`,
+      `[get-schedule] stage2 INCOMPLETE collected=${collectedPrices.length} apple_total=${lastPagingTotal} schedule_id=${scheduleId} — pagination may have dropped rows; investigate Railway logs for missing has_next links`,
     );
-    for (const id of toFetch) {
-      try {
-        const single: AscApiResponse<InAppPurchasePrice> = await withRetry(
-          () =>
-            iapFetch<AscApiResponse<InAppPurchasePrice>>(
-              creds,
-              "GET",
-              `/v1/inAppPurchasePrices/${id}?include=inAppPurchasePricePoint,territory`,
-            ),
-        );
-        collectedPrices.push(single.data);
-        if (single.included) {
-          collectedIncluded.push(...single.included);
-        }
-      } catch (err) {
-        console.warn(
-          `[get-schedule] stage2 recovery failed id=${id} schedule_id=${scheduleId}: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-    }
   }
 
   console.log(
-    `[get-schedule] stage2 done total_prices=${collectedPrices.length} stage1_expected=${expectedIds.length} apple_total=${lastPagingTotal ?? "?"} schedule_id=${scheduleId}`,
+    `[get-schedule] stage2 done total_prices=${collectedPrices.length} apple_total=${lastPagingTotal ?? "?"} schedule_id=${scheduleId}`,
   );
   return { data: collectedPrices, included: collectedIncluded };
 }
@@ -347,8 +310,12 @@ export async function getPriceScheduleForIap(
   appleIapId: string,
 ): Promise<AscApiResponse<InAppPurchasePriceSchedule>> {
   // ── Stage 1 ────────────────────────────────────────────────────────────
+  // IAP.p2.m: explicit `limit[manualPrices]=50` (the documented max) to
+  // make the relationship enumeration as complete as possible. Apple has
+  // been observed to truncate this list even with the explicit limit;
+  // the unpacker treats Stage 2's data as authoritative regardless.
   console.log(`[get-schedule] stage1 fetching apple_iap_id=${appleIapId}`);
-  const stage1Path = `/v2/inAppPurchases/${appleIapId}/iapPriceSchedule?include=baseTerritory,manualPrices`;
+  const stage1Path = `/v2/inAppPurchases/${appleIapId}/iapPriceSchedule?include=baseTerritory,manualPrices&limit[manualPrices]=50`;
   const stage1 = await withRetry(() =>
     iapFetch<AscApiResponse<InAppPurchasePriceSchedule>>(
       creds,
@@ -364,17 +331,18 @@ export async function getPriceScheduleForIap(
   const manualRefs = (stage1.data.relationships as
     | { manualPrices?: { data?: Array<{ id: string }> } }
     | undefined)?.manualPrices?.data ?? [];
-  const manualRefIds = manualRefs.map((r) => r.id);
 
   console.log(
-    `[get-schedule] stage1 schedule_id=${scheduleId} base_territory=${baseTerritoryId ?? "?"} manualRel_count=${manualRefs.length}`,
+    `[get-schedule] stage1 schedule_id=${scheduleId} base_territory=${baseTerritoryId ?? "?"} manualRel_count=${manualRefs.length} (advisory — may be truncated by Apple)`,
   );
 
-  // Stage 2 — manualPrices traversal with pagination + per-ID recovery.
-  // Skipped when Stage 1 returns no manualPrice refs.
+  // Stage 2 — manualPrices traversal with pagination. Skipped only when
+  // Stage 1 reports zero manualPrice refs (Apple says there are none).
+  // The unpacker iterates Stage 2's results, not Stage 1's manualRel,
+  // because Stage 1 can truncate.
   const stage2Result =
     manualRefs.length > 0
-      ? await fetchManualPricesPaginated(creds, scheduleId, manualRefIds)
+      ? await fetchManualPricesPaginated(creds, scheduleId)
       : {
           data: [] as InAppPurchasePrice[],
           included: [] as Array<AscResource<string, Record<string, unknown>>>,

@@ -333,6 +333,54 @@ describe("unpackPriceSchedule", () => {
     expect(unpackPriceSchedule(res).baseTerritory).toBe("USA");
   });
 
+  it("renders all manualPrices from included even when Stage 1's manualRel is short (IAP.p2.m)", () => {
+    // Manager UAT MV30 Railway logs: Apple's V2
+    // `?include=manualPrices` returned 10 ids; Stage 2 returned 12. The
+    // unpacker iterates Stage 2's data (priceBucket) — NOT Stage 1's
+    // manualRel — so the missing 2 are not silently dropped.
+    const res = priceScheduleResponse({
+      manualPrices: [
+        {
+          priceId: "p-usa",
+          pricePointId: "pp-usa",
+          territory: "USA",
+          customerPrice: "2.99",
+          currency: "USD",
+        },
+        {
+          priceId: "p-vn",
+          pricePointId: "pp-vn",
+          territory: "VNM",
+          customerPrice: "89000",
+          currency: "VND",
+        },
+        {
+          priceId: "p-jp",
+          pricePointId: "pp-jp",
+          territory: "JPN",
+          customerPrice: "300",
+          currency: "JPY",
+        },
+      ],
+    });
+    // Simulate Apple's V2 truncation: only the first manualPrice id is
+    // listed in the relationship enumeration. The other 2 are still in
+    // `included[]` (Stage 2's merged data).
+    (res.data.relationships as {
+      manualPrices?: { data?: Array<{ id: string }> };
+    }).manualPrices = {
+      data: [{ id: "p-usa" }],
+    };
+
+    const out = unpackPriceSchedule(res);
+    expect(out.entries).toHaveLength(3);
+    expect(out.entries.map((e) => e.territory).sort()).toEqual([
+      "JPN",
+      "USA",
+      "VNM",
+    ]);
+  });
+
   // ── IAP.p2.k regressions ─────────────────────────────────────────────────
   it("reads territory from InAppPurchasePrice.relationships.territory (FIX A)", () => {
     const out = unpackPriceSchedule(

@@ -216,21 +216,28 @@ export function unpackPriceSchedule(
       | { baseTerritory?: { data?: { id?: string } } }
       | undefined)?.baseTerritory?.data?.id as string | undefined) ?? "USA";
 
-  // manualPrices.data is a JSON:API list of {type, id} pointers; resolve each
-  // pointer through the typed buckets above.
-  const manualRel = (res.data.relationships as
-    | { manualPrices?: { data?: Array<{ id: string }> } }
-    | undefined)?.manualPrices?.data ?? [];
-
+  // IAP.p2.m — iterate priceBucket directly instead of Stage 1's
+  // `manualPrices.data` enumeration. Manager UAT MV30 Railway logs proved
+  // Apple's V2 `/iapPriceSchedule?include=manualPrices` truncates the
+  // relationship-list at 10 entries even when the actual schedule has 12
+  // (USA + 11 overrides). Stage 2's `/v1/.../manualPrices` returns the
+  // full set, so we walk the merged Stage 2 prices directly. The bucket
+  // is keyed by Apple ID and only contains the entries Stage 2 collected
+  // (plus any pagination-followed extras), so we get the canonical list
+  // even when Stage 1's relationship is short.
   const priceBucket = scheduleBuckets.get("inAppPurchasePrices");
   const entries: PriceScheduleEntry[] = [];
-  for (const ref of manualRel) {
-    const priceRes = priceBucket?.get(ref.id) as
-      | InAppPurchasePrice
-      | undefined;
-    if (!priceRes) continue;
-    const entry = unpackPriceEntry(priceRes, scheduleBuckets);
-    if (entry) entries.push(entry);
+  if (priceBucket) {
+    for (const priceRes of priceBucket.values()) {
+      // Loose `AscResource<string, Record<string, unknown>>` shape narrows
+      // to InAppPurchasePrice via `unknown` — same structural row, but
+      // the typed attribute shape is narrower than the bucket's generic.
+      const entry = unpackPriceEntry(
+        priceRes as unknown as InAppPurchasePrice,
+        scheduleBuckets,
+      );
+      if (entry) entries.push(entry);
+    }
   }
 
   // Stable order: startDate ASC with nulls (effective-now) first, then by

@@ -24,8 +24,8 @@ screenshots, price schedules, submissions) still use v1.
 | List price points | GET | `/v2/inAppPurchases/{id}/pricePoints?filter[territory]=USA&limit=1000` | Per-IAP scope — no /apps/{id}/pricePoints endpoint exists. IAP.o.11a bumped limit 200→1000 (OpenAPI spec max 8000). |
 | Set price schedule | POST | `/v1/inAppPurchasePriceSchedules` | Replace-all semantic; relationships + included (see below). |
 | Get price schedule Stage 1 (View Detail) | GET | `/v2/inAppPurchases/{id}/iapPriceSchedule?include=baseTerritory,manualPrices` | Relationship-traversal endpoint. Path segment is the **relationship name** (`iapPriceSchedule`), NOT the resource type — sending the type returns 404 (IAP.p2.i). Apple enforces a **strict include whitelist** — only `baseTerritory`, `manualPrices`, `automaticPrices` are accepted; nested includes like `manualPrices.inAppPurchasePricePoint.territory` return 400 `PARAMETER_ERROR.INVALID` (IAP.p2.j). Returns schedule id + baseTerritory + manualPrice ID stubs. 404 = no schedule yet. |
-| Get price schedule Stage 2 (View Detail) | GET | `/v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices?include=inAppPurchasePricePoint,territory&limit=200` | Deep-traversal endpoint that side-loads `inAppPurchasePricePoint` + `territory` per manual price — the only path that allows these includes (per OpenAPI). Skipped when Stage 1 returns 0 manualPrices. Paginated via `links.next`; we follow up to `MAX_STAGE2_PAGES=20` with a URL parser that handles both absolute + relative cursors. **IAP.p2.l recovery**: after pagination completes we compare collected IDs against Stage 1's `manualRel` enumeration; any missing entries are fetched individually via the recovery endpoint below. |
-| Get price schedule recovery (View Detail) | GET | `/v1/inAppPurchasePrices/{priceId}?include=inAppPurchasePricePoint,territory` | Per-ID recovery for entries Stage 2 silently dropped. Manager UAT MV30 surfaced cases where Apple's public API returned fewer rows than Stage 1's `manualRel` enumerated (the alphabetically-last Vietnam row disappeared from a 12-row schedule). Trust Stage 1's IDs as canonical; fetch any missing one here. Failures are swallowed with a warn log so a single missing recovery doesn't block the rest of the schedule from rendering. |
+| Get price schedule Stage 1 (View Detail) — `limit[manualPrices]=50` added at p2.m | GET | `/v2/inAppPurchases/{id}/iapPriceSchedule?include=baseTerritory,manualPrices&limit[manualPrices]=50` | (Same row as above — `limit[manualPrices]=50` is the OpenAPI maximum; even with this Apple has been observed to truncate the relationship enumeration. The list is treated as advisory only.) |
+| Get price schedule Stage 2 (View Detail) | GET | `/v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices?include=inAppPurchasePricePoint,territory&limit=200` | Deep-traversal endpoint that side-loads `inAppPurchasePricePoint` + `territory` per manual price. **This is the authoritative price source** — the unpacker iterates Stage 2's data (NOT Stage 1's truncated `manualRel`). Paginated via `links.next`; we follow up to `MAX_STAGE2_PAGES=20` with a URL parser that handles both absolute + relative cursors. `meta.paging.total` is logged as `apple_total`; if collected < apple_total after pagination, a warn fires in Railway logs. |
 | Poll IAP ready (Stage 1→2 guard) | GET | `/v2/inAppPurchases/{id}` | IAP.o.11a — invoked between CREATE and pricing POST to confirm Apple has propagated the new IAP. Polls 200 ms × 10 max = 2 s budget. |
 | Reserve screenshot | POST | `/v1/inAppPurchaseAppStoreReviewScreenshots` | Relationship: `inAppPurchaseV2`. Returns `uploadOperations[]`. |
 | Confirm screenshot | PATCH | `/v1/inAppPurchaseAppStoreReviewScreenshots/{id}` | `uploaded: true` + `sourceFileChecksum` (MD5 hex). |
@@ -220,17 +220,28 @@ but is documented as legacy in JSDoc — production code calls
     entry within `entries[]` whose `territory === baseTerritory` AND
     `startDate === null`. `automaticPrices` contains the ~164 Apple-
     equalized territories, NOT the developer-set base.
-16. **Apple's public API can silently return fewer rows than its own
-    relationship list enumerates (IAP.p2.l per-ID recovery)** — Manager
-    MV30 UAT: Stage 1's `manualPrices.data` enumerated 12 IDs;
-    Stage 2 pagination on `/v1/inAppPurchasePriceSchedules/{id}/manualPrices`
-    returned 11 entries with `links.next` absent and
-    `meta.paging.total` matching the smaller count. Apple's iris API
-    on the same data returned the full 12. The fix: treat Stage 1's
-    `manualRel` IDs as the canonical expected list and fetch any
-    missing rows individually via `/v1/inAppPurchasePrices/{id}`. Don't
-    trust `meta.paging.total` as authoritative — Apple's iris and
-    public APIs can disagree.
+16. **Apple's V2 schedule endpoint TRUNCATES `manualPrices.data` —
+    iterate Stage 2's payload, not Stage 1's relationship list
+    (IAP.p2.m)** — Manager UAT MV30 Railway logs:
+    `manualRel_count=10` from Stage 1 vs `got=12 apple_total=12` from
+    Stage 2 on the same schedule. Apple's V2
+    `/iapPriceSchedule?include=manualPrices` truncates the relationship
+    enumeration to ≤10 IDs even with explicit `limit[manualPrices]=50`
+    (the documented OpenAPI maximum). The truncation appears to be
+    server-side and undocumented. **Fix:** unpackPriceSchedule iterates
+    the merged Stage 2 `priceBucket` directly (every
+    `inAppPurchasePrices` resource in the merged `included[]`); Stage
+    1's `manualRel` is treated as advisory only (used to gate Stage 2
+    when zero, otherwise ignored). The per-ID recovery code shipped at
+    p2.l was removed at p2.m — it relied on Stage 1's manualRel as the
+    canonical expected-ID list, but since Stage 1 truncates, that list
+    is itself incomplete.
+17. **Stage 2's `meta.paging.total` IS reliable for the manualPrices
+    sub-resource endpoint (IAP.p2.m)** — corrects p2.l's earlier
+    caveat. iris-API and public-API agreed on count=12 in the MV30 log
+    sample. If `collected < apple_total` after Stage 2 pagination
+    completes, there's a real pagination break to investigate; we log
+    a `stage2 INCOMPLETE` warn to surface that case.
 
 ## Test enforcement
 
