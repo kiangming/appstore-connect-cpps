@@ -24,8 +24,8 @@ screenshots, price schedules, submissions) still use v1.
 | List price points | GET | `/v2/inAppPurchases/{id}/pricePoints?filter[territory]=USA&limit=1000` | Per-IAP scope — no /apps/{id}/pricePoints endpoint exists. IAP.o.11a bumped limit 200→1000 (OpenAPI spec max 8000). |
 | Set price schedule | POST | `/v1/inAppPurchasePriceSchedules` | Replace-all semantic; relationships + included (see below). |
 | Get price schedule Stage 1 (View Detail) | GET | `/v2/inAppPurchases/{id}/iapPriceSchedule?include=baseTerritory,manualPrices` | Relationship-traversal endpoint. Path segment is the **relationship name** (`iapPriceSchedule`), NOT the resource type — sending the type returns 404 (IAP.p2.i). Apple enforces a **strict include whitelist** — only `baseTerritory`, `manualPrices`, `automaticPrices` are accepted; nested includes like `manualPrices.inAppPurchasePricePoint.territory` return 400 `PARAMETER_ERROR.INVALID` (IAP.p2.j). Returns schedule id + baseTerritory + manualPrice ID stubs. 404 = no schedule yet. |
-| Get price schedule Stage 2 (View Detail) | GET | `/v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices?include=inAppPurchasePricePoint,territory&limit=200` | Deep-traversal endpoint that side-loads `inAppPurchasePricePoint` + `territory` per manual price — the only path that allows these includes (per OpenAPI). Skipped when Stage 1 returns 0 manualPrices (Apple-equalized everything). Paginated via `links.next`; we follow up to `MAX_STAGE2_PAGES=20` with a URL parser that handles both absolute + relative cursors. Apple's default page size has been observed to be smaller than our requested `limit` (10-row default seen post-p2.j MV30 test). |
-| Get price schedule Stage 3 (View Detail) | GET | `/v1/inAppPurchasePriceSchedules/{scheduleId}/automaticPrices?filter[territory]=<base>&include=inAppPurchasePricePoint,territory&limit=1` | Resolves the **base territory's actual price** — Apple stores the base in `automaticPrices`, NOT `manualPrices` (despite our POST shape sending the base AS a manualPrice; Apple unfolds it on storage). Without Stage 3 the View Detail had to fall back to `current[0]` which surfaced the wrong territory's price as the "base" (IAP.p2.k). Best-effort: a Stage 3 failure leaves `basePrice = null` and the section renders the territory name without a price. |
+| Get price schedule Stage 2 (View Detail) | GET | `/v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices?include=inAppPurchasePricePoint,territory&limit=200` | Deep-traversal endpoint that side-loads `inAppPurchasePricePoint` + `territory` per manual price — the only path that allows these includes (per OpenAPI). Skipped when Stage 1 returns 0 manualPrices. Paginated via `links.next`; we follow up to `MAX_STAGE2_PAGES=20` with a URL parser that handles both absolute + relative cursors. **IAP.p2.l recovery**: after pagination completes we compare collected IDs against Stage 1's `manualRel` enumeration; any missing entries are fetched individually via the recovery endpoint below. |
+| Get price schedule recovery (View Detail) | GET | `/v1/inAppPurchasePrices/{priceId}?include=inAppPurchasePricePoint,territory` | Per-ID recovery for entries Stage 2 silently dropped. Manager UAT MV30 surfaced cases where Apple's public API returned fewer rows than Stage 1's `manualRel` enumerated (the alphabetically-last Vietnam row disappeared from a 12-row schedule). Trust Stage 1's IDs as canonical; fetch any missing one here. Failures are swallowed with a warn log so a single missing recovery doesn't block the rest of the schedule from rendering. |
 | Poll IAP ready (Stage 1→2 guard) | GET | `/v2/inAppPurchases/{id}` | IAP.o.11a — invoked between CREATE and pricing POST to confirm Apple has propagated the new IAP. Polls 200 ms × 10 max = 2 s budget. |
 | Reserve screenshot | POST | `/v1/inAppPurchaseAppStoreReviewScreenshots` | Relationship: `inAppPurchaseV2`. Returns `uploadOperations[]`. |
 | Confirm screenshot | PATCH | `/v1/inAppPurchaseAppStoreReviewScreenshots/{id}` | `uploaded: true` + `sourceFileChecksum` (MD5 hex). |
@@ -210,14 +210,27 @@ but is documented as legacy in JSDoc — production code calls
     returned `undefined`, surfacing as a blank country column in the
     View Detail table and a failed base-territory match in the section
     header. Always read territory from `priceRes.relationships.territory`.
-15. **Apple stores the base price in `automaticPrices`, NOT
-    `manualPrices` (IAP.p2.k Stage 3)** — even when our POST shape sends
-    the base territory as part of `manualPrices`, Apple unfolds it
-    server-side: the base lives in `automaticPrices`, the explicit
-    overrides live in `manualPrices`. Reading the schedule's
-    manualPrices alone never surfaces the base territory's price.
-    Use the dedicated filter fetch documented in the Stage 3 endpoint
-    row above.
+15. **Base price IS in `manualPrices` — `automaticPrices` is the
+    equalized-territories bucket (IAP.p2.l corrects IAP.p2.k)** —
+    Apple Connect Web's iris-API ground truth (Manager MV30 UAT) showed
+    a 12-row `manualPrices` response including USA (the base territory)
+    alongside the 11 overrides; all rows carried `"manual": true`. The
+    p2.k Stage 3 hypothesis (base in `automaticPrices`) was wrong; Stage
+    3 was removed at p2.l. The base is now resolved by finding the
+    entry within `entries[]` whose `territory === baseTerritory` AND
+    `startDate === null`. `automaticPrices` contains the ~164 Apple-
+    equalized territories, NOT the developer-set base.
+16. **Apple's public API can silently return fewer rows than its own
+    relationship list enumerates (IAP.p2.l per-ID recovery)** — Manager
+    MV30 UAT: Stage 1's `manualPrices.data` enumerated 12 IDs;
+    Stage 2 pagination on `/v1/inAppPurchasePriceSchedules/{id}/manualPrices`
+    returned 11 entries with `links.next` absent and
+    `meta.paging.total` matching the smaller count. Apple's iris API
+    on the same data returned the full 12. The fix: treat Stage 1's
+    `manualRel` IDs as the canonical expected list and fetch any
+    missing rows individually via `/v1/inAppPurchasePrices/{id}`. Don't
+    trust `meta.paging.total` as authoritative — Apple's iris and
+    public APIs can disagree.
 
 ## Test enforcement
 
@@ -365,32 +378,34 @@ const [iapRes, scheduleSettled] = await Promise.all([
 ]);
 ```
 
-`getPriceScheduleForIap` internally does a 3-stage fetch (Stage 1 — V2
+`getPriceScheduleForIap` internally does a 2-stage fetch (Stage 1 — V2
 schedule + manualPrice ID stubs; Stage 2 — V1 manualPrices with
-inAppPurchasePricePoint + territory side-loaded, paginated; Stage 3 — V1
-automaticPrices filtered by base territory to resolve the base price)
-then returns `{ schedule, basePrice }`. The consumer
-(`unpackPriceSchedule`) walks both response shells and produces the
-`PriceScheduleView` with separate `entries[]` (manual overrides) and
-`basePrice` (base territory). See Gotchas 12 + 13 + 14 + 15 + the
-endpoint table above for why the single-round-trip approach the original
-p2.a shipped with doesn't work against Apple's actual API.
+inAppPurchasePricePoint + territory side-loaded, paginated + per-ID
+recovery) and returns a single merged `AscApiResponse`. The consumer
+(`unpackPriceSchedule`) walks the merged shell and produces the
+`PriceScheduleView` with `entries[]` (all manualPrices, including the
+base) and `basePrice` (derived by finding the effective-now entry whose
+territory matches `baseTerritory`).
+
+See Gotchas 12-16 + the endpoint table above for the failure modes that
+shaped this design (path-name traps, include whitelist, attribute-on-
+wrong-resource, public-API row dropouts).
 
 **View-model fields:**
 
 ```ts
 interface PriceScheduleView {
   baseTerritory: string;                  // Apple's baseTerritory id ("USA")
-  basePrice: PriceScheduleEntry | null;   // Stage 3 result; null on fetch fail
+  basePrice: PriceScheduleEntry | null;   // entries.find(t === baseTerritory)
   entries: PriceScheduleEntry[];          // Stage 2 manualPrices, sorted
 }
 ```
 
-**Observability:** every stage logs `[get-schedule] stage<N> …` lines to
-console — `stage1 schedule_id=… manualRel_count=N`, `stage2 page=N
-got=N has_next=…`, `stage3 base_territory=… got=N`, plus warn lines for
-Stage 2 cap-hits and Stage 3 failures. Manager UAT failures can be
-traced through Railway logs without rerunning.
+**Observability:** every stage logs `[get-schedule] stage<N> …` lines —
+`stage1 schedule_id=… manualRel_count=N`, `stage2 page=N got=N has_next=… apple_total=N`,
+recovery warns when Stage 2 collected fewer IDs than manualRel expected,
+plus per-ID recovery failure warns. Manager UAT failures can be traced
+through Railway logs without rerunning.
 
 ### Per-stage error boundaries
 

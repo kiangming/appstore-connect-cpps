@@ -114,81 +114,75 @@ function fullIapResponse(): AscApiResponse<InAppPurchase> {
 }
 
 /**
- * IAP.p2.k: schedule fixture mirrors Apple's actual JSON:API shape:
+ * IAP.p2.l: schedule fixture mirrors Apple's actual JSON:API shape
+ * (iris-API ground truth at MV30):
  *   - InAppPurchasePrice carries its OWN `relationships.territory`
  *   - Territory resources carry `attributes.currency`
- *   - InAppPurchasePricePoints have NO `currency` (it's a Territory attribute)
- *   - The fetch result is { schedule, basePrice } since p2.k 3-stage.
+ *   - InAppPurchasePricePoints have NO `currency` (Territory attribute)
+ *   - Base territory price IS in manualPrices (not in a separate bucket)
  */
-function priceScheduleFetchResult(): {
-  schedule: AscApiResponse<InAppPurchasePriceSchedule>;
-  basePrice: AscApiResponse<unknown> | null;
-} {
+function priceScheduleFetchResult(): AscApiResponse<InAppPurchasePriceSchedule> {
   return {
-    schedule: {
-      data: {
-        type: "inAppPurchasePriceSchedules",
-        id: "sched-1",
-        attributes: {},
+    data: {
+      type: "inAppPurchasePriceSchedules",
+      id: "sched-1",
+      attributes: {},
+      relationships: {
+        baseTerritory: { data: { type: "territories", id: "USA" } },
+        manualPrices: {
+          data: [
+            { type: "inAppPurchasePrices", id: "p-usa" },
+            { type: "inAppPurchasePrices", id: "p-vn" },
+          ],
+        },
+      },
+    } as unknown as InAppPurchasePriceSchedule,
+    included: [
+      // Base USA row (matches Apple's iris response — base lives WITHIN manualPrices).
+      {
+        type: "inAppPurchasePrices",
+        id: "p-usa",
+        attributes: { startDate: null },
         relationships: {
-          baseTerritory: { data: { type: "territories", id: "USA" } },
-          manualPrices: {
-            data: [{ type: "inAppPurchasePrices", id: "p-vn" }],
+          inAppPurchasePricePoint: {
+            data: { type: "inAppPurchasePricePoints", id: "pp-usa" },
           },
+          territory: { data: { type: "territories", id: "USA" } },
         },
-      } as unknown as InAppPurchasePriceSchedule,
-      included: [
-        {
-          type: "inAppPurchasePrices",
-          id: "p-vn",
-          attributes: { startDate: null },
-          relationships: {
-            inAppPurchasePricePoint: {
-              data: { type: "inAppPurchasePricePoints", id: "pp-vn" },
-            },
-            territory: { data: { type: "territories", id: "VNM" } },
+      },
+      {
+        type: "inAppPurchasePricePoints",
+        id: "pp-usa",
+        attributes: { customerPrice: "0.99", proceeds: "0.7" },
+      },
+      {
+        type: "territories",
+        id: "USA",
+        attributes: { currency: "USD" },
+      },
+      // VNM override.
+      {
+        type: "inAppPurchasePrices",
+        id: "p-vn",
+        attributes: { startDate: null },
+        relationships: {
+          inAppPurchasePricePoint: {
+            data: { type: "inAppPurchasePricePoints", id: "pp-vn" },
           },
+          territory: { data: { type: "territories", id: "VNM" } },
         },
-        {
-          type: "inAppPurchasePricePoints",
-          id: "pp-vn",
-          attributes: { customerPrice: "89000", proceeds: "62300" },
-        },
-        {
-          type: "territories",
-          id: "VNM",
-          attributes: { currency: "VND" },
-        },
-      ],
-    },
-    // Stage 3 single-row response — the base US price.
-    basePrice: {
-      data: [
-        {
-          type: "inAppPurchasePrices",
-          id: "p-base",
-          attributes: { startDate: null },
-          relationships: {
-            inAppPurchasePricePoint: {
-              data: { type: "inAppPurchasePricePoints", id: "pp-base" },
-            },
-            territory: { data: { type: "territories", id: "USA" } },
-          },
-        },
-      ],
-      included: [
-        {
-          type: "inAppPurchasePricePoints",
-          id: "pp-base",
-          attributes: { customerPrice: "0.99", proceeds: "0.7" },
-        },
-        {
-          type: "territories",
-          id: "USA",
-          attributes: { currency: "USD" },
-        },
-      ],
-    },
+      },
+      {
+        type: "inAppPurchasePricePoints",
+        id: "pp-vn",
+        attributes: { customerPrice: "89000", proceeds: "62300" },
+      },
+      {
+        type: "territories",
+        id: "VNM",
+        attributes: { currency: "VND" },
+      },
+    ],
   };
 }
 

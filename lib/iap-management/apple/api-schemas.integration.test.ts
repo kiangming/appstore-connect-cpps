@@ -360,10 +360,13 @@ describe("API schema: pricing endpoints", () => {
         stage1Response({
           scheduleId: "sched-42",
           manualPriceIds: ["p-1"],
-          baseTerritory: null, // skip Stage 3 — keeps this test focused on Stage 2
+          baseTerritory: null,
         }),
       )
-      .mockResolvedValueOnce({ data: [] }); // Stage 2 — empty page, no next
+      // Stage 2 returns p-1 (matches Stage 1 manualPriceIds → no recovery).
+      .mockResolvedValueOnce({
+        data: [{ type: "inAppPurchasePrices", id: "p-1" }],
+      });
 
     await getPriceScheduleForIap(creds, "iap-1");
     expect(iapFetch.mock.calls.length).toBe(2);
@@ -382,92 +385,29 @@ describe("API schema: pricing endpoints", () => {
     expect(iapFetch.mock.calls.length).toBe(1);
   });
 
-  it("get schedule Stage 3 → GET /v1/inAppPurchasePriceSchedules/{scheduleId}/automaticPrices filter+limit=1 (IAP.p2.k)", async () => {
-    // Stage 3 fires when Stage 1 carries a baseTerritory. Apple stores the
-    // base price in `automaticPrices` (NOT manualPrices) so this filtered
-    // single-row fetch resolves the base price + its currency. Without
-    // Stage 3 the view fell back to current[0] and surfaced HK's price
-    // as the "United States" base.
-    iapFetch
-      .mockResolvedValueOnce(
-        stage1Response({
-          scheduleId: "sched-7",
-          manualPriceIds: [], // skip Stage 2
-          baseTerritory: "USA",
-        }),
-      )
-      .mockResolvedValueOnce({ data: [] }); // Stage 3 — empty single-row page
-
-    await getPriceScheduleForIap(creds, "iap-1");
-    expect(iapFetch.mock.calls.length).toBe(2);
-    const [, method2, endpoint2] = iapFetch.mock.calls[1];
-    expect(method2).toBe("GET");
-    expect(endpoint2).toBe(
-      "/v1/inAppPurchasePriceSchedules/sched-7/automaticPrices?filter[territory]=USA&include=inAppPurchasePricePoint,territory&limit=1",
-    );
-  });
-
-  it("get schedule Stage 3 failure is swallowed (basePrice=null) without breaking Stage 1+2 (IAP.p2.k)", async () => {
-    // Stage 3 is best-effort — a 500 / 404 on automaticPrices must NOT
-    // poison the whole fetch since manualPrices already rendered.
-    iapFetch
-      .mockResolvedValueOnce(
-        stage1Response({
-          scheduleId: "sched-7",
-          manualPriceIds: [],
-          baseTerritory: "USA",
-        }),
-      )
-      .mockRejectedValueOnce(new Error("Apple 500 on automaticPrices"));
-
-    const out = await getPriceScheduleForIap(creds, "iap-1");
-    expect(out.basePrice).toBeNull();
-    // Stage 1 result still surfaced.
-    expect(out.schedule.data.id).toBe("sched-7");
-  });
-
-  it("get schedule fires Stage 2 + Stage 3 in parallel when both gates open (IAP.p2.k)", async () => {
-    iapFetch
-      .mockResolvedValueOnce(
-        stage1Response({
-          scheduleId: "sched-7",
-          manualPriceIds: ["p-1"],
-          baseTerritory: "USA",
-        }),
-      )
-      // Stage 2 fires first (synchronous code order in getPriceScheduleForIap).
-      .mockResolvedValueOnce({ data: [] })
-      // Stage 3 second.
-      .mockResolvedValueOnce({ data: [] });
-
-    await getPriceScheduleForIap(creds, "iap-1");
-    expect(iapFetch.mock.calls.length).toBe(3);
-    const [, , endpoint2] = iapFetch.mock.calls[1];
-    const [, , endpoint3] = iapFetch.mock.calls[2];
-    expect(endpoint2).toContain("/manualPrices");
-    expect(endpoint3).toContain("/automaticPrices");
-  });
-
-  it("get schedule follows links.next when Stage 2 paginates — absolute URL (IAP.p2.k)", async () => {
-    // Vietnam-missing bug at MV30 post-p2.j: 11-row schedule lost the
-    // alphabetically-last entry because Apple paginated at 10 and our
-    // links.next follow was brittle. URL-parser approach handles
-    // both absolute + relative cursors.
+  it("get schedule follows links.next when Stage 2 paginates — absolute URL (IAP.p2.l)", async () => {
+    // Manager UAT MV30: 11-row schedule lost the alphabetically-last
+    // entry because Apple paginated and our links.next follow was
+    // brittle. URL-parser approach handles both absolute + relative.
+    // The manualPriceIds match the data returned so the recovery step
+    // doesn't fire — this test is isolated to pagination.
     iapFetch
       .mockResolvedValueOnce(
         stage1Response({
           scheduleId: "sched-99",
           manualPriceIds: ["p-1", "p-2"],
-          baseTerritory: null, // skip Stage 3 for clarity
+          baseTerritory: null,
         }),
       )
       .mockResolvedValueOnce({
-        data: [],
+        data: [{ type: "inAppPurchasePrices", id: "p-1" }],
         links: {
           next: "https://api.appstoreconnect.apple.com/v1/inAppPurchasePriceSchedules/sched-99/manualPrices?cursor=PAGE2",
         },
       })
-      .mockResolvedValueOnce({ data: [] });
+      .mockResolvedValueOnce({
+        data: [{ type: "inAppPurchasePrices", id: "p-2" }],
+      });
 
     await getPriceScheduleForIap(creds, "iap-1");
     expect(iapFetch.mock.calls.length).toBe(3);
@@ -477,9 +417,7 @@ describe("API schema: pricing endpoints", () => {
     );
   });
 
-  it("get schedule follows links.next when Stage 2 paginates — relative URL (IAP.p2.k)", async () => {
-    // Apple's pagination format isn't documented; cover the relative-URL
-    // case too so a future Apple change doesn't silently break us.
+  it("get schedule follows links.next when Stage 2 paginates — relative URL (IAP.p2.l)", async () => {
     iapFetch
       .mockResolvedValueOnce(
         stage1Response({
@@ -489,7 +427,7 @@ describe("API schema: pricing endpoints", () => {
         }),
       )
       .mockResolvedValueOnce({
-        data: [],
+        data: [{ type: "inAppPurchasePrices", id: "p-1" }],
         links: { next: "/v1/inAppPurchasePriceSchedules/sched-99/manualPrices?cursor=REL" },
       })
       .mockResolvedValueOnce({ data: [] });
@@ -502,7 +440,7 @@ describe("API schema: pricing endpoints", () => {
     );
   });
 
-  it("get schedule respects MAX_STAGE2_PAGES safety cap (IAP.p2.k)", async () => {
+  it("get schedule respects MAX_STAGE2_PAGES safety cap (IAP.p2.l)", async () => {
     // Bounded loop guard against malformed cursors that link back to
     // themselves. Stage 1 + 20 Stage 2 pages = 21 total calls; we stop
     // after page 20 even if Apple keeps offering `links.next`.
@@ -514,9 +452,10 @@ describe("API schema: pricing endpoints", () => {
       }),
     );
     // Every Stage 2 page returns a next link → forces hitting the cap.
+    // Each page returns p-1 so the recovery step doesn't trigger.
     for (let i = 0; i < 25; i++) {
       iapFetch.mockResolvedValueOnce({
-        data: [],
+        data: [{ type: "inAppPurchasePrices", id: "p-1" }],
         links: { next: `/v1/inAppPurchasePriceSchedules/sched-loop/manualPrices?cursor=LOOP${i}` },
       });
     }
@@ -524,6 +463,83 @@ describe("API schema: pricing endpoints", () => {
     await getPriceScheduleForIap(creds, "iap-1");
     // 1 Stage-1 + 20 Stage-2 pages (cap MAX_STAGE2_PAGES).
     expect(iapFetch.mock.calls.length).toBe(21);
+  });
+
+  // ── IAP.p2.l — per-ID recovery ─────────────────────────────────────────
+  it("get schedule fetches missing manualRel ids individually when Stage 2 silently drops rows (IAP.p2.l)", async () => {
+    // Manager UAT MV30 ground truth: Apple's iris API returned 12 rows
+    // but the public API returned ≤11. Stage 1's manualRel is treated
+    // as the canonical expected-id list — anything missing from Stage 2
+    // pages gets fetched individually via /v1/inAppPurchasePrices/{id}.
+    iapFetch
+      .mockResolvedValueOnce(
+        stage1Response({
+          scheduleId: "sched-recovery",
+          manualPriceIds: ["p-1", "p-2", "p-VNM"],
+          baseTerritory: null,
+        }),
+      )
+      // Stage 2 page 1 returns only p-1 and p-2, no `links.next` —
+      // p-VNM is missing.
+      .mockResolvedValueOnce({
+        data: [
+          { type: "inAppPurchasePrices", id: "p-1" },
+          { type: "inAppPurchasePrices", id: "p-2" },
+        ],
+        meta: { paging: { total: 3, limit: 200 } },
+      })
+      // Recovery fetch for the missing p-VNM id.
+      .mockResolvedValueOnce({
+        data: { type: "inAppPurchasePrices", id: "p-VNM" },
+      });
+
+    await getPriceScheduleForIap(creds, "iap-1");
+    expect(iapFetch.mock.calls.length).toBe(3);
+    const [, method3, endpoint3] = iapFetch.mock.calls[2];
+    expect(method3).toBe("GET");
+    expect(endpoint3).toBe(
+      "/v1/inAppPurchasePrices/p-VNM?include=inAppPurchasePricePoint,territory",
+    );
+  });
+
+  it("get schedule skips recovery when all manualRel ids are present in pages (IAP.p2.l)", async () => {
+    iapFetch
+      .mockResolvedValueOnce(
+        stage1Response({
+          scheduleId: "sched-ok",
+          manualPriceIds: ["p-1", "p-2"],
+          baseTerritory: null,
+        }),
+      )
+      .mockResolvedValueOnce({
+        data: [
+          { type: "inAppPurchasePrices", id: "p-1" },
+          { type: "inAppPurchasePrices", id: "p-2" },
+        ],
+      });
+
+    await getPriceScheduleForIap(creds, "iap-1");
+    // Stage 1 + Stage 2 only — no recovery call.
+    expect(iapFetch.mock.calls.length).toBe(2);
+  });
+
+  it("get schedule swallows recovery-fetch failures and continues (IAP.p2.l)", async () => {
+    iapFetch
+      .mockResolvedValueOnce(
+        stage1Response({
+          scheduleId: "sched-rec-fail",
+          manualPriceIds: ["p-1", "p-missing"],
+          baseTerritory: null,
+        }),
+      )
+      .mockResolvedValueOnce({
+        data: [{ type: "inAppPurchasePrices", id: "p-1" }],
+      })
+      .mockRejectedValueOnce(new Error("Apple 404 on individual fetch"));
+
+    // Should not throw — recovery failures are swallowed.
+    const out = await getPriceScheduleForIap(creds, "iap-1");
+    expect(out.data.id).toBe("sched-rec-fail");
   });
 });
 

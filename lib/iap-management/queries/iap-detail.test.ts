@@ -38,11 +38,9 @@ import {
   getIapViewData,
 } from "./iap-detail";
 import { AppleApiError } from "@/lib/iap-management/apple/fetch";
-import type { PriceScheduleFetchResult } from "@/lib/iap-management/apple/price-schedules";
 import type {
   AscApiResponse,
   InAppPurchase,
-  InAppPurchasePrice,
   InAppPurchasePriceSchedule,
 } from "@/types/iap-management/apple";
 
@@ -167,6 +165,17 @@ describe("splitIncluded", () => {
  *     territory, equalizations]` — `territory` here is a field selector
  *     not a side-load).
  */
+/**
+ * IAP.p2.l fixture: returns the bare AscApiResponse shape that
+ * `getPriceScheduleForIap` now produces post-Stage-3 removal.
+ *
+ * Shape mirrors Apple's actual JSON:API (verified against the iris-API
+ * ground truth Manager pulled from Apple Connect Web in MV30 UAT):
+ *   - InAppPurchasePrice has its OWN `relationships.territory`
+ *   - Territory resources carry `attributes.currency`
+ *   - InAppPurchasePricePoint has NO `currency` (Apple stores it on
+ *     Territory, not on the price point — IAP.p2.k FIX B)
+ */
 function priceScheduleResponse(opts: {
   baseTerritory?: string;
   manualPrices?: Array<{
@@ -178,7 +187,7 @@ function priceScheduleResponse(opts: {
     startDate?: string | null;
     endDate?: string | null;
   }>;
-}): PriceScheduleFetchResult {
+}): AscApiResponse<InAppPurchasePriceSchedule> {
   const manuals = opts.manualPrices ?? [];
   const included: AscApiResponse<InAppPurchasePriceSchedule>["included"] = [];
   const seenTerritories = new Set<string>();
@@ -194,7 +203,6 @@ function priceScheduleResponse(opts: {
         inAppPurchasePricePoint: {
           data: { type: "inAppPurchasePricePoints", id: m.pricePointId },
         },
-        // FIX A: territory lives on the price entry itself, not the price point.
         territory: { data: { type: "territories", id: m.territory } },
       },
     });
@@ -204,14 +212,8 @@ function priceScheduleResponse(opts: {
       attributes: {
         customerPrice: m.customerPrice,
         proceeds: "0.7",
-        // Note: no `currency` here — Apple doesn't put it on price points.
       },
-      // Note: no relationships block — Stage 2 doesn't side-load price-point
-      // relationships, the resource arrives shell-only.
     });
-    // FIX B: each unique territory contributes a Territory resource
-    // with currency attribute (deduped — multiple prices can share territory
-    // in theory, but Apple's data doesn't in practice).
     if (m.currency && !seenTerritories.has(m.territory)) {
       seenTerritories.add(m.territory);
       included.push({
@@ -221,7 +223,7 @@ function priceScheduleResponse(opts: {
       });
     }
   }
-  const schedule: AscApiResponse<InAppPurchasePriceSchedule> = {
+  return {
     data: {
       type: "inAppPurchasePriceSchedules",
       id: "sched-1",
@@ -239,52 +241,6 @@ function priceScheduleResponse(opts: {
       },
     } as unknown as InAppPurchasePriceSchedule,
     included,
-  };
-  return { schedule, basePrice: null };
-}
-
-/** Helper to build a Stage 3 single-row response for a base-territory
- *  automaticPrice (`/v1/inAppPurchasePriceSchedules/{id}/automaticPrices
- *  ?filter[territory]=<base>&limit=1`). */
-function basePriceResponse(opts: {
-  priceId: string;
-  pricePointId: string;
-  territory: string;
-  customerPrice: string;
-  currency?: string;
-}): AscApiResponse<InAppPurchasePrice[]> {
-  return {
-    data: [
-      {
-        type: "inAppPurchasePrices",
-        id: opts.priceId,
-        attributes: { startDate: null },
-        relationships: {
-          inAppPurchasePricePoint: {
-            data: { type: "inAppPurchasePricePoints", id: opts.pricePointId },
-          },
-          territory: {
-            data: { type: "territories", id: opts.territory },
-          },
-        },
-      } as unknown as InAppPurchasePrice,
-    ],
-    included: [
-      {
-        type: "inAppPurchasePricePoints",
-        id: opts.pricePointId,
-        attributes: { customerPrice: opts.customerPrice, proceeds: "0.7" },
-      },
-      ...(opts.currency
-        ? [
-            {
-              type: "territories",
-              id: opts.territory,
-              attributes: { currency: opts.currency },
-            },
-          ]
-        : []),
-    ],
   };
 }
 
@@ -364,7 +320,7 @@ describe("unpackPriceSchedule", () => {
       ],
     });
     // simulate Apple returning the price resource but not the price point
-    res.schedule.included = res.schedule.included!.filter(
+    res.included = res.included!.filter(
       (r) => r.type !== "inAppPurchasePricePoints",
     );
     const out = unpackPriceSchedule(res);
@@ -373,7 +329,7 @@ describe("unpackPriceSchedule", () => {
 
   it("falls back to USA when baseTerritory relationship is missing", () => {
     const res = priceScheduleResponse({});
-    delete (res.schedule.data.relationships as { baseTerritory?: unknown }).baseTerritory;
+    delete (res.data.relationships as { baseTerritory?: unknown }).baseTerritory;
     expect(unpackPriceSchedule(res).baseTerritory).toBe("USA");
   });
 
@@ -429,40 +385,82 @@ describe("unpackPriceSchedule", () => {
     expect(out.entries[0].currency).toBeNull();
   });
 
-  // ── IAP.p2.k basePrice (Stage 3) ─────────────────────────────────────────
-  it("returns basePrice=null when no Stage 3 response is provided", () => {
+  // ── IAP.p2.l basePrice (derived from entries) ───────────────────────────
+  it("returns basePrice=null when no manualPrice matches the base territory", () => {
     const out = unpackPriceSchedule(
-      priceScheduleResponse({ baseTerritory: "USA" }),
+      priceScheduleResponse({
+        baseTerritory: "USA",
+        manualPrices: [
+          {
+            priceId: "p-vn",
+            pricePointId: "pp-vn",
+            territory: "VNM",
+            customerPrice: "89000",
+            currency: "VND",
+          },
+        ],
+      }),
     );
     expect(out.basePrice).toBeNull();
+    expect(out.entries).toHaveLength(1);
   });
 
-  it("unpacks the base price from a Stage 3 automaticPrices response", () => {
-    const schedule = priceScheduleResponse({ baseTerritory: "USA" });
-    const out = unpackPriceSchedule({
-      schedule: schedule.schedule,
-      basePrice: basePriceResponse({
-        priceId: "p-base",
-        pricePointId: "pp-base",
-        territory: "USA",
-        customerPrice: "0.99",
-        currency: "USD",
+  it("derives basePrice from the manualPrices entry whose territory === baseTerritory (IAP.p2.l)", () => {
+    // Per iris-API ground truth at MV30: Apple stores the base price in
+    // manualPrices alongside the other overrides, NOT in a separate
+    // automaticPrices bucket (p2.k Stage 3 assumption was disproved).
+    const out = unpackPriceSchedule(
+      priceScheduleResponse({
+        baseTerritory: "USA",
+        manualPrices: [
+          {
+            priceId: "p-vn",
+            pricePointId: "pp-vn",
+            territory: "VNM",
+            customerPrice: "89000",
+            currency: "VND",
+          },
+          {
+            priceId: "p-usa",
+            pricePointId: "pp-usa",
+            territory: "USA",
+            customerPrice: "2.99",
+            currency: "USD",
+          },
+        ],
       }),
-    });
-    expect(out.basePrice).not.toBeNull();
+    );
     expect(out.basePrice).toMatchObject({
       territory: "USA",
-      customerPrice: "0.99",
+      customerPrice: "2.99",
       currency: "USD",
     });
+    // The base IS still present in entries (Apple Connect's UI counts it
+    // in the manual-prices total too — Manager's "11 Countries or Regions"
+    // includes the base).
+    expect(out.entries).toHaveLength(2);
+    expect(out.entries.map((e) => e.territory).sort()).toEqual(["USA", "VNM"]);
   });
 
-  it("returns basePrice=null when Stage 3 returns an empty data array", () => {
-    const schedule = priceScheduleResponse({ baseTerritory: "USA" });
-    const out = unpackPriceSchedule({
-      schedule: schedule.schedule,
-      basePrice: { data: [], included: [] },
-    });
+  it("derives basePrice only from effective-now entries (future-dated base goes to upcoming)", () => {
+    // A future-dated base price belongs in the upcoming-changes table, not
+    // in the header block. Defensive: matches the partition logic in
+    // IapPriceScheduleSection.
+    const out = unpackPriceSchedule(
+      priceScheduleResponse({
+        baseTerritory: "USA",
+        manualPrices: [
+          {
+            priceId: "p-usa-future",
+            pricePointId: "pp-usa-future",
+            territory: "USA",
+            customerPrice: "3.99",
+            currency: "USD",
+            startDate: "2026-08-01",
+          },
+        ],
+      }),
+    );
     expect(out.basePrice).toBeNull();
   });
 });

@@ -16,10 +16,7 @@
 
 import type { AscCredentials } from "@/lib/asc-jwt";
 import { getInAppPurchase } from "@/lib/iap-management/apple/client";
-import {
-  getPriceScheduleForIap,
-  type PriceScheduleFetchResult,
-} from "@/lib/iap-management/apple/price-schedules";
+import { getPriceScheduleForIap } from "@/lib/iap-management/apple/price-schedules";
 import { AppleApiError } from "@/lib/iap-management/apple/fetch";
 import type {
   InAppPurchase,
@@ -27,6 +24,7 @@ import type {
   InAppPurchaseAppStoreReviewScreenshot,
   InAppPurchasePrice,
   InAppPurchasePricePointResource,
+  InAppPurchasePriceSchedule,
   Territory,
   AscApiResponse,
   AscResource,
@@ -94,14 +92,21 @@ export interface PriceScheduleView {
   /** Base territory ID (always present after Apple's POST). */
   baseTerritory: string;
   /**
-   * Apple stores the base price in `automaticPrices`, NOT `manualPrices`.
-   * `basePrice` is resolved separately via Stage 3 of `getPriceScheduleForIap`
-   * and lives outside the `entries` array (`entries` only enumerates manual
-   * overrides). `null` when Apple has no base price or the Stage 3 fetch
-   * failed — the section renders the territory name without a price.
+   * IAP.p2.l — corrected after iris-API ground truth: Apple stores the
+   * base price IN `manualPrices` (alongside the other manual overrides),
+   * NOT in `automaticPrices`. `basePrice` is the entry whose territory
+   * matches `baseTerritory`, found within the same `entries` array. Null
+   * when no manualPrice matches (rare — Apple shouldn't ship a schedule
+   * without a base; if it does, the section renders the territory name
+   * without a price).
    */
   basePrice: PriceScheduleEntry | null;
-  /** Every manual-price entry, oldest-startDate first. */
+  /**
+   * Every manual-price entry, oldest-startDate first. **Includes** the
+   * base price (the row whose territory === baseTerritory is also
+   * surfaced via `basePrice`). Manager Connect Web's UI similarly counts
+   * the base in the manual-prices total.
+   */
   entries: PriceScheduleEntry[];
 }
 
@@ -192,14 +197,15 @@ function unpackPriceEntry(
  * can render. Exported for unit-testing the JSON:API plumbing without a
  * live Apple call.
  *
- * Walks Stage 1+2's merged `included[]` for the manualPrice entries and
- * Stage 3's standalone response for the base price (Apple stores base in
- * `automaticPrices`, NOT in `manualPrices`).
+ * IAP.p2.l: walks the merged Stage 1 + Stage 2 response (plus any per-ID
+ * recovery entries). `basePrice` is derived by finding the entry whose
+ * `territory === baseTerritory` — Apple stores the base WITHIN
+ * `manualPrices`, not in a separate `automaticPrices` sub-resource
+ * (corrected after iris-API ground truth).
  */
 export function unpackPriceSchedule(
-  fetchResult: PriceScheduleFetchResult,
+  res: AscApiResponse<InAppPurchasePriceSchedule>,
 ): PriceScheduleView {
-  const { schedule: res, basePrice: basePriceRes } = fetchResult;
   const scheduleBuckets = indexIncluded(res.included ?? []);
 
   // Base territory id sits on the schedule's relationships. Defensive
@@ -241,13 +247,15 @@ export function unpackPriceSchedule(
     return a.territory.localeCompare(b.territory);
   });
 
-  // Stage 3 — unpack the base price (single-row response from
-  // automaticPrices?filter[territory]=<base>&limit=1).
-  let basePrice: PriceScheduleEntry | null = null;
-  if (basePriceRes && Array.isArray(basePriceRes.data) && basePriceRes.data.length > 0) {
-    const baseBuckets = indexIncluded(basePriceRes.included ?? []);
-    basePrice = unpackPriceEntry(basePriceRes.data[0], baseBuckets);
-  }
+  // Resolve the base price from within `entries`. Apple's iris ground
+  // truth (Manager UAT MV30) confirmed the base territory's price lives
+  // alongside the other manualPrices, NOT in a separate automaticPrices
+  // bucket. Effective-now base only: a future-dated base entry would
+  // belong in the upcoming-changes table, not the header.
+  const basePrice =
+    entries.find(
+      (e) => e.territory === baseTerritory && e.startDate === null,
+    ) ?? null;
 
   return { baseTerritory, basePrice, entries };
 }
@@ -280,7 +288,7 @@ export async function getIapViewData(
   const [iapRes, scheduleSettled] = await Promise.all([
     getInAppPurchase(creds, appleIapId),
     getPriceScheduleForIap(creds, appleIapId).then(
-      (res): { ok: true; res: PriceScheduleFetchResult } => ({
+      (res): { ok: true; res: AscApiResponse<InAppPurchasePriceSchedule> } => ({
         ok: true,
         res,
       }),
