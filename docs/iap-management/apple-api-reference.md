@@ -23,7 +23,8 @@ screenshots, price schedules, submissions) still use v1.
 | Delete localization | DELETE | `/v1/inAppPurchaseLocalizations/{id}` | Bulk-import OVERWRITE path + IAP.o.12 update-on-Apple locale removal. |
 | List price points | GET | `/v2/inAppPurchases/{id}/pricePoints?filter[territory]=USA&limit=1000` | Per-IAP scope — no /apps/{id}/pricePoints endpoint exists. IAP.o.11a bumped limit 200→1000 (OpenAPI spec max 8000). |
 | Set price schedule | POST | `/v1/inAppPurchasePriceSchedules` | Replace-all semantic; relationships + included (see below). |
-| Get price schedule (View Detail) | GET | `/v2/inAppPurchases/{id}/iapPriceSchedule?include=baseTerritory,manualPrices.inAppPurchasePricePoint.territory` | Relationship-traversal endpoint. Path segment is the **relationship name** (`iapPriceSchedule`), NOT the resource type (`inAppPurchasePriceSchedule`) — sending the type returns 404. Side-loads schedule + base territory + every manual price + price points + their territories in one round trip. 404 = no schedule yet (Manager-created IAP never had pricing pushed). |
+| Get price schedule Stage 1 (View Detail) | GET | `/v2/inAppPurchases/{id}/iapPriceSchedule?include=baseTerritory,manualPrices` | Relationship-traversal endpoint. Path segment is the **relationship name** (`iapPriceSchedule`), NOT the resource type — sending the type returns 404 (IAP.p2.i). Apple enforces a **strict include whitelist** — only `baseTerritory`, `manualPrices`, `automaticPrices` are accepted; nested includes like `manualPrices.inAppPurchasePricePoint.territory` return 400 `PARAMETER_ERROR.INVALID` (IAP.p2.j). Returns schedule id + baseTerritory + manualPrice ID stubs. 404 = no schedule yet. |
+| Get price schedule Stage 2 (View Detail) | GET | `/v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices?include=inAppPurchasePricePoint,territory&limit=200` | Deep-traversal endpoint that side-loads `inAppPurchasePricePoint` + `territory` per manual price — the only path that allows these includes (per OpenAPI). Skipped when Stage 1 returns 0 manualPrices (Apple-equalized everything). Paginated via `links.next`. |
 | Poll IAP ready (Stage 1→2 guard) | GET | `/v2/inAppPurchases/{id}` | IAP.o.11a — invoked between CREATE and pricing POST to confirm Apple has propagated the new IAP. Polls 200 ms × 10 max = 2 s budget. |
 | Reserve screenshot | POST | `/v1/inAppPurchaseAppStoreReviewScreenshots` | Relationship: `inAppPurchaseV2`. Returns `uploadOperations[]`. |
 | Confirm screenshot | PATCH | `/v1/inAppPurchaseAppStoreReviewScreenshots/{id}` | `uploaded: true` + `sourceFileChecksum` (MD5 hex). |
@@ -172,6 +173,21 @@ but is documented as legacy in JSDoc — production code calls
     "No pricing has been set on Apple yet." even when pricing IS set
     on Apple. Detected: Manager UAT post-p2.h ship. Path-shape pin lives
     in `api-schemas.integration.test.ts` to prevent recurrence.
+12. **Apple V2 schedule endpoint enforces strict include whitelist —
+    no nested traversal (IAP.p2.j)** — the OpenAPI for
+    `/v2/inAppPurchases/{id}/iapPriceSchedule` lists `include` as
+    `enum: [baseTerritory, manualPrices, automaticPrices]`. Apple's
+    parser treats each `include` value as a single whitelist key, not
+    as a JSON:API dotted-path. Sending
+    `manualPrices.inAppPurchasePricePoint.territory` is rejected with
+    `PARAMETER_ERROR.INVALID` / "'…' is not a valid relationship name".
+    Same restriction applies to `/v1/inAppPurchasePriceSchedules/{id}`.
+    The ONLY endpoint that side-loads `inAppPurchasePricePoint` +
+    `territory` on a manual-price is
+    `/v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices` — read
+    path therefore requires the 2-stage fetch documented in the endpoint
+    table above. Detected: Manager UAT post-p2.i ship. Both stage
+    path-shape pins live in `api-schemas.integration.test.ts`.
 
 ## Test enforcement
 
@@ -315,9 +331,17 @@ fans out two Apple fetches in parallel and assembles the page view-model:
 ```ts
 const [iapRes, scheduleSettled] = await Promise.all([
   getInAppPurchase(creds, appleIapId),                        // /v2/inAppPurchases/{id}?include=…
-  getPriceScheduleForIap(creds, appleIapId).then(ok, err),    // /v2/inAppPurchases/{id}/iapPriceSchedule
+  getPriceScheduleForIap(creds, appleIapId).then(ok, err),    // 2-stage; see Gotcha 12
 ]);
 ```
+
+`getPriceScheduleForIap` internally does a 2-stage fetch (Stage 1 — V2
+schedule + manualPrice ID stubs; Stage 2 — V1 manualPrices with
+inAppPurchasePricePoint + territory side-loaded) then merges the
+responses into a single AscApiResponse so the consumer
+(`unpackPriceSchedule`) sees the shape it expects. See Gotcha 12 + the
+endpoint table above for why the single-round-trip approach the original
+p2.a shipped with doesn't work against Apple's actual API.
 
 ### Per-stage error boundaries
 

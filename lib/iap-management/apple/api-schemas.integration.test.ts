@@ -293,19 +293,98 @@ describe("API schema: pricing endpoints", () => {
     expect(refId).toMatch(/^\$\{.+\}$/);
   });
 
-  it("get schedule → GET /v2/inAppPurchases/{id}/iapPriceSchedule with full include chain (IAP.p2.a + p2.i path-name fix)", async () => {
+  it("get schedule Stage 1 → GET /v2/inAppPurchases/{id}/iapPriceSchedule with top-level includes only (IAP.p2.j)", async () => {
     // IAP.p2.i: the path segment is the relationship NAME (`iapPriceSchedule`),
-    // not the resource TYPE (`inAppPurchasePriceSchedule`). Confirmed against
-    // Apple's OpenAPI spec (operationId `inAppPurchasesV2_iapPriceSchedule_getToOneRelated`).
-    // Sending the type as the path returns Apple 404 even when the schedule
-    // exists — the V2 IAP API uses the short relationship name in URL
-    // segments (same trap as IAP.o.9b's `appStoreReviewScreenshot` rename).
-    iapFetch.mockResolvedValueOnce({ data: { id: "sched-1", type: "inAppPurchasePriceSchedules" } });
+    // not the resource TYPE (`inAppPurchasePriceSchedule`).
+    // IAP.p2.j: Apple enforces a strict include whitelist on this endpoint —
+    // `baseTerritory`, `manualPrices`, `automaticPrices` only (per OpenAPI
+    // operationId `inAppPurchasesV2_iapPriceSchedule_getToOneRelated`). Any
+    // nested include (`manualPrices.inAppPurchasePricePoint.territory`) is
+    // rejected with Apple 400 `PARAMETER_ERROR.INVALID`. Deeper traversal has
+    // to happen via Stage 2 on the v1 `/manualPrices` sub-endpoint.
+    iapFetch.mockResolvedValueOnce({
+      data: {
+        id: "sched-1",
+        type: "inAppPurchasePriceSchedules",
+        relationships: { manualPrices: { data: [] } },
+      },
+    });
     await getPriceScheduleForIap(creds, "iap-1");
     const { method, endpoint } = callArgs();
     expect(method).toBe("GET");
     expect(endpoint).toBe(
-      "/v2/inAppPurchases/iap-1/iapPriceSchedule?include=baseTerritory,manualPrices.inAppPurchasePricePoint.territory",
+      "/v2/inAppPurchases/iap-1/iapPriceSchedule?include=baseTerritory,manualPrices",
+    );
+  });
+
+  it("get schedule Stage 2 → GET /v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices with deep include (IAP.p2.j)", async () => {
+    // Stage 2 fires only when Stage 1 returns ≥1 manualPrice. Endpoint per
+    // OpenAPI operationId `inAppPurchasePriceSchedules_manualPrices_getToManyRelated`
+    // accepts `include=inAppPurchasePricePoint,territory` (no nesting needed
+    // — these are direct relationships on InAppPurchasePrice).
+    iapFetch
+      .mockResolvedValueOnce({
+        data: {
+          id: "sched-42",
+          type: "inAppPurchasePriceSchedules",
+          relationships: {
+            manualPrices: { data: [{ type: "inAppPurchasePrices", id: "p-1" }] },
+          },
+        },
+      })
+      .mockResolvedValueOnce({ data: [] }); // Stage 2 — empty page, no `links.next`
+
+    await getPriceScheduleForIap(creds, "iap-1");
+    expect(iapFetch.mock.calls.length).toBe(2);
+    const [, method2, endpoint2] = iapFetch.mock.calls[1];
+    expect(method2).toBe("GET");
+    expect(endpoint2).toBe(
+      "/v1/inAppPurchasePriceSchedules/sched-42/manualPrices?include=inAppPurchasePricePoint,territory&limit=200",
+    );
+  });
+
+  it("get schedule short-circuits Stage 2 when Stage 1 has no manualPrices (IAP.p2.j)", async () => {
+    iapFetch.mockResolvedValueOnce({
+      data: {
+        id: "sched-empty",
+        type: "inAppPurchasePriceSchedules",
+        relationships: { manualPrices: { data: [] } },
+      },
+    });
+    await getPriceScheduleForIap(creds, "iap-1");
+    expect(iapFetch.mock.calls.length).toBe(1);
+  });
+
+  it("get schedule follows links.next when Stage 2 paginates (IAP.p2.j)", async () => {
+    iapFetch
+      .mockResolvedValueOnce({
+        data: {
+          id: "sched-99",
+          type: "inAppPurchasePriceSchedules",
+          relationships: {
+            manualPrices: {
+              data: [
+                { type: "inAppPurchasePrices", id: "p-1" },
+                { type: "inAppPurchasePrices", id: "p-2" },
+              ],
+            },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: [],
+        links: {
+          next: "https://api.appstoreconnect.apple.com/v1/inAppPurchasePriceSchedules/sched-99/manualPrices?cursor=PAGE2",
+        },
+      })
+      .mockResolvedValueOnce({ data: [] });
+
+    await getPriceScheduleForIap(creds, "iap-1");
+    expect(iapFetch.mock.calls.length).toBe(3);
+    const [, , endpoint3] = iapFetch.mock.calls[2];
+    // Cursor URL is followed after stripping the absolute ASC base prefix.
+    expect(endpoint3).toBe(
+      "/v1/inAppPurchasePriceSchedules/sched-99/manualPrices?cursor=PAGE2",
     );
   });
 });

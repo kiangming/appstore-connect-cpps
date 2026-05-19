@@ -19,6 +19,8 @@ import type { AscCredentials } from "@/lib/asc-jwt";
 import { iapFetch, withRetry, AppleApiError } from "./fetch";
 import type {
   AscApiResponse,
+  AscResource,
+  InAppPurchasePrice,
   InAppPurchasePriceSchedule,
 } from "@/types/iap-management/apple";
 
@@ -189,44 +191,123 @@ export async function setPriceSchedule(
 }
 
 /**
- * IAP.p2.a — fetch the current price schedule for a synced IAP for the
- * read-only View Detail page.
+ * IAP.p2.a (rewritten at IAP.p2.j) — fetch the current price schedule for a
+ * synced IAP for the read-only View Detail page.
  *
- * Uses the relationship-traversal endpoint so the full schedule + base
- * territory + every manual-price + each price point + each territory return
- * in a single round trip. The by-id endpoint
- * (`/v1/inAppPurchasePriceSchedules/{id}`) would require fetching the
- * schedule id from the parent IAP first; the traversal path collapses the
- * two-step into one and lets the view page render with the same latency.
+ * 2-stage fetch — the single-round-trip approach the original p2.a shipped
+ * with does NOT work against Apple's actual API. Apple's V2
+ * `/v2/inAppPurchases/{id}/iapPriceSchedule` endpoint enforces a strict
+ * include whitelist (`baseTerritory`, `manualPrices`, `automaticPrices`
+ * only — see openapi.oas.json operationId
+ * `inAppPurchasesV2_iapPriceSchedule_getToOneRelated`). Nested includes
+ * like `manualPrices.inAppPurchasePricePoint.territory` are rejected with
+ * Apple 400 `PARAMETER_ERROR.INVALID`. The only endpoint that side-loads
+ * `inAppPurchasePricePoint` + `territory` is
+ * `/v1/inAppPurchasePriceSchedules/{scheduleId}/manualPrices`.
  *
- * IAP.p2.i fix: the path segment is `iapPriceSchedule` (the V2 relationship
- * name), NOT `inAppPurchasePriceSchedule` (the resource type). Apple uses
- * the short name in URL segments — same naming inconsistency that bit
- * IAP.o.9b (screenshot rename to `appStoreReviewScreenshot`). Sending the
- * wrong path returns Apple 404, which the view layer rendered as "No
- * pricing has been set on Apple yet." even when pricing existed on Apple.
+ * IAP.p2.i fix: path segment is `iapPriceSchedule` (the V2 relationship
+ * name), NOT `inAppPurchasePriceSchedule` (the resource type). Same naming
+ * inconsistency as IAP.o.9b's `appStoreReviewScreenshot` rename.
  *
- * Include hierarchy (manualPrices.inAppPurchasePricePoint.territory) returns:
- *   - inAppPurchasePriceSchedules → top-level data
- *   - territories                  → baseTerritory + per-point territory
- *   - inAppPurchasePrices          → manualPrices entries
- *   - inAppPurchasePricePoints     → price point per manualPrice
+ * Returns an AscApiResponse-shaped merge of both stages so the existing
+ * `unpackPriceSchedule` consumer doesn't need to change: Stage 1's `data`
+ * + Stage 1's `included[]` (baseTerritory) + Stage 2's `data[]` cast into
+ * `included[]` (inAppPurchasePrices with full relationships) + Stage 2's
+ * `included[]` (price points + territories).
+ *
+ * Pagination: Stage 2 follows `links.next` if Apple returns >200 manual
+ * prices. Bounded by Apple's `limit[manualPrices]: 50` page-size on the
+ * traversal endpoint per OpenAPI; ≤10 territories is the Manager workflow
+ * norm, so pagination is defensive.
  *
  * Apple returns 404 when no schedule exists yet (Manager-created IAP that
- * never had pricing pushed). Callers should catch `AppleApiError` with
- * `status === 404` and render the empty-state placeholder.
- *
- * Wrapped in `withRetry` for Apple's intermittent 429s on the read path.
- * Apple has not historically returned 500s for the GET, but the same retry
- * budget applies because Manager workflow tolerance trumps fail-fast on a
- * read.
+ * never had pricing pushed). Stage 1 surfaces that 404 unchanged so the
+ * route's existing `priceSchedule = null` branch fires.
  */
 export async function getPriceScheduleForIap(
   creds: AscCredentials,
   appleIapId: string,
 ): Promise<AscApiResponse<InAppPurchasePriceSchedule>> {
-  const path = `/v2/inAppPurchases/${appleIapId}/iapPriceSchedule?include=baseTerritory,manualPrices.inAppPurchasePricePoint.territory`;
-  return withRetry(() =>
-    iapFetch<AscApiResponse<InAppPurchasePriceSchedule>>(creds, "GET", path),
+  // ── Stage 1 ────────────────────────────────────────────────────────────
+  // Schedule resource + baseTerritory + manualPrices stubs (ID-only).
+  // No nested includes — Apple enforces the strict enum.
+  const stage1Path = `/v2/inAppPurchases/${appleIapId}/iapPriceSchedule?include=baseTerritory,manualPrices`;
+  const stage1 = await withRetry(() =>
+    iapFetch<AscApiResponse<InAppPurchasePriceSchedule>>(
+      creds,
+      "GET",
+      stage1Path,
+    ),
   );
+
+  const scheduleId = stage1.data.id;
+  const manualRefs = (stage1.data.relationships as
+    | { manualPrices?: { data?: Array<{ id: string }> } }
+    | undefined)?.manualPrices?.data ?? [];
+
+  // Short-circuit when Apple equalised every territory and there are no
+  // manual prices — Stage 2 would just return an empty page, save the
+  // round-trip + token mint.
+  if (manualRefs.length === 0) {
+    return stage1;
+  }
+
+  // ── Stage 2 ────────────────────────────────────────────────────────────
+  // Deep traversal endpoint — only path that side-loads
+  // inAppPurchasePricePoint + territory. Paginated via `links.next`.
+  const collectedPrices: InAppPurchasePrice[] = [];
+  const collectedIncluded: Array<AscResource<string, Record<string, unknown>>> =
+    [];
+
+  let nextPath: string | null =
+    `/v1/inAppPurchasePriceSchedules/${scheduleId}/manualPrices?include=inAppPurchasePricePoint,territory&limit=200`;
+
+  while (nextPath) {
+    const page: AscApiResponse<InAppPurchasePrice[]> & {
+      links?: { next?: string };
+    } = await withRetry(() =>
+      iapFetch<
+        AscApiResponse<InAppPurchasePrice[]> & {
+          links?: { next?: string };
+        }
+      >(creds, "GET", nextPath as string),
+    );
+    // Apple's pagination ships `data` as an array on collection endpoints.
+    if (Array.isArray(page.data)) {
+      collectedPrices.push(...page.data);
+    }
+    if (page.included) {
+      collectedIncluded.push(...page.included);
+    }
+
+    if (page.links?.next) {
+      // Apple's `links.next` is absolute. Strip the ASC base prefix to keep
+      // the relative endpoint shape iapFetch expects.
+      nextPath = page.links.next.replace(/^https:\/\/api\.appstoreconnect\.apple\.com/, "");
+    } else {
+      nextPath = null;
+    }
+  }
+
+  // ── Merge ──────────────────────────────────────────────────────────────
+  // Stage 1's `included` may carry link-only InAppPurchasePrice stubs —
+  // drop them so the merge below adds Stage 2's full-relationship variants
+  // without leaving duplicate ID entries (which would let unpackPriceSchedule
+  // pick the wrong one).
+  const stage1WithoutPriceStubs = (stage1.included ?? []).filter(
+    (r) => r.type !== "inAppPurchasePrices",
+  );
+
+  return {
+    data: stage1.data,
+    included: [
+      ...stage1WithoutPriceStubs,
+      // InAppPurchasePrice's typed attributes shape (`startDate` / `endDate`)
+      // is narrower than the loose `Record<string, unknown>` AscApiResponse's
+      // `included[]` requires — same structural row, different TS bookkeeping.
+      // Cast through `unknown` so the unifier accepts the merge.
+      ...(collectedPrices as unknown as AscResource<string, Record<string, unknown>>[]),
+      ...collectedIncluded,
+    ],
+  };
 }
