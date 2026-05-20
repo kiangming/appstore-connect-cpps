@@ -24,19 +24,19 @@ Pattern 10 reuse #19 cycles 29 + 30 + 31 ALL CLOSED COHESIVELY. Strategic implem
 
 ---
 
-## Cumulative arc metrics (final, post-IAP.q.2)
+## Cumulative arc metrics (final, post-IAP.q.3)
 
 | Metric | Value |
 |---|---|
-| **Total project commits** | 215 (cumulative across all arcs) |
-| **IAP arc commits** | ~62 (IAP.c through IAP.q.2; Cycle 33 cross-module Store Submissions parser) |
-| **Tests** | 1346 → **1793** (+447 net during IAP trajectory; +10 in IAP.q.2) |
-| **Migrations** | 7 (`iap_mgmt` schema; IAP.q.2 = no migration) |
+| **Total project commits** | 216 (cumulative across all arcs) |
+| **IAP arc commits** | ~63 (IAP.c through IAP.q.3; Cycles 33-34 cross-module Store Submissions hardening) |
+| **Tests** | 1346 → **1815** (+469 net during IAP trajectory; +22 in IAP.q.3) |
+| **Migrations** | 7 (`iap_mgmt` schema; IAP.q.2 / IAP.q.3 = no migration) |
 | **Routes** | 18 active under `/api/iap-management/` |
 | **Backend modules** | 24 files under `lib/iap-management/apple/` + 10 under `queries/`, `parsers/`, `dedup/`, etc. |
 | **Frontend modules** | View Detail (4 sections) + iap-form + pricing-tiers + bulk-import + 7-primitive UI library |
 | **LOC net added** | ~20,000 cumulative across the IAP trajectory |
-| **Gauntlet 4/4** | ✅ Every sub-chunk through IAP.q.2 |
+| **Gauntlet 4/4** | ✅ Every sub-chunk through IAP.q.3 |
 | **Dependencies added** | `i18n-iso-countries` (IAP.p2.l, ISO 3166-1 territory names) |
 
 ---
@@ -163,6 +163,43 @@ Post-milestone Manager observation on TICKET-10021: Apple Reports → Top Apple 
 **Result:** Manager UAT MV24 scenario D closed. Post-ship Manager re-test on TICKET-10021: open Apple Reports → Top Apple Guidelines, sub-letter codes (`2.1(b)`, `4.3(a)`, `3`, `3.1.2(c)`) surface in the breakdown, "couldn't be parsed" counter drops to 0 (or near-0 with the remainder visible via "Show details").
 
 **Pattern alignment:** Cycle 33 demonstrates that production observation = continuous improvement signal post-MVP. Phase E shipped clean on a 2-entry corpus; 3 weeks of real Apple emails revealed a format Apple uses that wasn't in the sample. Investigation-first discipline (Phase 1 audit → SQL diagnostic → root-cause hypotheses → options proposal → Manager decision → targeted fix) preserved through the cycle.
+
+---
+
+## Cycle 34 — Store Submissions Top Apple Guidelines pagination (cross-module mini-cycle, IAP.q.3)
+
+**Span**: 2026-05-20
+**Sub-chunks**: IAP.q.3.I (hook + controls) + IAP.q.3.II (SQL ordering) + IAP.q.3.III (integration) — single cohesive 3-component bundle.
+**Cross-module**: Touches Store Submissions module (Apple Reports surface), not IAP Management — listed here for the IAP.q.* post-trajectory hardening cadence.
+
+Continuous improvement signal from IAP.q.2 ship: Manager confirmed parser fix works on TICKET-10021 then immediately surfaced the next question — `"Tôi muốn hiển thị all, nếu nhiều hơn 20 thì tách page"` (show all, paginate above 20). Phase-1 audit found neither surface has any row cap; both render every row via `.map()`. DB query also lacked deterministic ordering on the unparseable surface — pagination would have shuffled across re-fetches.
+
+| Gap | Layer | Fix |
+|---|---|---|
+| **No row cap on Main Guidelines list** — would scale unbounded as corpus grows | [`GuidelineBreakdownTable.tsx`](../../components/store-submissions/reports/GuidelineBreakdownTable.tsx) | Client-side offset pagination via new `usePagination` hook (20/page, hide-when-≤20 threshold per SQ1) |
+| **No row cap on UnparseableFooter expansion** — could grow as Manager pastes more free-text rejections | Same component, footer-level | Same hook; page state lives above the disclosure conditional → collapse/reopen preserves page (SQ3 structural) |
+| **Supabase fetch order non-deterministic** — pagination would shuffle across re-fetches | [`reports.ts:getAppleRejectReasonBreakdown`](../../lib/store-submissions/queries/reports.ts) | Added `.order('created_at', { ascending: false })` (newest-first, matches `getAppleRecentRejected` convention) |
+
+**4 sub-questions resolved (Manager auto-accepted defaults):**
+- SQ1 hide-when-≤20 threshold (no controls below the floor)
+- SQ2 component-local `useState` (no URL state — Reports is ephemeral internal-tool)
+- SQ3 preserve page state on collapse/reopen (hook state above `{open && …}` conditional — structural)
+- SQ4 SQL ordering fix bundled atomically (no partial-state commit history)
+
+**Files touched (cycle 34):**
+- **NEW** [lib/store-submissions/reports/use-pagination.ts](../../lib/store-submissions/reports/use-pagination.ts) — generic `usePagination<T>(items, pageSize=20)` hook with identity-based reset + clamp-on-shrink
+- **NEW** [lib/store-submissions/reports/use-pagination.test.ts](../../lib/store-submissions/reports/use-pagination.test.ts) — 11 tests
+- **NEW** [components/store-submissions/reports/PaginationControls.tsx](../../components/store-submissions/reports/PaginationControls.tsx) — `"Page N of M · X items total"` indicator + Prev/Next
+- **NEW** [components/store-submissions/reports/PaginationControls.test.tsx](../../components/store-submissions/reports/PaginationControls.test.tsx) — 5 tests
+- **NEW** [components/store-submissions/reports/GuidelineBreakdownTable.test.tsx](../../components/store-submissions/reports/GuidelineBreakdownTable.test.tsx) — 6 integration tests (SQ1 both surfaces, slicing advance, SQ3 preserve-on-toggle)
+- [lib/store-submissions/queries/reports.ts](../../lib/store-submissions/queries/reports.ts) — added `.order('created_at', desc)` + comment explaining determinism dependency
+- [components/store-submissions/reports/GuidelineBreakdownTable.tsx](../../components/store-submissions/reports/GuidelineBreakdownTable.tsx) — `usePagination` + `PaginationControls` integration in both surfaces
+
+**Tests:** 1793 → 1815 (+22). Gauntlet 4/4 ✅. No migration. Bundle delta: Apple Reports 113kB → 114kB.
+
+**Result:** Both Reports surfaces ready for production scale. Below 20 items: no controls, zero visual clutter (current corpus state). Above 20 items: Prev/Next + "Page N of M · X items total" indicator appears automatically. Deterministic SQL ordering guarantees page boundaries are stable across re-fetches.
+
+**Pattern alignment:** Cycle 34 continues the IAP.q.* sub-arc of post-trajectory continuous-improvement hardening. Same Pattern 10 reuse #19 cycle shape: production observation → investigation-first → options proposal → Manager decision gate → cohesive bundled implementation. Two pagination primitives (`usePagination` hook + `PaginationControls` component) extracted at the right level — future Reports surfaces (e.g. RecentRejected, ByApp scrollable contenders) reuse at zero marginal cost.
 
 ---
 

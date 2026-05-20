@@ -1120,6 +1120,13 @@ export async function getAppleRejectReasonBreakdown(
     };
   }
 
+  // IAP.q.3.II — `.order('created_at', desc)` is REQUIRED for pagination
+  // determinism on the `unparseableEntries` surface. Supabase returns rows
+  // in implementation-defined order without explicit `.order(...)`, which
+  // means client-side `usePagination` slice boundaries would shuffle
+  // across re-fetches and Manager could see different "page 2" content on
+  // refresh. Newest-first matches `getAppleRecentRejected` semantics and
+  // the Inbox surface convention (most recent at top).
   let q = storeDb()
     .from('ticket_entries')
     .select(
@@ -1129,7 +1136,8 @@ export async function getAppleRejectReasonBreakdown(
     .eq('tickets.platform_id', apple)
     .gte('created_at', windowStart.toISOString())
     .lt('created_at', windowEnd.toISOString())
-    .not('content', 'is', null);
+    .not('content', 'is', null)
+    .order('created_at', { ascending: false });
   if (typeId) q = q.eq('tickets.type_id', typeId);
 
   const { data, error } = await q;

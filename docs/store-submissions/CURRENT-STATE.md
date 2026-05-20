@@ -1378,6 +1378,53 @@ Phase E Manager UAT MV24 partial closure scenario D (data accumulation reveals p
 
 ---
 
+## IAP.q.3 — Top Apple Guidelines pagination + SQL ordering ✅ SHIPPED 2026-05-20
+
+Pattern 10 reuse #19 Cycle 34 narrow hardening, post-IAP.q.2 continuous improvement. Manager directive verbatim: `"Tôi muốn hiển thị all, nếu nhiều hơn 20 thì tách page"` — show all, split to pages above 20.
+
+### Decisions locked (4 sub-questions auto-accepted defaults)
+
+- **SQ1 — Threshold semantics**: **hide-when-≤20**. Pagination controls render only when `totalItems > pageSize` (default 20). Below threshold, no controls, no visual clutter.
+- **SQ2 — Page-state persistence**: **component-local `useState`**. No URL searchParam. Reports surface is internal-tool ephemeral; URL state can be added later if Manager surfaces a need.
+- **SQ3 — Footer disclosure interaction**: **preserve page state on collapse + reopen**. Hook state lives at `UnparseableFooter` level (above the `{open && …}` block), so toggling the disclosure doesn't unmount the hook. Reset still fires on `entries` identity change (date-range / type filter refetch).
+- **SQ4 — SQL ordering fix**: **same cohesive commit**. F2 determinism requirement bundled atomically.
+
+### IAP.q.3.I — Pagination primitives
+
+**NEW** [`lib/store-submissions/reports/use-pagination.ts`](../../lib/store-submissions/reports/use-pagination.ts) — generic `usePagination<T>(items, pageSize=20)` hook. Pure client-side offset math: identity-based reset via `useEffect(setCurrentPage(0), [items])`, `Math.min(currentPage, totalPages-1)` clamp for shrinking arrays, `pagedItems = items.slice(start, end)`. Exports `DEFAULT_PAGE_SIZE = 20` constant for future caller override.
+
+**NEW** [`components/store-submissions/reports/PaginationControls.tsx`](../../components/store-submissions/reports/PaginationControls.tsx) — small UI component. Renders `"Page N of M · X items total"` indicator + Prev/Next buttons (`ChevronLeft` / `ChevronRight`) with disabled states keyed off `hasPrev` / `hasNext`. Always-render contract — parent gates via `shouldRenderControls`.
+
+### IAP.q.3.II — SQL ordering determinism
+
+[`reports.ts:1108-1199`](../../lib/store-submissions/queries/reports.ts#L1108-L1199) (`getAppleRejectReasonBreakdown`) gained `.order('created_at', { ascending: false })`. Without explicit ordering, Supabase returns rows in implementation-defined order — pagination boundaries would shuffle across re-fetches. Newest-first matches `getAppleRecentRejected` semantics. Main `guidelines` array already sorted deterministically (total DESC, code ASC at [reports.ts:742](../../lib/store-submissions/queries/reports.ts#L742)) — no change needed.
+
+### IAP.q.3.III — Surface integration
+
+[`GuidelineBreakdownTable.tsx`](../../components/store-submissions/reports/GuidelineBreakdownTable.tsx):
+
+- **Main Guidelines list**: `const guidelinesPagination = usePagination(guidelines)` at top of component. Renders `pagedItems` (not full `guidelines`). `<PaginationControls />` rendered conditionally on `shouldRenderControls`.
+- **UnparseableFooter**: same pattern at footer-component level. Page state lives above the disclosure conditional render, so SQ3 collapse/reopen preservation is structural (no extra plumbing needed).
+
+### Test delta
+
+1793 → 1815 (+22):
+- `use-pagination.test.ts` — 11 tests (init state, slicing math, goToNext/Prev boundary clamping, identity reset, clamp-on-shrink, threshold at 20 vs 21, empty array, goToPage clamp, custom pageSize)
+- `PaginationControls.test.tsx` — 5 tests (indicator format with 1-indexed display, singular item label, disabled states, click callbacks)
+- `GuidelineBreakdownTable.test.tsx` — 6 integration tests (SQ1 threshold both surfaces, slicing advances correctly, SQ3 collapse/reopen preserves page state)
+
+No migration. ~+1kB on Apple Reports bundle (113kB → 114kB).
+
+### Risk flags addressed
+
+- **F1 reset on filter change** — identity-based reset via `useEffect([items])`. Caller must pass stable references between renders for the same data; satisfied by reading `result.guidelines` / `result.unparseableEntries` directly from Server-Component-derived props (no `.filter()` synthesis per render).
+- **F2 SQL ordering** — bundled cohesively per SQ4.
+- **F3 footer disclosure** — hook state lives above the `{open && …}` conditional; structural preservation verified by integration test.
+- **F4 reusable primitive** — ~70 LOC total across hook + component; two immediate consumers, future Reports surfaces benefit at zero marginal cost.
+- **F5 page size hardcoded 20** — `DEFAULT_PAGE_SIZE` exported constant; per-caller override supported via second hook arg.
+
+---
+
 ## Critical invariants (reference)
 
 Đầy đủ trong `CLAUDE.md`. Highlights:

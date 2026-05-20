@@ -4,11 +4,13 @@ import { ChevronDown, ChevronRight, ExternalLink, Info } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 
+import { usePagination } from '@/lib/store-submissions/reports/use-pagination';
 import type {
   GuidelineBreakdown,
   RejectReasonBreakdownResult,
   UnparseableEntry,
 } from '@/lib/store-submissions/queries/reports';
+import { PaginationControls } from './PaginationControls';
 
 interface Props {
   result: RejectReasonBreakdownResult;
@@ -37,6 +39,12 @@ export function GuidelineBreakdownTable({ result }: Props) {
   const { guidelines, totalReasons, unparseableReasons, unparseableEntries } =
     result;
   const parseableReasons = totalReasons - unparseableReasons;
+
+  // IAP.q.3 — 20-per-page client-side pagination. Identity-based reset
+  // when `result.guidelines` flips reference (date-range / type filter
+  // refetch). Hook is safe for empty arrays — `pagedItems=[]`,
+  // `shouldRenderControls=false`.
+  const guidelinesPagination = usePagination(guidelines);
 
   return (
     <div className="bg-white border border-slate-200 rounded-xl p-4">
@@ -69,11 +77,24 @@ export function GuidelineBreakdownTable({ result }: Props) {
             : 'No parseable Guideline headers in this period.'}
         </div>
       ) : (
-        <ul className="divide-y divide-slate-100">
-          {guidelines.map((g) => (
-            <GuidelineRow key={g.code} guideline={g} />
-          ))}
-        </ul>
+        <>
+          <ul className="divide-y divide-slate-100">
+            {guidelinesPagination.pagedItems.map((g) => (
+              <GuidelineRow key={g.code} guideline={g} />
+            ))}
+          </ul>
+          {guidelinesPagination.shouldRenderControls && (
+            <PaginationControls
+              currentPage={guidelinesPagination.currentPage}
+              totalPages={guidelinesPagination.totalPages}
+              totalItems={guidelinesPagination.totalItems}
+              hasPrev={guidelinesPagination.hasPrev}
+              hasNext={guidelinesPagination.hasNext}
+              onPrev={guidelinesPagination.goToPrev}
+              onNext={guidelinesPagination.goToNext}
+            />
+          )}
+        </>
       )}
 
       {unparseableReasons > 0 && (
@@ -106,6 +127,12 @@ function UnparseableFooter({
   entries: UnparseableEntry[];
 }) {
   const [open, setOpen] = useState(false);
+  // IAP.q.3 — pagination state lives at the footer level (not inside the
+  // `{open && …}` block), so collapsing + re-opening preserves the page
+  // the Manager last viewed. SQ3 verbatim. Reset still fires on `entries`
+  // identity flip (date-range / type filter refetch).
+  const entriesPagination = usePagination(entries);
+
   const message = `${count} reason${count === 1 ? '' : 's'} couldn’t be parsed (no Guideline header detected).`;
 
   if (entries.length === 0) {
@@ -136,26 +163,39 @@ function UnparseableFooter({
       </button>
 
       {open && (
-        <ul className="mt-2 space-y-1.5">
-          {entries.map((e) => (
-            <li
-              key={e.entry_id}
-              className="flex items-start gap-2 text-[11.5px] leading-snug"
-            >
-              <Link
-                href={`/store-submissions/inbox?ticket=${encodeURIComponent(e.ticket_id)}`}
-                className="flex-shrink-0 inline-flex items-center gap-0.5 font-mono text-slate-600 hover:text-blue-600 hover:underline"
-                aria-label={`Open ${e.ticket_display_id} in Inbox`}
+        <>
+          <ul className="mt-2 space-y-1.5">
+            {entriesPagination.pagedItems.map((e) => (
+              <li
+                key={e.entry_id}
+                className="flex items-start gap-2 text-[11.5px] leading-snug"
               >
-                {e.ticket_display_id}
-                <ExternalLink className="h-2.5 w-2.5" strokeWidth={2} />
-              </Link>
-              <span className="flex-1 min-w-0 text-slate-500 break-words">
-                {e.content_preview}
-              </span>
-            </li>
-          ))}
-        </ul>
+                <Link
+                  href={`/store-submissions/inbox?ticket=${encodeURIComponent(e.ticket_id)}`}
+                  className="flex-shrink-0 inline-flex items-center gap-0.5 font-mono text-slate-600 hover:text-blue-600 hover:underline"
+                  aria-label={`Open ${e.ticket_display_id} in Inbox`}
+                >
+                  {e.ticket_display_id}
+                  <ExternalLink className="h-2.5 w-2.5" strokeWidth={2} />
+                </Link>
+                <span className="flex-1 min-w-0 text-slate-500 break-words">
+                  {e.content_preview}
+                </span>
+              </li>
+            ))}
+          </ul>
+          {entriesPagination.shouldRenderControls && (
+            <PaginationControls
+              currentPage={entriesPagination.currentPage}
+              totalPages={entriesPagination.totalPages}
+              totalItems={entriesPagination.totalItems}
+              hasPrev={entriesPagination.hasPrev}
+              hasNext={entriesPagination.hasNext}
+              onPrev={entriesPagination.goToPrev}
+              onNext={entriesPagination.goToNext}
+            />
+          )}
+        </>
       )}
     </div>
   );
