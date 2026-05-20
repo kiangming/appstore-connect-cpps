@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { Layers, Inbox, ShoppingBag, ArrowRight } from "lucide-react";
+import { Layers, Inbox, ShoppingBag, PlayCircle, ArrowRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 interface ToolCard {
@@ -34,6 +34,13 @@ const TOOLS: ToolCard[] = [
     description: "Create + bulk-import In-App Purchases on App Store Connect",
     icon: ShoppingBag,
     href: "/iap-management",
+  },
+  {
+    id: "google-iap-management",
+    name: "Google IAP",
+    description: "Manage Google Play in-app products + bulk-import via Service Account",
+    icon: PlayCircle,
+    href: "/google-iap-management",
   },
 ];
 

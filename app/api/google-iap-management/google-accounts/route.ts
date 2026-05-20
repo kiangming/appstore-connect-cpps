@@ -11,9 +11,12 @@ import { appendAction } from "@/lib/google-iap-management/repository/actions-log
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  // GET is module-scoped (any authenticated session) — the header switcher
+  // needs to render for non-admin module users too. Mutations (POST below,
+  // DELETE in [id]/route.ts, verify in [id]/verify/route.ts) remain admin.
   const session = await getServerSession(authOptions);
-  if (!session || session.user.role !== "admin") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
