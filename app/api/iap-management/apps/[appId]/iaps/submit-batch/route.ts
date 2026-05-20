@@ -42,6 +42,7 @@ import {
 import { withConcurrency } from "@/lib/iap-management/concurrency";
 import {
   bucketSelection,
+  partitionByStateGuard,
   type AppleStateRow,
   type NotOnAppleRow,
   type PreflightRow,
@@ -69,7 +70,11 @@ interface PreflightResponse {
 interface ExecuteResultRow {
   iap_id: string;
   apple_iap_id: string;
-  status: "SUCCESS" | "ERROR";
+  /** IAP.q.1.IV: `SKIPPED_BY_STATE_GUARD` added — server-side state recheck
+   *  blocked a row whose Apple state was not `READY_TO_SUBMIT`. The UI
+   *  renders these distinctly from `ERROR`s (which represent real Apple
+   *  submission failures). */
+  status: "SUCCESS" | "ERROR" | "SKIPPED_BY_STATE_GUARD";
   state?: string;
   error?: string;
 }
@@ -78,6 +83,10 @@ interface ExecuteResponse {
   phase: "execute";
   submitted: number;
   failed: number;
+  /** IAP.q.1.IV — count of rows the server-side state guard blocked
+   *  before Apple was called. Modal preflight normally filters these
+   *  client-side; this counter > 0 means a race or direct-API call landed. */
+  skipped: number;
   results: ExecuteResultRow[];
 }
 
@@ -137,7 +146,13 @@ export async function POST(
   }
 
   // ─── Phase 2 — execute ───────────────────────────────────────────────────
-  return await runExecute(appleAppId, localRows, actor);
+  // IAP.q.1.IV: `?skipCheck=true` bypasses the server-side state guard
+  // (parity with the single-IAP `/submit?skipCheck=true` convention). The
+  // modal UI never sends `skipCheck=true`; the bypass exists for internal
+  // automation / replay scripts that have already verified state out-of-band.
+  const url = new URL(req.url);
+  const skipCheck = url.searchParams.get("skipCheck") === "true";
+  return await runExecute(appleAppId, localRows, actor, skipCheck);
 }
 
 async function runPreflight(
@@ -215,10 +230,10 @@ async function runExecute(
     reference_name: string;
   }>,
   actor: string,
+  skipCheck: boolean,
 ): Promise<NextResponse> {
-  void appleAppId; // included for future scoping/logging
-  const eligible = localRows.filter((r) => r.apple_iap_id);
-  if (eligible.length === 0) {
+  const onApple = localRows.filter((r) => r.apple_iap_id);
+  if (onApple.length === 0) {
     return NextResponse.json(
       { error: "No selected IAPs are on Apple — Create on Apple first." },
       { status: 422 },
@@ -228,7 +243,79 @@ async function runExecute(
   const creds = await getActiveAccount();
   const db = iapDb();
 
-  const results: ExecuteResultRow[] = await withConcurrency(
+  // ─── IAP.q.1.IV — server-side state guard ───────────────────────────────
+  // Defence-in-depth: even when the modal preflight passed only `ready` IDs,
+  // a race (Apple flipped state) or direct API call could land non-ready
+  // submissions here. Refetch Apple state and partition `onApple` into
+  // `eligible` (state === READY_TO_SUBMIT) vs `skipped` (anything else).
+  // `?skipCheck=true` bypasses the guard for explicit internal callers.
+  let eligible: Array<{
+    id: string;
+    apple_iap_id: string | null;
+    product_id: string;
+    reference_name: string;
+  }> = onApple;
+  const skippedResults: ExecuteResultRow[] = [];
+
+  if (!skipCheck) {
+    let stateByAppleId: Map<string, string>;
+    try {
+      const res = await withRetry(() =>
+        listInAppPurchases(creds, appleAppId),
+      );
+      stateByAppleId = new Map(
+        (res.data ?? []).map((iap) => [iap.id, iap.attributes.state]),
+      );
+    } catch (err) {
+      return NextResponse.json(
+        { error: `State recheck failed: ${errMsg(err)}` },
+        { status: err instanceof AppleApiError && err.status < 500 ? err.status : 502 },
+      );
+    }
+
+    const partition = partitionByStateGuard(
+      onApple.map((r) => ({ id: r.id, apple_iap_id: r.apple_iap_id! })),
+      stateByAppleId,
+    );
+
+    // Audit + mirror skipped rows; surface in results.
+    for (const skip of partition.skipped) {
+      skippedResults.push({
+        iap_id: skip.id,
+        apple_iap_id: skip.apple_iap_id,
+        status: "SKIPPED_BY_STATE_GUARD",
+        state: skip.apple_state,
+        error: `State guard blocked: Apple reports state="${skip.apple_state}".`,
+      });
+      await db
+        .from("iaps")
+        .update({
+          state: skip.apple_state,
+          synced_at: new Date().toISOString(),
+        })
+        .eq("id", skip.id);
+      await db.from("actions_log").insert({
+        iap_id: skip.id,
+        actor,
+        action_type: "SUBMIT_APPLE_REVIEW",
+        payload: {
+          apple_iap_id: skip.apple_iap_id,
+          result: "SKIPPED",
+          reason: "state_guard",
+          apple_state: skip.apple_state,
+          via: "batch",
+        },
+      });
+    }
+
+    // Rehydrate eligible rows from the original onApple list (helper returns
+    // the narrow {id, apple_iap_id} shape but downstream needs full row).
+    const eligibleIds = new Set(partition.eligible.map((e) => e.id));
+    eligible = onApple.filter((r) => eligibleIds.has(r.id));
+  }
+
+  // ─── Submit eligible rows ──────────────────────────────────────────────
+  const submitResults: ExecuteResultRow[] = await withConcurrency(
     eligible,
     SUBMIT_CONCURRENCY,
     async (row) => {
@@ -292,12 +379,17 @@ async function runExecute(
     },
   );
 
+  const results: ExecuteResultRow[] = [...submitResults, ...skippedResults];
   const submitted = results.filter((r) => r.status === "SUCCESS").length;
   const failed = results.filter((r) => r.status === "ERROR").length;
+  const skipped = results.filter(
+    (r) => r.status === "SKIPPED_BY_STATE_GUARD",
+  ).length;
   const response: ExecuteResponse = {
     phase: "execute",
     submitted,
     failed,
+    skipped,
     results,
   };
   return NextResponse.json(response);

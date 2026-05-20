@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   bucketSelection,
+  partitionByStateGuard,
   terminalStateHint,
   type AppleStateRow,
   type LocalSelectionRow,
@@ -113,6 +114,88 @@ describe("bucketSelection — preflight categorization", () => {
     expect(out.missing_metadata).toEqual([]);
     expect(out.other).toEqual([]);
     expect(out.not_on_apple).toEqual([]);
+  });
+});
+
+// ─── IAP.q.1.IV — partitionByStateGuard (execute-phase server-side guard) ──
+describe("partitionByStateGuard — execute-phase guard partition", () => {
+  it("admits READY_TO_SUBMIT into eligible", () => {
+    const out = partitionByStateGuard(
+      [{ id: "u1", apple_iap_id: "a1" }],
+      new Map([["a1", "READY_TO_SUBMIT"]]),
+    );
+    expect(out.eligible).toEqual([{ id: "u1", apple_iap_id: "a1" }]);
+    expect(out.skipped).toEqual([]);
+  });
+
+  it("blocks MISSING_METADATA into skipped with apple_state", () => {
+    const out = partitionByStateGuard(
+      [{ id: "u1", apple_iap_id: "a1" }],
+      new Map([["a1", "MISSING_METADATA"]]),
+    );
+    expect(out.eligible).toEqual([]);
+    expect(out.skipped).toEqual([
+      { id: "u1", apple_iap_id: "a1", apple_state: "MISSING_METADATA" },
+    ]);
+  });
+
+  it("blocks every non-READY_TO_SUBMIT state (WAITING / IN_REVIEW / APPROVED / REJECTED)", () => {
+    const rows = [
+      { id: "u1", apple_iap_id: "a1" },
+      { id: "u2", apple_iap_id: "a2" },
+      { id: "u3", apple_iap_id: "a3" },
+      { id: "u4", apple_iap_id: "a4" },
+    ];
+    const states = new Map([
+      ["a1", "WAITING_FOR_REVIEW"],
+      ["a2", "IN_REVIEW"],
+      ["a3", "APPROVED"],
+      ["a4", "REJECTED"],
+    ]);
+    const out = partitionByStateGuard(rows, states);
+    expect(out.eligible).toEqual([]);
+    expect(out.skipped).toHaveLength(4);
+    expect(out.skipped.map((s) => s.apple_state).sort()).toEqual([
+      "APPROVED",
+      "IN_REVIEW",
+      "REJECTED",
+      "WAITING_FOR_REVIEW",
+    ]);
+  });
+
+  it("marks rows missing from stateByAppleId map as UNKNOWN and blocks them", () => {
+    const out = partitionByStateGuard(
+      [{ id: "u1", apple_iap_id: "vanished" }],
+      new Map(),
+    );
+    expect(out.eligible).toEqual([]);
+    expect(out.skipped).toEqual([
+      { id: "u1", apple_iap_id: "vanished", apple_state: "UNKNOWN" },
+    ]);
+  });
+
+  it("mixed input: preserves eligible order + collects all skipped", () => {
+    const rows = [
+      { id: "u1", apple_iap_id: "a1" }, // ready
+      { id: "u2", apple_iap_id: "a2" }, // missing
+      { id: "u3", apple_iap_id: "a3" }, // ready
+      { id: "u4", apple_iap_id: "a4" }, // approved
+    ];
+    const states = new Map([
+      ["a1", "READY_TO_SUBMIT"],
+      ["a2", "MISSING_METADATA"],
+      ["a3", "READY_TO_SUBMIT"],
+      ["a4", "APPROVED"],
+    ]);
+    const out = partitionByStateGuard(rows, states);
+    expect(out.eligible.map((e) => e.id)).toEqual(["u1", "u3"]);
+    expect(out.skipped.map((s) => s.id)).toEqual(["u2", "u4"]);
+  });
+
+  it("empty input returns empty buckets", () => {
+    const out = partitionByStateGuard([], new Map());
+    expect(out.eligible).toEqual([]);
+    expect(out.skipped).toEqual([]);
   });
 });
 

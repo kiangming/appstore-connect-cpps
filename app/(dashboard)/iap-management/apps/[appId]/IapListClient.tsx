@@ -175,8 +175,21 @@ export function IapListClient({
     return ids;
   }, [selected, appleToInternal]);
 
+  // IAP.q.1.II — selectable = has local row AND Apple state === READY_TO_SUBMIT.
+  // Prior to q.1 the only gate was "has local row" (`appleToInternal[iap.id]`),
+  // which let Manager check MISSING_METADATA rows that the modal preflight
+  // would later silently drop. Apple's state is the authoritative gate per
+  // Q-IAP.h.3 — mirror that gate at the row level so eligibility is visible
+  // upfront. Toggle-all + selection count derive from this same list.
   const selectableAppleIds = useMemo(
-    () => filtered.filter((iap) => appleToInternal[iap.id]).map((iap) => iap.id),
+    () =>
+      filtered
+        .filter(
+          (iap) =>
+            appleToInternal[iap.id] &&
+            iap.attributes.state === "READY_TO_SUBMIT",
+        )
+        .map((iap) => iap.id),
     [filtered, appleToInternal],
   );
 
@@ -463,7 +476,18 @@ export function IapListClient({
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paginated.map((iap) => {
-                const eligible = Boolean(appleToInternal[iap.id]);
+                // IAP.q.1.II: row-level eligibility gate now includes Apple
+                // state. Tooltip surfaces the reason a checkbox is disabled
+                // so Manager sees it upfront instead of in the modal preflight.
+                const hasLocalRow = Boolean(appleToInternal[iap.id]);
+                const isReadyState =
+                  iap.attributes.state === "READY_TO_SUBMIT";
+                const eligible = hasLocalRow && isReadyState;
+                const disabledReason = !hasLocalRow
+                  ? "Not synced to local — click Refresh from Apple to enable selection."
+                  : !isReadyState
+                    ? `Cannot submit: state is ${stateLabel(iap.attributes.state)}. Fix prerequisites to reach Ready To Submit.`
+                    : null;
                 const isSelected = selected.has(iap.id);
                 const internalId = appleToInternal[iap.id];
                 const viewHref = internalId
@@ -505,10 +529,9 @@ export function IapListClient({
                         checked={isSelected}
                         onChange={() => toggleOne(iap.id)}
                         disabled={!eligible}
-                        title={
-                          eligible
-                            ? "Toggle selection"
-                            : "Click Refresh from Apple — this IAP will become selectable on the next render."
+                        title={disabledReason ?? "Toggle selection"}
+                        aria-label={
+                          disabledReason ?? `Select ${iap.attributes.productId}`
                         }
                         className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
                       />

@@ -4,7 +4,7 @@
 **Arc name**: IAP Management module — strategic trajectory closure (cycles 29 + 30 + 31)
 **Status**: 🎉🎯 **STRATEGIC 5-DELIVERABLE TRAJECTORY MILESTONE ACHIEVED**
 **Manager verdict**: *"this is the last push code. I work with claude code to fix a lot of issue for price schedule and now it's done."*
-**Latest commit**: `4801e5c` IAP.p2.m — unpacker iterates Stage 2 data, not Stage 1's truncated manualRel
+**Latest commit**: `(this commit)` IAP.q.1 — submit validation hardening (cycle 32 narrow scope) — was `4801e5c` IAP.p2.m at cycle-31 close
 
 ---
 
@@ -24,19 +24,19 @@ Pattern 10 reuse #19 cycles 29 + 30 + 31 ALL CLOSED COHESIVELY. Strategic implem
 
 ---
 
-## Cumulative arc metrics (final)
+## Cumulative arc metrics (final, post-IAP.q.1)
 
 | Metric | Value |
 |---|---|
-| **Total project commits** | 213 (cumulative across all arcs) |
-| **IAP arc commits** | ~60 (IAP.c through IAP.p2.m) |
-| **Tests** | 1346 → **1777** (+431 net during IAP trajectory) |
+| **Total project commits** | 214 (cumulative across all arcs) |
+| **IAP arc commits** | ~61 (IAP.c through IAP.q.1) |
+| **Tests** | 1346 → **1783** (+437 net during IAP trajectory) |
 | **Migrations** | 7 (`iap_mgmt` schema) |
 | **Routes** | 18 active under `/api/iap-management/` |
 | **Backend modules** | 24 files under `lib/iap-management/apple/` + 10 under `queries/`, `parsers/`, `dedup/`, etc. |
 | **Frontend modules** | View Detail (4 sections) + iap-form + pricing-tiers + bulk-import + 7-primitive UI library |
 | **LOC net added** | ~20,000 cumulative across the IAP trajectory |
-| **Gauntlet 4/4** | ✅ Every sub-chunk through IAP.p2.m |
+| **Gauntlet 4/4** | ✅ Every sub-chunk through IAP.q.1 |
 | **Dependencies added** | `i18n-iso-countries` (IAP.p2.l, ISO 3166-1 territory names) |
 
 ---
@@ -105,6 +105,35 @@ Pattern 10 reuse #19 cycles 29 + 30 + 31 ALL CLOSED COHESIVELY. Strategic implem
 | p2.f | Review Information section — ScreenshotPreview (Q-E enlarge modal) + read-only notes with X/4000 counter |
 | p2.g | Page composition + sticky Q-G action bar + per-section `SectionErrorBoundary` + Apple Connect deep link (Q-H) |
 | p2.h | Docs section + 7 integration tests pinning composer↔page contract |
+
+---
+
+## Cycle 32 — IAP Submit Validation Hardening (post-trajectory mini-cycle, IAP.q.1)
+
+**Span**: 2026-05-20
+**Sub-chunks**: IAP.q.1 (Option II + IV bundle, single commit)
+
+Post-milestone Manager observation: items in `MISSING_METADATA` were still checkbox-selectable on the IAP list even though the modal preflight bucketing dropped them at submit time. Investigation confirmed the architecture was sound (Apple state authoritative, Q-IAP.h.3 lock honoured), but surfaced two narrow gaps:
+
+| Gap | Layer | Fix |
+|---|---|---|
+| **UX clarity** — Manager could check a MISSING_METADATA row and discover later that it was silently filtered by the modal | Row-level checkbox | **Option II**: gate `eligible` by `appleToInternal[id]` AND `state === "READY_TO_SUBMIT"`; `title=`/`aria-label=` tooltip surfaces the specific blocker (no local row vs. wrong state) |
+| **Defence-in-depth** — batch route `runExecute` had no server-side state recheck; trusted modal/caller bucketing | Server route | **Option IV**: refetch Apple state via `listInAppPurchases` at execute time, partition rows via new `partitionByStateGuard` helper, surface `SKIPPED_BY_STATE_GUARD` results + `?skipCheck=true` bypass for explicit internal callers |
+
+**Pattern alignment**: `partitionByStateGuard` mirrors the existing `bucketSelection` preflight helper — same authority hierarchy (Apple state canonical), same testable-pure-function shape. The audit-log `action_type` reuses the existing `SUBMIT_APPLE_REVIEW` row with `payload.result: "SKIPPED"` (no migration needed; matches CLAUDE.md invariant on action_type CHECK constraints).
+
+**Files touched (cycle 32):**
+- [app/(dashboard)/iap-management/apps/[appId]/IapListClient.tsx](app/(dashboard)/iap-management/apps/[appId]/IapListClient.tsx) — selectableAppleIds + per-row eligible/tooltip
+- [app/api/iap-management/apps/[appId]/iaps/submit-batch/route.ts](app/api/iap-management/apps/[appId]/iaps/submit-batch/route.ts) — state-guard partition + skippedResults + `?skipCheck=true`
+- [lib/iap-management/submit-batch/bucket.ts](lib/iap-management/submit-batch/bucket.ts) — new `partitionByStateGuard` pure helper + `EligibleRow` / `SkippedRow` / `GuardPartition` types
+- [components/iap-management/SubmitBatchModal.tsx](components/iap-management/SubmitBatchModal.tsx) — render `SKIPPED_BY_STATE_GUARD` rows distinctly + extended toast text
+- [lib/iap-management/submit-batch/bucket.test.ts](lib/iap-management/submit-batch/bucket.test.ts) — +6 partitionByStateGuard tests
+
+**Tests:** 1777 → 1783 (+6). Gauntlet 4/4 ✅.
+
+**Result:** Manager-flagged UX gap closed AND defence-in-depth gap closed — single cohesive commit, no migration, ~1.5h.
+
+---
 
 ### Hardening cycle (Manager UAT MV30 iteration)
 

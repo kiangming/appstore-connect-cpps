@@ -39,7 +39,9 @@ interface PreflightResponse {
 interface ExecuteResultRow {
   iap_id: string;
   apple_iap_id: string;
-  status: "SUCCESS" | "ERROR";
+  /** IAP.q.1.IV: `SKIPPED_BY_STATE_GUARD` added — server-side state guard
+   *  blocked a row whose Apple state was not `READY_TO_SUBMIT`. */
+  status: "SUCCESS" | "ERROR" | "SKIPPED_BY_STATE_GUARD";
   state?: string;
   error?: string;
 }
@@ -48,6 +50,8 @@ interface ExecuteResponse {
   phase: "execute";
   submitted: number;
   failed: number;
+  /** IAP.q.1.IV — count of rows blocked by the server-side state guard. */
+  skipped?: number;
   results: ExecuteResultRow[];
 }
 
@@ -150,12 +154,14 @@ export function SubmitBatchModal({
         return;
       }
       setStage({ kind: "result", data });
-      if (data.failed === 0) {
+      const skipped = data.skipped ?? 0;
+      if (data.failed === 0 && skipped === 0) {
         toast.success(`Submitted ${data.submitted} IAP${data.submitted === 1 ? "" : "s"} for review.`);
       } else {
-        toast.warning(
-          `Submitted ${data.submitted} · ${data.failed} failed — see details.`,
-        );
+        const parts = [`Submitted ${data.submitted}`];
+        if (data.failed > 0) parts.push(`${data.failed} failed`);
+        if (skipped > 0) parts.push(`${skipped} blocked by state guard`);
+        toast.warning(`${parts.join(" · ")} — see details.`);
       }
     } catch (err) {
       setStage({
@@ -391,25 +397,34 @@ function Bucket({ icon, tone, title, rows }: BucketProps) {
 }
 
 function ResultView({ data }: { data: ExecuteResponse }) {
+  const skipped = data.skipped ?? 0;
+  const allClean = data.failed === 0 && skipped === 0;
   return (
     <div className="space-y-4">
       <div
         className={`rounded-lg border px-4 py-3 text-sm ${
-          data.failed === 0
+          allClean
             ? "border-emerald-200 bg-emerald-50 text-emerald-800"
             : "border-amber-200 bg-amber-50 text-amber-800"
         }`}
       >
         <p className="font-semibold">
           {data.submitted} submitted · {data.failed} failed
+          {skipped > 0 ? ` · ${skipped} blocked by state guard` : ""}
         </p>
-        {data.failed === 0 ? (
+        {allClean ? (
           <p className="mt-1 text-xs">
             All eligible IAPs are now waiting for Apple Review.
           </p>
+        ) : skipped > 0 && data.failed === 0 ? (
+          <p className="mt-1 text-xs">
+            The server-side state guard blocked {skipped} row
+            {skipped === 1 ? "" : "s"} that flipped out of READY_TO_SUBMIT
+            between preflight and submit. Refresh and try again.
+          </p>
         ) : (
           <p className="mt-1 text-xs">
-            Review the failed entries below — Apple may have updated state mid-flight.
+            Review the entries below — Apple may have updated state mid-flight.
           </p>
         )}
       </div>
@@ -425,10 +440,12 @@ function ResultView({ data }: { data: ExecuteResponse }) {
                 className={`text-[10px] font-medium uppercase tracking-wide ${
                   row.status === "SUCCESS"
                     ? "text-emerald-700 dark:text-emerald-400"
-                    : "text-red-700 dark:text-red-400"
+                    : row.status === "SKIPPED_BY_STATE_GUARD"
+                      ? "text-amber-700 dark:text-amber-400"
+                      : "text-red-700 dark:text-red-400"
                 }`}
               >
-                {row.status}
+                {row.status === "SKIPPED_BY_STATE_GUARD" ? "SKIPPED" : row.status}
               </span>
             </div>
             {row.state && (
@@ -437,7 +454,13 @@ function ResultView({ data }: { data: ExecuteResponse }) {
               </div>
             )}
             {row.error && (
-              <p className="mt-0.5 text-[11px] text-red-600 dark:text-red-400">
+              <p
+                className={`mt-0.5 text-[11px] ${
+                  row.status === "SKIPPED_BY_STATE_GUARD"
+                    ? "text-amber-700 dark:text-amber-400"
+                    : "text-red-600 dark:text-red-400"
+                }`}
+              >
                 {row.error}
               </p>
             )}

@@ -30,7 +30,7 @@ screenshots, price schedules, submissions) still use v1.
 | Reserve screenshot | POST | `/v1/inAppPurchaseAppStoreReviewScreenshots` | Relationship: `inAppPurchaseV2`. Returns `uploadOperations[]`. |
 | Confirm screenshot | PATCH | `/v1/inAppPurchaseAppStoreReviewScreenshots/{id}` | `uploaded: true` + `sourceFileChecksum` (MD5 hex). |
 | Delete screenshot | DELETE | `/v1/inAppPurchaseAppStoreReviewScreenshots/{id}` | OVERWRITE replace path. |
-| Submit for review | POST | `/v1/inAppPurchaseSubmissions` | Relationship: `inAppPurchaseV2`. No attributes. |
+| Submit for review | POST | `/v1/inAppPurchaseSubmissions` | Relationship: `inAppPurchaseV2`. No attributes. Single-IAP submit route (`/submit`) GETs `/v2/inAppPurchases/{id}` first and 409s if state ≠ `READY_TO_SUBMIT`. Batch submit route (`/submit-batch` execute phase) refetches state via `listInAppPurchases`, partitions via `partitionByStateGuard`, and skips non-ready rows with `SKIPPED_BY_STATE_GUARD` results (IAP.q.1.IV defence-in-depth). Both routes accept `?skipCheck=true` for explicit internal-caller bypass. |
 
 ## Relationship names (v2 IAP)
 
