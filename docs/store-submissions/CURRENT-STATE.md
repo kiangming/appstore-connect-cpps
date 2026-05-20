@@ -1332,6 +1332,52 @@ Superseded by PR-17c retag (PR-17+ → PR-18+) — see PR-17 milestone section a
 
 ---
 
+## IAP.q.2 — Top Apple Guidelines parser tolerance + visibility ✅ SHIPPED 2026-05-20
+
+Pattern 10 reuse #19 Cycle 33 narrow hardening. Strategic 5-deliverable trajectory milestone preserved; this is post-MVP continuous improvement triggered by production observation on TICKET-10021.
+
+### Trigger
+
+Manager observation: Apple Reports → Top Apple Guidelines section reported `"4 reasons couldn't be parsed (no Guideline header detected)"` on TICKET-10021. Investigation (Phase 1 audit, no code change) traced the message to the `extractGuidelines` regex in [`lib/store-submissions/queries/reports.ts`](../../lib/store-submissions/queries/reports.ts) being too strict for the format Apple uses in mid-2026: bare top-level categories (`Guideline 3`) and sub-clause letters (`2.1(b)`, `4.3(a)`, `3.1.2(c)`).
+
+### IAP.q.2.I — Parser tolerance
+
+`extractGuidelines` regex widened from `{1,2}` levels to `{0,2}` (i.e. 1-3 numeric levels, was 2-3) and added optional sub-letter capture `(?:\(([a-z])\))?`. Canonical code preserves the sub-letter when present so `2.1(b)` and `2.1(c)` aggregate as separate buckets (semantically distinct Apple sub-clauses, not collapsed onto `2.1`).
+
+New formats accepted:
+- `Guideline 3 - Business` → code `3`
+- `Guideline 2.1(b) - Information Needed` → code `2.1(b)`
+- `Guideline 4.3(a) - Design - Spam` → code `4.3(a)`
+- `Guideline 3.1.2(c) - Business - Payments - Subscriptions` → code `3.1.2(c)`
+
+Defensive bounds preserved:
+- Capital `G` still required (inline lowercase prose still rejected)
+- 4-level codes (e.g. `4.7.4.5`) still rejected (Apple has never used them; avoid swallowing version strings)
+- Uppercase sub-letter (e.g. `(B)`) still rejected (Apple convention is lowercase; surface accidental typos)
+- Standalone-line anchor (`^...$` with `/gm`) preserved
+
+### IAP.q.2.V — Unparseable visibility footer
+
+`RejectReasonBreakdownResult` extended with `unparseableEntries: UnparseableEntry[]` (each row carries `entry_id`, `ticket_id`, `ticket_display_id`, truncated `content_preview`). Footer in [`GuidelineBreakdownTable.tsx`](../../components/store-submissions/reports/GuidelineBreakdownTable.tsx) is now an expandable disclosure: default collapsed, click "Show details" to reveal a compact list with ticket deep-links into the Inbox detail panel (`/store-submissions/inbox?ticket=<uuid>` — same pattern as `RecentRejectedList`).
+
+Invariant: `unparseableReasons === unparseableEntries.length` (counter derived from entries; impossible to drift).
+
+### Files changed
+
+- [`lib/store-submissions/queries/reports.ts`](../../lib/store-submissions/queries/reports.ts) — regex + types + aggregator + DB fetcher select + projection
+- [`components/store-submissions/reports/GuidelineBreakdownTable.tsx`](../../components/store-submissions/reports/GuidelineBreakdownTable.tsx) — expandable `UnparseableFooter` subcomponent
+- [`lib/store-submissions/queries/reports.test.ts`](../../lib/store-submissions/queries/reports.test.ts) — +10 tests (4 positive formats, sub-letter canonical preservation, uppercase rejection, 4-level rejection, multi-blob email body, aggregator unparsed-entry surfacing, invariant test)
+
+### Test delta
+
+1783 → 1793 (+10). No new migration (parser + UI changes only).
+
+### Manager UAT MV24 resolution
+
+Phase E Manager UAT MV24 partial closure scenario D (data accumulation reveals parser gap) now resolved by IAP.q.2.I. Re-test: open Apple Reports → Top Apple Guidelines, verify TICKET-10021's 4 sub-letter guidelines surface in the breakdown, footer counter drops to 0 (or near-0, with the remainder visible via "Show details").
+
+---
+
 ## Critical invariants (reference)
 
 Đầy đủ trong `CLAUDE.md`. Highlights:

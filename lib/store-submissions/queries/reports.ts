@@ -149,15 +149,38 @@ export interface RejectReasonBreakdownResult {
   totalReasons: number;
   /** Rows where `extractGuidelines` returned []. Surfaced as transparency footer. */
   unparseableReasons: number;
+  /**
+   * IAP.q.2.V — unparseable rows surfaced for Manager triage. Same count
+   * as `unparseableReasons` but with row identity so the UI can deep-link
+   * back into the Inbox detail panel for in-place editing.
+   */
+  unparseableEntries: UnparseableEntry[];
+}
+
+/**
+ * IAP.q.2.V — one unparseable reject-reason row surfaced to the UI footer.
+ * `content_preview` is the truncated raw text (default 200 chars,
+ * whitespace-collapsed) — enough to eyeball the format mismatch without
+ * leaking full email bodies into the report surface.
+ */
+export interface UnparseableEntry {
+  entry_id: string;
+  ticket_id: string;
+  ticket_display_id: string;
+  content_preview: string;
 }
 
 /**
  * One reject_reason row projected to the breakdown aggregator. `type_id`
  * + `app_id` may be null (unclassified buckets) — aggregator skips
- * those rows entirely (no Type/App attribution possible).
+ * those rows entirely (no Type/App attribution possible). `entry_id` +
+ * `ticket_display_id` carry row identity so the aggregator can build
+ * `unparseableEntries` for the visibility footer (IAP.q.2.V).
  */
 export interface RejectReasonInputRow {
+  entry_id: string;
   ticket_id: string;
+  ticket_display_id: string;
   content: string;
   type_id: string | null;
   type_name: string | null;
@@ -577,23 +600,34 @@ export function truncateExcerpt(content: string, maxChars = 200): string {
 /**
  * Extract Apple Guideline headers from a reject-reason text block.
  *
- * Pattern: a standalone line of the form `Guideline X.X[.X] - <description>`
+ * Pattern: a standalone line of the form `Guideline X[.X][.X][(L)] - <desc>`
  * with these production-data-confirmed properties (Q-RejectReason-1/-2
- * May 2026):
+ * May 2026, IAP.q.2 widened scope):
  *   - Capital `G` — discriminates the header line from inline lowercase
  *     mentions ("comply with the requirements in guideline 4.7"), which
  *     appear in the same Apple email body and would otherwise inflate
  *     counts.
- *   - 2 or 3 numeric levels — `4.7`, `4.7.4`. No deeper hierarchy.
+ *   - 1, 2 or 3 numeric levels — `3`, `4.7`, `4.7.4`. IAP.q.2 widened
+ *     from {2,3} to {1,3}: Apple uses bare top-level categories
+ *     ("Guideline 3 - Business") for broad violations.
+ *   - Optional sub-letter suffix `(a)`/`(b)`/`(c)` — IAP.q.2 added.
+ *     Apple cites sub-clauses as e.g. `Guideline 2.1(b)`, `4.3(a)`,
+ *     `3.1.2(c)`. Lowercase only (Apple convention); uppercase rejects
+ *     defensively to surface accidental copy-paste typos.
  *   - Dash separator — ASCII hyphen `-` is the production canonical
  *     (verified TICKET-10012). En-dash `–` and em-dash `—` accepted for
  *     defensiveness (Apple template variation; CommentForm placeholder
  *     uses em-dash).
- *   - Description may itself contain `-` ("Design - Mini apps, mini
- *     games, …") — captured greedily to end-of-line.
+ *   - Description may itself contain `-` or `(` ("Design - Mini apps,
+ *     mini games, …", "Design (Spam)") — captured to end-of-line.
  *
  * Line-anchored `^...$` with `/gm` ensures we match only standalone
  * header lines, not inline body prose containing the word "Guideline".
+ *
+ * Canonical code preserves the sub-letter when present:
+ *   `Guideline 2.1(b) - X` → code `"2.1(b)"`, NOT `"2.1"` (different
+ *   sub-clauses are semantically distinct guidelines — `2.1(b)` and
+ *   `2.1(c)` should aggregate as separate buckets).
  *
  * Per-entry semantics (Manager E.1 verbatim): within a single reject
  * reason, if the same code appears more than once (e.g. cited twice in
@@ -604,10 +638,12 @@ export function extractGuidelines(
   text: string,
 ): Array<{ code: string; description: string }> {
   if (!text) return [];
-  const pattern = /^Guideline\s+(\d+(?:\.\d+){1,2})\s*[-–—]\s*(.+?)\s*$/gm;
+  const pattern =
+    /^Guideline\s+(\d+(?:\.\d+){0,2})(?:\(([a-z])\))?\s*[-–—]\s*(.+?)\s*$/gm;
   const matches: Array<{ code: string; description: string }> = [];
   for (const m of text.matchAll(pattern)) {
-    matches.push({ code: m[1], description: m[2] });
+    const code = m[2] ? `${m[1]}(${m[2]})` : m[1];
+    matches.push({ code, description: m[3] });
   }
   return matches;
 }
@@ -663,12 +699,17 @@ export function aggregateByGuideline(
   }
 
   const codeBuckets = new Map<string, CodeBucket>();
-  let unparseable = 0;
+  const unparseableEntries: UnparseableEntry[] = [];
 
   for (const row of rows) {
     const extracted = extractGuidelines(row.content);
     if (extracted.length === 0) {
-      unparseable += 1;
+      unparseableEntries.push({
+        entry_id: row.entry_id,
+        ticket_id: row.ticket_id,
+        ticket_display_id: row.ticket_display_id,
+        content_preview: truncateExcerpt(row.content),
+      });
       continue;
     }
     // Within-row dedup: a single entry citing the same code twice counts once.
@@ -744,7 +785,8 @@ export function aggregateByGuideline(
   return {
     guidelines,
     totalReasons: rows.length,
-    unparseableReasons: unparseable,
+    unparseableReasons: unparseableEntries.length,
+    unparseableEntries,
   };
 }
 
@@ -1070,13 +1112,18 @@ export async function getAppleRejectReasonBreakdown(
 ): Promise<RejectReasonBreakdownResult> {
   const apple = await getApplePlatformId();
   if (!apple) {
-    return { guidelines: [], totalReasons: 0, unparseableReasons: 0 };
+    return {
+      guidelines: [],
+      totalReasons: 0,
+      unparseableReasons: 0,
+      unparseableEntries: [],
+    };
   }
 
   let q = storeDb()
     .from('ticket_entries')
     .select(
-      'ticket_id, content, created_at, tickets!inner(platform_id, type_id, app_id, types(id, name), apps(id, name, display_name))',
+      'id, ticket_id, content, created_at, tickets!inner(display_id, platform_id, type_id, app_id, types(id, name), apps(id, name, display_name))',
     )
     .eq('entry_type', 'REJECT_REASON')
     .eq('tickets.platform_id', apple)
@@ -1087,17 +1134,24 @@ export async function getAppleRejectReasonBreakdown(
 
   const { data, error } = await q;
   if (error || !data) {
-    return { guidelines: [], totalReasons: 0, unparseableReasons: 0 };
+    return {
+      guidelines: [],
+      totalReasons: 0,
+      unparseableReasons: 0,
+      unparseableEntries: [],
+    };
   }
 
   // Supabase nests joined relations as object-or-array depending on
   // cardinality — same flattening pattern as `getAppleByAppTable`.
   const flat: RejectReasonInputRow[] = (
     data as Array<{
+      id: string;
       ticket_id: string;
       content: string | null;
       tickets:
         | {
+            display_id: string;
             type_id: string | null;
             app_id: string | null;
             types: { id: string; name: string } | { id: string; name: string }[] | null;
@@ -1107,6 +1161,7 @@ export async function getAppleRejectReasonBreakdown(
               | null;
           }
         | {
+            display_id: string;
             type_id: string | null;
             app_id: string | null;
             types: { id: string; name: string } | { id: string; name: string }[] | null;
@@ -1130,7 +1185,9 @@ export async function getAppleRejectReasonBreakdown(
         : ticket.apps
       : null;
     return {
+      entry_id: r.id,
       ticket_id: r.ticket_id,
+      ticket_display_id: ticket?.display_id ?? '',
       content: r.content ?? '',
       type_id: type?.id ?? null,
       type_name: type?.name ?? null,

@@ -1,11 +1,13 @@
 'use client';
 
-import { ChevronDown, ChevronRight, Info } from 'lucide-react';
+import { ChevronDown, ChevronRight, ExternalLink, Info } from 'lucide-react';
+import Link from 'next/link';
 import { useState } from 'react';
 
 import type {
   GuidelineBreakdown,
   RejectReasonBreakdownResult,
+  UnparseableEntry,
 } from '@/lib/store-submissions/queries/reports';
 
 interface Props {
@@ -32,7 +34,8 @@ const TOOLTIP_COPY =
  * (rare), or Apple format changes that should prompt regex revision.
  */
 export function GuidelineBreakdownTable({ result }: Props) {
-  const { guidelines, totalReasons, unparseableReasons } = result;
+  const { guidelines, totalReasons, unparseableReasons, unparseableEntries } =
+    result;
   const parseableReasons = totalReasons - unparseableReasons;
 
   return (
@@ -74,9 +77,85 @@ export function GuidelineBreakdownTable({ result }: Props) {
       )}
 
       {unparseableReasons > 0 && (
-        <div className="mt-3 pt-3 border-t border-slate-100 text-[11px] text-slate-400">
-          {unparseableReasons} reason{unparseableReasons === 1 ? '' : 's'} couldn&apos;t be parsed (no Guideline header detected).
-        </div>
+        <UnparseableFooter
+          count={unparseableReasons}
+          entries={unparseableEntries}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * IAP.q.2.V — expandable transparency footer. Default collapsed; clicking
+ * "Show details" reveals a compact table of the unparseable rows so
+ * Manager can triage the format mismatch (typo, paraphrase, deeper Apple
+ * format change) and deep-link to the Inbox detail panel via the ticket
+ * link.
+ *
+ * If `entries.length === 0` but `count > 0` (defensive — shouldn't happen
+ * once the SQL select wires entry_id/display_id through), we render the
+ * static message without a toggle so the footer doesn't claim a feature
+ * that has nothing to show.
+ */
+function UnparseableFooter({
+  count,
+  entries,
+}: {
+  count: number;
+  entries: UnparseableEntry[];
+}) {
+  const [open, setOpen] = useState(false);
+  const message = `${count} reason${count === 1 ? '' : 's'} couldn’t be parsed (no Guideline header detected).`;
+
+  if (entries.length === 0) {
+    return (
+      <div className="mt-3 pt-3 border-t border-slate-100 text-[11px] text-slate-400">
+        {message}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 pt-3 border-t border-slate-100">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex items-center gap-1 text-[11px] text-slate-400 hover:text-slate-600 transition-colors"
+      >
+        {open ? (
+          <ChevronDown className="h-3 w-3" strokeWidth={2} />
+        ) : (
+          <ChevronRight className="h-3 w-3" strokeWidth={2} />
+        )}
+        <span>{message}</span>
+        <span className="text-slate-500 underline-offset-2 hover:underline">
+          {open ? 'Hide' : 'Show'} details
+        </span>
+      </button>
+
+      {open && (
+        <ul className="mt-2 space-y-1.5">
+          {entries.map((e) => (
+            <li
+              key={e.entry_id}
+              className="flex items-start gap-2 text-[11.5px] leading-snug"
+            >
+              <Link
+                href={`/store-submissions/inbox?ticket=${encodeURIComponent(e.ticket_id)}`}
+                className="flex-shrink-0 inline-flex items-center gap-0.5 font-mono text-slate-600 hover:text-blue-600 hover:underline"
+                aria-label={`Open ${e.ticket_display_id} in Inbox`}
+              >
+                {e.ticket_display_id}
+                <ExternalLink className="h-2.5 w-2.5" strokeWidth={2} />
+              </Link>
+              <span className="flex-1 min-w-0 text-slate-500 break-words">
+                {e.content_preview}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

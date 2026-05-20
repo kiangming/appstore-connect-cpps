@@ -769,11 +769,95 @@ Guideline 4.7.4 - Design - Mini apps`;
     expect(extractGuidelines('')).toEqual([]);
     expect(extractGuidelines('   \n\n   ')).toEqual([]);
   });
+
+  // -- IAP.q.2.I — widened format scope (1-3 levels + sub-letter) ---------
+
+  it('extracts bare top-level Guideline (1 level, e.g. "Guideline 3")', () => {
+    expect(extractGuidelines('Guideline 3 - Business')).toEqual([
+      { code: '3', description: 'Business' },
+    ]);
+  });
+
+  it('extracts 2-level with sub-letter (e.g. "Guideline 2.1(b)")', () => {
+    expect(extractGuidelines('Guideline 2.1(b) - Information Needed')).toEqual(
+      [{ code: '2.1(b)', description: 'Information Needed' }],
+    );
+    expect(extractGuidelines('Guideline 4.3(a) - Design - Spam')).toEqual([
+      { code: '4.3(a)', description: 'Design - Spam' },
+    ]);
+  });
+
+  it('extracts 3-level with sub-letter (e.g. "Guideline 3.1.2(c)")', () => {
+    expect(
+      extractGuidelines(
+        'Guideline 3.1.2(c) - Business - Payments - Subscriptions',
+      ),
+    ).toEqual([
+      {
+        code: '3.1.2(c)',
+        description: 'Business - Payments - Subscriptions',
+      },
+    ]);
+  });
+
+  it('rejects uppercase sub-letter (Apple uses lowercase by convention)', () => {
+    // Defensive: surfaces accidental copy-paste typo as "unparseable" so
+    // Manager can see + correct. If Apple ever ships uppercase, regex
+    // should be relaxed deliberately rather than silently accepted.
+    expect(extractGuidelines('Guideline 2.1(B) - Information Needed')).toEqual(
+      [],
+    );
+  });
+
+  it('preserves sub-letter in canonical code (aggregation key fidelity)', () => {
+    // 2.1(b) and 2.1(c) are semantically distinct Apple sub-clauses;
+    // they MUST aggregate as separate buckets, not collapse onto 2.1.
+    const text = `Guideline 2.1(b) - Information Needed
+Guideline 2.1(c) - Information Needed
+Guideline 2.1 - Information Needed`;
+    const out = extractGuidelines(text);
+    expect(out.map((g) => g.code).sort()).toEqual(['2.1', '2.1(b)', '2.1(c)']);
+  });
+
+  it('does NOT match 4-level numeric (defensive against accidental over-match)', () => {
+    // Apple has not used 4+ levels in any observed email; keep the upper
+    // bound at 3 to avoid swallowing version strings like "4.7.4.5" that
+    // could appear in unrelated copy.
+    expect(extractGuidelines('Guideline 4.7.4.5 - Some description')).toEqual(
+      [],
+    );
+  });
+
+  it('matches sub-letter formats inline among multi-paragraph email body', () => {
+    // Real-shape blob mirroring TICKET-10021 Entry 2: three distinct
+    // Apple citations interleaved with prose. All three must parse.
+    const body = `Hello,
+
+Guideline 2.1(b) - Information Needed
+
+Issue Description: please provide additional info.
+
+Guideline 4.3(a) - Design - Spam
+
+Continue with cleanup steps below.
+
+Guideline 3.1.2(c) - Business - Payments - Subscriptions
+`;
+    const out = extractGuidelines(body);
+    expect(out).toHaveLength(3);
+    expect(out.map((g) => g.code)).toEqual([
+      '2.1(b)',
+      '4.3(a)',
+      '3.1.2(c)',
+    ]);
+  });
 });
 
 describe('aggregateByGuideline', () => {
   function rrRow(opts: {
+    entry_id?: string;
     ticket_id?: string;
+    ticket_display_id?: string;
     content: string;
     type_id?: string | null;
     type_name?: string | null;
@@ -782,8 +866,11 @@ describe('aggregateByGuideline', () => {
   }): RejectReasonInputRow {
     // Note: explicit null must be preserved (used by attribution test) —
     // can't use `??` since it collapses null AND undefined to the default.
+    const ticketId = opts.ticket_id ?? 'T1';
     return {
-      ticket_id: opts.ticket_id ?? 'T1',
+      entry_id: opts.entry_id ?? `E-${ticketId}-${Math.random().toString(36).slice(2, 8)}`,
+      ticket_id: ticketId,
+      ticket_display_id: opts.ticket_display_id ?? `TICKET-${ticketId}`,
       content: opts.content,
       type_id: 'type_id' in opts ? (opts.type_id ?? null) : 'type-app',
       type_name: 'type_name' in opts ? (opts.type_name ?? null) : 'App',
@@ -946,6 +1033,90 @@ Guideline 4.7.4 - Design - Mini apps`,
       guidelines: [],
       totalReasons: 0,
       unparseableReasons: 0,
+      unparseableEntries: [],
     });
+  });
+
+  // -- IAP.q.2.V — unparseable entry surfacing ----------------------------
+
+  it('surfaces unparseable rows with entry identity + content preview', () => {
+    const rows = [
+      rrRow({
+        entry_id: 'E1',
+        ticket_id: 'T-A',
+        ticket_display_id: 'TICKET-10021',
+        content: 'Free-text reject reason without any Guideline header',
+      }),
+      rrRow({
+        entry_id: 'E2',
+        ticket_id: 'T-B',
+        ticket_display_id: 'TICKET-10022',
+        content: 'Guideline 4.7.4 - Design - Mini apps', // parseable
+      }),
+      rrRow({
+        entry_id: 'E3',
+        ticket_id: 'T-A',
+        ticket_display_id: 'TICKET-10021',
+        content: 'Another paraphrased rejection in Vietnamese',
+      }),
+    ];
+    const out = aggregateByGuideline(rows);
+    expect(out.unparseableReasons).toBe(2);
+    expect(out.unparseableEntries).toHaveLength(2);
+    expect(out.unparseableEntries.map((e) => e.entry_id)).toEqual(['E1', 'E3']);
+    expect(out.unparseableEntries[0]).toMatchObject({
+      entry_id: 'E1',
+      ticket_id: 'T-A',
+      ticket_display_id: 'TICKET-10021',
+    });
+    // content_preview is the truncated raw text (truncateExcerpt default).
+    expect(out.unparseableEntries[0].content_preview).toContain(
+      'Free-text reject reason',
+    );
+  });
+
+  it('preserves invariant unparseableReasons === unparseableEntries.length', () => {
+    const rows = [
+      rrRow({ content: 'No header A' }),
+      rrRow({ content: 'No header B' }),
+      rrRow({ content: 'No header C' }),
+      rrRow({ content: 'Guideline 4.7.4 - X' }),
+    ];
+    const out = aggregateByGuideline(rows);
+    expect(out.unparseableReasons).toBe(out.unparseableEntries.length);
+    expect(out.unparseableReasons).toBe(3);
+  });
+
+  // -- IAP.q.2.I — multi-Guideline blob counting (TICKET-10021 Entry 2) ---
+
+  it('counts each Guideline in a multi-blob entry as +1 independently', () => {
+    // TICKET-10021 Entry 2 production case: a single reject_reason row
+    // citing 3 distinct Guidelines → each contributes 1 to its bucket.
+    const rows = [
+      rrRow({
+        ticket_id: 'T10021',
+        ticket_display_id: 'TICKET-10021',
+        content: `Guideline 2.1(b) - Information Needed
+Some prose paragraph between citations.
+
+Guideline 4.3(a) - Design - Spam
+More prose.
+
+Guideline 3.1.2(c) - Business - Payments - Subscriptions`,
+      }),
+    ];
+    const out = aggregateByGuideline(rows);
+    expect(out.guidelines).toHaveLength(3);
+    expect(out.guidelines.map((g) => g.code).sort()).toEqual([
+      '2.1(b)',
+      '3.1.2(c)',
+      '4.3(a)',
+    ]);
+    // Each cited once in the single row → total = 1 per code.
+    for (const g of out.guidelines) {
+      expect(g.total).toBe(1);
+    }
+    expect(out.totalReasons).toBe(1);
+    expect(out.unparseableReasons).toBe(0);
   });
 });

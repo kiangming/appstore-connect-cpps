@@ -24,19 +24,19 @@ Pattern 10 reuse #19 cycles 29 + 30 + 31 ALL CLOSED COHESIVELY. Strategic implem
 
 ---
 
-## Cumulative arc metrics (final, post-IAP.q.1)
+## Cumulative arc metrics (final, post-IAP.q.2)
 
 | Metric | Value |
 |---|---|
-| **Total project commits** | 214 (cumulative across all arcs) |
-| **IAP arc commits** | ~61 (IAP.c through IAP.q.1) |
-| **Tests** | 1346 → **1783** (+437 net during IAP trajectory) |
-| **Migrations** | 7 (`iap_mgmt` schema) |
+| **Total project commits** | 215 (cumulative across all arcs) |
+| **IAP arc commits** | ~62 (IAP.c through IAP.q.2; Cycle 33 cross-module Store Submissions parser) |
+| **Tests** | 1346 → **1793** (+447 net during IAP trajectory; +10 in IAP.q.2) |
+| **Migrations** | 7 (`iap_mgmt` schema; IAP.q.2 = no migration) |
 | **Routes** | 18 active under `/api/iap-management/` |
 | **Backend modules** | 24 files under `lib/iap-management/apple/` + 10 under `queries/`, `parsers/`, `dedup/`, etc. |
 | **Frontend modules** | View Detail (4 sections) + iap-form + pricing-tiers + bulk-import + 7-primitive UI library |
 | **LOC net added** | ~20,000 cumulative across the IAP trajectory |
-| **Gauntlet 4/4** | ✅ Every sub-chunk through IAP.q.1 |
+| **Gauntlet 4/4** | ✅ Every sub-chunk through IAP.q.2 |
 | **Dependencies added** | `i18n-iso-countries` (IAP.p2.l, ISO 3166-1 territory names) |
 
 ---
@@ -132,6 +132,37 @@ Post-milestone Manager observation: items in `MISSING_METADATA` were still check
 **Tests:** 1777 → 1783 (+6). Gauntlet 4/4 ✅.
 
 **Result:** Manager-flagged UX gap closed AND defence-in-depth gap closed — single cohesive commit, no migration, ~1.5h.
+
+---
+
+## Cycle 33 — Store Submissions Top Apple Guidelines parser tolerance + visibility (cross-module mini-cycle, IAP.q.2)
+
+**Span**: 2026-05-20
+**Sub-chunks**: IAP.q.2.I + IAP.q.2.V (Option I + V bundle, single commit)
+**Cross-module**: Touches Store Submissions module (Apple Reports), not IAP Management — listed here because the cycle continues the IAP.q.* post-trajectory hardening cadence with the same Pattern 10 reuse #19 discipline.
+
+Post-milestone Manager observation on TICKET-10021: Apple Reports → Top Apple Guidelines section reported `"4 reasons couldn't be parsed (no Guideline header detected)"`. Phase-1 investigation traced the message to the `extractGuidelines` regex being too strict for mid-2026 Apple formats; UAT MV24 scenario D (data-accumulation gap) materialized.
+
+| Gap | Layer | Fix |
+|---|---|---|
+| **Parser too strict** — rejected `Guideline 3 - Business` (1 level), `Guideline 2.1(b)`/`4.3(a)`/`3.1.2(c)` (sub-letters) which Apple actively uses | `extractGuidelines` regex in [`lib/store-submissions/queries/reports.ts`](../../lib/store-submissions/queries/reports.ts) | **Option I**: widened from `{1,2}` → `{0,2}` numeric levels + added optional `(?:\(([a-z])\))?` sub-letter capture. Canonical code preserves sub-letter so `2.1(b)` vs `2.1(c)` aggregate as distinct buckets |
+| **Unparseable reasons opaque** — counter said "X couldn't be parsed" with no way to see which entries failed | [`GuidelineBreakdownTable.tsx`](../../components/store-submissions/reports/GuidelineBreakdownTable.tsx) footer | **Option V**: extended `RejectReasonBreakdownResult` with `unparseableEntries: UnparseableEntry[]` (entry_id + ticket_display_id + content_preview). Footer is now a disclosure: "Show details" reveals a compact list with Inbox deep-links (`/store-submissions/inbox?ticket=<uuid>` — same pattern as `RecentRejectedList`) |
+
+**Defensive bounds preserved**: capital `G` still required (inline lowercase prose still rejected), 4-level codes still rejected (no accidental version-string match), uppercase sub-letter still rejected (surfaces typos), standalone-line anchor preserved.
+
+**Invariant**: `unparseableReasons === unparseableEntries.length` — counter is derived from the entries array; structurally impossible to drift.
+
+**Files touched (cycle 33):**
+- [lib/store-submissions/queries/reports.ts](../../lib/store-submissions/queries/reports.ts) — regex + types (`UnparseableEntry`, extended `RejectReasonInputRow` + `RejectReasonBreakdownResult`) + aggregator + DB fetcher select/projection
+- [components/store-submissions/reports/GuidelineBreakdownTable.tsx](../../components/store-submissions/reports/GuidelineBreakdownTable.tsx) — `UnparseableFooter` expandable subcomponent
+- [lib/store-submissions/queries/reports.test.ts](../../lib/store-submissions/queries/reports.test.ts) — +10 tests (4 positive formats, sub-letter canonical preservation, uppercase rejection, 4-level rejection, multi-paragraph email body, aggregator unparsed-entry surfacing, counter invariant)
+- [docs/store-submissions/CURRENT-STATE.md](../store-submissions/CURRENT-STATE.md) — IAP.q.2 section + Manager UAT MV24 scenario D resolution note
+
+**Tests:** 1783 → 1793 (+10). Gauntlet 4/4 ✅. No migration.
+
+**Result:** Manager UAT MV24 scenario D closed. Post-ship Manager re-test on TICKET-10021: open Apple Reports → Top Apple Guidelines, sub-letter codes (`2.1(b)`, `4.3(a)`, `3`, `3.1.2(c)`) surface in the breakdown, "couldn't be parsed" counter drops to 0 (or near-0 with the remainder visible via "Show details").
+
+**Pattern alignment:** Cycle 33 demonstrates that production observation = continuous improvement signal post-MVP. Phase E shipped clean on a 2-entry corpus; 3 weeks of real Apple emails revealed a format Apple uses that wasn't in the sample. Investigation-first discipline (Phase 1 audit → SQL diagnostic → root-cause hypotheses → options proposal → Manager decision → targeted fix) preserved through the cycle.
 
 ---
 
