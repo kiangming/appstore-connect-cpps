@@ -1,0 +1,1521 @@
+<!DOCTYPE html>
+<!--
+  ================================================================================
+  GOOGLE IAP MANAGEMENT — VISUAL MOCKUP (Phase 2 Discovery + Design)
+  ================================================================================
+
+  Strategic arc: Cycle 35 Google IAP Management
+  Manager Q-GIAP.A–J locks reflected inline per section.
+  Apple Connect aesthetic + StatusDot 5-color palette (parity with IAP arc mockup).
+
+  Sections rendered (single static HTML, Tailwind CDN, no JS deps):
+    Section 0    — Home page card (NEW MODULE entry point)
+    Section 0.1  — Left menu navigation item (sidebar integration)
+    Section 1    — Header account switcher (context-aware, Q-GIAP.H, 2 states)
+    Section 2    — Settings · Google Console Accounts (Q-GIAP.B)
+    Section 3    — Apps list page (Q-GIAP.C, Reporting API GET apps:search)
+    Section 4    — App detail page · IAPs list (Q-GIAP.I, Q-GIAP.J header)
+    Section 5    — Create IAP form (Q-GIAP.F, Q-GIAP.G, Q-GIAP.I, Q-GIAP.J)
+    Section 6    — Edit IAP form + diff modal (Q-GIAP.I)
+    Section 7    — Bulk import wizard 4-step (Q-GIAP.D, Q-GIAP.E, Q-GIAP.G)
+    Section 8    — Pricing Templates UI (3 sources, Q-GIAP.G)
+    Section 9    — View Detail page (parity with Apple IAP p2; optional v1)
+
+  Discovery findings (Phase 2.1) surfaced as TODO callouts inline:
+    • Reporting API endpoint is GET /v1beta1/apps:search (NOT POST apps:fetch
+      as Q-GIAP.C stated). Page size default 50 / max 1000, pageToken cursor.
+    • inappproducts.list uses legacy `token`/`startIndex`/`maxResults` query
+      params (different from Reporting API).
+    • inappproducts.batchUpdate exists → bulk import can use single batch call
+      instead of sequential POSTs (revisit g1.i estimate).
+    • autoConvertMissingPrices=true on insert/update → Google auto-fills
+      missing region prices from default → clean mapping for Q-GIAP.G option
+      "Google default".
+    • monetization.convertRegionPrices → preview-only price conversion endpoint
+      (useful for "preview before save" UX in Create/Edit form).
+    • priceMicros is `string` type (not number) — serialize carefully.
+    • Two OAuth scopes required: androidpublisher + playdeveloperreporting.
+
+  Component reuse mapping (from Apple IAP arc institutional knowledge):
+    • LocaleSidebar pattern (Q-IAP.h.2) → reuse for multi-locale listings
+    • StatusDot 5-color palette (IAP.p2.b) → status indicators
+    • TooltipBadge "?" pattern → all Q-GIAP decision tooltips
+    • Pagination 20/page hide-when-≤20 (IAP.q.3) → IAPs list + apps list
+    • PricingSourceSelector 3-radio (IAP.p1) → reuse pattern for Q-GIAP.G
+    • Multi-stage diff preview modal (IAP.p2 / IAP.o.12) → reuse for Edit IAP
+
+  All routes prefixed /google-iap-management/* (NEW module, mutex with Apple
+  context per Q-GIAP.H header switcher behavior).
+  ================================================================================
+-->
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Google IAP Management — Mockup (Cycle 35 Phase 2)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            // Apple Connect aesthetic palette (parity with iap-management-mockup.html)
+            bg: '#f5f5f4',
+            surface: '#ffffff',
+            'surface-2': '#fafaf9',
+            border: '#e7e5e4',
+            'border-strong': '#d6d3d1',
+            ink: '#1c1917',
+            'ink-muted': '#57534e',
+            'ink-subtle': '#78716c',
+            // Google brand accent (used sparingly — for context-isolation cue Q-GIAP.H)
+            'g-blue': '#1a73e8',
+            'g-blue-bg': '#e8f0fe',
+            'g-green': '#188038',
+            'g-green-bg': '#e6f4ea',
+            'g-red': '#d93025',
+            'g-yellow': '#f9ab00',
+            // App primary (existing Apple ASC tool color — used when on Apple context)
+            primary: '#0c447c',
+            'primary-hover': '#185fa5',
+            'primary-bg': '#e6f1fb',
+            // StatusDot 5-color palette (IAP.p2.b reuse)
+            success: '#27500a',
+            'success-bg': '#eaf3de',
+            warning: '#633806',
+            'warning-bg': '#faeeda',
+            danger: '#791f1f',
+            'danger-bg': '#fcebeb',
+            purple: '#3c3489',
+            'purple-bg': '#eeedfe',
+            teal: '#085041',
+            'teal-bg': '#e1f5ee',
+          },
+          fontFamily: {
+            sans: ['-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+            mono: ['SF Mono', 'Menlo', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .section-anchor { scroll-margin-top: 80px; }
+    .section-divider {
+      background: linear-gradient(90deg, #1a73e8 0%, #34a853 50%, #fbbc04 100%);
+      height: 3px;
+    }
+    /* StatusDot 5-color (5-state) */
+    .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+    /* Tooltip "?" badge pattern */
+    .tt-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 14px; height: 14px; border-radius: 50%;
+      background: #d6d3d1; color: #57534e;
+      font-size: 10px; font-weight: 600; cursor: help; margin-left: 4px;
+    }
+    .tt-badge:hover { background: #1a73e8; color: white; }
+    /* Section header bar */
+    .section-bar {
+      background: #fffbeb;
+      border-left: 4px solid #f9ab00;
+      padding: 12px 20px;
+      font-size: 13px;
+      color: #633806;
+      font-family: SF Mono, Menlo, monospace;
+    }
+    /* Mock browser chrome */
+    .browser-chrome {
+      background: #f5f5f4;
+      border: 1px solid #d6d3d1;
+      border-radius: 8px 8px 0 0;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #57534e;
+    }
+    .browser-chrome .dot-red { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; }
+    .browser-chrome .dot-amber { width: 12px; height: 12px; border-radius: 50%; background: #febc2e; }
+    .browser-chrome .dot-green { width: 12px; height: 12px; border-radius: 50%; background: #28c840; }
+    .browser-url {
+      flex: 1; background: white; border-radius: 4px; padding: 4px 12px;
+      font-family: SF Mono, Menlo, monospace; font-size: 12px; color: #1c1917;
+    }
+  </style>
+</head>
+<body class="bg-bg text-ink">
+
+<!-- ============================================================================
+     TOC / NAVIGATION HEADER (for mockup review)
+     ============================================================================ -->
+<div class="bg-white border-b border-border sticky top-0 z-50 shadow-sm">
+  <div class="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-g-blue to-g-green flex items-center justify-center text-white font-bold text-sm">G</div>
+      <div>
+        <div class="font-semibold text-sm">Google IAP Management — Mockup</div>
+        <div class="text-xs text-ink-subtle">Cycle 35 · Phase 2 Discovery · Q-GIAP.A–J locks</div>
+      </div>
+    </div>
+    <nav class="flex items-center gap-1 text-xs">
+      <a href="#s0" class="px-2 py-1 rounded hover:bg-bg">§0 Card</a>
+      <a href="#s0-1" class="px-2 py-1 rounded hover:bg-bg">§0.1 Menu</a>
+      <a href="#s1" class="px-2 py-1 rounded hover:bg-bg">§1 Header</a>
+      <a href="#s2" class="px-2 py-1 rounded hover:bg-bg">§2 Accounts</a>
+      <a href="#s3" class="px-2 py-1 rounded hover:bg-bg">§3 Apps</a>
+      <a href="#s4" class="px-2 py-1 rounded hover:bg-bg">§4 IAPs</a>
+      <a href="#s5" class="px-2 py-1 rounded hover:bg-bg">§5 New</a>
+      <a href="#s6" class="px-2 py-1 rounded hover:bg-bg">§6 Edit</a>
+      <a href="#s7" class="px-2 py-1 rounded hover:bg-bg">§7 Bulk</a>
+      <a href="#s8" class="px-2 py-1 rounded hover:bg-bg">§8 Templates</a>
+      <a href="#s9" class="px-2 py-1 rounded hover:bg-bg">§9 View</a>
+    </nav>
+  </div>
+</div>
+
+<!-- ============================================================================
+     DISCOVERY FINDINGS BANNER (visible at top for Manager review)
+     ============================================================================ -->
+<div class="max-w-7xl mx-auto px-6 pt-6">
+  <div class="bg-g-yellow/10 border border-g-yellow/40 rounded-lg p-4">
+    <div class="font-semibold text-sm mb-2 flex items-center gap-2">
+      <span class="w-5 h-5 rounded-full bg-g-yellow text-white text-xs flex items-center justify-center font-bold">!</span>
+      Phase 2.1 Discovery — Q-GIAP corrections for Manager review
+    </div>
+    <ul class="text-xs text-ink-muted space-y-1 ml-7 list-disc">
+      <li><b>Q-GIAP.C correction:</b> Reporting API endpoint is <code class="font-mono bg-white px-1 rounded">GET /v1beta1/apps:search</code> (not <code class="font-mono bg-white px-1 rounded">POST apps:fetch</code>). Default page size 50, max 1000, <code class="font-mono bg-white px-1 rounded">pageToken</code> cursor.</li>
+      <li><b>Q-GIAP.C note:</b> <code class="font-mono bg-white px-1 rounded">inappproducts.list</code> uses legacy <code class="font-mono bg-white px-1 rounded">token</code>/<code class="font-mono bg-white px-1 rounded">startIndex</code>/<code class="font-mono bg-white px-1 rounded">maxResults</code> params (different cursor mechanism than Reporting API).</li>
+      <li><b>Q-GIAP.E enrichment:</b> <code class="font-mono bg-white px-1 rounded">inappproducts.batchUpdate</code> exists — single atomic call supports both insert+update, avoiding sequential POSTs (revise g1.i scope downward ~0.5h).</li>
+      <li><b>Q-GIAP.G enrichment:</b> <code class="font-mono bg-white px-1 rounded">autoConvertMissingPrices=true</code> query param + <code class="font-mono bg-white px-1 rounded">monetization.convertRegionPrices</code> endpoint → clean 3-source mapping (see §5/§8 inline notes).</li>
+      <li><b>Q-GIAP.B note:</b> Two OAuth scopes required on Service Account: <code class="font-mono bg-white px-1 rounded">androidpublisher</code> + <code class="font-mono bg-white px-1 rounded">playdeveloperreporting</code>. Verify step in §2 must test both.</li>
+      <li><b>Type quirk:</b> <code class="font-mono bg-white px-1 rounded">priceMicros</code> is <i>string</i> (not number) — serialization-sensitive boundary, document in g1.b client wrapper.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================================
+     SECTION 0 — HOME PAGE CARD (NEW MODULE ENTRY POINT)
+     Route: / (Home Hub)
+     Component reuse: HubPage TOOLS array (lib/hub-page.ts)
+     Q-GIAP mapping: NEW navigation requirement
+     ============================================================================ -->
+<section id="s0" class="section-anchor max-w-7xl mx-auto px-6 mt-10">
+  <div class="section-bar mb-4">
+    §0 · Home page card · Route: <b>/</b> · Component: add to <b>HubPage</b> TOOLS array
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <!-- Mock browser frame around hub page -->
+    <div>
+      <div class="browser-chrome">
+        <div class="dot-red"></div><div class="dot-amber"></div><div class="dot-green"></div>
+        <div class="browser-url">vng-internal-tools.app/</div>
+      </div>
+      <div class="bg-white border border-border border-t-0 rounded-b-lg p-6">
+        <div class="mb-4">
+          <div class="text-lg font-semibold">Internal Tools</div>
+          <div class="text-xs text-ink-subtle">Welcome, minhgv@vng.com.vn</div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <!-- Existing card 1: CPP -->
+          <div class="border border-border rounded-lg p-4 hover:shadow-md hover:border-primary cursor-pointer transition">
+            <div class="w-10 h-10 rounded-lg bg-primary-bg text-primary flex items-center justify-center font-bold mb-3"></div>
+            <div class="font-semibold text-sm">CPP Manager</div>
+            <div class="text-xs text-ink-subtle mt-1">Custom Product Pages on App Store Connect</div>
+          </div>
+          <!-- Existing card 2: Apple IAP -->
+          <div class="border border-border rounded-lg p-4 hover:shadow-md hover:border-primary cursor-pointer transition">
+            <div class="w-10 h-10 rounded-lg bg-primary-bg text-primary flex items-center justify-center font-bold mb-3"></div>
+            <div class="font-semibold text-sm">Apple IAP Management</div>
+            <div class="text-xs text-ink-subtle mt-1">In-App Purchases on App Store Connect</div>
+          </div>
+          <!-- Existing card 3: Store Submission -->
+          <div class="border border-border rounded-lg p-4 hover:shadow-md hover:border-primary cursor-pointer transition">
+            <div class="w-10 h-10 rounded-lg bg-teal-bg text-teal flex items-center justify-center font-bold mb-3"></div>
+            <div class="font-semibold text-sm">Store Management</div>
+            <div class="text-xs text-ink-subtle mt-1">Multi-platform submission tracking</div>
+          </div>
+          <!-- NEW card: Google IAP -->
+          <div class="border-2 border-g-blue rounded-lg p-4 hover:shadow-md cursor-pointer transition bg-g-blue-bg/30 relative">
+            <div class="absolute top-2 right-2 text-[10px] font-bold text-g-blue bg-white px-1.5 py-0.5 rounded">NEW</div>
+            <div class="w-10 h-10 rounded-lg bg-white border border-g-blue/30 flex items-center justify-center mb-3">
+              <svg viewBox="0 0 24 24" class="w-6 h-6"><path fill="#34a853" d="M3.609 1.814 13.792 12 3.61 22.186a.996.996 0 0 1-.61-.92V2.734a1 1 0 0 1 .609-.92z"/><path fill="#fbbc04" d="m16.873 15.07 2.622-2.622-2.622-2.622L13.792 12z"/><path fill="#ea4335" d="M3.61 1.814 17.314 9.79l-3.522 2.21z"/><path fill="#4285f4" d="M3.61 22.186 17.314 14.21 13.792 12z" transform="translate(0 0)"/></svg>
+            </div>
+            <div class="font-semibold text-sm">Google IAP Management</div>
+            <div class="text-xs text-ink-subtle mt-1">In-app purchases on Google Play Console</div>
+            <div class="mt-2 pt-2 border-t border-g-blue/20 flex items-center justify-between text-[11px]">
+              <span class="text-ink-subtle">3 accounts · 24 apps</span>
+              <span class="text-ink-subtle">synced 12m ago</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card spec callouts -->
+    <div class="bg-white border border-border rounded-lg p-5 text-sm">
+      <div class="font-semibold mb-3">Card spec</div>
+      <ul class="space-y-2 text-ink-muted text-xs">
+        <li><b>Icon:</b> Official Google Play triangle (multicolor SVG inline, no external asset).</li>
+        <li><b>Title:</b> "Google IAP Management" (parity capitalization with Apple IAP).</li>
+        <li><b>Description:</b> "In-app purchases on Google Play Console" — short, action-oriented.</li>
+        <li><b>Stats footer:</b> account count · apps count · last-sync relative timestamp. Pulled from <code class="font-mono bg-bg px-1 rounded">google_iap_mgmt.google_console_accounts</code> aggregate + <code class="font-mono bg-bg px-1 rounded">apps.last_synced_at</code>.</li>
+        <li><b>NEW badge:</b> shown during launch window; remove after Cycle 35 ship + adoption.</li>
+        <li><b>Position:</b> alongside CPP / Apple IAP / Store — no priority ordering in v1, alphabetical.</li>
+        <li><b>Click target:</b> entire card; navigates to <code class="font-mono bg-bg px-1 rounded">/google-iap-management</code>.</li>
+        <li><b>Empty state:</b> if 0 accounts configured, footer shows "Add your first account" CTA instead of stats.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================================
+     SECTION 0.1 — LEFT MENU NAVIGATION ITEM
+     Route activation: /google-iap-management/*
+     Component reuse: AppSidebar.tsx NAV_ITEMS array
+     ============================================================================ -->
+<section id="s0-1" class="section-anchor max-w-7xl mx-auto px-6 mt-10">
+  <div class="section-bar mb-4">
+    §0.1 · Left menu nav item · Sidebar component: <b>AppSidebar.tsx</b> · Active on <b>/google-iap-management/*</b>
+  </div>
+
+  <div class="grid md:grid-cols-[280px_1fr] gap-4">
+    <!-- Mock collapsed icon sidebar (existing pattern from shell) -->
+    <div class="bg-white border border-border rounded-lg p-3">
+      <div class="text-[11px] uppercase tracking-wide text-ink-subtle px-2 pb-2">Sidebar (icon-rail, hover → flyout 180px)</div>
+      <div class="flex">
+        <!-- Icon rail 56px -->
+        <div class="w-14 bg-surface-2 border border-border rounded-l-md py-2 flex flex-col gap-1 items-center">
+          <!-- Home -->
+          <div class="w-10 h-10 rounded-lg hover:bg-bg flex items-center justify-center cursor-pointer">🏠</div>
+          <!-- CPP -->
+          <div class="w-10 h-10 rounded-lg hover:bg-bg flex items-center justify-center cursor-pointer text-ink-subtle"></div>
+          <!-- Apple IAP -->
+          <div class="w-10 h-10 rounded-lg hover:bg-bg flex items-center justify-center cursor-pointer text-ink-subtle"></div>
+          <!-- Store -->
+          <div class="w-10 h-10 rounded-lg hover:bg-bg flex items-center justify-center cursor-pointer text-ink-subtle">📧</div>
+          <!-- Google IAP (active) — NEW -->
+          <div class="w-10 h-10 rounded-lg bg-g-blue-bg flex items-center justify-center cursor-pointer ring-2 ring-g-blue relative">
+            <svg viewBox="0 0 24 24" class="w-5 h-5"><path fill="#34a853" d="M3.609 1.814 13.792 12 3.61 22.186a.996.996 0 0 1-.61-.92V2.734a1 1 0 0 1 .609-.92z"/><path fill="#fbbc04" d="m16.873 15.07 2.622-2.622-2.622-2.622L13.792 12z"/><path fill="#ea4335" d="M3.61 1.814 17.314 9.79l-3.522 2.21z"/><path fill="#4285f4" d="M3.61 22.186 17.314 14.21 13.792 12z"/></svg>
+            <span class="absolute -right-1 -top-1 w-2 h-2 bg-g-red rounded-full ring-2 ring-white"></span>
+          </div>
+        </div>
+        <!-- Flyout label (shown on hover) -->
+        <div class="ml-1 flex-1 bg-white border border-border rounded-r-md p-2 text-xs">
+          <div class="font-semibold text-g-blue mb-1">Google IAP</div>
+          <div class="text-ink-subtle text-[11px]">Manage in-app products across Google Play apps.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Spec -->
+    <div class="bg-white border border-border rounded-lg p-5 text-sm">
+      <div class="font-semibold mb-3">Menu item spec</div>
+      <ul class="space-y-2 text-ink-muted text-xs">
+        <li><b>Position in NAV_ITEMS:</b> after "Apple IAP" entry (peer-level, both are IAP-domain).</li>
+        <li><b>Icon:</b> Google Play multicolor triangle SVG (inline, same as §0 card).</li>
+        <li><b>Label (flyout):</b> "Google IAP".</li>
+        <li><b>Active state:</b> route <code class="font-mono bg-bg px-1 rounded">startsWith('/google-iap-management')</code> → ring + bg highlight.</li>
+        <li><b>Submenu (Phase 2 deferred):</b> v1 flat link only. Future: Apps · Templates · Accounts sub-items.</li>
+        <li><b>Notification dot:</b> reserved for future "sync error" or "credentials expiring" badges; mocked here as visual placeholder.</li>
+        <li><b>Implementation file:</b> <code class="font-mono bg-bg px-1 rounded">components/layout/AppSidebar.tsx</code> — add one entry to NAV_ITEMS array.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================================
+     SECTION 1 — CONTEXT-AWARE HEADER ACCOUNT SWITCHER (Q-GIAP.H)
+     Two states: A (on Google IAP) — Google accounts only
+                 B (on other tools)  — Apple ASC accounts
+     ============================================================================ -->
+<section id="s1" class="section-anchor max-w-7xl mx-auto px-6 mt-10">
+  <div class="section-bar mb-4">
+    §1 · Header account switcher · <b>Q-GIAP.H</b> context isolation mutex · Component: <b>AccountSwitcher.tsx</b> with route-aware resolver
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <!-- State A: on Google IAP -->
+    <div>
+      <div class="text-xs font-semibold text-g-blue mb-2 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-g-blue"></span>
+        STATE A — Manager on /google-iap-management/*
+      </div>
+      <div class="browser-chrome">
+        <div class="dot-red"></div><div class="dot-amber"></div><div class="dot-green"></div>
+        <div class="browser-url">vng-internal-tools.app/google-iap-management/apps</div>
+      </div>
+      <div class="bg-white border border-border border-t-0 rounded-b-lg">
+        <!-- Header bar -->
+        <div class="border-b border-border px-4 py-3 flex items-center justify-between">
+          <div class="text-sm text-ink-subtle">Apps in account</div>
+          <div class="flex items-center gap-2">
+            <!-- Account switcher dropdown (Google) -->
+            <div class="border-2 border-g-blue rounded-md px-3 py-1.5 flex items-center gap-2 cursor-pointer bg-g-blue-bg/40">
+              <svg viewBox="0 0 24 24" class="w-4 h-4"><path fill="#34a853" d="M3.609 1.814 13.792 12 3.61 22.186a.996.996 0 0 1-.61-.92V2.734a1 1 0 0 1 .609-.92z"/><path fill="#fbbc04" d="m16.873 15.07 2.622-2.622-2.622-2.622L13.792 12z"/><path fill="#ea4335" d="M3.61 1.814 17.314 9.79l-3.522 2.21z"/><path fill="#4285f4" d="M3.61 22.186 17.314 14.21 13.792 12z"/></svg>
+              <div class="text-xs">
+                <div class="text-[10px] uppercase text-g-blue font-bold">Google Console</div>
+                <div class="font-semibold">VNG Games Studios</div>
+              </div>
+              <span class="text-ink-subtle">▾</span>
+            </div>
+            <div class="w-8 h-8 rounded-full bg-primary text-white text-xs flex items-center justify-center font-semibold">MG</div>
+          </div>
+        </div>
+        <!-- Dropdown open state preview -->
+        <div class="px-4 py-3 bg-surface-2 border-b border-border">
+          <div class="bg-white border border-border rounded-md shadow-sm w-80 ml-auto">
+            <div class="px-3 py-2 border-b border-border text-[10px] uppercase font-semibold text-g-blue">Google Console accounts</div>
+            <div class="px-3 py-2 hover:bg-bg cursor-pointer flex items-center gap-2 bg-g-blue-bg/30">
+              <span class="w-2 h-2 rounded-full bg-g-green"></span>
+              <div class="flex-1">
+                <div class="text-sm font-medium">VNG Games Studios</div>
+                <div class="text-[11px] text-ink-subtle font-mono">vng-games@iam.gserviceaccount.com</div>
+              </div>
+              <span class="text-xs text-g-blue">✓</span>
+            </div>
+            <div class="px-3 py-2 hover:bg-bg cursor-pointer flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-g-green"></span>
+              <div class="flex-1">
+                <div class="text-sm font-medium">VNG Test Account</div>
+                <div class="text-[11px] text-ink-subtle font-mono">vng-test@iam.gserviceaccount.com</div>
+              </div>
+            </div>
+            <div class="px-3 py-2 hover:bg-bg cursor-pointer flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-warning"></span>
+              <div class="flex-1">
+                <div class="text-sm font-medium">VNG Mobile (verify pending)</div>
+                <div class="text-[11px] text-ink-subtle font-mono">vng-mobile@iam.gserviceaccount.com</div>
+              </div>
+            </div>
+            <div class="border-t border-border px-3 py-2 text-xs text-g-blue cursor-pointer hover:bg-bg flex items-center gap-1">
+              <span>+</span> Add Google Console account
+            </div>
+            <div class="border-t border-border px-3 py-2 text-[11px] text-ink-subtle bg-warning-bg/30">
+              Apple ASC accounts hidden — switch tools via left sidebar.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- State B: on other tools (Apple context restored) -->
+    <div>
+      <div class="text-xs font-semibold text-primary mb-2 flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-primary"></span>
+        STATE B — Manager on /apps/* (CPP) or /iap-management/*
+      </div>
+      <div class="browser-chrome">
+        <div class="dot-red"></div><div class="dot-amber"></div><div class="dot-green"></div>
+        <div class="browser-url">vng-internal-tools.app/iap-management/apps/...</div>
+      </div>
+      <div class="bg-white border border-border border-t-0 rounded-b-lg">
+        <div class="border-b border-border px-4 py-3 flex items-center justify-between">
+          <div class="text-sm text-ink-subtle">Apple IAP Management</div>
+          <div class="flex items-center gap-2">
+            <div class="border-2 border-primary rounded-md px-3 py-1.5 flex items-center gap-2 cursor-pointer bg-primary-bg/40">
+              <svg viewBox="0 0 24 24" class="w-4 h-4 text-ink"><path fill="currentColor" d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.08zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z"/></svg>
+              <div class="text-xs">
+                <div class="text-[10px] uppercase text-primary font-bold">Apple ASC</div>
+                <div class="font-semibold">VNG Corp (Issuer)</div>
+              </div>
+              <span class="text-ink-subtle">▾</span>
+            </div>
+            <div class="w-8 h-8 rounded-full bg-primary text-white text-xs flex items-center justify-center font-semibold">MG</div>
+          </div>
+        </div>
+        <div class="px-4 py-3 bg-surface-2 border-b border-border">
+          <div class="bg-white border border-border rounded-md shadow-sm w-80 ml-auto">
+            <div class="px-3 py-2 border-b border-border text-[10px] uppercase font-semibold text-primary">Apple ASC accounts</div>
+            <div class="px-3 py-2 hover:bg-bg cursor-pointer flex items-center gap-2 bg-primary-bg/30">
+              <span class="w-2 h-2 rounded-full bg-success"></span>
+              <div class="flex-1">
+                <div class="text-sm font-medium">VNG Corp</div>
+                <div class="text-[11px] text-ink-subtle font-mono">9a8b-...-issuer</div>
+              </div>
+              <span class="text-xs text-primary">✓</span>
+            </div>
+            <div class="px-3 py-2 hover:bg-bg cursor-pointer flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-success"></span>
+              <div class="flex-1">
+                <div class="text-sm font-medium">VNG Test Connect</div>
+              </div>
+            </div>
+            <div class="border-t border-border px-3 py-2 text-[11px] text-ink-subtle bg-primary-bg/30">
+              Google Console accounts hidden — switch tools via left sidebar.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Implementation note -->
+  <div class="mt-4 bg-white border border-border rounded-lg p-4 text-xs">
+    <div class="font-semibold mb-2">Implementation</div>
+    <ul class="text-ink-muted space-y-1 list-disc ml-5">
+      <li>Route-aware resolver: <code class="font-mono bg-bg px-1 rounded">useAccountContext()</code> hook reads pathname → returns <code class="font-mono bg-bg px-1 rounded">{ kind: 'google' | 'apple', accounts: [...] }</code>.</li>
+      <li>Visual mutex: dropdown label + accent color + icon flip atomically on route change (no flash; <code class="font-mono bg-bg px-1 rounded">useSyncExternalStore</code> on Next.js router).</li>
+      <li>Persistence: Google account selection stored separately from Apple (cookie keys <code class="font-mono bg-bg px-1 rounded">asc_active</code> vs <code class="font-mono bg-bg px-1 rounded">gp_active</code>).</li>
+      <li>Empty state: if Manager has 0 Google accounts and lands on Google IAP route → inline CTA "Add Google Console account" instead of dropdown.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ============================================================================
+     SECTION 2 — SETTINGS · GOOGLE CONSOLE ACCOUNTS (Q-GIAP.B)
+     Route: /google-iap-management/settings/google-accounts
+     ============================================================================ -->
+<section id="s2" class="section-anchor max-w-7xl mx-auto px-6 mt-10">
+  <div class="section-bar mb-4">
+    §2 · Settings · Google Console Accounts · <b>Q-GIAP.B</b> file upload + encrypted DB · Route: <b>/google-iap-management/settings/google-accounts</b>
+  </div>
+
+  <div class="browser-chrome">
+    <div class="dot-red"></div><div class="dot-amber"></div><div class="dot-green"></div>
+    <div class="browser-url">vng-internal-tools.app/google-iap-management/settings/google-accounts</div>
+  </div>
+  <div class="bg-white border border-border border-t-0 rounded-b-lg">
+    <!-- Page header -->
+    <div class="border-b border-border px-6 py-4 flex items-center justify-between">
+      <div>
+        <div class="text-[11px] text-ink-subtle">Settings</div>
+        <div class="font-semibold">Google Console accounts</div>
+      </div>
+      <button class="bg-g-blue text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-g-blue/90">+ Add Google Console account</button>
+    </div>
+
+    <!-- Upload dropzone (modal/inline) -->
+    <div class="px-6 py-5 bg-surface-2 border-b border-border">
+      <div class="text-sm font-semibold mb-3">Add account — upload Service Account JSON</div>
+      <div class="border-2 border-dashed border-border-strong rounded-lg p-8 text-center bg-white hover:bg-g-blue-bg/20 hover:border-g-blue cursor-pointer">
+        <div class="text-3xl mb-2">📁</div>
+        <div class="font-medium text-sm">Drop .json file here, or click to browse</div>
+        <div class="text-xs text-ink-subtle mt-1">
+          Service Account credentials with scopes:
+          <code class="font-mono bg-bg px-1 rounded">androidpublisher</code> +
+          <code class="font-mono bg-bg px-1 rounded">playdeveloperreporting</code>
+          <span class="tt-badge" title="Q-GIAP.B: file content encrypted at rest using GMAIL_ENCRYPTION_KEY-equivalent (AES-256-GCM). Service account email + display name stored plaintext for UI; JSON body in encrypted column.">?</span>
+        </div>
+      </div>
+      <div class="mt-3 flex items-center gap-3">
+        <input type="text" placeholder="Account display name (Manager-provided, optional)" class="flex-1 border border-border rounded-md px-3 py-2 text-sm">
+        <button class="bg-g-blue text-white text-sm px-4 py-2 rounded-md">Verify & save</button>
+        <button class="border border-border text-sm px-4 py-2 rounded-md">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Accounts list table -->
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-surface-2 border-b border-border">
+          <tr class="text-left text-[11px] uppercase text-ink-subtle">
+            <th class="px-6 py-2 font-medium">Display name</th>
+            <th class="px-6 py-2 font-medium">Service account email</th>
+            <th class="px-6 py-2 font-medium">Status</th>
+            <th class="px-6 py-2 font-medium">Created</th>
+            <th class="px-6 py-2 font-medium">Last verified</th>
+            <th class="px-6 py-2 font-medium text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border">
+          <tr class="hover:bg-bg">
+            <td class="px-6 py-3 font-medium">VNG Games Studios</td>
+            <td class="px-6 py-3 font-mono text-xs text-ink-subtle">vng-games@iam.gserviceaccount.com</td>
+            <td class="px-6 py-3"><span class="dot bg-g-green"></span><span class="text-success font-medium">Verified</span></td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">2026-05-18</td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">12 min ago</td>
+            <td class="px-6 py-3 text-right text-xs space-x-2">
+              <button class="text-g-blue hover:underline">Details</button>
+              <button class="text-g-blue hover:underline">Replace JSON</button>
+              <button class="text-danger hover:underline">Remove</button>
+            </td>
+          </tr>
+          <tr class="hover:bg-bg">
+            <td class="px-6 py-3 font-medium">VNG Test Account</td>
+            <td class="px-6 py-3 font-mono text-xs text-ink-subtle">vng-test@iam.gserviceaccount.com</td>
+            <td class="px-6 py-3"><span class="dot bg-g-green"></span><span class="text-success font-medium">Verified</span></td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">2026-05-19</td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">2 hr ago</td>
+            <td class="px-6 py-3 text-right text-xs space-x-2">
+              <button class="text-g-blue hover:underline">Details</button>
+              <button class="text-g-blue hover:underline">Replace JSON</button>
+              <button class="text-danger hover:underline">Remove</button>
+            </td>
+          </tr>
+          <tr class="hover:bg-bg">
+            <td class="px-6 py-3 font-medium">VNG Mobile</td>
+            <td class="px-6 py-3 font-mono text-xs text-ink-subtle">vng-mobile@iam.gserviceaccount.com</td>
+            <td class="px-6 py-3"><span class="dot bg-warning"></span><span class="text-warning font-medium">Pending verify</span></td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">2026-05-20</td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">—</td>
+            <td class="px-6 py-3 text-right text-xs space-x-2">
+              <button class="text-g-blue hover:underline font-medium">Verify now</button>
+              <button class="text-danger hover:underline">Remove</button>
+            </td>
+          </tr>
+          <tr class="hover:bg-bg">
+            <td class="px-6 py-3 font-medium text-ink-subtle">VNG Legacy (deprecated)</td>
+            <td class="px-6 py-3 font-mono text-xs text-ink-subtle">vng-legacy@iam.gserviceaccount.com</td>
+            <td class="px-6 py-3"><span class="dot bg-danger"></span><span class="text-danger font-medium">Invalid scope</span></td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">2026-04-10</td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">Failed</td>
+            <td class="px-6 py-3 text-right text-xs space-x-2">
+              <button class="text-g-blue hover:underline">Replace JSON</button>
+              <button class="text-danger hover:underline">Remove</button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Verify-step spec -->
+    <div class="px-6 py-4 border-t border-border bg-surface-2 text-xs text-ink-muted">
+      <b>Verify behavior:</b> on save → tool issues two test calls
+      (<code class="font-mono bg-white px-1 rounded">GET /v1beta1/apps:search?pageSize=1</code> +
+      <code class="font-mono bg-white px-1 rounded">GET /androidpublisher/v3/applications/{firstPackageName}/inappproducts?maxResults=1</code>) →
+      green dot only if both succeed; otherwise show specific scope-missing error.
+      <span class="tt-badge" title="Two OAuth scopes required. Reporting API + Publisher API. Tool MUST verify both to avoid partial-functionality bug.">?</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================================
+     SECTION 3 — APPS LIST PAGE (Q-GIAP.C)
+     Route: /google-iap-management/apps
+     API: GET /v1beta1/apps:search (Reporting API) — discovery-corrected
+     ============================================================================ -->
+<section id="s3" class="section-anchor max-w-7xl mx-auto px-6 mt-10">
+  <div class="section-bar mb-4">
+    §3 · Apps list · <b>Q-GIAP.C</b> Reporting API <code>GET /v1beta1/apps:search</code> · Route: <b>/google-iap-management/apps</b>
+  </div>
+
+  <div class="browser-chrome">
+    <div class="dot-red"></div><div class="dot-amber"></div><div class="dot-green"></div>
+    <div class="browser-url">vng-internal-tools.app/google-iap-management/apps</div>
+  </div>
+  <div class="bg-white border border-border border-t-0 rounded-b-lg">
+    <!-- Header -->
+    <div class="border-b border-border px-6 py-4 flex items-center justify-between">
+      <div>
+        <div class="text-[11px] text-ink-subtle">Google Console: VNG Games Studios</div>
+        <div class="font-semibold text-lg">Apps</div>
+      </div>
+      <div class="flex items-center gap-2">
+        <input type="text" placeholder="Search apps by name or package…" class="border border-border rounded-md px-3 py-2 text-sm w-64">
+        <button class="border border-border rounded-md px-3 py-2 text-sm flex items-center gap-2 hover:bg-bg">
+          <span>⟳</span> Refresh from Google
+        </button>
+      </div>
+    </div>
+
+    <!-- Last sync banner -->
+    <div class="px-6 py-2 bg-surface-2 border-b border-border text-xs text-ink-subtle flex items-center justify-between">
+      <span>Last synced from Google Reporting API: <b class="text-ink">2026-05-20 14:32</b> (12 min ago) · <b>24</b> apps</span>
+      <span class="text-[10px] uppercase tracking-wide">Page size 50 · max 1000 (per discovery)</span>
+    </div>
+
+    <!-- Apps grid -->
+    <div class="p-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+      <!-- App card -->
+      <div class="border border-border rounded-lg p-4 hover:shadow-md hover:border-g-blue cursor-pointer transition">
+        <div class="flex items-start gap-3 mb-3">
+          <div class="w-12 h-12 rounded-lg bg-gradient-to-br from-purple-bg to-primary-bg flex items-center justify-center text-purple font-bold">VS</div>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-sm truncate">VNG Survival</div>
+            <div class="text-[11px] text-ink-subtle font-mono truncate">com.vng.survival</div>
+          </div>
+        </div>
+        <div class="flex items-center justify-between text-xs">
+          <span class="bg-g-blue-bg text-g-blue px-2 py-0.5 rounded font-medium">42 IAPs</span>
+          <span class="text-ink-subtle">synced 12m</span>
+        </div>
+      </div>
+      <div class="border border-border rounded-lg p-4 hover:shadow-md hover:border-g-blue cursor-pointer transition">
+        <div class="flex items-start gap-3 mb-3">
+          <div class="w-12 h-12 rounded-lg bg-gradient-to-br from-teal-bg to-success-bg flex items-center justify-center text-teal font-bold">RZ</div>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-sm truncate">Raid Z</div>
+            <div class="text-[11px] text-ink-subtle font-mono truncate">com.vng.raidz</div>
+          </div>
+        </div>
+        <div class="flex items-center justify-between text-xs">
+          <span class="bg-g-blue-bg text-g-blue px-2 py-0.5 rounded font-medium">28 IAPs</span>
+          <span class="text-ink-subtle">synced 14m</span>
+        </div>
+      </div>
+      <div class="border border-border rounded-lg p-4 hover:shadow-md hover:border-g-blue cursor-pointer transition">
+        <div class="flex items-start gap-3 mb-3">
+          <div class="w-12 h-12 rounded-lg bg-gradient-to-br from-warning-bg to-danger-bg flex items-center justify-center text-warning font-bold">KK</div>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-sm truncate">Kart Kings</div>
+            <div class="text-[11px] text-ink-subtle font-mono truncate">com.vng.kartkings</div>
+          </div>
+        </div>
+        <div class="flex items-center justify-between text-xs">
+          <span class="bg-g-blue-bg text-g-blue px-2 py-0.5 rounded font-medium">16 IAPs</span>
+          <span class="text-ink-subtle">synced 14m</span>
+        </div>
+      </div>
+      <div class="border border-border rounded-lg p-4 hover:shadow-md hover:border-g-blue cursor-pointer transition">
+        <div class="flex items-start gap-3 mb-3">
+          <div class="w-12 h-12 rounded-lg bg-gradient-to-br from-primary-bg to-purple-bg flex items-center justify-center text-primary font-bold">MG</div>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-sm truncate">Mecha Galaxy</div>
+            <div class="text-[11px] text-ink-subtle font-mono truncate">com.vng.mechagalaxy</div>
+          </div>
+        </div>
+        <div class="flex items-center justify-between text-xs">
+          <span class="bg-g-blue-bg text-g-blue px-2 py-0.5 rounded font-medium">8 IAPs</span>
+          <span class="text-ink-subtle">synced 14m</span>
+        </div>
+      </div>
+      <!-- Empty IAPs state -->
+      <div class="border border-border rounded-lg p-4 hover:shadow-md hover:border-g-blue cursor-pointer transition">
+        <div class="flex items-start gap-3 mb-3">
+          <div class="w-12 h-12 rounded-lg bg-bg flex items-center justify-center text-ink-subtle font-bold">NN</div>
+          <div class="flex-1 min-w-0">
+            <div class="font-semibold text-sm truncate">Nono Quest</div>
+            <div class="text-[11px] text-ink-subtle font-mono truncate">com.vng.nono</div>
+          </div>
+        </div>
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-ink-subtle italic">No IAPs yet</span>
+          <span class="text-ink-subtle">synced 14m</span>
+        </div>
+      </div>
+      <!-- ... -->
+    </div>
+
+    <!-- Pagination footer (hide-when-≤20 reuse from IAP.q.3) -->
+    <div class="px-6 py-3 border-t border-border flex items-center justify-between text-xs">
+      <span class="text-ink-subtle">Showing 1–24 of 24 (page 1 of 1) · pagination hidden when ≤ 20 apps</span>
+      <div class="flex items-center gap-1 opacity-50 pointer-events-none">
+        <button class="border border-border rounded px-2 py-1">‹</button>
+        <span class="px-2">1</span>
+        <button class="border border-border rounded px-2 py-1">›</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================================
+     SECTION 4 — APP DETAIL · IAPs LIST
+     Route: /google-iap-management/apps/[packageName]
+     ============================================================================ -->
+<section id="s4" class="section-anchor max-w-7xl mx-auto px-6 mt-10">
+  <div class="section-bar mb-4">
+    §4 · App detail · IAPs list · API <code>GET /v3/applications/{pkg}/inappproducts</code> · Route: <b>/google-iap-management/apps/[packageName]</b>
+  </div>
+
+  <div class="browser-chrome">
+    <div class="dot-red"></div><div class="dot-amber"></div><div class="dot-green"></div>
+    <div class="browser-url">vng-internal-tools.app/google-iap-management/apps/com.vng.survival</div>
+  </div>
+  <div class="bg-white border border-border border-t-0 rounded-b-lg">
+    <!-- App header -->
+    <div class="border-b border-border px-6 py-4 flex items-center gap-4">
+      <div class="w-14 h-14 rounded-lg bg-gradient-to-br from-purple-bg to-primary-bg flex items-center justify-center text-purple font-bold text-xl">VS</div>
+      <div class="flex-1">
+        <div class="text-[11px] text-ink-subtle">com.vng.survival · default language en-US</div>
+        <div class="font-semibold text-lg">VNG Survival</div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="bg-g-blue text-white text-sm font-medium px-3 py-2 rounded-md">+ New IAP</button>
+        <button class="border border-border text-sm px-3 py-2 rounded-md hover:bg-bg">Bulk Import</button>
+        <button class="border border-border text-sm px-3 py-2 rounded-md hover:bg-bg">Apply Template</button>
+        <button class="border border-border text-sm px-3 py-2 rounded-md hover:bg-bg">⟳ Refresh</button>
+      </div>
+    </div>
+
+    <!-- Filter bar -->
+    <div class="px-6 py-3 border-b border-border flex items-center justify-between text-sm bg-surface-2">
+      <div class="flex items-center gap-2">
+        <input type="text" placeholder="Search SKU or title…" class="border border-border rounded-md px-3 py-1.5 text-sm w-56">
+        <select class="border border-border rounded-md px-2 py-1.5 text-sm">
+          <option>All statuses</option>
+          <option>Active</option>
+          <option>Inactive</option>
+        </select>
+        <span class="text-[11px] text-ink-subtle">Showing default locale (en-US) per Q-GIAP.J</span>
+      </div>
+      <span class="text-xs text-ink-subtle">42 IAPs total · last refreshed 12m ago</span>
+    </div>
+
+    <!-- Table -->
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-surface-2 border-b border-border">
+          <tr class="text-left text-[11px] uppercase text-ink-subtle">
+            <th class="px-6 py-2 font-medium">Display name <span class="text-[9px] normal-case text-ink-subtle">(default locale)</span></th>
+            <th class="px-6 py-2 font-medium">SKU</th>
+            <th class="px-6 py-2 font-medium">Price <span class="text-[9px] normal-case">(default region)</span></th>
+            <th class="px-6 py-2 font-medium">Status</th>
+            <th class="px-6 py-2 font-medium">Last updated</th>
+            <th class="px-6 py-2 font-medium text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-border">
+          <tr class="hover:bg-bg cursor-pointer">
+            <td class="px-6 py-3 font-medium">100 Gems</td>
+            <td class="px-6 py-3 font-mono text-xs">gems_100</td>
+            <td class="px-6 py-3 font-mono">$0.99 USD</td>
+            <td class="px-6 py-3"><span class="dot bg-success"></span><span class="text-success font-medium">Active</span></td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">2 days ago</td>
+            <td class="px-6 py-3 text-right text-xs space-x-2">
+              <button class="text-g-blue hover:underline">View</button>
+              <button class="text-g-blue hover:underline">Edit</button>
+            </td>
+          </tr>
+          <tr class="hover:bg-bg cursor-pointer">
+            <td class="px-6 py-3 font-medium">500 Gems</td>
+            <td class="px-6 py-3 font-mono text-xs">gems_500</td>
+            <td class="px-6 py-3 font-mono">$4.99 USD</td>
+            <td class="px-6 py-3"><span class="dot bg-success"></span><span class="text-success font-medium">Active</span></td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">2 days ago</td>
+            <td class="px-6 py-3 text-right text-xs space-x-2">
+              <button class="text-g-blue hover:underline">View</button>
+              <button class="text-g-blue hover:underline">Edit</button>
+            </td>
+          </tr>
+          <tr class="hover:bg-bg cursor-pointer">
+            <td class="px-6 py-3 font-medium">Starter Pack</td>
+            <td class="px-6 py-3 font-mono text-xs">pack_starter</td>
+            <td class="px-6 py-3 font-mono">$1.99 USD</td>
+            <td class="px-6 py-3"><span class="dot bg-success"></span><span class="text-success font-medium">Active</span></td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">1 wk ago</td>
+            <td class="px-6 py-3 text-right text-xs space-x-2">
+              <button class="text-g-blue hover:underline">View</button>
+              <button class="text-g-blue hover:underline">Edit</button>
+            </td>
+          </tr>
+          <tr class="hover:bg-bg cursor-pointer">
+            <td class="px-6 py-3 font-medium text-ink-subtle">Legacy Promo (old)</td>
+            <td class="px-6 py-3 font-mono text-xs">promo_legacy</td>
+            <td class="px-6 py-3 font-mono">$2.99 USD</td>
+            <td class="px-6 py-3"><span class="dot bg-warning"></span><span class="text-warning font-medium">Inactive</span></td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">3 mo ago</td>
+            <td class="px-6 py-3 text-right text-xs space-x-2">
+              <button class="text-g-blue hover:underline">View</button>
+              <button class="text-g-blue hover:underline">Edit</button>
+            </td>
+          </tr>
+          <tr class="hover:bg-bg cursor-pointer">
+            <td class="px-6 py-3 font-medium">Monthly Pass</td>
+            <td class="px-6 py-3 font-mono text-xs">pass_monthly</td>
+            <td class="px-6 py-3 font-mono text-ink-subtle italic">subscription</td>
+            <td class="px-6 py-3"><span class="dot bg-purple"></span><span class="text-purple font-medium">Subscription</span></td>
+            <td class="px-6 py-3 text-xs text-ink-subtle">2 wk ago</td>
+            <td class="px-6 py-3 text-right text-xs space-x-2">
+              <span class="text-ink-subtle italic">Phase 2</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Pagination -->
+    <div class="px-6 py-3 border-t border-border flex items-center justify-between text-xs">
+      <span class="text-ink-subtle">Showing 1–20 of 42</span>
+      <div class="flex items-center gap-1">
+        <button class="border border-border rounded px-2 py-1 hover:bg-bg">‹</button>
+        <button class="border border-g-blue bg-g-blue text-white rounded px-2 py-1">1</button>
+        <button class="border border-border rounded px-2 py-1 hover:bg-bg">2</button>
+        <button class="border border-border rounded px-2 py-1 hover:bg-bg">3</button>
+        <button class="border border-border rounded px-2 py-1 hover:bg-bg">›</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Q-GIAP.A scope reminder -->
+  <div class="mt-3 bg-warning-bg/30 border border-warning/30 rounded-lg p-3 text-xs text-warning">
+    <b>Q-GIAP.A scope:</b> v1 manages <i>managedUser</i> (one-time / consumable) products only. Subscriptions (<code class="font-mono">subscription</code> purchaseType) shown read-only with "Phase 2" badge — edit disabled. Subscriptions API lives in <code class="font-mono">monetization.subscriptions</code> resource, separate scope.
+  </div>
+</section>
+
+<!-- ============================================================================
+     SECTION 5 — CREATE IAP FORM (Q-GIAP.F, Q-GIAP.G, Q-GIAP.I, Q-GIAP.J)
+     Route: /google-iap-management/apps/[packageName]/iaps/new
+     ============================================================================ -->
+<section id="s5" class="section-anchor max-w-7xl mx-auto px-6 mt-10">
+  <div class="section-bar mb-4">
+    §5 · Create IAP · API <code>POST /v3/applications/{pkg}/inappproducts</code> + <code>?autoConvertMissingPrices=…</code> · Route: <b>/iaps/new</b>
+  </div>
+
+  <div class="browser-chrome">
+    <div class="dot-red"></div><div class="dot-amber"></div><div class="dot-green"></div>
+    <div class="browser-url">vng-internal-tools.app/google-iap-management/apps/com.vng.survival/iaps/new</div>
+  </div>
+  <div class="bg-white border border-border border-t-0 rounded-b-lg">
+    <div class="border-b border-border px-6 py-4 flex items-center justify-between">
+      <div>
+        <div class="text-[11px] text-ink-subtle">VNG Survival › New IAP</div>
+        <div class="font-semibold text-lg">Create in-app product</div>
+      </div>
+      <div class="flex items-center gap-2">
+        <button class="border border-border text-sm px-3 py-2 rounded-md">Cancel</button>
+        <button class="border border-border text-sm px-3 py-2 rounded-md">Save as Draft</button>
+        <button class="bg-g-blue text-white text-sm font-medium px-4 py-2 rounded-md">Create on Google Play</button>
+      </div>
+    </div>
+
+    <div class="grid lg:grid-cols-[240px_1fr] min-h-[600px]">
+      <!-- LocaleSidebar (reuse Apple IAP pattern Q-IAP.h.2) -->
+      <aside class="border-r border-border p-4 bg-surface-2">
+        <div class="text-[11px] uppercase text-ink-subtle font-semibold mb-2">Listings · Q-GIAP.J</div>
+        <div class="space-y-1">
+          <div class="px-2 py-1.5 rounded bg-g-blue-bg text-g-blue font-medium text-sm flex items-center justify-between cursor-pointer">
+            en-US <span class="text-[10px] uppercase font-bold">default</span>
+          </div>
+          <div class="px-2 py-1.5 rounded text-sm hover:bg-bg cursor-pointer flex items-center justify-between">
+            vi <span class="text-success text-xs">✓</span>
+          </div>
+          <div class="px-2 py-1.5 rounded text-sm hover:bg-bg cursor-pointer flex items-center justify-between">
+            ja <span class="text-success text-xs">✓</span>
+          </div>
+          <div class="px-2 py-1.5 rounded text-sm hover:bg-bg cursor-pointer text-ink-subtle italic flex items-center justify-between">
+            ko <span class="text-ink-subtle text-xs">empty</span>
+          </div>
+          <div class="px-2 py-1.5 rounded text-sm hover:bg-bg cursor-pointer text-ink-subtle italic">+ Add locale</div>
+        </div>
+        <div class="text-[10px] text-ink-subtle mt-3 leading-relaxed">BCP-47 codes per Google convention. Reuse <code class="font-mono">LocaleSidebar</code> from <code class="font-mono">components/ui/iap/</code>.</div>
+      </aside>
+
+      <div class="p-6 space-y-6">
+        <!-- Identification -->
+        <fieldset class="border border-border rounded-lg p-5">
+          <legend class="text-xs uppercase font-semibold text-ink-subtle px-2">Identification</legend>
+          <div class="grid grid-cols-2 gap-4 mt-2">
+            <div>
+              <label class="block text-xs font-medium mb-1">SKU <span class="text-danger">*</span> <span class="tt-badge" title="Stock-keeping unit. Lowercase letters, digits, underscores. Unique per app. Cannot be changed after creation.">?</span></label>
+              <input type="text" placeholder="gems_1000" class="w-full border border-border rounded-md px-3 py-2 text-sm font-mono">
+              <div class="text-[11px] text-ink-subtle mt-1">Must be unique within the app · cannot change after create</div>
+            </div>
+            <div>
+              <label class="block text-xs font-medium mb-1">Purchase type <span class="text-danger">*</span></label>
+              <div class="flex gap-3 mt-2">
+                <label class="flex items-center gap-2 text-sm"><input type="radio" name="ptype" checked> Managed (one-time)</label>
+                <label class="flex items-center gap-2 text-sm text-ink-subtle"><input type="radio" name="ptype" disabled> Subscription <span class="text-[10px] uppercase bg-purple-bg text-purple px-1 rounded">Phase 2</span></label>
+              </div>
+            </div>
+            <div class="col-span-2">
+              <label class="block text-xs font-medium mb-1">Status · <b>Q-GIAP.I</b></label>
+              <div class="flex items-center gap-3">
+                <label class="inline-flex items-center cursor-pointer">
+                  <input type="checkbox" checked class="sr-only peer">
+                  <div class="w-10 h-6 bg-border-strong rounded-full peer peer-checked:bg-g-green relative">
+                    <span class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition peer-checked:translate-x-4 shadow-sm"></span>
+                  </div>
+                  <span class="ml-2 text-sm">Active <span class="text-[11px] text-ink-subtle">(default per Q-GIAP.I — new items created active immediately)</span></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </fieldset>
+
+        <!-- Listings (multi-locale) Q-GIAP.J -->
+        <fieldset class="border border-border rounded-lg p-5">
+          <legend class="text-xs uppercase font-semibold text-ink-subtle px-2">Listing · en-US (default locale)</legend>
+          <div class="space-y-3 mt-2">
+            <div>
+              <div class="flex justify-between items-baseline">
+                <label class="block text-xs font-medium">Title <span class="text-danger">*</span></label>
+                <span class="text-[11px] text-ink-subtle">42 / 55</span>
+              </div>
+              <input type="text" value="1,000 Gems Bundle" class="w-full border border-border rounded-md px-3 py-2 text-sm">
+            </div>
+            <div>
+              <div class="flex justify-between items-baseline">
+                <label class="block text-xs font-medium">Description <span class="text-danger">*</span></label>
+                <span class="text-[11px] text-ink-subtle">87 / 200</span>
+              </div>
+              <textarea rows="3" class="w-full border border-border rounded-md px-3 py-2 text-sm">Get 1,000 in-game gems instantly. Use them to unlock characters, items, and special abilities.</textarea>
+            </div>
+          </div>
+        </fieldset>
+
+        <!-- Pricing (Q-GIAP.F decimal input + Q-GIAP.G 3-source) -->
+        <fieldset class="border border-border rounded-lg p-5">
+          <legend class="text-xs uppercase font-semibold text-ink-subtle px-2">Pricing · Q-GIAP.F (decimal) · Q-GIAP.G (3 sources)</legend>
+
+          <!-- Pricing source selector (3 radios) -->
+          <div class="mt-2 mb-4 p-3 bg-surface-2 rounded-md border border-border">
+            <div class="text-xs font-semibold mb-2">Pricing source <span class="tt-badge" title="Q-GIAP.G: pricing-source picker. 3 mutually-exclusive options. Maps to autoConvertMissingPrices query param + sparse prices map.">?</span></div>
+            <label class="flex items-start gap-2 text-sm mb-2 cursor-pointer">
+              <input type="radio" name="psource" checked class="mt-1">
+              <div>
+                <div class="font-medium">Google default (auto-convert)</div>
+                <div class="text-[11px] text-ink-subtle">Send only USD default price → Google auto-fills all targeted regions via exchange rates. API: <code class="font-mono">autoConvertMissingPrices=true</code>.</div>
+              </div>
+            </label>
+            <label class="flex items-start gap-2 text-sm mb-2 cursor-pointer">
+              <input type="radio" name="psource" class="mt-1">
+              <div>
+                <div class="font-medium">Default Template <span class="text-[11px] text-ink-subtle">(workspace-wide)</span></div>
+                <div class="text-[11px] text-ink-subtle">Use the workspace default pricing template. Overridable per-region below.</div>
+              </div>
+            </label>
+            <label class="flex items-start gap-2 text-sm cursor-pointer">
+              <input type="radio" name="psource" class="mt-1">
+              <div>
+                <div class="font-medium">App-specific Template</div>
+                <div class="text-[11px] text-ink-subtle">Use a template scoped to <i>VNG Survival</i> only. None configured → fail-soft fallback to Google default (Q-K reuse).</div>
+              </div>
+            </label>
+          </div>
+
+          <!-- Base price (decimal) -->
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs font-medium mb-1">Base price (default) <span class="text-danger">*</span></label>
+              <div class="flex gap-2">
+                <select class="border border-border rounded-md px-2 py-2 text-sm">
+                  <option>USD</option>
+                  <option>VND</option>
+                  <option>EUR</option>
+                </select>
+                <input type="text" value="9.99" class="flex-1 border border-border rounded-md px-3 py-2 text-sm font-mono">
+              </div>
+              <div class="text-[11px] text-ink-subtle mt-1">Tool stores 9.99 → converts to <code class="font-mono">priceMicros: "9990000"</code> on POST.</div>
+            </div>
+            <div class="col-span-2 flex items-end">
+              <button class="text-xs text-g-blue hover:underline">Preview converted prices →</button>
+              <span class="text-[10px] text-ink-subtle ml-2">(uses <code class="font-mono">monetization:convertRegionPrices</code> endpoint)</span>
+            </div>
+          </div>
+
+          <!-- Per-region overrides table (collapsed by default) -->
+          <details class="mt-4">
+            <summary class="cursor-pointer text-sm font-semibold text-g-blue hover:underline">Show per-region overrides (Q-GIAP.G sparse — 3 regions overridden, rest auto-converted)</summary>
+            <div class="mt-3 border border-border rounded-md overflow-hidden">
+              <table class="w-full text-sm">
+                <thead class="bg-surface-2 border-b border-border">
+                  <tr class="text-left text-[11px] uppercase text-ink-subtle">
+                    <th class="px-3 py-2 font-medium">Region</th>
+                    <th class="px-3 py-2 font-medium">Currency</th>
+                    <th class="px-3 py-2 font-medium">Price (decimal)</th>
+                    <th class="px-3 py-2 font-medium">Source</th>
+                    <th class="px-3 py-2 font-medium"></th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-border text-sm">
+                  <tr class="bg-g-blue-bg/30">
+                    <td class="px-3 py-2 font-medium">VN — Vietnam</td>
+                    <td class="px-3 py-2 font-mono">VND</td>
+                    <td class="px-3 py-2"><input type="text" value="229000" class="border border-border rounded px-2 py-1 text-sm w-24 font-mono"></td>
+                    <td class="px-3 py-2"><span class="text-xs bg-g-blue-bg text-g-blue px-2 py-0.5 rounded font-medium">Override</span></td>
+                    <td class="px-3 py-2 text-right"><button class="text-xs text-danger hover:underline">Remove</button></td>
+                  </tr>
+                  <tr class="bg-g-blue-bg/30">
+                    <td class="px-3 py-2 font-medium">JP — Japan</td>
+                    <td class="px-3 py-2 font-mono">JPY</td>
+                    <td class="px-3 py-2"><input type="text" value="1200" class="border border-border rounded px-2 py-1 text-sm w-24 font-mono"></td>
+                    <td class="px-3 py-2"><span class="text-xs bg-g-blue-bg text-g-blue px-2 py-0.5 rounded font-medium">Override</span></td>
+                    <td class="px-3 py-2 text-right"><button class="text-xs text-danger hover:underline">Remove</button></td>
+                  </tr>
+                  <tr class="bg-g-blue-bg/30">
+                    <td class="px-3 py-2 font-medium">KR — Korea</td>
+                    <td class="px-3 py-2 font-mono">KRW</td>
+                    <td class="px-3 py-2"><input type="text" value="11000" class="border border-border rounded px-2 py-1 text-sm w-24 font-mono"></td>
+                    <td class="px-3 py-2"><span class="text-xs bg-g-blue-bg text-g-blue px-2 py-0.5 rounded font-medium">Override</span></td>
+                    <td class="px-3 py-2 text-right"><button class="text-xs text-danger hover:underline">Remove</button></td>
+                  </tr>
+                  <tr class="text-ink-subtle">
+                    <td class="px-3 py-2">US — United States</td>
+                    <td class="px-3 py-2 font-mono">USD</td>
+                    <td class="px-3 py-2 font-mono">9.99</td>
+                    <td class="px-3 py-2"><span class="text-xs bg-bg text-ink-subtle px-2 py-0.5 rounded">Default</span></td>
+                    <td class="px-3 py-2 text-right"><button class="text-xs text-g-blue hover:underline">Override</button></td>
+                  </tr>
+                  <tr class="text-ink-subtle">
+                    <td class="px-3 py-2">GB — United Kingdom</td>
+                    <td class="px-3 py-2 font-mono">GBP</td>
+                    <td class="px-3 py-2 font-mono italic">≈ 7.89</td>
+                    <td class="px-3 py-2"><span class="text-xs bg-success-bg text-success px-2 py-0.5 rounded">Auto-converted</span></td>
+                    <td class="px-3 py-2 text-right"><button class="text-xs text-g-blue hover:underline">Override</button></td>
+                  </tr>
+                  <tr class="text-ink-subtle">
+                    <td class="px-3 py-2 italic" colspan="5">… 130+ regions, scroll for full list</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </details>
+        </fieldset>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================================
+     SECTION 6 — EDIT IAP FORM + DIFF MODAL
+     Route: /google-iap-management/apps/[packageName]/iaps/[sku]
+     ============================================================================ -->
+<section id="s6" class="section-anchor max-w-7xl mx-auto px-6 mt-10">
+  <div class="section-bar mb-4">
+    §6 · Edit IAP + diff preview · API <code>PATCH /v3/applications/{pkg}/inappproducts/{sku}</code> · Route: <b>/iaps/[sku]</b>
+  </div>
+
+  <div class="grid md:grid-cols-2 gap-4">
+    <!-- Edit form (compact view) -->
+    <div>
+      <div class="browser-chrome">
+        <div class="dot-red"></div><div class="dot-amber"></div><div class="dot-green"></div>
+        <div class="browser-url">vng-internal-tools.app/google-iap-management/apps/com.vng.survival/iaps/gems_500</div>
+      </div>
+      <div class="bg-white border border-border border-t-0 rounded-b-lg">
+        <div class="border-b border-border px-6 py-4 flex items-center justify-between">
+          <div>
+            <div class="text-[11px] text-ink-subtle font-mono">gems_500 · VNG Survival</div>
+            <div class="font-semibold">Edit IAP — 500 Gems</div>
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="inline-flex items-center cursor-pointer">
+              <input type="checkbox" checked class="sr-only peer">
+              <div class="w-10 h-6 bg-border-strong rounded-full peer peer-checked:bg-g-green relative">
+                <span class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition peer-checked:translate-x-4 shadow-sm"></span>
+              </div>
+              <span class="ml-2 text-sm">Active</span>
+            </label>
+            <button class="bg-g-blue text-white text-sm font-medium px-4 py-2 rounded-md">Update on Google Play</button>
+          </div>
+        </div>
+        <div class="p-6 space-y-3 text-sm">
+          <div class="text-[11px] uppercase text-ink-subtle font-semibold">Listings</div>
+          <div class="border border-border rounded-md p-3 bg-surface-2 text-xs">en-US · "500 Gems" · 67 chars</div>
+          <div class="border border-border rounded-md p-3 bg-surface-2 text-xs">vi · "500 Đá quý" · 51 chars</div>
+          <div class="text-[11px] uppercase text-ink-subtle font-semibold mt-3">Pricing</div>
+          <div class="border border-border rounded-md p-3 bg-surface-2 text-xs">Base USD 4.99 → micros 4990000 · 3 region overrides</div>
+          <div class="text-[11px] text-ink-subtle italic mt-2">Clicking "Update" → opens diff preview modal (right) before push.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Diff modal -->
+    <div>
+      <div class="bg-black/30 rounded-lg p-6">
+        <div class="bg-white rounded-lg shadow-2xl">
+          <div class="px-5 py-3 border-b border-border flex items-center justify-between">
+            <div class="font-semibold">Review changes before push</div>
+            <button class="text-ink-subtle hover:text-ink">✕</button>
+          </div>
+          <div class="p-5 space-y-4 text-sm">
+            <div>
+              <div class="text-[11px] uppercase font-semibold text-ink-subtle mb-1">Listings</div>
+              <div class="border-l-4 border-warning bg-warning-bg/30 p-2 text-xs">
+                <span class="text-ink-subtle line-through">en-US title: "500 Gems"</span>
+                → <b class="text-warning">"500 Gems Bonus"</b>
+              </div>
+              <div class="border-l-4 border-success bg-success-bg/30 p-2 mt-1 text-xs">
+                <b class="text-success">NEW</b> ja locale: title "500 ジェム", desc "ゲームで使えるジェム…"
+              </div>
+            </div>
+            <div>
+              <div class="text-[11px] uppercase font-semibold text-ink-subtle mb-1">Pricing</div>
+              <div class="border-l-4 border-warning bg-warning-bg/30 p-2 text-xs">
+                <span class="text-ink-subtle line-through">VN: 109,000 VND</span>
+                → <b class="text-warning">119,000 VND</b>
+              </div>
+              <div class="border-l-4 border-danger bg-danger-bg/30 p-2 mt-1 text-xs">
+                <b class="text-danger">REMOVE</b> override: KR (was 5,500 KRW → revert to Google auto-convert)
+              </div>
+            </div>
+            <div>
+              <div class="text-[11px] uppercase font-semibold text-ink-subtle mb-1">Attributes</div>
+              <div class="border-l-4 border-success bg-success-bg/30 p-2 text-xs">
+                <span class="text-ink-subtle line-through">status: inactive</span>
+                → <b class="text-success">active</b>
+              </div>
+            </div>
+            <div class="bg-bg p-3 rounded text-xs text-ink-muted">
+              <b>API call preview:</b> <code class="font-mono">PATCH /v3/applications/com.vng.survival/inappproducts/gems_500</code> with sparse listings+prices map. Audit log entry added on success.
+            </div>
+          </div>
+          <div class="px-5 py-3 border-t border-border flex items-center justify-end gap-2 bg-surface-2">
+            <button class="border border-border text-sm px-3 py-2 rounded-md">Back to edit</button>
+            <button class="bg-g-blue text-white text-sm font-medium px-4 py-2 rounded-md">Confirm push to Google Play</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================================
+     SECTION 7 — BULK IMPORT WIZARD (Q-GIAP.D placeholder · Q-GIAP.E per-row · Q-GIAP.G batch source)
+     Route: /google-iap-management/apps/[packageName]/bulk-import
+     ============================================================================ -->
+<section id="s7" class="section-anchor max-w-7xl mx-auto px-6 mt-10">
+  <div class="section-bar mb-4">
+    §7 · Bulk import wizard · 4 steps · API <code>POST :batchUpdate</code> (single call) · <b>Q-GIAP.D/E/G</b>
+  </div>
+
+  <div class="browser-chrome">
+    <div class="dot-red"></div><div class="dot-amber"></div><div class="dot-green"></div>
+    <div class="browser-url">vng-internal-tools.app/google-iap-management/apps/com.vng.survival/bulk-import</div>
+  </div>
+  <div class="bg-white border border-border border-t-0 rounded-b-lg">
+    <!-- Stepper -->
+    <div class="px-6 py-4 border-b border-border bg-surface-2">
+      <div class="flex items-center gap-4 text-sm">
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-full bg-success text-white text-xs flex items-center justify-center font-bold">✓</span>
+          <span class="text-ink-subtle">1 · Pricing source</span>
+        </div>
+        <span class="text-border-strong">—</span>
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-full bg-success text-white text-xs flex items-center justify-center font-bold">✓</span>
+          <span class="text-ink-subtle">2 · Upload</span>
+        </div>
+        <span class="text-border-strong">—</span>
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-full bg-g-blue text-white text-xs flex items-center justify-center font-bold">3</span>
+          <span class="font-semibold">3 · Preview & per-row choice</span>
+        </div>
+        <span class="text-border-strong">—</span>
+        <div class="flex items-center gap-2">
+          <span class="w-6 h-6 rounded-full bg-border-strong text-ink-subtle text-xs flex items-center justify-center font-bold">4</span>
+          <span class="text-ink-subtle">4 · Execute</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 1 panel (shown collapsed/recap) -->
+    <div class="px-6 py-3 border-b border-border bg-success-bg/20 text-xs flex items-center justify-between">
+      <span><b>Step 1 — Pricing source:</b> <i>Default Template</i> selected. <span class="text-success">(Q-GIAP.G)</span></span>
+      <button class="text-g-blue hover:underline">Change</button>
+    </div>
+    <div class="px-6 py-3 border-b border-border bg-success-bg/20 text-xs flex items-center justify-between">
+      <span><b>Step 2 — File:</b> <code class="font-mono bg-white px-1 rounded">survival-iaps-may-2026.xlsx</code> (47 rows parsed, 0 errors)</span>
+      <button class="text-g-blue hover:underline">Replace</button>
+    </div>
+
+    <!-- Step 3 — Preview with per-row choice (Q-GIAP.E) -->
+    <div class="p-6">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <div class="font-semibold">Preview · 47 rows · <span class="text-g-blue">12 existing</span> · <span class="text-success">35 new</span></div>
+          <div class="text-[11px] text-ink-subtle">Q-GIAP.E: per-row Overwrite/Skip required for EXISTING items. NEW items always created.</div>
+        </div>
+        <div class="flex items-center gap-2 text-xs">
+          <button class="border border-border rounded px-2 py-1 hover:bg-bg">Set all EXISTING → Overwrite</button>
+          <button class="border border-border rounded px-2 py-1 hover:bg-bg">Set all EXISTING → Skip</button>
+        </div>
+      </div>
+      <div class="overflow-x-auto border border-border rounded-md">
+        <table class="w-full text-sm">
+          <thead class="bg-surface-2 border-b border-border">
+            <tr class="text-left text-[11px] uppercase text-ink-subtle">
+              <th class="px-3 py-2 font-medium">#</th>
+              <th class="px-3 py-2 font-medium">SKU</th>
+              <th class="px-3 py-2 font-medium">Status</th>
+              <th class="px-3 py-2 font-medium">Display name (en-US)</th>
+              <th class="px-3 py-2 font-medium">Base price</th>
+              <th class="px-3 py-2 font-medium">Choice</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border">
+            <tr>
+              <td class="px-3 py-2 text-ink-subtle">1</td>
+              <td class="px-3 py-2 font-mono text-xs">gems_100</td>
+              <td class="px-3 py-2"><span class="text-xs bg-warning-bg text-warning px-2 py-0.5 rounded font-medium">EXISTING</span></td>
+              <td class="px-3 py-2">100 Gems</td>
+              <td class="px-3 py-2 font-mono text-xs">$0.99</td>
+              <td class="px-3 py-2">
+                <select class="border border-border rounded px-2 py-1 text-xs">
+                  <option>Overwrite</option>
+                  <option>Skip</option>
+                </select>
+              </td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 text-ink-subtle">2</td>
+              <td class="px-3 py-2 font-mono text-xs">gems_500</td>
+              <td class="px-3 py-2"><span class="text-xs bg-warning-bg text-warning px-2 py-0.5 rounded font-medium">EXISTING</span></td>
+              <td class="px-3 py-2">500 Gems</td>
+              <td class="px-3 py-2 font-mono text-xs">$4.99</td>
+              <td class="px-3 py-2">
+                <select class="border border-border rounded px-2 py-1 text-xs">
+                  <option>Overwrite</option>
+                  <option selected>Skip</option>
+                </select>
+              </td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 text-ink-subtle">3</td>
+              <td class="px-3 py-2 font-mono text-xs">gems_2500</td>
+              <td class="px-3 py-2"><span class="text-xs bg-success-bg text-success px-2 py-0.5 rounded font-medium">NEW</span></td>
+              <td class="px-3 py-2">2,500 Gems</td>
+              <td class="px-3 py-2 font-mono text-xs">$19.99</td>
+              <td class="px-3 py-2 text-ink-subtle text-xs italic">— always create —</td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 text-ink-subtle">4</td>
+              <td class="px-3 py-2 font-mono text-xs">pack_starter</td>
+              <td class="px-3 py-2"><span class="text-xs bg-warning-bg text-warning px-2 py-0.5 rounded font-medium">EXISTING</span></td>
+              <td class="px-3 py-2">Starter Pack</td>
+              <td class="px-3 py-2 font-mono text-xs">$1.99</td>
+              <td class="px-3 py-2">
+                <select class="border border-border rounded px-2 py-1 text-xs">
+                  <option>Overwrite</option>
+                  <option>Skip</option>
+                </select>
+              </td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 text-ink-subtle">5</td>
+              <td class="px-3 py-2 font-mono text-xs">pack_warrior</td>
+              <td class="px-3 py-2"><span class="text-xs bg-success-bg text-success px-2 py-0.5 rounded font-medium">NEW</span></td>
+              <td class="px-3 py-2">Warrior Pack</td>
+              <td class="px-3 py-2 font-mono text-xs">$9.99</td>
+              <td class="px-3 py-2 text-ink-subtle text-xs italic">— always create —</td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 text-ink-subtle">6</td>
+              <td class="px-3 py-2 font-mono text-xs">promo_seasonal</td>
+              <td class="px-3 py-2"><span class="text-xs bg-danger-bg text-danger px-2 py-0.5 rounded font-medium">PARSE ERR</span></td>
+              <td class="px-3 py-2 text-danger text-xs">Title missing for default locale</td>
+              <td class="px-3 py-2 font-mono text-xs">—</td>
+              <td class="px-3 py-2 text-danger text-xs italic">— skipped —</td>
+            </tr>
+            <tr>
+              <td class="px-3 py-2 text-ink-subtle text-xs italic" colspan="6">… 41 more rows</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-3 flex items-center justify-between">
+        <div class="text-xs text-ink-subtle">
+          Continue disabled while any EXISTING row choice is pending. <span class="text-success">(All 12 resolved ✓)</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="border border-border text-sm px-4 py-2 rounded-md">Back</button>
+          <button class="bg-g-blue text-white text-sm font-medium px-4 py-2 rounded-md">Continue to execute →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4 — Execution results (mocked) -->
+    <div class="border-t border-border p-6 bg-surface-2">
+      <div class="font-semibold mb-2">Step 4 preview — execution results</div>
+      <div class="text-xs text-ink-subtle mb-3">
+        Single API call: <code class="font-mono bg-white px-1 rounded">POST /v3/applications/com.vng.survival/inappproducts:batchUpdate</code>
+        (discovery finding: batch endpoint avoids sequential POST loop). Per-row results returned by Google.
+      </div>
+      <div class="grid grid-cols-5 gap-2 text-center text-xs">
+        <div class="bg-success-bg text-success rounded p-2"><b>35</b> created</div>
+        <div class="bg-g-blue-bg text-g-blue rounded p-2"><b>10</b> overwritten</div>
+        <div class="bg-warning-bg text-warning rounded p-2"><b>1</b> skipped</div>
+        <div class="bg-danger-bg text-danger rounded p-2"><b>1</b> failed</div>
+        <div class="bg-bg text-ink-muted rounded p-2"><b>47</b> total</div>
+      </div>
+      <div class="mt-3 text-xs">
+        <b>Audit:</b> import_batch_id <code class="font-mono">imp_2026-05-20_abc123</code> · 47 rows in <code class="font-mono">google_iap_mgmt.import_batches</code> · linked actions_log entries.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================================
+     SECTION 8 — PRICING TEMPLATES UI (Q-GIAP.G + Q-GIAP.D template format)
+     Route: /google-iap-management/settings/pricing-templates
+     ============================================================================ -->
+<section id="s8" class="section-anchor max-w-7xl mx-auto px-6 mt-10">
+  <div class="section-bar mb-4">
+    §8 · Pricing Templates · 3 sources · <b>Q-GIAP.G</b> + <b>Q-GIAP.D</b> (Excel format pending Manager) · Route: <b>/settings/pricing-templates</b>
+  </div>
+
+  <div class="browser-chrome">
+    <div class="dot-red"></div><div class="dot-amber"></div><div class="dot-green"></div>
+    <div class="browser-url">vng-internal-tools.app/google-iap-management/settings/pricing-templates</div>
+  </div>
+  <div class="bg-white border border-border border-t-0 rounded-b-lg">
+    <!-- Tabs -->
+    <div class="border-b border-border px-6 flex gap-1">
+      <button class="px-4 py-3 text-sm border-b-2 border-transparent hover:border-border-strong text-ink-subtle">Google default (reference)</button>
+      <button class="px-4 py-3 text-sm border-b-2 border-g-blue text-g-blue font-semibold">Default template</button>
+      <button class="px-4 py-3 text-sm border-b-2 border-transparent hover:border-border-strong text-ink-subtle">Per-app templates</button>
+    </div>
+
+    <div class="p-6">
+      <div class="flex items-start justify-between mb-4">
+        <div>
+          <div class="font-semibold">Default pricing template (workspace-wide)</div>
+          <div class="text-xs text-ink-subtle mt-1">
+            Used by Create / Edit / Bulk-import when "Default template" pricing source selected.
+            <span class="tt-badge" title="Q-GIAP.G: 3-source model. Fail-soft per Q-K — if template missing or empty, fallback to Google default with non-blocking banner.">?</span>
+          </div>
+          <div class="text-[11px] text-ink-subtle mt-1">
+            Last uploaded <b class="text-ink">2026-05-18 09:14</b> by <b class="text-ink">minhgv@vng.com.vn</b> ·
+            <code class="font-mono bg-bg px-1 rounded">default-pricing-template-may-2026.xlsx</code>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <button class="border border-border text-sm px-3 py-2 rounded-md hover:bg-bg">Download current</button>
+          <button class="bg-g-blue text-white text-sm font-medium px-3 py-2 rounded-md">Replace</button>
+          <button class="border border-danger text-danger text-sm px-3 py-2 rounded-md hover:bg-danger-bg">Remove</button>
+        </div>
+      </div>
+
+      <!-- Q-GIAP.D placeholder banner -->
+      <div class="bg-warning-bg/40 border border-warning/40 rounded-lg p-3 text-xs mb-4">
+        <b class="text-warning">Q-GIAP.D placeholder:</b> Template format pending Manager-provided Excel file.
+        Mock shows tier-based × region matrix assumption. Parser implementation deferred until Manager delivers spec.
+        Likely shape: rows = price tier OR SKU; columns = region × currency × priceMicros.
+      </div>
+
+      <!-- Mock template entries table -->
+      <div class="overflow-x-auto border border-border rounded-md">
+        <table class="w-full text-sm">
+          <thead class="bg-surface-2 border-b border-border">
+            <tr class="text-left text-[11px] uppercase text-ink-subtle">
+              <th class="px-3 py-2 font-medium">Tier</th>
+              <th class="px-3 py-2 font-medium">USD</th>
+              <th class="px-3 py-2 font-medium">VND</th>
+              <th class="px-3 py-2 font-medium">JPY</th>
+              <th class="px-3 py-2 font-medium">KRW</th>
+              <th class="px-3 py-2 font-medium">EUR</th>
+              <th class="px-3 py-2 font-medium">GBP</th>
+              <th class="px-3 py-2 font-medium text-ink-subtle">+ 124 regions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border font-mono text-xs">
+            <tr><td class="px-3 py-2 font-semibold">T1</td><td class="px-3 py-2">0.99</td><td class="px-3 py-2">23,000</td><td class="px-3 py-2">160</td><td class="px-3 py-2">1,400</td><td class="px-3 py-2">0.99</td><td class="px-3 py-2">0.89</td><td class="px-3 py-2 text-ink-subtle">…</td></tr>
+            <tr><td class="px-3 py-2 font-semibold">T2</td><td class="px-3 py-2">1.99</td><td class="px-3 py-2">45,000</td><td class="px-3 py-2">320</td><td class="px-3 py-2">2,800</td><td class="px-3 py-2">1.99</td><td class="px-3 py-2">1.79</td><td class="px-3 py-2 text-ink-subtle">…</td></tr>
+            <tr><td class="px-3 py-2 font-semibold">T3</td><td class="px-3 py-2">4.99</td><td class="px-3 py-2">115,000</td><td class="px-3 py-2">800</td><td class="px-3 py-2">7,000</td><td class="px-3 py-2">4.99</td><td class="px-3 py-2">4.49</td><td class="px-3 py-2 text-ink-subtle">…</td></tr>
+            <tr><td class="px-3 py-2 font-semibold">T4</td><td class="px-3 py-2">9.99</td><td class="px-3 py-2">229,000</td><td class="px-3 py-2">1,600</td><td class="px-3 py-2">14,000</td><td class="px-3 py-2">9.99</td><td class="px-3 py-2">8.99</td><td class="px-3 py-2 text-ink-subtle">…</td></tr>
+            <tr><td class="px-3 py-2 font-semibold">T5</td><td class="px-3 py-2">19.99</td><td class="px-3 py-2">459,000</td><td class="px-3 py-2">3,200</td><td class="px-3 py-2">28,000</td><td class="px-3 py-2">19.99</td><td class="px-3 py-2">17.99</td><td class="px-3 py-2 text-ink-subtle">…</td></tr>
+            <tr><td class="px-3 py-2 font-semibold">T6</td><td class="px-3 py-2">49.99</td><td class="px-3 py-2">1,150,000</td><td class="px-3 py-2">8,000</td><td class="px-3 py-2">70,000</td><td class="px-3 py-2">49.99</td><td class="px-3 py-2">44.99</td><td class="px-3 py-2 text-ink-subtle">…</td></tr>
+            <tr><td class="px-3 py-2 font-semibold">T7</td><td class="px-3 py-2">99.99</td><td class="px-3 py-2">2,290,000</td><td class="px-3 py-2">16,000</td><td class="px-3 py-2">140,000</td><td class="px-3 py-2">99.99</td><td class="px-3 py-2">89.99</td><td class="px-3 py-2 text-ink-subtle">…</td></tr>
+            <tr><td class="px-3 py-2 text-ink-subtle italic" colspan="8">… more tiers per Manager-provided spec</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================================
+     SECTION 9 — VIEW DETAIL PAGE (optional v1 — parity with Apple IAP p2)
+     Route: /google-iap-management/apps/[packageName]/iaps/[sku]/view
+     ============================================================================ -->
+<section id="s9" class="section-anchor max-w-7xl mx-auto px-6 mt-10 mb-12">
+  <div class="section-bar mb-4">
+    §9 · View Detail (read-only) · Optional v1 · Apple IAP p2 4-section parity · Route: <b>/iaps/[sku]/view</b>
+  </div>
+
+  <div class="browser-chrome">
+    <div class="dot-red"></div><div class="dot-amber"></div><div class="dot-green"></div>
+    <div class="browser-url">vng-internal-tools.app/google-iap-management/apps/com.vng.survival/iaps/gems_500/view</div>
+  </div>
+  <div class="bg-white border border-border border-t-0 rounded-b-lg">
+    <div class="border-b border-border px-6 py-4 flex items-center justify-between">
+      <div>
+        <div class="text-[11px] text-ink-subtle font-mono">gems_500 · VNG Survival</div>
+        <div class="font-semibold text-lg flex items-center gap-2">
+          500 Gems
+          <span class="dot bg-success"></span><span class="text-success text-sm font-medium">Active</span>
+        </div>
+      </div>
+      <button class="bg-g-blue text-white text-sm font-medium px-4 py-2 rounded-md">Edit</button>
+    </div>
+
+    <div class="p-6 grid lg:grid-cols-2 gap-6">
+      <!-- Section A — Identification -->
+      <div>
+        <div class="text-[11px] uppercase font-semibold text-ink-subtle mb-3">A · Identification</div>
+        <div class="bg-surface-2 border border-border rounded-lg p-4 space-y-2 text-sm">
+          <div class="flex justify-between"><span class="text-ink-subtle">SKU</span><code class="font-mono">gems_500</code></div>
+          <div class="flex justify-between"><span class="text-ink-subtle">Purchase type</span><span>Managed (one-time)</span></div>
+          <div class="flex justify-between"><span class="text-ink-subtle">Status</span><span class="text-success font-medium">Active</span></div>
+          <div class="flex justify-between"><span class="text-ink-subtle">Default language</span><span>en-US</span></div>
+          <div class="flex justify-between"><span class="text-ink-subtle">Package</span><code class="font-mono text-xs">com.vng.survival</code></div>
+        </div>
+      </div>
+
+      <!-- Section B — Listings -->
+      <div>
+        <div class="text-[11px] uppercase font-semibold text-ink-subtle mb-3">B · Listings (3 locales)</div>
+        <div class="bg-surface-2 border border-border rounded-lg p-4 space-y-3 text-sm">
+          <div>
+            <div class="text-[11px] uppercase font-bold text-g-blue">en-US <span class="text-[10px] bg-g-blue-bg text-g-blue px-1 rounded">default</span></div>
+            <div class="font-medium">500 Gems</div>
+            <div class="text-xs text-ink-muted">Get 500 in-game gems instantly. Use them to unlock characters and items.</div>
+          </div>
+          <div class="border-t border-border pt-2">
+            <div class="text-[11px] uppercase font-bold text-ink-subtle">vi</div>
+            <div class="font-medium">500 Đá quý</div>
+            <div class="text-xs text-ink-muted">Nhận 500 đá quý trong game ngay lập tức.</div>
+          </div>
+          <div class="border-t border-border pt-2">
+            <div class="text-[11px] uppercase font-bold text-ink-subtle">ja</div>
+            <div class="font-medium">500 ジェム</div>
+            <div class="text-xs text-ink-muted">ゲームで使えるジェムを500個獲得できます。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section C — Pricing -->
+      <div class="lg:col-span-2">
+        <div class="text-[11px] uppercase font-semibold text-ink-subtle mb-3">C · Pricing (default + 3 region overrides + auto-converted)</div>
+        <div class="bg-surface-2 border border-border rounded-lg p-4">
+          <div class="text-xs text-ink-subtle mb-2">Default price: <code class="font-mono">USD 4.99</code> (priceMicros <code class="font-mono">4990000</code>)</div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+            <div class="bg-g-blue-bg/30 rounded p-2"><b>VN</b> · VND 109,000 · <span class="text-g-blue text-[10px]">override</span></div>
+            <div class="bg-g-blue-bg/30 rounded p-2"><b>JP</b> · JPY 600 · <span class="text-g-blue text-[10px]">override</span></div>
+            <div class="bg-g-blue-bg/30 rounded p-2"><b>KR</b> · KRW 5,500 · <span class="text-g-blue text-[10px]">override</span></div>
+            <div class="bg-white border border-border rounded p-2"><b>US</b> · USD 4.99 · <span class="text-ink-subtle text-[10px]">default</span></div>
+            <div class="bg-white border border-border rounded p-2"><b>GB</b> · GBP ~4.49 · <span class="text-success text-[10px]">auto</span></div>
+            <div class="bg-white border border-border rounded p-2"><b>DE</b> · EUR ~4.99 · <span class="text-success text-[10px]">auto</span></div>
+            <div class="bg-white border border-border rounded p-2 text-ink-subtle italic">… 130+ more</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Section D — Activity log -->
+      <div class="lg:col-span-2">
+        <div class="text-[11px] uppercase font-semibold text-ink-subtle mb-3">D · Activity log (audit append-only)</div>
+        <div class="bg-surface-2 border border-border rounded-lg overflow-hidden">
+          <table class="w-full text-sm">
+            <tbody class="divide-y divide-border">
+              <tr><td class="px-4 py-2 w-32 text-xs text-ink-subtle">2026-05-20 14:32</td><td class="px-4 py-2 text-xs"><b>minhgv</b> edited prices · VN +10% · KR override removed</td></tr>
+              <tr><td class="px-4 py-2 text-xs text-ink-subtle">2026-05-18 09:14</td><td class="px-4 py-2 text-xs"><b>minhgv</b> added <code class="font-mono">ja</code> locale listing</td></tr>
+              <tr><td class="px-4 py-2 text-xs text-ink-subtle">2026-05-15 11:02</td><td class="px-4 py-2 text-xs"><b>nhungtt</b> created IAP via bulk import (<code class="font-mono">imp_2026-05-15_xyz</code>)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================================
+     FOOTER — Phase 2 sub-chunk plan preview (~30h Cycle 35 implementation scope)
+     ============================================================================ -->
+<footer class="max-w-7xl mx-auto px-6 pb-10 text-xs text-ink-subtle">
+  <div class="bg-white border border-border rounded-lg p-5">
+    <div class="font-semibold text-ink mb-2">Phase 3 implementation preview — sub-chunk plan</div>
+    <div class="grid md:grid-cols-2 gap-x-6 gap-y-1">
+      <div>g1.a — DB schema + migrations (~2h)</div>
+      <div>g1.b — Google API client + dual-scope auth (~2.5–3h)</div>
+      <div>g1.c — Settings · Google Console Accounts UI (~1.5h)</div>
+      <div>g1.d — Module routing + nav entry points (~1.5h) · NEW</div>
+      <div>g1.e — Apps list + Reporting API (~2h)</div>
+      <div>g1.f — App detail + IAPs list (~2h)</div>
+      <div>g1.g — Create IAP form orchestration (~3h)</div>
+      <div>g1.h — Edit IAP + diff modal (~2.5h)</div>
+      <div>g1.i — Bulk import wizard (~3h, revised down from 3.5h via batchUpdate)</div>
+      <div>g1.j — Pricing templates schema + UI (~3h)</div>
+      <div>g1.k — Pricing source integration create/edit/bulk (~1.5h)</div>
+      <div>g1.l — Docs + integration tests (~1.5h)</div>
+    </div>
+    <div class="mt-3 text-ink"><b>Total estimate:</b> ~26–28h (revised down ~2h after discovery findings).</div>
+    <div class="mt-2"><b>Strategic discipline:</b> Manager approves mockup → fresh session for Phase 3 implementation (~30h scope warrants new context window).</div>
+  </div>
+</footer>
+
+</body>
+</html>
