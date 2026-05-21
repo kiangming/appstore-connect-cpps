@@ -51,6 +51,7 @@ export default async function BulkImportPage({
       </p>
       <BulkImportWizard
         packageName={packageName}
+        appId={app.id}
         appDisplayName={app.display_name}
       />
     </div>

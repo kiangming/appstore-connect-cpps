@@ -14,6 +14,10 @@ import {
 import { GoogleLocaleSidebar } from "./GoogleLocaleSidebar";
 import { UpdateChangesPreviewModal } from "./UpdateChangesPreviewModal";
 import {
+  PricingSourceSelector,
+  type PricingSource,
+} from "./PricingSourceSelector";
+import {
   COMMON_REGIONS,
   COMMON_CURRENCIES,
   defaultCurrencyForRegion,
@@ -36,6 +40,7 @@ type Mode =
 
 interface Props {
   packageName: string;
+  appId: string;
   mode?: Mode;
 }
 
@@ -137,7 +142,7 @@ function buildAfterSnapshot(state: {
   };
 }
 
-export function IapForm({ packageName, mode = { kind: "create" } }: Props) {
+export function IapForm({ packageName, appId, mode = { kind: "create" } }: Props) {
   const router = useRouter();
   const isEdit = mode.kind === "edit";
   const initial = mode.kind === "edit" ? mode.initial : null;
@@ -164,7 +169,8 @@ export function IapForm({ packageName, mode = { kind: "create" } }: Props) {
   const [basePriceDecimal, setBasePriceDecimal] = useState(
     initial?.basePriceDecimal ?? "",
   );
-  const [pricingSource] = useState<"google_default">("google_default");
+  const [pricingSource, setPricingSource] = useState<PricingSource>("google_default");
+  const [tierIdentifier, setTierIdentifier] = useState<string>("");
   const [regionsOpen, setRegionsOpen] = useState(
     (initial?.regionOverrides.length ?? 0) > 0,
   );
@@ -247,6 +253,10 @@ export function IapForm({ packageName, mode = { kind: "create" } }: Props) {
       }
     }
 
+    if (pricingSource !== "google_default" && !tierIdentifier.trim()) {
+      errors.tier = "Pick a tier from the pricing template above.";
+    }
+
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
   }
@@ -314,6 +324,9 @@ export function IapForm({ packageName, mode = { kind: "create" } }: Props) {
           currency: r.currency,
           priceDecimal: r.priceDecimal,
         })),
+      pricingSource,
+      tierIdentifier:
+        pricingSource === "google_default" ? null : tierIdentifier.trim() || null,
     };
   }
 
@@ -534,37 +547,25 @@ export function IapForm({ packageName, mode = { kind: "create" } }: Props) {
         <h2 className="text-base font-semibold text-slate-900 mb-4">Pricing</h2>
 
         <div className="mb-4">
-          <p className="text-xs text-slate-500 mb-2">Pricing source (Q-GIAP.D)</p>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <label className="flex items-start gap-2 p-3 rounded-lg border border-emerald-300 bg-emerald-50 cursor-pointer">
-              <input
-                type="radio"
-                checked={pricingSource === "google_default"}
-                readOnly
-                className="mt-0.5 text-emerald-600"
-              />
-              <div>
-                <p className="text-sm font-medium text-emerald-900">Google default</p>
-                <p className="text-[11px] text-emerald-700">
-                  Base price + sparse manual region overrides.
-                </p>
-              </div>
-            </label>
-            <label className="flex items-start gap-2 p-3 rounded-lg border border-slate-200 bg-slate-50 cursor-not-allowed opacity-60">
-              <input type="radio" disabled className="mt-0.5" />
-              <div>
-                <p className="text-sm font-medium text-slate-600">Default Template</p>
-                <p className="text-[11px] text-slate-500">Available in g1.k.</p>
-              </div>
-            </label>
-            <label className="flex items-start gap-2 p-3 rounded-lg border border-slate-200 bg-slate-50 cursor-not-allowed opacity-60">
-              <input type="radio" disabled className="mt-0.5" />
-              <div>
-                <p className="text-sm font-medium text-slate-600">App-specific</p>
-                <p className="text-[11px] text-slate-500">Available in g1.k.</p>
-              </div>
-            </label>
-          </div>
+          <PricingSourceSelector
+            value={pricingSource}
+            onChange={(s) => {
+              setPricingSource(s);
+              if (s === "google_default") setTierIdentifier("");
+            }}
+            appId={appId}
+            tierValue={tierIdentifier}
+            onTierChange={setTierIdentifier}
+          />
+          {pricingSource !== "google_default" && (
+            <p className="mt-2 text-[11px] text-slate-500">
+              Picked tier&apos;s region prices will replace any manual overrides
+              below before submitting.
+            </p>
+          )}
+          {fieldErrors.tier && (
+            <p className="mt-1 text-xs text-red-500">{fieldErrors.tier}</p>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">

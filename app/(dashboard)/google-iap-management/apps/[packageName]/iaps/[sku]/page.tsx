@@ -61,6 +61,7 @@ export default async function EditIapPage({
       </p>
       <IapForm
         packageName={packageName}
+        appId={app.id}
         mode={{ kind: "edit", initial }}
       />
     </div>

@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 
 import { PreviewTable } from "./PreviewTable";
+import { PricingSourceSelector } from "@/components/google-iap-management/iap-form/PricingSourceSelector";
 
 export type PricingSource = "google_default" | "default_template" | "app_template";
 export type RowDecision = "overwrite" | "skip" | "create";
@@ -51,12 +52,13 @@ interface ExecuteResult {
 
 interface Props {
   packageName: string;
+  appId: string;
   appDisplayName: string | null;
 }
 
 type Step = "pricing" | "upload" | "preview" | "execute" | "done";
 
-export function BulkImportWizard({ packageName, appDisplayName }: Props) {
+export function BulkImportWizard({ packageName, appId, appDisplayName }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>("pricing");
 
@@ -196,31 +198,19 @@ export function BulkImportWizard({ packageName, appDisplayName }: Props) {
             Pricing source
           </h2>
           <p className="text-xs text-slate-500 mb-4">
-            Q-GIAP.E batch-level. Applied to every row in this import.
+            Q-GIAP.E batch-level. Applied to every row in this import. For
+            template modes, each row&apos;s SKU is matched to a template tier
+            identifier; rows without a matching tier fall back to the
+            row&apos;s inline USD + GT Price.
           </p>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <SourceCard
-              checked={pricingSource === "google_default"}
-              onChange={() => setPricingSource("google_default")}
-              title="Google default"
-              description="Use the row's USD base price + Google's auto-equalization for other regions, plus any GT Price override."
-              enabled
-            />
-            <SourceCard
-              checked={pricingSource === "default_template"}
-              onChange={() => setPricingSource("default_template")}
-              title="Default Template"
-              description="Apply the global pricing template (available in g1.k)."
-              enabled={false}
-            />
-            <SourceCard
-              checked={pricingSource === "app_template"}
-              onChange={() => setPricingSource("app_template")}
-              title="App-specific Template"
-              description="Apply this app's pricing template (available in g1.k)."
-              enabled={false}
-            />
-          </div>
+          <PricingSourceSelector
+            value={pricingSource}
+            onChange={setPricingSource}
+            appId={appId}
+            tierValue=""
+            onTierChange={() => undefined}
+            hideTierPicker
+          />
           <div className="mt-6 flex justify-end">
             <button
               onClick={() => setStep("upload")}
@@ -520,51 +510,6 @@ function StepHeader({ step }: { step: Step }) {
         </span>
       ))}
     </div>
-  );
-}
-
-function SourceCard({
-  checked,
-  onChange,
-  title,
-  description,
-  enabled,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  title: string;
-  description: string;
-  enabled: boolean;
-}) {
-  return (
-    <label
-      className={`flex items-start gap-2 p-3 rounded-lg border ${
-        enabled
-          ? checked
-            ? "border-emerald-300 bg-emerald-50 cursor-pointer"
-            : "border-slate-200 bg-white hover:bg-slate-50 cursor-pointer"
-          : "border-slate-200 bg-slate-50 cursor-not-allowed opacity-60"
-      } transition`}
-    >
-      <input
-        type="radio"
-        name="pricing-source"
-        disabled={!enabled}
-        checked={enabled && checked}
-        onChange={onChange}
-        className="mt-0.5"
-      />
-      <div>
-        <p
-          className={`text-sm font-medium ${
-            enabled ? "text-slate-900" : "text-slate-600"
-          }`}
-        >
-          {title}
-        </p>
-        <p className="text-[11px] text-slate-500 mt-0.5">{description}</p>
-      </div>
-    </label>
   );
 }
 

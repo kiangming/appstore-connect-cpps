@@ -25,7 +25,7 @@ import {
   type InAppProduct,
   type InappproductsBatchUpdateRequest,
 } from "../google/publisher-client";
-import { decimalToMicros } from "../google/price-conversion";
+import { decimalToMicros, microsToDecimal } from "../google/price-conversion";
 import { syncIapFromGoogle } from "../repository/iaps";
 import { appendAction } from "../repository/actions-log";
 import { googleIapDb } from "../db";
@@ -34,6 +34,7 @@ import type {
   ParsedRegionOverride,
   ParsedListing,
 } from "../parsers/excel-parser";
+import { lookupTemplateEntriesForIdentifier } from "../queries/templates";
 
 export type PricingSource = "google_default" | "default_template" | "app_template";
 export type RowDecision = "overwrite" | "skip" | "create";
@@ -139,6 +140,31 @@ export async function executeBulkImport(
 
   const actionableRows = input.rows.filter((r) => r.decision !== "skip");
   const skippedCount = input.rows.length - actionableRows.length;
+
+  // Q-GIAP.D: template-driven price resolution — when source is a template,
+  // each row's SKU is matched against the template's identifier column.
+  // Matched rows have their inline regionOverrides replaced with the
+  // template's tier entries; unmatched rows fall back to inline pricing
+  // (a warning is recorded but the row still imports).
+  let templateMatchCount = 0;
+  if (input.pricingSource !== "google_default") {
+    const scope = input.pricingSource === "app_template" ? "APP" : "GLOBAL";
+    for (const row of actionableRows) {
+      const entries = await lookupTemplateEntriesForIdentifier({
+        scope,
+        appId: scope === "APP" ? input.appId : null,
+        identifier: row.sku,
+      });
+      if (entries.length > 0) {
+        row.regionOverrides = entries.map((e) => ({
+          region: e.regionCode,
+          currency: e.currency,
+          priceDecimal: microsToDecimal(e.priceMicros, 6),
+        }));
+        templateMatchCount += 1;
+      }
+    }
+  }
 
   if (actionableRows.length > BATCH_MAX) {
     throw new Error(
@@ -274,6 +300,7 @@ export async function executeBulkImport(
       batch_id: batchId,
       package_name: input.packageName,
       pricing_source: input.pricingSource,
+      template_matched_rows: templateMatchCount,
       rows_total: input.rows.length,
       rows_created: created,
       rows_overwritten: overwritten,

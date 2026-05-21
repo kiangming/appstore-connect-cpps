@@ -264,6 +264,116 @@ export async function replaceTemplate(
   return { templateId, insertedEntryCount: insertedCount };
 }
 
+/** Availability flags for the 3-source pricing selector (Q-GIAP.D). */
+export interface PricingTemplateAvailability {
+  defaultExists: boolean;
+  appExists: boolean;
+}
+
+export async function getTemplateAvailability(
+  appId: string | null,
+): Promise<PricingTemplateAvailability> {
+  const db = googleIapDb();
+  const globalCount = await db
+    .from("pricing_templates")
+    .select("id", { count: "exact", head: true })
+    .eq("scope_type", "GLOBAL");
+  const defaultExists = (globalCount.count ?? 0) > 0;
+
+  let appExists = false;
+  if (appId) {
+    const appCount = await db
+      .from("pricing_templates")
+      .select("id", { count: "exact", head: true })
+      .eq("scope_type", "APP")
+      .eq("scope_app_id", appId);
+    appExists = (appCount.count ?? 0) > 0;
+  }
+  return { defaultExists, appExists };
+}
+
+/** Lookup all entries for a given (scope, appId, identifier) tuple.
+ *  Returns the most-specific template's entries when present
+ *  (Q-GIAP.D: App template > Default template > base price). */
+export async function lookupTemplateEntriesForIdentifier(
+  args: {
+    scope: TemplateScope;
+    appId: string | null;
+    identifier: string;
+  },
+): Promise<ParsedPricingEntry[]> {
+  const db = googleIapDb();
+  let templateQuery = db
+    .from("pricing_templates")
+    .select("id")
+    .eq("scope_type", args.scope);
+  templateQuery =
+    args.scope === "APP" && args.appId
+      ? templateQuery.eq("scope_app_id", args.appId)
+      : templateQuery.is("scope_app_id", null);
+  const { data: template, error } = await templateQuery.maybeSingle();
+  if (error) {
+    throw new Error(`Failed to look up template: ${error.message}`);
+  }
+  if (!template) return [];
+  const templateId = (template as { id: string }).id;
+  const { data: entries, error: entriesErr } = await db
+    .from("pricing_template_entries")
+    .select("identifier, region_code, currency, price_micros")
+    .eq("template_id", templateId)
+    .eq("identifier", args.identifier);
+  if (entriesErr) {
+    throw new Error(`Failed to load template entries: ${entriesErr.message}`);
+  }
+  return ((entries ?? []) as Array<{
+    identifier: string;
+    region_code: string;
+    currency: string;
+    price_micros: string;
+  }>).map((r) => ({
+    identifier: r.identifier,
+    regionCode: r.region_code,
+    currency: r.currency,
+    priceMicros: r.price_micros,
+  }));
+}
+
+/** List distinct tier identifiers under the active scope (used by the
+ *  single-IAP form's tier picker when Manager picks a template source). */
+export async function listTemplateTiers(args: {
+  scope: TemplateScope;
+  appId: string | null;
+}): Promise<string[]> {
+  const db = googleIapDb();
+  let q = db
+    .from("pricing_templates")
+    .select("id")
+    .eq("scope_type", args.scope);
+  q =
+    args.scope === "APP" && args.appId
+      ? q.eq("scope_app_id", args.appId)
+      : q.is("scope_app_id", null);
+  const { data: template, error } = await q.maybeSingle();
+  if (error) {
+    throw new Error(`Failed to look up template: ${error.message}`);
+  }
+  if (!template) return [];
+  const templateId = (template as { id: string }).id;
+  const { data: rows, error: rowsErr } = await db
+    .from("pricing_template_entries")
+    .select("identifier")
+    .eq("template_id", templateId)
+    .order("identifier", { ascending: true });
+  if (rowsErr) {
+    throw new Error(`Failed to load tier identifiers: ${rowsErr.message}`);
+  }
+  const seen = new Set<string>();
+  for (const r of (rows ?? []) as Array<{ identifier: string }>) {
+    seen.add(r.identifier);
+  }
+  return [...seen];
+}
+
 export async function deleteTemplate(templateId: string): Promise<void> {
   const db = googleIapDb();
   const { error } = await db.from("pricing_templates").delete().eq("id", templateId);

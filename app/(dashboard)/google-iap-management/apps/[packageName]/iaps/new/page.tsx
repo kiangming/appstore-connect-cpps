@@ -50,7 +50,7 @@ export default async function NewIapPage({
         Create an in-app product for{" "}
         <span className="font-mono text-emerald-700">{packageName}</span>.
       </p>
-      <IapForm packageName={packageName} />
+      <IapForm packageName={packageName} appId={app.id} />
     </div>
   );
 }

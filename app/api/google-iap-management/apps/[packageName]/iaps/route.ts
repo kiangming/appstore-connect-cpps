@@ -18,6 +18,8 @@ import { getEncryptedCredentials } from "@/lib/google-iap-management/repository/
 import { getAppByPackage } from "@/lib/google-iap-management/repository/apps";
 import { createIapOnGoogle } from "@/lib/google-iap-management/orchestration/create-iap";
 import { readActiveAccountId } from "@/lib/google-iap-management/active-account";
+import { microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
+import { lookupTemplateEntriesForIdentifier } from "@/lib/google-iap-management/queries/templates";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +32,8 @@ interface CreateBody {
   baseCurrency?: string;
   basePriceDecimal?: string;
   regionOverrides?: Array<{ region: string; currency: string; priceDecimal: string }>;
+  pricingSource?: "google_default" | "default_template" | "app_template";
+  tierIdentifier?: string | null;
 }
 
 function isNonEmptyString(v: unknown): v is string {
@@ -111,6 +115,41 @@ export async function POST(
   }
 
   try {
+    let regionOverrides = (body.regionOverrides ?? [])
+      .filter((r) => isNonEmptyString(r.region) && isNonEmptyString(r.priceDecimal))
+      .map((r) => ({
+        region: r.region.trim(),
+        currency: (r.currency ?? "USD").trim(),
+        priceDecimal: r.priceDecimal.trim(),
+      }));
+
+    // Q-GIAP.D: template-source picks override the manual region grid with
+    // the template tier's entries. App template > Default template.
+    if (
+      (body.pricingSource === "default_template" || body.pricingSource === "app_template") &&
+      isNonEmptyString(body.tierIdentifier)
+    ) {
+      const scope = body.pricingSource === "app_template" ? "APP" : "GLOBAL";
+      const entries = await lookupTemplateEntriesForIdentifier({
+        scope,
+        appId: scope === "APP" ? app.id : null,
+        identifier: body.tierIdentifier.trim(),
+      });
+      if (entries.length === 0) {
+        return NextResponse.json(
+          {
+            error: `Tier "${body.tierIdentifier}" not found in the selected template.`,
+          },
+          { status: 404 },
+        );
+      }
+      regionOverrides = entries.map((e) => ({
+        region: e.regionCode,
+        currency: e.currency,
+        priceDecimal: microsToDecimal(e.priceMicros, 6),
+      }));
+    }
+
     const encrypted = await getEncryptedCredentials(accountId);
     const jwt = jwtClientFromEncrypted(encrypted);
     const result = await createIapOnGoogle(jwt, {
@@ -129,13 +168,7 @@ export async function POST(
         })),
       baseCurrency: body.baseCurrency.trim(),
       basePriceDecimal: body.basePriceDecimal.trim(),
-      regionOverrides: (body.regionOverrides ?? [])
-        .filter((r) => isNonEmptyString(r.region) && isNonEmptyString(r.priceDecimal))
-        .map((r) => ({
-          region: r.region.trim(),
-          currency: (r.currency ?? "USD").trim(),
-          priceDecimal: r.priceDecimal.trim(),
-        })),
+      regionOverrides,
       actorEmail: session.user.email ?? null,
     });
 
