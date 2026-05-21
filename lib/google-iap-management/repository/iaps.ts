@@ -47,6 +47,12 @@ export interface IapWithDefaultLocale extends IapRow {
   default_title: string | null;
 }
 
+export interface IapDetail {
+  iap: IapRow;
+  listings: IapListingRow[];
+  prices: IapPriceRow[];
+}
+
 export async function listIapsForApp(appId: string): Promise<IapRow[]> {
   const { data, error } = await googleIapDb()
     .from("iaps")
@@ -99,6 +105,60 @@ export async function listIapsWithDefaultLocale(
       default_title: enUs?.title ?? fallback?.title ?? null,
     };
   });
+}
+
+/**
+ * Load a single IAP joined with all listings + prices. Used by the Edit
+ * page to render the form with current state and by the update
+ * orchestrator to construct the "before" diff snapshot.
+ */
+export async function getIapDetail(
+  appId: string,
+  sku: string,
+): Promise<IapDetail | null> {
+  const db = googleIapDb();
+
+  const { data: iapRow, error: iapErr } = await db
+    .from("iaps")
+    .select(
+      "id, app_id, sku, purchase_type, status, default_currency, default_price_micros, last_synced_at, created_at, updated_at",
+    )
+    .eq("app_id", appId)
+    .eq("sku", sku)
+    .maybeSingle();
+
+  if (iapErr) {
+    throw new Error(`Failed to load IAP ${sku}: ${iapErr.message}`);
+  }
+  if (!iapRow) return null;
+  const iap = iapRow as IapRow;
+
+  const [{ data: listings, error: listErr }, { data: prices, error: priceErr }] =
+    await Promise.all([
+      db
+        .from("iap_listings")
+        .select("id, iap_id, locale, title, description")
+        .eq("iap_id", iap.id)
+        .order("locale", { ascending: true }),
+      db
+        .from("iap_prices")
+        .select("id, iap_id, region_code, currency, price_micros")
+        .eq("iap_id", iap.id)
+        .order("region_code", { ascending: true }),
+    ]);
+
+  if (listErr) {
+    throw new Error(`Failed to load listings for ${sku}: ${listErr.message}`);
+  }
+  if (priceErr) {
+    throw new Error(`Failed to load prices for ${sku}: ${priceErr.message}`);
+  }
+
+  return {
+    iap,
+    listings: (listings ?? []) as IapListingRow[],
+    prices: (prices ?? []) as IapPriceRow[],
+  };
 }
 
 function mapPurchaseType(googlePurchaseType: string | null | undefined): PurchaseType {

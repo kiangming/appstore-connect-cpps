@@ -1,0 +1,199 @@
+/**
+ * Update-IAP orchestrator (g1.h).
+ *
+ * Manager submits the full target state (same shape as create); orchestrator
+ * computes the diff vs the cache snapshot, builds the patch body, calls
+ * Android Publisher v3 inappproducts.patch, syncs the cache from Google's
+ * response, and emits an IAP_UPDATE audit entry that records the diff.
+ *
+ * Why we patch with the full body rather than a sparse one:
+ *   Google's `prices` and `listings` are map fields — a sparse patch would
+ *   require explicit deletion semantics per key, which Publisher v3 does not
+ *   model cleanly. Sending the full desired state in patch matches Google
+ *   Play Console's own UI behaviour (replace map content wholesale) and keeps
+ *   "remove a locale / region" workable from the form.
+ *
+ * Errors thrown here surface to the API route handler, which maps Google
+ * SDK status codes to HTTP responses.
+ */
+import type { JWT } from "google-auth-library";
+
+import {
+  patchInAppProduct,
+  type InAppProduct,
+} from "../google/publisher-client";
+import { decimalToMicros } from "../google/price-conversion";
+import {
+  syncIapFromGoogle,
+  type IapDetail,
+} from "../repository/iaps";
+import { appendAction } from "../repository/actions-log";
+import {
+  computeIapDiff,
+  diffSummary,
+  type IapStateSnapshot,
+} from "./iap-diff";
+import type {
+  LocaleListingInput,
+  RegionPriceInput,
+} from "./create-iap";
+
+export interface UpdateIapInput {
+  appId: string;
+  packageName: string;
+  sku: string;
+  // Manager target state (decimal input, decimal → micros happens here)
+  purchaseType: "managed" | "consumable";
+  status: "active" | "inactive";
+  defaultLanguage: string;
+  listings: LocaleListingInput[];
+  baseCurrency: string;
+  basePriceDecimal: string;
+  regionOverrides: RegionPriceInput[];
+  actorEmail: string | null;
+  // Cache snapshot for diff
+  current: IapDetail;
+}
+
+export interface UpdateIapResult {
+  sku: string;
+  status: string | null;
+  hasChanges: boolean;
+}
+
+/**
+ * Build a snapshot from the Manager's target form values (after decimal →
+ * micros). Mirrors `snapshotFromDetail` so computeIapDiff can compare them
+ * symmetrically.
+ */
+function snapshotFromInput(input: UpdateIapInput): IapStateSnapshot {
+  const listings: Record<string, { title: string; description: string }> = {};
+  for (const l of input.listings) {
+    if (!l.title.trim() && !l.description.trim()) continue;
+    listings[l.locale] = {
+      title: l.title.trim(),
+      description: l.description.trim(),
+    };
+  }
+  const prices: Record<string, { currency: string; priceMicros: string }> = {};
+  for (const r of input.regionOverrides) {
+    if (!r.priceDecimal.trim()) continue;
+    prices[r.region] = {
+      currency: r.currency.trim().toUpperCase(),
+      priceMicros: decimalToMicros(r.priceDecimal),
+    };
+  }
+  return {
+    attributes: {
+      purchaseType: input.purchaseType,
+      status: input.status,
+      defaultLanguage: input.defaultLanguage,
+      baseCurrency: input.baseCurrency.trim().toUpperCase(),
+      basePriceMicros: decimalToMicros(input.basePriceDecimal),
+    },
+    listings,
+    prices,
+  };
+}
+
+function snapshotFromDetail(detail: IapDetail): IapStateSnapshot {
+  const listings: Record<string, { title: string; description: string }> = {};
+  for (const l of detail.listings) {
+    listings[l.locale] = { title: l.title, description: l.description };
+  }
+  const prices: Record<string, { currency: string; priceMicros: string }> = {};
+  for (const p of detail.prices) {
+    prices[p.region_code] = {
+      currency: p.currency,
+      priceMicros: p.price_micros,
+    };
+  }
+  return {
+    attributes: {
+      purchaseType: detail.iap.purchase_type === "subscription"
+        ? "managed"
+        : (detail.iap.purchase_type as "managed" | "consumable"),
+      status: detail.iap.status,
+      defaultLanguage: "en-US", // Cache schema doesn't carry it; form default
+      baseCurrency: detail.iap.default_currency ?? "USD",
+      basePriceMicros: detail.iap.default_price_micros ?? "0",
+    },
+    listings,
+    prices,
+  };
+}
+
+export async function updateIapOnGoogle(
+  jwt: JWT,
+  input: UpdateIapInput,
+): Promise<UpdateIapResult> {
+  const before = snapshotFromDetail(input.current);
+  const after = snapshotFromInput(input);
+  const diff = computeIapDiff(before, after);
+
+  if (!diff.hasChanges) {
+    return {
+      sku: input.sku,
+      status: input.current.iap.status,
+      hasChanges: false,
+    };
+  }
+
+  // Build full target body (see header comment on why we don't sparse-patch).
+  const listings: NonNullable<InAppProduct["listings"]> = {};
+  for (const [locale, l] of Object.entries(after.listings)) {
+    listings[locale] = { title: l.title, description: l.description };
+  }
+  if (Object.keys(listings).length === 0) {
+    throw new Error("At least one locale must have a title.");
+  }
+  if (!listings[input.defaultLanguage]) {
+    throw new Error(
+      `Default locale "${input.defaultLanguage}" must have a title.`,
+    );
+  }
+
+  const prices: NonNullable<InAppProduct["prices"]> = {};
+  for (const [region, p] of Object.entries(after.prices)) {
+    prices[region] = { currency: p.currency, priceMicros: p.priceMicros };
+  }
+
+  const body: InAppProduct = {
+    packageName: input.packageName,
+    sku: input.sku,
+    status: input.status,
+    purchaseType: "managedUser",
+    defaultLanguage: input.defaultLanguage,
+    defaultPrice: {
+      currency: after.attributes.baseCurrency,
+      priceMicros: after.attributes.basePriceMicros,
+    },
+    listings,
+    ...(Object.keys(prices).length > 0 ? { prices } : {}),
+  };
+
+  const updated = await patchInAppProduct(jwt, input.packageName, input.sku, body);
+
+  await syncIapFromGoogle(input.appId, updated);
+
+  const summary = diffSummary(diff);
+  await appendAction({
+    actionType: "IAP_UPDATE",
+    actorEmail: input.actorEmail,
+    targetId: input.appId,
+    payload: {
+      package_name: input.packageName,
+      sku: input.sku,
+      summary,
+      attributes: diff.attributes,
+      listings: diff.listings,
+      prices: diff.prices,
+    },
+  });
+
+  return {
+    sku: updated.sku ?? input.sku,
+    status: updated.status ?? input.status,
+    hasChanges: true,
+  };
+}

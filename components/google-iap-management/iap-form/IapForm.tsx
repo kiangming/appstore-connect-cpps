@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Save,
@@ -11,28 +11,33 @@ import {
   Trash2,
 } from "lucide-react";
 
-import {
-  GoogleLocaleSidebar,
-  type FormListing,
-} from "./GoogleLocaleSidebar";
+import { GoogleLocaleSidebar } from "./GoogleLocaleSidebar";
+import { UpdateChangesPreviewModal } from "./UpdateChangesPreviewModal";
 import {
   COMMON_REGIONS,
   COMMON_CURRENCIES,
   defaultCurrencyForRegion,
 } from "@/lib/google-iap-management/regions";
 import { decimalToMicros } from "@/lib/google-iap-management/google/price-conversion";
+import {
+  computeIapDiff,
+  type IapStateSnapshot,
+} from "@/lib/google-iap-management/orchestration/iap-diff";
+import {
+  DEFAULT_LOCALE,
+  type FormListing,
+  type IapFormInitial,
+  type RegionOverrideRow,
+} from "@/lib/google-iap-management/form-state";
+
+type Mode =
+  | { kind: "create" }
+  | { kind: "edit"; initial: IapFormInitial };
 
 interface Props {
   packageName: string;
+  mode?: Mode;
 }
-
-interface RegionOverrideRow {
-  region: string;
-  currency: string;
-  priceDecimal: string;
-}
-
-const DEFAULT_LOCALE = "en-US";
 
 function validateDecimal(input: string): string | null {
   if (!input.trim()) return null;
@@ -44,36 +49,136 @@ function validateDecimal(input: string): string | null {
   }
 }
 
-export function IapForm({ packageName }: Props) {
+function buildBeforeSnapshot(initial: IapFormInitial): IapStateSnapshot {
+  const listings: IapStateSnapshot["listings"] = {};
+  for (const [locale, l] of Object.entries(initial.listings)) {
+    if (!l.title.trim() && !l.description.trim()) continue;
+    listings[locale] = {
+      title: l.title.trim(),
+      description: l.description.trim(),
+    };
+  }
+  const prices: IapStateSnapshot["prices"] = {};
+  for (const r of initial.regionOverrides) {
+    if (!r.priceDecimal.trim()) continue;
+    try {
+      prices[r.region] = {
+        currency: r.currency.trim().toUpperCase(),
+        priceMicros: decimalToMicros(r.priceDecimal),
+      };
+    } catch {
+      /* skip invalid initial — should never happen */
+    }
+  }
+  return {
+    attributes: {
+      purchaseType: initial.purchaseType,
+      status: initial.status,
+      defaultLanguage: initial.defaultLanguage,
+      baseCurrency: initial.baseCurrency.trim().toUpperCase(),
+      basePriceMicros: (() => {
+        try {
+          return decimalToMicros(initial.basePriceDecimal);
+        } catch {
+          return "0";
+        }
+      })(),
+    },
+    listings,
+    prices,
+  };
+}
+
+function buildAfterSnapshot(state: {
+  purchaseType: "managed" | "consumable";
+  status: "active" | "inactive";
+  defaultLanguage: string;
+  listings: Record<string, FormListing>;
+  baseCurrency: string;
+  basePriceDecimal: string;
+  regionOverrides: RegionOverrideRow[];
+}): IapStateSnapshot {
+  const listings: IapStateSnapshot["listings"] = {};
+  for (const [locale, l] of Object.entries(state.listings)) {
+    if (!l.title.trim() && !l.description.trim()) continue;
+    listings[locale] = {
+      title: l.title.trim(),
+      description: l.description.trim(),
+    };
+  }
+  const prices: IapStateSnapshot["prices"] = {};
+  for (const r of state.regionOverrides) {
+    if (!r.priceDecimal.trim()) continue;
+    try {
+      prices[r.region] = {
+        currency: r.currency.trim().toUpperCase(),
+        priceMicros: decimalToMicros(r.priceDecimal),
+      };
+    } catch {
+      /* validation surface elsewhere */
+    }
+  }
+  return {
+    attributes: {
+      purchaseType: state.purchaseType,
+      status: state.status,
+      defaultLanguage: state.defaultLanguage,
+      baseCurrency: state.baseCurrency.trim().toUpperCase(),
+      basePriceMicros: (() => {
+        try {
+          return decimalToMicros(state.basePriceDecimal);
+        } catch {
+          return "0";
+        }
+      })(),
+    },
+    listings,
+    prices,
+  };
+}
+
+export function IapForm({ packageName, mode = { kind: "create" } }: Props) {
   const router = useRouter();
+  const isEdit = mode.kind === "edit";
+  const initial = mode.kind === "edit" ? mode.initial : null;
 
   // Identification
-  const [sku, setSku] = useState("");
+  const [sku, setSku] = useState(initial?.sku ?? "");
   const [purchaseType, setPurchaseType] = useState<"managed" | "consumable">(
-    "managed",
+    initial?.purchaseType ?? "managed",
   );
-  const [status, setStatus] = useState<"active" | "inactive">("active");
+  const [status, setStatus] = useState<"active" | "inactive">(
+    initial?.status ?? "active",
+  );
 
   // Listings (multi-locale)
-  const [listings, setListings] = useState<Record<string, FormListing>>({
-    [DEFAULT_LOCALE]: { title: "", description: "" },
-  });
-  const [activeLocale, setActiveLocale] = useState(DEFAULT_LOCALE);
+  const [listings, setListings] = useState<Record<string, FormListing>>(
+    initial?.listings ?? { [DEFAULT_LOCALE]: { title: "", description: "" } },
+  );
+  const [activeLocale, setActiveLocale] = useState(
+    initial?.defaultLanguage ?? DEFAULT_LOCALE,
+  );
 
   // Pricing
-  const [baseCurrency, setBaseCurrency] = useState("USD");
-  const [basePriceDecimal, setBasePriceDecimal] = useState("");
+  const [baseCurrency, setBaseCurrency] = useState(initial?.baseCurrency ?? "USD");
+  const [basePriceDecimal, setBasePriceDecimal] = useState(
+    initial?.basePriceDecimal ?? "",
+  );
   const [pricingSource] = useState<"google_default">("google_default");
-  const [regionsOpen, setRegionsOpen] = useState(false);
+  const [regionsOpen, setRegionsOpen] = useState(
+    (initial?.regionOverrides.length ?? 0) > 0,
+  );
   const [regionOverrides, setRegionOverrides] = useState<RegionOverrideRow[]>(
-    [],
+    initial?.regionOverrides ?? [],
   );
 
   // Submit
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [showDiff, setShowDiff] = useState(false);
 
+  const defaultLanguage = initial?.defaultLanguage ?? DEFAULT_LOCALE;
   const currentListing = listings[activeLocale] ?? { title: "", description: "" };
 
   function updateListing(field: keyof FormListing, value: string) {
@@ -104,7 +209,6 @@ export function IapForm({ packageName }: Props) {
       prev.map((r, i) => {
         if (i !== idx) return r;
         const merged = { ...r, ...updates };
-        // If region changed, snap currency to that region's default.
         if (updates.region && updates.region !== r.region) {
           merged.currency = defaultCurrencyForRegion(updates.region);
         }
@@ -124,9 +228,9 @@ export function IapForm({ packageName }: Props) {
       errors.sku =
         "SKU may only contain letters, numbers, underscores, dots, and dashes.";
 
-    const defaultListing = listings[DEFAULT_LOCALE];
+    const defaultListing = listings[defaultLanguage];
     if (!defaultListing?.title.trim())
-      errors.defaultTitle = `Title is required for the default locale (${DEFAULT_LOCALE}).`;
+      errors.defaultTitle = `Title is required for the default locale (${defaultLanguage}).`;
 
     if (!basePriceDecimal.trim()) {
       errors.basePrice = "Base price is required.";
@@ -147,13 +251,73 @@ export function IapForm({ packageName }: Props) {
     return Object.keys(errors).length === 0;
   }
 
-  async function handleSubmit() {
+  const diff = useMemo(() => {
+    if (!initial) return null;
+    const before = buildBeforeSnapshot(initial);
+    const after = buildAfterSnapshot({
+      purchaseType,
+      status,
+      defaultLanguage,
+      listings,
+      baseCurrency,
+      basePriceDecimal,
+      regionOverrides,
+    });
+    return computeIapDiff(before, after);
+  }, [
+    initial,
+    purchaseType,
+    status,
+    defaultLanguage,
+    listings,
+    baseCurrency,
+    basePriceDecimal,
+    regionOverrides,
+  ]);
+
+  function handleSubmitClick() {
     setFormError(null);
     if (!validate()) {
       setFormError("Please fix the errors above before submitting.");
       return;
     }
+    if (isEdit) {
+      if (!diff?.hasChanges) {
+        setFormError("No changes to submit.");
+        return;
+      }
+      setShowDiff(true);
+      return;
+    }
+    void submitCreate();
+  }
 
+  function buildBody() {
+    return {
+      sku: sku.trim(),
+      purchaseType,
+      status,
+      defaultLanguage,
+      listings: Object.entries(listings)
+        .filter(([, l]) => l.title.trim().length > 0)
+        .map(([locale, l]) => ({
+          locale,
+          title: l.title,
+          description: l.description,
+        })),
+      baseCurrency,
+      basePriceDecimal,
+      regionOverrides: regionOverrides
+        .filter((r) => r.priceDecimal.trim().length > 0)
+        .map((r) => ({
+          region: r.region,
+          currency: r.currency,
+          priceDecimal: r.priceDecimal,
+        })),
+    };
+  }
+
+  async function submitCreate() {
     setSubmitting(true);
     try {
       const res = await fetch(
@@ -161,28 +325,7 @@ export function IapForm({ packageName }: Props) {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sku: sku.trim(),
-            purchaseType,
-            status,
-            defaultLanguage: DEFAULT_LOCALE,
-            listings: Object.entries(listings)
-              .filter(([, l]) => l.title.trim().length > 0)
-              .map(([locale, l]) => ({
-                locale,
-                title: l.title,
-                description: l.description,
-              })),
-            baseCurrency,
-            basePriceDecimal,
-            regionOverrides: regionOverrides
-              .filter((r) => r.priceDecimal.trim().length > 0)
-              .map((r) => ({
-                region: r.region,
-                currency: r.currency,
-                priceDecimal: r.priceDecimal,
-              })),
-          }),
+          body: JSON.stringify(buildBody()),
         },
       );
       const body = (await res.json().catch(() => ({}))) as {
@@ -193,6 +336,45 @@ export function IapForm({ packageName }: Props) {
         setFormError(body.error ?? `Create failed (HTTP ${res.status}).`);
         return;
       }
+      router.push(
+        `/google-iap-management/apps/${encodeURIComponent(packageName)}`,
+      );
+      router.refresh();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submitUpdate() {
+    setSubmitting(true);
+    try {
+      const res = await fetch(
+        `/api/google-iap-management/apps/${encodeURIComponent(packageName)}/iaps/${encodeURIComponent(sku.trim())}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            purchaseType,
+            status,
+            defaultLanguage,
+            listings: buildBody().listings,
+            baseCurrency,
+            basePriceDecimal,
+            regionOverrides: buildBody().regionOverrides,
+          }),
+        },
+      );
+      const body = (await res.json().catch(() => ({}))) as {
+        sku?: string;
+        error?: string;
+      };
+      if (!res.ok) {
+        setFormError(body.error ?? `Update failed (HTTP ${res.status}).`);
+        return;
+      }
+      setShowDiff(false);
       router.push(
         `/google-iap-management/apps/${encodeURIComponent(packageName)}`,
       );
@@ -221,10 +403,16 @@ export function IapForm({ packageName }: Props) {
               value={sku}
               onChange={(e) => setSku(e.target.value)}
               placeholder="com.example.gem_pack_small"
+              disabled={isEdit}
               className={`w-full rounded-lg border px-3 py-2 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition ${
-                fieldErrors.sku ? "border-red-400" : "border-slate-300"
-              }`}
+                isEdit ? "bg-slate-50 cursor-not-allowed text-slate-500" : ""
+              } ${fieldErrors.sku ? "border-red-400" : "border-slate-300"}`}
             />
+            {isEdit && (
+              <p className="text-[11px] text-slate-400">
+                SKU is immutable — Google Play does not allow renaming.
+              </p>
+            )}
             {fieldErrors.sku && (
               <p className="text-xs text-red-500">{fieldErrors.sku}</p>
             )}
@@ -282,14 +470,14 @@ export function IapForm({ packageName }: Props) {
         <div className="flex items-baseline justify-between mb-4">
           <h2 className="text-base font-semibold text-slate-900">Listings</h2>
           <p className="text-xs text-slate-400">
-            Multi-locale (Q-GIAP.J). Default: {DEFAULT_LOCALE}.
+            Multi-locale (Q-GIAP.J). Default: {defaultLanguage}.
           </p>
         </div>
         <div className="flex gap-4">
           <GoogleLocaleSidebar
             listings={listings}
             activeLocale={activeLocale}
-            defaultLocale={DEFAULT_LOCALE}
+            defaultLocale={defaultLanguage}
             onSelect={(loc) => {
               setActiveLocale(loc);
               if (!listings[loc]) {
@@ -300,7 +488,7 @@ export function IapForm({ packageName }: Props) {
           <div className="flex-1 space-y-3">
             <div className="space-y-1.5">
               <label className="block text-sm font-medium text-slate-700">
-                Title{activeLocale === DEFAULT_LOCALE ? " *" : ""}
+                Title{activeLocale === defaultLanguage ? " *" : ""}
               </label>
               <input
                 type="text"
@@ -309,7 +497,7 @@ export function IapForm({ packageName }: Props) {
                 placeholder="Small Gem Pack"
                 maxLength={55}
                 className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition ${
-                  activeLocale === DEFAULT_LOCALE && fieldErrors.defaultTitle
+                  activeLocale === defaultLanguage && fieldErrors.defaultTitle
                     ? "border-red-400"
                     : "border-slate-300"
                 }`}
@@ -317,7 +505,7 @@ export function IapForm({ packageName }: Props) {
               <p className="text-[11px] text-slate-400">
                 {currentListing.title.length}/55
               </p>
-              {activeLocale === DEFAULT_LOCALE && fieldErrors.defaultTitle && (
+              {activeLocale === defaultLanguage && fieldErrors.defaultTitle && (
                 <p className="text-xs text-red-500">{fieldErrors.defaultTitle}</p>
               )}
             </div>
@@ -502,7 +690,6 @@ export function IapForm({ packageName }: Props) {
         </div>
       </section>
 
-      {/* Form errors + submit */}
       {formError && (
         <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
           <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
@@ -512,14 +699,34 @@ export function IapForm({ packageName }: Props) {
 
       <div className="flex justify-end">
         <button
-          onClick={handleSubmit}
+          onClick={handleSubmitClick}
           disabled={submitting}
           className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition disabled:opacity-50"
         >
           <Save className="h-4 w-4" />
-          {submitting ? "Creating…" : "Create on Google Play"}
+          {submitting
+            ? isEdit
+              ? "Reviewing…"
+              : "Creating…"
+            : isEdit
+              ? "Review changes"
+              : "Create on Google Play"}
         </button>
       </div>
+
+      {showDiff && diff && (
+        <UpdateChangesPreviewModal
+          diff={diff}
+          submitting={submitting}
+          submitError={formError}
+          onCancel={() => {
+            if (submitting) return;
+            setShowDiff(false);
+            setFormError(null);
+          }}
+          onConfirm={() => void submitUpdate()}
+        />
+      )}
     </div>
   );
 }
