@@ -7,23 +7,30 @@
  * Apple/Google contexts are mutually exclusive per-route (no cross-
  * context state to keep in sync).
  *
- * Cookie name: `g_iap_active_account` (short to keep header size minimal).
- * Max-Age: 30 days (matches Manager's typical session length).
+ * Cookie name: `g_iap_active_v2`. Renamed from `g_iap_active_account`
+ * during Hotfix 7 (2026-05-21). Reason: Hotfix 6 had attempted a
+ * legacy-path migration via two cookies().set() calls in one response,
+ * but Next.js's ResponseCookies internal Map keys by cookie name alone
+ * (node_modules/next/dist/compiled/@edge-runtime/cookies/index.js
+ * lines 289–295). The second set() call therefore OVERWROTE the first
+ * inside the Map, and `replace()` emitted only the deletion header —
+ * the browser saw the cookie cleared and nothing set, so every read
+ * returned null and `resolveActiveAccountId` fell back to first-
+ * verified on every surface (the "VNGG Sing locked" symptom).
  *
- * Hotfix 6 — path: `/`. The original design used path
- * `/google-iap-management` thinking it would prevent "leaking" the
- * cookie to other modules, but RFC 6265 §5.1.4 path-match means that
- * scope does NOT cover `/api/google-iap-management/*` (a different
- * URL prefix entirely). So API routes never saw the cookie — they
- * silently fell back to first-verified via resolveActiveAccountId,
- * making the switcher's selection appear to do nothing and Hotfix 2's
- * "pin only if no active" overwrite on every Add. Module isolation is
- * enforced by code (other modules don't read this cookie name), not
- * by cookie path. Path=`/` is the correct scope.
+ * Renaming sidesteps the Map collision permanently: the v2 cookie is a
+ * different key, so writeActiveAccountId emits exactly one Set-Cookie
+ * header. Legacy `g_iap_active_account` cookies sit harmlessly in any
+ * browser still carrying them until natural expiry (≤30 days from
+ * their last write); no migration logic required.
+ *
+ * Max-Age: 30 days (matches Manager's typical session length).
+ * Path: `/` — covers both dashboard pages AND `/api/*` routes so the
+ * switcher self-fetch and API mutations both see the cookie.
  */
 import { cookies } from "next/headers";
 
-export const ACTIVE_ACCOUNT_COOKIE = "g_iap_active_account";
+export const ACTIVE_ACCOUNT_COOKIE = "g_iap_active_v2";
 const COOKIE_PATH = "/";
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
@@ -33,7 +40,10 @@ export function readActiveAccountId(): string | null {
   return c?.value ?? null;
 }
 
-/** Server-side: set the active Google Console account cookie. */
+/** Server-side: set the active Google Console account cookie.
+ *  Single cookies().set() call — multiple calls with the same name in
+ *  one response collide inside ResponseCookies' name-keyed Map and only
+ *  the last write survives. See module-level comment. */
 export function writeActiveAccountId(accountId: string): void {
   cookies().set({
     name: ACTIVE_ACCOUNT_COOKIE,
@@ -42,21 +52,6 @@ export function writeActiveAccountId(accountId: string): void {
     httpOnly: true,
     sameSite: "lax",
     maxAge: COOKIE_MAX_AGE,
-  });
-  // Hotfix 6 migration: existing browser sessions may carry a stale
-  // cookie at the old `/google-iap-management` path (set before this
-  // fix). RFC 6265 §5.4 sends the longer-path cookie first; without
-  // explicit cleanup the dashboard pages would keep reading the stale
-  // value. One `Set-Cookie` with `Max-Age=0` at the old path clears
-  // it on the very next switch. Remove this migration shim after the
-  // 30-day cookie max-age window has lapsed.
-  cookies().set({
-    name: ACTIVE_ACCOUNT_COOKIE,
-    value: "",
-    path: "/google-iap-management",
-    httpOnly: true,
-    sameSite: "lax",
-    maxAge: 0,
   });
 }
 

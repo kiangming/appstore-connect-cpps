@@ -1,10 +1,56 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { resolveActiveAccountId } from "./active-account";
+import {
+  ACTIVE_ACCOUNT_COOKIE,
+  resolveActiveAccountId,
+} from "./active-account";
+
+// Spy on the cookies() store across both read + write paths so we can
+// regression-test that writeActiveAccountId emits exactly one set()
+// call. The Hotfix 7 bug was a second set() in writeActiveAccountId
+// that collided with the first in ResponseCookies' name-keyed Map and
+// silently nuked the new cookie — a unit-level guard catches a
+// recurrence at the function boundary.
+const setSpy = vi.fn();
+const getSpy = vi.fn(() => undefined);
+vi.mock("next/headers", () => ({
+  cookies: () => ({
+    set: setSpy,
+    get: getSpy,
+    getAll: () => [],
+    delete: () => undefined,
+  }),
+}));
+
+beforeEach(() => {
+  setSpy.mockClear();
+  getSpy.mockClear();
+});
 
 const verified = (id: string) => ({ id, status: "verified" });
 const pending = (id: string) => ({ id, status: "pending" });
 const invalid = (id: string) => ({ id, status: "invalid" });
+
+describe("writeActiveAccountId (Hotfix 7 regression)", () => {
+  it("emits exactly one cookies().set() call per invocation", async () => {
+    const { writeActiveAccountId } = await import("./active-account");
+    writeActiveAccountId("acct-uuid-123");
+    expect(setSpy).toHaveBeenCalledTimes(1);
+    const args = setSpy.mock.calls[0][0];
+    expect(args).toMatchObject({
+      name: ACTIVE_ACCOUNT_COOKIE,
+      value: "acct-uuid-123",
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+    });
+    expect(args.maxAge).toBeGreaterThan(0);
+  });
+
+  it("uses the renamed `g_iap_active_v2` cookie name", () => {
+    expect(ACTIVE_ACCOUNT_COOKIE).toBe("g_iap_active_v2");
+  });
+});
 
 describe("resolveActiveAccountId", () => {
   it("returns null when accounts list is empty", () => {
