@@ -261,7 +261,17 @@ async function newPatchOneTimeProduct(
   packageName: string,
   productId: string,
   body: OneTimeProduct,
-  options: { allowMissing?: boolean; updateMask?: string } = {},
+  options: {
+    allowMissing?: boolean;
+    updateMask?: string;
+    /** Hotfix 9 — caller-supplied regionsVersion. When the body's regional
+     *  prices were bootstrapped via `monetization.convertRegionPrices`,
+     *  callers MUST pass the version echoed in that response to keep
+     *  currencies consistent across the two calls. Defaults to
+     *  REGIONS_VERSION when omitted (the convertRegionPrices-failed
+     *  fallback path). */
+    regionsVersion?: string;
+  } = {},
 ): Promise<OneTimeProduct> {
   return timed("monetization.onetimeproducts.patch", packageName, productId, async () => {
     const client = buildClient(jwt);
@@ -270,7 +280,7 @@ async function newPatchOneTimeProduct(
       productId,
       allowMissing: options.allowMissing,
       updateMask: options.updateMask ?? FULL_UPDATE_MASK,
-      "regionsVersion.version": REGIONS_VERSION,
+      "regionsVersion.version": options.regionsVersion ?? REGIONS_VERSION,
       requestBody: body,
     });
     return res.data as OneTimeProduct;
@@ -406,11 +416,17 @@ async function applyDesiredState(
 /** Insert a new in-app product.
  *  Public surface unchanged; internally uses Monetization API v3
  *  patch+allowMissing (the new API's create idiom) with legacy
- *  fallback. State applied via the separate batchUpdateStates endpoint. */
+ *  fallback. State applied via the separate batchUpdateStates endpoint.
+ *
+ *  `options.regionsVersion` (Hotfix 9): pin the regions catalog version
+ *  to match whichever Google used for `convertRegionPrices` when the
+ *  caller bootstrapped regional prices — see newPatchOneTimeProduct
+ *  options docs. */
 export async function insertInAppProduct(
   jwt: JWT,
   packageName: string,
   body: InAppProduct,
+  options: { regionsVersion?: string } = {},
 ): Promise<InAppProduct> {
   try {
     const writeShape = inAppProductToOneTimeProduct({
@@ -422,7 +438,7 @@ export async function insertInAppProduct(
       packageName,
       writeShape.product.productId ?? body.sku ?? "",
       writeShape.product,
-      { allowMissing: true },
+      { allowMissing: true, regionsVersion: options.regionsVersion },
     );
     await applyDesiredState(
       jwt,
@@ -446,12 +462,15 @@ export async function insertInAppProduct(
 }
 
 /** Patch (update) an existing in-app product.
- *  Same try-new-then-legacy pattern; state applied separately. */
+ *  Same try-new-then-legacy pattern; state applied separately.
+ *
+ *  `options.regionsVersion` (Hotfix 9): see insertInAppProduct docs. */
 export async function patchInAppProduct(
   jwt: JWT,
   packageName: string,
   sku: string,
   body: InAppProduct,
+  options: { regionsVersion?: string } = {},
 ): Promise<InAppProduct> {
   try {
     const writeShape = inAppProductToOneTimeProduct({
@@ -464,7 +483,7 @@ export async function patchInAppProduct(
       packageName,
       sku,
       writeShape.product,
-      { allowMissing: false },
+      { allowMissing: false, regionsVersion: options.regionsVersion },
     );
     await applyDesiredState(
       jwt,

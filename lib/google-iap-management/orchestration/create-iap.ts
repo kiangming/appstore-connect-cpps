@@ -114,14 +114,20 @@ export async function createIapOnGoogle(
   //
   // Manager-supplied region overrides always win over the converted
   // result — explicit intent beats catalog defaults.
+  //
+  // Hotfix 9: capture the catalog version Google used and forward it
+  // to the patch call so currencies match. Without this, BG = EUR
+  // (current catalog post-Eurozone entry) sent against a pinned
+  // "2022/02" patch yields "Expected BGN but got EUR".
+  let regionsVersion: string | undefined;
   try {
-    const auto = await buildRegionMapFromBasePrice(
+    const result = await buildRegionMapFromBasePrice(
       jwt,
       input.packageName,
       baseMicros,
       input.baseCurrency,
     );
-    for (const a of auto) {
+    for (const a of result.regions) {
       if (!prices[a.region]) {
         prices[a.region] = {
           currency: a.currency,
@@ -129,6 +135,7 @@ export async function createIapOnGoogle(
         };
       }
     }
+    regionsVersion = result.regionsVersion ?? undefined;
   } catch (err) {
     // Non-fatal: if convertRegionPrices fails, fall through with only
     // Manager's explicit overrides + defaultPrice. Google may then
@@ -156,7 +163,9 @@ export async function createIapOnGoogle(
     ...(Object.keys(prices).length > 0 ? { prices } : {}),
   };
 
-  const created = await insertInAppProduct(jwt, input.packageName, body);
+  const created = await insertInAppProduct(jwt, input.packageName, body, {
+    regionsVersion,
+  });
 
   // Sync the cache from the response (Google may have normalized fields
   // — currency casing, etc).

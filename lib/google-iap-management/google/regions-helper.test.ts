@@ -38,6 +38,7 @@ describe("buildRegionMapFromBasePrice", () => {
           price: { currencyCode: "JPY", units: "300", nanos: 0 },
         },
       },
+      regionVersion: { version: "2022/02" },
     });
 
     const out = await buildRegionMapFromBasePrice(
@@ -55,11 +56,12 @@ describe("buildRegionMapFromBasePrice", () => {
     });
 
     // Output sorted by region; Money round-tripped back to micros.
-    expect(out).toEqual([
+    expect(out.regions).toEqual([
       { region: "JP", currency: "JPY", priceMicros: "300000000" },
       { region: "US", currency: "USD", priceMicros: "1990000" },
       { region: "VN", currency: "VND", priceMicros: "25000000000" },
     ]);
+    expect(out.regionsVersion).toBe("2022/02");
   });
 
   it("skips entries with missing currencyCode or price", async () => {
@@ -79,7 +81,7 @@ describe("buildRegionMapFromBasePrice", () => {
       "1990000",
       "USD",
     );
-    expect(out.map((r) => r.region)).toEqual(["US"]);
+    expect(out.regions.map((r) => r.region)).toEqual(["US"]);
   });
 
   it("returns empty array when the response carries no converted prices", async () => {
@@ -90,7 +92,7 @@ describe("buildRegionMapFromBasePrice", () => {
       "1990000",
       "USD",
     );
-    expect(out).toEqual([]);
+    expect(out.regions).toEqual([]);
   });
 
   it("propagates errors from convertRegionPrices unchanged", async () => {
@@ -103,6 +105,45 @@ describe("buildRegionMapFromBasePrice", () => {
         "USD",
       ),
     ).rejects.toThrow(/SCOPE_MISSING/);
+  });
+
+  // Hotfix 9: the response's regionVersion identifies which catalog
+  // Google used for the conversion. Callers MUST forward this value to
+  // the subsequent monetization.onetimeproducts.patch call so currencies
+  // stay consistent (e.g. BG = EUR in current catalog vs BGN in older
+  // pinned versions). Helper exposes the field so orchestrators can
+  // thread it through.
+  it("captures regionVersion.version from the response (Hotfix 9 — BG/Eurozone trap)", async () => {
+    convertSpy.mockResolvedValueOnce({
+      convertedRegionPrices: {
+        BG: {
+          regionCode: "BG",
+          price: { currencyCode: "EUR", units: "1", nanos: 990_000_000 },
+        },
+      },
+      regionVersion: { version: "2026/01" },
+    });
+    const out = await buildRegionMapFromBasePrice(
+      {} as never,
+      "com.example.app",
+      "1990000",
+      "EUR",
+    );
+    expect(out.regionsVersion).toBe("2026/01");
+    expect(out.regions).toEqual([
+      { region: "BG", currency: "EUR", priceMicros: "1990000" },
+    ]);
+  });
+
+  it("returns regionsVersion: null when the response omits regionVersion", async () => {
+    convertSpy.mockResolvedValueOnce({ convertedRegionPrices: {} });
+    const out = await buildRegionMapFromBasePrice(
+      {} as never,
+      "com.example.app",
+      "1990000",
+      "USD",
+    );
+    expect(out.regionsVersion).toBeNull();
   });
 });
 

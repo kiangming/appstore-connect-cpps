@@ -40,6 +40,27 @@ export interface RegionPriceMicros {
   priceMicros: string;
 }
 
+export interface RegionMapResult {
+  regions: RegionPriceMicros[];
+  /**
+   * The regions catalog version Google used to compute this conversion,
+   * echoed back from `ConvertRegionPricesResponse.regionVersion.version`.
+   *
+   * Hotfix 9: `monetization.convertRegionPrices` accepts no regionsVersion
+   * input — it always uses Google's CURRENT catalog. Subsequent writes
+   * to `monetization.onetimeproducts.patch` MUST pin the same version, or
+   * Google rejects the patch when a country's currency has changed between
+   * the pinned version and current (e.g. BG = BGN under "2022/02" but EUR
+   * in the current catalog post-Bulgaria Eurozone entry). Callers thread
+   * this value back to the patch call to keep both sides self-consistent.
+   *
+   * `null` when the response omitted the field (defensive — shouldn't
+   * happen with the SDK, but if it does callers fall back to their own
+   * pinned default).
+   */
+  regionsVersion: string | null;
+}
+
 /**
  * Call Google's `monetization.convertRegionPrices` with a single base
  * price + currency, then convert the response's Money values back to
@@ -47,31 +68,38 @@ export interface RegionPriceMicros {
  *
  * The base region is included in the result (Google echoes it back in
  * the converted map with the same currency).
+ *
+ * Returns the catalog version Google used so the caller can pin the
+ * same version on the subsequent patch (Hotfix 9 — see RegionMapResult
+ * docs for the cross-version-currency-mismatch trap).
  */
 export async function buildRegionMapFromBasePrice(
   jwt: JWT,
   packageName: string,
   basePriceMicros: string,
   baseCurrency: string,
-): Promise<RegionPriceMicros[]> {
+): Promise<RegionMapResult> {
   const request: ConvertRegionPricesRequest = {
     price: microsToMoney(basePriceMicros, baseCurrency),
   };
   const res = await rawConvertRegionPrices(jwt, packageName, request);
   const map = res.convertedRegionPrices ?? {};
-  const out: RegionPriceMicros[] = [];
+  const regions: RegionPriceMicros[] = [];
   for (const [regionCode, entry] of Object.entries(map)) {
     if (!entry?.price) continue;
     const currency = entry.price.currencyCode;
     if (!currency) continue;
-    out.push({
+    regions.push({
       region: regionCode,
       currency,
       priceMicros: moneyToMicros(entry.price),
     });
   }
-  out.sort((a, b) => a.region.localeCompare(b.region));
-  return out;
+  regions.sort((a, b) => a.region.localeCompare(b.region));
+  return {
+    regions,
+    regionsVersion: res.regionVersion?.version ?? null,
+  };
 }
 
 /**

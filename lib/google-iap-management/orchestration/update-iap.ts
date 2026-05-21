@@ -167,14 +167,18 @@ export async function updateIapOnGoogle(
   // auto-converted catalog values; missing regions get the conversion.
   // Skipped if convertRegionPrices fails — the publisher-client
   // fallback to legacy will then handle the call.
+  //
+  // Hotfix 9: capture and forward the catalog version Google used —
+  // see create-iap.ts header comment for the cross-version trap.
+  let regionsVersion: string | undefined;
   try {
-    const auto = await buildRegionMapFromBasePrice(
+    const result = await buildRegionMapFromBasePrice(
       jwt,
       input.packageName,
       after.attributes.basePriceMicros,
       after.attributes.baseCurrency,
     );
-    for (const a of auto) {
+    for (const a of result.regions) {
       if (!prices[a.region]) {
         prices[a.region] = {
           currency: a.currency,
@@ -182,6 +186,7 @@ export async function updateIapOnGoogle(
         };
       }
     }
+    regionsVersion = result.regionsVersion ?? undefined;
   } catch (err) {
     console.warn(
       `[google-iap:update-iap] regions bootstrap failed pkg=${input.packageName} sku=${input.sku} err="${
@@ -204,7 +209,9 @@ export async function updateIapOnGoogle(
     ...(Object.keys(prices).length > 0 ? { prices } : {}),
   };
 
-  const updated = await patchInAppProduct(jwt, input.packageName, input.sku, body);
+  const updated = await patchInAppProduct(jwt, input.packageName, input.sku, body, {
+    regionsVersion,
+  });
 
   await syncIapFromGoogle(input.appId, updated);
 
