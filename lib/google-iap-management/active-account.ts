@@ -39,3 +39,37 @@ export function writeActiveAccountId(accountId: string): void {
 export function clearActiveAccountId(): void {
   cookies().delete(ACTIVE_ACCOUNT_COOKIE);
 }
+
+/**
+ * Resolve the active Google Console account id with fallback (Hotfix 2).
+ *
+ * Mirrors the page-side resolver pattern that's duplicated across every
+ * /google-iap-management/* page: cookie wins when set + still valid, else
+ * first verified account, else first account regardless of status, else
+ * null (no accounts configured).
+ *
+ * Why this exists: the original API routes hard-failed when the cookie
+ * was unset, but the single-account Add Account flow never writes the
+ * cookie (the header switcher is disabled when accounts.length === 1, so
+ * there is no UI path to pin it). The strict path produced "No active
+ * Google Console account..." errors even when one account existed and
+ * was verified. The page resolvers already had the fallback; this helper
+ * lets the API routes adopt the same behaviour symmetrically.
+ *
+ * Caller contract: pass the result of `listAccounts()` + the result of
+ * `readActiveAccountId()`. Caller still owns the empty-list error
+ * response — null here means "no accounts configured" (legitimate empty
+ * state, not a missing-cookie bug).
+ */
+export function resolveActiveAccountId(
+  accounts: Array<{ id: string; status: string }>,
+  cookieActiveId: string | null,
+): string | null {
+  if (accounts.length === 0) return null;
+  if (cookieActiveId && accounts.some((a) => a.id === cookieActiveId)) {
+    return cookieActiveId;
+  }
+  const verified = accounts.find((a) => a.status === "verified");
+  if (verified) return verified.id;
+  return accounts[0].id;
+}

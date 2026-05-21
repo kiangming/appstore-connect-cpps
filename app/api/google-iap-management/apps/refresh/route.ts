@@ -17,10 +17,16 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { jwtClientFromEncrypted } from "@/lib/google-iap-management/google/auth";
 import { searchAppsAll } from "@/lib/google-iap-management/google/reporting-client";
-import { getEncryptedCredentials } from "@/lib/google-iap-management/repository/google-accounts";
+import {
+  getEncryptedCredentials,
+  listAccounts,
+} from "@/lib/google-iap-management/repository/google-accounts";
 import { batchUpsertAppsFromSync } from "@/lib/google-iap-management/repository/apps";
 import { appendAction } from "@/lib/google-iap-management/repository/actions-log";
-import { readActiveAccountId } from "@/lib/google-iap-management/active-account";
+import {
+  readActiveAccountId,
+  resolveActiveAccountId,
+} from "@/lib/google-iap-management/active-account";
 
 export const dynamic = "force-dynamic";
 
@@ -30,12 +36,13 @@ export async function POST() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const accountId = readActiveAccountId();
+  const accounts = await listAccounts().catch(() => []);
+  const accountId = resolveActiveAccountId(accounts, readActiveAccountId());
   if (!accountId) {
     return NextResponse.json(
       {
         error:
-          "No active Google Console account. Open the account switcher or visit Settings.",
+          "No Google Console accounts configured. Add one in Settings → Google Console Accounts first.",
       },
       { status: 400 },
     );

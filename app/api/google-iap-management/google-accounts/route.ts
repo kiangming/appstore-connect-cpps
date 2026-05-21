@@ -7,6 +7,10 @@ import {
   listAccounts,
 } from "@/lib/google-iap-management/repository/google-accounts";
 import { appendAction } from "@/lib/google-iap-management/repository/actions-log";
+import {
+  readActiveAccountId,
+  writeActiveAccountId,
+} from "@/lib/google-iap-management/active-account";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +77,14 @@ export async function POST(req: Request) {
         service_account_email: account.service_account_email,
       },
     });
+    // Hotfix 2: pin the new account as active when nothing's pinned yet.
+    // First-add UX: Manager submits the form, the next API request from
+    // the same browser sees the cookie and Refresh works without an extra
+    // explicit "set active" click. Existing pin is preserved on later
+    // adds (Manager's explicit switcher choice wins).
+    if (!readActiveAccountId()) {
+      writeActiveAccountId(account.id);
+    }
     return NextResponse.json({ account }, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to create account";
