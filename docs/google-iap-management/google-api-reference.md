@@ -309,24 +309,57 @@ legacy serialisation's coarser unit.
 - `getInAppProduct(jwt, packageName, sku)` — same try-new-then-
   legacy strategy for the single-fetch case.
 
-### Phase 2 (deferred) — WRITE path migration
+### Phase 2 — WRITE path migration (single-product flows)
 
-Create / Edit / Bulk Import still call legacy `inappproducts.insert`
-/ `.patch` / `.batchUpdate`. Phase 2 will:
+**Shipped 2026-05-21 alongside Phase 1.** Create / Edit / Delete for
+single products now go through Monetization API v3. Bulk Import is
+still on legacy `inappproducts.batchUpdate` — call it Phase 3 if
+the Manager's portfolio reaches a state where every bulk-import
+target is migrated.
 
-1. Replace insert with `monetization.onetimeproducts.patch` +
-   `allowMissing=true` (the new API has no separate insert endpoint).
-2. Replace patch with the same — sending the full target body and
-   the required `updateMask` + `regionsVersion.version` query params.
-3. Replace `inappproducts.batchUpdate` with
-   `monetization.onetimeproducts.batchUpdate` (same shape, different
-   path).
-4. After every write, call `purchaseOptions:batchUpdateStates` to
-   apply the desired `ACTIVE`/`INACTIVE` state (the new API marks
-   `state` as output-only on the product resource — state changes
-   are a dedicated endpoint).
-5. Use `regionsVersion.version="2022/02"` as the conservative
-   baseline (or whatever Google publishes as current).
+What's wired:
+
+1. **`insertInAppProduct` → `monetization.onetimeproducts.patch` +
+   `allowMissing=true`.** The new API has no separate insert; patch
+   with `allowMissing` is Google's idempotent-create idiom. Body uses
+   the WRITE-side adapter to translate legacy InAppProduct → OneTimeProduct.
+2. **`patchInAppProduct` → same endpoint, `allowMissing=false`.** The
+   `updateMask` is currently a comprehensive explicit list
+   (`listings,purchaseOptions,taxAndComplianceSettings,offerTags,
+   restrictedPaymentCountries`) rather than the wildcard `*` — the
+   wildcard has been inconsistently honoured in practice.
+3. **`deleteInAppProduct` → `monetization.onetimeproducts.delete`.**
+   Path-style identifier; same try-new-then-legacy fallback.
+4. **State two-step.** State is OUTPUT-ONLY on the OneTimeProduct
+   body in the new API. After every patch returns, we call
+   `purchaseOptions:batchUpdateStates` with the dedicated
+   `ActivatePurchaseOptionRequest` / `DeactivatePurchaseOptionRequest`
+   to apply the Manager's desired status. State failures are logged
+   but non-fatal — the product is already written; state drift is
+   recoverable via a subsequent edit.
+5. **`regionsVersion.version = "2022/02"`** (constant
+   `REGIONS_VERSION` in publisher-client.ts). Bump if Google
+   announces a new version that materially changes pricing behaviour.
+
+### Region expansion ("Must provide a price for each region...")
+
+The new Monetization API rejects products that don't carry a price
+for every region the app is published in — the legacy
+defaultPrice-plus-auto-equalise convenience is gone. The create and
+update orchestrators call
+[`buildRegionMapFromBasePrice`](../../lib/google-iap-management/google/regions-helper.ts)
+which wraps `monetization.convertRegionPrices` (Google's own catalog
+conversion). The resulting region map is merged into the IAP body
+*before* the patch call. Manager-supplied region overrides win over
+the converted result.
+
+If `convertRegionPrices` itself fails, the orchestrator logs and
+proceeds with only the explicit prices — Google will then reject
+with a clear "must provide a price..." error and the Manager gets
+an actionable message instead of a silent half-broken state.
+
+Cost: one extra API call per create / update for the regions
+bootstrap. Acceptable — Manager's create / edit volume is low.
 
 ### Fallback strategy
 

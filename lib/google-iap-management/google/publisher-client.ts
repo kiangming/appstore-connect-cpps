@@ -20,6 +20,8 @@ import type { JWT } from "google-auth-library";
 import { logPublisherCall, type LogOutcome } from "./logging";
 import {
   oneTimeProductToInAppProduct,
+  inAppProductToOneTimeProduct,
+  DEFAULT_PURCHASE_OPTION_ID,
   type OneTimeProduct,
   type ToolInAppProduct,
 } from "./onetime-product-adapter";
@@ -220,9 +222,115 @@ export async function getInAppProduct(
 // against the same shape we normalise to.
 export type { ToolInAppProduct };
 
-/** Insert a new in-app product. The body must include sku, purchaseType,
- *  status, defaultLanguage, listings, defaultPrice (or prices). */
-export async function insertInAppProduct(
+/* ──────────────────────────────────────────────────────────────────────
+ *  WRITE path — Hotfix 8 Phase 2: Monetization API v3 onetimeproducts.*
+ *
+ *  Same fallback strategy as the READ path: try the new API first, fall
+ *  back to legacy on error. The new API patch endpoint requires:
+ *    - regionsVersion.version  (mandatory query param)
+ *    - updateMask              (mandatory query param)
+ *    - allowMissing=true       (for the create-via-patch idiom; the new
+ *                               API has no separate insert endpoint)
+ *
+ *  State (active / inactive) is OUTPUT-ONLY on the OneTimeProduct
+ *  resource body. After the patch returns, we make a second call to
+ *  `purchaseOptions:batchUpdateStates` to apply the desired state.
+ *  This is the documented "two-step write" pattern for the new API.
+ *
+ *  Regions expansion: the orchestrator is responsible for providing a
+ *  comprehensive regions map (e.g. via the regions-helper that wraps
+ *  `convertRegionPrices`). Manager's "Google default pricing source"
+ *  uses that helper to bootstrap from a single base price. The
+ *  publisher-client itself just forwards what the orchestrator built.
+ * ──────────────────────────────────────────────────────────────────── */
+
+/** Regions schema version Google publishes for the resource. Bump if
+ *  Google announces a new version that materially changes pricing
+ *  behaviour. "2022/02" is the documented baseline at Hotfix 8 ship. */
+export const REGIONS_VERSION = "2022/02";
+
+/** updateMask the patch endpoint accepts for full-replace semantics.
+ *  The Monetization API documents `*` as the wildcard for "every
+ *  writable field"; we use a comprehensive explicit list instead
+ *  because the wildcard has been inconsistently honoured in practice. */
+const FULL_UPDATE_MASK =
+  "listings,purchaseOptions,taxAndComplianceSettings,offerTags,restrictedPaymentCountries";
+
+async function newPatchOneTimeProduct(
+  jwt: JWT,
+  packageName: string,
+  productId: string,
+  body: OneTimeProduct,
+  options: { allowMissing?: boolean; updateMask?: string } = {},
+): Promise<OneTimeProduct> {
+  return timed("monetization.onetimeproducts.patch", packageName, productId, async () => {
+    const client = buildClient(jwt);
+    const res = await client.monetization.onetimeproducts.patch({
+      packageName,
+      productId,
+      allowMissing: options.allowMissing,
+      updateMask: options.updateMask ?? FULL_UPDATE_MASK,
+      "regionsVersion.version": REGIONS_VERSION,
+      requestBody: body,
+    });
+    return res.data as OneTimeProduct;
+  });
+}
+
+async function newBatchUpdateOneTimeProductStates(
+  jwt: JWT,
+  packageName: string,
+  productId: string,
+  purchaseOptionId: string,
+  state: "ACTIVATE" | "DEACTIVATE",
+): Promise<void> {
+  await timed(
+    "monetization.onetimeproducts.purchaseOptions.batchUpdateStates",
+    packageName,
+    productId,
+    async () => {
+      const client = buildClient(jwt);
+      await client.monetization.onetimeproducts.purchaseOptions.batchUpdateStates({
+        packageName,
+        productId,
+        requestBody: {
+          requests: [
+            state === "ACTIVATE"
+              ? {
+                  activatePurchaseOptionRequest: {
+                    packageName,
+                    productId,
+                    purchaseOptionId,
+                  },
+                }
+              : {
+                  deactivatePurchaseOptionRequest: {
+                    packageName,
+                    productId,
+                    purchaseOptionId,
+                  },
+                },
+          ],
+        },
+      });
+      return undefined;
+    },
+  );
+}
+
+async function newDeleteOneTimeProduct(
+  jwt: JWT,
+  packageName: string,
+  productId: string,
+): Promise<void> {
+  await timed("monetization.onetimeproducts.delete", packageName, productId, async () => {
+    const client = buildClient(jwt);
+    await client.monetization.onetimeproducts.delete({ packageName, productId });
+    return undefined;
+  });
+}
+
+async function legacyInsertInAppProduct(
   jwt: JWT,
   packageName: string,
   body: InAppProduct,
@@ -237,8 +345,7 @@ export async function insertInAppProduct(
   });
 }
 
-/** Patch (partial update) an existing in-app product. */
-export async function patchInAppProduct(
+async function legacyPatchInAppProduct(
   jwt: JWT,
   packageName: string,
   sku: string,
@@ -255,8 +362,7 @@ export async function patchInAppProduct(
   });
 }
 
-/** Delete an in-app product. */
-export async function deleteInAppProduct(
+async function legacyDeleteInAppProduct(
   jwt: JWT,
   packageName: string,
   sku: string,
@@ -267,6 +373,144 @@ export async function deleteInAppProduct(
     return undefined;
   });
 }
+
+/** Apply the desired state via the dedicated batchUpdateStates endpoint.
+ *  Idempotent — ACTIVATE on an already-active option is harmless;
+ *  DEACTIVATE on inactive same. Errors here are non-fatal for the
+ *  parent write: we log and continue so the Manager at least gets the
+ *  product written. State drift is recoverable via a subsequent edit. */
+async function applyDesiredState(
+  jwt: JWT,
+  packageName: string,
+  productId: string,
+  purchaseOptionId: string,
+  desiredState: "ACTIVE" | "INACTIVE",
+): Promise<void> {
+  try {
+    await newBatchUpdateOneTimeProductStates(
+      jwt,
+      packageName,
+      productId,
+      purchaseOptionId,
+      desiredState === "ACTIVE" ? "ACTIVATE" : "DEACTIVATE",
+    );
+  } catch (err) {
+    console.warn(
+      `[google-iap:publisher] state apply failed pkg=${packageName} productId=${productId} desired=${desiredState} err="${
+        err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
+      }"`,
+    );
+  }
+}
+
+/** Insert a new in-app product.
+ *  Public surface unchanged; internally uses Monetization API v3
+ *  patch+allowMissing (the new API's create idiom) with legacy
+ *  fallback. State applied via the separate batchUpdateStates endpoint. */
+export async function insertInAppProduct(
+  jwt: JWT,
+  packageName: string,
+  body: InAppProduct,
+): Promise<InAppProduct> {
+  try {
+    const writeShape = inAppProductToOneTimeProduct({
+      ...body,
+      packageName,
+    } as ToolInAppProduct);
+    const created = await newPatchOneTimeProduct(
+      jwt,
+      packageName,
+      writeShape.product.productId ?? body.sku ?? "",
+      writeShape.product,
+      { allowMissing: true },
+    );
+    await applyDesiredState(
+      jwt,
+      packageName,
+      created.productId ?? body.sku ?? "",
+      writeShape.purchaseOptionId,
+      writeShape.desiredState,
+    );
+    return oneTimeProductToInAppProduct(created) as unknown as InAppProduct;
+  } catch (err) {
+    try {
+      const legacy = await legacyInsertInAppProduct(jwt, packageName, body);
+      console.warn(
+        `[google-iap:publisher] insert fallback pkg=${packageName} sku=${body.sku ?? "?"}`,
+      );
+      return legacy;
+    } catch {
+      throw err;
+    }
+  }
+}
+
+/** Patch (update) an existing in-app product.
+ *  Same try-new-then-legacy pattern; state applied separately. */
+export async function patchInAppProduct(
+  jwt: JWT,
+  packageName: string,
+  sku: string,
+  body: InAppProduct,
+): Promise<InAppProduct> {
+  try {
+    const writeShape = inAppProductToOneTimeProduct({
+      ...body,
+      packageName,
+      sku,
+    } as ToolInAppProduct);
+    const updated = await newPatchOneTimeProduct(
+      jwt,
+      packageName,
+      sku,
+      writeShape.product,
+      { allowMissing: false },
+    );
+    await applyDesiredState(
+      jwt,
+      packageName,
+      sku,
+      writeShape.purchaseOptionId,
+      writeShape.desiredState,
+    );
+    return oneTimeProductToInAppProduct(updated) as unknown as InAppProduct;
+  } catch (err) {
+    try {
+      const legacy = await legacyPatchInAppProduct(jwt, packageName, sku, body);
+      console.warn(
+        `[google-iap:publisher] patch fallback pkg=${packageName} sku=${sku}`,
+      );
+      return legacy;
+    } catch {
+      throw err;
+    }
+  }
+}
+
+/** Delete an in-app product.
+ *  Try new API first, fall back to legacy. */
+export async function deleteInAppProduct(
+  jwt: JWT,
+  packageName: string,
+  sku: string,
+): Promise<void> {
+  try {
+    await newDeleteOneTimeProduct(jwt, packageName, sku);
+  } catch (err) {
+    try {
+      await legacyDeleteInAppProduct(jwt, packageName, sku);
+      console.warn(
+        `[google-iap:publisher] delete fallback pkg=${packageName} sku=${sku}`,
+      );
+    } catch {
+      throw err;
+    }
+  }
+}
+
+// Re-export the canonical purchase option id so orchestrators can pass
+// it explicitly when they need to drive the state endpoint directly.
+export { DEFAULT_PURCHASE_OPTION_ID };
 
 /**
  * Q-GIAP.E: batchUpdate runs the Manager's preview decisions in a single

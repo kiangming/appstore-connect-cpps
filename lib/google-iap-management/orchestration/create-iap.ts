@@ -21,6 +21,7 @@ import {
   type InAppProduct,
 } from "../google/publisher-client";
 import { decimalToMicros } from "../google/price-conversion";
+import { buildRegionMapFromBasePrice } from "../google/regions-helper";
 import { syncIapFromGoogle } from "../repository/iaps";
 import { appendAction } from "../repository/actions-log";
 
@@ -101,6 +102,43 @@ export async function createIapOnGoogle(
       currency: r.currency,
       priceMicros: decimalToMicros(r.priceDecimal, r.currency),
     };
+  }
+
+  // Hotfix 8 Phase 2: the new Monetization API rejects products that
+  // don't carry a price for every region the app is published in. The
+  // legacy convenience of "specify defaultPrice + sparse overrides and
+  // let Google auto-equalise the rest" is gone. We bootstrap the
+  // missing regions via `monetization.convertRegionPrices` (Google's
+  // own catalog conversion) so Manager's "Google default pricing
+  // source" UX keeps working without forcing per-region input.
+  //
+  // Manager-supplied region overrides always win over the converted
+  // result — explicit intent beats catalog defaults.
+  try {
+    const auto = await buildRegionMapFromBasePrice(
+      jwt,
+      input.packageName,
+      baseMicros,
+      input.baseCurrency,
+    );
+    for (const a of auto) {
+      if (!prices[a.region]) {
+        prices[a.region] = {
+          currency: a.currency,
+          priceMicros: a.priceMicros,
+        };
+      }
+    }
+  } catch (err) {
+    // Non-fatal: if convertRegionPrices fails, fall through with only
+    // Manager's explicit overrides + defaultPrice. Google may then
+    // reject with "Must provide a price..." and the Manager gets a
+    // clear actionable error.
+    console.warn(
+      `[google-iap:create-iap] regions bootstrap failed pkg=${input.packageName} err="${
+        err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
+      }"`,
+    );
   }
 
   // Google's API enum mapping. v1: consumable is just a managed product

@@ -23,6 +23,7 @@ import {
   type InAppProduct,
 } from "../google/publisher-client";
 import { decimalToMicros } from "../google/price-conversion";
+import { buildRegionMapFromBasePrice } from "../google/regions-helper";
 import {
   syncIapFromGoogle,
   type IapDetail,
@@ -159,6 +160,34 @@ export async function updateIapOnGoogle(
   const prices: NonNullable<InAppProduct["prices"]> = {};
   for (const [region, p] of Object.entries(after.prices)) {
     prices[region] = { currency: p.currency, priceMicros: p.priceMicros };
+  }
+
+  // Hotfix 8 Phase 2: ensure comprehensive regions for the new API.
+  // Manager-supplied overrides (`prices` above) win over Google's
+  // auto-converted catalog values; missing regions get the conversion.
+  // Skipped if convertRegionPrices fails — the publisher-client
+  // fallback to legacy will then handle the call.
+  try {
+    const auto = await buildRegionMapFromBasePrice(
+      jwt,
+      input.packageName,
+      after.attributes.basePriceMicros,
+      after.attributes.baseCurrency,
+    );
+    for (const a of auto) {
+      if (!prices[a.region]) {
+        prices[a.region] = {
+          currency: a.currency,
+          priceMicros: a.priceMicros,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn(
+      `[google-iap:update-iap] regions bootstrap failed pkg=${input.packageName} sku=${input.sku} err="${
+        err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
+      }"`,
+    );
   }
 
   const body: InAppProduct = {
