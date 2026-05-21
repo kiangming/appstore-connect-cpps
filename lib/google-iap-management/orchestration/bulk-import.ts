@@ -66,7 +66,7 @@ export interface BulkImportResult {
 
 const BATCH_MAX = 100;
 
-function buildProduct(
+export function buildProduct(
   packageName: string,
   row: BulkImportRow,
 ): InAppProduct {
