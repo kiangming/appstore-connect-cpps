@@ -2,19 +2,29 @@
  * Active Google Console account selection — cookie-backed.
  *
  * Q-GIAP.H route-based context resolver: the active Google account lives
- * in a httpOnly cookie scoped to the /google-iap-management/ subtree.
- * Setting it via POST + full-page reload is sufficient v1; no NextAuth
- * JWT mutation is needed because the Apple/Google contexts are mutually
- * exclusive per-route (no cross-context state to keep in sync).
+ * in a httpOnly cookie. Setting it via POST + full-page reload is
+ * sufficient v1; no NextAuth JWT mutation is needed because the
+ * Apple/Google contexts are mutually exclusive per-route (no cross-
+ * context state to keep in sync).
  *
  * Cookie name: `g_iap_active_account` (short to keep header size minimal).
- * Path: `/google-iap-management` (won't leak to other modules).
  * Max-Age: 30 days (matches Manager's typical session length).
+ *
+ * Hotfix 6 — path: `/`. The original design used path
+ * `/google-iap-management` thinking it would prevent "leaking" the
+ * cookie to other modules, but RFC 6265 §5.1.4 path-match means that
+ * scope does NOT cover `/api/google-iap-management/*` (a different
+ * URL prefix entirely). So API routes never saw the cookie — they
+ * silently fell back to first-verified via resolveActiveAccountId,
+ * making the switcher's selection appear to do nothing and Hotfix 2's
+ * "pin only if no active" overwrite on every Add. Module isolation is
+ * enforced by code (other modules don't read this cookie name), not
+ * by cookie path. Path=`/` is the correct scope.
  */
 import { cookies } from "next/headers";
 
 export const ACTIVE_ACCOUNT_COOKIE = "g_iap_active_account";
-const COOKIE_PATH = "/google-iap-management";
+const COOKIE_PATH = "/";
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
 /** Server-side: read the active Google Console account id from cookie. */
@@ -33,11 +43,35 @@ export function writeActiveAccountId(accountId: string): void {
     sameSite: "lax",
     maxAge: COOKIE_MAX_AGE,
   });
+  // Hotfix 6 migration: existing browser sessions may carry a stale
+  // cookie at the old `/google-iap-management` path (set before this
+  // fix). RFC 6265 §5.4 sends the longer-path cookie first; without
+  // explicit cleanup the dashboard pages would keep reading the stale
+  // value. One `Set-Cookie` with `Max-Age=0` at the old path clears
+  // it on the very next switch. Remove this migration shim after the
+  // 30-day cookie max-age window has lapsed.
+  cookies().set({
+    name: ACTIVE_ACCOUNT_COOKIE,
+    value: "",
+    path: "/google-iap-management",
+    httpOnly: true,
+    sameSite: "lax",
+    maxAge: 0,
+  });
 }
 
-/** Server-side: clear the active account cookie (e.g. on delete). */
+/** Server-side: clear the active account cookie (e.g. on delete).
+ *  Must reuse the same path/attribute the set call used; the browser
+ *  treats (name, path, domain) as the cookie identity. */
 export function clearActiveAccountId(): void {
-  cookies().delete(ACTIVE_ACCOUNT_COOKIE);
+  cookies().set({
+    name: ACTIVE_ACCOUNT_COOKIE,
+    value: "",
+    path: COOKIE_PATH,
+    httpOnly: true,
+    sameSite: "lax",
+    maxAge: 0,
+  });
 }
 
 /**
