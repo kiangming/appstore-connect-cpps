@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
-  requireIapAdmin,
-  IapForbiddenError,
+  requireIapSession,
   IapUnauthorizedError,
 } from "@/lib/iap-management/auth";
 import {
@@ -38,22 +37,18 @@ const PatchSchema = z.object({
     .optional(),
 });
 
+// Hotfix 10: member-accessible (was requireIapAdmin pre-Hotfix-10).
 async function authAdmin(): Promise<
-  | { session: Awaited<ReturnType<typeof requireIapAdmin>> }
+  | { session: Awaited<ReturnType<typeof requireIapSession>> }
   | { error: NextResponse }
 > {
   try {
-    const session = await requireIapAdmin();
+    const session = await requireIapSession();
     return { session };
   } catch (err) {
     if (err instanceof IapUnauthorizedError) {
       return {
         error: NextResponse.json({ error: err.message }, { status: 401 }),
-      };
-    }
-    if (err instanceof IapForbiddenError) {
-      return {
-        error: NextResponse.json({ error: err.message }, { status: 403 }),
       };
     }
     throw err;

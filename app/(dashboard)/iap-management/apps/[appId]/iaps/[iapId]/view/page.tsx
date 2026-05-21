@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect, notFound } from "next/navigation";
 import { ChevronLeft } from "lucide-react";
-import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
+import { requireIapSession } from "@/lib/iap-management/auth";
 import { getIapWithRelations } from "@/lib/iap-management/queries/iaps";
 import { getIapViewData } from "@/lib/iap-management/queries/iap-detail";
 import { getApp } from "@/lib/asc-client";
@@ -30,12 +30,8 @@ interface PageProps {
  * pattern Manager reported across IAP.o.8c–IAP.o.9c).
  */
 export default async function ViewIapPage({ params }: PageProps) {
-  try {
-    await requireIapAdmin();
-  } catch (err) {
-    if (err instanceof IapForbiddenError) redirect("/");
-    throw err;
-  }
+  // Hotfix 10: member-accessible (was requireIapAdmin pre-Hotfix-10).
+  await requireIapSession();
 
   const local = await getIapWithRelations(params.iapId);
   if (!local) notFound();

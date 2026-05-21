@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import {
-  requireIapAdmin,
-  IapForbiddenError,
+  requireIapSession,
   IapUnauthorizedError,
 } from "@/lib/iap-management/auth";
 import { getActiveAccount } from "@/lib/get-active-account";
@@ -26,14 +25,12 @@ export const runtime = "nodejs";
  * naturally pulls a fresh list under the new account.
  */
 export async function GET() {
+  // Hotfix 10: member-accessible (was requireIapAdmin pre-Hotfix-10).
   try {
-    await requireIapAdmin();
+    await requireIapSession();
   } catch (err) {
     if (err instanceof IapUnauthorizedError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
-    }
-    if (err instanceof IapForbiddenError) {
-      return NextResponse.json({ error: err.message }, { status: 403 });
     }
     throw err;
   }

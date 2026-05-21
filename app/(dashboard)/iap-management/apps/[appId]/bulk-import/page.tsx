@@ -1,7 +1,6 @@
-import { redirect } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
-import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
+import { requireIapSession } from "@/lib/iap-management/auth";
 import { getApp } from "@/lib/asc-client";
 import { listAllInAppPurchases } from "@/lib/iap-management/apple/client";
 import { getActiveAccount } from "@/lib/get-active-account";
@@ -17,12 +16,8 @@ interface PageProps {
 }
 
 export default async function BulkImportPage({ params }: PageProps) {
-  try {
-    await requireIapAdmin();
-  } catch (err) {
-    if (err instanceof IapForbiddenError) redirect("/");
-    throw err;
-  }
+  // Hotfix 10: member-accessible (was requireIapAdmin pre-Hotfix-10).
+  await requireIapSession();
 
   let appName = "";
   let existingProductIds: string[] = [];

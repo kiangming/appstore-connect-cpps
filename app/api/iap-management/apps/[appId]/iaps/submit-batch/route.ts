@@ -24,8 +24,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import {
-  requireIapAdmin,
-  IapForbiddenError,
+  requireIapSession,
   IapUnauthorizedError,
 } from "@/lib/iap-management/auth";
 import { iapDb } from "@/lib/iap-management/db";
@@ -96,13 +95,11 @@ export async function POST(
 ) {
   let session;
   try {
-    session = await requireIapAdmin();
+    // Hotfix 10: member-accessible (was requireIapAdmin pre-Hotfix-10).
+    session = await requireIapSession();
   } catch (err) {
     if (err instanceof IapUnauthorizedError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
-    }
-    if (err instanceof IapForbiddenError) {
-      return NextResponse.json({ error: err.message }, { status: 403 });
     }
     throw err;
   }

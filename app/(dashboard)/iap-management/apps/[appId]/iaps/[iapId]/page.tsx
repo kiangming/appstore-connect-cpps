@@ -1,7 +1,7 @@
-import { redirect, notFound } from "next/navigation";
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft } from "lucide-react";
-import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
+import { requireIapSession } from "@/lib/iap-management/auth";
 import { listTiers } from "@/lib/iap-management/queries/price-tiers";
 import { getIapWithRelations } from "@/lib/iap-management/queries/iaps";
 import { getTemplateSummary } from "@/lib/iap-management/queries/templates";
@@ -21,12 +21,8 @@ interface PageProps {
 }
 
 export default async function EditIapPage({ params }: PageProps) {
-  try {
-    await requireIapAdmin();
-  } catch (err) {
-    if (err instanceof IapForbiddenError) redirect("/");
-    throw err;
-  }
+  // Hotfix 10: member-accessible (was requireIapAdmin pre-Hotfix-10).
+  await requireIapSession();
 
   const data = await getIapWithRelations(params.iapId);
   if (!data) notFound();

@@ -3,9 +3,20 @@
  *
  * Q-IAP.8 lock: reuse global admin/member RBAC (no module-specific user
  * whitelist). Session role is set by lib/auth.ts:isAdminEmail at JWT mint
- * time from the ADMIN_EMAILS env var. Manager-only actions (price tier
- * import, IAP CRUD, submit to Apple) require `role === "admin"`; read-only
- * routes can allow members.
+ * time from the ADMIN_EMAILS env var.
+ *
+ * Hotfix 10 lock interpretation (Manager pivot, 2026-05-21):
+ *   - `admin` role: Settings only — pricing tiers, pricing templates,
+ *     ASC account credentials (the latter sits in the global /settings
+ *     page, not this module).
+ *   - `member` role: full IAP module access — list, view, create, edit,
+ *     submit, bulk-import. Internal-tool blast radius is low (Q-IAP.8
+ *     rationale), team workflow needs members to drive the day-to-day
+ *     IAP lifecycle while admins curate the pricing catalog.
+ *
+ * Prior encoding (Cycle 29 → Hotfix 9) required admin for IAP CRUD;
+ * Hotfix 10 unblocks non-admin team members who were redirected to
+ * Hub when clicking Create IAP / Bulk Import.
  */
 
 import { getServerSession, type Session } from "next-auth";
@@ -39,8 +50,10 @@ export async function requireIapSession(): Promise<Session> {
 
 /**
  * Require an admin-role user. Throws `IapForbiddenError` for non-admins.
- * Use for Manager-only mutations: price tier import, IAP CRUD, submit
- * to Apple, etc.
+ * Use ONLY for the Settings-tier surface: pricing tiers, pricing
+ * templates (CRUD on the catalog the rest of the module reads from).
+ * Per Hotfix 10 lock pivot, IAP CRUD / submit / bulk-import are NOT
+ * admin-only — use `requireIapSession` for those.
  */
 export async function requireIapAdmin(): Promise<Session> {
   const session = await requireIapSession();
