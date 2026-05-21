@@ -59,15 +59,24 @@ credential and forces a re-upload of every Service Account JSON).
 
 ## 3. Publisher API endpoints used
 
-| Method | Endpoint | Caller |
-|---|---|---|
-| GET | `/inappproducts` | Apps detail page → IAPs list refresh |
-| GET | `/inappproducts/{sku}` | (reserved for future detail-view refresh) |
-| POST | `/inappproducts` | Create IAP orchestrator |
-| PATCH | `/inappproducts/{sku}` | Edit IAP orchestrator |
-| DELETE | `/inappproducts/{sku}` | (reserved for future delete UI) |
-| POST | `/inappproducts:batchUpdate` | Bulk Import orchestrator |
-| POST | `/monetization/convertRegionPrices` | (reserved — preview-only equalisation) |
+> **Hotfix 8 (2026-05-21)** — Google is rolling deprecation of legacy
+> `inappproducts.*` per package. New strategic endpoints live under
+> `monetization.onetimeproducts.*`. The **READ path** (`list`, `get`)
+> has been migrated with a try-new-then-fallback-to-legacy strategy;
+> the **WRITE path** (`patch`, `delete`, `batchUpdate`) is on legacy
+> until Phase 2 lands. See §12 for the migration story + field
+> mapping; see [onetime-product-adapter.ts](../../lib/google-iap-management/google/onetime-product-adapter.ts)
+> for the schema bridge.
+
+| Method | Endpoint (current strategic) | Caller | Status |
+|---|---|---|---|
+| GET | `/monetization/onetimeproducts` (paginated) | Apps detail → IAPs list refresh | **Migrated** (legacy fallback) |
+| GET | `/monetization/onetimeproducts/{productId}` | Single IAP fetch | **Migrated** (legacy fallback) |
+| POST | `/inappproducts` | Create IAP orchestrator | Legacy (Phase 2) |
+| PATCH | `/inappproducts/{sku}` | Edit IAP orchestrator | Legacy (Phase 2) |
+| DELETE | `/inappproducts/{sku}` | (reserved for future delete UI) | Legacy (Phase 2) |
+| POST | `/inappproducts:batchUpdate` | Bulk Import orchestrator | Legacy (Phase 2) |
+| POST | `/monetization/convertRegionPrices` | (reserved — preview-only equalisation) | n/a |
 
 All calls live in `lib/google-iap-management/google/publisher-client.ts`.
 Every call is wrapped by `timed()` which logs `method · packageName ·
@@ -245,3 +254,95 @@ listings + prices buckets, plus summary counts).
 - **Locale name → BCP-47** coverage is the 82 names in the v1 IAP
   template. Add to `LOCALE_NAME_TO_BCP47` when Manager introduces a new
   one.
+
+---
+
+## 12. Hotfix 8 — Monetization API v3 migration
+
+### Why this happened
+
+Production symptom (2026-05-21): Apps under one Service Account
+returned partial data on `inappproducts.list` (2 / 30 items visible)
+or outright 403 *"Please migrate to the new publishing API."*
+Google is moving every developer to the new Monetization API at
+their own pace, app by app. Until every app is migrated, both
+endpoints exist — but the legacy one returns degraded results on
+already-migrated apps.
+
+### What changed in the wire shape
+
+| Concept | Legacy `InAppProduct` | New `OneTimeProduct` |
+|---|---|---|
+| Identifier | `sku` | `productId` |
+| Visibility | top-level `status` (`active`/`inactive`) | `purchaseOptions[i].state` (`ACTIVE`/`INACTIVE`/`DRAFT`/`INACTIVE_PUBLISHED`) — **read-only on the resource; set via separate `purchaseOptions:batchUpdateStates`** |
+| Purchase type | `purchaseType` (`managedUser`/`subscription`) | `purchaseOptions[i].buyOption` vs `rentOption` (presence-based) |
+| Default language | top-level `defaultLanguage` | (no equivalent — listings carry `languageCode` per entry) |
+| Default price | top-level `defaultPrice` + sparse `prices` map | **No default** — `purchaseOptions[i].regionalPricingAndAvailabilityConfigs[]` carries every region explicitly |
+| Money | `priceMicros` (string, 10⁻⁶ units) | `Money { currencyCode, units (int64 string), nanos (10⁻⁹ int) }` |
+| Listings | `listings` map (locale → {title, desc}) | `listings[]` array of `{languageCode, title, description}` |
+
+### Adapter strategy
+
+A pure bidirectional module
+[`onetime-product-adapter.ts`](../../lib/google-iap-management/google/onetime-product-adapter.ts)
+maps both directions. The tool's internal `ToolInAppProduct` shape
+mirrors the legacy schema so the rest of the codebase
+(`repository/iaps.ts`, orchestrators, page resolvers) keeps working
+unchanged. Multi-purchase-option products are flattened to the first
+`buyOption`; the tool's single-option v1 model doesn't expose the
+multi-variant capability the new API supports.
+
+`Money` ↔ `priceMicros` conversion lives in
+[`price-conversion.ts`](../../lib/google-iap-management/google/price-conversion.ts).
+Round-trip is exact across the full int64 `units` range via BigInt
+arithmetic; sub-micro fractional nanos are truncated to match the
+legacy serialisation's coarser unit.
+
+### Phase 1 (Hotfix 8) — READ path migrated
+
+- `listInAppProducts(jwt, packageName)` calls
+  `monetization.onetimeproducts.list` first (paginated, max 1000
+  per page, walks every page). Each `OneTimeProduct` runs through
+  the adapter and the function returns the same `InAppProduct[]`
+  shape it always did. On error, falls back to legacy `inappproducts.list`
+  and logs the fallback for observability.
+- `getInAppProduct(jwt, packageName, sku)` — same try-new-then-
+  legacy strategy for the single-fetch case.
+
+### Phase 2 (deferred) — WRITE path migration
+
+Create / Edit / Bulk Import still call legacy `inappproducts.insert`
+/ `.patch` / `.batchUpdate`. Phase 2 will:
+
+1. Replace insert with `monetization.onetimeproducts.patch` +
+   `allowMissing=true` (the new API has no separate insert endpoint).
+2. Replace patch with the same — sending the full target body and
+   the required `updateMask` + `regionsVersion.version` query params.
+3. Replace `inappproducts.batchUpdate` with
+   `monetization.onetimeproducts.batchUpdate` (same shape, different
+   path).
+4. After every write, call `purchaseOptions:batchUpdateStates` to
+   apply the desired `ACTIVE`/`INACTIVE` state (the new API marks
+   `state` as output-only on the product resource — state changes
+   are a dedicated endpoint).
+5. Use `regionsVersion.version="2022/02"` as the conservative
+   baseline (or whatever Google publishes as current).
+
+### Fallback strategy
+
+- READ methods: try new API first. On exception, fall back to legacy
+  and log `[google-iap:publisher] list fallback pkg=… new_api_status=…
+  legacy_count=…`. Empty success from the new API is NOT a fallback
+  trigger (it means "this app has no products" — a legacy call would
+  be noise).
+- WRITE methods (Phase 2): same try-new-then-fallback. May tighten
+  the trigger to a specific Google error code once the
+  rolling-deprecation tail behaviour is observed in practice.
+
+### When can the fallback go away?
+
+When every app in Manager's portfolio has been migrated server-side
+by Google (signal: `inappproducts.list` returns 403 for *all* apps).
+Until then, keep both paths. Rolling deprecation timelines aren't
+published — re-evaluate quarterly.
+

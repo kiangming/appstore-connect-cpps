@@ -4,6 +4,8 @@ import {
   decimalToMicros,
   microsToDecimal,
   assertMicrosRoundTrip,
+  microsToMoney,
+  moneyToMicros,
 } from "./price-conversion";
 
 describe("decimalToMicros", () => {
@@ -128,5 +130,84 @@ describe("assertMicrosRoundTrip", () => {
     expect(() => assertMicrosRoundTrip("1.99")).not.toThrow();
     expect(() => assertMicrosRoundTrip("0", 0)).not.toThrow();
     expect(() => assertMicrosRoundTrip("1.500000", 6)).not.toThrow();
+  });
+});
+
+describe("microsToMoney / moneyToMicros (Hotfix 8)", () => {
+  it("converts USD micros → Money with units + nanos", () => {
+    expect(microsToMoney("1990000", "USD")).toEqual({
+      currencyCode: "USD",
+      units: "1",
+      nanos: 990_000_000,
+    });
+    expect(microsToMoney("0", "USD")).toEqual({
+      currencyCode: "USD",
+      units: "0",
+      nanos: 0,
+    });
+    expect(microsToMoney("990000", "USD")).toEqual({
+      currencyCode: "USD",
+      units: "0",
+      nanos: 990_000_000,
+    });
+  });
+
+  it("converts VND (zero-decimal) micros → Money with zero nanos", () => {
+    expect(microsToMoney("23000000000", "VND")).toEqual({
+      currencyCode: "VND",
+      units: "23000",
+      nanos: 0,
+    });
+  });
+
+  it("preserves smallest-unit micros (1 micro = 1000 nanos)", () => {
+    expect(microsToMoney("1", "USD")).toEqual({
+      currencyCode: "USD",
+      units: "0",
+      nanos: 1000,
+    });
+  });
+
+  it("normalises currency case", () => {
+    expect(microsToMoney("1990000", "usd").currencyCode).toBe("USD");
+  });
+
+  it("rejects negative or non-numeric input", () => {
+    expect(() => microsToMoney("-1", "USD")).toThrow();
+    expect(() => microsToMoney("abc", "USD")).toThrow();
+  });
+
+  it("converts Money → micros, truncating sub-micro nanos", () => {
+    expect(moneyToMicros({ currencyCode: "USD", units: "1", nanos: 990_000_000 }))
+      .toBe("1990000");
+    expect(moneyToMicros({ currencyCode: "VND", units: "23000", nanos: 0 }))
+      .toBe("23000000000");
+    // 999 nanos (sub-micro) truncates to 0 micros.
+    expect(moneyToMicros({ currencyCode: "USD", units: "0", nanos: 999 }))
+      .toBe("0");
+    // 1000 nanos = exactly 1 micro.
+    expect(moneyToMicros({ currencyCode: "USD", units: "0", nanos: 1000 }))
+      .toBe("1");
+  });
+
+  it("returns '0' for null / undefined Money", () => {
+    expect(moneyToMicros(null)).toBe("0");
+    expect(moneyToMicros(undefined)).toBe("0");
+  });
+
+  it("treats missing units / nanos as zero", () => {
+    expect(moneyToMicros({ currencyCode: "USD" })).toBe("0");
+  });
+
+  it("round-trips micros → Money → micros without drift", () => {
+    for (const m of ["1990000", "23000000000", "990000", "0", "1", "1500000"]) {
+      expect(moneyToMicros(microsToMoney(m, "USD"))).toBe(m);
+    }
+  });
+
+  it("rejects negative Money", () => {
+    expect(() =>
+      moneyToMicros({ currencyCode: "USD", units: "-1", nanos: 0 }),
+    ).toThrow();
   });
 });

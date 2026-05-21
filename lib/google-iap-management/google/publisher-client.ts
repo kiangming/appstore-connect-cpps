@@ -18,6 +18,11 @@ import { google, type androidpublisher_v3 } from "googleapis";
 import type { JWT } from "google-auth-library";
 
 import { logPublisherCall, type LogOutcome } from "./logging";
+import {
+  oneTimeProductToInAppProduct,
+  type OneTimeProduct,
+  type ToolInAppProduct,
+} from "./onetime-product-adapter";
 
 export type Publisher = androidpublisher_v3.Androidpublisher;
 export type InAppProduct = androidpublisher_v3.Schema$InAppProduct;
@@ -32,6 +37,7 @@ export type ConvertRegionPricesRequest =
 export type ConvertRegionPricesResponse =
   androidpublisher_v3.Schema$ConvertRegionPricesResponse;
 export type AppDetails = androidpublisher_v3.Schema$AppDetails;
+export type { OneTimeProduct } from "./onetime-product-adapter";
 
 function buildClient(jwt: JWT): Publisher {
   return google.androidpublisher({ version: "v3", auth: jwt });
@@ -69,8 +75,54 @@ async function timed<T>(
   }
 }
 
-/** List all in-app products for the given package. */
-export async function listInAppProducts(
+/* ──────────────────────────────────────────────────────────────────────
+ *  READ path — Hotfix 8: Monetization API v3 onetimeproducts.* primary,
+ *  legacy androidpublisher.inappproducts.* fallback.
+ *
+ *  Google is rolling deprecation of the legacy resource by package.
+ *  Symptoms observed in production:
+ *    - 403 "Please migrate to the new publishing API." (legacy fails on
+ *      apps Google has already migrated server-side)
+ *    - Partial results — legacy returns subset of items the new API
+ *      surfaces fully
+ *
+ *  Strategy: try the new API first. Only fall back to legacy when the
+ *  new API explicitly errors. Empty results from the new API are NOT a
+ *  fallback trigger — they mean "this app has no products" and a
+ *  duplicate legacy call would be noise. The adapter normalises the new
+ *  shape into the legacy InAppProduct shape so the rest of the codebase
+ *  (repository, orchestrators) keeps working unchanged.
+ * ──────────────────────────────────────────────────────────────────── */
+
+const NEW_API_LIST_PAGE_SIZE = 1000;
+const NEW_API_LIST_PAGE_CAP = 100; // defensive: 1000 × 100 = 100k items max
+
+async function newListOneTimeProducts(
+  jwt: JWT,
+  packageName: string,
+): Promise<OneTimeProduct[]> {
+  return timed("monetization.onetimeproducts.list", packageName, undefined, async () => {
+    const client = buildClient(jwt);
+    const all: OneTimeProduct[] = [];
+    let pageToken: string | undefined;
+    let pages = 0;
+    do {
+      const res = await client.monetization.onetimeproducts.list({
+        packageName,
+        pageSize: NEW_API_LIST_PAGE_SIZE,
+        pageToken,
+      });
+      const items = (res.data.oneTimeProducts ?? []) as OneTimeProduct[];
+      all.push(...items);
+      pageToken = res.data.nextPageToken ?? undefined;
+      pages += 1;
+      if (pages >= NEW_API_LIST_PAGE_CAP) break;
+    } while (pageToken);
+    return all;
+  });
+}
+
+async function legacyListInAppProducts(
   jwt: JWT,
   packageName: string,
 ): Promise<InAppProduct[]> {
@@ -81,8 +133,55 @@ export async function listInAppProducts(
   });
 }
 
-/** Get a single in-app product by SKU. */
-export async function getInAppProduct(
+/** List all in-app products for the given package.
+ *  Public surface unchanged — internally uses Monetization API v3 with
+ *  legacy fallback. Adapter normalises the new shape into the legacy
+ *  InAppProduct shape for downstream consumers. */
+export async function listInAppProducts(
+  jwt: JWT,
+  packageName: string,
+): Promise<InAppProduct[]> {
+  try {
+    const products = await newListOneTimeProducts(jwt, packageName);
+    // Adapter output is structurally compatible with Schema$InAppProduct
+    // (sku/status/defaultLanguage/defaultPrice/prices/listings/...).
+    return products.map(
+      (p) => oneTimeProductToInAppProduct(p) as unknown as InAppProduct,
+    );
+  } catch (err) {
+    const e = err as { code?: number; status?: number; message?: string };
+    const status = e?.code ?? e?.status;
+    try {
+      const legacy = await legacyListInAppProducts(jwt, packageName);
+      // Note the fallback in the logs so operators can see which path served.
+      console.warn(
+        `[google-iap:publisher] list fallback pkg=${packageName} new_api_status=${status ?? "?"} legacy_count=${legacy.length}`,
+      );
+      return legacy;
+    } catch {
+      // Both failed — bubble the new API error (more actionable for
+      // operators: it names the strategic endpoint).
+      throw err;
+    }
+  }
+}
+
+async function newGetOneTimeProduct(
+  jwt: JWT,
+  packageName: string,
+  productId: string,
+): Promise<OneTimeProduct> {
+  return timed("monetization.onetimeproducts.get", packageName, productId, async () => {
+    const client = buildClient(jwt);
+    const res = await client.monetization.onetimeproducts.get({
+      packageName,
+      productId,
+    });
+    return res.data as OneTimeProduct;
+  });
+}
+
+async function legacyGetInAppProduct(
   jwt: JWT,
   packageName: string,
   sku: string,
@@ -93,6 +192,33 @@ export async function getInAppProduct(
     return res.data as InAppProduct;
   });
 }
+
+/** Get a single in-app product by SKU.
+ *  Tries Monetization API v3 first; falls back to legacy on error. */
+export async function getInAppProduct(
+  jwt: JWT,
+  packageName: string,
+  sku: string,
+): Promise<InAppProduct> {
+  try {
+    const product = await newGetOneTimeProduct(jwt, packageName, sku);
+    return oneTimeProductToInAppProduct(product) as unknown as InAppProduct;
+  } catch (err) {
+    try {
+      const legacy = await legacyGetInAppProduct(jwt, packageName, sku);
+      console.warn(
+        `[google-iap:publisher] get fallback pkg=${packageName} sku=${sku}`,
+      );
+      return legacy;
+    } catch {
+      throw err;
+    }
+  }
+}
+
+// Internal: keep ToolInAppProduct re-export so callers + Phase 2 work
+// against the same shape we normalise to.
+export type { ToolInAppProduct };
 
 /** Insert a new in-app product. The body must include sku, purchaseType,
  *  status, defaultLanguage, listings, defaultPrice (or prices). */
