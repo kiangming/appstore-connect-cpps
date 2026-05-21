@@ -31,6 +31,7 @@ export type ConvertRegionPricesRequest =
   androidpublisher_v3.Schema$ConvertRegionPricesRequest;
 export type ConvertRegionPricesResponse =
   androidpublisher_v3.Schema$ConvertRegionPricesResponse;
+export type AppDetails = androidpublisher_v3.Schema$AppDetails;
 
 function buildClient(jwt: JWT): Publisher {
   return google.androidpublisher({ version: "v3", auth: jwt });
@@ -158,6 +159,63 @@ export async function batchUpdateInAppProducts(
     });
     return res.data as InappproductsBatchUpdateResponse;
   });
+}
+
+/**
+ * Fetch app-level details (defaultLanguage, contact info) via the edits
+ * resource — the only way Android Publisher v3 exposes app metadata.
+ *
+ * Hotfix 4: requires the 3-step edits dance because there's no
+ * applications.get endpoint:
+ *   1. POST /edits         → create a transient edit, returns editId
+ *   2. GET  /edits/{id}/details → AppDetails
+ *   3. DELETE /edits/{id}  → discard (no app state changes)
+ *
+ * The edit is never committed, so step 3 leaves the app exactly as it
+ * was. Step 3 failures are logged but not thrown (Google auto-expires
+ * untouched edits after ~7 days; an orphan won't block future syncs).
+ *
+ * Errors from steps 1 / 2 throw to the caller so the apps refresh loop
+ * can tolerate per-app failures without aborting the whole run.
+ */
+export async function getAppDetails(
+  jwt: JWT,
+  packageName: string,
+): Promise<AppDetails> {
+  const client = buildClient(jwt);
+
+  // Step 1: create edit.
+  const editId = await timed("edits.insert", packageName, undefined, async () => {
+    const res = await client.edits.insert({
+      packageName,
+      requestBody: {},
+    });
+    const id = res.data.id;
+    if (!id) throw new Error("edits.insert returned no id");
+    return id;
+  });
+
+  // Step 2: read details. Wrap so we can guarantee cleanup attempt.
+  let details: AppDetails;
+  try {
+    details = await timed("edits.details.get", packageName, undefined, async () => {
+      const res = await client.edits.details.get({ packageName, editId });
+      return res.data as AppDetails;
+    });
+  } finally {
+    // Step 3: best-effort cleanup. Swallow errors — orphan edits expire
+    // server-side automatically.
+    try {
+      await timed("edits.delete", packageName, undefined, async () => {
+        await client.edits.delete({ packageName, editId });
+        return undefined;
+      });
+    } catch {
+      /* logged by `timed`; nothing else to do */
+    }
+  }
+
+  return details;
 }
 
 /**

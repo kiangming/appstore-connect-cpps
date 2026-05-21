@@ -29,6 +29,17 @@ export interface IapFormInitial {
   regionOverrides: RegionOverrideRow[];
 }
 
+/**
+ * App-level Google Play defaults that propagate into Create / Edit / Bulk
+ * Import forms (Hotfix 4). Both fields are nullable when the cache has
+ * not yet been enriched (apps imported before Hotfix 4 land here);
+ * callers fall back to USD / en-US in that case.
+ */
+export interface AppDefaults {
+  currency: string | null;
+  language: string | null;
+}
+
 function safeMicrosToDecimal(micros: string | null | undefined): string {
   if (!micros) return "";
   try {
@@ -38,23 +49,27 @@ function safeMicrosToDecimal(micros: string | null | undefined): string {
   }
 }
 
-export function iapDetailToInitial(detail: {
-  iap: {
-    sku: string;
-    purchase_type: string;
-    status: string;
-    default_currency: string | null;
-    default_price_micros: string | null;
-  };
-  listings: Array<{ locale: string; title: string; description: string }>;
-  prices: Array<{ region_code: string; currency: string; price_micros: string }>;
-}): IapFormInitial {
+export function iapDetailToInitial(
+  detail: {
+    iap: {
+      sku: string;
+      purchase_type: string;
+      status: string;
+      default_currency: string | null;
+      default_price_micros: string | null;
+    };
+    listings: Array<{ locale: string; title: string; description: string }>;
+    prices: Array<{ region_code: string; currency: string; price_micros: string }>;
+  },
+  appDefaults: AppDefaults | null = null,
+): IapFormInitial {
   const listings: Record<string, FormListing> = {};
   for (const l of detail.listings) {
     listings[l.locale] = { title: l.title, description: l.description };
   }
-  if (!listings[DEFAULT_LOCALE]) {
-    listings[DEFAULT_LOCALE] = { title: "", description: "" };
+  const fallbackLocale = appDefaults?.language ?? DEFAULT_LOCALE;
+  if (!listings[fallbackLocale]) {
+    listings[fallbackLocale] = { title: "", description: "" };
   }
   const regionOverrides: RegionOverrideRow[] = detail.prices.map((p) => ({
     region: p.region_code,
@@ -66,9 +81,10 @@ export function iapDetailToInitial(detail: {
     purchaseType:
       detail.iap.purchase_type === "consumable" ? "consumable" : "managed",
     status: detail.iap.status === "inactive" ? "inactive" : "active",
-    defaultLanguage: DEFAULT_LOCALE,
+    defaultLanguage: appDefaults?.language ?? DEFAULT_LOCALE,
     listings,
-    baseCurrency: detail.iap.default_currency ?? "USD",
+    baseCurrency:
+      detail.iap.default_currency ?? appDefaults?.currency ?? "USD",
     basePriceDecimal: safeMicrosToDecimal(detail.iap.default_price_micros),
     regionOverrides,
   };

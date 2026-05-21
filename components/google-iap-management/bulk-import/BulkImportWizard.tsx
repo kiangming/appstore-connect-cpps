@@ -54,11 +54,22 @@ interface Props {
   packageName: string;
   appId: string;
   appDisplayName: string | null;
+  /** App-level Google Play defaults (Hotfix 4). Shown as a wizard banner
+   *  and threaded into the execute payload so the orchestrator can stamp
+   *  the row's baseCurrency to match Google's per-app enforcement. */
+  appDefaultCurrency: string | null;
+  appDefaultLanguage: string | null;
 }
 
 type Step = "pricing" | "upload" | "preview" | "execute" | "done";
 
-export function BulkImportWizard({ packageName, appId, appDisplayName }: Props) {
+export function BulkImportWizard({
+  packageName,
+  appId,
+  appDisplayName,
+  appDefaultCurrency,
+  appDefaultLanguage,
+}: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>("pricing");
 
@@ -158,7 +169,11 @@ export function BulkImportWizard({ packageName, appId, appDisplayName }: Props) 
             rows: previewRows.map((r) => ({
               rowNumber: r.rowNumber,
               sku: r.sku,
-              baseCurrency: r.baseCurrency,
+              // Hotfix 4: stamp the app's configured currency. Excel
+              // template column is named "Price (USD)" but the numeric
+              // value is interpreted in the app's currency (Google
+              // enforces app-wide consistency).
+              baseCurrency: appDefaultCurrency ?? r.baseCurrency,
               basePriceDecimal: r.basePriceDecimal,
               regionOverrides: r.regionOverrides,
               listings: r.listings,
@@ -190,6 +205,46 @@ export function BulkImportWizard({ packageName, appId, appDisplayName }: Props) 
   return (
     <div className="space-y-4">
       <StepHeader step={step} />
+
+      {/* App defaults banner (Hotfix 4) */}
+      {(appDefaultCurrency || appDefaultLanguage) && (
+        <div className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+          <span className="font-semibold">
+            Importing to {appDisplayName ?? packageName}:
+          </span>{" "}
+          {appDefaultCurrency && (
+            <>
+              rows will be sent with currency{" "}
+              <code className="px-1 bg-white border border-emerald-200 rounded font-mono">
+                {appDefaultCurrency}
+              </code>{" "}
+            </>
+          )}
+          {appDefaultLanguage && (
+            <>
+              · default locale{" "}
+              <code className="px-1 bg-white border border-emerald-200 rounded font-mono">
+                {appDefaultLanguage}
+              </code>
+            </>
+          )}
+          {appDefaultCurrency && (
+            <span className="block mt-1 text-emerald-700">
+              The Excel column header reads &quot;Price (USD)&quot; but the
+              numeric values are interpreted in the app&apos;s configured
+              currency — Google enforces app-wide consistency.
+            </span>
+          )}
+        </div>
+      )}
+      {!appDefaultCurrency && !appDefaultLanguage && (
+        <div className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          App defaults not cached. Run <strong>Refresh from Google</strong> on
+          the app detail page first — otherwise rows will be sent as USD and
+          Google will reject them if the app is configured for any other
+          currency.
+        </div>
+      )}
 
       {/* Step 1: Pricing source */}
       {step === "pricing" && (

@@ -50,7 +50,14 @@ export default async function NewIapPage({
         Create an in-app product for{" "}
         <span className="font-mono text-emerald-700">{packageName}</span>.
       </p>
-      <IapForm packageName={packageName} appId={app.id} />
+      <IapForm
+        packageName={packageName}
+        appId={app.id}
+        appDefaults={{
+          currency: app.default_currency,
+          language: app.default_language,
+        }}
+      />
     </div>
   );
 }

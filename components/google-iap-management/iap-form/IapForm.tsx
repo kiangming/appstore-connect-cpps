@@ -29,6 +29,7 @@ import {
 } from "@/lib/google-iap-management/orchestration/iap-diff";
 import {
   DEFAULT_LOCALE,
+  type AppDefaults,
   type FormListing,
   type IapFormInitial,
   type RegionOverrideRow,
@@ -41,6 +42,7 @@ type Mode =
 interface Props {
   packageName: string;
   appId: string;
+  appDefaults: AppDefaults | null;
   mode?: Mode;
 }
 
@@ -142,10 +144,22 @@ function buildAfterSnapshot(state: {
   };
 }
 
-export function IapForm({ packageName, appId, mode = { kind: "create" } }: Props) {
+export function IapForm({
+  packageName,
+  appId,
+  appDefaults,
+  mode = { kind: "create" },
+}: Props) {
   const router = useRouter();
   const isEdit = mode.kind === "edit";
   const initial = mode.kind === "edit" ? mode.initial : null;
+
+  // Hotfix 4: Create-mode pre-fills are driven by the app's configured
+  // defaults (currency + language). Edit-mode keeps the IAP's own values
+  // (already populated upstream by iapDetailToInitial, which also
+  // considers appDefaults as a fallback for null cache fields).
+  const createDefaultLocale = appDefaults?.language ?? DEFAULT_LOCALE;
+  const createDefaultCurrency = appDefaults?.currency ?? "USD";
 
   // Identification
   const [sku, setSku] = useState(initial?.sku ?? "");
@@ -158,14 +172,18 @@ export function IapForm({ packageName, appId, mode = { kind: "create" } }: Props
 
   // Listings (multi-locale)
   const [listings, setListings] = useState<Record<string, FormListing>>(
-    initial?.listings ?? { [DEFAULT_LOCALE]: { title: "", description: "" } },
+    initial?.listings ?? {
+      [createDefaultLocale]: { title: "", description: "" },
+    },
   );
   const [activeLocale, setActiveLocale] = useState(
-    initial?.defaultLanguage ?? DEFAULT_LOCALE,
+    initial?.defaultLanguage ?? createDefaultLocale,
   );
 
   // Pricing
-  const [baseCurrency, setBaseCurrency] = useState(initial?.baseCurrency ?? "USD");
+  const [baseCurrency, setBaseCurrency] = useState(
+    initial?.baseCurrency ?? createDefaultCurrency,
+  );
   const [basePriceDecimal, setBasePriceDecimal] = useState(
     initial?.basePriceDecimal ?? "",
   );
@@ -184,7 +202,7 @@ export function IapForm({ packageName, appId, mode = { kind: "create" } }: Props
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [showDiff, setShowDiff] = useState(false);
 
-  const defaultLanguage = initial?.defaultLanguage ?? DEFAULT_LOCALE;
+  const defaultLanguage = initial?.defaultLanguage ?? createDefaultLocale;
   const currentListing = listings[activeLocale] ?? { title: "", description: "" };
 
   function updateListing(field: keyof FormListing, value: string) {
@@ -401,6 +419,40 @@ export function IapForm({ packageName, appId, mode = { kind: "create" } }: Props
 
   return (
     <div className="space-y-6">
+      {/* App defaults banner (Hotfix 4) */}
+      {appDefaults && (appDefaults.currency || appDefaults.language) && (
+        <div className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+          <span className="font-semibold">App defaults:</span>{" "}
+          {appDefaults.currency && (
+            <span>
+              currency{" "}
+              <code className="px-1 bg-white border border-emerald-200 rounded font-mono">
+                {appDefaults.currency}
+              </code>
+            </span>
+          )}
+          {appDefaults.currency && appDefaults.language && " · "}
+          {appDefaults.language && (
+            <span>
+              default locale{" "}
+              <code className="px-1 bg-white border border-emerald-200 rounded font-mono">
+                {appDefaults.language}
+              </code>
+            </span>
+          )}
+          <span className="ml-1 text-emerald-700">
+            — Google enforces these per app; mismatches will be rejected.
+          </span>
+        </div>
+      )}
+      {!appDefaults?.currency && !appDefaults?.language && !isEdit && (
+        <div className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          App defaults not cached yet. Click <strong>Refresh from Google</strong> on the
+          app detail page to capture this app&apos;s configured currency and locale,
+          otherwise the form falls back to USD / en-US.
+        </div>
+      )}
+
       {/* Identification */}
       <section className="bg-white border border-slate-200 rounded-xl p-6">
         <h2 className="text-base font-semibold text-slate-900 mb-4">
@@ -491,6 +543,7 @@ export function IapForm({ packageName, appId, mode = { kind: "create" } }: Props
             listings={listings}
             activeLocale={activeLocale}
             defaultLocale={defaultLanguage}
+            appDefaultLocale={appDefaults?.language ?? null}
             onSelect={(loc) => {
               setActiveLocale(loc);
               if (!listings[loc]) {

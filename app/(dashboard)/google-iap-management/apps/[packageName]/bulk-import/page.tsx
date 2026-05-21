@@ -53,6 +53,8 @@ export default async function BulkImportPage({
         packageName={packageName}
         appId={app.id}
         appDisplayName={app.display_name}
+        appDefaultCurrency={app.default_currency}
+        appDefaultLanguage={app.default_language}
       />
     </div>
   );

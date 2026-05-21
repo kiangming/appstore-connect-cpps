@@ -10,6 +10,7 @@
  */
 import { googleIapDb } from "../db";
 import type { InAppProduct } from "../google/publisher-client";
+import { updateAppDefaults } from "./apps";
 
 export type PurchaseType = "managed" | "consumable" | "subscription";
 export type IapStatus = "active" | "inactive";
@@ -251,6 +252,12 @@ export async function syncIapFromGoogle(
  * Sequentially sync a batch of IAPs from a Publisher API list response.
  * Returns { synced, failed } counts; failed IAPs surface their errors
  * in the per-sku log line but don't abort the batch.
+ *
+ * Hotfix 4: opportunistically write the app's default_currency +
+ * default_language from the first product that carries both. Google
+ * enforces app-wide defaults, so every IAP under an app shares the
+ * same pair — sampling the first one is sufficient and gives ground
+ * truth that overrides any inference made during apps refresh.
  */
 export async function batchSyncIapsFromGoogle(
   appId: string,
@@ -270,5 +277,25 @@ export async function batchSyncIapsFromGoogle(
       );
     }
   }
+
+  // Capture app-level defaults from the first IAP that carries them.
+  const sample = products.find(
+    (p) => p.defaultPrice?.currency || p.defaultLanguage,
+  );
+  if (sample) {
+    try {
+      await updateAppDefaults(appId, {
+        currency: sample.defaultPrice?.currency ?? null,
+        language: sample.defaultLanguage ?? null,
+      });
+    } catch (err) {
+      // Non-fatal — the cache row still has the IAPs synced, just
+      // without updated app defaults. Log for visibility.
+      console.error(
+        `[google-iap:iap-sync] app_defaults_capture_failed appId=${appId} err="${err instanceof Error ? err.message.replace(/"/g, "'") : String(err)}"`,
+      );
+    }
+  }
+
   return { synced, failed };
 }

@@ -21,6 +21,10 @@ interface Props {
   listings: Record<string, FormListing>;
   activeLocale: string;
   defaultLocale: string;
+  /** App-level default locale from Google Play (Hotfix 4). Rendered with
+   *  a distinct "App default" badge when present and different from the
+   *  form's own default. */
+  appDefaultLocale?: string | null;
   onSelect: (locale: string) => void;
 }
 
@@ -28,6 +32,7 @@ export function GoogleLocaleSidebar({
   listings,
   activeLocale,
   defaultLocale,
+  appDefaultLocale = null,
   onSelect,
 }: Props) {
   const [query, setQuery] = useState("");
@@ -76,6 +81,8 @@ export function GoogleLocaleSidebar({
               const partial = hasTitle || hasDescription;
               const active = activeLocale === locale.value;
               const isDefault = defaultLocale === locale.value;
+              const isAppDefault =
+                appDefaultLocale !== null && appDefaultLocale === locale.value;
               return (
                 <li key={locale.value}>
                   <button
@@ -92,6 +99,11 @@ export function GoogleLocaleSidebar({
                       {isDefault && (
                         <span className="ml-1 text-[9px] uppercase font-semibold text-emerald-600">
                           ★ default
+                        </span>
+                      )}
+                      {isAppDefault && !isDefault && (
+                        <span className="ml-1 text-[9px] uppercase font-semibold text-emerald-700 bg-emerald-100 border border-emerald-200 rounded px-1">
+                          app
                         </span>
                       )}
                     </span>

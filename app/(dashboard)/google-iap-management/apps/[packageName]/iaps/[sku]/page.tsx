@@ -41,7 +41,11 @@ export default async function EditIapPage({
   const detail = await getIapDetail(app.id, sku);
   if (!detail) notFound();
 
-  const initial = iapDetailToInitial(detail);
+  const appDefaults = {
+    currency: app.default_currency,
+    language: app.default_language,
+  };
+  const initial = iapDetailToInitial(detail, appDefaults);
 
   return (
     <div className="p-8 max-w-5xl">
@@ -62,6 +66,7 @@ export default async function EditIapPage({
       <IapForm
         packageName={packageName}
         appId={app.id}
+        appDefaults={appDefaults}
         mode={{ kind: "edit", initial }}
       />
     </div>

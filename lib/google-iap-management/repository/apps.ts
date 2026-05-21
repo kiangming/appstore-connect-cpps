@@ -14,19 +14,22 @@ export interface AppRow {
   google_console_account_id: string;
   package_name: string;
   display_name: string | null;
+  default_currency: string | null;
+  default_language: string | null;
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;
 }
+
+const APP_COLUMNS =
+  "id, google_console_account_id, package_name, display_name, default_currency, default_language, last_synced_at, created_at, updated_at";
 
 export async function listAppsForAccount(
   accountId: string,
 ): Promise<AppRow[]> {
   const { data, error } = await googleIapDb()
     .from("apps")
-    .select(
-      "id, google_console_account_id, package_name, display_name, last_synced_at, created_at, updated_at",
-    )
+    .select(APP_COLUMNS)
     .eq("google_console_account_id", accountId)
     .order("display_name", { ascending: true })
     .order("package_name", { ascending: true });
@@ -43,9 +46,7 @@ export async function getAppByPackage(
 ): Promise<AppRow | null> {
   const { data, error } = await googleIapDb()
     .from("apps")
-    .select(
-      "id, google_console_account_id, package_name, display_name, last_synced_at, created_at, updated_at",
-    )
+    .select(APP_COLUMNS)
     .eq("google_console_account_id", accountId)
     .eq("package_name", packageName)
     .maybeSingle();
@@ -81,6 +82,39 @@ export async function upsertAppFromSync(args: UpsertAppArgs): Promise<void> {
 
   if (error) {
     throw new Error(`Failed to upsert app ${args.packageName}: ${error.message}`);
+  }
+}
+
+/**
+ * Hotfix 4: update an app's cached default_currency + default_language
+ * without touching last_synced_at (this is a side-channel write done
+ * during apps refresh and opportunistically during IAPs refresh; the
+ * primary sync timestamp is owned by the corresponding upsert path).
+ *
+ * Either field may be passed as `null` (no change). Pass an actual
+ * value to overwrite. Caller decides precedence (e.g. IAPs-refresh
+ * ground truth wins over apps-refresh fallback inference).
+ */
+export async function updateAppDefaults(
+  appId: string,
+  defaults: { currency?: string | null; language?: string | null },
+): Promise<void> {
+  const patch: Record<string, string | null> = {};
+  if (defaults.currency !== undefined && defaults.currency !== null) {
+    patch.default_currency = defaults.currency;
+  }
+  if (defaults.language !== undefined && defaults.language !== null) {
+    patch.default_language = defaults.language;
+  }
+  if (Object.keys(patch).length === 0) return;
+
+  const { error } = await googleIapDb()
+    .from("apps")
+    .update(patch)
+    .eq("id", appId);
+
+  if (error) {
+    throw new Error(`Failed to update app defaults: ${error.message}`);
   }
 }
 
