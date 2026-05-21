@@ -75,12 +75,15 @@ function snapshotFromInput(input: UpdateIapInput): IapStateSnapshot {
       description: l.description.trim(),
     };
   }
+  // Hotfix 5: currency-aware precision validation. Per-region overrides
+  // each carry their own currency, so each conversion validates against
+  // its own.
   const prices: Record<string, { currency: string; priceMicros: string }> = {};
   for (const r of input.regionOverrides) {
     if (!r.priceDecimal.trim()) continue;
     prices[r.region] = {
       currency: r.currency.trim().toUpperCase(),
-      priceMicros: decimalToMicros(r.priceDecimal),
+      priceMicros: decimalToMicros(r.priceDecimal, r.currency),
     };
   }
   return {
@@ -89,7 +92,7 @@ function snapshotFromInput(input: UpdateIapInput): IapStateSnapshot {
       status: input.status,
       defaultLanguage: input.defaultLanguage,
       baseCurrency: input.baseCurrency.trim().toUpperCase(),
-      basePriceMicros: decimalToMicros(input.basePriceDecimal),
+      basePriceMicros: decimalToMicros(input.basePriceDecimal, input.baseCurrency),
     },
     listings,
     prices,

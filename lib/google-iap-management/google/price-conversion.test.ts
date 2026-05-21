@@ -46,6 +46,40 @@ describe("decimalToMicros", () => {
   it("rejects more than 6 fractional digits (micros overflow)", () => {
     expect(() => decimalToMicros("1.1234567")).toThrow(/6 fractional/);
   });
+
+  // --- Hotfix 5: currency-aware validation ---
+
+  it("converts integers for zero-decimal currencies (VND/JPY/KRW)", () => {
+    expect(decimalToMicros("23000", "VND")).toBe("23000000000");
+    expect(decimalToMicros("100", "JPY")).toBe("100000000");
+    expect(decimalToMicros("1000", "KRW")).toBe("1000000000");
+  });
+
+  it("tolerates trailing-zero fractions for zero-decimal currencies", () => {
+    // "23000.00" parses cleanly; the .00 has no significant fractional digits.
+    expect(decimalToMicros("23000.00", "VND")).toBe("23000000000");
+    expect(decimalToMicros("100.000", "JPY")).toBe("100000000");
+  });
+
+  it("rejects fractional values for zero-decimal currencies", () => {
+    expect(() => decimalToMicros("1.99", "VND")).toThrow(
+      /VND only accepts whole numbers/,
+    );
+    expect(() => decimalToMicros("0.99", "JPY")).toThrow(/JPY/);
+    expect(() => decimalToMicros("100.5", "KRW")).toThrow(/KRW/);
+  });
+
+  it("respects 3-decimal precision (BHD/KWD/OMR)", () => {
+    expect(decimalToMicros("1.250", "BHD")).toBe("1250000");
+    expect(() => decimalToMicros("1.2345", "BHD")).toThrow(/BHD/);
+  });
+
+  it("preserves the no-currency legacy path", () => {
+    // Without a currency arg, the old behaviour is unchanged — fractional
+    // is allowed up to 6 digits regardless of what currency might apply.
+    expect(decimalToMicros("1.99")).toBe("1990000");
+    expect(decimalToMicros("0.000001")).toBe("1");
+  });
 });
 
 describe("microsToDecimal", () => {

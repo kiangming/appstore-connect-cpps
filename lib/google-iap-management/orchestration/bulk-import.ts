@@ -92,7 +92,8 @@ export function buildProduct(
     if (!r.priceDecimal.trim()) continue;
     prices[r.region] = {
       currency: r.currency.trim().toUpperCase(),
-      priceMicros: decimalToMicros(r.priceDecimal),
+      // Hotfix 5: per-region currency drives precision validation.
+      priceMicros: decimalToMicros(r.priceDecimal, r.currency),
     };
   }
 
@@ -104,7 +105,9 @@ export function buildProduct(
     defaultLanguage: "en-US",
     defaultPrice: {
       currency: row.baseCurrency.trim().toUpperCase(),
-      priceMicros: decimalToMicros(row.basePriceDecimal),
+      // Hotfix 5: base price must match the app's configured currency
+      // precision — VND rejects fractions, etc.
+      priceMicros: decimalToMicros(row.basePriceDecimal, row.baseCurrency),
     },
     listings,
     ...(Object.keys(prices).length > 0 ? { prices } : {}),

@@ -14,6 +14,7 @@ import {
 
 import { PreviewTable } from "./PreviewTable";
 import { PricingSourceSelector } from "@/components/google-iap-management/iap-form/PricingSourceSelector";
+import { validateDecimalForCurrency } from "@/lib/google-iap-management/google/currency-precision";
 
 export type PricingSource = "google_default" | "default_template" | "app_template";
 export type RowDecision = "overwrite" | "skip" | "create";
@@ -101,6 +102,23 @@ export function BulkImportWizard({
     const willCreate = previewRows.filter((r) => !r.exists && r.decision === "create").length;
     return { total, existing, pending, willOverwrite, willSkip, willCreate };
   }, [previewRows]);
+
+  // Hotfix 5: precision violations for the app's currency. We check only
+  // actionable rows (Skip rows aren't sent to Google so their numeric
+  // shape doesn't matter). The same currency is used for every row since
+  // Google enforces app-wide.
+  const precisionViolations = useMemo(() => {
+    if (!appDefaultCurrency) return [] as Array<{ rowNumber: number; sku: string; error: string }>;
+    const violations: Array<{ rowNumber: number; sku: string; error: string }> = [];
+    for (const row of previewRows) {
+      if (row.decision === "skip") continue;
+      const err = validateDecimalForCurrency(row.basePriceDecimal, appDefaultCurrency);
+      if (err) {
+        violations.push({ rowNumber: row.rowNumber, sku: row.sku, error: err });
+      }
+    }
+    return violations;
+  }, [previewRows, appDefaultCurrency]);
 
   async function handleUploadAndPreview() {
     if (!file) return;
@@ -200,7 +218,10 @@ export function BulkImportWizard({
     }
   }
 
-  const canContinueFromPreview = counts.pending === 0 && previewRows.length > 0;
+  const canContinueFromPreview =
+    counts.pending === 0 &&
+    previewRows.length > 0 &&
+    precisionViolations.length === 0;
 
   return (
     <div className="space-y-4">
@@ -413,6 +434,28 @@ export function BulkImportWizard({
             </div>
           )}
 
+          {precisionViolations.length > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <p className="text-xs font-medium text-red-900 mb-1">
+                {precisionViolations.length} row(s) violate {appDefaultCurrency}{" "}
+                precision — Google will reject these. Fix the Excel file and
+                re-upload, or remove the affected rows.
+              </p>
+              <ul className="space-y-0.5 text-[11px] text-red-800 max-h-32 overflow-y-auto">
+                {precisionViolations.slice(0, 20).map((v) => (
+                  <li key={v.rowNumber}>
+                    · Row {v.rowNumber} ({v.sku}): {v.error}
+                  </li>
+                ))}
+                {precisionViolations.length > 20 && (
+                  <li className="italic text-red-700">
+                    …and {precisionViolations.length - 20} more.
+                  </li>
+                )}
+              </ul>
+            </div>
+          )}
+
           {executeError && (
             <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
@@ -434,9 +477,11 @@ export function BulkImportWizard({
               onClick={handleExecute}
               disabled={!canContinueFromPreview || executing}
               title={
-                !canContinueFromPreview
-                  ? "Resolve all existing-SKU decisions first"
-                  : ""
+                precisionViolations.length > 0
+                  ? `${precisionViolations.length} row(s) violate ${appDefaultCurrency} precision`
+                  : !canContinueFromPreview
+                    ? "Resolve all existing-SKU decisions first"
+                    : ""
               }
               className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition disabled:opacity-50"
             >

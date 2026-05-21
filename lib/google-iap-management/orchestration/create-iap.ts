@@ -85,7 +85,10 @@ export async function createIapOnGoogle(
     );
   }
 
-  const baseMicros = decimalToMicros(input.basePriceDecimal);
+  // Hotfix 5: pass currency so decimalToMicros enforces precision.
+  // VND/JPY/KRW etc. reject fractional values; Google rejects mismatches
+  // with "Illegal default price-value" if we let one through.
+  const baseMicros = decimalToMicros(input.basePriceDecimal, input.baseCurrency);
   const defaultPrice: NonNullable<InAppProduct["defaultPrice"]> = {
     currency: input.baseCurrency,
     priceMicros: baseMicros,
@@ -96,7 +99,7 @@ export async function createIapOnGoogle(
     if (!r.priceDecimal.trim()) continue;
     prices[r.region] = {
       currency: r.currency,
-      priceMicros: decimalToMicros(r.priceDecimal),
+      priceMicros: decimalToMicros(r.priceDecimal, r.currency),
     };
   }
 

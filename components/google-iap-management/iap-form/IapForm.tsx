@@ -24,6 +24,10 @@ import {
 } from "@/lib/google-iap-management/regions";
 import { decimalToMicros } from "@/lib/google-iap-management/google/price-conversion";
 import {
+  getCurrencyDecimals,
+  validateDecimalForCurrency,
+} from "@/lib/google-iap-management/google/currency-precision";
+import {
   computeIapDiff,
   type IapStateSnapshot,
 } from "@/lib/google-iap-management/orchestration/iap-diff";
@@ -46,8 +50,15 @@ interface Props {
   mode?: Mode;
 }
 
-function validateDecimal(input: string): string | null {
+function validateDecimal(input: string, currency?: string): string | null {
   if (!input.trim()) return null;
+  // Hotfix 5: when a currency is known, run the currency-aware
+  // validation first (catches VND/JPY/KRW fractions before they're
+  // sent and rejected by Google).
+  if (currency) {
+    const currencyErr = validateDecimalForCurrency(input, currency);
+    if (currencyErr) return currencyErr;
+  }
   try {
     decimalToMicros(input);
     return null;
@@ -259,14 +270,14 @@ export function IapForm({
     if (!basePriceDecimal.trim()) {
       errors.basePrice = "Base price is required.";
     } else {
-      const decErr = validateDecimal(basePriceDecimal);
+      const decErr = validateDecimal(basePriceDecimal, baseCurrency);
       if (decErr) errors.basePrice = decErr;
     }
 
     for (let i = 0; i < regionOverrides.length; i += 1) {
       const r = regionOverrides[i];
       if (r.priceDecimal.trim()) {
-        const e = validateDecimal(r.priceDecimal);
+        const e = validateDecimal(r.priceDecimal, r.currency);
         if (e) errors[`override_${i}`] = e;
       }
     }
@@ -631,14 +642,19 @@ export function IapForm({
             </label>
             <input
               type="text"
-              inputMode="decimal"
+              inputMode={getCurrencyDecimals(baseCurrency) === 0 ? "numeric" : "decimal"}
               value={basePriceDecimal}
               onChange={(e) => setBasePriceDecimal(e.target.value)}
-              placeholder="1.99"
+              placeholder={getCurrencyDecimals(baseCurrency) === 0 ? "23000" : "1.99"}
               className={`w-full rounded-lg border px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition ${
                 fieldErrors.basePrice ? "border-red-400" : "border-slate-300"
               }`}
             />
+            <p className="text-[11px] text-slate-400">
+              {getCurrencyDecimals(baseCurrency) === 0
+                ? `${baseCurrency.toUpperCase()} only accepts whole numbers (no fractional values).`
+                : `${baseCurrency.toUpperCase()} supports up to ${getCurrencyDecimals(baseCurrency)} decimal place${getCurrencyDecimals(baseCurrency) === 1 ? "" : "s"}.`}
+            </p>
             {fieldErrors.basePrice && (
               <p className="text-xs text-red-500">{fieldErrors.basePrice}</p>
             )}
