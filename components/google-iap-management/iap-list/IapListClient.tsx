@@ -135,14 +135,13 @@ export function IapListClient({
             <Plus className="h-4 w-4" />
             New IAP
           </Link>
-          <button
-            disabled
-            title="Bulk import coming in g1.i"
-            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-500 border border-slate-200 rounded-lg cursor-not-allowed opacity-60"
+          <Link
+            href={`/google-iap-management/apps/${encodeURIComponent(packageName)}/bulk-import`}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 rounded-lg transition"
           >
             <Upload className="h-4 w-4" />
             Bulk import
-          </button>
+          </Link>
           <button
             onClick={handleRefresh}
             disabled={refreshing}
