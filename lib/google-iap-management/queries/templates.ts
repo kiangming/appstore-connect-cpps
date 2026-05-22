@@ -338,6 +338,91 @@ export async function lookupTemplateEntriesForIdentifier(
   }));
 }
 
+/** Pure helper: from a flat array of pricing-template entries, find the
+ *  tier identifier whose US-region USD entry exactly matches the given
+ *  USD priceMicros. Used by bulk-import to infer the tier for each Excel
+ *  row when the row's SKU doesn't match the template's identifier column
+ *  (which typically stores tier names like "Tier 1", not SKUs).
+ *
+ *  Returns the first matching tier identifier (deterministic order =
+ *  query order). Returns null when no tier's US entry matches.
+ *
+ *  Exported so it can be unit-tested without mocking the DB client.
+ *  Used by `findTemplateTierByUsdMicros` (the I/O wrapper). */
+export function pickTierByUsdMicros(
+  entries: ReadonlyArray<{
+    identifier: string;
+    region_code: string;
+    currency: string;
+    price_micros: string;
+  }>,
+  usdMicros: string,
+): string | null {
+  for (const e of entries) {
+    if (e.region_code !== "US") continue;
+    if (e.currency !== "USD") continue;
+    if (e.price_micros === usdMicros) return e.identifier;
+  }
+  return null;
+}
+
+/** Hotfix 15: USD-price-based tier inference for bulk-import.
+ *
+ *  The orchestrator currently looks up template entries WHERE
+ *  identifier = row.sku (matching the documented design). Manager's
+ *  templates in practice index entries by tier name (Tier 1 / Tier 2)
+ *  rather than SKU, so SKU lookups return 0 entries and the row
+ *  silently falls back to USD auto-conversion via convertRegionPrices —
+ *  defeating the template selection.
+ *
+ *  This helper finds the tier whose US-region USD entry equals the
+ *  row's USD baseline (in micros). When matched, the caller can re-
+ *  query template entries for that tier identifier and apply them as
+ *  region overrides. Falls back to null when no tier's US entry
+ *  matches — caller decides whether to fail the row or fall through to
+ *  auto-convert.
+ */
+export async function findTemplateTierByUsdMicros(args: {
+  scope: TemplateScope;
+  appId: string | null;
+  usdPriceMicros: string;
+}): Promise<string | null> {
+  const db = googleIapDb();
+  let templateQuery = db
+    .from("pricing_templates")
+    .select("id")
+    .eq("scope_type", args.scope);
+  templateQuery =
+    args.scope === "APP" && args.appId
+      ? templateQuery.eq("scope_app_id", args.appId)
+      : templateQuery.is("scope_app_id", null);
+  const { data: template, error } = await templateQuery.maybeSingle();
+  if (error) {
+    throw new Error(`Failed to look up template: ${error.message}`);
+  }
+  if (!template) return null;
+  const templateId = (template as { id: string }).id;
+  const { data: entries, error: entriesErr } = await db
+    .from("pricing_template_entries")
+    .select("identifier, region_code, currency, price_micros")
+    .eq("template_id", templateId)
+    .eq("region_code", "US")
+    .eq("currency", "USD")
+    .eq("price_micros", args.usdPriceMicros);
+  if (entriesErr) {
+    throw new Error(
+      `Failed to load template US entries: ${entriesErr.message}`,
+    );
+  }
+  const rows = (entries ?? []) as Array<{
+    identifier: string;
+    region_code: string;
+    currency: string;
+    price_micros: string;
+  }>;
+  return pickTierByUsdMicros(rows, args.usdPriceMicros);
+}
+
 /** List distinct tier identifiers under the active scope (used by the
  *  single-IAP form's tier picker when Manager picks a template source). */
 export async function listTemplateTiers(args: {

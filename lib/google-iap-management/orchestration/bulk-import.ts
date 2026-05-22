@@ -55,7 +55,10 @@ import type {
   ParsedRegionOverride,
   ParsedListing,
 } from "../parsers/excel-parser";
-import { lookupTemplateEntriesForIdentifier } from "../queries/templates";
+import {
+  lookupTemplateEntriesForIdentifier,
+  findTemplateTierByUsdMicros,
+} from "../queries/templates";
 
 /** Bound on per-row convertRegionPrices fanout. Google's Publisher API
  *  doesn't publish a documented rate limit for read endpoints but bulk
@@ -171,20 +174,66 @@ export async function executeBulkImport(
   const actionableRows = input.rows.filter((r) => r.decision !== "skip");
   const skippedCount = input.rows.length - actionableRows.length;
 
-  // Q-GIAP.D: template-driven price resolution — when source is a template,
-  // each row's SKU is matched against the template's identifier column.
-  // Matched rows have their inline regionOverrides replaced with the
-  // template's tier entries; unmatched rows fall back to inline pricing
-  // (a warning is recorded but the row still imports).
+  // Q-GIAP.D + Hotfix 15: template-driven price resolution.
+  //
+  // Each row's SKU is matched against the template's identifier column
+  // first (documented design — wizard step 1 help text). If that returns
+  // zero entries (Manager's template is keyed by tier name "Tier 1" /
+  // "Tier 2" rather than SKU — by far the more common shape), fall back
+  // to USD-price-based tier inference: find the tier whose US-region
+  // USD entry equals the row's USD baseline (in micros), then load that
+  // tier's regional entries. Either match strategy fully replaces the
+  // row's inline regionOverrides. Rows with neither match fall through
+  // to USD auto-conversion via the Hotfix 14 bootstrap below — Manager
+  // sees the per-row outcome breakdown in the BULK_IMPORT_BATCH audit
+  // entry's match_by_strategy counters.
   let templateMatchCount = 0;
+  let templateMatchBySku = 0;
+  let templateMatchByUsd = 0;
   if (input.pricingSource !== "google_default") {
     const scope = input.pricingSource === "app_template" ? "APP" : "GLOBAL";
+    const appIdForScope = scope === "APP" ? input.appId : null;
     for (const row of actionableRows) {
-      const entries = await lookupTemplateEntriesForIdentifier({
+      // Strategy 1: SKU-based lookup (documented design).
+      let entries = await lookupTemplateEntriesForIdentifier({
         scope,
-        appId: scope === "APP" ? input.appId : null,
+        appId: appIdForScope,
         identifier: row.sku,
       });
+      let matchedBy: "sku" | "usd" | null = entries.length > 0 ? "sku" : null;
+
+      // Strategy 2: USD-price-based tier inference (Hotfix 15 fallback).
+      if (entries.length === 0) {
+        try {
+          const usdMicros = decimalToMicros(row.basePriceDecimal, row.baseCurrency);
+          // Only attempt the USD lookup when the row's base currency is
+          // actually USD — otherwise the row's basePriceMicros is in
+          // (say) VND and matching it against US/USD entries would be a
+          // category error.
+          if (row.baseCurrency.trim().toUpperCase() === "USD") {
+            const tierId = await findTemplateTierByUsdMicros({
+              scope,
+              appId: appIdForScope,
+              usdPriceMicros: usdMicros,
+            });
+            if (tierId) {
+              entries = await lookupTemplateEntriesForIdentifier({
+                scope,
+                appId: appIdForScope,
+                identifier: tierId,
+              });
+              if (entries.length > 0) matchedBy = "usd";
+            }
+          }
+        } catch (err) {
+          console.warn(
+            `[google-iap:bulk-import] usd tier inference failed sku=${row.sku} err="${
+              err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
+            }"`,
+          );
+        }
+      }
+
       if (entries.length > 0) {
         row.regionOverrides = entries.map((e) => ({
           region: e.regionCode,
@@ -192,6 +241,8 @@ export async function executeBulkImport(
           priceDecimal: microsToDecimal(e.priceMicros, 6),
         }));
         templateMatchCount += 1;
+        if (matchedBy === "sku") templateMatchBySku += 1;
+        else if (matchedBy === "usd") templateMatchByUsd += 1;
       }
     }
   }
@@ -388,6 +439,12 @@ export async function executeBulkImport(
       package_name: input.packageName,
       pricing_source: input.pricingSource,
       template_matched_rows: templateMatchCount,
+      // Hotfix 15: split per match strategy so a future audit can tell
+      // how many rows used the documented SKU-identifier path vs the
+      // USD-price fallback. Helps Manager spot when templates need
+      // restructuring (USD-only matches signal SKU mismatch).
+      template_matched_by_sku: templateMatchBySku,
+      template_matched_by_usd: templateMatchByUsd,
       rows_total: input.rows.length,
       rows_created: created,
       rows_overwritten: overwritten,
