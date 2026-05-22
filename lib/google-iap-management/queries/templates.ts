@@ -302,14 +302,25 @@ export async function lookupTemplateEntriesForIdentifier(
     identifier: string;
   },
 ): Promise<ParsedPricingEntry[]> {
+  // Hotfix 17: hard-fail on scope=APP + missing appId. The pre-Hotfix-17
+  // code silently treated this as a GLOBAL query (the `&& args.appId`
+  // short-circuit fell through to the `is("scope_app_id", null)`
+  // clause), which would have surfaced Per-App misuse as a Default-
+  // template result — a debugging nightmare. Force the caller to be
+  // explicit.
+  if (args.scope === "APP" && !args.appId) {
+    throw new Error(
+      'lookupTemplateEntriesForIdentifier: scope="APP" requires a non-empty appId.',
+    );
+  }
   const db = googleIapDb();
   let templateQuery = db
     .from("pricing_templates")
     .select("id")
     .eq("scope_type", args.scope);
   templateQuery =
-    args.scope === "APP" && args.appId
-      ? templateQuery.eq("scope_app_id", args.appId)
+    args.scope === "APP"
+      ? templateQuery.eq("scope_app_id", args.appId!)
       : templateQuery.is("scope_app_id", null);
   const { data: template, error } = await templateQuery.maybeSingle();
   if (error) {
@@ -415,14 +426,21 @@ export async function findTemplateTierByCurrencyMicros(args: {
   currencyCode: string;
   priceMicros: string;
 }): Promise<string | null> {
+  // Hotfix 17: same silent-fallback landmine as the SKU lookup —
+  // refuse to query when scope=APP is requested without appId.
+  if (args.scope === "APP" && !args.appId) {
+    throw new Error(
+      'findTemplateTierByCurrencyMicros: scope="APP" requires a non-empty appId.',
+    );
+  }
   const db = googleIapDb();
   let templateQuery = db
     .from("pricing_templates")
     .select("id")
     .eq("scope_type", args.scope);
   templateQuery =
-    args.scope === "APP" && args.appId
-      ? templateQuery.eq("scope_app_id", args.appId)
+    args.scope === "APP"
+      ? templateQuery.eq("scope_app_id", args.appId!)
       : templateQuery.is("scope_app_id", null);
   const { data: template, error } = await templateQuery.maybeSingle();
   if (error) {
@@ -464,6 +482,39 @@ export async function findTemplateTierByUsdMicros(args: {
     currencyCode: "USD",
     priceMicros: args.usdPriceMicros,
   });
+}
+
+/** Hotfix 17: lightweight existence probe — returns true when a
+ *  template row exists for the given scope. For scope=APP an appId is
+ *  required; throws when missing (same defensive stance as
+ *  `lookupTemplateEntriesForIdentifier` / `findTemplateTierByCurrencyMicros`).
+ *
+ *  Used by `executeBulkImport`'s pre-flight: when Manager selects
+ *  `app_template` but no Per-App template has been uploaded for this
+ *  app, the orchestrator fails fast with an actionable message rather
+ *  than silently auto-bootstrapping every row and leaving Manager to
+ *  wonder why "Per-App" produced auto-converted prices. */
+export async function templateExists(args: {
+  scope: TemplateScope;
+  appId: string | null;
+}): Promise<boolean> {
+  if (args.scope === "APP" && !args.appId) {
+    throw new Error('templateExists: scope="APP" requires a non-empty appId.');
+  }
+  const db = googleIapDb();
+  let query = db
+    .from("pricing_templates")
+    .select("id", { head: true, count: "exact" })
+    .eq("scope_type", args.scope);
+  query =
+    args.scope === "APP"
+      ? query.eq("scope_app_id", args.appId!)
+      : query.is("scope_app_id", null);
+  const { count, error } = await query;
+  if (error) {
+    throw new Error(`Template existence probe failed: ${error.message}`);
+  }
+  return (count ?? 0) > 0;
 }
 
 /** List distinct tier identifiers under the active scope (used by the

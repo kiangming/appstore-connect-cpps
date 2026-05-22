@@ -58,6 +58,7 @@ import type {
 import {
   lookupTemplateEntriesForIdentifier,
   findTemplateTierByCurrencyMicros,
+  templateExists,
 } from "../queries/templates";
 
 /** Bound on per-row convertRegionPrices fanout. Google's Publisher API
@@ -190,9 +191,30 @@ export async function executeBulkImport(
   let templateMatchCount = 0;
   let templateMatchBySku = 0;
   let templateMatchByCurrencyPrice = 0;
+  let templateNoMatchRows = 0;
   if (input.pricingSource !== "google_default") {
     const scope = input.pricingSource === "app_template" ? "APP" : "GLOBAL";
     const appIdForScope = scope === "APP" ? input.appId : null;
+
+    // Hotfix 17: pre-flight check. When Manager selects "Per-App
+    // Template" (or "Default Template") but no template of that scope
+    // exists, fail fast with an actionable message instead of silently
+    // auto-bootstrapping every row from USD. Previously the orchestrator
+    // looped all N rows, all lookups returned null, all rows fell
+    // through to Hotfix 14 auto-bootstrap (Google's convertRegionPrices)
+    // — Manager saw "items created with auto-converted prices" and
+    // assumed Default fallback when in fact no template applied at all.
+    const exists = await templateExists({ scope, appId: appIdForScope });
+    if (!exists) {
+      const which =
+        input.pricingSource === "app_template"
+          ? `Per-App Template for app ${input.appId}`
+          : `Default Template`;
+      throw new Error(
+        `Bulk import was set to "${input.pricingSource}" but no ${which} has been uploaded. ` +
+          `Upload one in Settings → Pricing Tiers, or change the pricing source to "google_default".`,
+      );
+    }
     for (const row of actionableRows) {
       // Strategy 1: SKU-based lookup (documented design).
       let entries = await lookupTemplateEntriesForIdentifier({
@@ -246,6 +268,13 @@ export async function executeBulkImport(
         templateMatchCount += 1;
         if (matchedBy === "sku") templateMatchBySku += 1;
         else if (matchedBy === "currency_price") templateMatchByCurrencyPrice += 1;
+      } else {
+        // Hotfix 17: template scope was selected but this row didn't
+        // match any tier — track the count so the audit log surfaces
+        // "how many rows fell through to auto-bootstrap" instead of
+        // Manager having to infer it from the difference between
+        // template_matched_rows and rows_total.
+        templateNoMatchRows += 1;
       }
     }
   }
@@ -449,6 +478,13 @@ export async function executeBulkImport(
       // template_matched_by_currency_price (was _by_usd in Hotfix 15).
       template_matched_by_sku: templateMatchBySku,
       template_matched_by_currency_price: templateMatchByCurrencyPrice,
+      // Hotfix 17: rows where pricingSource was a template scope but
+      // neither SKU nor currency-price lookup found a tier — these
+      // rows fall through to Hotfix 14 USD auto-bootstrap (Google's
+      // convertRegionPrices). Surfacing the count lets Manager debug
+      // mismatches between Excel rows and template coverage without
+      // inferring from the gap between matched_rows and rows_total.
+      template_no_match_rows: templateNoMatchRows,
       rows_total: input.rows.length,
       rows_created: created,
       rows_overwritten: overwritten,

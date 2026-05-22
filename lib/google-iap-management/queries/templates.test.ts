@@ -3,6 +3,9 @@ import { describe, it, expect } from "vitest";
 import {
   pickTierByUsdMicros,
   pickTierByCurrencyMicros,
+  lookupTemplateEntriesForIdentifier,
+  findTemplateTierByCurrencyMicros,
+  templateExists,
 } from "./templates";
 
 /**
@@ -143,5 +146,70 @@ describe("pickTierByCurrencyMicros (Hotfix 16 — currency-aware)", () => {
     expect(pickTierByCurrencyMicros(entries, "VND", "10000000000")).toBe(
       "Tier A",
     );
+  });
+});
+
+/**
+ * Hotfix 17: the three query helpers each refuse to silently treat
+ * scope=APP + missing appId as a GLOBAL query. Pre-Hotfix-17 the
+ * `&& args.appId` short-circuit on the Supabase chain dropped the
+ * scope_app_id filter, so a buggy caller would have queried Default
+ * Template entries while believing it was hitting a Per-App template
+ * — a debugging trap. These helpers now throw before any DB I/O so
+ * the bad call is impossible to miss.
+ */
+describe("Hotfix 17: scope=APP requires appId guards (no silent GLOBAL fallback)", () => {
+  it("lookupTemplateEntriesForIdentifier throws when scope=APP + appId is null", async () => {
+    await expect(
+      lookupTemplateEntriesForIdentifier({
+        scope: "APP",
+        appId: null,
+        identifier: "Tier 1",
+      }),
+    ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
+  });
+
+  it("lookupTemplateEntriesForIdentifier throws when scope=APP + appId is empty string", async () => {
+    await expect(
+      lookupTemplateEntriesForIdentifier({
+        scope: "APP",
+        appId: "",
+        identifier: "Tier 1",
+      }),
+    ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
+  });
+
+  it("findTemplateTierByCurrencyMicros throws when scope=APP + appId is null", async () => {
+    await expect(
+      findTemplateTierByCurrencyMicros({
+        scope: "APP",
+        appId: null,
+        currencyCode: "VND",
+        priceMicros: "25000000000",
+      }),
+    ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
+  });
+
+  it("findTemplateTierByCurrencyMicros throws when scope=APP + appId is empty string", async () => {
+    await expect(
+      findTemplateTierByCurrencyMicros({
+        scope: "APP",
+        appId: "",
+        currencyCode: "VND",
+        priceMicros: "25000000000",
+      }),
+    ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
+  });
+
+  it("templateExists throws when scope=APP + appId is null", async () => {
+    await expect(
+      templateExists({ scope: "APP", appId: null }),
+    ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
+  });
+
+  it("templateExists throws when scope=APP + appId is empty string", async () => {
+    await expect(
+      templateExists({ scope: "APP", appId: "" }),
+    ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
   });
 });
