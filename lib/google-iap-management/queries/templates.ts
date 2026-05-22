@@ -484,6 +484,37 @@ export async function findTemplateTierByUsdMicros(args: {
   });
 }
 
+/** Hotfix 18: companion to `templateExists` — returns the template id
+ *  (UUID) for the given scope, or null if no template row exists.
+ *  Used by orchestrators that need to surface which template was
+ *  actually queried in audit logs + diagnostic traces (Manager debugging
+ *  "audit says matched but Google received wrong price").
+ *
+ *  Same defensive guard as the sibling helpers: scope=APP without an
+ *  appId throws before any DB I/O. */
+export async function findTemplateId(args: {
+  scope: TemplateScope;
+  appId: string | null;
+}): Promise<string | null> {
+  if (args.scope === "APP" && !args.appId) {
+    throw new Error('findTemplateId: scope="APP" requires a non-empty appId.');
+  }
+  const db = googleIapDb();
+  let query = db
+    .from("pricing_templates")
+    .select("id")
+    .eq("scope_type", args.scope);
+  query =
+    args.scope === "APP"
+      ? query.eq("scope_app_id", args.appId!)
+      : query.is("scope_app_id", null);
+  const { data, error } = await query.maybeSingle();
+  if (error) {
+    throw new Error(`findTemplateId failed: ${error.message}`);
+  }
+  return data ? (data as { id: string }).id : null;
+}
+
 /** Hotfix 17: lightweight existence probe — returns true when a
  *  template row exists for the given scope. For scope=APP an appId is
  *  required; throws when missing (same defensive stance as

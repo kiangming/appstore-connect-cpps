@@ -6,6 +6,7 @@ import {
   lookupTemplateEntriesForIdentifier,
   findTemplateTierByCurrencyMicros,
   templateExists,
+  findTemplateId,
 } from "./templates";
 
 /**
@@ -210,6 +211,18 @@ describe("Hotfix 17: scope=APP requires appId guards (no silent GLOBAL fallback)
   it("templateExists throws when scope=APP + appId is empty string", async () => {
     await expect(
       templateExists({ scope: "APP", appId: "" }),
+    ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
+  });
+
+  it("findTemplateId throws when scope=APP + appId is null (Hotfix 18 companion guard)", async () => {
+    await expect(
+      findTemplateId({ scope: "APP", appId: null }),
+    ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
+  });
+
+  it("findTemplateId throws when scope=APP + appId is empty string", async () => {
+    await expect(
+      findTemplateId({ scope: "APP", appId: "" }),
     ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
   });
 });

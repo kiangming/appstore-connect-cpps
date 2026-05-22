@@ -59,6 +59,7 @@ import {
   lookupTemplateEntriesForIdentifier,
   findTemplateTierByCurrencyMicros,
   templateExists,
+  findTemplateId,
 } from "../queries/templates";
 
 /** Bound on per-row convertRegionPrices fanout. Google's Publisher API
@@ -192,9 +193,33 @@ export async function executeBulkImport(
   let templateMatchBySku = 0;
   let templateMatchByCurrencyPrice = 0;
   let templateNoMatchRows = 0;
+  // Hotfix 18 diagnostic context — populated whenever the batch uses
+  // a template scope. Surfaced in the audit log + Railway logs so
+  // Manager can correlate "matched" counters with the actual entries
+  // the orchestrator applied. Production gap (Manager batch 4895756e):
+  // audit said matched_by_currency_price=3 but Google received the
+  // Default template's VN value — without per-row diagnostics we can't
+  // tell whether the bug is in the lookup, the mutation, the merge, or
+  // the publisher-client. Capture-then-fix.
+  let templateIdResolved: string | null = null;
+  let templateScopeUsed: "GLOBAL" | "APP" | null = null;
+  let templateAppIdUsed: string | null = null;
+  const perRowDiagnostic: Array<{
+    row_index: number;
+    sku: string;
+    base_currency: string;
+    base_price_decimal: string;
+    match_strategy: "sku" | "currency_price" | "none";
+    entries_count: number;
+    vn_currency: string | null;
+    vn_price_decimal: string | null;
+  }> = [];
+
   if (input.pricingSource !== "google_default") {
     const scope = input.pricingSource === "app_template" ? "APP" : "GLOBAL";
     const appIdForScope = scope === "APP" ? input.appId : null;
+    templateScopeUsed = scope;
+    templateAppIdUsed = appIdForScope;
 
     // Hotfix 17: pre-flight check. When Manager selects "Per-App
     // Template" (or "Default Template") but no template of that scope
@@ -215,7 +240,21 @@ export async function executeBulkImport(
           `Upload one in Settings → Pricing Tiers, or change the pricing source to "google_default".`,
       );
     }
-    for (const row of actionableRows) {
+
+    // Hotfix 18: capture the template UUID the orchestrator's scope
+    // resolution returned. Surfaced in audit log + per-row logs so
+    // Manager can SQL-verify the right template was queried. If the
+    // logged template_id ≠ the expected (Per-App) UUID, the bug is in
+    // the scope→template resolution; if it matches but the row's
+    // entries are still wrong, the bug is in the entries query or
+    // downstream.
+    templateIdResolved = await findTemplateId({ scope, appId: appIdForScope });
+    console.info(
+      `[google-iap:bulk-import] template_resolved scope=${scope} app_id=${appIdForScope ?? "-"} template_id=${templateIdResolved ?? "?"}`,
+    );
+
+    for (let rowIndex = 0; rowIndex < actionableRows.length; rowIndex += 1) {
+      const row = actionableRows[rowIndex];
       // Strategy 1: SKU-based lookup (documented design).
       let entries = await lookupTemplateEntriesForIdentifier({
         scope,
@@ -268,6 +307,26 @@ export async function executeBulkImport(
         templateMatchCount += 1;
         if (matchedBy === "sku") templateMatchBySku += 1;
         else if (matchedBy === "currency_price") templateMatchByCurrencyPrice += 1;
+
+        // Hotfix 18 diagnostic: log + capture the resolved VN entry
+        // (Manager symptom region) immediately after the mutation. If
+        // this disagrees with the final body's VN entry logged below,
+        // the gap is in the bootstrap merge. If it disagrees with what
+        // Google receives, the gap is in publisher-client.
+        const vnEntry = row.regionOverrides.find((r) => r.region === "VN");
+        perRowDiagnostic.push({
+          row_index: rowIndex,
+          sku: row.sku,
+          base_currency: row.baseCurrency,
+          base_price_decimal: row.basePriceDecimal,
+          match_strategy: matchedBy ?? "none",
+          entries_count: entries.length,
+          vn_currency: vnEntry?.currency ?? null,
+          vn_price_decimal: vnEntry?.priceDecimal ?? null,
+        });
+        console.info(
+          `[google-iap:bulk-import] template_match sku=${row.sku} strategy=${matchedBy ?? "?"} entries=${entries.length} vn=${vnEntry ? `${vnEntry.currency}/${vnEntry.priceDecimal}` : "missing"}`,
+        );
       } else {
         // Hotfix 17: template scope was selected but this row didn't
         // match any tier — track the count so the audit log surfaces
@@ -275,6 +334,16 @@ export async function executeBulkImport(
         // Manager having to infer it from the difference between
         // template_matched_rows and rows_total.
         templateNoMatchRows += 1;
+        perRowDiagnostic.push({
+          row_index: rowIndex,
+          sku: row.sku,
+          base_currency: row.baseCurrency,
+          base_price_decimal: row.basePriceDecimal,
+          match_strategy: "none",
+          entries_count: 0,
+          vn_currency: null,
+          vn_price_decimal: null,
+        });
       }
     }
   }
@@ -385,6 +454,23 @@ export async function executeBulkImport(
         };
       }
     }
+
+    // Hotfix 18 diagnostic: log the VN entry that actually goes into
+    // the request body sent to Google. Pair with the post-template-
+    // resolution log to pinpoint at which step VN diverges from the
+    // template's value (if Manager's symptom recurs).
+    if (input.pricingSource !== "google_default") {
+      const vnFinal = existing.VN;
+      const fromTemplate = product.prices?.VN;
+      const fromBootstrap = bootstrap.regions.find((r) => r.region === "VN");
+      console.info(
+        `[google-iap:bulk-import] final_body sku=${row.sku} ` +
+          `template_vn=${fromTemplate ? `${fromTemplate.currency}/${fromTemplate.priceMicros}` : "missing"} ` +
+          `bootstrap_vn=${fromBootstrap ? `${fromBootstrap.currency}/${fromBootstrap.priceMicros}` : "missing"} ` +
+          `final_vn=${vnFinal ? `${vnFinal.currency}/${vnFinal.priceMicros}` : "missing"}`,
+      );
+    }
+
     return {
       body: {
         ...product,
@@ -485,6 +571,15 @@ export async function executeBulkImport(
       // mismatches between Excel rows and template coverage without
       // inferring from the gap between matched_rows and rows_total.
       template_no_match_rows: templateNoMatchRows,
+      // Hotfix 18 diagnostics: surface which template the orchestrator
+      // actually queried + a compact per-row record of (strategy,
+      // entries_count, VN price applied). Manager queries the audit log
+      // alongside Q5's template SQL output and can spot at which step
+      // the VN price diverges from the template entry.
+      template_id_resolved: templateIdResolved,
+      template_scope_used: templateScopeUsed,
+      template_app_id_used: templateAppIdUsed,
+      per_row_diagnostic: perRowDiagnostic,
       rows_total: input.rows.length,
       rows_created: created,
       rows_overwritten: overwritten,
