@@ -1,40 +1,67 @@
 /**
- * Bulk-import orchestrator (Q-GIAP.E).
+ * Bulk-import orchestrator (Q-GIAP.E + Hotfix 14 Phase 3 migration).
  *
- * Takes the Manager's parsed Excel rows + per-row Overwrite/Skip decisions
- * and pushes them to Google Play in a single batchUpdate call. Each request
- * carries `allowMissing: true` so new SKUs are inserted and existing SKUs
- * are updated in the same round-trip — matching Google Play Console's own
- * import behaviour.
+ * Pushes the Manager's parsed Excel rows + per-row Overwrite/Skip
+ * decisions to Google Play in a single round-trip via
+ * `batchUpsertInAppProducts` (Hotfix 14, Monetization API). Each request
+ * carries `allowMissing: true` so new SKUs are inserted and existing
+ * SKUs are updated in the same call.
  *
- * Post-call we resync the cache from the response (one row per affected
- * IAP) and emit a BULK_IMPORT_BATCH audit entry with the counters.
+ * Hotfix 14 — Phase 3 migration: the legacy `inappproducts.batchUpdate`
+ * enforces that `defaultPrice.currency` matches the app's configured
+ * currency, which rejected the Manager's Excel-with-USD bulk imports
+ * against VND-configured apps with "Expecting currency VND for default
+ * price but found USD instead." The new Monetization batch endpoint
+ * instead expects comprehensive regional pricing per product, with
+ * each region carrying its own currency — sidestepping the legacy
+ * equality check.
+ *
+ * Per-row regions bootstrap: we call `convertRegionPrices` per row to
+ * expand the Manager's base price (any currency — USD, VND, EUR…) into
+ * comprehensive regional prices in their local currencies, then
+ * overlay Manager-supplied region overrides on top. Concurrency-
+ * bounded to avoid Google rate-limit spikes on 100-row batches.
+ *
+ * Post-call we resync the cache from the response (one row per
+ * affected IAP) and emit a BULK_IMPORT_BATCH audit entry with the
+ * counters.
  *
  * Failure modes:
- *   - batchUpdate caps at 100 requests. The caller is responsible for
- *     chunking if a Manager submits >100 rows; v1 surfaces an error so the
- *     wizard can show it. Manager flow today rarely hits that ceiling.
- *   - Per-row failures inside batchUpdate aren't surfaced by Google as
- *     a structured per-row error array — only success responses come back.
- *     If the call throws, the whole batch is treated as failed.
+ *   - batchUpdate caps at 100 requests per Google's docs. The caller
+ *     surfaces an error >100 so the wizard can show it. Manager flow
+ *     today rarely hits that ceiling.
+ *   - Per-row failures inside batchUpdate aren't surfaced by Google
+ *     as a structured per-row error array — only success responses
+ *     come back. If the new-API call throws, `batchUpsertInAppProducts`
+ *     falls back to the legacy endpoint and that throw bubbles here.
+ *   - Per-row regions bootstrap failures are non-fatal; the row falls
+ *     through with only Manager's explicit prices and Google may then
+ *     reject it with a clear actionable error.
  */
 import type { JWT } from "google-auth-library";
 
 import {
-  batchUpdateInAppProducts,
+  batchUpsertInAppProducts,
   type InAppProduct,
-  type InappproductsBatchUpdateRequest,
 } from "../google/publisher-client";
 import { decimalToMicros, microsToDecimal } from "../google/price-conversion";
+import { buildRegionMapFromBasePrice } from "../google/regions-helper";
 import { syncIapFromGoogle } from "../repository/iaps";
 import { appendAction } from "../repository/actions-log";
 import { googleIapDb } from "../db";
+import { withConcurrency } from "@/lib/iap-management/concurrency";
 import type {
   ParsedIapRow,
   ParsedRegionOverride,
   ParsedListing,
 } from "../parsers/excel-parser";
 import { lookupTemplateEntriesForIdentifier } from "../queries/templates";
+
+/** Bound on per-row convertRegionPrices fanout. Google's Publisher API
+ *  doesn't publish a documented rate limit for read endpoints but bulk
+ *  callers should keep concurrent in-flight to a reasonable cap.
+ *  5 mirrors the Apple submit orchestrator (lib/iap-management/concurrency.ts). */
+const REGIONS_BOOTSTRAP_CONCURRENCY = 5;
 
 export type PricingSource = "google_default" | "default_template" | "app_template";
 export type RowDecision = "overwrite" | "skip" | "create";
@@ -220,22 +247,79 @@ export async function executeBulkImport(
     };
   }
 
-  const requestBody: InappproductsBatchUpdateRequest = {
-    requests: actionableRows.map((row) => ({
-      packageName: input.packageName,
-      sku: row.sku,
-      allowMissing: true,
-      autoConvertMissingPrices: false,
-      inappproduct: buildProduct(input.packageName, row),
-    })),
+  // Hotfix 14 Phase 3: per-row regions bootstrap via convertRegionPrices.
+  // Bounded concurrency keeps the pre-batch fanout from saturating
+  // Google's API. Each row gets its own {regions, regionsVersion} —
+  // regionsVersion threads through to the batch upsert so the resource
+  // is pinned to the same catalog the conversion came from (Hotfix 9
+  // pattern carries forward to the batch path).
+  type RowBootstrap = {
+    regions: Array<{ region: string; currency: string; priceMicros: string }>;
+    regionsVersion?: string;
   };
+  const bootstraps = await withConcurrency(
+    actionableRows,
+    REGIONS_BOOTSTRAP_CONCURRENCY,
+    async (row): Promise<RowBootstrap> => {
+      try {
+        const baseMicros = decimalToMicros(row.basePriceDecimal, row.baseCurrency);
+        const result = await buildRegionMapFromBasePrice(
+          jwt,
+          input.packageName,
+          baseMicros,
+          row.baseCurrency,
+        );
+        return {
+          regions: result.regions,
+          regionsVersion: result.regionsVersion ?? undefined,
+        };
+      } catch (err) {
+        console.warn(
+          `[google-iap:bulk-import] regions bootstrap failed sku=${row.sku} err="${
+            err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
+          }"`,
+        );
+        return { regions: [] };
+      }
+    },
+  );
+
+  // Build per-row InAppProduct. Manager region overrides (already in
+  // row.regionOverrides after the template-resolution loop above) win
+  // over auto-converted catalog values — explicit intent beats
+  // catalog defaults.
+  const upsertInputs = actionableRows.map((row, i) => {
+    const product = buildProduct(input.packageName, row);
+    const bootstrap = bootstraps[i];
+    const existing: NonNullable<InAppProduct["prices"]> = {
+      ...(product.prices ?? {}),
+    };
+    for (const auto of bootstrap.regions) {
+      if (!existing[auto.region]) {
+        existing[auto.region] = {
+          currency: auto.currency,
+          priceMicros: auto.priceMicros,
+        };
+      }
+    }
+    return {
+      body: {
+        ...product,
+        ...(Object.keys(existing).length > 0 ? { prices: existing } : {}),
+      },
+      regionsVersion: bootstrap.regionsVersion,
+    };
+  });
 
   try {
-    const res = await batchUpdateInAppProducts(jwt, input.packageName, requestBody);
+    const returned = await batchUpsertInAppProducts(
+      jwt,
+      input.packageName,
+      upsertInputs,
+    );
 
-    // Map responses back to decisions. Google returns one InAppProduct per
-    // request in the same order; if any are missing we count those as failed.
-    const returned = res.inappproducts ?? [];
+    // Map responses back to decisions. Order-preserved — index i
+    // matches the request order. Missing positions = row failed.
     for (let i = 0; i < actionableRows.length; i += 1) {
       const row = actionableRows[i];
       const product = returned[i];

@@ -627,6 +627,234 @@ export async function batchUpdateInAppProducts(
   });
 }
 
+/* ──────────────────────────────────────────────────────────────────────
+ *  Phase 3 — Bulk Import migration to Monetization API (Hotfix 14).
+ *
+ *  Legacy `inappproducts.batchUpdate` enforces that
+ *  `defaultPrice.currency` matches the app's configured currency
+ *  ("Expecting currency VND for default price but found USD instead"
+ *  on apps configured for VND). The new
+ *  `monetization.onetimeproducts.batchUpdate` instead requires
+ *  comprehensive regional pricing per product, with each region carrying
+ *  its own currency — sidestepping the legacy currency-equality check
+ *  entirely. Orchestrator bootstraps regions per row via
+ *  `convertRegionPrices` (Hotfix 8 Phase 2 pattern) before calling here.
+ *
+ *  State is output-only on product bodies just like Phase 2 single-
+ *  writes; the dedicated `purchaseOptions:batchUpdateStates` endpoint
+ *  accepts `productId="-"` as a wildcard so one POST activates state
+ *  for the entire batch.
+ * ──────────────────────────────────────────────────────────────────── */
+
+async function newBatchUpdateOneTimeProducts(
+  jwt: JWT,
+  packageName: string,
+  requests: Array<{
+    oneTimeProduct: OneTimeProduct;
+    regionsVersion: string;
+    allowMissing: boolean;
+  }>,
+): Promise<OneTimeProduct[]> {
+  return timed("monetization.onetimeproducts.batchUpdate", packageName, undefined, async () => {
+    const client = buildClient(jwt);
+    const res = await client.monetization.onetimeproducts.batchUpdate({
+      packageName,
+      requestBody: {
+        requests: requests.map((r) => ({
+          oneTimeProduct: r.oneTimeProduct,
+          updateMask: FULL_UPDATE_MASK,
+          regionsVersion: { version: r.regionsVersion },
+          allowMissing: r.allowMissing,
+        })),
+      },
+    });
+    return (res.data.oneTimeProducts ?? []) as OneTimeProduct[];
+  });
+}
+
+async function newCrossProductBatchActivate(
+  jwt: JWT,
+  packageName: string,
+  requests: Array<{
+    productId: string;
+    purchaseOptionId: string;
+    state: "ACTIVATE" | "DEACTIVATE";
+  }>,
+): Promise<void> {
+  if (requests.length === 0) return;
+  await timed(
+    "monetization.onetimeproducts.purchaseOptions.batchUpdateStates",
+    packageName,
+    "-",
+    async () => {
+      const client = buildClient(jwt);
+      await client.monetization.onetimeproducts.purchaseOptions.batchUpdateStates({
+        packageName,
+        productId: "-", // cross-product wildcard (discovery: "set this to '-' if this batch update spans multiple one-time products")
+        requestBody: {
+          requests: requests.map((r) =>
+            r.state === "ACTIVATE"
+              ? {
+                  activatePurchaseOptionRequest: {
+                    packageName,
+                    productId: r.productId,
+                    purchaseOptionId: r.purchaseOptionId,
+                  },
+                }
+              : {
+                  deactivatePurchaseOptionRequest: {
+                    packageName,
+                    productId: r.productId,
+                    purchaseOptionId: r.purchaseOptionId,
+                  },
+                },
+          ),
+        },
+      });
+      return undefined;
+    },
+  );
+}
+
+export interface BatchUpsertInput {
+  /** Legacy InAppProduct shape, same as `insertInAppProduct`. The adapter
+   *  converts to the new OneTimeProduct schema. Pricing must already be
+   *  comprehensive (every published region present in `prices`) — the
+   *  orchestrator is responsible for bootstrapping via `regions-helper`. */
+  body: InAppProduct;
+  /** Catalog version Google used when bootstrapping this row's regional
+   *  pricing (Hotfix 9). When omitted, falls back to REGIONS_VERSION. */
+  regionsVersion?: string;
+}
+
+/**
+ * Bulk upsert (Phase 3). Mirrors `insertInAppProduct` for many rows in a
+ * single round-trip. Order-preserved response — index i in the returned
+ * array corresponds to index i in `inputs`. Rows that Google rejects
+ * appear as missing-by-position (caller counts them as failed, same as
+ * legacy semantics).
+ *
+ * After the body batch returns, fires one cross-product state batch to
+ * activate / deactivate purchase options to match each row's desired
+ * state. State failures are logged but non-fatal — the products are
+ * already written and a subsequent edit can reconcile.
+ *
+ * Hotfix 12 overlay: the batch response carries the pre-state-update
+ * snapshot (purchaseOptions[].state = "DRAFT" on freshly-created
+ * products). When the state batch reports success we overlay the
+ * intended state onto each returned product so the downstream adapter +
+ * cache sync see ACTIVE / INACTIVE matching Manager's submitted rows.
+ *
+ * Falls back to legacy `inappproducts.batchUpdate` on new-API failure
+ * (apps not yet migrated, transient 5xx, etc.). Same try-new-then-legacy
+ * pattern as the single-write paths.
+ */
+export async function batchUpsertInAppProducts(
+  jwt: JWT,
+  packageName: string,
+  inputs: BatchUpsertInput[],
+): Promise<InAppProduct[]> {
+  if (inputs.length === 0) return [];
+
+  try {
+    const writeShapes = inputs.map((input) =>
+      inAppProductToOneTimeProduct({
+        ...input.body,
+        packageName,
+      } as ToolInAppProduct),
+    );
+
+    const batchRequests = writeShapes.map((shape, i) => ({
+      oneTimeProduct: shape.product,
+      regionsVersion: inputs[i].regionsVersion ?? REGIONS_VERSION,
+      allowMissing: true,
+    }));
+
+    const products = await newBatchUpdateOneTimeProducts(
+      jwt,
+      packageName,
+      batchRequests,
+    );
+
+    // Fire one cross-product state batch. Match response position so
+    // the right state is applied to the right product.
+    const stateRequests = products
+      .map((product, i) => {
+        const productId = product?.productId ?? writeShapes[i].product.productId;
+        if (!productId) return null;
+        return {
+          productId,
+          purchaseOptionId: writeShapes[i].purchaseOptionId,
+          state:
+            writeShapes[i].desiredState === "ACTIVE"
+              ? ("ACTIVATE" as const)
+              : ("DEACTIVATE" as const),
+          desiredState: writeShapes[i].desiredState,
+          responseIndex: i,
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
+
+    let stateApplied = false;
+    if (stateRequests.length > 0) {
+      try {
+        await newCrossProductBatchActivate(
+          jwt,
+          packageName,
+          stateRequests.map(({ productId, purchaseOptionId, state }) => ({
+            productId,
+            purchaseOptionId,
+            state,
+          })),
+        );
+        stateApplied = true;
+      } catch (err) {
+        console.warn(
+          `[google-iap:publisher] batch state apply failed pkg=${packageName} count=${stateRequests.length} err="${
+            err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
+          }"`,
+        );
+      }
+    }
+
+    // Hotfix 12 overlay: stamp desired state onto each response product
+    // so the cache sync stores Manager's intent rather than the
+    // pre-state-update DRAFT default.
+    if (stateApplied) {
+      for (const req of stateRequests) {
+        const product = products[req.responseIndex];
+        const target = product?.purchaseOptions?.find(
+          (o) => o.purchaseOptionId === req.purchaseOptionId,
+        );
+        if (target) target.state = req.desiredState;
+      }
+    }
+
+    return products.map(
+      (p) => oneTimeProductToInAppProduct(p) as unknown as InAppProduct,
+    );
+  } catch (err) {
+    try {
+      const legacyReq: InappproductsBatchUpdateRequest = {
+        requests: inputs.map((input) => ({
+          packageName,
+          sku: input.body.sku ?? undefined,
+          allowMissing: true,
+          autoConvertMissingPrices: false,
+          inappproduct: input.body,
+        })),
+      };
+      const legacyRes = await batchUpdateInAppProducts(jwt, packageName, legacyReq);
+      console.warn(
+        `[google-iap:publisher] batch upsert fallback pkg=${packageName} count=${inputs.length}`,
+      );
+      return (legacyRes.inappproducts ?? []) as InAppProduct[];
+    } catch {
+      throw err;
+    }
+  }
+}
+
 /**
  * Fetch app-level details (defaultLanguage, contact info) via the edits
  * resource — the only way Android Publisher v3 exposes app metadata.
