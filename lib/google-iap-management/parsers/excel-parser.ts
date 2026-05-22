@@ -181,17 +181,90 @@ export interface ParseResult {
   errors: string[];
 }
 
-/** Column headers we recognise as non-locale at the start of the sheet. */
+/** Column headers we recognise as non-locale at the start of the sheet.
+ *  Hotfix 16: the price column is no longer required to literally be
+ *  "Price (USD)" — `resolvePriceColumn` accepts any "Price (XXX)" with a
+ *  3-letter ISO 4217 code, or generic "Price" / "Default Price" / "Base
+ *  Price" (which fall back to the app's default currency). The set
+ *  below only enumerates headers that are NOT routed through the price
+ *  resolver (price headers are matched by regex / case-insensitive
+ *  string comparison, see resolvePriceColumn). */
 const FIXED_HEADERS = new Set([
   "Product ID",
-  "Price (USD)",
   "GT Price",
   "GT Currency",
 ]);
 
+/** Price column resolution result (Hotfix 16). Carries both the column
+ *  index and the currency the row's base price should be interpreted
+ *  in — explicit when the header carried a "(XXX)" suffix, inferred
+ *  when the header was a generic "Price" / "Default Price" / "Base
+ *  Price" (in which case caller supplied the app's default currency). */
+export interface PriceColumnResolution {
+  columnIndex: number;
+  currencyCode: string;
+  source: "explicit" | "inferred";
+  /** Verbatim header text — useful for error messages. */
+  headerText: string;
+}
+
+/** Hotfix 16: resolve which column carries the row's base price + what
+ *  currency to interpret it as. Returns null when no candidate column is
+ *  found (caller surfaces the listed-options error).
+ *
+ *  Resolution order:
+ *    1. "Price (XXX)" where XXX is a 3-letter currency code (any case;
+ *       trimmed). Currency is explicit.
+ *    2. Generic candidates: "Price", "Default Price", "Base Price"
+ *       (case-insensitive). Currency falls back to `appDefaultCurrency`.
+ *
+ *  Backward-compat: "Price (USD)" still matches via rule 1 and resolves
+ *  to USD. Older templates keep working unchanged. */
+const GENERIC_PRICE_HEADERS = ["Price", "Default Price", "Base Price"];
+
+export function resolvePriceColumn(
+  headerRow: ReadonlyArray<string | number | undefined>,
+  appDefaultCurrency: string,
+): PriceColumnResolution | null {
+  // Pass 1: explicit currency suffix.
+  for (let c = 0; c < headerRow.length; c += 1) {
+    const raw = headerRow[c];
+    if (raw === undefined || raw === null) continue;
+    const header = String(raw).trim();
+    const m = header.match(/^Price\s*\(\s*([A-Za-z]{3})\s*\)$/);
+    if (m) {
+      return {
+        columnIndex: c,
+        currencyCode: m[1].toUpperCase(),
+        source: "explicit",
+        headerText: header,
+      };
+    }
+  }
+  // Pass 2: generic candidates → app-default currency.
+  const normalisedDefault = appDefaultCurrency.trim().toUpperCase() || "USD";
+  for (let c = 0; c < headerRow.length; c += 1) {
+    const raw = headerRow[c];
+    if (raw === undefined || raw === null) continue;
+    const header = String(raw).trim();
+    const matchesGeneric = GENERIC_PRICE_HEADERS.some(
+      (candidate) => candidate.toLowerCase() === header.toLowerCase(),
+    );
+    if (matchesGeneric) {
+      return {
+        columnIndex: c,
+        currencyCode: normalisedDefault,
+        source: "inferred",
+        headerText: header,
+      };
+    }
+  }
+  return null;
+}
+
 interface ColumnIndex {
   sku?: number;
-  priceUsd?: number;
+  price?: PriceColumnResolution;
   gtPrice?: number;
   gtCurrency?: number;
   /** locale → [titleCol, descCol] */
@@ -201,11 +274,18 @@ interface ColumnIndex {
 
 function indexColumns(
   headerRow: Array<string | number | undefined>,
+  appDefaultCurrency: string,
 ): ColumnIndex {
   const idx: ColumnIndex = {
     locales: new Map(),
     unknownLocales: new Set(),
   };
+
+  // Hotfix 16: route the price column through the flexible resolver
+  // before the per-cell loop. The resolver matches both "Price (XXX)"
+  // (explicit currency) and generic "Price" / "Default Price" / "Base
+  // Price" (resolves to appDefaultCurrency).
+  idx.price = resolvePriceColumn(headerRow, appDefaultCurrency) ?? undefined;
 
   for (let c = 0; c < headerRow.length; c += 1) {
     const raw = headerRow[c];
@@ -214,11 +294,12 @@ function indexColumns(
     if (header === "") continue;
 
     if (header === "Product ID") idx.sku = c;
-    else if (header === "Price (USD)") idx.priceUsd = c;
     else if (header === "GT Price") idx.gtPrice = c;
     else if (header === "GT Currency") idx.gtCurrency = c;
     else if (FIXED_HEADERS.has(header)) {
       /* already handled */
+    } else if (idx.price && idx.price.columnIndex === c) {
+      /* price column — handled by resolvePriceColumn above */
     } else {
       const titleMatch = header.match(/^Title \((.+)\)$/);
       const descMatch = header.match(/^Description \((.+)\)$/);
@@ -276,6 +357,15 @@ function cellDecimal(
   return String(cell.v).trim();
 }
 
+export interface ParseOptions {
+  /** Hotfix 16: currency used when the Excel header is a generic
+   *  "Price" / "Default Price" / "Base Price" (no explicit "(XXX)"
+   *  suffix). Pre-Hotfix-16 the parser hardcoded USD; the orchestrator
+   *  passes the app's default_currency captured at apps refresh time
+   *  (Hotfix 4) so VND apps with generic headers resolve to VND. */
+  appDefaultCurrency: string;
+}
+
 /**
  * Parse the Manager's IAP template buffer into structured rows.
  *
@@ -288,9 +378,15 @@ function cellDecimal(
  * Hard errors that block the entire file:
  *   - Workbook can't be opened.
  *   - Required Product ID column is missing.
- *   - Required Price (USD) column is missing.
+ *   - No recognised price column. Resolved patterns: "Price (XXX)" with
+ *     a 3-letter ISO 4217 currency code, or generic "Price" /
+ *     "Default Price" / "Base Price". (Hotfix 16 — pre-Hotfix-16
+ *     required exactly "Price (USD)".)
  */
-export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
+export function parseIapTemplate(
+  buffer: ArrayBuffer | Buffer,
+  options: ParseOptions,
+): ParseResult {
   const warnings: string[] = [];
   const errors: string[] = [];
   const rows: ParsedIapRow[] = [];
@@ -322,17 +418,28 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
     headerRow.push(cellString(ws, range.s.r, c));
   }
 
-  const idx = indexColumns(headerRow);
+  const idx = indexColumns(headerRow, options.appDefaultCurrency);
 
   const skuCol = idx.sku;
-  const priceCol = idx.priceUsd;
+  const priceResolution = idx.price;
   if (skuCol === undefined) {
     errors.push('Required column "Product ID" not found in header row.');
     return { rows, warnings, errors };
   }
-  if (priceCol === undefined) {
-    errors.push('Required column "Price (USD)" not found in header row.');
+  if (!priceResolution) {
+    const defaultCurrencyForMsg =
+      options.appDefaultCurrency.trim().toUpperCase() || "USD";
+    errors.push(
+      `No price column found. Expected one of: "Price (XXX)" where XXX is a 3-letter currency code (e.g. "Price (USD)", "Price (VND)"), or generic "Price" / "Default Price" / "Base Price" (which is interpreted as the app's default currency "${defaultCurrencyForMsg}").`,
+    );
     return { rows, warnings, errors };
+  }
+  const priceCol = priceResolution.columnIndex;
+  const resolvedCurrency = priceResolution.currencyCode;
+  if (priceResolution.source === "inferred") {
+    warnings.push(
+      `Header "${priceResolution.headerText}" has no explicit currency; treating prices as the app default currency "${resolvedCurrency}". To suppress this warning, rename the header to "Price (${resolvedCurrency})".`,
+    );
   }
 
   if (idx.unknownLocales.size > 0) {
@@ -349,7 +456,9 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
 
     const basePriceDecimal = cellDecimal(ws, r, priceCol);
     if (basePriceDecimal === "") {
-      warnings.push(`Row ${r + 1} (SKU "${sku}"): missing Price (USD); skipped.`);
+      warnings.push(
+        `Row ${r + 1} (SKU "${sku}"): missing "${priceResolution.headerText}"; skipped.`,
+      );
       continue;
     }
 
@@ -392,7 +501,11 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
     rows.push({
       rowNumber: r + 1,
       sku,
-      baseCurrency: "USD",
+      // Hotfix 16: baseCurrency now follows the resolved price column
+      // (was hardcoded "USD" pre-Hotfix-16). Downstream currency-
+      // precision validation (Hotfix 5) and template lookup (Hotfix 15
+      // + Hotfix 16 generalisation) both consume this field.
+      baseCurrency: resolvedCurrency,
       basePriceDecimal,
       regionOverrides,
       listings,

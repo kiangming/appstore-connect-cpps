@@ -57,7 +57,7 @@ import type {
 } from "../parsers/excel-parser";
 import {
   lookupTemplateEntriesForIdentifier,
-  findTemplateTierByUsdMicros,
+  findTemplateTierByCurrencyMicros,
 } from "../queries/templates";
 
 /** Bound on per-row convertRegionPrices fanout. Google's Publisher API
@@ -189,7 +189,7 @@ export async function executeBulkImport(
   // entry's match_by_strategy counters.
   let templateMatchCount = 0;
   let templateMatchBySku = 0;
-  let templateMatchByUsd = 0;
+  let templateMatchByCurrencyPrice = 0;
   if (input.pricingSource !== "google_default") {
     const scope = input.pricingSource === "app_template" ? "APP" : "GLOBAL";
     const appIdForScope = scope === "APP" ? input.appId : null;
@@ -200,34 +200,37 @@ export async function executeBulkImport(
         appId: appIdForScope,
         identifier: row.sku,
       });
-      let matchedBy: "sku" | "usd" | null = entries.length > 0 ? "sku" : null;
+      let matchedBy: "sku" | "currency_price" | null =
+        entries.length > 0 ? "sku" : null;
 
-      // Strategy 2: USD-price-based tier inference (Hotfix 15 fallback).
+      // Strategy 2: currency-aware price-based tier inference. Hotfix
+      // 15 shipped a USD-only variant; Hotfix 16 generalises so VND /
+      // EUR / etc. apps benefit from the same fallback. The match is
+      // region-agnostic (a template tier's EUR price is the same micros
+      // value under any Eurozone region code).
       if (entries.length === 0) {
         try {
-          const usdMicros = decimalToMicros(row.basePriceDecimal, row.baseCurrency);
-          // Only attempt the USD lookup when the row's base currency is
-          // actually USD — otherwise the row's basePriceMicros is in
-          // (say) VND and matching it against US/USD entries would be a
-          // category error.
-          if (row.baseCurrency.trim().toUpperCase() === "USD") {
-            const tierId = await findTemplateTierByUsdMicros({
+          const baseMicros = decimalToMicros(
+            row.basePriceDecimal,
+            row.baseCurrency,
+          );
+          const tierId = await findTemplateTierByCurrencyMicros({
+            scope,
+            appId: appIdForScope,
+            currencyCode: row.baseCurrency,
+            priceMicros: baseMicros,
+          });
+          if (tierId) {
+            entries = await lookupTemplateEntriesForIdentifier({
               scope,
               appId: appIdForScope,
-              usdPriceMicros: usdMicros,
+              identifier: tierId,
             });
-            if (tierId) {
-              entries = await lookupTemplateEntriesForIdentifier({
-                scope,
-                appId: appIdForScope,
-                identifier: tierId,
-              });
-              if (entries.length > 0) matchedBy = "usd";
-            }
+            if (entries.length > 0) matchedBy = "currency_price";
           }
         } catch (err) {
           console.warn(
-            `[google-iap:bulk-import] usd tier inference failed sku=${row.sku} err="${
+            `[google-iap:bulk-import] currency tier inference failed sku=${row.sku} currency=${row.baseCurrency} err="${
               err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
             }"`,
           );
@@ -242,7 +245,7 @@ export async function executeBulkImport(
         }));
         templateMatchCount += 1;
         if (matchedBy === "sku") templateMatchBySku += 1;
-        else if (matchedBy === "usd") templateMatchByUsd += 1;
+        else if (matchedBy === "currency_price") templateMatchByCurrencyPrice += 1;
       }
     }
   }
@@ -439,12 +442,13 @@ export async function executeBulkImport(
       package_name: input.packageName,
       pricing_source: input.pricingSource,
       template_matched_rows: templateMatchCount,
-      // Hotfix 15: split per match strategy so a future audit can tell
-      // how many rows used the documented SKU-identifier path vs the
-      // USD-price fallback. Helps Manager spot when templates need
-      // restructuring (USD-only matches signal SKU mismatch).
+      // Hotfix 15 → Hotfix 16: split per match strategy so a future
+      // audit can tell how many rows used the documented SKU-identifier
+      // path vs the currency-price fallback. Hotfix 16 generalised the
+      // fallback from USD-only to currency-aware, so the field name is
+      // template_matched_by_currency_price (was _by_usd in Hotfix 15).
       template_matched_by_sku: templateMatchBySku,
-      template_matched_by_usd: templateMatchByUsd,
+      template_matched_by_currency_price: templateMatchByCurrencyPrice,
       rows_total: input.rows.length,
       rows_created: created,
       rows_overwritten: overwritten,

@@ -71,7 +71,13 @@ export async function POST(
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  const parsed = parseIapTemplate(buffer);
+  // Hotfix 16: thread the app's default currency so the parser can
+  // resolve generic "Price" / "Default Price" / "Base Price" headers to
+  // the right currency. Falls back to USD when the app row never had a
+  // default_currency cached (pre-Hotfix-4 row).
+  const parsed = parseIapTemplate(buffer, {
+    appDefaultCurrency: app.default_currency ?? "USD",
+  });
   if (parsed.errors.length > 0) {
     return NextResponse.json(
       { errors: parsed.errors, warnings: parsed.warnings },

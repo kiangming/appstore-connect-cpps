@@ -1,16 +1,20 @@
 import { describe, it, expect } from "vitest";
 
-import { pickTierByUsdMicros } from "./templates";
+import {
+  pickTierByUsdMicros,
+  pickTierByCurrencyMicros,
+} from "./templates";
 
 /**
- * Hotfix 15: pure picker used by the USD-tier inference fallback in
- * bulk-import. The DB-integrated `findTemplateTierByUsdMicros`
- * narrows the SELECT with `.eq("region_code", "US")` + `.eq("currency",
- * "USD")` + `.eq("price_micros", ...)`, but we still run the picker
- * locally because the integration tests would need to mock the
- * Supabase client. Pure logic here is the regression-prevention path.
+ * Hotfix 15 → Hotfix 16: pure picker used by the tier inference
+ * fallback in bulk-import. The DB-integrated
+ * `findTemplateTierByCurrencyMicros` narrows the SELECT with
+ * `.eq("currency", ...)` + `.eq("price_micros", ...)`, but we still
+ * run the picker locally because the integration tests would need to
+ * mock the Supabase client. Pure logic here is the regression-
+ * prevention path.
  */
-describe("pickTierByUsdMicros", () => {
+describe("pickTierByUsdMicros (Hotfix 15 — preserved as alias)", () => {
   it("returns the identifier whose US-region USD entry matches", () => {
     const entries = [
       { identifier: "Tier 1", region_code: "US", currency: "USD", price_micros: "990000" },
@@ -66,5 +70,78 @@ describe("pickTierByUsdMicros", () => {
 
   it("returns null for empty entries (template has no US/USD rows)", () => {
     expect(pickTierByUsdMicros([], "990000")).toBeNull();
+  });
+});
+
+/**
+ * Hotfix 16: currency-aware picker — region-agnostic, accepts any
+ * currency. Replaces the USD-only path for bulk-import's generalised
+ * tier inference.
+ */
+describe("pickTierByCurrencyMicros (Hotfix 16 — currency-aware)", () => {
+  it("matches a VND row by (currency, priceMicros) — region-agnostic", () => {
+    const entries = [
+      { identifier: "Tier 1", currency: "VND", price_micros: "10000000000" }, // 10,000 VND
+      { identifier: "Tier 2", currency: "VND", price_micros: "25000000000" }, // 25,000 VND
+      { identifier: "Tier 3", currency: "VND", price_micros: "50000000000" }, // 50,000 VND
+    ];
+    expect(pickTierByCurrencyMicros(entries, "VND", "25000000000")).toBe(
+      "Tier 2",
+    );
+  });
+
+  it("matches a EUR row even when the template has multiple Eurozone regions sharing the same micros (region-agnostic by design)", () => {
+    // Template tier 2's EUR price (€0.99 = 990_000 micros) might
+    // appear under several Eurozone region codes (AT, BE, DE, FR, …).
+    // The picker should still return Tier 2 — the (currency, price)
+    // pair is the tier-identifying key.
+    const entries = [
+      { identifier: "Tier 2", currency: "EUR", price_micros: "990000" },
+      { identifier: "Tier 2", currency: "EUR", price_micros: "990000" }, // dup under different region
+      { identifier: "Tier 3", currency: "EUR", price_micros: "1990000" },
+    ];
+    expect(pickTierByCurrencyMicros(entries, "EUR", "990000")).toBe("Tier 2");
+  });
+
+  it("normalises lowercase currency input to uppercase (Manager input forgiveness)", () => {
+    const entries = [
+      { identifier: "Tier 1", currency: "VND", price_micros: "10000000000" },
+    ];
+    expect(pickTierByCurrencyMicros(entries, "vnd", "10000000000")).toBe(
+      "Tier 1",
+    );
+  });
+
+  it("skips entries whose currency doesn't match (defensive — wrong tier shouldn't bleed across currencies)", () => {
+    // USD entry at 990_000 must NOT win when we ask for VND/990_000.
+    const entries = [
+      { identifier: "Tier USD", currency: "USD", price_micros: "990000" },
+      { identifier: "Tier VND", currency: "VND", price_micros: "990000" },
+    ];
+    expect(pickTierByCurrencyMicros(entries, "VND", "990000")).toBe(
+      "Tier VND",
+    );
+  });
+
+  it("returns null when no matching (currency, priceMicros) pair exists", () => {
+    const entries = [
+      { identifier: "Tier 1", currency: "VND", price_micros: "10000000000" },
+    ];
+    expect(pickTierByCurrencyMicros(entries, "VND", "99999")).toBeNull();
+    expect(pickTierByCurrencyMicros(entries, "USD", "10000000000")).toBeNull();
+  });
+
+  it("returns null for empty entries", () => {
+    expect(pickTierByCurrencyMicros([], "VND", "10000000000")).toBeNull();
+  });
+
+  it("returns the first match deterministically when duplicates exist", () => {
+    const entries = [
+      { identifier: "Tier A", currency: "VND", price_micros: "10000000000" },
+      { identifier: "Tier B", currency: "VND", price_micros: "10000000000" },
+    ];
+    expect(pickTierByCurrencyMicros(entries, "VND", "10000000000")).toBe(
+      "Tier A",
+    );
   });
 });

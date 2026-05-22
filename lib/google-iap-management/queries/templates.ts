@@ -339,16 +339,40 @@ export async function lookupTemplateEntriesForIdentifier(
 }
 
 /** Pure helper: from a flat array of pricing-template entries, find the
- *  tier identifier whose US-region USD entry exactly matches the given
- *  USD priceMicros. Used by bulk-import to infer the tier for each Excel
- *  row when the row's SKU doesn't match the template's identifier column
- *  (which typically stores tier names like "Tier 1", not SKUs).
+ *  tier identifier whose (currency, price_micros) pair matches the
+ *  request. Region-agnostic — within a single tier the (currency,
+ *  price) pair uniquely identifies the tier even when multiple regions
+ *  share the same currency (e.g. multiple Eurozone regions under EUR
+ *  all carry the same tier-EUR price).
  *
- *  Returns the first matching tier identifier (deterministic order =
- *  query order). Returns null when no tier's US entry matches.
+ *  Hotfix 16 generalisation: replaces the USD-only `pickTierByUsdMicros`
+ *  helper Hotfix 15 shipped. Backward-compat alias preserved below.
+ *
+ *  Returns the first matching tier identifier (deterministic = query
+ *  order). Returns null when no entry matches.
  *
  *  Exported so it can be unit-tested without mocking the DB client.
- *  Used by `findTemplateTierByUsdMicros` (the I/O wrapper). */
+ *  Used by `findTemplateTierByCurrencyMicros` (the I/O wrapper). */
+export function pickTierByCurrencyMicros(
+  entries: ReadonlyArray<{
+    identifier: string;
+    currency: string;
+    price_micros: string;
+  }>,
+  currencyCode: string,
+  priceMicros: string,
+): string | null {
+  const normalisedCurrency = currencyCode.trim().toUpperCase();
+  for (const e of entries) {
+    if (e.currency !== normalisedCurrency) continue;
+    if (e.price_micros === priceMicros) return e.identifier;
+  }
+  return null;
+}
+
+/** Hotfix 15 USD-only pure picker, kept as a thin alias over the
+ *  Hotfix 16 currency-aware picker. Pre-existing tests still exercise
+ *  this signature; new code should call `pickTierByCurrencyMicros`. */
 export function pickTierByUsdMicros(
   entries: ReadonlyArray<{
     identifier: string;
@@ -358,34 +382,38 @@ export function pickTierByUsdMicros(
   }>,
   usdMicros: string,
 ): string | null {
-  for (const e of entries) {
-    if (e.region_code !== "US") continue;
-    if (e.currency !== "USD") continue;
-    if (e.price_micros === usdMicros) return e.identifier;
-  }
-  return null;
+  // Preserve the pre-Hotfix-16 enforcement: only US-region rows count
+  // for the USD-only path. Hotfix 16's currency-aware path doesn't need
+  // the region constraint because EUR can legitimately appear under
+  // multiple Eurozone region codes.
+  const usOnly = entries.filter(
+    (e) => e.region_code === "US" && e.currency === "USD",
+  );
+  return pickTierByCurrencyMicros(usOnly, "USD", usdMicros);
 }
 
-/** Hotfix 15: USD-price-based tier inference for bulk-import.
+/** Hotfix 15 → Hotfix 16: currency-aware tier inference for bulk-import.
  *
- *  The orchestrator currently looks up template entries WHERE
- *  identifier = row.sku (matching the documented design). Manager's
- *  templates in practice index entries by tier name (Tier 1 / Tier 2)
- *  rather than SKU, so SKU lookups return 0 entries and the row
- *  silently falls back to USD auto-conversion via convertRegionPrices —
- *  defeating the template selection.
+ *  Bulk-import looks up template entries WHERE identifier = row.sku
+ *  first (documented design). When that returns zero entries —
+ *  typically because Manager's template indexes entries by tier name
+ *  ("Tier 1") rather than SKU — the orchestrator falls back here:
+ *  find the tier whose entry for the row's base currency matches the
+ *  row's base price in micros.
  *
- *  This helper finds the tier whose US-region USD entry equals the
- *  row's USD baseline (in micros). When matched, the caller can re-
- *  query template entries for that tier identifier and apply them as
- *  region overrides. Falls back to null when no tier's US entry
- *  matches — caller decides whether to fail the row or fall through to
- *  auto-convert.
+ *  Hotfix 16: generalised from the Hotfix 15 USD-only variant so
+ *  non-USD app workflows (Manager's VND apps, Eurozone apps, etc.)
+ *  also benefit from template inference. Region-agnostic — see
+ *  pickTierByCurrencyMicros docs.
+ *
+ *  Returns the tier identifier or null when no match. Caller decides
+ *  whether to fail the row or fall through to auto-convert.
  */
-export async function findTemplateTierByUsdMicros(args: {
+export async function findTemplateTierByCurrencyMicros(args: {
   scope: TemplateScope;
   appId: string | null;
-  usdPriceMicros: string;
+  currencyCode: string;
+  priceMicros: string;
 }): Promise<string | null> {
   const db = googleIapDb();
   let templateQuery = db
@@ -402,25 +430,40 @@ export async function findTemplateTierByUsdMicros(args: {
   }
   if (!template) return null;
   const templateId = (template as { id: string }).id;
+  const normalisedCurrency = args.currencyCode.trim().toUpperCase();
   const { data: entries, error: entriesErr } = await db
     .from("pricing_template_entries")
-    .select("identifier, region_code, currency, price_micros")
+    .select("identifier, currency, price_micros")
     .eq("template_id", templateId)
-    .eq("region_code", "US")
-    .eq("currency", "USD")
-    .eq("price_micros", args.usdPriceMicros);
+    .eq("currency", normalisedCurrency)
+    .eq("price_micros", args.priceMicros);
   if (entriesErr) {
     throw new Error(
-      `Failed to load template US entries: ${entriesErr.message}`,
+      `Failed to load template ${normalisedCurrency} entries: ${entriesErr.message}`,
     );
   }
   const rows = (entries ?? []) as Array<{
     identifier: string;
-    region_code: string;
     currency: string;
     price_micros: string;
   }>;
-  return pickTierByUsdMicros(rows, args.usdPriceMicros);
+  return pickTierByCurrencyMicros(rows, normalisedCurrency, args.priceMicros);
+}
+
+/** @deprecated Hotfix 15 wrapper; use `findTemplateTierByCurrencyMicros`
+ *  with currencyCode="USD" instead. Kept for any external caller still
+ *  on the Hotfix 15 signature. */
+export async function findTemplateTierByUsdMicros(args: {
+  scope: TemplateScope;
+  appId: string | null;
+  usdPriceMicros: string;
+}): Promise<string | null> {
+  return findTemplateTierByCurrencyMicros({
+    scope: args.scope,
+    appId: args.appId,
+    currencyCode: "USD",
+    priceMicros: args.usdPriceMicros,
+  });
 }
 
 /** List distinct tier identifiers under the active scope (used by the
