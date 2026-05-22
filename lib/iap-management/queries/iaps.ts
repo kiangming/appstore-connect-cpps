@@ -360,3 +360,88 @@ export async function listSyncedAppleIapMap(
   }
   return map;
 }
+
+/** Hotfix 13: pure partition step used by `seedMissingIapStubs`. Returns
+ *  the subset of `appleIaps` whose id is not in `existingAppleIds`.
+ *  Extracted so the filter semantics can be unit-tested without
+ *  mocking the Supabase client. */
+export function partitionMissingAppleIaps<
+  T extends { id: string },
+>(appleIaps: T[], existingAppleIds: ReadonlySet<string>): T[] {
+  return appleIaps.filter((iap) => !existingAppleIds.has(iap.id));
+}
+
+/**
+ * Hotfix 13: seed local stubs for every Apple IAP that doesn't already
+ * have one. Returns the count actually inserted (zero when everything
+ * was already cached).
+ *
+ * Why: per-row View/Edit buttons + functional checkboxes in the IAP
+ * list view are gated by the presence of an internal UUID
+ * (appleToInternal[iap.id]). Without this seed, the only way to
+ * populate that map was a manual "Refresh from Apple" click — Manager
+ * landing on a new app saw 200+ Apple IAPs with no action affordances
+ * because no one had ever clicked Refresh on that app.
+ *
+ * Idempotent + cheap when nothing to do: one SELECT, then INSERT only
+ * the missing rows. State drift (Apple updates state, our row keeps the
+ * old one) is NOT handled here — that's the explicit Refresh button's
+ * job. The seed is INSERT-only so Manager can still tell when state has
+ * changed on Apple's side vs. when the row is freshly cached.
+ *
+ * Pure of any "what changed since" reasoning — the canonical UPDATE
+ * path lives in app/api/iap-management/apps/[appId]/iaps/sync-states
+ * which uses classifySyncStates from sync-states/classify.ts.
+ */
+export async function seedMissingIapStubs(
+  internalAppId: string,
+  appleIaps: Array<{
+    id: string;
+    attributes: {
+      productId: string;
+      name: string;
+      inAppPurchaseType: string;
+      state: string;
+    };
+  }>,
+): Promise<number> {
+  if (appleIaps.length === 0) return 0;
+  const db = iapDb();
+
+  const existingRes = await db
+    .from("iaps")
+    .select("apple_iap_id")
+    .eq("app_id", internalAppId)
+    .not("apple_iap_id", "is", null);
+  if (existingRes.error) {
+    throw new Error(
+      `stub seed lookup failed: ${existingRes.error.message}`,
+    );
+  }
+  const existingAppleIds = new Set<string>();
+  for (const row of (existingRes.data ?? []) as Array<{
+    apple_iap_id: string | null;
+  }>) {
+    if (row.apple_iap_id) existingAppleIds.add(row.apple_iap_id);
+  }
+
+  const missing = partitionMissingAppleIaps(appleIaps, existingAppleIds);
+  if (missing.length === 0) return 0;
+
+  const now = new Date().toISOString();
+  const ins = await db.from("iaps").insert(
+    missing.map((iap) => ({
+      app_id: internalAppId,
+      apple_iap_id: iap.id,
+      product_id: iap.attributes.productId,
+      reference_name: iap.attributes.name,
+      type: iap.attributes.inAppPurchaseType,
+      state: iap.attributes.state,
+      synced_at: now,
+    })),
+  );
+  if (ins.error) {
+    throw new Error(`stub seed insert failed: ${ins.error.message}`);
+  }
+  return missing.length;
+}

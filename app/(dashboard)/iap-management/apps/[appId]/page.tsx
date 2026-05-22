@@ -4,9 +4,10 @@ import { listAllInAppPurchases } from "@/lib/iap-management/apple/client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { requireIapSession } from "@/lib/iap-management/auth";
 import {
-  findAppByAppleId,
+  ensureAppRegistered,
   listDraftIaps,
   listSyncedAppleIapMap,
+  seedMissingIapStubs,
   type IapDbRow,
 } from "@/lib/iap-management/queries/iaps";
 import {
@@ -64,9 +65,12 @@ async function IapListContent({ appId }: { appId: string }) {
   let iaps: InAppPurchase[] = [];
   let drafts: IapDbRow[] = [];
   let appleToInternal: Record<string, string> = {};
+  let internalAppId: string | null = null;
+  let ascAccountId: string | null = null;
 
   try {
     const creds = await getActiveAccount();
+    ascAccountId = creds.id;
     const [appRes, iapsRes] = await Promise.all([
       getApp(creds, appId),
       listAllInAppPurchases(creds, appId),
@@ -78,15 +82,28 @@ async function IapListContent({ appId }: { appId: string }) {
     error = e instanceof Error ? e.message : "Failed to load IAPs";
   }
 
-  // Drafts are read-only-by-default: only fetch if the app exists in our
-  // schema (= a draft has been saved at least once). findAppByAppleId is a
-  // pure read; it returns null for un-registered apps which is normal.
-  let internalAppId: string | null = null;
+  // Hotfix 13: register the app + seed missing local stubs so the
+  // per-row View/Edit buttons + functional checkboxes always render.
+  // Prior behaviour required Manager to click "Refresh from Apple"
+  // first to populate appleToInternal — apps that had never been
+  // refreshed showed 200+ live Apple IAPs with no action affordances.
+  // Auto-seed is INSERT-only; the explicit Refresh button still owns
+  // state-drift reconciliation (UPDATE_STATE + UNCHANGED counters).
   let appTemplate: TemplateHeader | null = null;
   let appTemplateEntryCount = 0;
   let defaultTemplateExists = false;
   try {
-    internalAppId = await findAppByAppleId(appId);
+    if (appName && appBundleId) {
+      internalAppId = await ensureAppRegistered({
+        apple_app_id: appId,
+        bundle_id: appBundleId,
+        name: appName,
+        asc_account_id: ascAccountId,
+      });
+      if (iaps.length > 0) {
+        await seedMissingIapStubs(internalAppId, iaps);
+      }
+    }
     if (internalAppId) {
       drafts = (await listDraftIaps(internalAppId)).drafts;
       appleToInternal = await listSyncedAppleIapMap(internalAppId);
@@ -99,7 +116,9 @@ async function IapListContent({ appId }: { appId: string }) {
     const def = await getTemplateSummary({ kind: "GLOBAL" });
     defaultTemplateExists = def !== null;
   } catch {
-    // drafts + synced map + template lookups are non-essential — degrade silently
+    // registration + seed + drafts + template lookups are non-essential
+    // for the read view — degrade silently. View/Edit buttons may stay
+    // hidden if seed failed but the rest of the list still renders.
   }
 
   if (error) {
