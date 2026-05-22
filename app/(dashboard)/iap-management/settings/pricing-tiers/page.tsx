@@ -1,5 +1,4 @@
-import { redirect } from "next/navigation";
-import { requireIapAdmin, IapForbiddenError } from "@/lib/iap-management/auth";
+import { requireIapSession } from "@/lib/iap-management/auth";
 import {
   getTemplateOverview,
   listAppsWithTemplates,
@@ -9,14 +8,13 @@ import { PricingTiersClient } from "./PricingTiersClient";
 export const dynamic = "force-dynamic";
 
 export default async function PricingTiersPage() {
-  try {
-    await requireIapAdmin();
-  } catch (err) {
-    if (err instanceof IapForbiddenError) {
-      redirect("/");
-    }
-    throw err;
-  }
+  // Hotfix 11: page is member-accessible; the Default Template tab renders
+  // read-only for non-admins (S1.B). Default mutation routes still enforce
+  // admin role server-side (POST /pricing-templates scope=GLOBAL + DELETE on
+  // GLOBAL templates).
+  const session = await requireIapSession();
+  const isAdmin = session.user.role === "admin";
+  const currentUserEmail = session.user.email ?? "unknown";
 
   // IAP.p1.j Issue 3: the "Upload for an app" dropdown moved to a live
   // client-side fetch against the active ASC account
@@ -33,6 +31,8 @@ export default async function PricingTiersPage() {
     <PricingTiersClient
       defaultOverview={defaultOverview}
       appsWithTemplates={appsWithTemplates}
+      isAdmin={isAdmin}
+      currentUserEmail={currentUserEmail}
     />
   );
 }

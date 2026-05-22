@@ -3,12 +3,16 @@
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Upload, RefreshCw, Sparkles, Trash2 } from "lucide-react";
+import { Upload, RefreshCw, Sparkles, Trash2, Lock } from "lucide-react";
 import type { TemplateOverview } from "@/lib/iap-management/queries/templates";
 import { TemplateEntriesTable } from "@/components/iap-management/pricing-tiers/TemplateEntriesTable";
 
 interface Props {
   overview: TemplateOverview;
+  /** Hotfix 11: non-admin sees the Default tab in read-only mode. The
+   *  catalog is visible (transparency — Per-App templates fall back to
+   *  Default) but upload/remove are hidden and a banner explains why. */
+  readOnly?: boolean;
 }
 
 function formatTimestamp(iso: string | null | undefined): string {
@@ -20,7 +24,7 @@ function formatTimestamp(iso: string | null | undefined): string {
   }
 }
 
-export function DefaultTemplateTab({ overview }: Props) {
+export function DefaultTemplateTab({ overview, readOnly = false }: Props) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -121,36 +125,43 @@ export function DefaultTemplateTab({ overview }: Props) {
               fall back to Apple&apos;s auto-equalization.
             </p>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {overview.template && (
-              <button
-                onClick={handleRemove}
-                className="flex items-center gap-1.5 px-3 py-2 text-sm text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
-              >
-                <Trash2 className="h-4 w-4" />
-                Remove
-              </button>
-            )}
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-50"
-            >
-              {uploading ? (
-                <RefreshCw className="h-4 w-4 animate-spin" />
-              ) : (
-                <Upload className="h-4 w-4" />
+          {readOnly ? (
+            <div className="flex items-center gap-1.5 px-3 py-2 text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 rounded-lg shrink-0">
+              <Lock className="h-3.5 w-3.5" />
+              Admin-managed
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 shrink-0">
+              {overview.template && (
+                <button
+                  onClick={handleRemove}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Remove
+                </button>
               )}
-              {uploading ? "Uploading…" : overview.template ? "Replace" : "Upload .xlsx"}
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx"
-              onChange={handleFileChange}
-              className="hidden"
-            />
-          </div>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-50"
+              >
+                {uploading ? (
+                  <RefreshCw className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Upload className="h-4 w-4" />
+                )}
+                {uploading ? "Uploading…" : overview.template ? "Replace" : "Upload .xlsx"}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-4 gap-4">
@@ -173,8 +184,9 @@ export function DefaultTemplateTab({ overview }: Props) {
             No Default Template
           </p>
           <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
-            Upload the Manager-provided price-tiers-template.xlsx to set
-            per-territory overrides shared across all apps.
+            {readOnly
+              ? "An admin needs to upload the Default Template before IAPs created from this source pick up per-territory overrides."
+              : "Upload the Manager-provided price-tiers-template.xlsx to set per-territory overrides shared across all apps."}
           </p>
         </div>
       ) : (

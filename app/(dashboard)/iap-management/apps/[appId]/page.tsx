@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { getApp } from "@/lib/asc-client";
 import { listAllInAppPurchases } from "@/lib/iap-management/apple/client";
 import { getActiveAccount } from "@/lib/get-active-account";
+import { requireIapSession } from "@/lib/iap-management/auth";
 import {
   findAppByAppleId,
   listDraftIaps,
@@ -51,6 +52,12 @@ function IapListSkeleton() {
 }
 
 async function IapListContent({ appId }: { appId: string }) {
+  // Hotfix 11: thread current user's email to AppPricingTemplateSection
+  // so the Replace flow can confirm before overwriting a different
+  // teammate's per-app template.
+  const session = await requireIapSession();
+  const currentUserEmail = session.user.email ?? "unknown";
+
   let error: string | null = null;
   let appName: string | null = null;
   let appBundleId: string | null = null;
@@ -110,6 +117,7 @@ async function IapListContent({ appId }: { appId: string }) {
         template={appTemplate}
         entryCount={appTemplateEntryCount}
         defaultTemplateExists={defaultTemplateExists}
+        currentUserEmail={currentUserEmail}
       />
       <IapListClient
         appId={appId}

@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import {
-  requireIapAdmin,
-  IapForbiddenError,
+  requireIapSession,
   IapUnauthorizedError,
 } from "@/lib/iap-management/auth";
 import { parsePriceTiersXlsx } from "@/lib/iap-management/parsers/price-tiers";
@@ -28,18 +27,18 @@ export const runtime = "nodejs";
  *   scope      — "GLOBAL" or "APP" (required)
  *   app_id     — required when scope=APP
  *
- * Admin-only (Q-IAP.8). Failures return JSON `{ error }`.
+ * Hotfix 11: scope-conditional admin gate. `scope=GLOBAL` (Default
+ * Template) remains admin-only — global blast radius. `scope=APP`
+ * (per-app override) is open to any signed-in member. Failures return
+ * JSON `{ error }`.
  */
 export async function POST(req: Request) {
   let session;
   try {
-    session = await requireIapAdmin();
+    session = await requireIapSession();
   } catch (err) {
     if (err instanceof IapUnauthorizedError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
-    }
-    if (err instanceof IapForbiddenError) {
-      return NextResponse.json({ error: err.message }, { status: 403 });
     }
     throw err;
   }
@@ -78,6 +77,13 @@ export async function POST(req: Request) {
 
   let scope: TemplateScope;
   if (scopeField === "GLOBAL") {
+    // Hotfix 11: Default Template upload is admin-only (global blast).
+    if (session.user.role !== "admin") {
+      return NextResponse.json(
+        { error: "Admin role required to upload the Default Template." },
+        { status: 403 },
+      );
+    }
     scope = { kind: "GLOBAL" };
   } else if (scopeField === "APP") {
     let internalAppId = appIdField;

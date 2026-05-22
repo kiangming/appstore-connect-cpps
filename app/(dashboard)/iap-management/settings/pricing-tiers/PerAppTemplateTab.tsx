@@ -14,6 +14,11 @@ interface AscApp {
 
 interface Props {
   appsWithTemplates: AppTemplateSummary[];
+  /** Hotfix 11: current user's email; used to gate the "replacing
+   *  someone else's template" confirmation modal. The Per-App template
+   *  is REPLACE-ONLY (Q-A) so an unaware overwrite silently loses a
+   *  teammate's work — confirm before overwriting. */
+  currentUserEmail: string;
 }
 
 function formatTimestamp(iso: string): string {
@@ -24,7 +29,10 @@ function formatTimestamp(iso: string): string {
   }
 }
 
-export function PerAppTemplateTab({ appsWithTemplates }: Props) {
+export function PerAppTemplateTab({
+  appsWithTemplates,
+  currentUserEmail,
+}: Props) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedAppId, setSelectedAppId] = useState<string>("");
@@ -134,6 +142,23 @@ export function PerAppTemplateTab({ appsWithTemplates }: Props) {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file || !selectedAppId) return;
+
+    // Hotfix 11: REPLACE-ONLY (Q-A) wipes the existing entries CASCADE.
+    // If the existing template was uploaded by a different user, warn
+    // before overwriting their work. Same-user replace and first-upload
+    // skip the prompt.
+    const existing = appsWithTemplates.find(
+      (a) => a.apple_app_id === selectedAppId,
+    );
+    if (existing && existing.template.uploaded_by !== currentUserEmail) {
+      const when = formatTimestamp(existing.template.uploaded_at);
+      const ok = window.confirm(
+        `This template was last uploaded by ${existing.template.uploaded_by} at ${when}. ` +
+          `Uploading will REPLACE their entries entirely. Continue?`,
+      );
+      if (!ok) return;
+    }
+
     void handleFile(file, selectedAppId);
   }
 

@@ -18,6 +18,10 @@ interface Props {
   /** Whether the Default Template exists — drives the "falls back to…" copy
    *  shown when no per-app template is configured. */
   defaultTemplateExists: boolean;
+  /** Hotfix 11: current user's email; used to gate the "replacing
+   *  someone else's template" confirmation modal. REPLACE-ONLY (Q-A)
+   *  semantics mean an unaware overwrite silently loses teammate work. */
+  currentUserEmail: string;
 }
 
 function formatTimestamp(iso: string): string {
@@ -33,6 +37,7 @@ export function AppPricingTemplateSection({
   template,
   entryCount,
   defaultTemplateExists,
+  currentUserEmail,
 }: Props) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -86,6 +91,17 @@ export function AppPricingTemplateSection({
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
+
+    // Hotfix 11: warn before replacing a teammate's template. Same-user
+    // replace + first-upload skip the prompt.
+    if (template && template.uploaded_by !== currentUserEmail) {
+      const ok = window.confirm(
+        `This template was last uploaded by ${template.uploaded_by} at ${formatTimestamp(template.uploaded_at)}. ` +
+          `Uploading will REPLACE their entries entirely. Continue?`,
+      );
+      if (!ok) return;
+    }
+
     void handleFile(file);
   }
 

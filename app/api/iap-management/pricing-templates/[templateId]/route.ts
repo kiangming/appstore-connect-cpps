@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import {
-  requireIapAdmin,
-  IapForbiddenError,
+  requireIapSession,
   IapUnauthorizedError,
 } from "@/lib/iap-management/auth";
 import { deleteTemplate } from "@/lib/iap-management/queries/templates";
@@ -14,7 +13,12 @@ export const runtime = "nodejs";
  * DELETE /api/iap-management/pricing-templates/[templateId]
  *
  * Remove a Default or App-specific pricing template. CASCADE wipes its
- * entries automatically. Admin-only (Q-IAP.8).
+ * entries automatically.
+ *
+ * Hotfix 11: scope-conditional admin gate. Deleting a GLOBAL (Default)
+ * template requires admin (global blast); APP-scoped templates are open
+ * to any signed-in member, consistent with member-uploadable per-app
+ * templates.
  */
 export async function DELETE(
   _req: Request,
@@ -22,15 +26,43 @@ export async function DELETE(
 ) {
   let session;
   try {
-    session = await requireIapAdmin();
+    session = await requireIapSession();
   } catch (err) {
     if (err instanceof IapUnauthorizedError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
     }
-    if (err instanceof IapForbiddenError) {
-      return NextResponse.json({ error: err.message }, { status: 403 });
-    }
     throw err;
+  }
+
+  // Hotfix 11: pre-fetch scope to enforce admin-only on GLOBAL deletes.
+  // Small race window between this read and deleteTemplate's own header
+  // load is acceptable — scope_type doesn't change mid-template-life
+  // and the team is small.
+  const scopeProbe = await iapDb()
+    .from("price_tier_templates")
+    .select("scope_type")
+    .eq("id", ctx.params.templateId)
+    .maybeSingle();
+  if (scopeProbe.error) {
+    return NextResponse.json(
+      { error: `Template lookup failed: ${scopeProbe.error.message}` },
+      { status: 500 },
+    );
+  }
+  if (!scopeProbe.data) {
+    return NextResponse.json(
+      { error: `Template ${ctx.params.templateId} does not exist.` },
+      { status: 404 },
+    );
+  }
+  if (
+    scopeProbe.data.scope_type === "GLOBAL" &&
+    session.user.role !== "admin"
+  ) {
+    return NextResponse.json(
+      { error: "Admin role required to remove the Default Template." },
+      { status: 403 },
+    );
   }
 
   try {

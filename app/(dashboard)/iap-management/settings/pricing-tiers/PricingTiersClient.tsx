@@ -11,6 +11,12 @@ import { PerAppTemplateTab } from "./PerAppTemplateTab";
 interface Props {
   defaultOverview: TemplateOverview;
   appsWithTemplates: AppTemplateSummary[];
+  /** Hotfix 11: role-aware rendering. Non-admin sees Default tab in
+   *  read-only mode (upload/remove hidden) but the Per-App tab is full
+   *  edit. The Per-App tab uses currentUserEmail to gate the
+   *  "replacing someone else's template" confirm modal. */
+  isAdmin: boolean;
+  currentUserEmail: string;
 }
 
 type Tab = "default" | "per-app";
@@ -18,6 +24,8 @@ type Tab = "default" | "per-app";
 export function PricingTiersClient({
   defaultOverview,
   appsWithTemplates,
+  isAdmin,
+  currentUserEmail,
 }: Props) {
   const [tab, setTab] = useState<Tab>("default");
 
@@ -52,9 +60,12 @@ export function PricingTiersClient({
       </div>
 
       {tab === "default" ? (
-        <DefaultTemplateTab overview={defaultOverview} />
+        <DefaultTemplateTab overview={defaultOverview} readOnly={!isAdmin} />
       ) : (
-        <PerAppTemplateTab appsWithTemplates={appsWithTemplates} />
+        <PerAppTemplateTab
+          appsWithTemplates={appsWithTemplates}
+          currentUserEmail={currentUserEmail}
+        />
       )}
     </div>
   );
