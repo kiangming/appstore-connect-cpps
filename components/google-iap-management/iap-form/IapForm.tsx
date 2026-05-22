@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   Save,
   AlertCircle,
@@ -378,6 +379,13 @@ export function IapForm({
         setFormError(body.error ?? `Create failed (HTTP ${res.status}).`);
         return;
       }
+      // Hotfix 12: Manager reported silent redirect on create. Toast
+      // confirms the action so the redirect feels intentional, not a
+      // lost submission. SKU echoed back so multiple creates in a row
+      // are visually distinct.
+      toast.success(
+        `IAP "${body.sku ?? sku}" created on Google Play.`,
+      );
       router.push(
         `/google-iap-management/apps/${encodeURIComponent(packageName)}`,
       );
@@ -416,6 +424,8 @@ export function IapForm({
         setFormError(body.error ?? `Update failed (HTTP ${res.status}).`);
         return;
       }
+      // Hotfix 12: same UX as create — confirm before redirect.
+      toast.success(`IAP "${sku.trim()}" updated on Google Play.`);
       setShowDiff(false);
       router.push(
         `/google-iap-management/apps/${encodeURIComponent(packageName)}`,

@@ -388,14 +388,17 @@ async function legacyDeleteInAppProduct(
  *  Idempotent — ACTIVATE on an already-active option is harmless;
  *  DEACTIVATE on inactive same. Errors here are non-fatal for the
  *  parent write: we log and continue so the Manager at least gets the
- *  product written. State drift is recoverable via a subsequent edit. */
+ *  product written. State drift is recoverable via a subsequent edit.
+ *  Returns whether the state call succeeded so callers can decide
+ *  whether to re-fetch (Hotfix 12: post-apply re-read keeps UI in
+ *  sync with Google's post-state-update view of the product). */
 async function applyDesiredState(
   jwt: JWT,
   packageName: string,
   productId: string,
   purchaseOptionId: string,
   desiredState: "ACTIVE" | "INACTIVE",
-): Promise<void> {
+): Promise<boolean> {
   try {
     await newBatchUpdateOneTimeProductStates(
       jwt,
@@ -404,13 +407,63 @@ async function applyDesiredState(
       purchaseOptionId,
       desiredState === "ACTIVE" ? "ACTIVATE" : "DEACTIVATE",
     );
+    return true;
   } catch (err) {
     console.warn(
       `[google-iap:publisher] state apply failed pkg=${packageName} productId=${productId} desired=${desiredState} err="${
         err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
       }"`,
     );
+    return false;
   }
+}
+
+/**
+ * Hotfix 12: re-fetch a OneTimeProduct after `applyDesiredState` so the
+ * caller sees the post-state-update view. `newPatchOneTimeProduct`
+ * returns the product as it existed at create-time — purchaseOptions[].
+ * state defaults to "DRAFT" on a brand-new option, which the adapter
+ * maps to "inactive". Without the re-fetch, the UI shows Inactive even
+ * though the subsequent ACTIVATE call succeeded on Google's side.
+ *
+ * Best-effort: if the get itself fails, fall back to the pre-update
+ * snapshot. If the get returns a state that contradicts `applyDesiredState`
+ * having succeeded (e.g. cache lag — get still shows DRAFT after a
+ * successful ACTIVATE), overlay the desired state on the first matching
+ * purchaseOption so the UI reflects Manager intent. Subsequent refreshes
+ * pull ground truth once Google's list/get propagation catches up.
+ */
+async function refetchWithStateOverlay(
+  jwt: JWT,
+  packageName: string,
+  productId: string,
+  purchaseOptionId: string,
+  fallback: OneTimeProduct,
+  stateApplied: boolean,
+  desiredState: "ACTIVE" | "INACTIVE",
+): Promise<OneTimeProduct> {
+  let fresh: OneTimeProduct;
+  try {
+    fresh = await newGetOneTimeProduct(jwt, packageName, productId);
+  } catch (err) {
+    console.warn(
+      `[google-iap:publisher] post-state refetch failed pkg=${packageName} productId=${productId} err="${
+        err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
+      }"`,
+    );
+    return fallback;
+  }
+  if (!stateApplied) return fresh;
+  const opts = fresh.purchaseOptions ?? [];
+  if (opts.length === 0) return fresh;
+  const target = opts.find((o) => o.purchaseOptionId === purchaseOptionId);
+  if (!target) return fresh;
+  if (target.state === desiredState) return fresh;
+  // Overlay: applyDesiredState reported success but the fresh read still
+  // shows a pre-update state. Trust the write — propagation will catch
+  // up on the next refresh.
+  target.state = desiredState;
+  return fresh;
 }
 
 /** Insert a new in-app product.
@@ -440,14 +493,26 @@ export async function insertInAppProduct(
       writeShape.product,
       { allowMissing: true, regionsVersion: options.regionsVersion },
     );
-    await applyDesiredState(
+    const productId = created.productId ?? body.sku ?? "";
+    const stateApplied = await applyDesiredState(
       jwt,
       packageName,
-      created.productId ?? body.sku ?? "",
+      productId,
       writeShape.purchaseOptionId,
       writeShape.desiredState,
     );
-    return oneTimeProductToInAppProduct(created) as unknown as InAppProduct;
+    // Hotfix 12: re-fetch so the returned snapshot reflects state =
+    // ACTIVE (not the stale DRAFT default from the create response).
+    const fresh = await refetchWithStateOverlay(
+      jwt,
+      packageName,
+      productId,
+      writeShape.purchaseOptionId,
+      created,
+      stateApplied,
+      writeShape.desiredState,
+    );
+    return oneTimeProductToInAppProduct(fresh) as unknown as InAppProduct;
   } catch (err) {
     try {
       const legacy = await legacyInsertInAppProduct(jwt, packageName, body);
@@ -485,14 +550,26 @@ export async function patchInAppProduct(
       writeShape.product,
       { allowMissing: false, regionsVersion: options.regionsVersion },
     );
-    await applyDesiredState(
+    const stateApplied = await applyDesiredState(
       jwt,
       packageName,
       sku,
       writeShape.purchaseOptionId,
       writeShape.desiredState,
     );
-    return oneTimeProductToInAppProduct(updated) as unknown as InAppProduct;
+    // Hotfix 12: re-fetch so the returned snapshot reflects the
+    // post-state-update view (active/inactive flips don't show in the
+    // patch response since state is output-only on the product body).
+    const fresh = await refetchWithStateOverlay(
+      jwt,
+      packageName,
+      sku,
+      writeShape.purchaseOptionId,
+      updated,
+      stateApplied,
+      writeShape.desiredState,
+    );
+    return oneTimeProductToInAppProduct(fresh) as unknown as InAppProduct;
   } catch (err) {
     try {
       const legacy = await legacyPatchInAppProduct(jwt, packageName, sku, body);

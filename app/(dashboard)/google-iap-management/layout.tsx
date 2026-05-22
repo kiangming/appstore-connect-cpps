@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
+import { Toaster } from "sonner";
 
 import { authOptions } from "@/lib/auth";
 import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
@@ -31,6 +32,7 @@ export default async function GoogleIapManagementLayout({
       activeAccountId={activeAccountId}
     >
       {children}
+      <Toaster position="bottom-right" richColors closeButton />
     </GoogleAccountProvider>
   );
 }
