@@ -24,6 +24,22 @@ import type {
 
 const ASC_BASE_URL = "https://api.appstoreconnect.apple.com";
 
+/**
+ * Hotfix 20 — page-size + safety cap for the apps catalogue fetch.
+ *
+ * Apple ASC `/v1/apps` returns 20 by default, max 200 per page, and
+ * carries a `links.next` cursor (full URL form) when more pages exist.
+ * `getApps()` follows the cursor and accumulates pages so callers see
+ * the complete catalogue (Manager symptom 2026-05-23: 50-app cap on
+ * the Apple IAP "Apps" page).
+ *
+ * Safety net: 50 pages × 200 = 10,000 apps — well above any realistic
+ * tenant catalogue. Prevents an unbounded loop if Apple ever returns a
+ * malformed cursor.
+ */
+const APPS_PAGE_SIZE = 200;
+const APPS_MAX_PAGES = 50;
+
 async function ascFetch<T>(
   creds: AscCredentials,
   method: string,
@@ -31,7 +47,11 @@ async function ascFetch<T>(
   body?: unknown
 ): Promise<T> {
   const token = await generateAscToken(creds);
-  const url = `${ASC_BASE_URL}${endpoint}`;
+  // Hotfix 20: accept either a path (`/v1/apps?...`) or a full URL
+  // (Apple's `links.next` carries the full origin). Detect via prefix.
+  const url = endpoint.startsWith("http")
+    ? endpoint
+    : `${ASC_BASE_URL}${endpoint}`;
 
   if (body) {
     await log("asc-client", `[${creds.keyId}] ${method} ${endpoint} body: ${JSON.stringify(body)}`);
@@ -61,8 +81,61 @@ async function ascFetch<T>(
   return res.json() as Promise<T>;
 }
 
+/**
+ * Hotfix 20 — paginated fetch of the active ASC account's apps.
+ *
+ * Pre-Hotfix-20 this was a single `GET /v1/apps?limit=50` call, so
+ * Manager could never see app #51+ in either the CPP Manager dashboard
+ * or the Apple IAP Management module (both consume this function). The
+ * symptom surfaced on the Apple IAP "Apps" page after Manager added a
+ * 51st app to the ASC account.
+ *
+ * Behaviour now: request `?limit=200`, then follow `links.next` (a full
+ * URL Apple returns when more pages exist) until exhausted or the
+ * safety cap kicks in. Synthesises an `AscApiResponse<App[]>` whose
+ * `data` array contains every app — callers stay drop-in. `included`
+ * arrays from each page are concatenated (rare for `/v1/apps`, but
+ * preserves the shape). `links.self` carries the first page's self
+ * URL; pagination cursors are intentionally dropped since they no
+ * longer point at the caller's current position.
+ */
 export async function getApps(creds: AscCredentials): Promise<AscApiResponse<App[]>> {
-  return ascFetch<AscApiResponse<App[]>>(creds, "GET", "/v1/apps?limit=50");
+  const allApps: App[] = [];
+  const allIncluded: NonNullable<AscApiResponse<App[]>["included"]> = [];
+  let next: string | null = `/v1/apps?limit=${APPS_PAGE_SIZE}`;
+  let firstSelf: string | undefined;
+  let pageCount = 0;
+
+  while (next && pageCount < APPS_MAX_PAGES) {
+    const page: AscApiResponse<App[]> = await ascFetch<AscApiResponse<App[]>>(
+      creds,
+      "GET",
+      next,
+    );
+    allApps.push(...page.data);
+    if (page.included) allIncluded.push(...page.included);
+    if (firstSelf === undefined) firstSelf = page.links?.self;
+    next = page.links?.next ?? null;
+    pageCount += 1;
+    await log(
+      "asc-client",
+      `[${creds.keyId}] getApps page ${pageCount} total=${allApps.length} has_next=${next ? "yes" : "no"}`,
+    );
+  }
+
+  if (next) {
+    await log(
+      "asc-client",
+      `[${creds.keyId}] getApps page cap (${APPS_MAX_PAGES}) reached at ${allApps.length} apps; truncating remainder`,
+      "WARN",
+    );
+  }
+
+  return {
+    data: allApps,
+    ...(allIncluded.length > 0 ? { included: allIncluded } : {}),
+    links: firstSelf ? { self: firstSelf } : undefined,
+  };
 }
 
 export async function getApp(creds: AscCredentials, appId: string): Promise<AscApiResponse<App>> {
