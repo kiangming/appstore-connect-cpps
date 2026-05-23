@@ -19,10 +19,10 @@ import {
   type PricingSource,
 } from "./PricingSourceSelector";
 import {
-  COMMON_REGIONS,
   COMMON_CURRENCIES,
   defaultCurrencyForRegion,
 } from "@/lib/google-iap-management/regions";
+import { getAllRegions } from "@/lib/google-iap-management/region-name";
 import { decimalToMicros } from "@/lib/google-iap-management/google/price-conversion";
 import {
   getCurrencyDecimals,
@@ -227,13 +227,13 @@ export function IapForm({
   function addRegionOverride() {
     setRegionOverrides((prev) => {
       const used = new Set(prev.map((r) => r.region));
-      const next = COMMON_REGIONS.find((r) => !used.has(r.code));
+      const next = getAllRegions().find((r) => !used.has(r.code));
       if (!next) return prev;
       return [
         ...prev,
         {
           region: next.code,
-          currency: next.currency,
+          currency: defaultCurrencyForRegion(next.code),
           priceDecimal: "",
         },
       ];
@@ -718,9 +718,9 @@ export function IapForm({
                     onChange={(e) => updateOverride(i, { region: e.target.value })}
                     className="col-span-4 rounded border border-slate-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition"
                   >
-                    {COMMON_REGIONS.map((opt) => (
+                    {getAllRegions().map((opt) => (
                       <option key={opt.code} value={opt.code}>
-                        {opt.code} — {opt.name}
+                        {opt.name}
                       </option>
                     ))}
                   </select>
@@ -755,7 +755,7 @@ export function IapForm({
                   )}
                 </div>
               ))}
-              {regionOverrides.length < COMMON_REGIONS.length && (
+              {regionOverrides.length < getAllRegions().length && (
                 <button
                   type="button"
                   onClick={addRegionOverride}
