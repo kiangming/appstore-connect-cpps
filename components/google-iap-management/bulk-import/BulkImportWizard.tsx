@@ -31,6 +31,17 @@ export interface PreviewRegionOverride {
   priceDecimal: string;
 }
 
+/** Hotfix 19: candidate-tier descriptor returned by the Preview API per
+ *  row. Matches `TierCandidate` in `queries/templates.ts`. */
+export interface PreviewTierCandidate {
+  identifier: string;
+  templateId: string;
+  regionCount: number;
+  vnCurrency: string | null;
+  vnPriceMicros: string | null;
+  vnPriceDecimal: string | null;
+}
+
 export interface PreviewRow {
   rowNumber: number;
   sku: string;
@@ -40,6 +51,10 @@ export interface PreviewRow {
   listings: PreviewListing[];
   exists: boolean;
   decision: RowDecision;
+  // Hotfix 19 — server-rendered candidate metadata.
+  tierCandidates: PreviewTierCandidate[];
+  defaultTierSelection: string | null;
+  tierMatchedBy: "sku" | "currency_price" | "none";
 }
 
 interface ExecuteResult {
@@ -85,6 +100,12 @@ export function BulkImportWizard({
   // Step 3: preview
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
   const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
+  // Hotfix 19: per-row Manager tier selection. Keyed by rowNumber so
+  // the orchestrator's execute payload can map back. Pre-filled from the
+  // Preview API's `defaultTierSelection` (Q5.B primary tier).
+  const [tierSelections, setTierSelections] = useState<Record<number, string>>(
+    {},
+  );
 
   // Step 4: execute
   const [executing, setExecuting] = useState(false);
@@ -120,6 +141,37 @@ export function BulkImportWizard({
     return violations;
   }, [previewRows, appDefaultCurrency]);
 
+  // Hotfix 19: derive disambiguation status for the banner + button counter.
+  //   - ambiguous: rows whose template lookup found >1 candidate tiers
+  //   - pending:   ambiguous rows where Manager cleared the selection (edge case)
+  //   - changed:   ambiguous rows where Manager picked a non-default tier
+  //   - atDefault: ambiguous rows still on the pre-selected primary tier
+  const tierStatus = useMemo(() => {
+    let ambiguous = 0;
+    let pending = 0;
+    let changed = 0;
+    let atDefault = 0;
+    for (const row of previewRows) {
+      if (row.decision === "skip") continue;
+      if (row.tierCandidates.length <= 1) continue;
+      ambiguous += 1;
+      const selection = tierSelections[row.rowNumber];
+      if (!selection) {
+        pending += 1;
+        continue;
+      }
+      if (
+        row.defaultTierSelection &&
+        selection === row.defaultTierSelection
+      ) {
+        atDefault += 1;
+      } else {
+        changed += 1;
+      }
+    }
+    return { ambiguous, pending, changed, atDefault };
+  }, [previewRows, tierSelections]);
+
   async function handleUploadAndPreview() {
     if (!file) return;
     setUploadError(null);
@@ -127,6 +179,9 @@ export function BulkImportWizard({
     try {
       const form = new FormData();
       form.append("file", file);
+      // Hotfix 19: thread pricingSource so the API can look up
+      // candidate tiers per row server-side.
+      form.append("pricingSource", pricingSource);
       const res = await fetch(
         `/api/google-iap-management/apps/${encodeURIComponent(packageName)}/bulk-import/preview`,
         { method: "POST", body: form },
@@ -147,16 +202,42 @@ export function BulkImportWizard({
       }
       const rows: PreviewRow[] = (body.rows ?? []).map((r) => ({
         ...r,
+        // Defensive defaults — older clients may not carry these fields.
+        tierCandidates: r.tierCandidates ?? [],
+        defaultTierSelection: r.defaultTierSelection ?? null,
+        tierMatchedBy: r.tierMatchedBy ?? "none",
         decision: r.exists ? "create" : "create",
       }));
+      // Hotfix 19: seed tierSelections — every row with candidates
+      // starts on its primary tier (Q5.B). Manager can change via dropdown.
+      const seedSelections: Record<number, string> = {};
+      for (const r of rows) {
+        if (r.tierCandidates.length >= 1) {
+          const pick = r.defaultTierSelection ?? r.tierCandidates[0].identifier;
+          if (pick) seedSelections[r.rowNumber] = pick;
+        }
+      }
       setPreviewRows(rows);
       setPreviewWarnings(body.warnings ?? []);
+      setTierSelections(seedSelections);
       setStep("preview");
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploading(false);
     }
+  }
+
+  function setRowTierSelection(rowNumber: number, identifier: string) {
+    setTierSelections((prev) => {
+      const next = { ...prev };
+      if (identifier === "") {
+        delete next[rowNumber];
+      } else {
+        next[rowNumber] = identifier;
+      }
+      return next;
+    });
   }
 
   function setAllExisting(decision: "overwrite" | "skip") {
@@ -196,6 +277,18 @@ export function BulkImportWizard({
               regionOverrides: r.regionOverrides,
               listings: r.listings,
               decision: r.decision,
+              // Hotfix 19: explicit tier selection (null when no
+              // template lookup applied). Orchestrator honours it
+              // verbatim — no silent fallback. The companion fields
+              // let the audit log distinguish:
+              //   - single_match           (1 candidate, no choice)
+              //   - default_accepted       (>1 candidates, primary kept)
+              //   - manager_explicit       (>1 candidates, override)
+              //   - no_candidates_auto_bootstrap (0 candidates)
+              chosenTierIdentifier:
+                tierSelections[r.rowNumber] ?? null,
+              defaultTierIdentifier: r.defaultTierSelection,
+              tierCandidateCount: r.tierCandidates.length,
             })),
           }),
         },
@@ -218,10 +311,15 @@ export function BulkImportWizard({
     }
   }
 
+  // Hotfix 19: Push button is gated on every ambiguous row having a
+  // selection (Manager either accepted the pre-selected primary tier or
+  // explicitly picked another). `tierStatus.pending > 0` only happens
+  // when Manager clears a dropdown back to "— Select a tier —".
   const canContinueFromPreview =
     counts.pending === 0 &&
     previewRows.length > 0 &&
-    precisionViolations.length === 0;
+    precisionViolations.length === 0 &&
+    tierStatus.pending === 0;
 
   return (
     <div className="space-y-4">
@@ -383,6 +481,11 @@ export function BulkImportWizard({
       {/* Step 3: Preview */}
       {step === "preview" && (
         <section className="space-y-3">
+          {/* Hotfix 19 — disambiguation banner (Q4.D). */}
+          {tierStatus.ambiguous > 0 && (
+            <TierBanner status={tierStatus} />
+          )}
+
           <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center justify-between gap-3">
             <div className="flex items-center gap-4 text-xs text-slate-600">
               <span>
@@ -398,6 +501,19 @@ export function BulkImportWizard({
               {counts.pending > 0 && (
                 <span className="text-red-600">
                   Pending decisions: <strong>{counts.pending}</strong>
+                </span>
+              )}
+              {tierStatus.ambiguous > 0 && (
+                <span
+                  className={
+                    tierStatus.pending > 0
+                      ? "ml-auto inline-flex items-center gap-1 text-amber-700"
+                      : "ml-auto inline-flex items-center gap-1 text-blue-700"
+                  }
+                >
+                  {tierStatus.pending > 0
+                    ? `${tierStatus.pending} need${tierStatus.pending === 1 ? "s" : ""} selection`
+                    : `${tierStatus.ambiguous} ambiguous · ${tierStatus.changed} changed`}
                 </span>
               )}
             </div>
@@ -463,7 +579,12 @@ export function BulkImportWizard({
             </div>
           )}
 
-          <PreviewTable rows={previewRows} onRowDecisionChange={setRowDecision} />
+          <PreviewTable
+            rows={previewRows}
+            onRowDecisionChange={setRowDecision}
+            tierSelections={tierSelections}
+            onTierSelectionChange={setRowTierSelection}
+          />
 
           <div className="flex justify-between pt-2">
             <button
@@ -479,13 +600,17 @@ export function BulkImportWizard({
               title={
                 precisionViolations.length > 0
                   ? `${precisionViolations.length} row(s) violate ${appDefaultCurrency} precision`
-                  : !canContinueFromPreview
-                    ? "Resolve all existing-SKU decisions first"
-                    : ""
+                  : tierStatus.pending > 0
+                    ? `${tierStatus.pending} item${tierStatus.pending === 1 ? "" : "s"} need${tierStatus.pending === 1 ? "s" : ""} tier selection`
+                    : !canContinueFromPreview
+                      ? "Resolve all existing-SKU decisions first"
+                      : ""
               }
               className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition disabled:opacity-50"
             >
-              Push to Google Play
+              {tierStatus.pending > 0
+                ? `Push to Google Play (${tierStatus.pending} item${tierStatus.pending === 1 ? "" : "s"} need${tierStatus.pending === 1 ? "s" : ""} selection)`
+                : "Push to Google Play"}
               <ChevronRight className="h-4 w-4" />
             </button>
           </div>
@@ -609,6 +734,67 @@ function StepHeader({ step }: { step: Step }) {
           {s.label}
         </span>
       ))}
+    </div>
+  );
+}
+
+/** Hotfix 19 — disambiguation banner (Q4.D).
+ *
+ *  Two visual states:
+ *    - pending > 0  → amber ⚠ "N items need tier selection"
+ *    - pending == 0 → blue  ℹ "N ambiguous items pre-selected — review or change"
+ *                            (or "...— X changed by you, Y at default" when overridden)
+ *  Renders only when status.ambiguous > 0 — no banner in the zero-ambiguity case. */
+function TierBanner({
+  status,
+}: {
+  status: { ambiguous: number; pending: number; changed: number; atDefault: number };
+}) {
+  if (status.pending > 0) {
+    return (
+      <div className="bg-amber-50 border border-amber-300 rounded-xl p-4">
+        <div className="flex items-start gap-3">
+          <AlertCircle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-amber-900">
+              {status.pending} item{status.pending === 1 ? "" : "s"} need{status.pending === 1 ? "s" : ""} tier selection.
+            </p>
+            <p className="text-xs text-amber-800 mt-1">
+              Pick a tier for the highlighted row{status.pending === 1 ? "" : "s"} below before pushing.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const headline =
+    status.changed > 0
+      ? `${status.ambiguous} ambiguous items — ${status.changed} changed by you, ${status.atDefault} at default.`
+      : `${status.ambiguous} ambiguous item${status.ambiguous === 1 ? "" : "s"} pre-selected — review or change as needed.`;
+  return (
+    <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+      <div className="flex items-start gap-3">
+        <svg
+          className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+        </svg>
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-blue-900">{headline}</p>
+          <p className="text-xs text-blue-800 mt-1">
+            Rows priced the same as multiple template tiers — pick the tier whose regional prices you
+            want applied. The tool no longer auto-picks silently.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

@@ -7,6 +7,9 @@ import {
   findTemplateTierByCurrencyMicros,
   templateExists,
   findTemplateId,
+  buildCandidatesFromEntries,
+  getPrimaryTierFromCandidates,
+  findCandidateTiersForCurrencyPrice,
 } from "./templates";
 
 /**
@@ -224,5 +227,174 @@ describe("Hotfix 17: scope=APP requires appId guards (no silent GLOBAL fallback)
     await expect(
       findTemplateId({ scope: "APP", appId: "" }),
     ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
+  });
+
+  it("findCandidateTiersForCurrencyPrice throws when scope=APP + appId is null (Hotfix 19 guard)", async () => {
+    await expect(
+      findCandidateTiersForCurrencyPrice({
+        scope: "APP",
+        appId: null,
+        currencyCode: "VND",
+        priceMicros: "25000000000",
+      }),
+    ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
+  });
+
+  it("findCandidateTiersForCurrencyPrice throws when scope=APP + appId is empty string", async () => {
+    await expect(
+      findCandidateTiersForCurrencyPrice({
+        scope: "APP",
+        appId: "",
+        currencyCode: "VND",
+        priceMicros: "25000000000",
+      }),
+    ).rejects.toThrow(/scope="APP" requires a non-empty appId/);
+  });
+});
+
+/**
+ * Hotfix 19: pure helpers backing the wizard's Preview-step tier
+ * picker. `buildCandidatesFromEntries` shapes per-tier metadata
+ * (region count + VN entry); `getPrimaryTierFromCandidates` selects
+ * the Q5.B-default primary tier.
+ */
+describe("buildCandidatesFromEntries (Hotfix 19 — candidate descriptor)", () => {
+  const TEMPLATE_ID = "tmpl-uuid-1";
+
+  it("captures the VN entry as the primary lens for VND apps", () => {
+    const entries = [
+      { identifier: "Tier 1", region_code: "US", currency: "USD", price_micros: "990000" },
+      { identifier: "Tier 1", region_code: "VN", currency: "VND", price_micros: "27000000000" },
+      { identifier: "Tier 1", region_code: "JP", currency: "JPY", price_micros: "160000000" },
+    ];
+    const [c] = buildCandidatesFromEntries(TEMPLATE_ID, ["Tier 1"], entries);
+    expect(c.identifier).toBe("Tier 1");
+    expect(c.templateId).toBe(TEMPLATE_ID);
+    expect(c.regionCount).toBe(3);
+    expect(c.vnCurrency).toBe("VND");
+    expect(c.vnPriceMicros).toBe("27000000000");
+    expect(c.vnPriceDecimal).toBe("27000");
+  });
+
+  it("returns null VN fields when the tier has no VN entry", () => {
+    const entries = [
+      { identifier: "Tier 1", region_code: "US", currency: "USD", price_micros: "990000" },
+      { identifier: "Tier 1", region_code: "JP", currency: "JPY", price_micros: "160000000" },
+    ];
+    const [c] = buildCandidatesFromEntries(TEMPLATE_ID, ["Tier 1"], entries);
+    expect(c.vnCurrency).toBeNull();
+    expect(c.vnPriceMicros).toBeNull();
+    expect(c.vnPriceDecimal).toBeNull();
+    expect(c.regionCount).toBe(2);
+  });
+
+  it("builds one descriptor per identifier requested even when entries are interleaved", () => {
+    const entries = [
+      { identifier: "Tier 1", region_code: "US", currency: "USD", price_micros: "990000" },
+      { identifier: "Alt Tier", region_code: "US", currency: "USD", price_micros: "990000" },
+      { identifier: "Tier 1", region_code: "VN", currency: "VND", price_micros: "27000000000" },
+      { identifier: "Alt Tier", region_code: "VN", currency: "VND", price_micros: "25000000000" },
+    ];
+    const cs = buildCandidatesFromEntries(
+      TEMPLATE_ID,
+      ["Tier 1", "Alt Tier"],
+      entries,
+    );
+    expect(cs).toHaveLength(2);
+    const tier1 = cs.find((c) => c.identifier === "Tier 1");
+    const alt = cs.find((c) => c.identifier === "Alt Tier");
+    expect(tier1?.vnPriceDecimal).toBe("27000");
+    expect(alt?.vnPriceDecimal).toBe("25000");
+  });
+});
+
+describe("getPrimaryTierFromCandidates (Hotfix 19 — Q5.B primary-tier algorithm)", () => {
+  it("returns null for empty input", () => {
+    expect(getPrimaryTierFromCandidates([])).toBeNull();
+  });
+
+  it("returns the single identifier when only one candidate exists", () => {
+    expect(
+      getPrimaryTierFromCandidates([{ identifier: "Tier 1" }]),
+    ).toBe("Tier 1");
+  });
+
+  it("prefers a non-Alternate tier over Alternate tiers (Manager's edited tier wins)", () => {
+    expect(
+      getPrimaryTierFromCandidates([
+        { identifier: "Alternate Tier 1" },
+        { identifier: "Tier 1" },
+        { identifier: "Alternate Tier A" },
+      ]),
+    ).toBe("Tier 1");
+  });
+
+  it("sorts non-Alternate candidates numerically — Tier 1 beats Tier 10", () => {
+    expect(
+      getPrimaryTierFromCandidates([
+        { identifier: "Tier 10" },
+        { identifier: "Tier 1" },
+        { identifier: "Tier 2" },
+      ]),
+    ).toBe("Tier 1");
+  });
+
+  it("falls back to Alternate-only set when no non-Alternate candidate exists", () => {
+    expect(
+      getPrimaryTierFromCandidates([
+        { identifier: "Alternate Tier A" },
+        { identifier: "Alternate Tier 1" },
+      ]),
+    ).toBe("Alternate Tier 1");
+  });
+
+  it("within all-Alternate set, prefers numeric tier names over alphabetic", () => {
+    // "Alternate Tier 1" beats "Alternate Tier A" via Intl.Collator
+    // numeric sort — digits sort before letters in numeric-aware mode.
+    expect(
+      getPrimaryTierFromCandidates([
+        { identifier: "Alternate Tier B" },
+        { identifier: "Alternate Tier A" },
+        { identifier: "Alternate Tier 2" },
+        { identifier: "Alternate Tier 1" },
+      ]),
+    ).toBe("Alternate Tier 1");
+  });
+
+  it("matches case-insensitively on the 'Alternate' prefix", () => {
+    // Defensive — Manager's template may capitalise inconsistently.
+    expect(
+      getPrimaryTierFromCandidates([
+        { identifier: "alternate tier 1" },
+        { identifier: "Tier 1" },
+      ]),
+    ).toBe("Tier 1");
+  });
+
+  it("does NOT mark 'AlternateTier 1' (no space) as Alternate — word-boundary precision", () => {
+    // The regex `/^alternate\b/i` matches "alternate" only when followed
+    // by a non-word character (or end of string). "AlternateTier" has no
+    // boundary between 'e' and 'T' (both word chars), so it is treated
+    // as a regular non-Alternate tier. Manager's templates conventionally
+    // use "Alternate Tier" with a space, so this conservative match is
+    // the right default — Manager can use either spacing.
+    expect(
+      getPrimaryTierFromCandidates([
+        { identifier: "AlternateTier 1" },
+        { identifier: "Tier 5" },
+      ]),
+    ).toBe("AlternateTier 1"); // sorts before "Tier 5" alphabetically
+  });
+
+  it("does NOT mark 'Alternative Plan' as Alternate — different prefix entirely", () => {
+    // "Alternative" doesn't actually start with "Alternate" (the prefix
+    // "Alternat" + "e" vs "Alternat" + "i" diverges at the 9th char).
+    // Defensive coverage in case Manager invents new tier-name patterns.
+    expect(
+      getPrimaryTierFromCandidates([
+        { identifier: "Alternative Plan" },
+        { identifier: "Tier 5" },
+      ]),
+    ).toBe("Alternative Plan");
   });
 });

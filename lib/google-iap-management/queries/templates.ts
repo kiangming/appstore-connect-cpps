@@ -10,6 +10,7 @@
  * surfaces as an error.
  */
 import { googleIapDb } from "../db";
+import { microsToDecimal } from "../google/price-conversion";
 import type { ParsedPricingEntry } from "../parsers/pricing-template-parser";
 
 export type TemplateScope = "GLOBAL" | "APP";
@@ -582,6 +583,245 @@ export async function listTemplateTiers(args: {
     seen.add(r.identifier);
   }
   return [...seen];
+}
+
+/** Hotfix 19: tier candidate descriptor surfaced to the Bulk Import wizard
+ *  Preview step so Manager can disambiguate when multiple template tiers
+ *  share the same `(currency, priceMicros)` pair. Production trap (batch
+ *  4895756e, PASS SDK): a Per-App template had 4 tiers all priced 0.99
+ *  USD — `pickTierByCurrencyMicros` returned the first one silently and
+ *  Google received the wrong VN value (25,000 VND instead of 27,000 VND).
+ *
+ *  `vnCurrency` / `vnPriceMicros` / `vnPriceDecimal` are the VN-region
+ *  row inside this tier (null when the tier has no VN entry). VN is
+ *  surfaced because the Manager primarily reads VND prices when
+ *  distinguishing tiers — the dropdown format is
+ *  "{identifier} — {vnPriceDecimal} VND · {regionCount} regions". */
+export interface TierCandidate {
+  identifier: string;
+  templateId: string;
+  regionCount: number;
+  vnCurrency: string | null;
+  vnPriceMicros: string | null;
+  vnPriceDecimal: string | null;
+}
+
+/** Pure helper: given a flat list of pricing-template entries and the
+ *  set of candidate tier identifiers, build per-tier `TierCandidate`
+ *  descriptors. Exported so the wizard's pre-selection / formatting
+ *  paths can be unit-tested without mocking Supabase.
+ *
+ *  - `regionCount` counts distinct `region_code` values per tier.
+ *  - VN entry: first row in `entries` where `region_code === "VN"` (the
+ *    template parser writes one row per tier+region pair, so a single
+ *    `find` is sufficient — a defensive `null` is returned when no VN
+ *    row exists). */
+export function buildCandidatesFromEntries(
+  templateId: string,
+  identifiers: ReadonlyArray<string>,
+  entries: ReadonlyArray<{
+    identifier: string;
+    region_code: string;
+    currency: string;
+    price_micros: string;
+  }>,
+): TierCandidate[] {
+  return identifiers.map((id) => {
+    const tierEntries = entries.filter((e) => e.identifier === id);
+    const vnEntry = tierEntries.find((e) => e.region_code === "VN") ?? null;
+    const regionCount = new Set(tierEntries.map((e) => e.region_code)).size;
+    return {
+      identifier: id,
+      templateId,
+      regionCount,
+      vnCurrency: vnEntry?.currency ?? null,
+      vnPriceMicros: vnEntry?.price_micros ?? null,
+      // Strip trailing fractional zeros so VND/JPY (zero-fraction
+      // currencies) render as "27000" not "27000.000000" without losing
+      // precision for fractional currencies (e.g. "0.99" stays "0.99").
+      vnPriceDecimal: vnEntry
+        ? stripTrailingZeros(microsToDecimal(vnEntry.price_micros, 6))
+        : null,
+    };
+  });
+}
+
+function stripTrailingZeros(decimal: string): string {
+  if (!decimal.includes(".")) return decimal;
+  return decimal.replace(/\.?0+$/, "");
+}
+
+/** Hotfix 19: returns *all* tier identifiers whose `(currency,
+ *  priceMicros)` row matches the request — not just the first match
+ *  (which was Hotfix 15/16's behaviour and the root cause of batch
+ *  4895756e). The Bulk Import Preview step uses the array length to
+ *  decide between read-only (==1) and dropdown (>1) rendering.
+ *
+ *  Same defensive guards as the sibling helpers (Hotfix 17): scope=APP
+ *  without `appId` throws before any DB I/O. */
+export async function findCandidateTiersForCurrencyPrice(args: {
+  scope: TemplateScope;
+  appId: string | null;
+  currencyCode: string;
+  priceMicros: string;
+}): Promise<TierCandidate[]> {
+  if (args.scope === "APP" && !args.appId) {
+    throw new Error(
+      'findCandidateTiersForCurrencyPrice: scope="APP" requires a non-empty appId.',
+    );
+  }
+  const db = googleIapDb();
+  let templateQuery = db
+    .from("pricing_templates")
+    .select("id")
+    .eq("scope_type", args.scope);
+  templateQuery =
+    args.scope === "APP"
+      ? templateQuery.eq("scope_app_id", args.appId!)
+      : templateQuery.is("scope_app_id", null);
+  const { data: template, error } = await templateQuery.maybeSingle();
+  if (error) {
+    throw new Error(`Failed to look up template: ${error.message}`);
+  }
+  if (!template) return [];
+  const templateId = (template as { id: string }).id;
+
+  const normalisedCurrency = args.currencyCode.trim().toUpperCase();
+  const { data: matchingRows, error: matchErr } = await db
+    .from("pricing_template_entries")
+    .select("identifier")
+    .eq("template_id", templateId)
+    .eq("currency", normalisedCurrency)
+    .eq("price_micros", args.priceMicros);
+  if (matchErr) {
+    throw new Error(
+      `Failed to load candidate tiers (${normalisedCurrency}/${args.priceMicros}): ${matchErr.message}`,
+    );
+  }
+  const candidateIdentifiers = Array.from(
+    new Set(
+      ((matchingRows ?? []) as Array<{ identifier: string }>).map(
+        (r) => r.identifier,
+      ),
+    ),
+  );
+  if (candidateIdentifiers.length === 0) return [];
+
+  // Fetch all rows for the candidate tiers so we can build per-tier
+  // metadata (region count + VN entry). Single query keeps fan-out
+  // bounded — `IN` clause on identifier handles all candidates at once.
+  const { data: allRows, error: allErr } = await db
+    .from("pricing_template_entries")
+    .select("identifier, region_code, currency, price_micros")
+    .eq("template_id", templateId)
+    .in("identifier", candidateIdentifiers);
+  if (allErr) {
+    throw new Error(
+      `Failed to load candidate tier metadata: ${allErr.message}`,
+    );
+  }
+  return buildCandidatesFromEntries(
+    templateId,
+    candidateIdentifiers,
+    (allRows ?? []) as Array<{
+      identifier: string;
+      region_code: string;
+      currency: string;
+      price_micros: string;
+    }>,
+  );
+}
+
+/** Hotfix 19: unified per-row candidate lookup. Mirrors the
+ *  orchestrator's two-strategy logic so the Preview API and the
+ *  orchestrator agree on what the candidate set is for each row.
+ *
+ *  Strategy 1 (documented): SKU == template identifier — exact match.
+ *  Strategy 2 (Hotfix 16): `(currency, priceMicros)` fallback. May
+ *  return >1 candidates when Manager's template has alternate tiers
+ *  sharing the same price (the trap Hotfix 19 fixes).
+ *
+ *  Caller decides ambiguity rendering:
+ *    candidates.length === 0 → no template match → auto-bootstrap
+ *    candidates.length === 1 → unambiguous → render read-only
+ *    candidates.length  >  1 → ambiguous   → Manager picks via dropdown */
+export async function findRowCandidates(args: {
+  scope: TemplateScope;
+  appId: string | null;
+  sku: string;
+  currencyCode: string;
+  priceMicros: string;
+}): Promise<{
+  candidates: TierCandidate[];
+  matchedBy: "sku" | "currency_price" | "none";
+}> {
+  const skuEntries = await lookupTemplateEntriesForIdentifier({
+    scope: args.scope,
+    appId: args.appId,
+    identifier: args.sku,
+  });
+  if (skuEntries.length > 0) {
+    const templateId = await findTemplateId({
+      scope: args.scope,
+      appId: args.appId,
+    });
+    const candidates = buildCandidatesFromEntries(
+      templateId ?? "",
+      [args.sku],
+      skuEntries.map((e) => ({
+        identifier: args.sku,
+        region_code: e.regionCode,
+        currency: e.currency,
+        price_micros: e.priceMicros,
+      })),
+    );
+    return { candidates, matchedBy: "sku" };
+  }
+  const candidates = await findCandidateTiersForCurrencyPrice({
+    scope: args.scope,
+    appId: args.appId,
+    currencyCode: args.currencyCode,
+    priceMicros: args.priceMicros,
+  });
+  return {
+    candidates,
+    matchedBy: candidates.length > 0 ? "currency_price" : "none",
+  };
+}
+
+/** Pure helper: Q5.B primary-tier preference algorithm.
+ *
+ *  Selects a sensible default tier when multiple candidates share the
+ *  same `(currency, priceMicros)`. Pure function so the UI's "primary
+ *  tier pre-selected" behaviour is unit-testable.
+ *
+ *  Algorithm (Manager-locked, 2026-05-23):
+ *    1. Filter out identifiers starting with "Alternate" (case-insensitive,
+ *       word-boundary so "AlternateX" without space still matches).
+ *    2. If anything remains, return the first in numeric-ascending order
+ *       (Intl.Collator { numeric: true }). "Tier 1" beats "Tier 10".
+ *    3. If everything was Alternate, return the first in numeric-ascending
+ *       order across the full set — "Alternate Tier 1" beats "Alternate
+ *       Tier A" (numeric beats alpha).
+ *
+ *  Returns null only when the input is empty (caller's responsibility
+ *  to handle no-candidates separately — different UI state). */
+export function getPrimaryTierFromCandidates(
+  candidates: ReadonlyArray<{ identifier: string }>,
+): string | null {
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0].identifier;
+  const collator = new Intl.Collator(undefined, {
+    numeric: true,
+    sensitivity: "base",
+  });
+  const isAlternate = (id: string) => /^alternate\b/i.test(id.trim());
+  const nonAlternate = candidates.filter((c) => !isAlternate(c.identifier));
+  const pool = nonAlternate.length > 0 ? nonAlternate : candidates;
+  const sorted = [...pool].sort((a, b) =>
+    collator.compare(a.identifier, b.identifier),
+  );
+  return sorted[0].identifier;
 }
 
 export async function deleteTemplate(templateId: string): Promise<void> {

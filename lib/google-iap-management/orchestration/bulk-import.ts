@@ -55,9 +55,10 @@ import type {
   ParsedRegionOverride,
   ParsedListing,
 } from "../parsers/excel-parser";
+import type { ParsedPricingEntry } from "../parsers/pricing-template-parser";
 import {
   lookupTemplateEntriesForIdentifier,
-  findTemplateTierByCurrencyMicros,
+  findCandidateTiersForCurrencyPrice,
   templateExists,
   findTemplateId,
 } from "../queries/templates";
@@ -75,6 +76,20 @@ export interface BulkImportRow extends ParsedIapRow {
   /** Manager decision for this row. "create" = SKU not yet on Google;
    *  "overwrite" = SKU exists, push the update; "skip" = leave as-is. */
   decision: RowDecision;
+  /** Hotfix 19 — wizard's explicit tier selection. The orchestrator
+   *  uses this verbatim instead of running its own tier-picker. Null
+   *  means "no template lookup applies" (e.g. google_default path) and
+   *  the orchestrator falls through to auto-bootstrap.
+   *
+   *  The companion fields let the audit log classify the row's
+   *  selection_path without the orchestrator re-running the lookup:
+   *    - tierCandidateCount === 0           → no_candidates_auto_bootstrap
+   *    - tierCandidateCount === 1           → single_match (no choice required)
+   *    - tierCandidateCount  >  1 + chosen === default → default_accepted
+   *    - tierCandidateCount  >  1 + chosen !== default → manager_explicit */
+  chosenTierIdentifier?: string | null;
+  defaultTierIdentifier?: string | null;
+  tierCandidateCount?: number;
 }
 
 export interface BulkImportInput {
@@ -176,39 +191,52 @@ export async function executeBulkImport(
   const actionableRows = input.rows.filter((r) => r.decision !== "skip");
   const skippedCount = input.rows.length - actionableRows.length;
 
-  // Q-GIAP.D + Hotfix 15: template-driven price resolution.
+  // Q-GIAP.D + Hotfix 15 → Hotfix 19: template-driven price resolution.
   //
-  // Each row's SKU is matched against the template's identifier column
-  // first (documented design — wizard step 1 help text). If that returns
-  // zero entries (Manager's template is keyed by tier name "Tier 1" /
-  // "Tier 2" rather than SKU — by far the more common shape), fall back
-  // to USD-price-based tier inference: find the tier whose US-region
-  // USD entry equals the row's USD baseline (in micros), then load that
-  // tier's regional entries. Either match strategy fully replaces the
-  // row's inline regionOverrides. Rows with neither match fall through
-  // to USD auto-conversion via the Hotfix 14 bootstrap below — Manager
-  // sees the per-row outcome breakdown in the BULK_IMPORT_BATCH audit
-  // entry's match_by_strategy counters.
+  // Hotfix 19 reshape: the wizard's Preview step pre-computes per-row
+  // tier candidates and asks Manager to pick when >1 tier matches at
+  // the same `(currency, priceMicros)`. The orchestrator now consumes
+  // the Manager's explicit selection (row.chosenTierIdentifier) and
+  // loads exactly that tier's entries — no silent first-match fallback
+  // (the root cause Hotfix 18 instrumentation pinpointed in batch
+  // 4895756e: 4 tiers priced 0.99 USD, picker returned the wrong one).
+  //
+  // Legacy clients that don't send chosenTierIdentifier fall back to
+  // the older SKU-then-currency-price logic — but with one critical
+  // difference: when currency-price returns >1 candidates, we throw
+  // (rather than silently pick the first). Internal-only tool, so the
+  // only realistic caller is the wizard itself.
   let templateMatchCount = 0;
   let templateMatchBySku = 0;
   let templateMatchByCurrencyPrice = 0;
   let templateNoMatchRows = 0;
+  // Hotfix 19 — new selection-path counters.
+  let ambiguousRows = 0;
+  let managerOverrodeRows = 0;
+  let defaultAcceptedRows = 0;
+  let singleMatchRows = 0;
   // Hotfix 18 diagnostic context — populated whenever the batch uses
   // a template scope. Surfaced in the audit log + Railway logs so
   // Manager can correlate "matched" counters with the actual entries
-  // the orchestrator applied. Production gap (Manager batch 4895756e):
-  // audit said matched_by_currency_price=3 but Google received the
-  // Default template's VN value — without per-row diagnostics we can't
-  // tell whether the bug is in the lookup, the mutation, the merge, or
-  // the publisher-client. Capture-then-fix.
+  // the orchestrator applied.
   let templateIdResolved: string | null = null;
   let templateScopeUsed: "GLOBAL" | "APP" | null = null;
   let templateAppIdUsed: string | null = null;
+  type SelectionPath =
+    | "manager_explicit"
+    | "default_accepted"
+    | "single_match"
+    | "no_candidates_auto_bootstrap";
   const perRowDiagnostic: Array<{
     row_index: number;
     sku: string;
     base_currency: string;
     base_price_decimal: string;
+    candidate_count: number;
+    default_tier_offered: string | null;
+    selected_tier: string | null;
+    selection_path: SelectionPath;
+    // Backward-compat fields for SQL queries written against pre-H19 audit shape.
     match_strategy: "sku" | "currency_price" | "none";
     entries_count: number;
     vn_currency: string | null;
@@ -221,14 +249,8 @@ export async function executeBulkImport(
     templateScopeUsed = scope;
     templateAppIdUsed = appIdForScope;
 
-    // Hotfix 17: pre-flight check. When Manager selects "Per-App
-    // Template" (or "Default Template") but no template of that scope
-    // exists, fail fast with an actionable message instead of silently
-    // auto-bootstrapping every row from USD. Previously the orchestrator
-    // looped all N rows, all lookups returned null, all rows fell
-    // through to Hotfix 14 auto-bootstrap (Google's convertRegionPrices)
-    // — Manager saw "items created with auto-converted prices" and
-    // assumed Default fallback when in fact no template applied at all.
+    // Hotfix 17 pre-flight (preserved): refuse to silently auto-bootstrap
+    // when the selected template scope has no rows.
     const exists = await templateExists({ scope, appId: appIdForScope });
     if (!exists) {
       const which =
@@ -241,13 +263,6 @@ export async function executeBulkImport(
       );
     }
 
-    // Hotfix 18: capture the template UUID the orchestrator's scope
-    // resolution returned. Surfaced in audit log + per-row logs so
-    // Manager can SQL-verify the right template was queried. If the
-    // logged template_id ≠ the expected (Per-App) UUID, the bug is in
-    // the scope→template resolution; if it matches but the row's
-    // entries are still wrong, the bug is in the entries query or
-    // downstream.
     templateIdResolved = await findTemplateId({ scope, appId: appIdForScope });
     console.info(
       `[google-iap:bulk-import] template_resolved scope=${scope} app_id=${appIdForScope ?? "-"} template_id=${templateIdResolved ?? "?"}`,
@@ -255,46 +270,117 @@ export async function executeBulkImport(
 
     for (let rowIndex = 0; rowIndex < actionableRows.length; rowIndex += 1) {
       const row = actionableRows[rowIndex];
-      // Strategy 1: SKU-based lookup (documented design).
-      let entries = await lookupTemplateEntriesForIdentifier({
-        scope,
-        appId: appIdForScope,
-        identifier: row.sku,
-      });
-      let matchedBy: "sku" | "currency_price" | null =
-        entries.length > 0 ? "sku" : null;
+      const baseMicros = decimalToMicros(
+        row.basePriceDecimal,
+        row.baseCurrency,
+      );
+      let entries: ParsedPricingEntry[] = [];
+      let selectionPath: SelectionPath = "no_candidates_auto_bootstrap";
+      let matchStrategy: "sku" | "currency_price" | "none" = "none";
+      let candidateCount = row.tierCandidateCount ?? 0;
+      const defaultTierOffered = row.defaultTierIdentifier ?? null;
+      let selectedTier: string | null = null;
 
-      // Strategy 2: currency-aware price-based tier inference. Hotfix
-      // 15 shipped a USD-only variant; Hotfix 16 generalises so VND /
-      // EUR / etc. apps benefit from the same fallback. The match is
-      // region-agnostic (a template tier's EUR price is the same micros
-      // value under any Eurozone region code).
-      if (entries.length === 0) {
-        try {
-          const baseMicros = decimalToMicros(
-            row.basePriceDecimal,
-            row.baseCurrency,
+      if (row.chosenTierIdentifier) {
+        // Wizard supplied an explicit selection — honour it verbatim.
+        // No silent picker; if the tier no longer exists in the
+        // template (Manager edited Settings between Preview and Push),
+        // throw rather than guess.
+        selectedTier = row.chosenTierIdentifier;
+        entries = await lookupTemplateEntriesForIdentifier({
+          scope,
+          appId: appIdForScope,
+          identifier: row.chosenTierIdentifier,
+        });
+        if (entries.length === 0) {
+          throw new Error(
+            `Bulk import row ${row.rowNumber} (SKU "${row.sku}") references tier ` +
+              `"${row.chosenTierIdentifier}" which has no entries in the ${scope} template. ` +
+              `The wizard's selection state appears to have drifted — re-run Preview and try again.`,
           );
-          const tierId = await findTemplateTierByCurrencyMicros({
-            scope,
-            appId: appIdForScope,
-            currencyCode: row.baseCurrency,
-            priceMicros: baseMicros,
-          });
-          if (tierId) {
-            entries = await lookupTemplateEntriesForIdentifier({
+        }
+        matchStrategy =
+          row.chosenTierIdentifier === row.sku ? "sku" : "currency_price";
+        if (candidateCount <= 1) {
+          selectionPath = "single_match";
+          singleMatchRows += 1;
+        } else if (
+          row.defaultTierIdentifier &&
+          row.chosenTierIdentifier === row.defaultTierIdentifier
+        ) {
+          selectionPath = "default_accepted";
+          defaultAcceptedRows += 1;
+          ambiguousRows += 1;
+        } else {
+          selectionPath = "manager_explicit";
+          managerOverrodeRows += 1;
+          ambiguousRows += 1;
+        }
+      } else if (candidateCount > 0) {
+        // Wizard reported candidates but no selection — should never
+        // happen with the new wizard (the Push gate forces a selection
+        // on every ambiguous row + seeds singletons from the primary
+        // tier). Throw rather than silently fall through.
+        throw new Error(
+          `Bulk import row ${row.rowNumber} (SKU "${row.sku}") has ${candidateCount} candidate ` +
+            `tier(s) but the wizard did not provide an explicit tier selection. ` +
+            `Re-run the Bulk Import wizard.`,
+        );
+      } else {
+        // Legacy path — wizard didn't send tier metadata (older clients
+        // or direct API consumers). Fall back to SKU lookup, then to a
+        // candidate probe via `findCandidateTiersForCurrencyPrice` —
+        // but only accept the result when exactly 1 candidate exists.
+        // Multiple candidates throws (Hotfix 19 silent-pick removal).
+        const skuEntries = await lookupTemplateEntriesForIdentifier({
+          scope,
+          appId: appIdForScope,
+          identifier: row.sku,
+        });
+        if (skuEntries.length > 0) {
+          entries = skuEntries;
+          matchStrategy = "sku";
+          selectionPath = "single_match";
+          selectedTier = row.sku;
+          candidateCount = 1;
+          singleMatchRows += 1;
+        } else {
+          let candidates: Array<{ identifier: string }> = [];
+          try {
+            candidates = await findCandidateTiersForCurrencyPrice({
               scope,
               appId: appIdForScope,
-              identifier: tierId,
+              currencyCode: row.baseCurrency,
+              priceMicros: baseMicros,
             });
-            if (entries.length > 0) matchedBy = "currency_price";
+          } catch (err) {
+            console.warn(
+              `[google-iap:bulk-import] candidate probe failed sku=${row.sku} err="${err instanceof Error ? err.message.replace(/"/g, "'") : String(err)}"`,
+            );
           }
-        } catch (err) {
-          console.warn(
-            `[google-iap:bulk-import] currency tier inference failed sku=${row.sku} currency=${row.baseCurrency} err="${
-              err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
-            }"`,
-          );
+          if (candidates.length === 1) {
+            const probeEntries = await lookupTemplateEntriesForIdentifier({
+              scope,
+              appId: appIdForScope,
+              identifier: candidates[0].identifier,
+            });
+            if (probeEntries.length > 0) {
+              entries = probeEntries;
+              matchStrategy = "currency_price";
+              selectionPath = "single_match";
+              selectedTier = candidates[0].identifier;
+              candidateCount = 1;
+              singleMatchRows += 1;
+            }
+          } else if (candidates.length > 1) {
+            throw new Error(
+              `Bulk import row ${row.rowNumber} (SKU "${row.sku}") matches ${candidates.length} template tiers ` +
+                `at ${row.baseCurrency}/${row.basePriceDecimal} but no explicit tier selection was provided. ` +
+                `Tiers: ${candidates.map((c) => c.identifier).join(", ")}. ` +
+                `Re-run the Bulk Import wizard so you can pick a tier explicitly.`,
+            );
+          }
+          // else: candidates.length === 0 → fall through to auto-bootstrap
         }
       }
 
@@ -305,40 +391,39 @@ export async function executeBulkImport(
           priceDecimal: microsToDecimal(e.priceMicros, 6),
         }));
         templateMatchCount += 1;
-        if (matchedBy === "sku") templateMatchBySku += 1;
-        else if (matchedBy === "currency_price") templateMatchByCurrencyPrice += 1;
+        if (matchStrategy === "sku") templateMatchBySku += 1;
+        else if (matchStrategy === "currency_price")
+          templateMatchByCurrencyPrice += 1;
 
-        // Hotfix 18 diagnostic: log + capture the resolved VN entry
-        // (Manager symptom region) immediately after the mutation. If
-        // this disagrees with the final body's VN entry logged below,
-        // the gap is in the bootstrap merge. If it disagrees with what
-        // Google receives, the gap is in publisher-client.
         const vnEntry = row.regionOverrides.find((r) => r.region === "VN");
         perRowDiagnostic.push({
           row_index: rowIndex,
           sku: row.sku,
           base_currency: row.baseCurrency,
           base_price_decimal: row.basePriceDecimal,
-          match_strategy: matchedBy ?? "none",
+          candidate_count: candidateCount,
+          default_tier_offered: defaultTierOffered,
+          selected_tier: selectedTier,
+          selection_path: selectionPath,
+          match_strategy: matchStrategy,
           entries_count: entries.length,
           vn_currency: vnEntry?.currency ?? null,
           vn_price_decimal: vnEntry?.priceDecimal ?? null,
         });
         console.info(
-          `[google-iap:bulk-import] template_match sku=${row.sku} strategy=${matchedBy ?? "?"} entries=${entries.length} vn=${vnEntry ? `${vnEntry.currency}/${vnEntry.priceDecimal}` : "missing"}`,
+          `[google-iap:bulk-import] template_match sku=${row.sku} path=${selectionPath} tier=${selectedTier ?? "?"} entries=${entries.length} vn=${vnEntry ? `${vnEntry.currency}/${vnEntry.priceDecimal}` : "missing"}`,
         );
       } else {
-        // Hotfix 17: template scope was selected but this row didn't
-        // match any tier — track the count so the audit log surfaces
-        // "how many rows fell through to auto-bootstrap" instead of
-        // Manager having to infer it from the difference between
-        // template_matched_rows and rows_total.
         templateNoMatchRows += 1;
         perRowDiagnostic.push({
           row_index: rowIndex,
           sku: row.sku,
           base_currency: row.baseCurrency,
           base_price_decimal: row.basePriceDecimal,
+          candidate_count: candidateCount,
+          default_tier_offered: defaultTierOffered,
+          selected_tier: selectedTier,
+          selection_path: "no_candidates_auto_bootstrap",
           match_strategy: "none",
           entries_count: 0,
           vn_currency: null,
@@ -571,6 +656,17 @@ export async function executeBulkImport(
       // mismatches between Excel rows and template coverage without
       // inferring from the gap between matched_rows and rows_total.
       template_no_match_rows: templateNoMatchRows,
+      // Hotfix 19: selection-path counters. The wizard pre-selects a
+      // primary tier for each ambiguous row (Q5.B); Manager can override.
+      //   - ambiguous_rows:        rows with >1 candidate tiers
+      //   - manager_overrode_rows: subset of ambiguous where Manager picked != default
+      //   - default_accepted_rows: subset of ambiguous where Manager kept the default
+      //   - single_match_rows:     rows with exactly 1 candidate (no choice)
+      // Sum of (default_accepted + manager_overrode) == ambiguous_rows.
+      ambiguous_rows: ambiguousRows,
+      manager_overrode_rows: managerOverrodeRows,
+      default_accepted_rows: defaultAcceptedRows,
+      single_match_rows: singleMatchRows,
       // Hotfix 18 diagnostics: surface which template the orchestrator
       // actually queried + a compact per-row record of (strategy,
       // entries_count, VN price applied). Manager queries the audit log

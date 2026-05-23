@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<!--
+  ================================================================================
+  HOTFIX 19 FINAL — INLINE MULTI-TIER DISAMBIGUATION IN PREVIEW STEP
+  ================================================================================
+
+  Strategic arc : Cycle 35 Google IAP Management · Hotfix 19
+  Module        : Google IAP Management (lib/google-iap-management/, schema
+                  google_iap_mgmt) — NOT Apple IAP.
+  Trigger       : Manager batch 4895756e · PASS SDK / VND app
+                  Per-App template had 4 tiers all priced 0.99 USD;
+                  pickTierByCurrencyMicros returned wrong tier silently.
+
+  Manager directive (2026-05-23):
+    "không muốn tool tự chọn ngầm khi có nhiều tier trùng với giá của
+     file import. cho phép user được chọn tier user muốn"
+    → user-explicit tier selection
+    → INLINE within Preview step (NO separate wizard step)
+    → 4-step wizard flow preserved (Pricing source → Upload → Preview → Done)
+
+  Manager UX clarification (6 questions locked):
+    Q1.B — Tier column always visible (read-only for unambiguous rows,
+           dropdown for ambiguous rows)
+    Q2.C — Dropdown option format:
+           "{Tier Name} — {VN Price} VND · {N} regions"
+    Q3.C — Ambiguous rows: yellow background + ⚠️ warning icon
+    Q4.D — Both top banner AND button counter
+    Q5.B — Pre-select primary tier; user can change via dropdown
+           Algorithm: non-"Alternate" preferred; within group numeric
+           ascending; all-Alternate → first numeric.
+    Q6.A — Excel row order preserved (Manager natural reading order)
+
+  Scope symmetry: same UI for Default Template scope (GLOBAL) and
+  Per-App Template scope (APP) — no UX divergence.
+
+  Simplified state model (post Manager 2026-05-23 redefine):
+  Pre-selections are IMPLICITLY RESOLVED — no separate "all resolved"
+  success state. The Continue button is enabled as long as every
+  ambiguous row has SOME selection (default or explicit override).
+
+  4 UI states rendered (single static HTML, Tailwind CDN, no JS deps):
+    State 1 — Initial pre-selections valid (banner ℹ️, button enabled)
+    State 2 — Manager overrode some (banner ℹ️ with override count, enabled)
+    State 3 — Edge case: Manager cleared a selection (banner ⚠️, button disabled with counter)
+    State 4 — No-ambiguity scenario (banner absent, all read-only, button enabled)
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hotfix 19 — Inline Preview Disambiguation</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .state-frame { box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.05); }
+    .row-ambig { background: #fffbeb; }
+    .row-ambig:hover { background: #fef3c7; }
+    .row-changed { background: #eff6ff; }
+    .row-changed:hover { background: #dbeafe; }
+    .row-normal:hover { background: #f8fafc; }
+    .gate-disabled { background: #cbd5e1 !important; cursor: not-allowed !important; opacity: 0.6; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen p-6">
+
+  <!-- ============================================================ -->
+  <!-- Mockup header — context + Manager decisions locked            -->
+  <!-- ============================================================ -->
+  <header class="max-w-6xl mx-auto mb-8">
+    <div class="bg-white border border-slate-200 rounded-2xl p-6">
+      <div class="flex items-start gap-4">
+        <div class="flex-shrink-0 w-12 h-12 rounded-xl bg-emerald-100 flex items-center justify-center">
+          <svg class="w-6 h-6 text-emerald-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          </svg>
+        </div>
+        <div class="flex-1">
+          <p class="text-xs font-semibold text-emerald-700 uppercase tracking-wider">Hotfix 19 · FINAL mockup — inline Preview</p>
+          <h1 class="text-2xl font-semibold text-slate-900 mt-1">Bulk Import — Multi-tier disambiguation inside Preview</h1>
+          <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+            Per Manager directive, disambiguation is <strong>inline within the existing Preview step</strong> — no
+            new wizard step. Tier column is <strong>always visible</strong>. Ambiguous rows render a dropdown
+            (with a sensible pre-selection); unambiguous rows render the resolved tier read-only. Same UX
+            for both <code class="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono">DEFAULT_TEMPLATE</code> and
+            <code class="bg-slate-100 px-1.5 py-0.5 rounded text-xs font-mono">APP_TEMPLATE</code> sources.
+          </p>
+          <div class="mt-4 grid grid-cols-2 md:grid-cols-3 gap-2 text-[11px]">
+            <div class="bg-slate-50 border border-slate-200 rounded-lg p-2">
+              <p class="font-semibold text-slate-700">Q1.B — Tier column</p>
+              <p class="text-slate-600 mt-0.5">Always visible</p>
+            </div>
+            <div class="bg-slate-50 border border-slate-200 rounded-lg p-2">
+              <p class="font-semibold text-slate-700">Q2.C — Dropdown format</p>
+              <p class="text-slate-600 mt-0.5 font-mono text-[10px]">Tier — VND · N regions</p>
+            </div>
+            <div class="bg-slate-50 border border-slate-200 rounded-lg p-2">
+              <p class="font-semibold text-slate-700">Q3.C — Ambiguous row</p>
+              <p class="text-slate-600 mt-0.5">Yellow bg + ⚠️</p>
+            </div>
+            <div class="bg-slate-50 border border-slate-200 rounded-lg p-2">
+              <p class="font-semibold text-slate-700">Q4.D — Status</p>
+              <p class="text-slate-600 mt-0.5">Banner + button counter</p>
+            </div>
+            <div class="bg-slate-50 border border-slate-200 rounded-lg p-2">
+              <p class="font-semibold text-slate-700">Q5.B — Default</p>
+              <p class="text-slate-600 mt-0.5">Pre-select primary tier</p>
+            </div>
+            <div class="bg-slate-50 border border-slate-200 rounded-lg p-2">
+              <p class="font-semibold text-slate-700">Q6.A — Order</p>
+              <p class="text-slate-600 mt-0.5">Excel order preserved</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============================================================ -->
+  <!-- STATE 1 — Initial load with pre-selections                    -->
+  <!-- ============================================================ -->
+  <section class="max-w-6xl mx-auto mb-12">
+    <div class="flex items-center gap-3 mb-3">
+      <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-slate-900 text-white text-xs font-semibold">1</span>
+      <h2 class="text-lg font-semibold text-slate-900">State 1 — Initial load with pre-selections</h2>
+      <span class="text-xs text-slate-500">3 ambiguous + 3 unambiguous rows · primary tier pre-selected</span>
+    </div>
+
+    <div class="state-frame bg-white border border-slate-200 rounded-2xl overflow-hidden">
+
+      <!-- Step header (4 steps preserved) -->
+      <div class="bg-slate-50 px-6 py-3 border-b border-slate-200 flex items-center justify-between">
+        <div class="flex items-center gap-1.5 text-[11px] text-slate-500">
+          <span class="text-slate-400 line-through">1. Pricing source</span>
+          <span class="text-slate-400">→</span>
+          <span class="text-slate-400 line-through">2. Upload</span>
+          <span class="text-slate-400">→</span>
+          <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium">3. Preview</span>
+          <span class="text-slate-300">→</span>
+          <span class="text-slate-400">4. Done</span>
+        </div>
+        <span class="text-[11px] text-slate-500">App: <code class="font-mono">com.vng.passsdk</code> · Source: <span class="font-semibold">Per-App Template</span></span>
+      </div>
+
+      <!-- Top banner Q4.D — informational state -->
+      <div class="px-6 pt-5">
+        <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
+          <div class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <div class="flex-1">
+              <p class="text-sm font-semibold text-blue-900">
+                3 ambiguous items pre-selected — review or change as needed.
+              </p>
+              <p class="text-xs text-blue-800 mt-1">
+                These rows match multiple tiers at the same <code class="font-mono">(currency, price)</code> in your
+                <strong>Per-App template</strong>. The tool suggested a primary tier for each; the dropdown lets you
+                pick a different one.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Counts strip (existing wizard behavior, unchanged) -->
+      <div class="px-6 pt-4">
+        <div class="flex items-center gap-4 text-xs text-slate-600">
+          <span>Total: <strong class="text-slate-900">6</strong></span>
+          <span>New: <strong class="text-emerald-700">6</strong></span>
+          <span>Existing: <strong class="text-amber-700">0</strong></span>
+          <span class="ml-auto inline-flex items-center gap-1 text-amber-700">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+            3 ambiguous
+          </span>
+        </div>
+      </div>
+
+      <!-- Preview table -->
+      <div class="px-6 py-4">
+        <div class="border border-slate-200 rounded-xl overflow-hidden">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr class="text-left text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                <th class="px-3 py-2.5">#</th>
+                <th class="px-3 py-2.5">SKU</th>
+                <th class="px-3 py-2.5">Default title</th>
+                <th class="px-3 py-2.5 text-right">Base price</th>
+                <th class="px-3 py-2.5">Tier</th>
+                <th class="px-3 py-2.5">Status</th>
+                <th class="px-3 py-2.5">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+
+              <!-- Row 2: unambiguous (1 candidate) -->
+              <tr class="row-normal transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">2</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">starter_pack</td>
+                <td class="px-3 py-2.5 text-slate-700">Starter Pack</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">0.49 USD</td>
+                <td class="px-3 py-2.5">
+                  <span class="inline-flex items-center gap-1 font-mono text-slate-600 italic">Tier S</span>
+                </td>
+                <td class="px-3 py-2.5">
+                  <span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span>
+                </td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+
+              <!-- Row 3: AMBIGUOUS (4 candidates, primary pre-selected = Tier 1) -->
+              <tr class="row-ambig transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">3</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">
+                  <span class="inline-flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5 text-amber-600" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 6l7.5 13H4.5L12 8zm-1 4v3h2v-3h-2zm0 4v2h2v-2h-2z"/></svg>
+                    gold_pack_small
+                  </span>
+                </td>
+                <td class="px-3 py-2.5 text-slate-700">Small Gold Pack</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">0.99 USD</td>
+                <td class="px-3 py-2.5">
+                  <select class="text-xs border border-amber-400 rounded px-1.5 py-1 bg-white font-mono w-full max-w-[260px]">
+                    <option selected>Tier 1 — 27,000 VND · 175 regions</option>
+                    <option>Alternate Tier 1 — 25,000 VND · 175 regions</option>
+                    <option>Alternate Tier A — 25,000 VND · 64 regions</option>
+                    <option>Alternate Tier B — 25,000 VND · 60 regions</option>
+                  </select>
+                </td>
+                <td class="px-3 py-2.5">
+                  <span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span>
+                </td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+
+              <!-- Row 4: AMBIGUOUS (4 candidates, primary pre-selected = Tier 1) -->
+              <tr class="row-ambig transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">4</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">
+                  <span class="inline-flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5 text-amber-600" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 6l7.5 13H4.5L12 8zm-1 4v3h2v-3h-2zm0 4v2h2v-2h-2z"/></svg>
+                    gem_starter
+                  </span>
+                </td>
+                <td class="px-3 py-2.5 text-slate-700">Starter Gems</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">0.99 USD</td>
+                <td class="px-3 py-2.5">
+                  <select class="text-xs border border-amber-400 rounded px-1.5 py-1 bg-white font-mono w-full max-w-[260px]">
+                    <option selected>Tier 1 — 27,000 VND · 175 regions</option>
+                    <option>Alternate Tier 1 — 25,000 VND · 175 regions</option>
+                    <option>Alternate Tier A — 25,000 VND · 64 regions</option>
+                    <option>Alternate Tier B — 25,000 VND · 60 regions</option>
+                  </select>
+                </td>
+                <td class="px-3 py-2.5">
+                  <span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span>
+                </td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+
+              <!-- Row 5: unambiguous -->
+              <tr class="row-normal transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">5</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">gem_value</td>
+                <td class="px-3 py-2.5 text-slate-700">Value Gems</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">1.99 USD</td>
+                <td class="px-3 py-2.5">
+                  <span class="inline-flex items-center gap-1 font-mono text-slate-600 italic">Tier 3</span>
+                </td>
+                <td class="px-3 py-2.5">
+                  <span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span>
+                </td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+
+              <!-- Row 6: AMBIGUOUS (2 candidates, primary = Tier 5) -->
+              <tr class="row-ambig transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">6</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">
+                  <span class="inline-flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5 text-amber-600" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 6l7.5 13H4.5L12 8zm-1 4v3h2v-3h-2zm0 4v2h2v-2h-2z"/></svg>
+                    gold_pack_medium
+                  </span>
+                </td>
+                <td class="px-3 py-2.5 text-slate-700">Medium Gold Pack</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">2.99 USD</td>
+                <td class="px-3 py-2.5">
+                  <select class="text-xs border border-amber-400 rounded px-1.5 py-1 bg-white font-mono w-full max-w-[260px]">
+                    <option selected>Tier 5 — 79,000 VND · 175 regions</option>
+                    <option>Alternate Tier 5 — 75,000 VND · 62 regions</option>
+                  </select>
+                </td>
+                <td class="px-3 py-2.5">
+                  <span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span>
+                </td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+
+              <!-- Row 7: no template match (auto-bootstrap) -->
+              <tr class="row-normal transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">7</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">special_offer</td>
+                <td class="px-3 py-2.5 text-slate-700">Special Offer</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">4.49 USD</td>
+                <td class="px-3 py-2.5">
+                  <span class="inline-flex items-center gap-1 text-slate-500 italic">Auto-converted from USD</span>
+                </td>
+                <td class="px-3 py-2.5">
+                  <span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span>
+                </td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Footer with Back + Continue button (Q4.D counter) -->
+      <div class="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+        <button class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          Back
+        </button>
+        <button class="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition">
+          Push to Google Play
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- STATE 2 — Manager changed some selections                     -->
+  <!-- ============================================================ -->
+  <section class="max-w-6xl mx-auto mb-12">
+    <div class="flex items-center gap-3 mb-3">
+      <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-slate-900 text-white text-xs font-semibold">2</span>
+      <h2 class="text-lg font-semibold text-slate-900">State 2 — Manager overrode 2 selections</h2>
+      <span class="text-xs text-slate-500">Row 4 switched to Alternate Tier 1 · Row 6 left at default</span>
+    </div>
+
+    <div class="state-frame bg-white border border-slate-200 rounded-2xl overflow-hidden">
+      <div class="bg-slate-50 px-6 py-3 border-b border-slate-200 flex items-center justify-between">
+        <div class="flex items-center gap-1.5 text-[11px] text-slate-500">
+          <span class="text-slate-400 line-through">1. Pricing source</span>
+          <span class="text-slate-400">→</span>
+          <span class="text-slate-400 line-through">2. Upload</span>
+          <span class="text-slate-400">→</span>
+          <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium">3. Preview</span>
+          <span class="text-slate-300">→</span>
+          <span class="text-slate-400">4. Done</span>
+        </div>
+        <span class="text-[11px] text-slate-500">App: <code class="font-mono">com.vng.passsdk</code> · Source: <span class="font-semibold">Per-App Template</span></span>
+      </div>
+
+      <div class="px-6 pt-5">
+        <div class="bg-blue-50 border border-blue-200 rounded-xl p-4">
+          <div class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <div class="flex-1">
+              <p class="text-sm font-semibold text-blue-900">
+                3 ambiguous items pre-selected — 1 changed by you, 2 at default.
+              </p>
+              <p class="text-xs text-blue-800 mt-1">
+                Selections are valid. Push when ready.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="px-6 pt-4">
+        <div class="flex items-center gap-4 text-xs text-slate-600">
+          <span>Total: <strong class="text-slate-900">6</strong></span>
+          <span>New: <strong class="text-emerald-700">6</strong></span>
+          <span class="ml-auto inline-flex items-center gap-1 text-blue-700">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+            1 changed
+          </span>
+        </div>
+      </div>
+
+      <div class="px-6 py-4">
+        <div class="border border-slate-200 rounded-xl overflow-hidden">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr class="text-left text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                <th class="px-3 py-2.5">#</th>
+                <th class="px-3 py-2.5">SKU</th>
+                <th class="px-3 py-2.5">Default title</th>
+                <th class="px-3 py-2.5 text-right">Base price</th>
+                <th class="px-3 py-2.5">Tier</th>
+                <th class="px-3 py-2.5">Status</th>
+                <th class="px-3 py-2.5">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr class="row-normal transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">2</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">starter_pack</td>
+                <td class="px-3 py-2.5 text-slate-700">Starter Pack</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">0.49 USD</td>
+                <td class="px-3 py-2.5"><span class="font-mono text-slate-600 italic">Tier S</span></td>
+                <td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+
+              <!-- Row 3: still default -->
+              <tr class="row-ambig transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">3</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">
+                  <span class="inline-flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5 text-amber-600" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 6l7.5 13H4.5L12 8zm-1 4v3h2v-3h-2zm0 4v2h2v-2h-2z"/></svg>
+                    gold_pack_small
+                  </span>
+                </td>
+                <td class="px-3 py-2.5 text-slate-700">Small Gold Pack</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">0.99 USD</td>
+                <td class="px-3 py-2.5">
+                  <select class="text-xs border border-amber-400 rounded px-1.5 py-1 bg-white font-mono w-full max-w-[260px]">
+                    <option selected>Tier 1 — 27,000 VND · 175 regions</option>
+                    <option>Alternate Tier 1 — 25,000 VND · 175 regions</option>
+                    <option>Alternate Tier A — 25,000 VND · 64 regions</option>
+                    <option>Alternate Tier B — 25,000 VND · 60 regions</option>
+                  </select>
+                </td>
+                <td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+
+              <!-- Row 4: CHANGED — Manager picked Alternate Tier 1 -->
+              <tr class="row-changed transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">4</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">
+                  <span class="inline-flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
+                    gem_starter
+                  </span>
+                </td>
+                <td class="px-3 py-2.5 text-slate-700">Starter Gems</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">0.99 USD</td>
+                <td class="px-3 py-2.5">
+                  <select class="text-xs border border-blue-400 rounded px-1.5 py-1 bg-white font-mono w-full max-w-[260px]">
+                    <option>Tier 1 — 27,000 VND · 175 regions</option>
+                    <option selected>Alternate Tier 1 — 25,000 VND · 175 regions</option>
+                    <option>Alternate Tier A — 25,000 VND · 64 regions</option>
+                    <option>Alternate Tier B — 25,000 VND · 60 regions</option>
+                  </select>
+                  <p class="text-[10px] text-blue-700 mt-0.5">Changed from default (Tier 1)</p>
+                </td>
+                <td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+
+              <tr class="row-normal transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">5</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">gem_value</td>
+                <td class="px-3 py-2.5 text-slate-700">Value Gems</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">1.99 USD</td>
+                <td class="px-3 py-2.5"><span class="font-mono text-slate-600 italic">Tier 3</span></td>
+                <td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+
+              <tr class="row-ambig transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">6</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">
+                  <span class="inline-flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5 text-amber-600" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 6l7.5 13H4.5L12 8zm-1 4v3h2v-3h-2zm0 4v2h2v-2h-2z"/></svg>
+                    gold_pack_medium
+                  </span>
+                </td>
+                <td class="px-3 py-2.5 text-slate-700">Medium Gold Pack</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">2.99 USD</td>
+                <td class="px-3 py-2.5">
+                  <select class="text-xs border border-amber-400 rounded px-1.5 py-1 bg-white font-mono w-full max-w-[260px]">
+                    <option selected>Tier 5 — 79,000 VND · 175 regions</option>
+                    <option>Alternate Tier 5 — 75,000 VND · 62 regions</option>
+                  </select>
+                </td>
+                <td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+
+              <tr class="row-normal transition">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">7</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">special_offer</td>
+                <td class="px-3 py-2.5 text-slate-700">Special Offer</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">4.49 USD</td>
+                <td class="px-3 py-2.5"><span class="text-slate-500 italic">Auto-converted from USD</span></td>
+                <td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+        <button class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          Back
+        </button>
+        <button class="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition">
+          Push to Google Play
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- STATE 3 — Edge case: Manager cleared a selection              -->
+  <!-- ============================================================ -->
+  <section class="max-w-6xl mx-auto mb-12">
+    <div class="flex items-center gap-3 mb-3">
+      <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-slate-900 text-white text-xs font-semibold">3</span>
+      <h2 class="text-lg font-semibold text-slate-900">State 3 — Edge case: Manager cleared a selection</h2>
+      <span class="text-xs text-slate-500">Banner ⚠️ · button disabled with counter</span>
+    </div>
+
+    <div class="state-frame bg-white border border-slate-200 rounded-2xl overflow-hidden">
+      <div class="bg-slate-50 px-6 py-3 border-b border-slate-200 flex items-center justify-between">
+        <div class="flex items-center gap-1.5 text-[11px] text-slate-500">
+          <span class="text-slate-400 line-through">1. Pricing source</span>
+          <span class="text-slate-400">→</span>
+          <span class="text-slate-400 line-through">2. Upload</span>
+          <span class="text-slate-400">→</span>
+          <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium">3. Preview</span>
+          <span class="text-slate-300">→</span>
+          <span class="text-slate-400">4. Done</span>
+        </div>
+        <span class="text-[11px] text-slate-500">App: <code class="font-mono">com.vng.passsdk</code> · Source: <span class="font-semibold">Per-App Template</span></span>
+      </div>
+
+      <!-- Warning banner Q4.D -->
+      <div class="px-6 pt-5">
+        <div class="bg-amber-50 border border-amber-300 rounded-xl p-4">
+          <div class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+            <div class="flex-1">
+              <p class="text-sm font-semibold text-amber-900">
+                1 item needs tier selection.
+              </p>
+              <p class="text-xs text-amber-800 mt-1">
+                Pick a tier for the row highlighted below before pushing. The other ambiguous rows are
+                resolved via their pre-selection or your override.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="px-6 pt-4">
+        <div class="flex items-center gap-4 text-xs text-slate-600">
+          <span>Total: <strong class="text-slate-900">6</strong></span>
+          <span>New: <strong class="text-emerald-700">6</strong></span>
+          <span class="ml-auto inline-flex items-center gap-1 text-amber-700">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+            1 needs selection
+          </span>
+        </div>
+      </div>
+
+      <div class="px-6 py-4">
+        <div class="border border-slate-200 rounded-xl overflow-hidden">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr class="text-left text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                <th class="px-3 py-2.5">#</th>
+                <th class="px-3 py-2.5">SKU</th>
+                <th class="px-3 py-2.5">Default title</th>
+                <th class="px-3 py-2.5 text-right">Base price</th>
+                <th class="px-3 py-2.5">Tier</th>
+                <th class="px-3 py-2.5">Status</th>
+                <th class="px-3 py-2.5">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr class="row-normal transition"><td class="px-3 py-2.5 text-slate-400 font-mono">2</td><td class="px-3 py-2.5 font-mono text-slate-900">starter_pack</td><td class="px-3 py-2.5 text-slate-700">Starter Pack</td><td class="px-3 py-2.5 text-right font-mono text-slate-700">0.49 USD</td><td class="px-3 py-2.5"><span class="font-mono text-slate-600 italic">Tier S</span></td><td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td><td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td></tr>
+
+              <!-- Row 3: CLEARED (no selection) — bold yellow + ⚠️ icon -->
+              <tr class="row-ambig transition" style="background:#fef3c7;">
+                <td class="px-3 py-2.5 text-slate-400 font-mono">3</td>
+                <td class="px-3 py-2.5 font-mono text-slate-900">
+                  <span class="inline-flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5 text-amber-700" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 6l7.5 13H4.5L12 8zm-1 4v3h2v-3h-2zm0 4v2h2v-2h-2z"/></svg>
+                    gold_pack_small
+                  </span>
+                </td>
+                <td class="px-3 py-2.5 text-slate-700">Small Gold Pack</td>
+                <td class="px-3 py-2.5 text-right font-mono text-slate-700">0.99 USD</td>
+                <td class="px-3 py-2.5">
+                  <select class="text-xs border-2 border-amber-500 rounded px-1.5 py-1 bg-amber-50 font-mono w-full max-w-[260px]">
+                    <option selected disabled>— Select a tier —</option>
+                    <option>Tier 1 — 27,000 VND · 175 regions</option>
+                    <option>Alternate Tier 1 — 25,000 VND · 175 regions</option>
+                    <option>Alternate Tier A — 25,000 VND · 64 regions</option>
+                    <option>Alternate Tier B — 25,000 VND · 60 regions</option>
+                  </select>
+                  <p class="text-[10px] text-amber-700 mt-0.5 font-semibold">Selection cleared — pick a tier.</p>
+                </td>
+                <td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td>
+                <td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td>
+              </tr>
+
+              <tr class="row-ambig transition"><td class="px-3 py-2.5 text-slate-400 font-mono">4</td><td class="px-3 py-2.5 font-mono text-slate-900"><span class="inline-flex items-center gap-1.5"><svg class="w-3.5 h-3.5 text-amber-600" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 6l7.5 13H4.5L12 8zm-1 4v3h2v-3h-2zm0 4v2h2v-2h-2z"/></svg>gem_starter</span></td><td class="px-3 py-2.5 text-slate-700">Starter Gems</td><td class="px-3 py-2.5 text-right font-mono text-slate-700">0.99 USD</td><td class="px-3 py-2.5"><select class="text-xs border border-amber-400 rounded px-1.5 py-1 bg-white font-mono w-full max-w-[260px]"><option selected>Tier 1 — 27,000 VND · 175 regions</option><option>Alternate Tier 1 — 25,000 VND · 175 regions</option><option>Alternate Tier A — 25,000 VND · 64 regions</option><option>Alternate Tier B — 25,000 VND · 60 regions</option></select></td><td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td><td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td></tr>
+              <tr class="row-normal transition"><td class="px-3 py-2.5 text-slate-400 font-mono">5</td><td class="px-3 py-2.5 font-mono text-slate-900">gem_value</td><td class="px-3 py-2.5 text-slate-700">Value Gems</td><td class="px-3 py-2.5 text-right font-mono text-slate-700">1.99 USD</td><td class="px-3 py-2.5"><span class="font-mono text-slate-600 italic">Tier 3</span></td><td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td><td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td></tr>
+              <tr class="row-ambig transition"><td class="px-3 py-2.5 text-slate-400 font-mono">6</td><td class="px-3 py-2.5 font-mono text-slate-900"><span class="inline-flex items-center gap-1.5"><svg class="w-3.5 h-3.5 text-amber-600" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 6l7.5 13H4.5L12 8zm-1 4v3h2v-3h-2zm0 4v2h2v-2h-2z"/></svg>gold_pack_medium</span></td><td class="px-3 py-2.5 text-slate-700">Medium Gold Pack</td><td class="px-3 py-2.5 text-right font-mono text-slate-700">2.99 USD</td><td class="px-3 py-2.5"><select class="text-xs border border-amber-400 rounded px-1.5 py-1 bg-white font-mono w-full max-w-[260px]"><option selected>Tier 5 — 79,000 VND · 175 regions</option><option>Alternate Tier 5 — 75,000 VND · 62 regions</option></select></td><td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td><td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td></tr>
+              <tr class="row-normal transition"><td class="px-3 py-2.5 text-slate-400 font-mono">7</td><td class="px-3 py-2.5 font-mono text-slate-900">special_offer</td><td class="px-3 py-2.5 text-slate-700">Special Offer</td><td class="px-3 py-2.5 text-right font-mono text-slate-700">4.49 USD</td><td class="px-3 py-2.5"><span class="text-slate-500 italic">Auto-converted from USD</span></td><td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td><td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Footer with disabled button + counter -->
+      <div class="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+        <button class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          Back
+        </button>
+        <button class="gate-disabled flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white rounded-lg" title="1 item needs tier selection">
+          Push to Google Play (1 item needs selection)
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- STATE 4 — No ambiguity scenario                               -->
+  <!-- ============================================================ -->
+  <section class="max-w-6xl mx-auto mb-12">
+    <div class="flex items-center gap-3 mb-3">
+      <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-slate-900 text-white text-xs font-semibold">4</span>
+      <h2 class="text-lg font-semibold text-slate-900">State 4 — No ambiguity (Tier column read-only for all rows)</h2>
+      <span class="text-xs text-slate-500">Banner absent · button counter shows just "Push" · zero-friction common case</span>
+    </div>
+
+    <div class="state-frame bg-white border border-slate-200 rounded-2xl overflow-hidden">
+      <div class="bg-slate-50 px-6 py-3 border-b border-slate-200 flex items-center justify-between">
+        <div class="flex items-center gap-1.5 text-[11px] text-slate-500">
+          <span class="text-slate-400 line-through">1. Pricing source</span>
+          <span class="text-slate-400">→</span>
+          <span class="text-slate-400 line-through">2. Upload</span>
+          <span class="text-slate-400">→</span>
+          <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium">3. Preview</span>
+          <span class="text-slate-300">→</span>
+          <span class="text-slate-400">4. Done</span>
+        </div>
+        <span class="text-[11px] text-slate-500">App: <code class="font-mono">com.vng.shootergame</code> · Source: <span class="font-semibold">Default Template</span></span>
+      </div>
+
+      <!-- No banner — clean state -->
+
+      <div class="px-6 pt-5">
+        <div class="flex items-center gap-4 text-xs text-slate-600">
+          <span>Total: <strong class="text-slate-900">5</strong></span>
+          <span>New: <strong class="text-emerald-700">5</strong></span>
+        </div>
+      </div>
+
+      <div class="px-6 py-4">
+        <div class="border border-slate-200 rounded-xl overflow-hidden">
+          <table class="w-full text-xs">
+            <thead class="bg-slate-50 border-b border-slate-200">
+              <tr class="text-left text-[11px] font-medium uppercase tracking-wide text-slate-500">
+                <th class="px-3 py-2.5">#</th>
+                <th class="px-3 py-2.5">SKU</th>
+                <th class="px-3 py-2.5">Default title</th>
+                <th class="px-3 py-2.5 text-right">Base price</th>
+                <th class="px-3 py-2.5">Tier</th>
+                <th class="px-3 py-2.5">Status</th>
+                <th class="px-3 py-2.5">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100">
+              <tr class="row-normal transition"><td class="px-3 py-2.5 text-slate-400 font-mono">2</td><td class="px-3 py-2.5 font-mono text-slate-900">small_pack</td><td class="px-3 py-2.5 text-slate-700">Small Pack</td><td class="px-3 py-2.5 text-right font-mono text-slate-700">0.99 USD</td><td class="px-3 py-2.5"><span class="font-mono text-slate-600 italic">Tier 1</span></td><td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td><td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td></tr>
+              <tr class="row-normal transition"><td class="px-3 py-2.5 text-slate-400 font-mono">3</td><td class="px-3 py-2.5 font-mono text-slate-900">medium_pack</td><td class="px-3 py-2.5 text-slate-700">Medium Pack</td><td class="px-3 py-2.5 text-right font-mono text-slate-700">2.99 USD</td><td class="px-3 py-2.5"><span class="font-mono text-slate-600 italic">Tier 5</span></td><td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td><td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td></tr>
+              <tr class="row-normal transition"><td class="px-3 py-2.5 text-slate-400 font-mono">4</td><td class="px-3 py-2.5 font-mono text-slate-900">large_pack</td><td class="px-3 py-2.5 text-slate-700">Large Pack</td><td class="px-3 py-2.5 text-right font-mono text-slate-700">4.99 USD</td><td class="px-3 py-2.5"><span class="font-mono text-slate-600 italic">Tier 9</span></td><td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td><td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td></tr>
+              <tr class="row-normal transition"><td class="px-3 py-2.5 text-slate-400 font-mono">5</td><td class="px-3 py-2.5 font-mono text-slate-900">premium_pack</td><td class="px-3 py-2.5 text-slate-700">Premium Pack</td><td class="px-3 py-2.5 text-right font-mono text-slate-700">9.99 USD</td><td class="px-3 py-2.5"><span class="font-mono text-slate-600 italic">Tier 15</span></td><td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td><td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td></tr>
+              <tr class="row-normal transition"><td class="px-3 py-2.5 text-slate-400 font-mono">6</td><td class="px-3 py-2.5 font-mono text-slate-900">whale_pack</td><td class="px-3 py-2.5 text-slate-700">Whale Pack</td><td class="px-3 py-2.5 text-right font-mono text-slate-700">99.99 USD</td><td class="px-3 py-2.5"><span class="text-slate-500 italic">Auto-converted from USD</span></td><td class="px-3 py-2.5"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td><td class="px-3 py-2.5"><span class="text-[11px] text-emerald-700">Create</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+        <button class="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          Back
+        </button>
+        <button class="flex items-center gap-1.5 px-4 py-2 text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition">
+          Push to Google Play
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- SCOPE SYMMETRY                                                -->
+  <!-- ============================================================ -->
+  <section class="max-w-6xl mx-auto mb-12">
+    <div class="bg-white border border-slate-200 rounded-2xl p-6">
+      <p class="text-xs font-semibold text-emerald-700 uppercase tracking-wider mb-2">Scope symmetry</p>
+      <h2 class="text-lg font-semibold text-slate-900 mb-3">Same UX for both template scopes</h2>
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 border-b border-slate-200">
+          <tr class="text-left text-xs uppercase tracking-wide text-slate-500">
+            <th class="px-3 py-2">Pricing source</th>
+            <th class="px-3 py-2">Disambiguation applies?</th>
+            <th class="px-3 py-2">Tier column rendering</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 text-sm">
+          <tr>
+            <td class="px-3 py-2 font-mono text-emerald-700">DEFAULT_TEMPLATE</td>
+            <td class="px-3 py-2">✅ Yes — GLOBAL scope candidate lookup</td>
+            <td class="px-3 py-2">Read-only when ≤1 candidate; dropdown when &gt;1</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-emerald-700">APP_TEMPLATE</td>
+            <td class="px-3 py-2">✅ Yes — APP scope candidate lookup</td>
+            <td class="px-3 py-2">Read-only when ≤1 candidate; dropdown when &gt;1</td>
+          </tr>
+          <tr>
+            <td class="px-3 py-2 font-mono text-slate-600">GOOGLE_DEFAULT</td>
+            <td class="px-3 py-2">❌ No — auto-bootstrap path, no template lookup</td>
+            <td class="px-3 py-2">"Auto-converted from USD" for every row</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="text-xs text-slate-500 mt-3 italic">
+        Wizard Step 1 (Pricing source) determines which scope is queried; the Preview step's rendering
+        rules don't branch on scope. Manager workflow is identical regardless of source selection.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <!-- IMPLEMENTATION HAND-OFF                                       -->
+  <!-- ============================================================ -->
+  <section class="max-w-6xl mx-auto mb-12">
+    <div class="bg-slate-900 text-slate-100 rounded-2xl p-6">
+      <p class="text-xs font-semibold text-emerald-400 uppercase tracking-wider mb-2">Implementation hand-off (9 steps · ~3h)</p>
+      <h2 class="text-xl font-semibold mb-4">Behavioral contract locked</h2>
+
+      <div class="grid md:grid-cols-2 gap-5 text-xs leading-relaxed">
+
+        <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+          <p class="text-emerald-300 font-semibold mb-2">Step 1 · Candidate-tier query (~20m)</p>
+          <p class="text-slate-300 mb-2"><code class="bg-slate-900 px-1 rounded">findCandidateTiersForCurrencyPrice({scope, appId, currency, priceMicros})</code> in <code class="bg-slate-900 px-1 rounded">queries/templates.ts</code>.</p>
+          <p class="text-slate-300">Returns <code class="bg-slate-900 px-1 rounded">TierCandidate[]</code> · 0=no match, 1=unambiguous, &gt;1=ambiguous. Hotfix 17 hard-fail guard preserved.</p>
+        </div>
+
+        <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+          <p class="text-emerald-300 font-semibold mb-2">Step 2 · Primary-tier algorithm (~15m)</p>
+          <p class="text-slate-300 mb-2"><code class="bg-slate-900 px-1 rounded">getPrimaryTierFromCandidates(candidates): string</code></p>
+          <p class="text-slate-300">Q5.B: non-"Alternate" preferred · within group <code class="bg-slate-900 px-1 rounded">Intl.Collator({numeric:true})</code> ascending · all-Alternate → first numeric.</p>
+        </div>
+
+        <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+          <p class="text-emerald-300 font-semibold mb-2">Step 3 · Preview API extension (~20m)</p>
+          <p class="text-slate-300">Per row, call candidate query with wizard pricingSource. Response gains <code class="bg-slate-900 px-1 rounded">tierCandidates: TierCandidate[]</code> + <code class="bg-slate-900 px-1 rounded">defaultTierSelection: string | null</code>.</p>
+        </div>
+
+        <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+          <p class="text-emerald-300 font-semibold mb-2">Step 4 · Preview table render (~1h)</p>
+          <p class="text-slate-300">New Tier column. Per-row matrix: 0 candidates→"Auto-converted from USD" · 1→read-only italic · &gt;1→dropdown Q2.C format, primary pre-selected, row yellow bg + ⚠️ icon (Q3.C).</p>
+        </div>
+
+        <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+          <p class="text-emerald-300 font-semibold mb-2">Step 5 · Banner + button counter (~20m)</p>
+          <p class="text-slate-300">Q4.D — banner states ℹ️/✓/⚠️ at top; button counter shows "(N items need selection)" when invalid.</p>
+        </div>
+
+        <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+          <p class="text-emerald-300 font-semibold mb-2">Step 6 · Wizard state (~20m)</p>
+          <p class="text-slate-300">Add <code class="bg-slate-900 px-1 rounded">tierSelections: Record&lt;rowNumber, string&gt;</code> to wizard state. <code class="bg-slate-900 px-1 rounded">canContinueFromPreview</code> requires every ambiguous row to have a selection. Pass to execute.</p>
+        </div>
+
+        <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+          <p class="text-emerald-300 font-semibold mb-2">Step 7 · Orchestrator integration (~30m)</p>
+          <p class="text-slate-300">Per-row logic: tierSelections[i] → use it; else 1 candidate → use it; else 0 candidates → auto-bootstrap. NO silent fallback. Remove the Hotfix 15–18 pickTierByCurrencyMicros first-match behavior.</p>
+        </div>
+
+        <div class="bg-slate-800 rounded-xl p-4 border border-slate-700">
+          <p class="text-emerald-300 font-semibold mb-2">Step 8 · Audit log (~10m)</p>
+          <p class="text-slate-300">Extend <code class="bg-slate-900 px-1 rounded">per_row_diagnostic</code> with <code class="bg-slate-900 px-1 rounded">selection_path</code>: <code class="bg-slate-900 px-1 rounded">manager_explicit | default_accepted | single_match | no_candidates_auto_bootstrap</code> · <code class="bg-slate-900 px-1 rounded">ambiguous_rows</code> + <code class="bg-slate-900 px-1 rounded">manager_overrode_rows</code> counters.</p>
+        </div>
+
+        <div class="bg-slate-800 rounded-xl p-4 border border-slate-700 md:col-span-2">
+          <p class="text-emerald-300 font-semibold mb-2">Step 9 · Tests +12–15 (~25m)</p>
+          <ul class="text-slate-300 space-y-1 columns-2">
+            <li>· findCandidateTiersForCurrencyPrice · scope=GLOBAL</li>
+            <li>· findCandidateTiersForCurrencyPrice · scope=APP</li>
+            <li>· getPrimaryTierFromCandidates · primary preferred</li>
+            <li>· getPrimaryTierFromCandidates · all-Alternate fallback</li>
+            <li>· Preview component · 1 candidate read-only</li>
+            <li>· Preview component · &gt;1 candidate dropdown</li>
+            <li>· Preview component · primary pre-selected</li>
+            <li>· Wizard · selection updates state</li>
+            <li>· Wizard · gate disabled when missing</li>
+            <li>· Orchestrator · honors tierSelections</li>
+            <li>· Orchestrator · no silent fallback</li>
+            <li>· Audit log · selection_path correct</li>
+            <li>· E2E scope symmetry · GLOBAL</li>
+            <li>· E2E scope symmetry · APP</li>
+            <li>· Backward compat · single-create unchanged</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="mt-6 pt-5 border-t border-slate-700 grid md:grid-cols-3 gap-4 text-[11px]">
+        <div>
+          <p class="text-emerald-300 font-semibold mb-1.5">FILES TOUCHED</p>
+          <ul class="text-slate-400 space-y-1 font-mono">
+            <li>queries/templates.ts</li>
+            <li>orchestration/bulk-import.ts</li>
+            <li>api/.../preview/route.ts</li>
+            <li>api/.../execute/route.ts</li>
+            <li>BulkImportWizard.tsx</li>
+            <li>PreviewTable.tsx</li>
+          </ul>
+        </div>
+        <div>
+          <p class="text-emerald-300 font-semibold mb-1.5">REMOVALS</p>
+          <ul class="text-slate-400 space-y-1">
+            <li>· Silent first-match in <code class="bg-slate-800 px-1 rounded">pickTierByCurrencyMicros</code> for &gt;1 candidates</li>
+            <li>· The Hotfix 18 "audit said matched but Google wrong" branch is now structurally impossible</li>
+          </ul>
+        </div>
+        <div>
+          <p class="text-emerald-300 font-semibold mb-1.5">VERIFIED INVARIANTS</p>
+          <ul class="text-slate-400 space-y-1">
+            <li>· Excel order preserved (Q6.A) — no sort applied to <code class="bg-slate-800 px-1 rounded">previewRows</code></li>
+            <li>· Scope symmetry — same render rules for GLOBAL + APP</li>
+            <li>· Backward compat — google_default + no-ambiguity flows unchanged</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</body>
+</html>

@@ -2,14 +2,36 @@
 
 import { Check, AlertTriangle } from "lucide-react";
 
-import type { PreviewRow } from "./BulkImportWizard";
+import type { PreviewRow, PreviewTierCandidate } from "./BulkImportWizard";
 
 interface Props {
   rows: PreviewRow[];
   onRowDecisionChange: (rowNumber: number, decision: "overwrite" | "skip") => void;
+  // Hotfix 19 — tier-selection plumbing.
+  tierSelections: Record<number, string>;
+  onTierSelectionChange: (rowNumber: number, identifier: string) => void;
 }
 
-export function PreviewTable({ rows, onRowDecisionChange }: Props) {
+/** Hotfix 19: tier-dropdown option format Q2.C —
+ *  "{identifier} — {VN price} VND · {N} regions" when a VN entry exists,
+ *  "{identifier} — {N} regions" otherwise. VN price is formatted with
+ *  thousands separators (Manager reads "27,000" not "27000"). */
+function formatTierLabel(c: PreviewTierCandidate): string {
+  const regionPart = `${c.regionCount} regions`;
+  if (c.vnPriceDecimal && c.vnCurrency) {
+    const [whole] = c.vnPriceDecimal.split(".");
+    const formatted = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return `${c.identifier} — ${formatted} ${c.vnCurrency} · ${regionPart}`;
+  }
+  return `${c.identifier} — ${regionPart}`;
+}
+
+export function PreviewTable({
+  rows,
+  onRowDecisionChange,
+  tierSelections,
+  onTierSelectionChange,
+}: Props) {
   return (
     <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
       <table className="w-full">
@@ -19,6 +41,7 @@ export function PreviewTable({ rows, onRowDecisionChange }: Props) {
             <th className="px-3 py-2.5">SKU</th>
             <th className="px-3 py-2.5">Default title</th>
             <th className="px-3 py-2.5 text-right">Base (USD)</th>
+            <th className="px-3 py-2.5">Tier</th>
             <th className="px-3 py-2.5">Locales</th>
             <th className="px-3 py-2.5">Status</th>
             <th className="px-3 py-2.5">Action</th>
@@ -31,13 +54,35 @@ export function PreviewTable({ rows, onRowDecisionChange }: Props) {
               row.listings[0]?.title ??
               "—";
             const locales = row.listings.map((l) => l.locale).join(", ");
+            const isAmbiguous = row.tierCandidates.length > 1;
+            const selection = tierSelections[row.rowNumber];
+            // Q3.C: yellow row background + warning icon for ambiguous rows.
+            // Bolder amber tint when Manager cleared the selection (defensive
+            // edge-case, see BulkImportWizard tierStatus.pending).
+            const selectionMissing = isAmbiguous && !selection;
+            const rowClass = selectionMissing
+              ? "bg-amber-100 hover:bg-amber-200 transition"
+              : isAmbiguous
+                ? "bg-amber-50 hover:bg-amber-100 transition"
+                : "hover:bg-slate-50 transition";
             return (
-              <tr key={row.rowNumber} className="hover:bg-slate-50 transition">
+              <tr key={row.rowNumber} className={rowClass}>
                 <td className="px-3 py-2.5 text-xs text-slate-400 font-mono">
                   {row.rowNumber}
                 </td>
                 <td className="px-3 py-2.5 text-xs font-mono text-slate-900">
-                  {row.sku}
+                  <span className="inline-flex items-center gap-1.5">
+                    {isAmbiguous && (
+                      <AlertTriangle
+                        className={
+                          selectionMissing
+                            ? "h-3.5 w-3.5 text-amber-700"
+                            : "h-3.5 w-3.5 text-amber-600"
+                        }
+                      />
+                    )}
+                    {row.sku}
+                  </span>
                 </td>
                 <td className="px-3 py-2.5 text-xs text-slate-700 max-w-[180px] truncate">
                   {defaultTitle}
@@ -45,7 +90,55 @@ export function PreviewTable({ rows, onRowDecisionChange }: Props) {
                 <td className="px-3 py-2.5 text-xs text-right font-mono text-slate-700">
                   {row.basePriceDecimal}
                 </td>
-                <td className="px-3 py-2.5 text-[10px] text-slate-500 font-mono max-w-[200px] truncate">
+                <td className="px-3 py-2.5 text-xs">
+                  {row.tierCandidates.length === 0 ? (
+                    <span className="text-slate-500 italic">
+                      Auto-converted from USD
+                    </span>
+                  ) : row.tierCandidates.length === 1 ? (
+                    <span className="font-mono text-slate-600 italic">
+                      {row.tierCandidates[0].identifier}
+                    </span>
+                  ) : (
+                    <div>
+                      <select
+                        value={selection ?? ""}
+                        onChange={(e) =>
+                          onTierSelectionChange(row.rowNumber, e.target.value)
+                        }
+                        className={
+                          "text-xs border rounded px-1.5 py-1 font-mono w-full max-w-[280px] " +
+                          (selectionMissing
+                            ? "border-2 border-amber-500 bg-amber-50"
+                            : "border-amber-400 bg-white")
+                        }
+                      >
+                        <option value="" disabled hidden>
+                          — Select a tier —
+                        </option>
+                        {row.tierCandidates.map((c) => (
+                          <option key={c.identifier} value={c.identifier}>
+                            {formatTierLabel(c)}
+                          </option>
+                        ))}
+                      </select>
+                      {selectionMissing && (
+                        <p className="text-[10px] text-amber-700 mt-0.5 font-semibold">
+                          Selection cleared — pick a tier.
+                        </p>
+                      )}
+                      {!selectionMissing &&
+                        selection &&
+                        row.defaultTierSelection &&
+                        selection !== row.defaultTierSelection && (
+                          <p className="text-[10px] text-blue-700 mt-0.5">
+                            Changed from default ({row.defaultTierSelection})
+                          </p>
+                        )}
+                    </div>
+                  )}
+                </td>
+                <td className="px-3 py-2.5 text-[10px] text-slate-500 font-mono max-w-[160px] truncate">
                   {locales || "—"}
                 </td>
                 <td className="px-3 py-2.5">

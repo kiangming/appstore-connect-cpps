@@ -39,6 +39,10 @@ interface ExecuteBody {
     regionOverrides?: Array<{ region: string; currency: string; priceDecimal: string }>;
     listings?: Array<{ locale: string; title: string; description: string }>;
     decision?: RowDecision;
+    // Hotfix 19 — explicit tier selection from the wizard's Preview step.
+    chosenTierIdentifier?: string | null;
+    defaultTierIdentifier?: string | null;
+    tierCandidateCount?: number;
   }>;
 }
 
@@ -129,6 +133,18 @@ export async function POST(
         description: l.description ?? "",
       })),
       decision,
+      // Hotfix 19 — forward tier selection metadata verbatim. Null when
+      // the wizard didn't compute candidates (google_default path or
+      // older client). Orchestrator handles all combinations.
+      chosenTierIdentifier:
+        typeof r.chosenTierIdentifier === "string" && r.chosenTierIdentifier.length > 0
+          ? r.chosenTierIdentifier
+          : null,
+      defaultTierIdentifier:
+        typeof r.defaultTierIdentifier === "string" && r.defaultTierIdentifier.length > 0
+          ? r.defaultTierIdentifier
+          : null,
+      tierCandidateCount: typeof r.tierCandidateCount === "number" ? r.tierCandidateCount : 0,
     });
   }
 
