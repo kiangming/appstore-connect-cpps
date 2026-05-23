@@ -18,6 +18,11 @@ import type { AscCredentials } from "@/lib/asc-jwt";
 import { getInAppPurchase } from "@/lib/iap-management/apple/client";
 import { getPriceScheduleForIap } from "@/lib/iap-management/apple/price-schedules";
 import { AppleApiError } from "@/lib/iap-management/apple/fetch";
+import {
+  getAvailabilityForIap,
+  getAllTerritoryIds,
+  type AvailabilityForIap,
+} from "@/lib/iap-management/apple/availabilities";
 import type {
   InAppPurchase,
   InAppPurchaseLocalization,
@@ -267,6 +272,16 @@ export function unpackPriceSchedule(
   return { baseTerritory, basePrice, entries };
 }
 
+/** Cycle 37 Phase 1 — view-model for the AvailabilitiesSection.
+ *  `availability` is null when Apple responds 404 to the linked-resource
+ *  fetch (no availability resource exists → "Removed from Sale" state).
+ *  `totalTerritoryCount` is the global Apple denominator used in the
+ *  "N of M" badge; populated from `/v1/territories` (cached). */
+export interface AvailabilityView {
+  availability: AvailabilityForIap | null;
+  totalTerritoryCount: number;
+}
+
 export interface IapViewData {
   iap: InAppPurchase;
   localizations: InAppPurchaseLocalization[];
@@ -275,6 +290,10 @@ export interface IapViewData {
   priceSchedule: PriceScheduleView | null;
   /** Populated when the price-schedule fetch failed for a non-404 reason. */
   priceScheduleError: string | null;
+  /** Cycle 37 Phase 1 — Apple-side availability snapshot (read-only). */
+  availabilityView: AvailabilityView | null;
+  /** Populated when the availability fetch failed for a non-404 reason. */
+  availabilityError: string | null;
 }
 
 /**
@@ -292,16 +311,30 @@ export async function getIapViewData(
   creds: AscCredentials,
   appleIapId: string,
 ): Promise<IapViewData> {
-  const [iapRes, scheduleSettled] = await Promise.all([
-    getInAppPurchase(creds, appleIapId),
-    getPriceScheduleForIap(creds, appleIapId).then(
-      (res): { ok: true; res: AscApiResponse<InAppPurchasePriceSchedule> } => ({
-        ok: true,
-        res,
-      }),
-      (err: unknown): { ok: false; err: unknown } => ({ ok: false, err }),
-    ),
-  ]);
+  const [iapRes, scheduleSettled, availabilitySettled, totalTerritoryCount] =
+    await Promise.all([
+      getInAppPurchase(creds, appleIapId),
+      getPriceScheduleForIap(creds, appleIapId).then(
+        (res): { ok: true; res: AscApiResponse<InAppPurchasePriceSchedule> } => ({
+          ok: true,
+          res,
+        }),
+        (err: unknown): { ok: false; err: unknown } => ({ ok: false, err }),
+      ),
+      // Cycle 37 Phase 1 — best-effort availability fetch (parallel,
+      // resilient). 404 here means "no availability resource yet" —
+      // surfaced as the "Removed from Sale" state in the section.
+      getAvailabilityForIap(creds, appleIapId).then(
+        (res): { ok: true; res: AvailabilityForIap | null } => ({ ok: true, res }),
+        (err: unknown): { ok: false; err: unknown } => ({ ok: false, err }),
+      ),
+      // Denominator for the "N of M countries" badge. Cached per-process
+      // so a sequence of detail views shares one upstream fetch.
+      getAllTerritoryIds(creds).then(
+        (ids) => ids.length,
+        () => 0,
+      ),
+    ]);
 
   const { iap, localizations, screenshot } = splitIncluded(iapRes);
 
@@ -326,11 +359,27 @@ export async function getIapViewData(
     }
   }
 
+  let availabilityView: AvailabilityView | null = null;
+  let availabilityError: string | null = null;
+  if (availabilitySettled.ok) {
+    availabilityView = {
+      availability: availabilitySettled.res,
+      totalTerritoryCount,
+    };
+  } else {
+    availabilityError =
+      availabilitySettled.err instanceof Error
+        ? availabilitySettled.err.message
+        : "Failed to fetch availability";
+  }
+
   return {
     iap,
     localizations,
     screenshot,
     priceSchedule,
     priceScheduleError,
+    availabilityView,
+    availabilityError,
   };
 }

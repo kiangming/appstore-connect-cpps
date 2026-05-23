@@ -42,6 +42,7 @@ import {
   AppleApiError,
 } from "@/lib/iap-management/apple/fetch";
 import { uploadScreenshotToApple } from "@/lib/iap-management/apple/screenshot-upload";
+import { setAvailabilityToAllTerritories } from "@/lib/iap-management/apple/availabilities";
 import {
   applyPricingSchedule,
   type PricingSource,
@@ -80,6 +81,8 @@ interface SuccessResponse {
     | "failed-exception";
   price_schedule_error?: string;
   price_usd?: number;
+  availability_set: boolean;
+  availability_error?: string;
 }
 
 export async function POST(
@@ -348,6 +351,40 @@ export async function POST(
     }
   }
 
+  // 11.5 Cycle 37 Phase 1 — default availability to "All territories".
+  // Manager Q1.A: every newly-created IAP should be sellable everywhere
+  // Apple supports, including future-launched markets. Apple's POST is
+  // additive (no PATCH on the resource type), and we only call it on a
+  // brand-new IAP shell so re-POST collisions can't surface here.
+  // Failures are non-fatal: the IAP is already on Apple, Manager can
+  // fix availability via Apple Connect web — the audit row records
+  // exactly which step blocked.
+  let availabilitySet = false;
+  let availabilityError: string | undefined;
+  try {
+    await withRetry(() =>
+      setAvailabilityToAllTerritories(creds, appleIapId),
+    );
+    availabilitySet = true;
+  } catch (err) {
+    availabilityError = err instanceof Error ? err.message : String(err);
+    await log(
+      "iap-create-on-apple",
+      `availability set-all failed iap=${iapId}: ${availabilityError}`,
+      "WARN",
+    );
+  }
+  await db.from("actions_log").insert({
+    iap_id: iapId,
+    actor,
+    action_type: "AVAILABILITY_SET_ALL_TERRITORIES",
+    payload: {
+      apple_iap_id: appleIapId,
+      success: availabilitySet,
+      ...(availabilityError ? { error: availabilityError } : {}),
+    },
+  });
+
   // 12. GET authoritative Apple state
   let finalState = "MISSING_METADATA";
   try {
@@ -395,6 +432,8 @@ export async function POST(
     price_schedule_note: pricing.kind,
     ...(priceScheduleError ? { price_schedule_error: priceScheduleError } : {}),
     ...(usdPrice !== null ? { price_usd: usdPrice } : {}),
+    availability_set: availabilitySet,
+    ...(availabilityError ? { availability_error: availabilityError } : {}),
   };
   return NextResponse.json(response);
 }

@@ -100,6 +100,8 @@ export default async function ViewIapPage({ params }: PageProps) {
         screenshot={detail.screenshot}
         priceSchedule={detail.priceSchedule}
         priceScheduleError={detail.priceScheduleError}
+        availabilityView={detail.availabilityView}
+        availabilityError={detail.availabilityError}
         fetchedAt={fetchedAt}
       />
     </div>

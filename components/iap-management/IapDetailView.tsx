@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { IapHeaderSection } from "./view-detail/IapHeaderSection";
 import { IapPriceScheduleSection } from "./view-detail/IapPriceScheduleSection";
+import { IapAvailabilitiesSection } from "./view-detail/IapAvailabilitiesSection";
 import { IapLocalizationSection } from "./view-detail/IapLocalizationSection";
 import { IapReviewInfoSection } from "./view-detail/IapReviewInfoSection";
 import { SectionErrorBoundary } from "./view-detail/SectionErrorBoundary";
@@ -39,7 +40,10 @@ import type {
   InAppPurchaseLocalization,
   InAppPurchaseAppStoreReviewScreenshot,
 } from "@/types/iap-management/apple";
-import type { PriceScheduleView } from "@/lib/iap-management/queries/iap-detail";
+import type {
+  AvailabilityView,
+  PriceScheduleView,
+} from "@/lib/iap-management/queries/iap-detail";
 
 interface Props {
   appAppleId: string;
@@ -50,6 +54,8 @@ interface Props {
   screenshot: InAppPurchaseAppStoreReviewScreenshot | null;
   priceSchedule: PriceScheduleView | null;
   priceScheduleError: string | null;
+  availabilityView?: AvailabilityView | null;
+  availabilityError?: string | null;
   /** Server-captured ISO timestamp for the "Real-time as of …" line. */
   fetchedAt: string;
 }
@@ -73,6 +79,8 @@ export function IapDetailView({
   screenshot,
   priceSchedule,
   priceScheduleError,
+  availabilityView = null,
+  availabilityError = null,
   fetchedAt,
 }: Props) {
   const router = useRouter();
@@ -154,6 +162,13 @@ export function IapDetailView({
         <IapPriceScheduleSection
           priceSchedule={priceSchedule}
           priceScheduleError={priceScheduleError}
+        />
+      </SectionErrorBoundary>
+
+      <SectionErrorBoundary label="availability">
+        <IapAvailabilitiesSection
+          availabilityView={availabilityView}
+          availabilityError={availabilityError}
         />
       </SectionErrorBoundary>
 

@@ -727,7 +727,7 @@ Before wiring ANY new Apple V2 IAP endpoint:
 | ID | Item | Notes |
 |---|---|---|
 | **IAP.p3** | Inline edit Reference Name in view mode | Q-A deferral from Cycle 31 |
-| **IAP.p2+** | `contentHosting` + `availableInAllTerritories` edit | Separate Apple endpoints (e.g. `/v1/inAppPurchaseAvailabilities`); not in `InAppPurchaseV2UpdateRequest` |
+| **IAP.p2+** | `contentHosting` edit | Separate Apple endpoint; not in `InAppPurchaseV2UpdateRequest`. `availableInAllTerritories` half UNBLOCKED by Cycle 37 Phase 1 (read + default-on-create); edit affordance deferred to Phase 2 — see §10.6. |
 | **IAP.p2+** | Apply pricing template to existing IAPs bulk action | Q-G deferral from Cycle 30 |
 | **IAP.p2+** | Per-row pricing source override in Bulk Import | Q-E deferral from Cycle 30 (batch-level v1 shipped) |
 | **IAP.p2+** | Pricing template versioning + history | Q-A REPLACE-ONLY locked v1 |
@@ -760,6 +760,51 @@ Current task: <task description>
 ```
 
 Standard Manager protocol applies: read CLAUDE.md, surface findings before implementing, surface mid-flow trigger-condition events, gauntlet 4/4 per sub-chunk.
+
+### 10.6 Cycle 37 Phase 1 — IAP availability default + read display
+
+Cycle 37 ships in two phases. Phase 1 (this commit) unblocks half of the §10.4 `availableInAllTerritories` deferral by wiring Apple's separate `/v1/inAppPurchaseAvailabilities` resource into the create flows and surfacing the result in the View Detail page.
+
+**Apple semantic correction.** Apple's IAP V2 has no `availableInAllTerritories` boolean. The "All countries or regions" radio in Apple Connect maps to a `POST /v1/inAppPurchaseAvailabilities` with the full ~175-entry `availableTerritories` list plus `availableInNewTerritories: true`. Read path is the linked-resource lookup `GET /v2/inAppPurchases/{id}/inAppPurchaseAvailability?include=availableTerritories`; 404 = no resource yet (= "Removed from Sale"). No `PATCH` exists — replace by re-POST.
+
+**Phase 1 scope (Manager Q&A defaults locked 2026-05-23):**
+
+| Surface | Behaviour |
+|---|---|
+| `lib/iap-management/apple/availabilities.ts` | `listTerritories` / `getAllTerritoryIds` (cached 1h per process) / `setAvailabilityToAllTerritories` / `getAvailabilityForIap`. Pure helper `collectIncludedTerritoryIds` unit-tested. |
+| Single create route (`/iaps/[iapId]/create-on-apple`) | Inserts step 11.5: `setAvailabilityToAllTerritories(appleIapId)` after screenshot, before final state fetch. Non-fatal; `action_type=AVAILABILITY_SET_ALL_TERRITORIES` audit log entry every attempt (success or fail). Response shape gains `availability_set: boolean` + optional `availability_error`. |
+| Bulk Import (`/bulk-import/execute`) | `runCreate` only — `runOverwrite` deliberately untouched (Q5.A no migration on existing IAPs). Per-row audit log; `PerIapResult` gains `availability_set` + `availability_error` fields for UI surfacing. |
+| `getIapViewData` (View Detail composer) | Adds parallel fetch of availability + total-territory count alongside the existing IAP and price-schedule fetches. Resilient per-stage: 404 → null surfaced; non-404 error → `availabilityError` populated. |
+| `IapAvailabilitiesSection` | New section between PriceSchedule and Localization. Read-only count badge: "All countries or regions" / "N of M countries or regions" / "Removed from Sale" / "Couldn't fetch availability." No Edit affordance (Q4.C). |
+
+**What Phase 2 will add (deferred):**
+
+- Edit affordance on the section trailing slot (territory picker UI).
+- "Set All Territories" backfill button for existing IAPs.
+- Per-row Excel override column for Bulk Import (Q2.B opted out for now).
+- Apple Connect web's "Remove from Sale" toggle parity.
+
+**Manager re-test scenarios (Phase 1 ship):**
+
+1. Create a new IAP via single create → confirm Apple Connect web shows "All countries or regions" on the IAP availability page.
+2. Bulk-import a batch → confirm each new row shows "All countries or regions" on Apple Connect web.
+3. Open View Detail for any existing IAP → confirm the Availability section renders the matching Apple-side state (no migration means most pre-Cycle-37 items will show "Removed from Sale").
+4. Open View Detail for a freshly-created IAP from scenario 1 → confirm "All countries or regions" with the full territory count.
+
+**Audit-log SQL for fleet-wide check:**
+
+```sql
+SELECT
+  payload->>'apple_iap_id' AS apple_iap_id,
+  payload->>'product_id'   AS product_id,
+  (payload->>'success')::boolean AS success,
+  payload->>'error'        AS error,
+  created_at
+FROM iap_mgmt.actions_log
+WHERE action_type = 'AVAILABILITY_SET_ALL_TERRITORIES'
+ORDER BY created_at DESC
+LIMIT 100;
+```
 
 ---
 

@@ -43,6 +43,7 @@ import {
   updateInAppPurchase,
 } from "@/lib/iap-management/apple/client";
 import { replaceScreenshotOnApple } from "@/lib/iap-management/apple/screenshot-upload";
+import { setAvailabilityToAllTerritories } from "@/lib/iap-management/apple/availabilities";
 import {
   applyPricingSchedule,
   type PricingSource,
@@ -99,6 +100,12 @@ interface PerIapResult {
   price_schedule_set?: boolean;
   pricing_outcome?: PricingOutcome["kind"];
   pricing_error?: string;
+  /** Cycle 37 Phase 1 — set true when the CREATE path successfully
+   *  defaulted the IAP availability to "All territories." False when
+   *  Apple rejected the call (recorded in `availability_error`); absent
+   *  on OVERWRITE rows since Q5.A leaves existing IAPs alone. */
+  availability_set?: boolean;
+  availability_error?: string;
   submitted?: boolean;
   stage?: string;
   error?: string;
@@ -561,6 +568,42 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
+  // 4.5 Cycle 37 Phase 1 — default availability to "All territories"
+  // (Manager Q1.A). Per-row + non-fatal: if Apple rejects this call the
+  // IAP is still on Apple, Manager can fix it via Apple Connect web.
+  // `setAvailabilityToAllTerritories` reuses the per-process territory
+  // cache, so the territories list is fetched once per batch and the
+  // overhead per row is a single POST.
+  let availabilitySet = false;
+  let availabilityErr: string | undefined;
+  try {
+    await withRetry(() =>
+      setAvailabilityToAllTerritories(creds, appleIapId),
+    );
+    availabilitySet = true;
+  } catch (err) {
+    availabilityErr = errMsg(err);
+    await log(
+      "iap-bulk-execute",
+      `availability set-all failed on product=${item.product_id}: ${availabilityErr}`,
+      "WARN",
+    );
+  }
+  await iapDb()
+    .from("actions_log")
+    .insert({
+      iap_id: null,
+      actor: args.actor,
+      action_type: "AVAILABILITY_SET_ALL_TERRITORIES",
+      payload: {
+        batch_id: args.batchId,
+        product_id: item.product_id,
+        apple_iap_id: appleIapId,
+        success: availabilitySet,
+        ...(availabilityErr ? { error: availabilityErr } : {}),
+      },
+    });
+
   // 5. Optional submit
   let submitted = false;
   if (submit && screenshotOk && failedLocales.length === 0) {
@@ -583,6 +626,8 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
         pricing.kind === "failed-exception"
           ? { pricing_error: pricing.error }
           : {}),
+        availability_set: availabilitySet,
+        ...(availabilityErr ? { availability_error: availabilityErr } : {}),
         error: errMsg(err),
       });
     }
@@ -603,6 +648,8 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     pricing.kind === "failed-exception"
       ? { pricing_error: pricing.error }
       : {}),
+    availability_set: availabilitySet,
+    ...(availabilityErr ? { availability_error: availabilityErr } : {}),
   });
 }
 
