@@ -44,6 +44,7 @@ import {
 } from "@/lib/iap-management/apple/client";
 import { replaceScreenshotOnApple } from "@/lib/iap-management/apple/screenshot-upload";
 import { setAvailabilityToAllTerritories } from "@/lib/iap-management/apple/availabilities";
+import { decideOverwritePricing } from "@/lib/iap-management/bulk-import/overwrite-pricing-decision";
 import {
   applyPricingSchedule,
   type PricingSource,
@@ -777,18 +778,38 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
-  // Pricing schedule conditional (IAP.o.9a + IAP.o.10a → IAP.o.11a). Only
-  // re-apply when the resolved tier differs from the locally cached row.
-  // Missing-from-cache treated as "differs" so pricing stays in sync. No
-  // poll on OVERWRITE — IAP already exists on Apple (state has long since
-  // propagated). Orchestrator owns the SET_PRICE_SCHEDULE audit log.
+  // Pricing schedule (IAP.o.9a + IAP.o.10a → IAP.o.11a · Hotfix 23).
+  //
+  // Pre-Hotfix-23 the OVERWRITE path only re-applied pricing when the
+  // resolved tier_id differed from the locally cached row. That
+  // optimisation was unsound the moment Manager replaced a Per-App
+  // template in place: a v1 → v2 swap that *kept* the same tier_id
+  // mapping but *changed* the tier's per-territory entries (10
+  // countries → 4 countries) silently left Apple on the v1 schedule
+  // because `resolvedTier === cachedTier` short-circuited the POST.
+  //
+  // Apple's POST /v1/inAppPurchasePriceSchedules is REPLACE-ALL per
+  // §4.2, idempotent on identical content. Templates are also fetched
+  // fresh inside `applyPricingSchedule` (no orchestrator-level cache),
+  // so always calling it on OVERWRITE when a tier resolves picks up
+  // template-content changes — the only safe behaviour when a
+  // template can be replaced behind a re-imported SKU.
+  //
+  // The cached-tier comparison stays in the orchestration only as a
+  // diagnostic surfaced in the audit log + console; no longer gates
+  // the POST. No poll on OVERWRITE — IAP already exists on Apple
+  // (state has long since propagated).
   const resolvedTier = decision.resolved_tier_id ?? null;
   const cachedTier = args.existingTierByProductId.get(item.product_id) ?? null;
+  const pricingDecision = decideOverwritePricing({
+    resolvedTierId: resolvedTier,
+    cachedTierId: cachedTier,
+  });
   let pricing: PricingOutcome | null = null;
-  if (resolvedTier && resolvedTier !== cachedTier) {
+  if (pricingDecision.shouldRunPricing && resolvedTier) {
     const usdPrice = args.usdPriceByTier.get(resolvedTier) ?? null;
     console.log(
-      `[bulk-execute] OVERWRITE pricing starting product_id=${item.product_id} apple_iap_id=${appleIapId} tier_id=${resolvedTier} cached=${cachedTier ?? "<null>"} usd=${usdPrice}`,
+      `[bulk-execute] OVERWRITE pricing starting product_id=${item.product_id} apple_iap_id=${appleIapId} tier_id=${resolvedTier} cached=${cachedTier ?? "<null>"} tier_unchanged=${pricingDecision.tierUnchanged} usd=${usdPrice} source=${args.pricingSource.kind}`,
     );
     pricing = await applyPricingSchedule({
       creds,
@@ -805,7 +826,7 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
       },
     });
     console.log(
-      `[bulk-execute] OVERWRITE pricing result product_id=${item.product_id} outcome=${pricing.kind}`,
+      `[bulk-execute] OVERWRITE pricing result product_id=${item.product_id} outcome=${pricing.kind} tier_unchanged=${pricingDecision.tierUnchanged}`,
     );
   }
 
