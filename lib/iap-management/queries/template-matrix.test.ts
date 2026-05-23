@@ -93,20 +93,40 @@ describe("composeMatrix (no diff)", () => {
     expect(out.tiers[0].tier_name).toBe("UNMAPPED");
   });
 
-  it("sorts markets alphabetically by territoryName (alpha-3 → English name)", () => {
+  it("preserves Excel upload order in the market list (Hotfix 24 — first-appearance, not alphabetic)", () => {
+    // Manager's xlsx puts VN first (business priority), then US, then
+    // DE. Pre-Hotfix-24 the composer sorted alphabetically and
+    // surfaced Germany → United States → Vietnam, burying intent.
     const out = composeMatrix({
       entries: [
-        row("TIER_1", "VNM", "VND", 25000), // Vietnam
-        row("TIER_1", "USA", "USD", 0.99), // United States
-        row("TIER_1", "DEU", "EUR", 0.99), // Germany
+        row("TIER_1", "VNM", "VND", 25000), // Vietnam — Manager's first column
+        row("TIER_1", "USA", "USD", 0.99), // United States — second
+        row("TIER_1", "DEU", "EUR", 0.99), // Germany — third
       ],
       tierNames: TIER_NAMES,
     });
+    expect(out.markets.map((m) => m.code)).toEqual(["VNM", "USA", "DEU"]);
     expect(out.markets.map((m) => m.name)).toEqual([
-      "Germany",
-      "United States",
       "Vietnam",
+      "United States",
+      "Germany",
     ]);
+  });
+
+  it("dedupes the market list while preserving first-appearance order across tiers", () => {
+    // Tier 2's VNM row should NOT push VN to the back — it's seen
+    // first in Tier 1 and stays in position 1.
+    const out = composeMatrix({
+      entries: [
+        row("TIER_1", "VNM", "VND", 25000),
+        row("TIER_1", "USA", "USD", 0.99),
+        row("TIER_2", "USA", "USD", 1.99),
+        row("TIER_2", "VNM", "VND", 59000),
+        row("TIER_2", "DEU", "EUR", 1.99),
+      ],
+      tierNames: TIER_NAMES,
+    });
+    expect(out.markets.map((m) => m.code)).toEqual(["VNM", "USA", "DEU"]);
   });
 
   it("buckets markets by continent via alpha-3 helper", () => {

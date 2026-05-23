@@ -115,14 +115,21 @@ export function composeMatrix(
 
   const tiers = Array.from(tierSet).sort(compareTiers);
 
-  const markets: MatrixMarket[] = Array.from(marketCurrencyByCode.entries())
-    .map(([code, currency]) => ({
+  // Hotfix 24 — preserve Excel upload order. Manager's `.xlsx` lists
+  // markets left-to-right in business-priority order; the alphabetic
+  // sort that lived here pre-Hotfix-24 buried that intent. The
+  // `marketCurrencyByCode` Map iterates in insertion order = the
+  // order rows arrive from the DB. Templates are REPLACE-ONLY (Q-A)
+  // so a fresh upload yields physical-heap order = insertion order
+  // for the SELECT without ORDER BY.
+  const markets: MatrixMarket[] = Array.from(marketCurrencyByCode.entries()).map(
+    ([code, currency]) => ({
       code,
       name: regionNameFromCode(code),
       currency,
       continent: getContinentForRegion(code),
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+    }),
+  );
 
   const continentCounts: Record<Continent, number> = {
     Asia: 0,

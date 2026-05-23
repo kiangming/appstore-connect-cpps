@@ -57,20 +57,38 @@ describe("composeMatrix (no diff)", () => {
     expect(out.tiers[3]).toMatch(/^Alternate/);
   });
 
-  it("sorts markets alphabetically by display name (post Hotfix 21 resolver)", () => {
+  it("preserves Excel upload order in the market list (Hotfix 24 — first-appearance, not alphabetic)", () => {
+    // Manager's xlsx columns left-to-right: VN, AL, DZ, US. Pre-
+    // Hotfix-24 the composer sorted alphabetically and Manager saw
+    // Albania → Algeria → United States → Vietnam, burying intent.
     const entries: TemplateEntryRow[] = [
-      row("Tier 1", "VN", "VND", "1"), // Vietnam
+      row("Tier 1", "VN", "VND", "1"), // Vietnam — Manager's first column
       row("Tier 1", "AL", "ALL", "1"), // Albania
       row("Tier 1", "DZ", "DZD", "1"), // Algeria
       row("Tier 1", "US", "USD", "1"), // United States
     ];
     const out = composeMatrix(entries);
+    expect(out.markets.map((m) => m.code)).toEqual(["VN", "AL", "DZ", "US"]);
     expect(out.markets.map((m) => m.name)).toEqual([
+      "Vietnam",
       "Albania",
       "Algeria",
       "United States",
-      "Vietnam",
     ]);
+  });
+
+  it("dedupes the market list while preserving first-appearance order across tiers", () => {
+    // Tier 2's VN row should NOT push VN to the back — it's seen
+    // first in Tier 1 and stays in position 1.
+    const entries: TemplateEntryRow[] = [
+      row("Tier 1", "VN", "VND", "1"),
+      row("Tier 1", "US", "USD", "1"),
+      row("Tier 2", "US", "USD", "2"),
+      row("Tier 2", "VN", "VND", "2"),
+      row("Tier 2", "DE", "EUR", "2"),
+    ];
+    const out = composeMatrix(entries);
+    expect(out.markets.map((m) => m.code)).toEqual(["VN", "US", "DE"]);
   });
 
   it("attaches continent to each market via getContinentForRegion", () => {

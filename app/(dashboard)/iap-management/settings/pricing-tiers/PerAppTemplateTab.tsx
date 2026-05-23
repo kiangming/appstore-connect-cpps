@@ -343,10 +343,10 @@ export function PerAppTemplateTab({
                     </div>
                   </td>
                   <td className="px-6 py-3 text-right">
-                    <div className="inline-flex items-center gap-1">
+                    <div className="inline-flex items-center gap-4 whitespace-nowrap">
                       <Link
                         href={`/iap-management/settings/pricing-tiers/per-app-matrix/${encodeURIComponent(a.app_id)}`}
-                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-950/40 rounded transition"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-50 dark:hover:bg-sky-950/40 rounded-md transition whitespace-nowrap"
                         title="View matrix"
                       >
                         <Table2 className="h-3.5 w-3.5" />
@@ -354,10 +354,11 @@ export function PerAppTemplateTab({
                       </Link>
                       <button
                         onClick={() => handleRemove(a.template.id, a.app_name)}
-                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded transition"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-md transition whitespace-nowrap"
                         title="Remove template"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
+                        Remove
                       </button>
                     </div>
                   </td>
