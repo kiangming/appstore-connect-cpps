@@ -57,6 +57,18 @@ export async function getAppByPackage(
   return (data as AppRow | null) ?? null;
 }
 
+export async function getAppById(appId: string): Promise<AppRow | null> {
+  const { data, error } = await googleIapDb()
+    .from("apps")
+    .select(APP_COLUMNS)
+    .eq("id", appId)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`Failed to fetch app: ${error.message}`);
+  }
+  return (data as AppRow | null) ?? null;
+}
+
 export interface UpsertAppArgs {
   accountId: string;
   packageName: string;

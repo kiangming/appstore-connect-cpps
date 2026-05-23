@@ -2,6 +2,7 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Upload,
   RefreshCw,
@@ -9,6 +10,7 @@ import {
   Trash2,
   AlertCircle,
   CheckCircle2,
+  Table2,
 } from "lucide-react";
 
 import type { TemplateOverview } from "@/lib/google-iap-management/queries/templates";
@@ -126,6 +128,15 @@ export function DefaultTemplateTab({ overview }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {overview.template && (
+              <Link
+                href="/google-iap-management/settings/pricing-templates/default"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-emerald-700 border border-emerald-200 hover:bg-emerald-50 rounded-lg transition"
+              >
+                <Table2 className="h-4 w-4" />
+                Open matrix view
+              </Link>
+            )}
             {overview.template && (
               <button
                 onClick={handleRemove}

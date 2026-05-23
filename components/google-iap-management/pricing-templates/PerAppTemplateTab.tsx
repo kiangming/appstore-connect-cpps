@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Upload,
@@ -9,6 +10,7 @@ import {
   Trash2,
   AlertCircle,
   CheckCircle2,
+  Table2,
 } from "lucide-react";
 
 import type { AppTemplateSummary } from "@/lib/google-iap-management/queries/templates";
@@ -225,13 +227,22 @@ export function PerAppTemplateTab({ appTemplates, cachedApps }: Props) {
                     </p>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => handleDelete(t.template.id, t.package_name)}
-                      className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-red-600 hover:bg-red-50 rounded px-2 py-1 transition"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Remove
-                    </button>
+                    <div className="inline-flex items-center gap-1">
+                      <Link
+                        href={`/google-iap-management/settings/pricing-templates/per-app/${encodeURIComponent(t.app_id)}`}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50 rounded px-2 py-1 transition"
+                      >
+                        <Table2 className="h-3.5 w-3.5" />
+                        View matrix
+                      </Link>
+                      <button
+                        onClick={() => handleDelete(t.template.id, t.package_name)}
+                        className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-red-600 hover:bg-red-50 rounded px-2 py-1 transition"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Remove
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

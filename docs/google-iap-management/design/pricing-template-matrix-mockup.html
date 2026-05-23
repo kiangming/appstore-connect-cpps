@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cycle 36 — Pricing Template Matrix View · Mockup</title>
+  <!--
+    Strategic arc : Cycle 36 Google IAP Management · Pricing Template Matrix View
+    Predecessor   : Hotfix 21 (region-name resolver, commit 4ac2c79)
+    Manager UX directive (locked 2026-05-23):
+      Q1.A — Hotfix 21 ship first ✅ + Cycle 36 strategic
+      Q2.D — Comprehensive UX: sticky + filter + toggle
+      Q3   — Claude Code picks transport → dedicated routes
+      Q4.B — Same visual language, separate components
+      Q5.A — Mockup-first → Manager review → implement
+
+    File          : docs/google-iap-management/design/pricing-template-matrix-mockup.html
+    Author tag    : Claude Code (Pattern 10 reuse #19 — H19 ROI compound)
+  -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif; }
+    /* Sticky tier column visual */
+    .matrix-wrap { overflow-x: auto; overflow-y: hidden; }
+    .matrix-tbl { border-collapse: separate; border-spacing: 0; }
+    .matrix-tbl th, .matrix-tbl td {
+      border-bottom: 1px solid #e2e8f0;
+      border-right: 1px solid #f1f5f9;
+      padding: 8px 12px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .matrix-tbl thead th {
+      background: #f8fafc;
+      font-weight: 600;
+      color: #475569;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .matrix-tbl .tier-col {
+      position: sticky;
+      left: 0;
+      background: white;
+      z-index: 1;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      color: #0f172a;
+      border-right: 2px solid #cbd5e1;
+      box-shadow: 3px 0 6px -3px rgba(15, 23, 42, 0.18);
+    }
+    .matrix-tbl thead th.tier-col {
+      z-index: 3;
+      background: #f8fafc;
+    }
+    .matrix-tbl tbody tr:hover .tier-col { background: #f8fafc; }
+    .matrix-tbl tbody tr:hover { background: #f8fafc; }
+    .matrix-tbl td.price {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-align: right;
+      color: #0f172a;
+    }
+    .matrix-tbl td.empty { color: #cbd5e1; text-align: right; }
+    .matrix-tbl td.diff::after {
+      content: " ★";
+      color: #f59e0b;
+    }
+    .currency-chip {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-weight: 500;
+      letter-spacing: 0.5px;
+    }
+    .ccy-USD { background: #ecfeff; color: #0e7490; }
+    .ccy-EUR { background: #eef2ff; color: #4338ca; }
+    .ccy-VND { background: #f0fdf4; color: #15803d; }
+    .ccy-JPY { background: #fdf2f8; color: #be185d; }
+    .ccy-KRW { background: #fff7ed; color: #c2410c; }
+    .ccy-GBP { background: #f1f5f9; color: #334155; }
+    .ccy-CNY { background: #fef2f2; color: #b91c1c; }
+    .ccy-INR { background: #fefce8; color: #a16207; }
+    .ccy-AUD { background: #faf5ff; color: #7e22ce; }
+    .ccy-BRL { background: #ecfeff; color: #155e75; }
+    .ccy-MXN { background: #f0fdfa; color: #115e59; }
+    .ccy-IDR { background: #fffbeb; color: #92400e; }
+    .ccy-THB { background: #fef3c7; color: #92400e; }
+    .ccy-PHP { background: #ecfeff; color: #155e75; }
+    .ccy-MYR { background: #fdf4ff; color: #86198f; }
+    .ccy-SGD { background: #ecfdf5; color: #047857; }
+    .ccy-HKD { background: #fff7ed; color: #9a3412; }
+    .ccy-TWD { background: #fef2f2; color: #9f1239; }
+    .ccy-CAD { background: #fef2f2; color: #b91c1c; }
+    .ccy-AED { background: #f7fee7; color: #4d7c0f; }
+    .ccy-SAR { background: #f0fdf4; color: #166534; }
+    .ccy-ARS { background: #ecfeff; color: #0e7490; }
+    .ccy-RUB { background: #fef2f2; color: #b91c1c; }
+    .ccy-TRY { background: #fefce8; color: #a16207; }
+    .ccy-PLN { background: #faf5ff; color: #7e22ce; }
+    .ccy-CZK { background: #f0f9ff; color: #0369a1; }
+    .ccy-DKK { background: #fef3c7; color: #92400e; }
+    .ccy-NOK { background: #ecfdf5; color: #047857; }
+    .ccy-SEK { background: #fffbeb; color: #92400e; }
+    .ccy-CHF { background: #fef2f2; color: #b91c1c; }
+    .ccy-NZD { background: #ecfdf5; color: #047857; }
+    .ccy-ZAR { background: #fef3c7; color: #92400e; }
+    .ccy-DZD, .ccy-AOA, .ccy-ALL { background: #f1f5f9; color: #334155; }
+
+    .state-card {
+      border: 1px solid #e2e8f0;
+      border-radius: 16px;
+      background: white;
+      padding: 24px;
+      margin-bottom: 32px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    .state-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: #ecfdf5;
+      color: #047857;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .continent-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid #cbd5e1;
+      background: white;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .continent-pill.on {
+      background: #ecfdf5;
+      border-color: #10b981;
+      color: #047857;
+    }
+    .continent-pill.off {
+      color: #94a3b8;
+      background: #f8fafc;
+    }
+    .checkbox-on::before { content: "✓"; font-weight: 700; }
+    .checkbox-off::before { content: "○"; }
+
+    .clarification-block {
+      background: #fffbeb;
+      border: 1px solid #fcd34d;
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 24px;
+    }
+    .clarification-block ol { margin: 0; padding-left: 20px; }
+    .clarification-block li { margin-bottom: 8px; color: #78350f; font-size: 13px; line-height: 1.5; }
+    .clarification-block li code {
+      background: #fef3c7;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 11px;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 p-6">
+  <div class="max-w-7xl mx-auto">
+
+    <!-- Header -->
+    <div class="mb-6">
+      <p class="text-xs font-semibold text-emerald-700 uppercase tracking-wider">Cycle 36 · Pricing Template Matrix View · Mockup v1</p>
+      <h1 class="text-2xl font-semibold text-slate-900 mt-1">Pricing Template — Matrix View</h1>
+      <p class="text-sm text-slate-500 mt-1 max-w-3xl">
+        Cycle 36 strategic UX enhancement. Replaces the current 50-row "Sample entries" flat list with a
+        full <strong>tier × market</strong> matrix view. Sticky tier column, horizontal market scroll,
+        searchable + filter-able + continent toggleable. Renders all 87 tiers × ~175 markets without
+        pagination (single-query fetch viable per investigation).
+      </p>
+      <div class="mt-3 flex items-center gap-2 text-xs text-slate-500">
+        <span>Investigation summary :</span>
+        <span class="px-2 py-1 bg-white border border-slate-200 rounded">~15,225 cells / template</span>
+        <span class="px-2 py-1 bg-white border border-slate-200 rounded">Hotfix 21 region-name reuse</span>
+        <span class="px-2 py-1 bg-white border border-slate-200 rounded">Inline continent map (~250 entries)</span>
+        <span class="px-2 py-1 bg-white border border-slate-200 rounded">CSS-only sticky column</span>
+      </div>
+    </div>
+
+    <!-- ==================== STATE 1 ==================== -->
+    <div class="state-card">
+      <span class="state-label">State 1 — Default Template · initial load</span>
+      <h2 class="text-base font-semibold text-slate-900 mb-1">Default Pricing Template</h2>
+      <p class="text-xs text-slate-500 mb-4">
+        175 markets · 87 tiers · uploaded by minhgv@vng.com.vn · 2 days ago ·
+        <a href="#" class="text-emerald-700 hover:underline">Replace .xlsx</a>
+      </p>
+
+      <!-- Filter bar -->
+      <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4">
+        <div class="flex items-center gap-3 mb-3">
+          <div class="flex-1 max-w-md relative">
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
+            <input type="text" placeholder="Search market — country name or code" class="w-full pl-9 pr-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent" />
+          </div>
+          <div class="flex items-center gap-2">
+            <label class="text-xs text-slate-500">Currency:</label>
+            <select class="text-sm border border-slate-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+              <option>All currencies (32 used)</option>
+              <option>USD · 1 market</option>
+              <option>EUR · 19 markets</option>
+              <option>VND · 1 market</option>
+              <option>JPY · 1 market</option>
+              <option>...</option>
+            </select>
+          </div>
+          <div class="ml-auto text-xs text-slate-500">
+            Showing <span class="font-semibold text-slate-900">175</span> of 175 markets
+          </div>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs text-slate-500">Continents:</span>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Asia (56)</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Europe (44)</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Americas (35)</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Africa (32)</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Oceania (8)</button>
+        </div>
+      </div>
+
+      <!-- Matrix table -->
+      <div class="matrix-wrap border border-slate-200 rounded-lg" style="max-height: 480px; overflow: auto;">
+        <table class="matrix-tbl">
+          <thead>
+            <tr>
+              <th class="tier-col text-left" style="min-width: 180px;">Tier</th>
+              <th class="text-right" style="min-width: 130px;">Albania <span class="currency-chip ccy-ALL ml-1">ALL</span></th>
+              <th class="text-right" style="min-width: 130px;">Algeria <span class="currency-chip ccy-DZD ml-1">DZD</span></th>
+              <th class="text-right" style="min-width: 130px;">Angola <span class="currency-chip ccy-AOA ml-1">AOA</span></th>
+              <th class="text-right" style="min-width: 130px;">Argentina <span class="currency-chip ccy-ARS ml-1">ARS</span></th>
+              <th class="text-right" style="min-width: 130px;">Australia <span class="currency-chip ccy-AUD ml-1">AUD</span></th>
+              <th class="text-right" style="min-width: 130px;">Brazil <span class="currency-chip ccy-BRL ml-1">BRL</span></th>
+              <th class="text-right" style="min-width: 130px;">Germany <span class="currency-chip ccy-EUR ml-1">EUR</span></th>
+              <th class="text-right" style="min-width: 130px;">Japan <span class="currency-chip ccy-JPY ml-1">JPY</span></th>
+              <th class="text-right" style="min-width: 130px;">South Korea <span class="currency-chip ccy-KRW ml-1">KRW</span></th>
+              <th class="text-right" style="min-width: 130px;">United States <span class="currency-chip ccy-USD ml-1">USD</span></th>
+              <th class="text-right" style="min-width: 130px;">Vietnam <span class="currency-chip ccy-VND ml-1">VND</span></th>
+              <th class="text-right" style="min-width: 130px;">… 164 more →</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="tier-col">Tier 1</td><td class="price">99.00</td><td class="price">130.00</td><td class="price">900.00</td><td class="price">990.00</td><td class="price">1.49</td><td class="price">4.99</td><td class="price">0.99</td><td class="price">150</td><td class="price">1,300</td><td class="price">0.99</td><td class="price">27,000</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Tier 2</td><td class="price">199.00</td><td class="price">260.00</td><td class="price">1,800.00</td><td class="price">1,990.00</td><td class="price">2.99</td><td class="price">9.99</td><td class="price">1.99</td><td class="price">300</td><td class="price">2,500</td><td class="price">1.99</td><td class="price">59,000</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Tier 3</td><td class="price">299.00</td><td class="price">390.00</td><td class="price">2,700.00</td><td class="price">2,990.00</td><td class="price">4.49</td><td class="price">14.99</td><td class="price">2.99</td><td class="price">400</td><td class="price">3,800</td><td class="price">2.99</td><td class="price">79,000</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Tier 4</td><td class="price">499.00</td><td class="price">650.00</td><td class="price">4,500.00</td><td class="price">4,990.00</td><td class="price">7.49</td><td class="price">24.99</td><td class="price">4.99</td><td class="price">700</td><td class="price">6,400</td><td class="price">4.99</td><td class="price">129,000</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Tier 5</td><td class="price">999.00</td><td class="price">1,300.00</td><td class="price">9,000.00</td><td class="price">9,990.00</td><td class="price">14.99</td><td class="price">49.99</td><td class="price">9.99</td><td class="price">1,500</td><td class="price">12,800</td><td class="price">9.99</td><td class="price">259,000</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Tier 10</td><td class="price">1,999.00</td><td class="price">2,600.00</td><td class="price">18,000.00</td><td class="price">19,990.00</td><td class="price">29.99</td><td class="price">99.99</td><td class="price">19.99</td><td class="price">3,000</td><td class="price">25,600</td><td class="price">19.99</td><td class="price">519,000</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Alternate Tier A</td><td class="price">99.00</td><td class="price">130.00</td><td class="empty">·</td><td class="price">990.00</td><td class="price">1.49</td><td class="empty">·</td><td class="price">0.99</td><td class="price">150</td><td class="price">1,300</td><td class="price">0.99</td><td class="price">5,000</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Alternate Tier B</td><td class="price">99.00</td><td class="empty">·</td><td class="empty">·</td><td class="price">990.00</td><td class="price">1.49</td><td class="empty">·</td><td class="price">0.99</td><td class="price">150</td><td class="price">1,300</td><td class="price">0.99</td><td class="price">9,000</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Alternate Tier C</td><td class="price">99.00</td><td class="empty">·</td><td class="empty">·</td><td class="price">990.00</td><td class="empty">·</td><td class="empty">·</td><td class="price">0.99</td><td class="price">150</td><td class="empty">·</td><td class="price">0.99</td><td class="price">15,000</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col text-slate-400 italic">… 78 more tiers</td><td colspan="12" class="text-center text-xs text-slate-400 italic">scroll vertically to see all tiers</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-slate-400 mt-2 italic">
+        ⬅ Scroll horizontally to see all 175 markets · ⬇ Scroll vertically for all 87 tiers ·
+        Empty cell (·) = no override for that tier-market pair (Google auto-equalisation will fill)
+      </p>
+    </div>
+
+    <!-- ==================== STATE 2 ==================== -->
+    <div class="state-card">
+      <span class="state-label">State 2 — Per-App Template (PASS SDK)</span>
+
+      <!-- Breadcrumb -->
+      <nav class="text-xs text-slate-500 mb-3">
+        <a href="#" class="hover:text-slate-700">Settings</a>
+        <span class="mx-1.5">›</span>
+        <a href="#" class="hover:text-slate-700">Pricing Templates</a>
+        <span class="mx-1.5">›</span>
+        <a href="#" class="hover:text-slate-700">Per-App Templates</a>
+        <span class="mx-1.5">›</span>
+        <span class="text-slate-700">PASS SDK</span>
+      </nav>
+
+      <div class="flex items-start justify-between mb-4 gap-3">
+        <div>
+          <h2 class="text-base font-semibold text-slate-900">Per-App Pricing Template — PASS SDK</h2>
+          <p class="text-xs text-slate-500 mt-0.5">
+            <span class="font-mono">com.vng.passsdk</span> · 175 markets · 87 tiers ·
+            uploaded by minhgv@vng.com.vn · 2 days ago
+          </p>
+        </div>
+        <div class="flex items-center gap-2">
+          <label class="text-xs text-slate-500 flex items-center gap-1.5 cursor-pointer">
+            <input type="checkbox" checked class="rounded" />
+            <span>Highlight differences from Default ★</span>
+          </label>
+          <button class="text-xs text-slate-600 border border-slate-300 hover:bg-slate-50 px-3 py-1.5 rounded-lg transition">← Back to list</button>
+        </div>
+      </div>
+
+      <!-- Filter bar (same as State 1, abbreviated) -->
+      <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4">
+        <div class="flex items-center gap-3 mb-2">
+          <input type="text" placeholder="Search market — country name or code" class="flex-1 max-w-md px-3 py-2 text-sm border border-slate-300 rounded-lg" />
+          <select class="text-sm border border-slate-300 rounded-lg px-3 py-2"><option>All currencies</option></select>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs text-slate-500">Continents:</span>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Asia</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Europe</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Americas</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Africa</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Oceania</button>
+        </div>
+      </div>
+
+      <!-- Matrix with diff highlight (★) -->
+      <div class="matrix-wrap border border-slate-200 rounded-lg" style="max-height: 380px; overflow: auto;">
+        <table class="matrix-tbl">
+          <thead>
+            <tr>
+              <th class="tier-col text-left" style="min-width: 180px;">Tier</th>
+              <th class="text-right" style="min-width: 130px;">Vietnam <span class="currency-chip ccy-VND ml-1">VND</span></th>
+              <th class="text-right" style="min-width: 130px;">United States <span class="currency-chip ccy-USD ml-1">USD</span></th>
+              <th class="text-right" style="min-width: 130px;">Japan <span class="currency-chip ccy-JPY ml-1">JPY</span></th>
+              <th class="text-right" style="min-width: 130px;">South Korea <span class="currency-chip ccy-KRW ml-1">KRW</span></th>
+              <th class="text-right" style="min-width: 130px;">Germany <span class="currency-chip ccy-EUR ml-1">EUR</span></th>
+              <th class="text-right" style="min-width: 130px;">Brazil <span class="currency-chip ccy-BRL ml-1">BRL</span></th>
+              <th class="text-right" style="min-width: 130px;">Indonesia <span class="currency-chip ccy-IDR ml-1">IDR</span></th>
+              <th class="text-right" style="min-width: 130px;">Thailand <span class="currency-chip ccy-THB ml-1">THB</span></th>
+              <th class="text-right" style="min-width: 130px;">… 167 more →</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="tier-col">Tier 1</td><td class="price diff">27,000</td><td class="price">0.99</td><td class="price">150</td><td class="price">1,300</td><td class="price">0.99</td><td class="price">4.99</td><td class="price">15,000</td><td class="price">35</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Tier 2</td><td class="price diff">59,000</td><td class="price">1.99</td><td class="price">300</td><td class="price">2,500</td><td class="price">1.99</td><td class="price">9.99</td><td class="price">30,000</td><td class="price">70</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Tier 3</td><td class="price">79,000</td><td class="price">2.99</td><td class="price">400</td><td class="price">3,800</td><td class="price">2.99</td><td class="price">14.99</td><td class="price">45,000</td><td class="price">105</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Alternate Tier A</td><td class="price diff">5,000</td><td class="price">0.99</td><td class="price">150</td><td class="price">1,300</td><td class="price">0.99</td><td class="empty">·</td><td class="price">15,000</td><td class="price">35</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Alternate Tier B</td><td class="price diff">9,000</td><td class="price">0.99</td><td class="price">150</td><td class="price">1,300</td><td class="price">0.99</td><td class="empty">·</td><td class="empty">·</td><td class="price">35</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col text-slate-400 italic">… 82 more tiers</td><td colspan="9" class="text-center text-xs text-slate-400 italic">scroll vertically</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-xs text-slate-400 mt-2 italic">
+        ★ = cell value differs from the Default Template at the same tier-market position ·
+        Hover for the Default value (tooltip on hover, not shown statically)
+      </p>
+    </div>
+
+    <!-- ==================== STATE 3 ==================== -->
+    <div class="state-card">
+      <span class="state-label">State 3 — filtered (search "viet" + Asia only)</span>
+
+      <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4">
+        <div class="flex items-center gap-3 mb-2">
+          <div class="flex-1 max-w-md relative">
+            <span class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
+            <input type="text" value="viet" class="w-full pl-9 pr-3 py-2 text-sm border border-emerald-400 ring-1 ring-emerald-200 rounded-lg" />
+          </div>
+          <div class="ml-auto text-xs">
+            Showing <span class="font-semibold text-slate-900">1</span> of 175 markets
+            <button class="ml-2 text-emerald-700 hover:underline">clear filter</button>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs text-slate-500">Continents:</span>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Asia (56)</button>
+          <button class="continent-pill off"><span class="checkbox-off"></span> Europe</button>
+          <button class="continent-pill off"><span class="checkbox-off"></span> Americas</button>
+          <button class="continent-pill off"><span class="checkbox-off"></span> Africa</button>
+          <button class="continent-pill off"><span class="checkbox-off"></span> Oceania</button>
+        </div>
+      </div>
+
+      <div class="border border-slate-200 rounded-lg overflow-hidden">
+        <table class="matrix-tbl w-full">
+          <thead>
+            <tr>
+              <th class="tier-col text-left" style="min-width: 180px;">Tier</th>
+              <th class="text-right" style="min-width: 160px;">Vietnam <span class="currency-chip ccy-VND ml-1">VND</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="tier-col">Tier 1</td><td class="price">27,000</td></tr>
+            <tr><td class="tier-col">Tier 2</td><td class="price">59,000</td></tr>
+            <tr><td class="tier-col">Tier 3</td><td class="price">79,000</td></tr>
+            <tr><td class="tier-col">Tier 4</td><td class="price">129,000</td></tr>
+            <tr><td class="tier-col">Tier 5</td><td class="price">259,000</td></tr>
+            <tr><td class="tier-col">Alternate Tier A</td><td class="price">5,000</td></tr>
+            <tr><td class="tier-col">Alternate Tier B</td><td class="price">9,000</td></tr>
+            <tr><td class="tier-col">Alternate Tier C</td><td class="price">15,000</td></tr>
+            <tr><td class="tier-col text-slate-400 italic">… 79 more tiers</td><td class="text-center text-xs text-slate-400 italic">scroll vertically</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ==================== STATE 4 ==================== -->
+    <div class="state-card">
+      <span class="state-label">State 4 — continent toggle · Asia OFF</span>
+
+      <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4">
+        <div class="flex items-center gap-3 mb-2">
+          <input type="text" placeholder="Search market" class="flex-1 max-w-md px-3 py-2 text-sm border border-slate-300 rounded-lg" />
+          <div class="ml-auto text-xs">
+            <span class="text-amber-600 font-medium">Hidden:</span> 56 Asian markets ·
+            Showing <span class="font-semibold text-slate-900">119</span> of 175
+          </div>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs text-slate-500">Continents:</span>
+          <button class="continent-pill off"><span class="checkbox-off"></span> Asia (56)</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Europe (44)</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Americas (35)</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Africa (32)</button>
+          <button class="continent-pill on"><span class="checkbox-on"></span> Oceania (8)</button>
+        </div>
+      </div>
+
+      <div class="matrix-wrap border border-slate-200 rounded-lg" style="max-height: 320px; overflow: auto;">
+        <table class="matrix-tbl">
+          <thead>
+            <tr>
+              <th class="tier-col text-left" style="min-width: 180px;">Tier</th>
+              <th class="text-right" style="min-width: 130px;">Austria <span class="currency-chip ccy-EUR ml-1">EUR</span></th>
+              <th class="text-right" style="min-width: 130px;">Belgium <span class="currency-chip ccy-EUR ml-1">EUR</span></th>
+              <th class="text-right" style="min-width: 130px;">Germany <span class="currency-chip ccy-EUR ml-1">EUR</span></th>
+              <th class="text-right" style="min-width: 130px;">France <span class="currency-chip ccy-EUR ml-1">EUR</span></th>
+              <th class="text-right" style="min-width: 130px;">Italy <span class="currency-chip ccy-EUR ml-1">EUR</span></th>
+              <th class="text-right" style="min-width: 130px;">United Kingdom <span class="currency-chip ccy-GBP ml-1">GBP</span></th>
+              <th class="text-right" style="min-width: 130px;">Brazil <span class="currency-chip ccy-BRL ml-1">BRL</span></th>
+              <th class="text-right" style="min-width: 130px;">United States <span class="currency-chip ccy-USD ml-1">USD</span></th>
+              <th class="text-right" style="min-width: 130px;">Canada <span class="currency-chip ccy-CAD ml-1">CAD</span></th>
+              <th class="text-right" style="min-width: 130px;">Mexico <span class="currency-chip ccy-MXN ml-1">MXN</span></th>
+              <th class="text-right" style="min-width: 130px;">… 109 more →</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td class="tier-col">Tier 1</td><td class="price">0.99</td><td class="price">0.99</td><td class="price">0.99</td><td class="price">0.99</td><td class="price">0.99</td><td class="price">0.79</td><td class="price">4.99</td><td class="price">0.99</td><td class="price">1.39</td><td class="price">19.00</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col">Tier 2</td><td class="price">1.99</td><td class="price">1.99</td><td class="price">1.99</td><td class="price">1.99</td><td class="price">1.99</td><td class="price">1.79</td><td class="price">9.99</td><td class="price">1.99</td><td class="price">2.79</td><td class="price">39.00</td><td class="empty">·</td></tr>
+            <tr><td class="tier-col text-slate-400 italic">… 85 more tiers</td><td colspan="11" class="text-center text-xs text-slate-400 italic">scroll vertically</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ==================== STATE 5 ==================== -->
+    <div class="state-card">
+      <span class="state-label">State 5 — empty state (Per-App, no template uploaded)</span>
+
+      <nav class="text-xs text-slate-500 mb-3">
+        <a href="#" class="hover:text-slate-700">Settings</a>
+        <span class="mx-1.5">›</span>
+        <a href="#" class="hover:text-slate-700">Pricing Templates</a>
+        <span class="mx-1.5">›</span>
+        <a href="#" class="hover:text-slate-700">Per-App Templates</a>
+        <span class="mx-1.5">›</span>
+        <span class="text-slate-700">PASS SDK</span>
+      </nav>
+
+      <h2 class="text-base font-semibold text-slate-900 mb-1">Per-App Pricing Template — PASS SDK</h2>
+      <p class="text-xs text-slate-500 mb-6"><span class="font-mono">com.vng.passsdk</span></p>
+
+      <div class="bg-white border border-dashed border-slate-300 rounded-xl p-12 text-center">
+        <div class="text-5xl mb-3">📋</div>
+        <p class="text-base font-medium text-slate-700 mb-2">
+          No Per-App template uploaded yet
+        </p>
+        <p class="text-sm text-slate-500 max-w-md mx-auto mb-6">
+          Per-App templates override Default Template entries for this specific app.
+          When no Per-App template exists, the Default Template values apply.
+        </p>
+        <div class="flex items-center justify-center gap-3">
+          <button class="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition">
+            📤 Upload Per-App Template
+          </button>
+          <a href="#" class="text-sm text-emerald-700 hover:underline">
+            View Default Template instead →
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================== CLARIFICATION QUESTIONS ==================== -->
+    <div class="clarification-block">
+      <h3 class="text-sm font-semibold text-amber-900 mb-3 flex items-center gap-2">
+        <span>💬</span> Manager review — 8 clarification questions
+      </h3>
+      <ol class="text-sm">
+        <li>
+          <strong>Q1. Diff highlighting (Per-App view, State 2).</strong>
+          Cell-level <code>★</code> next to values differing from Default, with hover tooltip showing
+          the Default value. Default: ON. <strong>Keep?</strong>
+        </li>
+        <li>
+          <strong>Q2. Currency dropdown scope.</strong>
+          Show only the currencies used by this template (e.g. 32 of 180 ISO-4217 codes), OR all
+          ISO-4217 currencies. Default: only used currencies (with count). <strong>Confirm?</strong>
+        </li>
+        <li>
+          <strong>Q3. Continent toggle default state.</strong>
+          All 5 continents ON at first render (matrix shows everything), OR start with Asia only
+          (Manager's primary market focus). Default: <strong>all ON</strong>. <strong>Override?</strong>
+        </li>
+        <li>
+          <strong>Q4. Sticky tier column width.</strong>
+          Fixed 180px (room for "Alternate Tier A" + chips) OR dynamic to fit longest identifier.
+          Default: <strong>fixed 180px</strong> for consistency. <strong>OK?</strong>
+        </li>
+        <li>
+          <strong>Q5. Row hover highlight.</strong>
+          Slate-50 background on hover across the entire tier row (helps reading across 175
+          markets). Default: ON. <strong>Keep?</strong>
+        </li>
+        <li>
+          <strong>Q6. Export to CSV / Excel.</strong>
+          Add an "⬇ Export" button next to "Replace .xlsx" that downloads the active filter set
+          as <code>.csv</code>. Useful for offline review. Default: OUT of scope for v1.
+          <strong>Include?</strong>
+        </li>
+        <li>
+          <strong>Q7. Mobile breakpoint UX.</strong>
+          Below 768px: keep the horizontal-scroll matrix (Manager workflow is desktop-first), OR
+          collapse to a per-tier accordion (tap a tier → see all market prices vertically).
+          Default: <strong>keep horizontal scroll</strong> (desktop-first). <strong>Confirm?</strong>
+        </li>
+        <li>
+          <strong>Q8. Loading state.</strong>
+          Server-rendered (no skeleton needed — Next.js Server Component, all data resolved
+          before hydration) OR client-side fetch with skeleton rows. Default:
+          <strong>Server Component</strong>. <strong>OK?</strong>
+        </li>
+      </ol>
+      <p class="text-xs text-amber-800 mt-4 italic">
+        Pattern 10 reuse #19 — mockup-first design discipline (H19 ROI compound).
+        Manager answers above lock the implementation Phase C onwards.
+      </p>
+    </div>
+
+    <!-- ==================== ROUTING + IMPLEMENTATION PLAN ==================== -->
+    <div class="state-card" style="background: #f0fdf4; border-color: #86efac;">
+      <span class="state-label" style="background: #d1fae5; color: #065f46;">Routing + implementation plan</span>
+      <h3 class="text-sm font-semibold text-slate-900 mb-2">Dedicated routes (Manager Q3 — Claude Code recommendation B)</h3>
+      <ul class="text-sm text-slate-700 space-y-1.5 mb-4">
+        <li>
+          <code class="text-xs bg-white px-1.5 py-0.5 rounded">/google-iap-management/settings/pricing-templates</code>
+          — existing tabbed Settings page (Sample-entries display stays as the
+          <em>summary</em>, with a new "Open matrix view ↗" CTA on each tab).
+        </li>
+        <li>
+          <code class="text-xs bg-white px-1.5 py-0.5 rounded">/google-iap-management/settings/pricing-templates/default</code>
+          <strong>(NEW)</strong> — Default Template matrix view (States 1, 3, 4).
+        </li>
+        <li>
+          <code class="text-xs bg-white px-1.5 py-0.5 rounded">/google-iap-management/settings/pricing-templates/per-app/[appId]</code>
+          <strong>(NEW)</strong> — Per-App matrix view (States 2, 5). <code>[appId]</code> is the
+          internal Supabase app UUID (same as the Per-App upload's <code>scope_app_id</code>).
+        </li>
+      </ul>
+      <h3 class="text-sm font-semibold text-slate-900 mb-2">Phases (post Manager mockup approval)</h3>
+      <ol class="text-sm text-slate-700 space-y-1 list-decimal pl-5">
+        <li><strong>Phase C</strong> — Default matrix view + filter/toggle (~2.5h)</li>
+        <li><strong>Phase D</strong> — Per-App matrix view + diff overlay (~2h)</li>
+        <li><strong>Phase E</strong> — Navigation: Settings tab "Open matrix ↗" CTAs + Per-App list rows → matrix link (~30min)</li>
+        <li><strong>Phase F</strong> — Tests (component + helpers) + docs (operational-guide.md section) (~45min)</li>
+      </ol>
+      <p class="text-xs text-slate-600 mt-3">
+        Shared helpers: <code>regionNameFromCode</code> + <code>getAllRegions</code> (Hotfix 21
+        reuse), new <code>regionContinent.ts</code> (~250 alpha-2 → 5 buckets inline map).
+        Matrix data composer: new <code>buildMatrix(entries) → { tiers, markets, cellByTierMarket }</code>
+        in <code>lib/google-iap-management/queries/templates.ts</code> alongside the existing
+        overview composers.
+      </p>
+    </div>
+
+    <p class="text-center text-xs text-slate-400 mt-6 mb-12">
+      Mockup v1 · Generated 2026-05-23 · Cycle 36 Phase A · awaiting Manager review (Phase B)
+    </p>
+  </div>
+</body>
+</html>
