@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Upload, RefreshCw, Trash2, Loader2 } from "lucide-react";
+import { Upload, RefreshCw, Trash2, Loader2, Table2 } from "lucide-react";
 import type { AppTemplateSummary } from "@/lib/iap-management/queries/templates";
 
 interface AscApp {
@@ -342,13 +343,23 @@ export function PerAppTemplateTab({
                     </div>
                   </td>
                   <td className="px-6 py-3 text-right">
-                    <button
-                      onClick={() => handleRemove(a.template.id, a.app_name)}
-                      className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded transition"
-                      title="Remove template"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="inline-flex items-center gap-1">
+                      <Link
+                        href={`/iap-management/settings/pricing-tiers/per-app-matrix/${encodeURIComponent(a.app_id)}`}
+                        className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-sky-700 dark:text-sky-300 hover:bg-sky-50 dark:hover:bg-sky-950/40 rounded transition"
+                        title="View matrix"
+                      >
+                        <Table2 className="h-3.5 w-3.5" />
+                        View matrix
+                      </Link>
+                      <button
+                        onClick={() => handleRemove(a.template.id, a.app_name)}
+                        className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded transition"
+                        title="Remove template"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

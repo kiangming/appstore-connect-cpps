@@ -1,9 +1,10 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Upload, RefreshCw, Sparkles, Trash2, Lock } from "lucide-react";
+import { Upload, RefreshCw, Sparkles, Trash2, Lock, Table2 } from "lucide-react";
 import type { TemplateOverview } from "@/lib/iap-management/queries/templates";
 import { TemplateEntriesTable } from "@/components/iap-management/pricing-tiers/TemplateEntriesTable";
 
@@ -126,12 +127,32 @@ export function DefaultTemplateTab({ overview, readOnly = false }: Props) {
             </p>
           </div>
           {readOnly ? (
-            <div className="flex items-center gap-1.5 px-3 py-2 text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 rounded-lg shrink-0">
-              <Lock className="h-3.5 w-3.5" />
-              Admin-managed
+            <div className="flex items-center gap-2 shrink-0">
+              {overview.template && (
+                <Link
+                  href="/iap-management/settings/pricing-tiers/default-matrix"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-50 dark:hover:bg-sky-950/40 rounded-lg transition"
+                >
+                  <Table2 className="h-4 w-4" />
+                  Open matrix view
+                </Link>
+              )}
+              <div className="flex items-center gap-1.5 px-3 py-2 text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 rounded-lg">
+                <Lock className="h-3.5 w-3.5" />
+                Admin-managed
+              </div>
             </div>
           ) : (
             <div className="flex items-center gap-2 shrink-0">
+              {overview.template && (
+                <Link
+                  href="/iap-management/settings/pricing-tiers/default-matrix"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-800 hover:bg-sky-50 dark:hover:bg-sky-950/40 rounded-lg transition"
+                >
+                  <Table2 className="h-4 w-4" />
+                  Open matrix view
+                </Link>
+              )}
               {overview.template && (
                 <button
                   onClick={handleRemove}
