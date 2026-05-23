@@ -2,9 +2,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import {
   __resetTerritoryCacheForTests,
-  collectIncludedTerritoryIds,
   getAllTerritoryIds,
   getAvailabilityForIap,
+  nextCursorFrom,
   setAvailabilityToAllTerritories,
 } from "./availabilities";
 
@@ -107,44 +107,87 @@ describe("setAvailabilityToAllTerritories", () => {
   });
 });
 
-describe("getAvailabilityForIap", () => {
-  it("returns availability with inlined territory ids when Apple responds 200", async () => {
-    mockedFetch.mockResolvedValueOnce({
-      data: {
-        type: "inAppPurchaseAvailabilities",
-        id: "avail-1",
-        attributes: { availableInNewTerritories: true },
-        relationships: {
-          availableTerritories: { links: {} },
+describe("getAvailabilityForIap (Hotfix 22 — V1 sub-resource pattern)", () => {
+  it("issues the V2 metadata GET first, then the V1 sub-resource GET", async () => {
+    mockedFetch
+      .mockResolvedValueOnce({
+        data: {
+          type: "inAppPurchaseAvailabilities",
+          id: "avail-42",
+          attributes: { availableInNewTerritories: true },
         },
-      },
-      included: [
-        { type: "territories", id: "USA" },
-        { type: "territories", id: "VNM" },
-        { type: "apps", id: "should-be-filtered" },
-      ],
-    });
+      })
+      .mockResolvedValueOnce({
+        data: [
+          { type: "territories", id: "USA" },
+          { type: "territories", id: "VNM" },
+        ],
+        links: { next: null },
+      });
+
     const out = await getAvailabilityForIap(fakeCreds, "iap-1");
+
     expect(out).toEqual({
       availableInNewTerritories: true,
       territoryCount: 2,
       territoryIds: ["USA", "VNM"],
     });
-    expect(mockedFetch).toHaveBeenCalledWith(
-      fakeCreds,
-      "GET",
-      "/v2/inAppPurchases/iap-1/inAppPurchaseAvailability?include=availableTerritories&limit[availableTerritories]=200",
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+    expect(mockedFetch.mock.calls[0][2]).toBe(
+      "/v2/inAppPurchases/iap-1/inAppPurchaseAvailability",
+    );
+    // The sub-resource path uses the V1 endpoint with limit=200 (the
+    // main-resource limit Apple's V1 endpoint honours — the bug fixed
+    // by Hotfix 22 was requesting limit=200 on the V2 ?include path,
+    // where Apple caps it at 50).
+    expect(mockedFetch.mock.calls[1][2]).toBe(
+      "/v1/inAppPurchaseAvailabilities/avail-42/availableTerritories?limit=200",
     );
   });
 
-  it("returns null when Apple responds 404 (no availability resource yet)", async () => {
+  it("walks links.next when the territory list spans multiple pages (cursor pagination)", async () => {
+    mockedFetch
+      .mockResolvedValueOnce({
+        data: {
+          type: "inAppPurchaseAvailabilities",
+          id: "avail-42",
+          attributes: { availableInNewTerritories: true },
+        },
+      })
+      .mockResolvedValueOnce({
+        data: [
+          { type: "territories", id: "USA" },
+          { type: "territories", id: "VNM" },
+        ],
+        links: {
+          next:
+            "https://api.appstoreconnect.apple.com/v1/inAppPurchaseAvailabilities/avail-42/availableTerritories?limit=200&cursor=page2",
+        },
+      })
+      .mockResolvedValueOnce({
+        data: [{ type: "territories", id: "JPN" }],
+        links: { next: null },
+      });
+
+    const out = await getAvailabilityForIap(fakeCreds, "iap-1");
+
+    expect(out?.territoryIds).toEqual(["USA", "VNM", "JPN"]);
+    expect(mockedFetch).toHaveBeenCalledTimes(3);
+    // Page-2 cursor should arrive at the wrapper as a relative path.
+    expect(mockedFetch.mock.calls[2][2]).toBe(
+      "/v1/inAppPurchaseAvailabilities/avail-42/availableTerritories?limit=200&cursor=page2",
+    );
+  });
+
+  it("returns null when Apple responds 404 to the metadata call (no availability resource)", async () => {
     const err = Object.assign(new Error("Not Found"), { status: 404 });
     mockedFetch.mockRejectedValueOnce(err);
     const out = await getAvailabilityForIap(fakeCreds, "iap-1");
     expect(out).toBeNull();
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("propagates non-404 errors so the section can surface a friendly note", async () => {
+  it("propagates non-404 errors from the metadata call so the section can surface them", async () => {
     const err = Object.assign(new Error("Apple boom"), { status: 503 });
     mockedFetch.mockRejectedValueOnce(err);
     await expect(getAvailabilityForIap(fakeCreds, "iap-1")).rejects.toThrow(
@@ -152,38 +195,63 @@ describe("getAvailabilityForIap", () => {
     );
   });
 
-  it("returns availableInNewTerritories=false when Apple omits attributes", async () => {
-    mockedFetch.mockResolvedValueOnce({
-      data: {
-        type: "inAppPurchaseAvailabilities",
-        id: "avail-1",
-      },
-      included: [],
-    });
+  it("falls back to an empty territory list when the metadata succeeds but the sub-resource fetch fails", async () => {
+    mockedFetch
+      .mockResolvedValueOnce({
+        data: {
+          type: "inAppPurchaseAvailabilities",
+          id: "avail-42",
+          attributes: { availableInNewTerritories: false },
+        },
+      })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Sub-resource boom"), { status: 500 }),
+      );
+
     const out = await getAvailabilityForIap(fakeCreds, "iap-1");
-    expect(out?.availableInNewTerritories).toBe(false);
-    expect(out?.territoryCount).toBe(0);
+    expect(out).toEqual({
+      availableInNewTerritories: false,
+      territoryCount: 0,
+      territoryIds: [],
+    });
+  });
+
+  it("returns availableInNewTerritories=false when Apple omits the attributes block", async () => {
+    mockedFetch
+      .mockResolvedValueOnce({
+        data: { type: "inAppPurchaseAvailabilities", id: "avail-42" },
+      })
+      .mockResolvedValueOnce({ data: [], links: { next: null } });
+    const out = await getAvailabilityForIap(fakeCreds, "iap-1");
+    expect(out).toEqual({
+      availableInNewTerritories: false,
+      territoryCount: 0,
+      territoryIds: [],
+    });
   });
 });
 
-describe("collectIncludedTerritoryIds (pure helper)", () => {
-  it("filters non-territory resources from included[]", () => {
-    const ids = collectIncludedTerritoryIds({
-      data: { type: "inAppPurchaseAvailabilities", id: "x" },
-      included: [
-        { type: "territories", id: "USA" },
-        { type: "apps", id: "drop" },
-        { type: "territories", id: "JPN" },
-      ],
-    } as never);
-    expect(ids).toEqual(["USA", "JPN"]);
+describe("nextCursorFrom (pure cursor extractor)", () => {
+  it("strips the host from Apple's absolute next-URL so iapFetch receives a relative path", () => {
+    expect(
+      nextCursorFrom({
+        data: [],
+        links: {
+          next:
+            "https://api.appstoreconnect.apple.com/v1/inAppPurchaseAvailabilities/x/availableTerritories?cursor=2",
+        },
+      }),
+    ).toBe("/v1/inAppPurchaseAvailabilities/x/availableTerritories?cursor=2");
   });
 
-  it("returns [] when included is missing entirely", () => {
+  it("returns null when links.next is absent", () => {
+    expect(nextCursorFrom({ data: [], links: {} })).toBeNull();
+    expect(nextCursorFrom({ data: [] })).toBeNull();
+  });
+
+  it("passes through an already-relative cursor unchanged (defensive)", () => {
     expect(
-      collectIncludedTerritoryIds({
-        data: { type: "inAppPurchaseAvailabilities", id: "x" },
-      } as never),
-    ).toEqual([]);
+      nextCursorFrom({ data: [], links: { next: "/v1/foo?cursor=2" } }),
+    ).toBe("/v1/foo?cursor=2");
   });
 });

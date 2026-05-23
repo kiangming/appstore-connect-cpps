@@ -133,10 +133,34 @@ export async function setAvailabilityToAllTerritories(
 }
 
 /**
- * GET /v2/inAppPurchases/{id}/inAppPurchaseAvailability — the linked
- * availability resource, with the territory list inlined via `include`.
- * Returns null when Apple responds 404 (no availability resource exists
- * — the empty / "Removed from Sale" case the View Detail surfaces).
+ * Read the IAP's availability — Hotfix 22: V1 sub-resource pattern.
+ *
+ * Apple's V2 `?include=availableTerritories` path that Cycle 37 Phase 1
+ * shipped failed in production with `400 PARAMETER_ERROR.INVALID: The
+ * maximum allowable limit is '50'` against `limit[availableTerritories]`.
+ * V2 endpoints cap the per-relationship include pagination at 50; the
+ * tool requested 200 (the main-resource limit) which Apple rejects
+ * outright instead of clamping. The V2 include path also suffers from
+ * the documented 10-ID relationship-truncation trap
+ * (IAP-MANAGEMENT-KNOWLEDGE-BASE §4.1 LANDMARK Trap class 1) — even at
+ * `limit=50` Apple may return a truncated list.
+ *
+ * Fix: split into the canonical "metadata then sub-resource" pattern:
+ *   Step A: GET /v2/inAppPurchases/{id}/inAppPurchaseAvailability
+ *     → availability id + availableInNewTerritories
+ *   Step B: GET /v1/inAppPurchaseAvailabilities/{availabilityId}/availableTerritories?limit=200
+ *     → full territory list, cursor-paginated via `links.next` (Hotfix 20
+ *       pattern reuse).
+ *
+ * Two HTTP calls per detail-view render is acceptable (Server Component;
+ * Manager-tolerable latency); the V1 sub-resource endpoint honours the
+ * 200 page size + supports `links.next` so even a hypothetical future
+ * 250-territory Apple inventory paginates cleanly.
+ *
+ * Returns null when Step A responds 404 (no availability resource yet —
+ * the "Removed from Sale" surface). Step B is best-effort: if it fails
+ * the function still returns the metadata with an empty territory list
+ * so the caller renders "0 of M" instead of a hard error.
  */
 export interface AvailabilityForIap {
   availableInNewTerritories: boolean;
@@ -148,45 +172,68 @@ export async function getAvailabilityForIap(
   creds: AscCredentials,
   appleIapId: string,
 ): Promise<AvailabilityForIap | null> {
-  let res: AscApiResponse<InAppPurchaseAvailability>;
+  // ── Step A — metadata only.
+  let metaRes: AscApiResponse<InAppPurchaseAvailability>;
   try {
-    res = await iapFetch<AscApiResponse<InAppPurchaseAvailability>>(
+    metaRes = await iapFetch<AscApiResponse<InAppPurchaseAvailability>>(
       creds,
       "GET",
-      `/v2/inAppPurchases/${appleIapId}/inAppPurchaseAvailability?include=availableTerritories&limit[availableTerritories]=200`,
+      `/v2/inAppPurchases/${appleIapId}/inAppPurchaseAvailability`,
     );
   } catch (err) {
-    // AppleApiError with status 404 → no availability resource. Other
-    // errors propagate so the caller can decide whether to render an
-    // error card or swallow per-section.
     if (isApple404(err)) return null;
     throw err;
   }
-  const attrs = res.data.attributes ?? { availableInNewTerritories: false };
-  const territoryIds = collectIncludedTerritoryIds(res);
+  const availabilityId = metaRes.data.id;
+  const availableInNewTerritories =
+    metaRes.data.attributes?.availableInNewTerritories === true;
+
+  // ── Step B — paginate the territory list via the V1 sub-resource.
+  const territoryIds: string[] = [];
+  let cursor: string | null =
+    `/v1/inAppPurchaseAvailabilities/${availabilityId}/availableTerritories?limit=200`;
+  try {
+    while (cursor) {
+      const page = await iapFetch<TerritoryListResponse>(creds, "GET", cursor);
+      for (const t of page.data ?? []) {
+        if (t && t.type === "territories" && typeof t.id === "string") {
+          territoryIds.push(t.id);
+        }
+      }
+      cursor = nextCursorFrom(page);
+    }
+  } catch {
+    // Step A succeeded so the metadata is real; surface what we have
+    // (the count will read as 0 in the section, which the caller already
+    // handles as a degenerate "subset" state).
+  }
+
   return {
-    availableInNewTerritories: attrs.availableInNewTerritories === true,
+    availableInNewTerritories,
     territoryCount: territoryIds.length,
     territoryIds,
   };
+}
+
+interface TerritoryListResponse {
+  data: Array<{ type?: string; id?: string }>;
+  links?: { next?: string | null };
+}
+
+/** Convert Apple's absolute `links.next` URL into a relative path
+ *  `iapFetch` accepts (we strip the host so the fetch wrapper can stay
+ *  base-URL-agnostic). Mirrors the Hotfix 20 pagination cursor pattern. */
+export function nextCursorFrom(page: TerritoryListResponse): string | null {
+  const next = page.links?.next;
+  if (!next) return null;
+  // `next` arrives absolute; strip scheme + host so iapFetch can prepend
+  // the base URL itself (its endpoint param expects a leading slash).
+  const match = /^https?:\/\/[^/]+(\/.*)$/.exec(next);
+  return match ? match[1] : next;
 }
 
 function isApple404(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
   const status = (err as { status?: unknown }).status;
   return status === 404;
-}
-
-/** Pure helper exported for unit-testing. Pulls the territory ids out of
- *  the JSON:API `included` array. Apple's response carries one Territory
- *  resource per available market when the include query is set. */
-export function collectIncludedTerritoryIds(
-  res: AscApiResponse<InAppPurchaseAvailability>,
-): string[] {
-  const included = (res as unknown as { included?: Array<{ type?: string; id?: string }> })
-    .included;
-  if (!Array.isArray(included)) return [];
-  return included
-    .filter((r) => r && r.type === "territories" && typeof r.id === "string")
-    .map((r) => r.id as string);
 }
