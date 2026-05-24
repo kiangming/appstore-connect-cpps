@@ -873,7 +873,7 @@ Edit page server component (app/.../iaps/[iapId]/page.tsx)
 
 **Edit isolation discipline preserved.** Other field edits never touch availability — Stage 5 fires only when the radio target actually flips. Manager's confirmation modal (`UpdateChangesPreviewModal`) renders the availability bucket with destructive red emphasis when the target is `NONE`.
 
-**Phase 2 deferred (Unit C bulk-action toolbar):** mockup-first design + bulk modal + filtered selection + confirm popup. Tracking item moved here from §10.4 once Phase 1 lands.
+**Phase 2 shipped — Cycle 39 Phase 2 (Units C + D):** see §10.8 Phase 2 sub-entry below.
 
 **Files touched (Phase 1):**
 
@@ -891,6 +891,79 @@ Edit page server component (app/.../iaps/[iapId]/page.tsx)
 | `components/iap-management/view-detail/IapAvailabilitiesSection.tsx` | Unit A red emphasis when `removed === true`. |
 
 Tests +9 (availabilities +2, diff-detector +5, orchestration +4, view-detail +2 reused — net new assertions).
+
+#### Phase 2 (Units C + D) — Bulk Availabilities actions + list column
+
+Manager scope addition mid-cycle: cohesive ship of toolbar bulk actions
+(Unit C) + IAP list view column (Unit D). Single fetch serves both via
+shared data-layer ROI.
+
+**Strategy A locked — Server Component fetch on mount.** Per-page-render
+parallel Apple availability fetch (`fetchAvailabilityStatesForIaps`,
+concurrency 5). Mirrors the Cycle 37 Phase 1 View Detail freshness pattern
+— manager-tolerable ~5–10s latency for 25-item lists in exchange for
+parity with what's currently on Apple. Rejected alternatives: cached
+state (stale risk), lazy/on-click fetch (blank column UX gap).
+
+**Shared data layer.** One `fetchAvailabilityStatesForIaps(creds, iapIds)`
+call drives:
+- Unit D — per-row column rendering via `classifyAvailability(state, hasError)` → `available | removed | unknown`.
+- Unit C — bulk-modal filter via the same classifier, mode-aware: `set-all` keeps `removed`, `remove` keeps `available`, both modes drop `unknown` so Manager doesn't act on stale state.
+
+The pre-fetched `Map<appleIapId, AvailabilityForIap | null>` plus an
+error Map thread from the Server Component → IapListClient prop →
+AvailabilitiesBulkModal prop. No client-side re-fetch on modal open.
+
+**API + orchestrator.** New `POST /api/iap-management/iaps/bulk-availability`
+delegates to `executeBulkAvailability` which iterates input IAP UUIDs at
+concurrency 5, resolves each row's `apple_iap_id` from `iap_mgmt.iaps`,
+calls the Phase 1 helper (`setAvailabilityToAllTerritories` or
+`setAvailabilityRemoveFromSales`), and writes one `actions_log` row per
+IAP using the Phase 1 audit action types (no new types — bulk + single
+edits surface under the same dashboard filters).
+
+**Q-K fail-soft.** A single Apple rejection (e.g. 409 STATE_ERROR on a
+MISSING_METADATA IAP) never cancels siblings. Per-row results stream back
+on the response; the modal's progress view (mockup State 6) shows
+successes + failures side-by-side. Aggregate severity surfaces as a toast
+on close (`SUCCESS` / `PARTIAL` / `FAILURE` / `NO_OP`).
+
+**Confirm popup discipline (Q5.C).** Only the destructive *Remove from
+Sales* mode shows the confirm popup with Manager's locked verbatim copy
+("This action will perform the remove from sales for items, do you
+confirm?"). The non-destructive *Set Availabilities* mode submits
+directly from the modal footer.
+
+**Files touched (Phase 2):**
+
+| File | Change |
+|---|---|
+| `lib/iap-management/apple/bulk-availability-fetch.ts` | **NEW** — `fetchAvailabilityStatesForIaps` (withConcurrency 5) + `classifyAvailability` pure helper. |
+| `lib/iap-management/orchestrators/bulk-availability.ts` | **NEW** — `executeBulkAvailability` + per-IAP audit + Q-K fail-soft aggregate. |
+| `app/api/iap-management/iaps/bulk-availability/route.ts` | **NEW** — POST endpoint with zod-validated body schema. |
+| `components/iap-management/AvailabilitiesBulkModal.tsx` | **NEW** — 7-state modal (list / empty / progress) + Q5.C confirm popup; pure `filterEligible` exported for tests. |
+| `app/(dashboard)/iap-management/apps/[appId]/page.tsx` | Server Component — Apple availability prefetch; threads serializable per-IAP array to client. |
+| `app/(dashboard)/iap-management/apps/[appId]/IapListClient.tsx` | New `Availabilities` column + Set/Remove toolbar buttons (left-most, teal-300 / red-300 borders) + bulk-modal mount. |
+| `docs/iap-management/design/availabilities-bulk-mockup.html` | **NEW** — 7-state mockup; Manager-approved before implementation. |
+
+Tests +18 (bulk-availability-fetch +8 covering pure classifier +
+concurrency + per-IAP failure isolation; bulk-availability orchestrator
++8 covering action routing + audit shape + fail-soft + local-draft path;
+modal filterEligible +6 covering both modes + error/unsynced exclusion).
+
+**Phase 3 candidates (deferred, tracked here):**
+
+- Server-side cache for `fetchAvailabilityStatesForIaps` so repeated list-page renders don't burn Apple's 250 req/hour budget. Promote to Hotfix tier if production traffic surfaces 429s.
+- Bulk-action progress streaming (Server-Sent Events) so the modal updates per-row as the orchestrator works instead of after the response. Current v1 batches results in one shot.
+
+**Cycle 37 Phase 2 deferral closure status (post Cycle 39):**
+
+| Deferred item | Shipped in |
+|---|---|
+| Edit affordance on trailing slot | Cycle 39 Phase 1 (Unit B, AvailabilitiesSection) |
+| "Remove from Sale" toggle parity | Cycle 39 Phase 1 (Unit B radio + Stage 5) + Phase 2 (Unit C bulk) |
+| List view column visibility | Cycle 39 Phase 2 (Unit D, Manager scope addition) |
+| View Detail red emphasis | Cycle 39 Phase 1 (Unit A) |
 
 ---
 

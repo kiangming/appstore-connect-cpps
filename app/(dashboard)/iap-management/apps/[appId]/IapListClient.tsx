@@ -17,6 +17,8 @@ import {
   Loader2,
   ChevronRight,
   Eye,
+  Globe,
+  MinusCircle,
 } from "lucide-react";
 import type {
   InAppPurchase,
@@ -26,6 +28,12 @@ import type { IapDbRow } from "@/lib/iap-management/queries/iaps";
 import { useAppIcon, getAvatarColor, getInitials } from "@/lib/use-app-icon";
 import { computePageMeta } from "@/lib/iap-management/pagination/page-slice";
 import { SubmitBatchModal } from "@/components/iap-management/SubmitBatchModal";
+import {
+  AvailabilitiesBulkModal,
+  type BulkMode,
+} from "@/components/iap-management/AvailabilitiesBulkModal";
+import type { AvailabilityForIap } from "@/lib/iap-management/apple/availabilities";
+import { classifyAvailability } from "@/lib/iap-management/apple/availability-classify";
 
 const PAGE_SIZE = 100;
 
@@ -38,6 +46,11 @@ interface Props {
   drafts?: IapDbRow[];
   /** Apple-IAP-id → internal-UUID map for synced rows. Required for multi-select submit. */
   appleToInternal: Record<string, string>;
+  /** Cycle 39 Phase 2 — per-IAP Apple availability prefetched on the
+   *  Server Component. Drives the new Availabilities column + bulk modal
+   *  filter. Empty array when the upstream fetch failed entirely; per-row
+   *  fetch failures surface as entries with `error` populated. */
+  availabilityState?: { id: string; state: AvailabilityForIap | null; error?: string }[];
 }
 
 const TYPE_LABEL: Record<InAppPurchaseType, string> = {
@@ -114,6 +127,7 @@ export function IapListClient({
   iaps,
   drafts = [],
   appleToInternal,
+  availabilityState = [],
 }: Props) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -123,6 +137,22 @@ export function IapListClient({
   const [modalOpen, setModalOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [page, setPage] = useState(1);
+  // Cycle 39 Phase 2 — bulk modal state. Null = closed.
+  const [bulkMode, setBulkMode] = useState<BulkMode | null>(null);
+
+  // Cycle 39 Phase 2 — derive id-keyed Maps for the column + modal filter.
+  // The Server Component prop arrives as an array (serializable across the
+  // network boundary); we hoist it into Maps once per render for O(1) reads.
+  const availabilityStates = useMemo(() => {
+    const m = new Map<string, AvailabilityForIap | null>();
+    for (const row of availabilityState) m.set(row.id, row.state);
+    return m;
+  }, [availabilityState]);
+  const availabilityErrors = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const row of availabilityState) if (row.error) m.set(row.id, row.error);
+    return m;
+  }, [availabilityState]);
 
   const allStates = useMemo(() => {
     const s = new Set<string>();
@@ -292,6 +322,28 @@ export function IapListClient({
         <span className="ml-auto inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">
           {iaps.length} IAP{iaps.length === 1 ? "" : "s"}
         </span>
+        {/* Cycle 39 Phase 2 Unit C — bulk Availabilities buttons (left-most
+            position per Manager kickoff). The buttons render unconditionally
+            so Manager always has the affordance; the modal handles empty
+            states when no IAP currently sits in the eligible bucket. */}
+        <button
+          type="button"
+          onClick={() => setBulkMode("set-all")}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-teal-300 text-teal-700 hover:bg-teal-50 rounded-lg transition"
+          title="Mark a multi-selection of items as available in all Apple territories"
+        >
+          <Globe className="h-3.5 w-3.5" />
+          Set Availabilities
+        </button>
+        <button
+          type="button"
+          onClick={() => setBulkMode("remove")}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-red-300 text-red-700 hover:bg-red-50 rounded-lg transition"
+          title="Mark a multi-selection of items as Remove from Sales (destructive)"
+        >
+          <MinusCircle className="h-3.5 w-3.5" />
+          Remove from Sales
+        </button>
         <button
           type="button"
           onClick={handleRefresh}
@@ -471,6 +523,8 @@ export function IapListClient({
                 <th className="px-4 py-3">Reference Name</th>
                 <th className="px-4 py-3 w-36">Type</th>
                 <th className="px-4 py-3 w-44">State</th>
+                {/* Cycle 39 Phase 2 Unit D — Availabilities column. */}
+                <th className="px-4 py-3 w-44">Availabilities</th>
                 <th className="px-4 py-3 w-32 text-right">Actions</th>
               </tr>
             </thead>
@@ -555,6 +609,13 @@ export function IapListClient({
                       >
                         {stateLabel(iap.attributes.state)}
                       </span>
+                    </td>
+                    {/* Cycle 39 Phase 2 Unit D — Availabilities cell. */}
+                    <td className="px-4 py-2.5">
+                      <AvailabilityCell
+                        state={availabilityStates.get(iap.id) ?? null}
+                        error={availabilityErrors.get(iap.id)}
+                      />
                     </td>
                     <td
                       className="px-4 py-2.5 text-right"
@@ -649,6 +710,57 @@ export function IapListClient({
         selectedIapIds={selectedInternalIds}
         onClose={() => setModalOpen(false)}
       />
+
+      {/* Cycle 39 Phase 2 Unit C — bulk Availabilities modal. Operates on
+          the full filtered table set (not paginated), per Manager kickoff. */}
+      {bulkMode !== null && (
+        <AvailabilitiesBulkModal
+          open
+          mode={bulkMode}
+          iaps={filtered}
+          availabilityStates={availabilityStates}
+          availabilityErrors={availabilityErrors}
+          appleToInternal={appleToInternal}
+          onClose={() => setBulkMode(null)}
+          onComplete={() => router.refresh()}
+        />
+      )}
     </div>
+  );
+}
+
+// ─── Cycle 39 Phase 2 Unit D — Availabilities cell renderer ────────────────
+
+function AvailabilityCell({
+  state,
+  error,
+}: {
+  state: AvailabilityForIap | null;
+  error?: string;
+}) {
+  const bucket = classifyAvailability(state, Boolean(error));
+  if (bucket === "unknown") {
+    return (
+      <span
+        className="text-slate-400 text-xs"
+        title={error ? `Apple fetch failed: ${error}` : "Apple fetch failed"}
+      >
+        — <span className="text-[10px]">(fetch failed)</span>
+      </span>
+    );
+  }
+  if (bucket === "removed") {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 dark:text-red-400">
+        <MinusCircle className="h-3 w-3" />
+        Remove from Sales
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+      <Globe className="h-3 w-3" />
+      Available
+    </span>
   );
 }

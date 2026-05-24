@@ -16,6 +16,8 @@ import {
 } from "@/lib/iap-management/queries/templates";
 import { IapListClient } from "./IapListClient";
 import { AppPricingTemplateSection } from "@/components/iap-management/pricing-tiers/AppPricingTemplateSection";
+import { fetchAvailabilityStatesForIaps } from "@/lib/iap-management/apple/bulk-availability-fetch";
+import type { AvailabilityForIap } from "@/lib/iap-management/apple/availabilities";
 import type {
   InAppPurchase,
 } from "@/types/iap-management/apple";
@@ -129,6 +131,29 @@ async function IapListContent({ appId }: { appId: string }) {
     );
   }
 
+  // Cycle 39 Phase 2 — bulk Apple availability prefetch. Serves both:
+  //   • Unit D — the new Availabilities column on every row.
+  //   • Unit C — the bulk-modal filter on Set / Remove from Sales.
+  // Strategy A locked: Server Component fetch on mount (freshness > perf).
+  // Per-IAP failures are non-fatal; classifyAvailability renders an em-dash.
+  let availabilityState: { id: string; state: AvailabilityForIap | null; error?: string }[] = [];
+  try {
+    const creds = await getActiveAccount();
+    if (iaps.length > 0) {
+      const { results } = await fetchAvailabilityStatesForIaps({
+        creds,
+        iapIds: iaps.map((i) => i.id),
+      });
+      availabilityState = results.map((r) => ({
+        id: r.iapId,
+        state: r.state,
+        ...(r.error ? { error: r.error } : {}),
+      }));
+    }
+  } catch {
+    // best-effort — IapListClient classifyAvailability handles missing entries.
+  }
+
   return (
     <>
       <AppPricingTemplateSection
@@ -145,6 +170,7 @@ async function IapListContent({ appId }: { appId: string }) {
         iaps={iaps}
         drafts={drafts}
         appleToInternal={appleToInternal}
+        availabilityState={availabilityState}
       />
     </>
   );

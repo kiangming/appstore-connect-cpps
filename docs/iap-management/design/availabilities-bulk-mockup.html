@@ -1,0 +1,551 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cycle 39 Phase 2 — Availabilities bulk + list column mockup</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; }
+    .state-shell { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; }
+    .state-title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #64748b; margin-bottom: 4px; }
+    .state-sub { font-size: 12px; color: #64748b; margin-bottom: 16px; }
+    .surface { background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
+    .badge-type { display:inline-flex; align-items:center; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 500; border-width: 1px; }
+    .badge-type-consumable { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+    .badge-type-non-consumable { background: #faf5ff; color: #6b21a8; border-color: #e9d5ff; }
+    .badge-state { display:inline-flex; align-items:center; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 500; border-width: 1px; }
+    .badge-rfs { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+    .badge-mm { background: #fefce8; color: #a16207; border-color: #fde68a; }
+    .badge-rfsale { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+    .pill-current { display:inline-flex; padding: 1px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; }
+    /* Toolbar buttons */
+    .btn-bulk-set { display:inline-flex; align-items:center; gap: 6px; padding: 6px 12px; font-size: 12px; font-weight: 500; background: white; color: #0f766e; border: 1px solid #5eead4; border-radius: 8px; }
+    .btn-bulk-set:hover { background: #f0fdfa; }
+    .btn-bulk-remove { display:inline-flex; align-items:center; gap: 6px; padding: 6px 12px; font-size: 12px; font-weight: 500; background: white; color: #b91c1c; border: 1px solid #fca5a5; border-radius: 8px; }
+    .btn-bulk-remove:hover { background: #fef2f2; }
+    .btn-existing { display:inline-flex; align-items:center; gap: 6px; padding: 6px 12px; font-size: 12px; font-weight: 500; background: #f1f5f9; color: #334155; border: 1px solid #e2e8f0; border-radius: 8px; }
+    .btn-primary { display:inline-flex; align-items:center; gap: 6px; padding: 6px 12px; font-size: 12px; font-weight: 500; background: #0071E3; color: white; border-radius: 8px; }
+    .btn-danger { display:inline-flex; align-items:center; gap: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500; background: #dc2626; color: white; border-radius: 8px; }
+    .btn-cancel { display:inline-flex; align-items:center; gap: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500; background: white; color: #475569; border: 1px solid #e2e8f0; border-radius: 8px; }
+    .btn-ok { display:inline-flex; align-items:center; gap: 6px; padding: 8px 16px; font-size: 13px; font-weight: 500; background: #0071E3; color: white; border-radius: 8px; }
+    .btn-ok-disabled { opacity: 0.4; cursor: not-allowed; }
+    /* Avail cells */
+    .avail-available { display:inline-flex; align-items:center; gap: 4px; color: #047857; font-size: 12px; font-weight: 500; }
+    .avail-removed { display:inline-flex; align-items:center; gap: 4px; color: #dc2626; font-size: 12px; font-weight: 600; }
+    .avail-loading { display:inline-flex; align-items:center; gap: 4px; color: #94a3b8; font-size: 12px; }
+    .avail-error { display:inline-flex; align-items:center; gap: 4px; color: #94a3b8; font-size: 12px; }
+    .skeleton-pill { display: inline-block; width: 72px; height: 16px; border-radius: 999px; background: linear-gradient(90deg, #f1f5f9 0%, #e2e8f0 50%, #f1f5f9 100%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+    @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+    /* Modal overlays */
+    .modal-backdrop { position: relative; }
+    .modal-shell { background: white; border-radius: 14px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.25); border: 1px solid #e2e8f0; max-width: 560px; }
+    .modal-header { padding: 16px 20px; border-bottom: 1px solid #f1f5f9; }
+    .modal-body { padding: 16px 20px; max-height: 420px; overflow-y: auto; }
+    .modal-footer { padding: 12px 20px; border-top: 1px solid #f1f5f9; background: #fafbfc; display: flex; justify-content: flex-end; gap: 8px; }
+    .filter-note { font-size: 11px; color: #64748b; padding: 8px 12px; background: #f8fafc; border-radius: 6px; margin-bottom: 12px; }
+    .item-row { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
+    .item-row:last-child { border-bottom: 0; }
+    .item-mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; color: #475569; }
+    .item-name { color: #1e293b; }
+    .empty-state { padding: 32px 16px; text-align: center; color: #64748b; font-size: 13px; }
+    /* Progress */
+    .progress-row { display: flex; align-items: center; gap: 8px; padding: 6px 4px; font-size: 12px; }
+    .progress-mark { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; font-size: 10px; font-weight: 700; }
+    .progress-success { background: #d1fae5; color: #047857; }
+    .progress-error { background: #fee2e2; color: #b91c1c; }
+    .progress-pending { background: #e2e8f0; color: #64748b; }
+    .progress-bar { width: 100%; height: 6px; background: #e2e8f0; border-radius: 999px; overflow: hidden; margin-top: 8px; }
+    .progress-fill { height: 100%; background: #0071E3; transition: width 200ms ease; }
+  </style>
+</head>
+<body class="bg-slate-100">
+
+<header class="bg-white border-b border-slate-200 px-8 py-5 mb-8">
+  <p class="text-[11px] uppercase tracking-widest text-slate-400 font-semibold">iap-management · cycle 39 phase 2</p>
+  <h1 class="text-2xl font-semibold text-slate-900 mt-1">Availabilities — list column + bulk actions</h1>
+  <p class="text-sm text-slate-500 mt-1">
+    Unit C bulk modal · Unit D list column · shared <code class="font-mono text-xs">fetchAvailabilityStatesForIaps</code> data layer.
+    Strategy A (Server Component fetch on mount) locked — freshness &gt; perf.
+  </p>
+  <ul class="text-xs text-slate-500 mt-2 list-disc pl-5 space-y-0.5">
+    <li>Existing IAP list columns preserved (checkbox · Product ID · Reference Name · Type · State · Actions). The new column inserts between <em>State</em> and <em>Actions</em>.</li>
+    <li>Toolbar bulk buttons land in the app header row, left of existing Refresh / Bulk Import / Create. Both buttons render unconditionally (mode-aware empty state lives in the modal, not the toolbar).</li>
+    <li>Phase 2 reuses Phase 1 audit types: <code class="font-mono">AVAILABILITY_SET_ALL_TERRITORIES</code> + <code class="font-mono">AVAILABILITY_REMOVE_FROM_SALES</code>.</li>
+  </ul>
+</header>
+
+<main class="max-w-6xl mx-auto px-8 pb-16 space-y-8">
+
+  <!-- ============================================================== -->
+  <!-- STATE 1 — List page with new column + toolbar buttons           -->
+  <!-- ============================================================== -->
+  <section class="state-shell">
+    <p class="state-title">State 1 / 7 — List page (steady state)</p>
+    <p class="state-sub">App detail page with new <strong>Availabilities</strong> column + toolbar bulk buttons. Apple state pre-fetched at render time, so the column hydrates immediately.</p>
+
+    <div class="bg-white rounded-xl border border-slate-200 p-6">
+      <!-- App header row (existing) -->
+      <div class="flex items-center gap-4 mb-5">
+        <div class="w-[60px] h-[60px] rounded-[16px] bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-lg">MN</div>
+        <div>
+          <h2 class="text-[20px] font-semibold text-slate-900">MyGame</h2>
+          <p class="text-xs font-mono text-slate-400">com.vng.mygame</p>
+        </div>
+        <span class="ml-auto inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600">17 IAPs</span>
+
+        <!-- NEW Unit C toolbar buttons (left of existing) -->
+        <button class="btn-bulk-set" title="Switch a multi-selection of items from Remove from Sales → Available">
+          🌐 Set Availabilities
+        </button>
+        <button class="btn-bulk-remove" title="Mark a multi-selection of items as Remove from Sales (destructive)">
+          ⊖ Remove from Sales
+        </button>
+
+        <span class="text-slate-200 mx-1">|</span>
+
+        <!-- Existing buttons (preserved order) -->
+        <button class="btn-existing">↻ Refresh from Apple</button>
+        <button class="btn-existing">⤴ Bulk Import</button>
+        <button class="btn-primary">+ Create IAP</button>
+      </div>
+
+      <!-- Filters (existing, unchanged) -->
+      <div class="flex items-center gap-2 mb-4">
+        <input class="flex-1 px-3 py-2 rounded-lg border border-slate-200 text-sm" placeholder="Search Product ID or Reference Name…" />
+        <select class="px-3 py-2 rounded-lg border border-slate-200 text-sm"><option>All types</option></select>
+        <select class="px-3 py-2 rounded-lg border border-slate-200 text-sm"><option>All states</option></select>
+      </div>
+
+      <!-- Table -->
+      <div class="surface">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b border-slate-200">
+            <tr class="text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+              <th class="px-3 py-3 w-10"><input type="checkbox" class="h-3.5 w-3.5"></th>
+              <th class="px-4 py-3">Product ID</th>
+              <th class="px-4 py-3">Reference Name</th>
+              <th class="px-4 py-3 w-28">Type</th>
+              <th class="px-4 py-3 w-32">State</th>
+              <!-- NEW Unit D column -->
+              <th class="px-4 py-3 w-40 bg-blue-50/40 text-blue-700 border-l border-r border-blue-100">
+                Availabilities ✦ NEW
+              </th>
+              <th class="px-4 py-3 w-28 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr class="hover:bg-slate-50">
+              <td class="px-3 py-2.5"><input type="checkbox" class="h-3.5 w-3.5"></td>
+              <td class="px-4 py-2.5 font-mono text-xs text-slate-700">com.vng.diamonds.small</td>
+              <td class="px-4 py-2.5 text-slate-800">Diamond Pack Small</td>
+              <td class="px-4 py-2.5"><span class="badge-type badge-type-consumable">Consumable</span></td>
+              <td class="px-4 py-2.5"><span class="badge-state badge-rfs">Ready For Sale</span></td>
+              <td class="px-4 py-2.5"><span class="avail-available">● Available</span></td>
+              <td class="px-4 py-2.5 text-right text-xs text-[#0071E3]">View · Edit</td>
+            </tr>
+            <tr class="hover:bg-slate-50">
+              <td class="px-3 py-2.5"><input type="checkbox" class="h-3.5 w-3.5"></td>
+              <td class="px-4 py-2.5 font-mono text-xs text-slate-700">com.vng.diamonds.medium</td>
+              <td class="px-4 py-2.5 text-slate-800">Diamond Pack Medium</td>
+              <td class="px-4 py-2.5"><span class="badge-type badge-type-consumable">Consumable</span></td>
+              <td class="px-4 py-2.5"><span class="badge-state badge-rfs">Ready For Sale</span></td>
+              <td class="px-4 py-2.5"><span class="avail-available">● Available</span></td>
+              <td class="px-4 py-2.5 text-right text-xs text-[#0071E3]">View · Edit</td>
+            </tr>
+            <tr class="hover:bg-slate-50 bg-red-50/30">
+              <td class="px-3 py-2.5"><input type="checkbox" class="h-3.5 w-3.5"></td>
+              <td class="px-4 py-2.5 font-mono text-xs text-slate-700">com.vng.diamonds.large</td>
+              <td class="px-4 py-2.5 text-slate-800">Diamond Pack Large</td>
+              <td class="px-4 py-2.5"><span class="badge-type badge-type-consumable">Consumable</span></td>
+              <td class="px-4 py-2.5"><span class="badge-state badge-rfsale">Removed From Sale</span></td>
+              <td class="px-4 py-2.5"><span class="avail-removed">⚠ Remove from Sales</span></td>
+              <td class="px-4 py-2.5 text-right text-xs text-[#0071E3]">View · Edit</td>
+            </tr>
+            <tr class="hover:bg-slate-50">
+              <td class="px-3 py-2.5"><input type="checkbox" class="h-3.5 w-3.5"></td>
+              <td class="px-4 py-2.5 font-mono text-xs text-slate-700">com.vng.gold.starter</td>
+              <td class="px-4 py-2.5 text-slate-800">Gold Starter Pack</td>
+              <td class="px-4 py-2.5"><span class="badge-type badge-type-non-consumable">Non-Consumable</span></td>
+              <td class="px-4 py-2.5"><span class="badge-state badge-mm">Missing Metadata</span></td>
+              <td class="px-4 py-2.5"><span class="avail-error" title="Apple availability fetch failed">— <span class="text-[10px]">(fetch failed)</span></span></td>
+              <td class="px-4 py-2.5 text-right text-xs text-[#0071E3]">View · Edit</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="text-[11px] text-slate-400 mt-3">
+        Column source: server-side <code class="font-mono">fetchAvailabilityStatesForIaps(iapIds)</code> with bounded concurrency 5.
+        Per-IAP fetch failures fall back to a soft em-dash with hover tooltip; the row stays interactive.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================== -->
+  <!-- STATE 2 — "Set Availabilities" modal (filtered to Removed)     -->
+  <!-- ============================================================== -->
+  <section class="state-shell">
+    <p class="state-title">State 2 / 7 — "Set Availabilities" modal</p>
+    <p class="state-sub">Click <em>Set Availabilities</em> button → modal opens showing only items currently <strong>Removed from Sales</strong>.</p>
+
+    <div class="flex items-center justify-center bg-black/40 rounded-lg p-8 modal-backdrop">
+      <div class="modal-shell w-full">
+        <div class="modal-header flex items-center justify-between">
+          <div>
+            <h3 class="text-base font-semibold text-slate-900">Set Availabilities for items</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Mark selected items as available in all Apple territories.</p>
+          </div>
+          <button class="text-slate-400 hover:text-slate-600">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <p class="filter-note">
+            🔎 Showing <strong>3 items</strong> currently in Remove from Sales. Items already Available are filtered out.
+          </p>
+
+          <div class="flex items-center justify-between pb-2 border-b border-slate-200 mb-2">
+            <label class="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+              <input type="checkbox" class="h-3.5 w-3.5"> Select all (3)
+            </label>
+            <span class="text-[11px] text-slate-400">2 selected</span>
+          </div>
+
+          <div class="item-row">
+            <input type="checkbox" checked class="h-3.5 w-3.5">
+            <span class="item-mono">com.vng.diamonds.large</span>
+            <span class="item-name flex-1 truncate">Diamond Pack Large</span>
+            <span class="avail-removed text-[11px]">⚠ Removed</span>
+          </div>
+          <div class="item-row">
+            <input type="checkbox" checked class="h-3.5 w-3.5">
+            <span class="item-mono">com.vng.special.event</span>
+            <span class="item-name flex-1 truncate">Special Event Bundle</span>
+            <span class="avail-removed text-[11px]">⚠ Removed</span>
+          </div>
+          <div class="item-row">
+            <input type="checkbox" class="h-3.5 w-3.5">
+            <span class="item-mono">com.vng.legacy.pack</span>
+            <span class="item-name flex-1 truncate">Legacy Mega Pack (Deprecated)</span>
+            <span class="avail-removed text-[11px]">⚠ Removed</span>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-ok">OK (2 selected)</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================== -->
+  <!-- STATE 3 — "Remove from Sales" modal (filtered to Available)    -->
+  <!-- ============================================================== -->
+  <section class="state-shell">
+    <p class="state-title">State 3 / 7 — "Remove from Sales" modal</p>
+    <p class="state-sub">Same modal shell, inverted filter: shows only items currently <strong>Available</strong>. Destructive accent tint on the header strip.</p>
+
+    <div class="flex items-center justify-center bg-black/40 rounded-lg p-8 modal-backdrop">
+      <div class="modal-shell w-full border-t-4 border-red-500">
+        <div class="modal-header flex items-center justify-between bg-red-50/50">
+          <div>
+            <h3 class="text-base font-semibold text-red-900">Remove from Sales</h3>
+            <p class="text-xs text-red-700 mt-0.5">Mark selected items as unavailable in all territories.</p>
+          </div>
+          <button class="text-slate-400 hover:text-slate-600">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <p class="filter-note bg-red-50">
+            🔎 Showing <strong>12 items</strong> currently Available. Items already Removed from Sales are filtered out. Scroll for the full list.
+          </p>
+
+          <div class="flex items-center justify-between pb-2 border-b border-slate-200 mb-2">
+            <label class="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
+              <input type="checkbox" class="h-3.5 w-3.5"> Select all (12)
+            </label>
+            <span class="text-[11px] text-slate-400">4 selected</span>
+          </div>
+
+          <!-- Show first ~8 visible; scroll for more -->
+          <div class="item-row">
+            <input type="checkbox" checked class="h-3.5 w-3.5">
+            <span class="item-mono">com.vng.diamonds.small</span>
+            <span class="item-name flex-1 truncate">Diamond Pack Small</span>
+            <span class="avail-available text-[11px]">● Available</span>
+          </div>
+          <div class="item-row">
+            <input type="checkbox" checked class="h-3.5 w-3.5">
+            <span class="item-mono">com.vng.diamonds.medium</span>
+            <span class="item-name flex-1 truncate">Diamond Pack Medium</span>
+            <span class="avail-available text-[11px]">● Available</span>
+          </div>
+          <div class="item-row">
+            <input type="checkbox" checked class="h-3.5 w-3.5">
+            <span class="item-mono">com.vng.gold.starter</span>
+            <span class="item-name flex-1 truncate">Gold Starter Pack</span>
+            <span class="avail-available text-[11px]">● Available</span>
+          </div>
+          <div class="item-row">
+            <input type="checkbox" checked class="h-3.5 w-3.5">
+            <span class="item-mono">com.vng.gold.elite</span>
+            <span class="item-name flex-1 truncate">Gold Elite Pack</span>
+            <span class="avail-available text-[11px]">● Available</span>
+          </div>
+          <div class="item-row">
+            <input type="checkbox" class="h-3.5 w-3.5">
+            <span class="item-mono">com.vng.season.pass</span>
+            <span class="item-name flex-1 truncate">Season Pass</span>
+            <span class="avail-available text-[11px]">● Available</span>
+          </div>
+          <div class="item-row">
+            <input type="checkbox" class="h-3.5 w-3.5">
+            <span class="item-mono">com.vng.battle.bundle</span>
+            <span class="item-name flex-1 truncate">Battle Bundle</span>
+            <span class="avail-available text-[11px]">● Available</span>
+          </div>
+          <div class="item-row">
+            <input type="checkbox" class="h-3.5 w-3.5">
+            <span class="item-mono">com.vng.starter.kit</span>
+            <span class="item-name flex-1 truncate">Starter Kit</span>
+            <span class="avail-available text-[11px]">● Available</span>
+          </div>
+          <div class="item-row">
+            <input type="checkbox" class="h-3.5 w-3.5">
+            <span class="item-mono">com.vng.elite.boost</span>
+            <span class="item-name flex-1 truncate">Elite Boost</span>
+            <span class="avail-available text-[11px]">● Available</span>
+          </div>
+          <p class="text-center text-[11px] text-slate-400 pt-2">⌄ 4 more — scroll</p>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-danger">Remove (4 selected)</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================== -->
+  <!-- STATE 4 — Confirm popup (Remove from Sales only)               -->
+  <!-- ============================================================== -->
+  <section class="state-shell">
+    <p class="state-title">State 4 / 7 — Confirm popup (Remove only)</p>
+    <p class="state-sub">Stacks above the selection modal when Manager clicks <em>Remove (N selected)</em>. Manager-locked copy verbatim from kickoff Q5.C.</p>
+
+    <div class="flex items-center justify-center bg-black/60 rounded-lg p-8 modal-backdrop">
+      <div class="modal-shell" style="max-width: 440px;">
+        <div class="px-5 pt-5 pb-2">
+          <div class="flex items-start gap-3">
+            <div class="flex h-10 w-10 items-center justify-center rounded-full bg-red-100 text-red-600 text-xl">⚠</div>
+            <div class="min-w-0 flex-1">
+              <h3 class="text-base font-semibold text-slate-900">Confirm Remove from Sales</h3>
+              <p class="text-sm text-slate-600 mt-1.5 leading-snug">
+                This action will perform the remove from sales for items, do you confirm?
+              </p>
+              <p class="text-[11px] text-slate-500 mt-2 leading-relaxed">
+                <strong>4 items</strong> will become unavailable in every Apple territory.
+                Customers will be unable to purchase them until you re-enable availability.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-danger">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="text-[11px] text-slate-500 mt-3">
+      <strong>"Set Availabilities" path</strong> skips this popup — the Set path is non-destructive (re-enabling sales), so the modal's <em>OK</em> button submits directly per Manager Q5.C.
+    </p>
+  </section>
+
+  <!-- ============================================================== -->
+  <!-- STATE 5 — Loading state (Apple fetch on mount)                 -->
+  <!-- ============================================================== -->
+  <section class="state-shell">
+    <p class="state-title">State 5 / 7 — Loading (Apple fetch on page render)</p>
+    <p class="state-sub">Server Component fetches Apple availability before the page hydrates. Browser sees the skeleton shimmer until the server response lands (~5–10s for ~25 items at concurrency 5). The rest of the row is non-blocking — IDs/state/actions render immediately from the existing fetch.</p>
+
+    <div class="bg-white rounded-xl border border-slate-200 p-6">
+      <div class="surface">
+        <table class="w-full text-sm">
+          <thead class="bg-slate-50 border-b border-slate-200">
+            <tr class="text-left text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+              <th class="px-3 py-3 w-10"></th>
+              <th class="px-4 py-3">Product ID</th>
+              <th class="px-4 py-3">Reference Name</th>
+              <th class="px-4 py-3 w-28">Type</th>
+              <th class="px-4 py-3 w-32">State</th>
+              <th class="px-4 py-3 w-40 bg-blue-50/40 text-blue-700">Availabilities</th>
+              <th class="px-4 py-3 w-28 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr><td class="px-3 py-2.5"><input type="checkbox" class="h-3.5 w-3.5" disabled></td>
+              <td class="px-4 py-2.5 font-mono text-xs text-slate-700">com.vng.diamonds.small</td>
+              <td class="px-4 py-2.5 text-slate-800">Diamond Pack Small</td>
+              <td class="px-4 py-2.5"><span class="badge-type badge-type-consumable">Consumable</span></td>
+              <td class="px-4 py-2.5"><span class="badge-state badge-rfs">Ready For Sale</span></td>
+              <td class="px-4 py-2.5"><span class="skeleton-pill"></span></td>
+              <td class="px-4 py-2.5 text-right text-xs text-slate-400">View · Edit</td>
+            </tr>
+            <tr><td class="px-3 py-2.5"><input type="checkbox" class="h-3.5 w-3.5" disabled></td>
+              <td class="px-4 py-2.5 font-mono text-xs text-slate-700">com.vng.diamonds.medium</td>
+              <td class="px-4 py-2.5 text-slate-800">Diamond Pack Medium</td>
+              <td class="px-4 py-2.5"><span class="badge-type badge-type-consumable">Consumable</span></td>
+              <td class="px-4 py-2.5"><span class="badge-state badge-rfs">Ready For Sale</span></td>
+              <td class="px-4 py-2.5"><span class="skeleton-pill"></span></td>
+              <td class="px-4 py-2.5 text-right text-xs text-slate-400">View · Edit</td>
+            </tr>
+            <tr><td class="px-3 py-2.5"><input type="checkbox" class="h-3.5 w-3.5" disabled></td>
+              <td class="px-4 py-2.5 font-mono text-xs text-slate-700">com.vng.gold.starter</td>
+              <td class="px-4 py-2.5 text-slate-800">Gold Starter Pack</td>
+              <td class="px-4 py-2.5"><span class="badge-type badge-type-non-consumable">Non-Consumable</span></td>
+              <td class="px-4 py-2.5"><span class="badge-state badge-mm">Missing Metadata</span></td>
+              <td class="px-4 py-2.5"><span class="skeleton-pill"></span></td>
+              <td class="px-4 py-2.5 text-right text-xs text-slate-400">View · Edit</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-[11px] text-slate-400 mt-3">
+        ⚠ Page render blocks on the Apple fetch (Server Component). Manager sees the full IAP list skeleton (existing Suspense fallback) during this window; the table reveals once availability resolves.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================== -->
+  <!-- STATE 6 — Bulk action progress (per-IAP status updates)        -->
+  <!-- ============================================================== -->
+  <section class="state-shell">
+    <p class="state-title">State 6 / 7 — Bulk action progress + aggregate result</p>
+    <p class="state-sub">After confirm, the modal flips to a progress view. Per-IAP status streams in as the orchestrator iterates (concurrency 5). Failures stay visible alongside successes — Q-K fail-soft.</p>
+
+    <div class="flex items-center justify-center bg-black/40 rounded-lg p-8 modal-backdrop">
+      <div class="modal-shell w-full">
+        <div class="modal-header">
+          <h3 class="text-base font-semibold text-slate-900">Remove from Sales · In progress</h3>
+          <p class="text-xs text-slate-500 mt-0.5">3 of 4 items processed</p>
+        </div>
+        <div class="modal-body">
+          <div class="progress-row">
+            <span class="progress-mark progress-success">✓</span>
+            <span class="item-mono">com.vng.diamonds.small</span>
+            <span class="item-name flex-1 truncate">Diamond Pack Small</span>
+            <span class="text-[11px] text-emerald-700">Removed from Apple</span>
+          </div>
+          <div class="progress-row">
+            <span class="progress-mark progress-success">✓</span>
+            <span class="item-mono">com.vng.diamonds.medium</span>
+            <span class="item-name flex-1 truncate">Diamond Pack Medium</span>
+            <span class="text-[11px] text-emerald-700">Removed from Apple</span>
+          </div>
+          <div class="progress-row">
+            <span class="progress-mark progress-error">!</span>
+            <span class="item-mono">com.vng.gold.starter</span>
+            <span class="item-name flex-1 truncate">Gold Starter Pack</span>
+            <span class="text-[11px] text-red-700">Apple 409 — MISSING_METADATA blocks edits</span>
+          </div>
+          <div class="progress-row">
+            <span class="progress-mark progress-pending">◷</span>
+            <span class="item-mono">com.vng.gold.elite</span>
+            <span class="item-name flex-1 truncate">Gold Elite Pack</span>
+            <span class="text-[11px] text-slate-400">Pending…</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" style="width: 75%"></div>
+          </div>
+          <p class="text-[11px] text-slate-400 mt-2 text-right">2 succeeded · 1 failed · 1 pending</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" disabled style="opacity:0.4;">Cancel (disabled while running)</button>
+          <button class="btn-ok btn-ok-disabled">Working…</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="text-[11px] text-slate-500 mt-3">
+      On completion the footer flips to <strong>"Close"</strong>; a toast surfaces aggregate severity:
+      <code class="font-mono text-emerald-700">success</code> when all rows succeed,
+      <code class="font-mono text-amber-700">warning</code> when some fail (Q-K),
+      <code class="font-mono text-red-700">error</code> when all fail.
+    </p>
+  </section>
+
+  <!-- ============================================================== -->
+  <!-- STATE 7 — Empty-state (no eligible items in this mode)         -->
+  <!-- ============================================================== -->
+  <section class="state-shell">
+    <p class="state-title">State 7 / 7 — Empty state (no eligible items)</p>
+    <p class="state-sub">When the filter has zero matches the modal renders a friendly empty-state instead of an empty checklist. The footer's OK button is disabled.</p>
+
+    <div class="grid grid-cols-2 gap-4">
+      <!-- Empty Set -->
+      <div class="flex items-center justify-center bg-black/40 rounded-lg p-6 modal-backdrop">
+        <div class="modal-shell w-full">
+          <div class="modal-header">
+            <h3 class="text-base font-semibold text-slate-900">Set Availabilities for items</h3>
+            <p class="text-xs text-slate-500 mt-0.5">All items are already available.</p>
+          </div>
+          <div class="modal-body">
+            <div class="empty-state">
+              <p class="text-2xl mb-2">🌐</p>
+              <p class="font-medium text-slate-700">All items are currently Available.</p>
+              <p class="text-[11px] text-slate-400 mt-1">Nothing to enable — every IAP in this app already sells in all territories.</p>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-cancel">Close</button>
+            <button class="btn-ok btn-ok-disabled" disabled>OK (0 selected)</button>
+          </div>
+        </div>
+      </div>
+      <!-- Empty Remove -->
+      <div class="flex items-center justify-center bg-black/40 rounded-lg p-6 modal-backdrop">
+        <div class="modal-shell w-full border-t-4 border-red-500">
+          <div class="modal-header bg-red-50/50">
+            <h3 class="text-base font-semibold text-red-900">Remove from Sales</h3>
+            <p class="text-xs text-red-700 mt-0.5">All items are already removed.</p>
+          </div>
+          <div class="modal-body">
+            <div class="empty-state">
+              <p class="text-2xl mb-2">⊖</p>
+              <p class="font-medium text-slate-700">All items are currently Removed from Sales.</p>
+              <p class="text-[11px] text-slate-400 mt-1">Nothing to remove — every IAP in this app is already unavailable.</p>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button class="btn-cancel">Close</button>
+            <button class="btn-danger btn-ok-disabled" disabled style="opacity:0.4;">Remove (0 selected)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================== -->
+  <!-- Implementation notes appendix                                    -->
+  <!-- ============================================================== -->
+  <section class="state-shell">
+    <p class="state-title">Implementation notes</p>
+    <div class="prose prose-sm max-w-none text-slate-700">
+      <ul class="list-disc pl-5 space-y-1.5 text-sm">
+        <li><strong>Data layer reuse.</strong> One <code class="font-mono">fetchAvailabilityStatesForIaps(creds, iapIds)</code> call per page render serves both Unit C (modal filter) and Unit D (column display). The pre-fetched <code class="font-mono">Map&lt;appleIapId, AvailabilityForIap | null&gt;</code> threads through the existing <code class="font-mono">IapListClient</code> prop interface — no client-side refetch on modal open.</li>
+        <li><strong>Concurrency budget.</strong> Reuses the existing <code class="font-mono">withConcurrency&lt;T,R&gt;</code> primitive (Cycle 30) at fanout 5 — matches the Phase 1 territory-fetch ceiling and stays well under Apple's 250 req/hour cap for typical 25-item lists.</li>
+        <li><strong>Filter semantics.</strong> <em>Set</em> mode shows items whose Apple availability is <em>null OR territoryCount&nbsp;=&nbsp;0</em>; <em>Remove</em> mode shows items whose availability has at least one territory. The <code class="font-mono">null</code> bucket (Apple fetch failed) is excluded from both modals to avoid acting on stale state.</li>
+        <li><strong>Audit reuse.</strong> Each bulk row writes <code class="font-mono">AVAILABILITY_SET_ALL_TERRITORIES</code> or <code class="font-mono">AVAILABILITY_REMOVE_FROM_SALES</code> (the Phase 1 audit types) so existing dashboards/reports surface bulk activity alongside single-item edits.</li>
+        <li><strong>Fail-soft (Q-K).</strong> A per-IAP failure never cancels siblings — the orchestrator iterates to completion and the modal's progress view shows successes + failures side-by-side. Aggregate severity surfaces as a toast on close.</li>
+        <li><strong>Rate-limit risk.</strong> Page render = N Apple calls. Future Phase 3 candidate: server-side cache with manual refresh, mirroring the territories-cache pattern. Tracked as Hotfix candidate.</li>
+      </ul>
+    </div>
+  </section>
+
+</main>
+
+</body>
+</html>
