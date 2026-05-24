@@ -3,27 +3,32 @@
 /**
  * Cycle 39 Phase 2 Unit C — Bulk Availabilities modal.
  *
+ * Hotfix 25 — Strategy A → D pivot: the modal no longer relies on a
+ * Server-Component-prefetched availability Map. On open, it fetches
+ * each visible IAP's Apple availability through the per-IAP API route
+ * (Hotfix 25 Step 2) via the shared client-fetch-queue (concurrency 3)
+ * so the bulk path inherits the same rate-limit protection as the row
+ * cells. Manager workflow tolerates the explicit wait — opening this
+ * modal is an explicit bulk action, not a passive page render.
+ *
  * Two modes, one component (mode-aware filter + footer):
  *   • "set-all"  → list only items currently Removed from Sales.
  *   • "remove"   → list only items currently Available; confirm popup
  *                  before submit (destructive Q5.C).
  *
- * The Apple-side state Map is pre-fetched on the Server Component (see
- * `app/(dashboard)/.../[appId]/page.tsx`) and threaded as a prop. The
- * modal never re-fetches — opening it is instant.
- *
- * Submit posts to /api/iap-management/iaps/bulk-availability. The modal
- * renders progress (mockup State 6) per-row with success/fail markers as
- * the orchestrator's response streams back — for v1 the API responds in
- * one shot, so progress flips from "Working…" to the per-row results
- * once the POST resolves. Q-K fail-soft preserved.
+ * Submit posts to /api/iap-management/iaps/bulk-availability and renders
+ * the per-row progress view (mockup State 6). Q-K fail-soft preserved.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Globe, MinusCircle, Loader2, X, AlertTriangle } from "lucide-react";
 import type { AvailabilityForIap } from "@/lib/iap-management/apple/availabilities";
 import { classifyAvailability } from "@/lib/iap-management/apple/availability-classify";
+import {
+  acquireSlot,
+  releaseSlot,
+} from "@/lib/iap-management/client-fetch-queue";
 import type { InAppPurchase } from "@/types/iap-management/apple";
 
 export type BulkMode = "set-all" | "remove";
@@ -33,10 +38,6 @@ export interface AvailabilitiesBulkModalProps {
   mode: BulkMode;
   /** Full filtered IAP list visible in the table (post search/type/state filters). */
   iaps: InAppPurchase[];
-  /** Apple-side availability state pre-fetched on the Server Component. */
-  availabilityStates: Map<string, AvailabilityForIap | null>;
-  /** Per-IAP fetch errors — rows in this set are excluded from both filter buckets. */
-  availabilityErrors: Map<string, string>;
   /** Apple-IAP-id → internal-UUID map. Internal UUIDs are what the API expects. */
   appleToInternal: Record<string, string>;
   onClose: () => void;
@@ -51,25 +52,102 @@ interface RowResult {
   error?: string;
 }
 
+interface ApiAvailabilityResponse {
+  state: AvailabilityForIap | null;
+  error?: "rate_limited" | "fetch_failed" | "iap_not_found" | "not_synced";
+}
+
 export function AvailabilitiesBulkModal({
   open,
   mode,
   iaps,
-  availabilityStates,
-  availabilityErrors,
   appleToInternal,
   onClose,
   onComplete,
 }: AvailabilitiesBulkModalProps) {
-  const eligible = useMemo(
-    () => filterEligible(iaps, availabilityStates, availabilityErrors, mode, appleToInternal),
-    [iaps, availabilityStates, availabilityErrors, mode, appleToInternal],
+  const [states, setStates] = useState<Map<string, AvailabilityForIap | null>>(
+    new Map(),
   );
+  const [errors, setErrors] = useState<Map<string, string>>(new Map());
+  const [fetching, setFetching] = useState(false);
+  const [fetchProgress, setFetchProgress] = useState({ done: 0, total: 0 });
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [results, setResults] = useState<RowResult[] | null>(null);
+
+  // Hotfix 25 — Fetch availability for every visible (filtered) IAP that
+  // has a local UUID, on modal open. Bounded by the shared queue.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const targets = iaps
+      .map((i) => ({ appleId: i.id, internalId: appleToInternal[i.id] }))
+      .filter((r): r is { appleId: string; internalId: string } =>
+        Boolean(r.internalId),
+      );
+
+    setStates(new Map());
+    setErrors(new Map());
+    setFetching(true);
+    setFetchProgress({ done: 0, total: targets.length });
+
+    (async () => {
+      const nextStates = new Map<string, AvailabilityForIap | null>();
+      const nextErrors = new Map<string, string>();
+      await Promise.all(
+        targets.map(async ({ appleId, internalId }) => {
+          await acquireSlot();
+          if (cancelled) {
+            releaseSlot();
+            return;
+          }
+          try {
+            const res = await fetch(
+              `/api/iap-management/iaps/${internalId}/availability`,
+              { cache: "no-store" },
+            );
+            const data = (await res.json()) as ApiAvailabilityResponse;
+            if (cancelled) return;
+            if (data.error === "rate_limited") {
+              nextErrors.set(appleId, "rate_limited");
+            } else if (data.error) {
+              nextErrors.set(appleId, data.error);
+            } else {
+              nextStates.set(appleId, data.state ?? null);
+            }
+          } catch (err) {
+            if (!cancelled) {
+              nextErrors.set(
+                appleId,
+                err instanceof Error ? err.message : String(err),
+              );
+            }
+          } finally {
+            releaseSlot();
+            if (!cancelled) {
+              setFetchProgress((p) => ({ ...p, done: p.done + 1 }));
+            }
+          }
+        }),
+      );
+      if (!cancelled) {
+        setStates(nextStates);
+        setErrors(nextErrors);
+        setFetching(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, iaps, appleToInternal]);
+
+  const eligible = useMemo(
+    () => filterEligible(iaps, states, errors, mode, appleToInternal),
+    [iaps, states, errors, mode, appleToInternal],
+  );
 
   if (!open) return null;
 
@@ -105,7 +183,9 @@ export function AvailabilitiesBulkModal({
       if (internal) internalIds.push(internal);
     }
     if (internalIds.length === 0) {
-      toast.error("No selected items resolve to a local IAP row — try Refresh from Apple.");
+      toast.error(
+        "No selected items resolve to a local IAP row — try Refresh from Apple.",
+      );
       return;
     }
     setSubmitting(true);
@@ -126,12 +206,15 @@ export function AvailabilitiesBulkModal({
           }
         | { error: string };
       if (!res.ok) {
-        toast.error("error" in data ? data.error : `Bulk action failed (${res.status})`);
+        toast.error(
+          "error" in data ? data.error : `Bulk action failed (${res.status})`,
+        );
         return;
       }
       if ("overall" in data) {
         setResults(data.results);
-        const verb = mode === "set-all" ? "Set Availabilities" : "Remove from Sales";
+        const verb =
+          mode === "set-all" ? "Set Availabilities" : "Remove from Sales";
         if (data.overall === "SUCCESS") {
           toast.success(`${verb} · ${data.summary}`);
         } else if (data.overall === "PARTIAL") {
@@ -235,7 +318,9 @@ export function AvailabilitiesBulkModal({
 
         {/* Body */}
         <div className="px-5 py-4 overflow-y-auto flex-1">
-          {results ? (
+          {fetching ? (
+            <FetchingState progress={fetchProgress} destructive={destructive} />
+          ) : results ? (
             <ProgressList results={results} />
           ) : eligible.length === 0 ? (
             <EmptyState
@@ -326,7 +411,12 @@ export function AvailabilitiesBulkModal({
             <button
               type="button"
               onClick={onPrimaryClick}
-              disabled={selected.size === 0 || submitting || eligible.length === 0}
+              disabled={
+                selected.size === 0 ||
+                submitting ||
+                fetching ||
+                eligible.length === 0
+              }
               className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed ${
                 destructive
                   ? "bg-red-600 hover:bg-red-700 text-white"
@@ -406,8 +496,8 @@ interface EligibleRow {
 }
 
 /** Pure helper exported for unit tests — given the table's filtered IAP
- *  list + the pre-fetched Apple state Map, produce the subset eligible
- *  for the requested bulk action. Rows whose Apple fetch errored are
+ *  list + the fetched Apple state Map, produce the subset eligible for
+ *  the requested bulk action. Rows whose Apple fetch errored are
  *  excluded from BOTH modes so Manager doesn't act on stale state. */
 export function filterEligible(
   iaps: InAppPurchase[],
@@ -418,13 +508,14 @@ export function filterEligible(
 ): EligibleRow[] {
   const out: EligibleRow[] = [];
   for (const iap of iaps) {
-    // Must have a local row so the API can resolve internal UUID.
     if (!appleToInternal[iap.id]) continue;
-    const bucket = classifyAvailability(
-      states.get(iap.id) ?? null,
-      errors.has(iap.id),
-    );
-    if (bucket === "unknown") continue;
+    if (errors.has(iap.id)) continue;
+    // A successfully-fetched row that's missing from `states` is impossible
+    // (the modal effect populates both Maps atomically), but defensively
+    // exclude it the same way as an error so filter semantics are robust
+    // under partial mid-fetch states.
+    if (!states.has(iap.id)) continue;
+    const bucket = classifyAvailability(states.get(iap.id) ?? null, false);
     if (mode === "set-all" && bucket !== "removed") continue;
     if (mode === "remove" && bucket !== "available") continue;
     out.push({
@@ -437,6 +528,39 @@ export function filterEligible(
 }
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
+
+function FetchingState({
+  progress,
+  destructive,
+}: {
+  progress: { done: number; total: number };
+  destructive: boolean;
+}) {
+  const pct = progress.total > 0
+    ? Math.round((progress.done / progress.total) * 100)
+    : 0;
+  return (
+    <div className="py-6">
+      <p className="text-sm font-medium text-slate-700 dark:text-slate-200 flex items-center gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Fetching Apple availability for {progress.total}{" "}
+        {plural(progress.total, "item", "items")}…
+      </p>
+      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+        {progress.done}/{progress.total} ({pct}%) · concurrency 3 — keeps
+        Apple ASC well under the 250 req/hour cap.
+      </p>
+      <div className="mt-3 h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+        <div
+          className={`h-full transition-[width] duration-200 ${
+            destructive ? "bg-red-500" : "bg-[#0071E3]"
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
 
 function EmptyState({
   destructive,
@@ -486,7 +610,9 @@ function ProgressList({ results }: { results: RowResult[] }) {
           </span>
           <span
             className={`text-[11px] truncate max-w-[220px] ${
-              r.ok ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"
+              r.ok
+                ? "text-emerald-700 dark:text-emerald-400"
+                : "text-red-700 dark:text-red-400"
             }`}
           >
             {r.ok ? "Updated on Apple" : (r.error ?? "Failed")}

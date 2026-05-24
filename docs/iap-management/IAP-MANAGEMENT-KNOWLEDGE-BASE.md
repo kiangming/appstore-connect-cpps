@@ -953,8 +953,81 @@ modal filterEligible +6 covering both modes + error/unsynced exclusion).
 
 **Phase 3 candidates (deferred, tracked here):**
 
-- Server-side cache for `fetchAvailabilityStatesForIaps` so repeated list-page renders don't burn Apple's 250 req/hour budget. Promote to Hotfix tier if production traffic surfaces 429s.
+- ~~Server-side cache for `fetchAvailabilityStatesForIaps`~~ — **superseded by Hotfix 25 Strategy A → D pivot** (see Hotfix 25 entry below).
 - Bulk-action progress streaming (Server-Sent Events) so the modal updates per-row as the orchestrator works instead of after the response. Current v1 batches results in one shot.
+- Auto-retry on rate-limited cells after a cool-down window. Hotfix 25 ships click-to-retry only; auto-retry adds clock-management complexity without strong production demand yet.
+
+#### Hotfix 25 — Strategy A → D pivot (lazy-load client cells)
+
+**Production verification result.** Phase 2 Strategy A (Server Component
+bulk prefetch on mount) cascaded into Apple ASC 429 rate-limit hits the
+moment Manager workflows fanned across multiple apps. Railway logs:
+
+```
+[iap-apple] [F28D5J857Z] GET /v2/inAppPurchases/.../inAppPurchaseAvailability
+  rate-limited (retry-after=nullms)
+```
+
+`retry-after=null` is the Apple-side signal that the limiter cooled with
+no explicit recovery window. With N items × M apps × short-window
+manager workflows fanning out from each list-page render, Apple's 250
+req/hour cap drops the tail of every render → many cells "(fetch
+failed)" + degraded Manager UX.
+
+**Pivot — Strategy A → Strategy D (client-side lazy load).**
+
+| Aspect | Strategy A (Phase 2 shipped) | Strategy D (Hotfix 25) |
+|---|---|---|
+| Page render | Blocks on Apple fetch (~5–10s) | Returns immediately |
+| Fetch trigger | All rows on mount | Per-row IntersectionObserver |
+| Concurrency | Server-side `withConcurrency` 5 | Client-side queue 3 |
+| Rate-limit recovery | Cascade fail | Per-cell click retry |
+| Bulk modal | Reuses prefetched Map | Fetches on open |
+
+**New surfaces:**
+
+| File | Role |
+|---|---|
+| `app/api/iap-management/iaps/[iapId]/availability/route.ts` | Per-IAP GET endpoint, wraps `getAvailabilityForIap` in `withRetry` so Apple 429 backoff honours Retry-After automatically. Returns `{ state, error?, reason? }` with 200 wrapping rate-limited / fetch-failed cases so the client can render without `fetch` rejecting. |
+| `lib/iap-management/client-fetch-queue.ts` | Singleton concurrency-bounded queue, cap 3. FIFO drain. Module-scoped state ⇒ per-tab rate-limit protection. |
+| `components/iap-management/AvailabilityCell.tsx` | Lazy-load cell. IntersectionObserver with `rootMargin: 100px` so the row fetches slightly before scroll-in. Six states (`pending` / `loading` / `available` / `removed` / `failed` / `rate_limited`). Click-to-retry on the two failure states flips back to `pending` so the observer re-fires. |
+
+**Bulk modal refactor.** `AvailabilitiesBulkModal` no longer accepts
+prefetched `availabilityStates` / `availabilityErrors` props. On open
+the modal fetches each filtered IAP's availability via the new per-IAP
+API route through the same client-fetch-queue (concurrency 3). Manager
+sees an explicit progress indicator while the fetch runs — bulk action
+is an explicit Manager workflow, so the wait is acceptable.
+
+**Deletions.** `lib/iap-management/apple/bulk-availability-fetch.ts` +
+its test removed — the server-side bulk prefetch is orphaned by the
+pivot. No backwards-compat shims (per project Don'ts).
+
+**Apple ASC institutional trap class — NEW.** Strategy A's "bulk
+prefetch on render" pattern is now documented as an anti-pattern for
+Apple-rate-limited integrations. Apple's 250 req/hour cap is shared
+across all API surfaces under a single ASC key; any pattern that fans
+out N requests per page render compounds across pages, apps, and
+manager tabs. Lazy-load + per-cell observers + client-side concurrency
+ceiling is the institutional answer.
+
+Cumulative Apple ASC rate-limit pattern stack (Hotfix-derived):
+- Hotfix 20 — cursor pagination over hardcoded limit=50.
+- Hotfix 22 — V1 sub-resource pattern to dodge the V2 ?include 50-cap.
+- **Hotfix 25 — lazy-load + client queue + per-cell retry** (this).
+
+**Cycle 39 Phase 2 closure status post Hotfix 25:**
+
+| Deliverable | Status |
+|---|---|
+| List view Availabilities column (Unit D) | ✅ Shipped (Phase 2) · ✅ Hardened (Hotfix 25 lazy-load) |
+| Bulk Set Availabilities (Unit C) | ✅ Shipped (Phase 2) · ✅ Hardened (Hotfix 25 on-demand fetch) |
+| Bulk Remove from Sales + confirm popup (Unit C) | ✅ Shipped (Phase 2) · ✅ Hardened (Hotfix 25 on-demand fetch) |
+| Apple ASC rate-limit handling | ✅ Hotfix 25 |
+
+**Tests added (Hotfix 25).** client-fetch-queue +4 (concurrency cap +
+FIFO drain + zero-floor + sustained-load peak). AvailabilityCell +7
+(inert no-UUID + each terminal state + click-to-retry round-trip).
 
 **Cycle 37 Phase 2 deferral closure status (post Cycle 39):**
 

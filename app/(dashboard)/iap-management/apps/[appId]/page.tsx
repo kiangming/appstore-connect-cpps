@@ -16,8 +16,6 @@ import {
 } from "@/lib/iap-management/queries/templates";
 import { IapListClient } from "./IapListClient";
 import { AppPricingTemplateSection } from "@/components/iap-management/pricing-tiers/AppPricingTemplateSection";
-import { fetchAvailabilityStatesForIaps } from "@/lib/iap-management/apple/bulk-availability-fetch";
-import type { AvailabilityForIap } from "@/lib/iap-management/apple/availabilities";
 import type {
   InAppPurchase,
 } from "@/types/iap-management/apple";
@@ -131,29 +129,13 @@ async function IapListContent({ appId }: { appId: string }) {
     );
   }
 
-  // Cycle 39 Phase 2 — bulk Apple availability prefetch. Serves both:
-  //   • Unit D — the new Availabilities column on every row.
-  //   • Unit C — the bulk-modal filter on Set / Remove from Sales.
-  // Strategy A locked: Server Component fetch on mount (freshness > perf).
-  // Per-IAP failures are non-fatal; classifyAvailability renders an em-dash.
-  let availabilityState: { id: string; state: AvailabilityForIap | null; error?: string }[] = [];
-  try {
-    const creds = await getActiveAccount();
-    if (iaps.length > 0) {
-      const { results } = await fetchAvailabilityStatesForIaps({
-        creds,
-        iapIds: iaps.map((i) => i.id),
-      });
-      availabilityState = results.map((r) => ({
-        id: r.iapId,
-        state: r.state,
-        ...(r.error ? { error: r.error } : {}),
-      }));
-    }
-  } catch {
-    // best-effort — IapListClient classifyAvailability handles missing entries.
-  }
-
+  // Hotfix 25 — Strategy A → D pivot. The Server Component used to bulk
+  // prefetch Apple availability for every IAP here; production verified
+  // that Apple's 250 req/hour cap cascades into 429s on multi-app
+  // workflows. The page now returns immediately; the Availabilities
+  // column lazy-loads per row via IntersectionObserver + a client-side
+  // concurrency queue (see components/iap-management/AvailabilityCell.tsx
+  // + lib/iap-management/client-fetch-queue.ts).
   return (
     <>
       <AppPricingTemplateSection
@@ -170,7 +152,6 @@ async function IapListContent({ appId }: { appId: string }) {
         iaps={iaps}
         drafts={drafts}
         appleToInternal={appleToInternal}
-        availabilityState={availabilityState}
       />
     </>
   );
