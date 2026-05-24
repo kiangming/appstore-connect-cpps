@@ -77,7 +77,72 @@ import type {
 
 export const runtime = "nodejs";
 
-const CONCURRENCY_LIMIT = 5;
+/**
+ * Hotfix 26 — concurrency dropped 5 → 2 after Manager production
+ * verification surfaced Apple ASC 429 cascades in Bulk Import. Each
+ * row generates ~6 sequential Apple calls (create → state → locales →
+ * screenshot → pricing → availability); two workers in parallel cap
+ * peak in-flight requests at ~2 and stay well under Apple's documented
+ * 1 req/sec average per token.
+ */
+const CONCURRENCY_LIMIT = 2;
+
+/**
+ * Hotfix 26 — fixed inter-row delay (ms) applied at the end of every
+ * `orchestrateOne` invocation. Provides headroom for Apple's bucket
+ * to refill between rows + lets concurrent workers stagger naturally
+ * if they finish at the same moment. Bumping this is the cheapest knob
+ * to dial down rate-limit pressure further.
+ */
+const INTER_ROW_DELAY_MS = 1000;
+
+/**
+ * Per-row 429-aware retry telemetry. Mutated by `trackedWithRetry` and
+ * persisted to `actions_log.payload` for each row so Manager can audit
+ * rate-limit impact after a batch completes (and so future Cycle 40
+ * telemetry can roll up batch-level statistics).
+ */
+interface RetryCounters {
+  rate429_count: number;
+  retry_attempts: number;
+  backoff_total_ms: number;
+  longest_backoff_ms: number;
+}
+
+function createRetryCounters(): RetryCounters {
+  return {
+    rate429_count: 0,
+    retry_attempts: 0,
+    backoff_total_ms: 0,
+    longest_backoff_ms: 0,
+  };
+}
+
+/**
+ * Thin wrapper around `withRetry` that mutates a counters bag in place
+ * each time the 429 backoff path fires. Pass the SAME counters instance
+ * through every Apple call in a single row's orchestration so the
+ * per-row audit captures cumulative retry impact across all stages
+ * (create + state + locales + screenshot + pricing + availability).
+ */
+function trackedWithRetry<T>(
+  counters: RetryCounters,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withRetry(fn, {
+    onRetry: ({ delayMs }) => {
+      counters.rate429_count += 1;
+      counters.retry_attempts += 1;
+      counters.backoff_total_ms += delayMs;
+      if (delayMs > counters.longest_backoff_ms) {
+        counters.longest_backoff_ms = delayMs;
+      }
+    },
+  });
+}
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
 
 interface PerIapResult {
   product_id: string;
@@ -110,6 +175,9 @@ interface PerIapResult {
   submitted?: boolean;
   stage?: string;
   error?: string;
+  /** Hotfix 26 — per-row Apple 429 telemetry. Absent on rows that never
+   *  touched Apple (SKIP / validation ERROR); zeroes when no 429 fired. */
+  rate_limit?: RetryCounters;
 }
 
 interface ExecuteSummary {
@@ -119,6 +187,10 @@ interface ExecuteSummary {
   failed: number;
   skipped: number;
   results: PerIapResult[];
+  /** Hotfix 26 — batch-level Apple 429 telemetry roll-up. Sums per-row
+   *  counters so the UI can render a single chip "X retries, Yms backoff
+   *  total" instead of digging into every row. */
+  rate_limit_total: RetryCounters & { rows_throttled: number };
 }
 
 export async function POST(
@@ -319,30 +391,68 @@ export async function POST(
   );
 
   // ── Orchestrate per-IAP with bounded concurrency ────────────────────────
+  //    Hotfix 26 — concurrency 2 (was 5) + 1000ms inter-row delay so each
+  //    worker spaces its successive rows. Manager-locked tradeoff: ~4-5
+  //    min for 50 items vs ~1 min before, in exchange for surviving Apple's
+  //    documented 1 req/sec average per token.
   const results: PerIapResult[] = await withConcurrency(
     resolved.decisions,
     CONCURRENCY_LIMIT,
-    async (decision) => orchestrateOne({
-      creds,
-      decision,
-      screenshots,
-      submit: Boolean(config.submit_on_create),
-      existingByProductId,
-      existingTierByProductId,
-      usdPriceByTier,
-      appleAppId: ctx.params.appId,
-      internalAppId,
-      batchId,
-      actor,
-      tierOverrides,
-      pricingSource,
-    }),
+    async (decision, index) => {
+      const result = await orchestrateOne({
+        creds,
+        decision,
+        screenshots,
+        submit: Boolean(config.submit_on_create),
+        existingByProductId,
+        existingTierByProductId,
+        usdPriceByTier,
+        appleAppId: ctx.params.appId,
+        internalAppId,
+        batchId,
+        actor,
+        tierOverrides,
+        pricingSource,
+        // Hotfix 26 — one counter bag per row, mutated by every
+        // trackedWithRetry call across the row's stages.
+        rateCounters: createRetryCounters(),
+      });
+      // Skip the trailing delay on the very last decision a worker may
+      // pick up — cheap optimisation; the overhead at batch end is tiny
+      // but worth it on small batches.
+      if (index < resolved.decisions.length - 1) {
+        await sleep(INTER_ROW_DELAY_MS);
+      }
+      return result;
+    },
   );
 
   // ── Tally + close audit batch ───────────────────────────────────────────
   const succeeded = results.filter((r) => r.status === "SUCCESS").length;
   const skipped = results.filter((r) => r.status === "SKIPPED").length;
   const failed = results.filter((r) => r.status === "ERROR").length;
+
+  // Hotfix 26 — batch-level rate-limit roll-up. Aggregates per-row 429
+  // telemetry so the wizard summary + the batch audit row both surface
+  // how much Apple throttled this run.
+  const rate_limit_total = results.reduce(
+    (acc, r) => {
+      const rl = r.rate_limit;
+      if (!rl) return acc;
+      acc.rate429_count += rl.rate429_count;
+      acc.retry_attempts += rl.retry_attempts;
+      acc.backoff_total_ms += rl.backoff_total_ms;
+      if (rl.longest_backoff_ms > acc.longest_backoff_ms) {
+        acc.longest_backoff_ms = rl.longest_backoff_ms;
+      }
+      if (rl.rate429_count > 0) acc.rows_throttled += 1;
+      return acc;
+    },
+    {
+      ...createRetryCounters(),
+      rows_throttled: 0,
+    } as RetryCounters & { rows_throttled: number },
+  );
 
   await db
     .from("import_batches")
@@ -366,6 +476,10 @@ export async function POST(
       total: parsed.items.length,
       counts: { succeeded, skipped, failed },
       conflict_counts: resolved.counts,
+      // Hotfix 26 — batch-level 429 telemetry for post-run audit.
+      rate_limit: rate_limit_total,
+      concurrency_limit: CONCURRENCY_LIMIT,
+      inter_row_delay_ms: INTER_ROW_DELAY_MS,
     },
   });
 
@@ -376,6 +490,7 @@ export async function POST(
     failed,
     skipped,
     results,
+    rate_limit_total,
   };
   return NextResponse.json(summary);
 }
@@ -408,6 +523,11 @@ interface OrchestrateArgs {
    *  row. Already discriminated server-side (APP_TEMPLATE carries the
    *  internal app_id). */
   pricingSource: PricingSource;
+  /** Hotfix 26 — per-row 429 telemetry. Populated by `orchestrateOne`
+   *  before delegating to runCreate/runOverwrite; every Apple call in
+   *  the row's stages threads through `trackedWithRetry(args.rateCounters, …)`
+   *  so the final persisted row sees cumulative impact. */
+  rateCounters: RetryCounters;
 }
 
 async function orchestrateOne(args: OrchestrateArgs): Promise<PerIapResult> {
@@ -445,7 +565,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   // 1. Create shell on Apple — type comes from the parser (IAP.h2 Type
   //    column with COLUMN/DEFAULT source tracking, surfaced in audit log).
   try {
-    const created = await withRetry(() =>
+    const created = await trackedWithRetry(args.rateCounters, () =>
       createInAppPurchase(creds, {
         appId: appleAppId,
         name: item.reference_name,
@@ -468,7 +588,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   const failedLocales: string[] = [];
   for (const loc of item.localizations) {
     try {
-      await withRetry(() =>
+      await trackedWithRetry(args.rateCounters, () =>
         createInAppPurchaseLocalization(creds, {
           iapId: appleIapId,
           locale: loc.locale,
@@ -541,7 +661,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   }
   if (screenshotFile) {
     try {
-      const reserved = await withRetry(() =>
+      const reserved = await trackedWithRetry(args.rateCounters, () =>
         reserveInAppPurchaseScreenshot(
           creds,
           appleIapId,
@@ -556,7 +676,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
       await uploadScreenshotToOperations(ops, screenshotFile);
       const buf = Buffer.from(await screenshotFile.arrayBuffer());
       const checksum = createHash("md5").update(buf).digest("hex");
-      await withRetry(() =>
+      await trackedWithRetry(args.rateCounters, () =>
         confirmInAppPurchaseScreenshot(creds, reserved.data.id, checksum),
       );
       screenshotOk = true;
@@ -578,7 +698,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   let availabilitySet = false;
   let availabilityErr: string | undefined;
   try {
-    await withRetry(() =>
+    await trackedWithRetry(args.rateCounters, () =>
       setAvailabilityToAllTerritories(creds, appleIapId),
     );
     availabilitySet = true;
@@ -609,7 +729,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   let submitted = false;
   if (submit && screenshotOk && failedLocales.length === 0) {
     try {
-      await withRetry(() => submitInAppPurchase(creds, appleIapId));
+      await trackedWithRetry(args.rateCounters, () => submitInAppPurchase(creds, appleIapId));
       submitted = true;
     } catch (err) {
       return await persistResult(args, {
@@ -661,7 +781,7 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
 
   // 1. PATCH attributes
   try {
-    await withRetry(() =>
+    await trackedWithRetry(args.rateCounters, () =>
       updateInAppPurchase(creds, appleIapId, {
         name: item.reference_name,
       }),
@@ -680,12 +800,12 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
   // 2. Replace localizations: list + delete + POST new
   const failedLocales: string[] = [];
   try {
-    const existing = await withRetry(() =>
+    const existing = await trackedWithRetry(args.rateCounters, () =>
       listInAppPurchaseLocalizations(creds, appleIapId),
     );
     for (const loc of existing.data ?? []) {
       try {
-        await withRetry(() =>
+        await trackedWithRetry(args.rateCounters, () =>
           iapFetch<unknown>(
             creds,
             "DELETE",
@@ -710,7 +830,7 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
 
   for (const loc of item.localizations) {
     try {
-      await withRetry(() =>
+      await trackedWithRetry(args.rateCounters, () =>
         createInAppPurchaseLocalization(creds, {
           iapId: appleIapId,
           locale: loc.locale,
@@ -881,6 +1001,11 @@ async function persistResult(
 ): Promise<PerIapResult> {
   const db = iapDb();
   const item = args.decision.source;
+
+  // Hotfix 26 — attach per-row 429 telemetry. The wrapper rolls up on
+  // the way out so both the returned PerIapResult AND the persisted
+  // actions_log payload (spread below) carry the counters.
+  result = { ...result, rate_limit: { ...args.rateCounters } };
 
   if (result.status === "SUCCESS" && result.apple_iap_id) {
     // Upsert into iaps table — best-effort, surface only via log on conflict.

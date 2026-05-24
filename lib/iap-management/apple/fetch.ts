@@ -72,11 +72,25 @@ export type Sleeper = (ms: number) => Promise<void>;
 const defaultSleep: Sleeper = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+export interface RetryAttemptInfo {
+  /** 0-indexed attempt number that just failed and is about to sleep. */
+  attempt: number;
+  /** Computed sleep duration (ms), already capped at RETRY_DELAY_CEILING_MS. */
+  delayMs: number;
+  /** Retry-After header value Apple sent (ms), or null when absent. */
+  retryAfterMs: number | null;
+}
+
 export interface RetryOptions {
   /** Backoff delays (ms) between attempts. Default: 500 → 1000 → 2000. */
   backoffMs?: readonly number[];
   /** Injected sleeper for tests — vi.fn() that resolves immediately. */
   sleep?: Sleeper;
+  /** Hotfix 26 — invoked once per 429 that triggers a backoff sleep.
+   *  Use for per-call telemetry: count 429s, accumulate backoff_total_ms,
+   *  surface in audit-log rows / progress UI. Not called when the call
+   *  succeeds on the first attempt or fails with a non-rate-limit error. */
+  onRetry?: (info: RetryAttemptInfo) => void;
 }
 
 /**
@@ -92,6 +106,7 @@ export async function withRetry<T>(
 ): Promise<T> {
   const backoff = options.backoffMs ?? DEFAULT_BACKOFF_MS;
   const sleep = options.sleep ?? defaultSleep;
+  const onRetry = options.onRetry;
 
   for (let attempt = 0; attempt <= backoff.length; attempt++) {
     try {
@@ -107,6 +122,9 @@ export async function withRetry<T>(
         err.retryAfterMs ?? backoff[attempt],
         RETRY_DELAY_CEILING_MS,
       );
+      if (onRetry) {
+        onRetry({ attempt, delayMs: delay, retryAfterMs: err.retryAfterMs });
+      }
       await sleep(delay);
     }
   }

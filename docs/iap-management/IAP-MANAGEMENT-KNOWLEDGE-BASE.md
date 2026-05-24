@@ -1014,7 +1014,8 @@ ceiling is the institutional answer.
 Cumulative Apple ASC rate-limit pattern stack (Hotfix-derived):
 - Hotfix 20 — cursor pagination over hardcoded limit=50.
 - Hotfix 22 — V1 sub-resource pattern to dodge the V2 ?include 50-cap.
-- **Hotfix 25 — lazy-load + client queue + per-cell retry** (this).
+- Hotfix 25 — lazy-load + client queue + per-cell retry.
+- **Hotfix 26 — Bulk Import concurrency + per-row throttle + onRetry telemetry** (next subsection).
 
 **Cycle 39 Phase 2 closure status post Hotfix 25:**
 
@@ -1028,6 +1029,79 @@ Cumulative Apple ASC rate-limit pattern stack (Hotfix-derived):
 **Tests added (Hotfix 25).** client-fetch-queue +4 (concurrency cap +
 FIFO drain + zero-floor + sustained-load peak). AvailabilityCell +7
 (inert no-UUID + each terminal state + click-to-retry round-trip).
+
+#### Hotfix 26 — Bulk Import rate-limit hardening + onRetry telemetry hook
+
+**Production verification.** Hotfix 25 successfully mitigated rate-limit
+cascade for *View* flows (column + bulk modal lazy-load + concurrency 3),
+but **Bulk Import** still cascaded — Manager's primary pain workflow.
+Each row generates ~6 sequential Apple calls (create → state → locales →
+screenshot → pricing → availability); with `CONCURRENCY_LIMIT = 5` the
+peak in-flight rate burst past Apple's documented ~1 req/sec/token cap.
+Items pushed to Apple incomplete (availability not set, pricing schedule
+silently failed).
+
+**Fix scope (Manager workflow unblock).**
+
+| Knob | Phase 2 ship | Hotfix 26 |
+|---|---|---|
+| `CONCURRENCY_LIMIT` | 5 | **2** |
+| Inter-row delay | 0 | **1000ms** (skipped on the worker's last row) |
+| `withRetry` coverage | All 10 bulk-import call sites | unchanged — already universal |
+| Telemetry | none | per-row 429 / retry / backoff counters; batch-level roll-up |
+
+**`withRetry.onRetry` telemetry hook (NEW).** Extended
+`RetryOptions` with an optional callback fired once per 429 backoff:
+
+```ts
+withRetry(fn, {
+  onRetry: ({ attempt, delayMs, retryAfterMs }) => {
+    counters.rate429_count += 1;
+    counters.backoff_total_ms += delayMs;
+  },
+});
+```
+
+Per-row in the bulk-import orchestrator, a `RetryCounters` bag is
+created at the worker boundary and threaded through `trackedWithRetry`
+at every Apple call site. The wrapper mutates the bag in place; the bag
+is then attached to:
+
+1. The returned `PerIapResult.rate_limit` (visible in the wizard table).
+2. The per-row `actions_log.payload.rate_limit` (audit trail).
+3. The batch-level `ExecuteSummary.rate_limit_total` (wizard chip + `BULK_IMPORT_BATCH` audit payload).
+
+The wizard renders an amber summary chip ONLY when `rate429_count > 0`,
+so clean runs stay visually quiet. The chip surfaces:
+
+- `rows_throttled / total` — how many rows hit at least one 429.
+- `rate429_count` — total retry attempts across the batch.
+- `backoff_total_ms` — cumulative time spent sleeping.
+- `longest_backoff_ms` — single worst stall (helps gauge Apple's mood).
+
+**Tradeoff (Manager-locked).** ~50-item batch wall time moves from ~1 min
+(burst-and-fail) to ~4-5 min (steady-pace-and-survive). Q-K fail-soft
+preserved — a row that exhausts retries gets its existing
+`stage`/`error` fields plus rate-limit counters so Manager can identify
+exactly which rows fell off after the rate-limit recovery budget.
+
+**Files touched (Hotfix 26):**
+
+| File | Change |
+|---|---|
+| `lib/iap-management/apple/fetch.ts` | + `onRetry?: (info: RetryAttemptInfo) => void` option on `withRetry`. Non-breaking — absent in every existing call site. |
+| `lib/iap-management/apple/fetch.test.ts` | +6 tests pinning the onRetry hook (invocation count, payload shape, accumulator-style usage, suppressed when no retry, suppressed for non-rate-limit errors). |
+| `app/api/iap-management/apps/[appId]/bulk-import/execute/route.ts` | `CONCURRENCY_LIMIT 5 → 2`; new `INTER_ROW_DELAY_MS = 1000`; `RetryCounters` + `trackedWithRetry` helpers; all 10 `withRetry(() => …)` callsites replaced with `trackedWithRetry(args.rateCounters, () => …)`; `persistResult` attaches counters; batch summary includes `rate_limit_total`. |
+| `app/(dashboard)/iap-management/apps/[appId]/bulk-import/BulkImportWizard.tsx` | `ExecuteResult.rate_limit_total` typed; conditional amber summary chip rendered when `rate429_count > 0`. |
+
+**Cycle 40 prerequisite.** The `onRetry` hook is the smallest piece of
+"systematic infrastructure" surfaced early because Hotfix 26 needs the
+telemetry now. Cycle 40 will:
+
+- Build the centralized rate-limit handler (token bucket + X-Rate-Limit header parser).
+- Refactor `iapFetch` to thread server-side budget state into the same `onRetry` callback shape.
+- Audit all `withConcurrency` sites and align them with the documented Apple cap (Hotfix 26 covers Bulk Import; bulk-availability + screenshot-upload still default to concurrency 5).
+- Surface per-request Railway log instrumentation (`budget=X/3600`).
 
 **Cycle 37 Phase 2 deferral closure status (post Cycle 39):**
 

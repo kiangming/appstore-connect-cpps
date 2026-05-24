@@ -244,6 +244,88 @@ describe("withRetry", () => {
     await withRetry(fn, { sleep, backoffMs: [777] });
     expect(sleep).toHaveBeenCalledWith(777);
   });
+
+  // ── Hotfix 26 — onRetry telemetry hook ─────────────────────────────
+  describe("onRetry telemetry hook (Hotfix 26)", () => {
+    it("is invoked exactly once per 429 backoff", async () => {
+      const fn = vi
+        .fn()
+        .mockRejectedValueOnce(new AppleRateLimitError("GET", "/x", "", 100))
+        .mockRejectedValueOnce(new AppleRateLimitError("GET", "/x", "", 200))
+        .mockResolvedValueOnce("ok");
+      const onRetry = vi.fn();
+      await withRetry(fn, { sleep, backoffMs: [50, 100], onRetry });
+      expect(onRetry).toHaveBeenCalledTimes(2);
+    });
+
+    it("reports the actual sleep delay (Retry-After honored, then ceiling-capped)", async () => {
+      const fn = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new AppleRateLimitError("GET", "/x", "", 60_000), // 60s → ceiling-capped to 10s
+        )
+        .mockResolvedValueOnce("ok");
+      const onRetry = vi.fn();
+      await withRetry(fn, { sleep, onRetry });
+      expect(onRetry).toHaveBeenCalledWith({
+        attempt: 0,
+        delayMs: 10_000,
+        retryAfterMs: 60_000,
+      });
+    });
+
+    it("reports retryAfterMs=null when Apple omits the header (backoff-curve path)", async () => {
+      const fn = vi
+        .fn()
+        .mockRejectedValueOnce(new AppleRateLimitError("GET", "/x", "", null))
+        .mockResolvedValueOnce("ok");
+      const onRetry = vi.fn();
+      await withRetry(fn, { sleep, backoffMs: [777], onRetry });
+      expect(onRetry).toHaveBeenCalledWith({
+        attempt: 0,
+        delayMs: 777,
+        retryAfterMs: null,
+      });
+    });
+
+    it("is NOT invoked when the call succeeds on the first try", async () => {
+      const fn = vi.fn().mockResolvedValue("ok");
+      const onRetry = vi.fn();
+      await withRetry(fn, { sleep, onRetry });
+      expect(onRetry).not.toHaveBeenCalled();
+    });
+
+    it("is NOT invoked for non-rate-limit errors", async () => {
+      const fn = vi
+        .fn()
+        .mockRejectedValue(new AppleApiError(422, "POST", "/x", "validation"));
+      const onRetry = vi.fn();
+      await expect(withRetry(fn, { sleep, onRetry })).rejects.toBeInstanceOf(
+        AppleApiError,
+      );
+      expect(onRetry).not.toHaveBeenCalled();
+    });
+
+    it("supports accumulator-style counters across attempts", async () => {
+      const fn = vi
+        .fn()
+        .mockRejectedValueOnce(new AppleRateLimitError("GET", "/x", "", 100))
+        .mockRejectedValueOnce(new AppleRateLimitError("GET", "/x", "", 200))
+        .mockResolvedValueOnce("ok");
+      const counters = { count: 0, total: 0 };
+      await withRetry(fn, {
+        sleep,
+        backoffMs: [50, 100, 200],
+        onRetry: ({ delayMs }) => {
+          counters.count += 1;
+          counters.total += delayMs;
+        },
+      });
+      expect(counters.count).toBe(2);
+      // Retry-After honored → 100 + 200 = 300.
+      expect(counters.total).toBe(300);
+    });
+  });
 });
 
 describe("AppleApiError / AppleRateLimitError construction", () => {

@@ -65,6 +65,13 @@ interface ScreenshotEntry {
   match: ScreenshotMatchResult;
 }
 
+interface RateLimitCounters {
+  rate429_count: number;
+  retry_attempts: number;
+  backoff_total_ms: number;
+  longest_backoff_ms: number;
+}
+
 interface ExecuteResult {
   batch_id: string;
   total: number;
@@ -102,7 +109,12 @@ interface ExecuteResult {
       | "failed-exception";
     pricing_error?: string;
     submitted?: boolean;
+    /** Hotfix 26 — per-row 429 telemetry attached by the route. Absent
+     *  on rows that never touched Apple (SKIP / validation ERROR). */
+    rate_limit?: RateLimitCounters;
   }>;
+  /** Hotfix 26 — batch-level 429 telemetry roll-up. */
+  rate_limit_total?: RateLimitCounters & { rows_throttled: number };
 }
 
 export function BulkImportWizard({
@@ -1104,6 +1116,26 @@ function Step4Result({
         <Tally label="Skipped" value={result.skipped} color="slate" />
         <Tally label="Failed" value={result.failed} color="amber" />
       </div>
+
+      {/* Hotfix 26 — Apple rate-limit chip. Renders only when Apple
+          actually throttled this batch; suppressed for clean runs so
+          the summary stays tight. */}
+      {result.rate_limit_total &&
+        result.rate_limit_total.rate429_count > 0 && (
+          <div className="mb-4 rounded-lg border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+            <p className="font-medium">
+              Apple ASC throttled this batch — every row recovered via
+              exponential backoff.
+            </p>
+            <p className="text-[11px] mt-0.5 text-amber-700 dark:text-amber-300/80">
+              {result.rate_limit_total.rows_throttled} of {result.total} rows
+              hit 429 · {result.rate_limit_total.rate429_count} retries total
+              · {Math.round(result.rate_limit_total.backoff_total_ms / 1000)}s
+              cumulative backoff · longest{" "}
+              {Math.round(result.rate_limit_total.longest_backoff_ms / 1000)}s.
+            </p>
+          </div>
+        )}
 
       <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden max-h-[420px] overflow-y-auto">
         <table className="w-full text-xs">
