@@ -25,6 +25,7 @@ function baseForm(overrides: Partial<IapFormState> = {}): IapFormState {
     screenshot_filename: "shot.png",
     review_note: "Reviewer note",
     family_sharable: false,
+    availability_target: "ALL",
     ...overrides,
   };
 }
@@ -41,6 +42,7 @@ function baseCached(overrides: Partial<CachedIapState> = {}): CachedIapState {
     },
     screenshot_apple_id: "scr-1",
     screenshot_file_name: "shot.png",
+    availability_target: "ALL",
     ...overrides,
   };
 }
@@ -280,5 +282,62 @@ describe("isEmptyDiff", () => {
       hasNewScreenshotFile: false,
     });
     expect(isEmptyDiff(diff)).toBe(false);
+  });
+});
+
+describe("detectIapChanges — availability (Cycle 39 Phase 1)", () => {
+  it("detects ALL → NONE as a Remove-from-Sales availability change", () => {
+    const diff = detectIapChanges({
+      form: baseForm({ availability_target: "NONE" }),
+      cached: baseCached({ availability_target: "ALL" }),
+      hasNewScreenshotFile: false,
+    });
+    expect(diff.availability_changed).toEqual({
+      old_target: "ALL",
+      new_target: "NONE",
+    });
+    expect(isEmptyDiff(diff)).toBe(false);
+  });
+
+  it("detects NONE → ALL as an availability change in the opposite direction", () => {
+    const diff = detectIapChanges({
+      form: baseForm({ availability_target: "ALL" }),
+      cached: baseCached({ availability_target: "NONE" }),
+      hasNewScreenshotFile: false,
+    });
+    expect(diff.availability_changed).toEqual({
+      old_target: "NONE",
+      new_target: "ALL",
+    });
+  });
+
+  it("returns null availability_changed when form target matches cached", () => {
+    const diff = detectIapChanges({
+      form: baseForm({ availability_target: "ALL" }),
+      cached: baseCached({ availability_target: "ALL" }),
+      hasNewScreenshotFile: false,
+    });
+    expect(diff.availability_changed).toBeNull();
+  });
+
+  it("surfaces a diff when cached target is unknown (null) and the form picks one", () => {
+    const diff = detectIapChanges({
+      form: baseForm({ availability_target: "NONE" }),
+      cached: baseCached({ availability_target: null }),
+      hasNewScreenshotFile: false,
+    });
+    expect(diff.availability_changed).toEqual({
+      old_target: null,
+      new_target: "NONE",
+    });
+  });
+
+  it("returns null availability_changed when form target is undefined (Section 5 not rendered)", () => {
+    const diff = detectIapChanges({
+      form: baseForm({ availability_target: undefined }),
+      cached: baseCached({ availability_target: "ALL" }),
+      hasNewScreenshotFile: false,
+    });
+    expect(diff.availability_changed).toBeNull();
   });
 });

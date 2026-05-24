@@ -59,18 +59,51 @@ describe("pickDisplayState (pure)", () => {
     expect(state.secondary).toMatch(/manually/);
   });
 
-  it("renders 'Removed from Sale' when no availability resource exists (404)", () => {
+  it("renders 'Remove from Sales' when no availability resource exists (404) and flags the removed state", () => {
     const state = pickDisplayState(
       { availability: null, totalTerritoryCount: 175 },
       null,
     );
-    expect(state.primary).toBe("Removed from Sale");
+    expect(state.primary).toBe("Remove from Sales");
+    expect(state.removed).toBe(true);
+  });
+
+  it("Cycle 39 Phase 1 — flags removed when Apple returns availability with zero territories", () => {
+    const state = pickDisplayState(
+      {
+        availability: {
+          availableInNewTerritories: false,
+          territoryCount: 0,
+          territoryIds: [],
+        },
+        totalTerritoryCount: 175,
+      },
+      null,
+    );
+    expect(state.primary).toBe("Remove from Sales");
+    expect(state.removed).toBe(true);
+  });
+
+  it("does NOT flag removed for healthy subset states", () => {
+    const state = pickDisplayState(
+      {
+        availability: {
+          availableInNewTerritories: false,
+          territoryCount: 50,
+          territoryIds: [],
+        },
+        totalTerritoryCount: 175,
+      },
+      null,
+    );
+    expect(state.removed).toBe(false);
   });
 
   it("surfaces 'Couldn't fetch availability' on a non-404 Apple error", () => {
     const state = pickDisplayState(null, "Apple boom");
     expect(state.primary).toBe("Couldn't fetch availability");
     expect(state.secondary).toBe("Apple boom");
+    expect(state.removed).toBe(false);
   });
 
   it("falls back to a sensible denominator when the territories fetch failed (total=0)", () => {
@@ -124,14 +157,18 @@ describe("<IapAvailabilitiesSection />", () => {
     expect(screen.getByText("73 of 175 countries or regions")).toBeTruthy();
   });
 
-  it("renders the Removed from Sale state", () => {
+  it("renders the Remove from Sales state with red emphasis", () => {
     render(
       <IapAvailabilitiesSection
         availabilityView={{ availability: null, totalTerritoryCount: 175 }}
         availabilityError={null}
       />,
     );
-    expect(screen.getByText("Removed from Sale")).toBeTruthy();
+    const heading = screen.getByText("Remove from Sales");
+    expect(heading).toBeTruthy();
+    // Cycle 39 Phase 1 Unit A — red emphasis classes applied to the primary
+    // text when the state surfaces as removed.
+    expect(heading.className).toMatch(/text-red-/);
   });
 
   it("renders the error state with Apple's message", () => {

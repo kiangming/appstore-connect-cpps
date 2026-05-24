@@ -133,6 +133,50 @@ export async function setAvailabilityToAllTerritories(
 }
 
 /**
+ * Cycle 39 Phase 1 — "Remove from Sales" via re-POST with empty territory
+ * list. Apple's API has no DELETE or PATCH on the availability resource
+ * (verified against `/v1/inAppPurchaseAvailabilities` + `/{id}` operations
+ * in openapi.oas.json — only POST + GET exist), so the only path to
+ * "available in zero territories" is a fresh POST that replaces the prior
+ * availability snapshot.
+ *
+ * Payload shape mirrors `setAvailabilityToAllTerritories` exactly except
+ * `availableInNewTerritories: false` + `availableTerritories.data: []`.
+ * The OpenAPI schema (InAppPurchaseAvailabilityCreateRequest) requires the
+ * relationship object + `data` array, but imposes no `minItems`, so an
+ * empty array satisfies the contract.
+ *
+ * Apple Connect web UI's "Remove from Sale" action surfaces the same
+ * semantic — once submitted, the IAP isn't sold in any territory.
+ */
+export async function setAvailabilityRemoveFromSales(
+  creds: AscCredentials,
+  appleIapId: string,
+): Promise<AscApiResponse<InAppPurchaseAvailability>> {
+  return iapFetch<AscApiResponse<InAppPurchaseAvailability>>(
+    creds,
+    "POST",
+    "/v1/inAppPurchaseAvailabilities",
+    {
+      data: {
+        type: "inAppPurchaseAvailabilities",
+        attributes: {
+          availableInNewTerritories: false,
+        },
+        relationships: {
+          inAppPurchase: {
+            data: { type: "inAppPurchases", id: appleIapId },
+          },
+          availableTerritories: {
+            data: [],
+          },
+        },
+      },
+    },
+  );
+}
+
+/**
  * Read the IAP's availability — Hotfix 22: V1 sub-resource pattern.
  *
  * Apple's V2 `?include=availableTerritories` path that Cycle 37 Phase 1

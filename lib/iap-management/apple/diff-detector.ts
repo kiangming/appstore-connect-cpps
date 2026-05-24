@@ -16,7 +16,11 @@
  * string ("" / null) are also collapsed — neither represents a value Apple
  * would store as different.
  */
-import type { FormLocalization, IapFormState } from "../validation";
+import type {
+  AvailabilityTarget,
+  FormLocalization,
+  IapFormState,
+} from "../validation";
 
 /** Locally-cached IAP state as last persisted from Apple (or local draft). */
 export interface CachedIapState {
@@ -38,6 +42,10 @@ export interface CachedIapState {
   screenshot_apple_id: string | null;
   /** Local cached file_name from iap_mgmt.iap_screenshots.file_name. */
   screenshot_file_name: string | null;
+  /** Cycle 39 Phase 1 — Apple-side availability target as last fetched.
+   *  Null when the availability resource hasn't been fetched (legacy /
+   *  pre-Cycle-37 IAPs whose Apple-side state is unknown). */
+  availability_target: AvailabilityTarget | null;
 }
 
 export interface IapDiff {
@@ -61,6 +69,15 @@ export interface IapDiff {
   tier_changed: {
     old_tier_id: string | null;
     new_tier_id: string;
+  } | null;
+  /** Cycle 39 Phase 1 — availability target change. Null when the form's
+   *  selection matches the cached Apple-side state (no Stage 5 work to do).
+   *  Pre-Cycle-37 IAPs whose `cached.availability_target` is null surface a
+   *  diff only when the form explicitly picks a target — Manager has to
+   *  affirm the choice before we POST. */
+  availability_changed: {
+    old_target: AvailabilityTarget | null;
+    new_target: AvailabilityTarget;
   } | null;
 }
 
@@ -181,11 +198,26 @@ export function detectIapChanges(args: DetectIapChangesArgs): IapDiff {
     };
   }
 
+  // ── Availability ──────────────────────────────────────────────────────
+  // Cycle 39 Phase 1 — only fire Stage 5 when the form carries an explicit
+  // target AND it differs from the cached Apple-side state. A form target
+  // of `undefined` means the IapForm didn't render Section 5 (create flow
+  // or a UI variant) — leave availability untouched.
+  let availability_changed: IapDiff["availability_changed"] = null;
+  const formTarget = form.availability_target;
+  if (formTarget && formTarget !== cached.availability_target) {
+    availability_changed = {
+      old_target: cached.availability_target,
+      new_target: formTarget,
+    };
+  }
+
   return {
     attributes_changed,
     localizations_changed,
     screenshot_changed,
     tier_changed,
+    availability_changed,
   };
 }
 
@@ -196,6 +228,7 @@ export function isEmptyDiff(diff: IapDiff): boolean {
     diff.attributes_changed === null &&
     diff.localizations_changed === null &&
     diff.screenshot_changed === false &&
-    diff.tier_changed === null
+    diff.tier_changed === null &&
+    diff.availability_changed === null
   );
 }

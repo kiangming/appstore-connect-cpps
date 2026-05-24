@@ -8,7 +8,12 @@ import { getTemplateSummary } from "@/lib/iap-management/queries/templates";
 import { getApp } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { IapForm } from "@/components/iap-management/iap-form/IapForm";
+import {
+  getAvailabilityForIap,
+  getAllTerritoryIds,
+} from "@/lib/iap-management/apple/availabilities";
 import type {
+  AvailabilityTarget,
   IapFormState,
   FormLocalization,
 } from "@/lib/iap-management/validation";
@@ -28,8 +33,9 @@ export default async function EditIapPage({ params }: PageProps) {
   if (!data) notFound();
 
   let appName = "";
+  let creds: Awaited<ReturnType<typeof getActiveAccount>> | null = null;
   try {
-    const creds = await getActiveAccount();
+    creds = await getActiveAccount();
     const app = await getApp(creds, params.appId);
     appName = app.data.attributes.name;
   } catch {
@@ -37,6 +43,39 @@ export default async function EditIapPage({ params }: PageProps) {
   }
 
   const tiers = await listTiers();
+
+  // Cycle 39 Phase 1 — fetch the Apple-side availability for the Edit form's
+  // Section 5 prefill. Only meaningful when the IAP is synced; for local
+  // drafts we leave the target undefined (Section 5 won't render).
+  let availabilityTarget: AvailabilityTarget | null = null;
+  if (creds && data.iap.apple_iap_id) {
+    try {
+      const [avail, totalIds] = await Promise.all([
+        getAvailabilityForIap(creds, data.iap.apple_iap_id),
+        getAllTerritoryIds(creds).catch(() => [] as string[]),
+      ]);
+      if (!avail) {
+        availabilityTarget = "NONE";
+      } else if (
+        totalIds.length > 0 &&
+        avail.territoryCount >= totalIds.length &&
+        avail.availableInNewTerritories
+      ) {
+        availabilityTarget = "ALL";
+      } else if (avail.territoryCount === 0 && !avail.availableInNewTerritories) {
+        availabilityTarget = "NONE";
+      } else {
+        // Subset state — pre-Cycle-37 / Apple-Connect-managed IAPs may sit
+        // here. We don't surface a third radio; default the form to ALL so
+        // Manager flipping to NONE produces an unambiguous Remove from Sales
+        // diff. The CURRENT badge stays off because cached !== ALL.
+        availabilityTarget = null;
+      }
+    } catch {
+      // best-effort — section will render with no CURRENT badge.
+      availabilityTarget = null;
+    }
+  }
 
   // Map DB rows back to form state
   const localizations: Record<string, FormLocalization> = {};
@@ -61,6 +100,11 @@ export default async function EditIapPage({ params }: PageProps) {
     // IAP.p1.j Issue 1: hydrate persisted pricing-source so the form
     // doesn't re-derive Q-D default and override the Manager's choice.
     pricing_source: data.iap.pricing_source ?? undefined,
+    // Cycle 39 Phase 1 — pre-fill the Availabilities radio with the
+    // Apple-side state. When unknown (pre-Cycle-37 subset / fetch failed)
+    // we still default the form to "ALL" so the diff is unambiguous if
+    // Manager flips to Remove from Sales.
+    availability_target: availabilityTarget ?? "ALL",
   };
 
   // IAP.p1.f: per-edit pricing-source selection. Defaults to most-specific
@@ -130,6 +174,7 @@ export default async function EditIapPage({ params }: PageProps) {
         appTemplateAvailable={appTemplateAvailable}
         defaultTemplateEntryCount={defaultTemplateEntryCount}
         appTemplateEntryCount={appTemplateEntryCount}
+        cachedAvailabilityTarget={availabilityTarget}
       />
     </div>
   );

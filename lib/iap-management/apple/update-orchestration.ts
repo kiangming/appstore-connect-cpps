@@ -1,7 +1,7 @@
 /**
  * IAP.o.12a — Apple edit-on-Apple orchestration.
  *
- * Composes the 5 Apple-side stages required to push form edits to a synced
+ * Composes the 6 Apple-side stages required to push form edits to a synced
  * IAP. Reuses primitives shipped across the IAP.o.6 → IAP.o.11 cycle so the
  * new orchestration surface is minimal:
  *
@@ -11,6 +11,9 @@
  *   • Stage 3 — Screenshot replace (IAP.o.8a `replaceScreenshotOnApple`).
  *   • Stage 4 — Pricing schedule (IAP.o.11d `applyPricingSchedule` — owns
  *               its own audit log row + retry budget + jitter).
+ *   • Stage 5 — Availability (Cycle 39 Phase 1) — `setAvailabilityToAll
+ *               Territories` for "ALL", or `setAvailabilityRemoveFromSales`
+ *               (re-POST with empty territory list) for "NONE".
  *
  * Per Manager IAP.o.11 instrumentation-first discipline: every stage emits
  * `[update-on-apple] stage=X start/result` console.log so Railway tail shows
@@ -35,6 +38,10 @@ import {
   type PricingOutcome,
   type PricingSource,
 } from "./pricing-orchestration";
+import {
+  setAvailabilityToAllTerritories,
+  setAvailabilityRemoveFromSales,
+} from "./availabilities";
 import type { IapDiff } from "./diff-detector";
 import { iapDb } from "@/lib/iap-management/db";
 
@@ -101,6 +108,16 @@ export interface StagePricingResult {
   outcome?: PricingOutcome;
 }
 
+export interface StageAvailabilityResult {
+  changed: boolean;
+  ok?: boolean;
+  /** "ALL" or "NONE" — the target Manager picked. */
+  target?: "ALL" | "NONE";
+  /** Apple-side availability resource id after the POST. */
+  apple_availability_id?: string;
+  error?: string;
+}
+
 export interface StagePrecheckResult {
   ready: boolean;
   attempts: number;
@@ -115,6 +132,7 @@ export interface UpdateIapOutcome {
     localizations: StageLocalizationsResult;
     screenshot: StageScreenshotResult;
     pricing: StagePricingResult;
+    availability: StageAvailabilityResult;
   };
   /** Aggregate roll-up: SUCCESS only when every changed stage succeeded;
    *  PARTIAL when at least one stage succeeded AND at least one failed;
@@ -130,7 +148,7 @@ export async function updateIapOnApple(
 ): Promise<UpdateIapOutcome> {
   const { creds, appleIapId, diff, audit } = args;
   console.log(
-    `[update-on-apple] start apple_iap_id=${appleIapId} attr=${diff.attributes_changed !== null} loc=${diff.localizations_changed !== null} scr=${diff.screenshot_changed} tier=${diff.tier_changed !== null}`,
+    `[update-on-apple] start apple_iap_id=${appleIapId} attr=${diff.attributes_changed !== null} loc=${diff.localizations_changed !== null} scr=${diff.screenshot_changed} tier=${diff.tier_changed !== null} avail=${diff.availability_changed !== null}`,
   );
 
   // ── Stage 0 — precheck poll (IAP.o.11a reuse) ─────────────────────────
@@ -163,6 +181,7 @@ export async function updateIapOnApple(
         localizations: { changed: diff.localizations_changed !== null },
         screenshot: { changed: diff.screenshot_changed },
         pricing: { changed: diff.tier_changed !== null },
+        availability: { changed: diff.availability_changed !== null },
       },
       overall: "FAILURE",
       summary: `Apple IAP not ready (${poll.reason ?? "timeout"})`,
@@ -181,19 +200,30 @@ export async function updateIapOnApple(
   // ── Stage 4 — Pricing ─────────────────────────────────────────────────
   const pricing = await runPricingStage(args);
 
+  // ── Stage 5 — Availability (Cycle 39 Phase 1) ─────────────────────────
+  const availability = await runAvailabilityStage(args);
+
   // ── Aggregate ─────────────────────────────────────────────────────────
   const aggregated = aggregate({
     attributes,
     localizations,
     screenshot,
     pricing,
+    availability,
   });
 
   console.log(
     `[update-on-apple] complete apple_iap_id=${appleIapId} overall=${aggregated.overall}`,
   );
   return {
-    stages: { precheck, attributes, localizations, screenshot, pricing },
+    stages: {
+      precheck,
+      attributes,
+      localizations,
+      screenshot,
+      pricing,
+      availability,
+    },
     ...aggregated,
   };
 }
@@ -531,6 +561,61 @@ async function runPricingStage(
   return { changed: true, outcome };
 }
 
+// ─── Stage 5 — Availability (Cycle 39 Phase 1) ───────────────────────────────
+
+async function runAvailabilityStage(
+  args: UpdateIapOnAppleArgs,
+): Promise<StageAvailabilityResult> {
+  const { creds, appleIapId, diff, audit } = args;
+  if (!diff.availability_changed) {
+    return { changed: false };
+  }
+  const target = diff.availability_changed.new_target;
+  console.log(
+    `[update-on-apple] stage=availability start apple_iap_id=${appleIapId} target=${target}`,
+  );
+  const actionType =
+    target === "ALL"
+      ? "AVAILABILITY_SET_ALL_TERRITORIES"
+      : "AVAILABILITY_REMOVE_FROM_SALES";
+  try {
+    const res =
+      target === "ALL"
+        ? await setAvailabilityToAllTerritories(creds, appleIapId)
+        : await setAvailabilityRemoveFromSales(creds, appleIapId);
+    const apple_availability_id = res.data?.id;
+    console.log(
+      `[update-on-apple] stage=availability success apple_iap_id=${appleIapId} target=${target} avail_id=${apple_availability_id}`,
+    );
+    await writeAuditRow(audit, actionType, {
+      apple_iap_id: appleIapId,
+      result: "SUCCESS",
+      target,
+      ...(apple_availability_id ? { apple_availability_id } : {}),
+      previous_target: diff.availability_changed.old_target,
+    });
+    return {
+      changed: true,
+      ok: true,
+      target,
+      ...(apple_availability_id ? { apple_availability_id } : {}),
+    };
+  } catch (err) {
+    const errStr = errToString(err);
+    console.error(
+      `[update-on-apple] stage=availability failure apple_iap_id=${appleIapId} target=${target}: ${errStr}`,
+    );
+    await writeAuditRow(audit, actionType, {
+      apple_iap_id: appleIapId,
+      result: "ERROR",
+      target,
+      previous_target: diff.availability_changed.old_target,
+      error: errStr,
+    });
+    return { changed: true, ok: false, target, error: errStr };
+  }
+}
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function aggregate(stages: {
@@ -538,12 +623,14 @@ function aggregate(stages: {
   localizations: StageLocalizationsResult;
   screenshot: StageScreenshotResult;
   pricing: StagePricingResult;
+  availability: StageAvailabilityResult;
 }): { overall: UpdateIapOutcome["overall"]; summary: string } {
   const changedFlags = [
     stages.attributes.changed,
     stages.localizations.changed,
     stages.screenshot.changed,
     stages.pricing.changed,
+    stages.availability.changed,
   ];
   if (!changedFlags.some(Boolean)) {
     return { overall: "NO_CHANGES", summary: "No changes detected." };
@@ -575,6 +662,15 @@ function aggregate(stages: {
     okFlags.push(ok);
     if (!ok) {
       failureSummaries.push(`pricing: ${stages.pricing.outcome?.kind ?? "unknown"}`);
+    }
+  }
+  if (stages.availability.changed) {
+    const ok = stages.availability.ok === true;
+    okFlags.push(ok);
+    if (!ok) {
+      failureSummaries.push(
+        `availability: ${stages.availability.error ?? "unknown"}`,
+      );
     }
   }
 

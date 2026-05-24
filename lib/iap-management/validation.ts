@@ -29,6 +29,11 @@ export interface FormLocalization {
  *  params). */
 export type PricingSourceKind = "APPLE" | "DEFAULT_TEMPLATE" | "APP_TEMPLATE";
 
+/** Cycle 39 Phase 1 Unit B — Manager's choice for the IAP's territorial
+ *  availability. "ALL" maps to the full territory list + new-territories
+ *  flag; "NONE" maps to empty territories + flag off (Remove from Sales). */
+export type AvailabilityTarget = "ALL" | "NONE";
+
 export interface IapFormState {
   reference_name: string;
   product_id: string;
@@ -48,6 +53,10 @@ export interface IapFormState {
    *  Defaults to APPLE; UI gates DEFAULT_TEMPLATE / APP_TEMPLATE by
    *  template availability (Q-D most-specific selection). */
   pricing_source?: PricingSourceKind;
+  /** Cycle 39 Phase 1 Unit B — pre-filled from the Apple-side availability
+   *  fetch on the Edit page server component. Only meaningful for synced
+   *  IAPs (edit mode). Diff stage fires only when this differs from cached. */
+  availability_target?: AvailabilityTarget;
 }
 
 export type ChecklistKey =
@@ -220,5 +229,10 @@ export function emptyIapForm(): IapFormState {
     review_note: null,
     family_sharable: false,
     pricing_source: "APPLE",
+    // Cycle 39 Phase 1 — create flow already defaults Apple-side to ALL via
+    // create-on-apple's `AVAILABILITY_SET_ALL_TERRITORIES` audit step. The
+    // form's availability_target is informational only at create; it has no
+    // effect because Section 5 is only rendered for synced IAPs (edit mode).
+    availability_target: "ALL",
   };
 }

@@ -198,6 +198,35 @@ export function UpdateChangesPreviewModal(props: UpdateChangesPreviewModalProps)
             </section>
           )}
 
+          {/* Cycle 39 Phase 1 — Availability change. Red-tinted when the
+              target is NONE (Remove from Sales) so the destructive choice
+              stays visible in the confirmation. */}
+          {diff.availability_changed && (
+            <section>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
+                Availability
+              </h3>
+              <p
+                className={
+                  diff.availability_changed.new_target === "NONE"
+                    ? "text-xs font-medium text-red-700 dark:text-red-300"
+                    : "text-xs text-slate-700 dark:text-slate-200"
+                }
+              >
+                {availabilityLabel(diff.availability_changed.old_target)} →{" "}
+                <span className="font-semibold">
+                  {availabilityLabel(diff.availability_changed.new_target)}
+                </span>
+              </p>
+              {diff.availability_changed.new_target === "NONE" && (
+                <p className="text-[11px] text-red-600 dark:text-red-400 mt-1">
+                  Customers will be unable to purchase this in-app purchase
+                  in any country or region once Apple acknowledges the change.
+                </p>
+              )}
+            </section>
+          )}
+
           {/* IAP.p1.h — pricing source banner. Surfaces when Manager picked a
               template-backed source so they know per-territory overrides
               will be re-applied even if tier didn't change. APPLE source
@@ -258,4 +287,10 @@ export function UpdateChangesPreviewModal(props: UpdateChangesPreviewModalProps)
 function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
   return s.slice(0, max - 1) + "…";
+}
+
+function availabilityLabel(t: "ALL" | "NONE" | null): string {
+  if (t === "ALL") return "Publish — Available in all countries or regions";
+  if (t === "NONE") return "Remove from Sales";
+  return "Unknown (Apple-side state pre-Cycle-37)";
 }

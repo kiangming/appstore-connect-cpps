@@ -9,12 +9,14 @@ import { LocaleEditor } from "./LocaleEditor";
 import { SubmitChecklist } from "./SubmitChecklist";
 import { ScreenshotUpload } from "./ScreenshotUpload";
 import { UpdateChangesPreviewModal } from "./UpdateChangesPreviewModal";
+import { AvailabilitiesSection } from "./AvailabilitiesSection";
 import {
   PricingSourceSelector,
   resolveInitialPricingSource,
 } from "./PricingSourceSelector";
 import {
   validateIapFormGrouped,
+  type AvailabilityTarget,
   type IapFormState,
   type FormLocalization,
   type PricingSourceKind,
@@ -53,6 +55,10 @@ export interface IapFormProps {
   /** Entry counts surfaced in PricingSourceSelector helper copy. */
   defaultTemplateEntryCount?: number;
   appTemplateEntryCount?: number;
+  /** Cycle 39 Phase 1 — Apple-side availability target at page-render time.
+   *  Null = unknown (subset state or fetch failed); the section still
+   *  renders but no CURRENT badge appears. Edit mode + syncedToApple only. */
+  cachedAvailabilityTarget?: AvailabilityTarget | null;
 }
 
 const TYPES: { value: InAppPurchaseType; label: string }[] = [
@@ -75,6 +81,7 @@ export function IapForm({
   appTemplateAvailable = false,
   defaultTemplateEntryCount,
   appTemplateEntryCount,
+  cachedAvailabilityTarget = null,
 }: IapFormProps) {
   const router = useRouter();
   // Resolve the initial pricing-source: stored Manager choice wins (Q-J
@@ -120,8 +127,11 @@ export function IapForm({
       ),
       screenshot_apple_id: null,
       screenshot_file_name: initial.screenshot_filename,
+      // Cycle 39 Phase 1 — the diff needs the Apple-side target to suppress
+      // a no-op stage call when the radio matches what's already on Apple.
+      availability_target: cachedAvailabilityTarget,
     }),
-    [initial],
+    [initial, cachedAvailabilityTarget],
   );
 
   const editableStateBlockedLikely = isStateEditLikelyBlocked(appleState);
@@ -167,6 +177,10 @@ export function IapForm({
         review_note: form.review_note ?? null,
         family_sharable: form.family_sharable ?? false,
         pricing_source: form.pricing_source ?? "APPLE",
+        // Cycle 39 Phase 1 — Section 5 radio choice. Only Stage 5 reads it;
+        // local Save Draft / Create on Apple ignore it (availability lives
+        // on Apple, not in our DB cache).
+        availability_target: form.availability_target ?? "ALL",
       },
     };
   }
@@ -645,6 +659,16 @@ export function IapForm({
             onRemove={handleScreenshotRemove}
           />
         </section>
+
+        {/* Cycle 39 Phase 1 Unit B — Availabilities Section 5 (synced IAPs only).
+            Manager Q3.A locked 2-radio Publish / Remove from Sales. */}
+        {mode === "edit" && syncedToApple && (
+          <AvailabilitiesSection
+            value={form.availability_target ?? "ALL"}
+            cached={cachedAvailabilityTarget ?? "ALL"}
+            onChange={(next) => patchForm({ availability_target: next })}
+          />
+        )}
       </div>
 
       {/* Sidebar column: checklist + actions */}

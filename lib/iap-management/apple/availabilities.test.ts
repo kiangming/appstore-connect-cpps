@@ -5,6 +5,7 @@ import {
   getAllTerritoryIds,
   getAvailabilityForIap,
   nextCursorFrom,
+  setAvailabilityRemoveFromSales,
   setAvailabilityToAllTerritories,
 } from "./availabilities";
 
@@ -104,6 +105,45 @@ describe("setAvailabilityToAllTerritories", () => {
 
     // 1 territories fetch + 2 POSTs = 3 calls total (not 4).
     expect(mockedFetch).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("setAvailabilityRemoveFromSales (Cycle 39 Phase 1)", () => {
+  it("POSTs availableInNewTerritories=false + an empty availableTerritories array", async () => {
+    mockedFetch.mockResolvedValueOnce({
+      data: {
+        type: "inAppPurchaseAvailabilities",
+        id: "avail-removed-1",
+        attributes: { availableInNewTerritories: false },
+      },
+    });
+
+    const res = await setAvailabilityRemoveFromSales(fakeCreds, "iap-42");
+
+    expect(res.data.id).toBe("avail-removed-1");
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    const call = mockedFetch.mock.calls[0];
+    expect(call[1]).toBe("POST");
+    expect(call[2]).toBe("/v1/inAppPurchaseAvailabilities");
+    const body = call[3];
+    expect(body.data.type).toBe("inAppPurchaseAvailabilities");
+    expect(body.data.attributes.availableInNewTerritories).toBe(false);
+    expect(body.data.relationships.inAppPurchase.data).toEqual({
+      type: "inAppPurchases",
+      id: "iap-42",
+    });
+    expect(body.data.relationships.availableTerritories.data).toEqual([]);
+  });
+
+  it("does NOT hit /v1/territories — empty list needs no territory enumeration", async () => {
+    mockedFetch.mockResolvedValueOnce({
+      data: { type: "inAppPurchaseAvailabilities", id: "av-2" },
+    });
+    await setAvailabilityRemoveFromSales(fakeCreds, "iap-99");
+    expect(mockedFetch).toHaveBeenCalledTimes(1);
+    expect(mockedFetch.mock.calls[0][2]).toBe(
+      "/v1/inAppPurchaseAvailabilities",
+    );
   });
 });
 

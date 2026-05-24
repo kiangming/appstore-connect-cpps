@@ -18,6 +18,8 @@ const deleteInAppPurchaseLocalization = vi.hoisted(() => vi.fn());
 const listInAppPurchaseLocalizations = vi.hoisted(() => vi.fn());
 const replaceScreenshotOnApple = vi.hoisted(() => vi.fn());
 const applyPricingSchedule = vi.hoisted(() => vi.fn());
+const setAvailabilityToAllTerritories = vi.hoisted(() => vi.fn());
+const setAvailabilityRemoveFromSales = vi.hoisted(() => vi.fn());
 const auditInsert = vi.hoisted(() => vi.fn());
 
 vi.mock("./poll-iap-ready", () => ({ pollIapReadyForPricing }));
@@ -30,6 +32,10 @@ vi.mock("./client", () => ({
 }));
 vi.mock("./screenshot-upload", () => ({ replaceScreenshotOnApple }));
 vi.mock("./pricing-orchestration", () => ({ applyPricingSchedule }));
+vi.mock("./availabilities", () => ({
+  setAvailabilityToAllTerritories,
+  setAvailabilityRemoveFromSales,
+}));
 vi.mock("./fetch", () => ({
   AppleApiError: class extends Error {
     status: number;
@@ -72,6 +78,7 @@ function emptyDiff(): IapDiff {
     localizations_changed: null,
     screenshot_changed: false,
     tier_changed: null,
+    availability_changed: null,
   };
 }
 
@@ -84,6 +91,8 @@ beforeEach(() => {
   listInAppPurchaseLocalizations.mockReset();
   replaceScreenshotOnApple.mockReset();
   applyPricingSchedule.mockReset();
+  setAvailabilityToAllTerritories.mockReset();
+  setAvailabilityRemoveFromSales.mockReset();
   auditInsert.mockReset();
   // Default precheck = ready
   pollIapReadyForPricing.mockResolvedValue({
@@ -425,5 +434,98 @@ describe("updateIapOnApple — aggregation", () => {
     expect(out.stages.attributes.ok).toBe(true);
     expect(out.stages.screenshot.ok).toBe(false);
     expect(out.overall).toBe("PARTIAL");
+  });
+});
+
+describe("updateIapOnApple — availability stage (Cycle 39 Phase 1)", () => {
+  it("calls setAvailabilityRemoveFromSales when diff target is NONE and writes the AVAILABILITY_REMOVE_FROM_SALES audit row", async () => {
+    setAvailabilityRemoveFromSales.mockResolvedValueOnce({
+      data: { id: "avail-removed-1", type: "inAppPurchaseAvailabilities" },
+    });
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: {
+        ...emptyDiff(),
+        availability_changed: { old_target: "ALL", new_target: "NONE" },
+      },
+      audit: baseAudit,
+    });
+    expect(setAvailabilityRemoveFromSales).toHaveBeenCalledWith(creds, "iap-1");
+    expect(setAvailabilityToAllTerritories).not.toHaveBeenCalled();
+    expect(out.stages.availability).toMatchObject({
+      changed: true,
+      ok: true,
+      target: "NONE",
+      apple_availability_id: "avail-removed-1",
+    });
+    expect(out.overall).toBe("SUCCESS");
+    const row = auditInsert.mock.calls.find(
+      (c) =>
+        (c[0] as { action_type: string }).action_type ===
+        "AVAILABILITY_REMOVE_FROM_SALES",
+    );
+    expect(row).toBeDefined();
+  });
+
+  it("calls setAvailabilityToAllTerritories when diff target is ALL and writes the AVAILABILITY_SET_ALL_TERRITORIES audit row", async () => {
+    setAvailabilityToAllTerritories.mockResolvedValueOnce({
+      data: { id: "avail-all-1", type: "inAppPurchaseAvailabilities" },
+    });
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: {
+        ...emptyDiff(),
+        availability_changed: { old_target: "NONE", new_target: "ALL" },
+      },
+      audit: baseAudit,
+    });
+    expect(setAvailabilityToAllTerritories).toHaveBeenCalledWith(creds, "iap-1");
+    expect(setAvailabilityRemoveFromSales).not.toHaveBeenCalled();
+    expect(out.stages.availability).toMatchObject({
+      changed: true,
+      ok: true,
+      target: "ALL",
+    });
+    const row = auditInsert.mock.calls.find(
+      (c) =>
+        (c[0] as { action_type: string }).action_type ===
+        "AVAILABILITY_SET_ALL_TERRITORIES",
+    );
+    expect(row).toBeDefined();
+  });
+
+  it("surfaces a stage failure without breaking sibling stages or the overall aggregate path", async () => {
+    updateInAppPurchase.mockResolvedValueOnce({ data: { id: "iap-1" } });
+    setAvailabilityRemoveFromSales.mockRejectedValueOnce(
+      new Error("Apple 409 PRICING_LOCK"),
+    );
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: {
+        ...emptyDiff(),
+        attributes_changed: { name: "New" },
+        availability_changed: { old_target: "ALL", new_target: "NONE" },
+      },
+      audit: baseAudit,
+    });
+    expect(out.stages.attributes.ok).toBe(true);
+    expect(out.stages.availability.ok).toBe(false);
+    expect(out.stages.availability.error).toContain("Apple 409 PRICING_LOCK");
+    expect(out.overall).toBe("PARTIAL");
+  });
+
+  it("stays a no-op (no Apple call) when diff.availability_changed is null", async () => {
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: emptyDiff(),
+      audit: baseAudit,
+    });
+    expect(setAvailabilityToAllTerritories).not.toHaveBeenCalled();
+    expect(setAvailabilityRemoveFromSales).not.toHaveBeenCalled();
+    expect(out.stages.availability.changed).toBe(false);
   });
 });

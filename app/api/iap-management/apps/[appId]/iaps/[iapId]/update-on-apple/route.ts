@@ -40,7 +40,14 @@ import {
   updateIapOnApple,
   type UpdateIapOutcome,
 } from "@/lib/iap-management/apple/update-orchestration";
-import type { IapFormState } from "@/lib/iap-management/validation";
+import {
+  getAvailabilityForIap,
+  getAllTerritoryIds,
+} from "@/lib/iap-management/apple/availabilities";
+import type {
+  AvailabilityTarget,
+  IapFormState,
+} from "@/lib/iap-management/validation";
 import { log } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -126,6 +133,38 @@ export async function POST(
   }
 
   // 4. Build CachedIapState from DB rows.
+  //    Cycle 39 Phase 1 — fetch the Apple-side availability target as part
+  //    of the cached snapshot. The diff stage requires server-side ground
+  //    truth (the client's form value alone can't tell us whether the radio
+  //    represents a change or matches what's already on Apple).
+  const creds = await getActiveAccount();
+  let cachedAvailabilityTarget: AvailabilityTarget | null = null;
+  try {
+    const [avail, totalIds] = await Promise.all([
+      getAvailabilityForIap(creds, appleIapId),
+      getAllTerritoryIds(creds).catch(() => [] as string[]),
+    ]);
+    if (!avail) {
+      cachedAvailabilityTarget = "NONE";
+    } else if (
+      totalIds.length > 0 &&
+      avail.territoryCount >= totalIds.length &&
+      avail.availableInNewTerritories
+    ) {
+      cachedAvailabilityTarget = "ALL";
+    } else if (avail.territoryCount === 0 && !avail.availableInNewTerritories) {
+      cachedAvailabilityTarget = "NONE";
+    } else {
+      cachedAvailabilityTarget = null;
+    }
+  } catch (err) {
+    await log(
+      "iap-update-on-apple",
+      `availability prefetch failed iap=${iapId}: ${err instanceof Error ? err.message : err}`,
+      "WARN",
+    );
+  }
+
   const cachedScreenshot = existing.screenshots[0];
   const cached: CachedIapState = {
     reference_name: existing.iap.reference_name,
@@ -147,6 +186,7 @@ export async function POST(
     ),
     screenshot_apple_id: cachedScreenshot?.apple_id ?? null,
     screenshot_file_name: cachedScreenshot?.file_name ?? null,
+    availability_target: cachedAvailabilityTarget,
   };
 
   // 5. Diff
@@ -165,6 +205,7 @@ export async function POST(
         localizations: { changed: false },
         screenshot: { changed: false },
         pricing: { changed: false },
+        availability: { changed: false },
       },
     } satisfies UpdateIapOutcome);
   }
@@ -192,7 +233,6 @@ export async function POST(
   }
 
   // 7. Orchestrate
-  const creds = await getActiveAccount();
   const outcome = await updateIapOnApple({
     creds,
     appleIapId,

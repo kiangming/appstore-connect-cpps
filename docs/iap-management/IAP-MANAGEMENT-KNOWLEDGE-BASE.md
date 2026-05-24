@@ -727,7 +727,7 @@ Before wiring ANY new Apple V2 IAP endpoint:
 | ID | Item | Notes |
 |---|---|---|
 | **IAP.p3** | Inline edit Reference Name in view mode | Q-A deferral from Cycle 31 |
-| **IAP.p2+** | `contentHosting` edit | Separate Apple endpoint; not in `InAppPurchaseV2UpdateRequest`. `availableInAllTerritories` half UNBLOCKED by Cycle 37 Phase 1 (read + default-on-create); edit affordance deferred to Phase 2 — see §10.6. |
+| **IAP.p2+** | `contentHosting` edit | Separate Apple endpoint; not in `InAppPurchaseV2UpdateRequest`. `availableInAllTerritories` FULLY UNBLOCKED by Cycle 39 Phase 1 (edit affordance + Remove-from-Sale toggle) — see §10.8. Bulk-action toolbar deferred to Cycle 39 Phase 2. |
 | **IAP.p2+** | Apply pricing template to existing IAPs bulk action | Q-G deferral from Cycle 30 |
 | **IAP.p2+** | Per-row pricing source override in Bulk Import | Q-E deferral from Cycle 30 (batch-level v1 shipped) |
 | **IAP.p2+** | Pricing template versioning + history | Q-A REPLACE-ONLY locked v1 |
@@ -835,6 +835,62 @@ Apple sibling of the Cycle 36 Google IAP matrix view (commit 677ad73). Same UX l
 **Cycle 36 → Cycle 38 ROI compound:** mockup phase skipped, same Q&A defaults reused, ship time ~3.5 h vs Cycle 36's ~6.5 h. Structurally identical component tree means future matrix-view tweaks (virtual scrolling, per-tier expansion, batch actions) land in both modules with parallel diffs.
 
 **Phase 2 deferred (Cycle 30 Q-G):** "Apply pricing template to existing IAPs" bulk action — still in §10.4 backlog, Cycle 38 surfaces the data so the bulk action can target it later.
+
+### 10.8 Cycle 39 Phase 1 — Apple IAP Availabilities edit + Remove from Sales
+
+Unblocks the two Cycle 37 Phase 1 deferred items tracked in §10.6:
+
+1. **Edit affordance on the trailing slot** — replaced with a full Section 5 on the Edit Item form (Manager Q6.C "full Edit page" default locked over the simpler "trailing-slot affordance" of Cycle 37 Q4.C).
+2. **"Remove from Sale" toggle parity** — the 2-radio (Q3.A) flip wires through the orchestrator's new Stage 5, which calls either `setAvailabilityToAllTerritories` (existing Cycle 37 helper) or the new `setAvailabilityRemoveFromSales`.
+
+**Apple "Remove from Sales" semantic verified via openapi.oas.json:**
+
+- `/v1/inAppPurchaseAvailabilities/{id}` supports **GET only** — no PATCH, no DELETE.
+- `/v1/inAppPurchaseAvailabilities` supports **POST only**.
+- The only path to "no salable territories" is therefore a fresh POST with `availableInNewTerritories: false` + `availableTerritories.data: []`. Apple's replace-by-re-POST pattern (already documented for the "ALL" path in availabilities.ts:103-105) applies symmetrically.
+
+**Multi-stage orchestration extended 4 → 5 stages.** Pipeline is now:
+
+> Stage 0 precheck · Stage 1 attributes · Stage 2 localizations · Stage 3 screenshot · Stage 4 pricing · **Stage 5 availability (NEW)**
+
+Per the §4.4 discipline, the stage runs only when `diff.availability_changed !== null` and a failure never cascades to siblings. Audit rows: `AVAILABILITY_SET_ALL_TERRITORIES` (reused from Cycle 37) and the new `AVAILABILITY_REMOVE_FROM_SALES` action type.
+
+**View Detail Unit A red emphasis.** The Cycle 37 IapAvailabilitiesSection now flips to a red left-border + red text presentation when Apple reports a "Removed from Sale" surface (404 metadata OR explicit zero-territories availability). Pure helper `pickDisplayState` returns a new `removed: boolean` flag so the JSX swap stays declarative.
+
+**Edit form Section 5 pre-fill path:**
+
+```
+Edit page server component (app/.../iaps/[iapId]/page.tsx)
+  └── getAvailabilityForIap (Hotfix-22 V1 sub-resource path)
+  └── getAllTerritoryIds (cached)
+  └── Resolves AvailabilityTarget: "ALL" | "NONE" | null (unknown/subset)
+       └── IapForm.cachedAvailabilityTarget prop
+            └── AvailabilitiesSection renders 2-radio + CURRENT badge
+                 └── On change → form.availability_target dirties
+                      └── detectIapChanges populates availability_changed bucket
+                           └── Update on Apple → orchestrator Stage 5
+```
+
+**Edit isolation discipline preserved.** Other field edits never touch availability — Stage 5 fires only when the radio target actually flips. Manager's confirmation modal (`UpdateChangesPreviewModal`) renders the availability bucket with destructive red emphasis when the target is `NONE`.
+
+**Phase 2 deferred (Unit C bulk-action toolbar):** mockup-first design + bulk modal + filtered selection + confirm popup. Tracking item moved here from §10.4 once Phase 1 lands.
+
+**Files touched (Phase 1):**
+
+| File | Change |
+|---|---|
+| `lib/iap-management/apple/availabilities.ts` | + `setAvailabilityRemoveFromSales` (re-POST empty list). |
+| `lib/iap-management/validation.ts` | + `AvailabilityTarget` type + `availability_target` form field. |
+| `lib/iap-management/apple/diff-detector.ts` | + `availability_changed` bucket + `availability_target` on CachedIapState. |
+| `lib/iap-management/apple/update-orchestration.ts` | + Stage 5 (`runAvailabilityStage`); aggregate extended. |
+| `app/(dashboard)/iap-management/apps/[appId]/iaps/[iapId]/page.tsx` | Fetches Apple availability for prefill; passes `cachedAvailabilityTarget`. |
+| `app/api/iap-management/apps/[appId]/iaps/[iapId]/update-on-apple/route.ts` | Server-side availability refetch when building CachedIapState. |
+| `components/iap-management/iap-form/AvailabilitiesSection.tsx` | **NEW** 2-radio Section 5 with CURRENT badge + change-pending caption. |
+| `components/iap-management/iap-form/IapForm.tsx` | Threads `availability_target` through saveBody + renders Section 5 for synced edits only. |
+| `components/iap-management/iap-form/UpdateChangesPreviewModal.tsx` | + Availability change preview (destructive red copy for NONE). |
+| `components/iap-management/view-detail/IapAvailabilitiesSection.tsx` | Unit A red emphasis when `removed === true`. |
+
+Tests +9 (availabilities +2, diff-detector +5, orchestration +4, view-detail +2 reused — net new assertions).
 
 ---
 
