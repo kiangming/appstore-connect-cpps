@@ -135,7 +135,7 @@ Surface-design overrides during the IAP form chunk.
 |---|---|
 | Tier-count contradiction (Alternates) | Include Alternate Tiers; `iap_mgmt.iaps.tier_id` migrated `INT → TEXT` |
 | Screenshot filename matcher | Robust both-forms: literal preferred, dots-as-underscores fallback |
-| Type column in Excel template | Optional column; empty/absent → CONSUMABLE default; invalid → row error |
+| Type column in Excel template | Optional column; empty/absent → CONSUMABLE default; invalid → row error. **Restored by Hotfix 27** after the parser was discovered to be doing strict positional validation that violated this lock — header lookup is now name-based, only `Product ID` + `Reference Name` are required. |
 | Tier inference | Price (USD) lookup → `tier_id` from `price_tier_territories` cache; no separate Tier column needed in v2 template |
 
 ### 3.4 Cycle 29 — IAP.o.* hotfix-driven locks
@@ -1102,6 +1102,77 @@ telemetry now. Cycle 40 will:
 - Refactor `iapFetch` to thread server-side budget state into the same `onRetry` callback shape.
 - Audit all `withConcurrency` sites and align them with the documented Apple cap (Hotfix 26 covers Bulk Import; bulk-availability + screenshot-upload still default to concurrency 5).
 - Surface per-request Railway log instrumentation (`budget=X/3600`).
+
+#### Hotfix 27 — Bulk Import Type column tolerance (§3.3 institutional-lock restoration)
+
+**Production verification.** Manager uploaded a Bulk Import file without
+a `Type` column and the parser rejected it with
+`IAP-item template header mismatch at column 3: expected "Type", got "Price (USD)"`.
+The §3.3 IAP.h2 lock has always said "Optional column; empty/absent →
+CONSUMABLE default; invalid → row error" — the empty-cell branch was
+honored, the absent-column branch was not. Manager institutional memory
+caught the drift; tool restored compliance.
+
+**Root cause.** `lib/iap-management/parsers/iap-items.ts` shipped Cycle
+29 with a comment claiming "Q-IAP.5 strict validation" — a deliberate
+positional check that conflicted with the deeper §3.3 lock. The strict
+validator walked `LEAD_HEADERS` against `header[i]` at each position; a
+missing or reordered Type column failed *before* row parsing even
+started, so the "empty cell → CONSUMABLE" branch downstream was
+unreachable when the column itself was missing.
+
+**Fix.** Header resolution switched from positional → name-based.
+`findHeaderIndex(header, name)` does a trimmed case-insensitive match
+and returns -1 for absent columns. Each lead header now resolves to its
+own index (or -1):
+
+```ts
+const leadIdx = {
+  productId:     findHeaderIndex(header, "Product ID"),
+  referenceName: findHeaderIndex(header, "Reference Name"),
+  type:          findHeaderIndex(header, "Type"),
+  priceUsd:      findHeaderIndex(header, "Price (USD)"),
+  gtPrice:       findHeaderIndex(header, "GT Price"),
+  gtCurrency:    findHeaderIndex(header, "GT Currency"),
+};
+```
+
+Only `Product ID` + `Reference Name` raise a header error when absent
+(`REQUIRED_LEAD_HEADERS`). Every other lead column falls back to a
+documented default:
+
+| Column | Absent / empty → |
+|---|---|
+| Type | `CONSUMABLE` + `type_source: "DEFAULT"` |
+| Price (USD) | `0` (downstream pricing stage skips with `skipped-no-tier`) |
+| GT Price | `0` |
+| GT Currency | `""` |
+
+Locale-pair detection (`Display Name (X)` / `Description (X)`) now
+scans non-lead columns at any position, not just `LEAD_HEADERS.length+`,
+so reorderings work end-to-end.
+
+**Invalid-Type guard preserved.** A *present* `Type` column with an
+invalid enum value (e.g. `"consumable"` lowercase) still raises a
+row-level error per the institutional lock's "invalid → row error"
+clause — Manager spot-checks aren't silently coerced.
+
+**Files touched (Hotfix 27):**
+
+| File | Change |
+|---|---|
+| `lib/iap-management/parsers/iap-items.ts` | Strict positional `LEAD_HEADERS` loop replaced with name-based lookup; `findHeaderIndex` helper (case-insensitive, trimmed); new `LeadColumnIndex` shape; `readOptionalCellNumber` swap for the cells under optional columns; locale-pair scan iterates from col 0 skipping `leadClaimed`; header doc-comment rewritten to spell out the required vs optional contract. |
+| `lib/iap-management/parsers/iap-items.test.ts` | Replaced the wrong-position-fails test with a reordered-now-works assertion; +8 new tests (no-Type column / minimal-template / empty-cells-under-optional / missing-Product-ID / missing-Reference-Name / case-insensitive headers / invalid-Type-still-errors). |
+
+Tests: +6 net on the parser (8 existing → 14 total in this suite —
+removed the now-irrelevant wrong-position + header-shift assertions,
+added 8 new ones covering each branch of the §3.3 lock).
+
+**Cycle 29 institutional-lock compliance now binding-by-test.** The new
+tests pin every branch of the §3.3 lock — column absent, cell empty,
+column present + valid, column present + invalid — so the parser can't
+drift back into positional strictness without a deliberate test
+deletion that would surface in review.
 
 **Cycle 37 Phase 2 deferral closure status (post Cycle 39):**
 

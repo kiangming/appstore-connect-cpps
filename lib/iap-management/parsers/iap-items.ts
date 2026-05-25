@@ -3,20 +3,32 @@
  *
  * Expected file: docs/iap-management/templates/item-iap-template.xlsx
  *
- * Header schema (Manager Q-IAP.5 strict validation):
- *   Col 0: "Product ID"          — string, immutable (Apple regex: [A-Za-z0-9_.-]+)
- *   Col 1: "Reference Name"      — string, max 64 chars (Apple constraint)
- *   Col 2: "Type"                — enum CONSUMABLE / NON_CONSUMABLE /
- *                                  NON_RENEWING_SUBSCRIPTION. Empty cell →
- *                                  default CONSUMABLE (Manager IAP.h2 lock).
- *                                  Invalid value → row error.
- *   Col 3: "Price (USD)"         — numeric, base price (drives tier inference)
- *   Col 4: "GT Price"            — numeric, base-territory price
- *   Col 5: "GT Currency"         — string, base-territory currency code
- *   Col 6..: locale pairs in this exact order per template:
+ * Header schema (Hotfix 27 — restored §3.3 Cycle 29 IAP.h2 institutional
+ * lock: name-based column lookup, NOT positional). Only two headers are
+ * required; everything else is optional with a documented fallback.
+ *
+ *   "Product ID"           REQUIRED — string, immutable (Apple regex: [A-Za-z0-9_.-]+)
+ *   "Reference Name"       REQUIRED — string, max 64 chars (Apple constraint)
+ *   "Type"                 optional — enum CONSUMABLE / NON_CONSUMABLE /
+ *                                     NON_RENEWING_SUBSCRIPTION. Empty cell
+ *                                     OR column absent → CONSUMABLE default
+ *                                     (§3.3 institutional lock). Invalid
+ *                                     value with column present → row error.
+ *   "Price (USD)"          optional — numeric, drives tier inference downstream.
+ *                                     Empty / column absent → 0 (pricing stage
+ *                                     skips with `skipped-no-tier`).
+ *   "GT Price"             optional — numeric, base-territory price. Empty /
+ *                                     column absent → 0.
+ *   "GT Currency"          optional — string, base-territory currency code.
+ *                                     Empty / column absent → "" (pricing
+ *                                     stage skips on missing base currency).
+ *
+ *   Locale pair columns (any position after the lead columns):
  *           [Display Name (<Locale Name>), Description (<Locale Name>)]
  *           Locale names are Apple user-friendly format (e.g. "English (U.S.)").
  *           Mapped to BCP-47 codes via lib/locale-utils.localeCodeFromName.
+ *           Display Name must be immediately followed by its matching
+ *           Description column — the pair is the unit of locale data.
  *           Unrecognised locale names are skipped + surfaced as warnings.
  *
  * Empty-cell policy (Manager directive "có cái nào import cái đó"):
@@ -36,14 +48,11 @@ import type { InAppPurchaseType } from "@/types/iap-management/apple";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-const LEAD_HEADERS = [
-  "Product ID",
-  "Reference Name",
-  "Type",
-  "Price (USD)",
-  "GT Price",
-  "GT Currency",
-] as const;
+/** Only these two columns are REQUIRED. Everything else has a safe default
+ *  per the §3.3 institutional lock (Hotfix 27 restoration). The other lead
+ *  headers the parser recognises are "Type" / "Price (USD)" / "GT Price" /
+ *  "GT Currency" — all optional. */
+const REQUIRED_LEAD_HEADERS = ["Product ID", "Reference Name"] as const;
 
 const TYPE_VALUES: readonly InAppPurchaseType[] = [
   "CONSUMABLE",
@@ -95,15 +104,55 @@ function readCellString(value: unknown): string {
   return String(value).trim();
 }
 
-function readCellNumber(value: unknown, label: string, rowIdx: number): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() !== "") {
-    const n = Number(value.replace(/,/g, ""));
+/** Hotfix 27 — only invoked when the column EXISTS in the template. A
+ *  missing column resolves to col=-1 and the caller short-circuits to
+ *  the documented default (0). Empty cells under a present column still
+ *  short-circuit to 0 here. Invalid contents (e.g. "abc") remain a
+ *  row-level error because the institutional lock distinguishes
+ *  "absent/empty → default" from "invalid → row error". */
+function readOptionalCellNumber(
+  value: unknown,
+  label: string,
+  rowIdx: number,
+): number {
+  if (value == null) return 0;
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed === "") return 0;
+    const n = Number(trimmed.replace(/,/g, ""));
     if (Number.isFinite(n)) return n;
   }
   throw new Error(
     `Row ${rowIdx + 1}: expected numeric ${label}, got "${String(value)}"`,
   );
+}
+
+/** Hotfix 27 — name-based lookup. Trims + matches case-insensitively so
+ *  Manager templates with stylistic variations ("product id", "PRODUCT ID")
+ *  still resolve. Returns -1 when the header is absent. */
+function findHeaderIndex(headers: readonly string[], name: string): number {
+  const target = name.trim().toLowerCase();
+  for (let i = 0; i < headers.length; i++) {
+    if ((headers[i] ?? "").trim().toLowerCase() === target) return i;
+  }
+  return -1;
+}
+
+interface LeadColumnIndex {
+  productId: number;
+  referenceName: number;
+  type: number;
+  priceUsd: number;
+  gtPrice: number;
+  gtCurrency: number;
+}
+
+/** Read a known column by its resolved index; returns "" when the column
+ *  was absent (idx === -1) so callers don't need separate branches. */
+function readCol(row: unknown[], idx: number): string {
+  if (idx < 0) return "";
+  return readCellString(row[idx]);
 }
 
 export async function parseIapItemsXlsx(
@@ -149,31 +198,55 @@ export async function parseIapItemsXlsx(
     );
   }
 
-  // ── Strict header validation (Q-IAP.5) ───────────────────────────────────
+  // ── Name-based header resolution (Hotfix 27 — §3.3 IAP.h2 institutional
+  //    lock restoration). Required columns: Product ID + Reference Name.
+  //    Every other lead column is optional; missing columns surface as a
+  //    resolved index of -1 and the per-row reader falls back to a
+  //    documented default.
   const header = rows[0].map((c) =>
     typeof c === "string" ? c.trim() : String(c ?? "").trim(),
   );
 
-  for (let i = 0; i < LEAD_HEADERS.length; i++) {
-    if (header[i] !== LEAD_HEADERS[i]) {
+  for (const required of REQUIRED_LEAD_HEADERS) {
+    if (findHeaderIndex(header, required) < 0) {
       throw new Error(
-        `IAP-item template header mismatch at column ${i + 1}: ` +
-          `expected "${LEAD_HEADERS[i]}", got "${header[i] ?? "(empty)"}". ` +
-          `Use the Manager-provided template format.`,
+        `IAP-item template is missing the required "${required}" column. ` +
+          `Required columns: ${REQUIRED_LEAD_HEADERS.join(", ")}.`,
       );
     }
   }
 
-  // ── Discover locale pair columns (cols 5+) ───────────────────────────────
-  // Templates pair them as [Display Name (X), Description (X)] in order. We
-  // scan for Display Name headers and verify each is immediately followed by
-  // a matching Description column.
+  const leadIdx: LeadColumnIndex = {
+    productId: findHeaderIndex(header, "Product ID"),
+    referenceName: findHeaderIndex(header, "Reference Name"),
+    type: findHeaderIndex(header, "Type"),
+    priceUsd: findHeaderIndex(header, "Price (USD)"),
+    gtPrice: findHeaderIndex(header, "GT Price"),
+    gtCurrency: findHeaderIndex(header, "GT Currency"),
+  };
+
+  /** The set of column indices already claimed by lead headers. Used below
+   *  so the locale-pair scan doesn't try to interpret a lead column as a
+   *  locale-header. */
+  const leadClaimed = new Set<number>(
+    Object.values(leadIdx).filter((i) => i >= 0),
+  );
+
+  // ── Discover locale pair columns ─────────────────────────────────────────
+  // Locale columns can appear in any position outside the lead set. We scan
+  // for Display Name headers, skip lead columns + previously-claimed pair
+  // columns, and verify each Display Name is immediately followed by its
+  // matching Description column.
   const pairs: LocalePairSpec[] = [];
   const skippedLocales: string[] = [];
   const warnings: string[] = [];
 
-  let col = LEAD_HEADERS.length;
+  let col = 0;
   while (col < header.length) {
+    if (leadClaimed.has(col)) {
+      col++;
+      continue;
+    }
     const cell = header[col];
     if (!cell) {
       col++;
@@ -215,10 +288,10 @@ export async function parseIapItemsXlsx(
 
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
-    const productId = readCellString(row[0]);
+    const productId = readCol(row, leadIdx.productId);
     if (!productId) continue; // blank product ID → skip silently (likely empty row)
 
-    const referenceName = readCellString(row[1]);
+    const referenceName = readCol(row, leadIdx.referenceName);
     if (!referenceName) {
       throw new Error(
         `Row ${r + 1}: Reference Name is required for product "${productId}".`,
@@ -230,9 +303,11 @@ export async function parseIapItemsXlsx(
       );
     }
 
-    // Col 2: Type (Manager IAP.h2 lock). Empty → default CONSUMABLE.
-    // Invalid value → row error (not silent default).
-    const typeRaw = readCellString(row[2]);
+    // Type (§3.3 IAP.h2 institutional lock):
+    //   - column absent OR empty cell → CONSUMABLE default (DEFAULT source).
+    //   - column present + valid enum value → use the value (COLUMN source).
+    //   - column present + invalid value → row error (NOT silent default).
+    const typeRaw = readCol(row, leadIdx.type);
     let type: InAppPurchaseType;
     let typeSource: "COLUMN" | "DEFAULT";
     if (typeRaw === "") {
@@ -247,14 +322,19 @@ export async function parseIapItemsXlsx(
       );
     }
 
-    const priceUsd = readCellNumber(row[3], "Price (USD)", r);
-    const basePrice = readCellNumber(row[4], "GT Price", r);
-    const baseCurrency = readCellString(row[5]);
-    if (!baseCurrency) {
-      throw new Error(
-        `Row ${r + 1}: GT Currency is required for product "${productId}".`,
-      );
-    }
+    // Price (USD) / GT Price / GT Currency — all optional per §3.3 lock.
+    // Missing column OR empty cell → safe default (0 / 0 / ""). Downstream
+    // pricing-orchestration treats price_usd=0 or empty base_currency as
+    // "no tier to resolve" and skips the pricing stage gracefully.
+    const priceUsd =
+      leadIdx.priceUsd < 0
+        ? 0
+        : readOptionalCellNumber(row[leadIdx.priceUsd], "Price (USD)", r);
+    const basePrice =
+      leadIdx.gtPrice < 0
+        ? 0
+        : readOptionalCellNumber(row[leadIdx.gtPrice], "GT Price", r);
+    const baseCurrency = readCol(row, leadIdx.gtCurrency);
 
     const itemWarnings: string[] = [];
     const localizations: ParsedIapLocalization[] = [];

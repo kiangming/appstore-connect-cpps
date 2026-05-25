@@ -86,36 +86,200 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
     );
   });
 
-  it("Type column at wrong position → header mismatch error", async () => {
+  it("Hotfix 27 — reordered lead columns parse successfully via name lookup", async () => {
+    // Pre-Hotfix-27 this layout (Type before Reference Name) failed strict
+    // positional validation. Post-Hotfix-27 the parser resolves columns by
+    // name, so reorderings work as long as the required columns are present.
     const ws = XLSX.utils.aoa_to_sheet([
       [
         "Product ID",
-        "Type", // wrong — should be col 2 not col 1
+        "Type",
         "Reference Name",
         "Price (USD)",
         "GT Price",
         "GT Currency",
+        "Display Name (English (U.S.))",
+        "Description (English (U.S.))",
       ],
-      ["com.vng.x", "CONSUMABLE", "Name", 0.99, 23000, "VND"],
+      [
+        "com.vng.x",
+        "NON_CONSUMABLE",
+        "Reordered Test",
+        4.99,
+        23000,
+        "VND",
+        "Test",
+        "Test desc",
+      ],
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
     const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
-    const file = new File([buf], "bad-header.xlsx", {
+    const file = new File([buf], "reordered.xlsx", {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
-    await expect(parseIapItemsXlsx(file)).rejects.toThrow(
-      /header mismatch at column 2/,
-    );
-  });
-
-  it("Header shift propagates to Price column at col 3", async () => {
-    // If parser still expected Price at col 2 (pre-IAP.h2 layout), it would
-    // throw a numeric-cell error. Verify the post-IAP.h2 layout works.
-    const file = buildFile([rowWith({ type: "CONSUMABLE", price: 4.99 })]);
     const result = await parseIapItemsXlsx(file);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].product_id).toBe("com.vng.x");
+    expect(result.items[0].reference_name).toBe("Reordered Test");
+    expect(result.items[0].type).toBe("NON_CONSUMABLE");
+    expect(result.items[0].type_source).toBe("COLUMN");
     expect(result.items[0].price_usd).toBe(4.99);
     expect(result.items[0].base_price).toBe(23000);
     expect(result.items[0].base_currency).toBe("VND");
+    expect(result.items[0].localizations).toHaveLength(1);
+  });
+
+  it("Hotfix 27 — Type column entirely absent → every row defaults to CONSUMABLE (DEFAULT source)", async () => {
+    // Manager's production bug: template arrived without the Type column.
+    // §3.3 IAP.h2 lock says column absent == empty cell → CONSUMABLE default.
+    const ws = XLSX.utils.aoa_to_sheet([
+      [
+        "Product ID",
+        "Reference Name",
+        "Price (USD)",
+        "GT Price",
+        "GT Currency",
+        "Display Name (English (U.S.))",
+        "Description (English (U.S.))",
+      ],
+      ["com.vng.a", "Product A", 0.99, 23000, "VND", "A", "Adesc"],
+      ["com.vng.b", "Product B", 4.99, 115000, "VND", "B", "Bdesc"],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+    const file = new File([buf], "no-type-col.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const result = await parseIapItemsXlsx(file);
+    expect(result.items).toHaveLength(2);
+    for (const row of result.items) {
+      expect(row.type).toBe("CONSUMABLE");
+      expect(row.type_source).toBe("DEFAULT");
+    }
+  });
+
+  it("Hotfix 27 — Price (USD) / GT Price / GT Currency columns absent → safe defaults", async () => {
+    // Per §3.3 institutional lock, only Product ID + Reference Name are
+    // truly required. Other columns become 0 / "" defaults; downstream
+    // pricing stage gracefully skips with `skipped-no-tier`.
+    const ws = XLSX.utils.aoa_to_sheet([
+      [
+        "Product ID",
+        "Reference Name",
+        "Display Name (English (U.S.))",
+        "Description (English (U.S.))",
+      ],
+      ["com.vng.minimal", "Minimal Row", "Name", "Desc"],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+    const file = new File([buf], "minimal.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const result = await parseIapItemsXlsx(file);
+    expect(result.items[0]).toMatchObject({
+      product_id: "com.vng.minimal",
+      reference_name: "Minimal Row",
+      type: "CONSUMABLE",
+      type_source: "DEFAULT",
+      price_usd: 0,
+      base_price: 0,
+      base_currency: "",
+    });
+    // Locale pair still works even though no lead pricing columns exist.
+    expect(result.items[0].localizations).toHaveLength(1);
+  });
+
+  it("Hotfix 27 — empty cells under present numeric columns → 0 (not row error)", async () => {
+    const file = buildFile([
+      [
+        "com.vng.empty.price",
+        "Empty Price Row",
+        "", // Type empty → CONSUMABLE
+        "", // Price (USD) empty → 0 (Hotfix 27 — was a row error pre-fix)
+        "", // GT Price empty → 0
+        "", // GT Currency empty → ""
+        "Name",
+        "Desc",
+      ],
+    ]);
+    const result = await parseIapItemsXlsx(file);
+    expect(result.items[0]).toMatchObject({
+      product_id: "com.vng.empty.price",
+      type: "CONSUMABLE",
+      type_source: "DEFAULT",
+      price_usd: 0,
+      base_price: 0,
+      base_currency: "",
+    });
+  });
+
+  it("Hotfix 27 — missing Product ID column surfaces a clear required-column error", async () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Reference Name", "Type", "Price (USD)"],
+      ["Sample Name", "CONSUMABLE", 0.99],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+    const file = new File([buf], "no-product-id.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    await expect(parseIapItemsXlsx(file)).rejects.toThrow(
+      /missing the required "Product ID" column/,
+    );
+  });
+
+  it("Hotfix 27 — missing Reference Name column surfaces a clear required-column error", async () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Product ID", "Type", "Price (USD)"],
+      ["com.vng.x", "CONSUMABLE", 0.99],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+    const file = new File([buf], "no-reference-name.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    await expect(parseIapItemsXlsx(file)).rejects.toThrow(
+      /missing the required "Reference Name" column/,
+    );
+  });
+
+  it("Hotfix 27 — case-insensitive header matching tolerates stylistic variations", async () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      [
+        "product id",        // lowercase
+        "REFERENCE NAME",     // uppercase
+        "Type",
+        "Price (USD)",
+        "GT Price",
+        "GT Currency",
+      ],
+      ["com.vng.case", "Case Test", "", 0.99, 23000, "VND"],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+    const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+    const file = new File([buf], "case-variant.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const result = await parseIapItemsXlsx(file);
+    expect(result.items[0].product_id).toBe("com.vng.case");
+    expect(result.items[0].reference_name).toBe("Case Test");
+    expect(result.items[0].type).toBe("CONSUMABLE");
+    expect(result.items[0].type_source).toBe("DEFAULT");
+  });
+
+  it("Hotfix 27 — invalid Type value still errors out (institutional lock preserved)", async () => {
+    // §3.3 IAP.h2 lock: "invalid → row error" — NOT silently defaulted.
+    // This guard against accidentally-typed values being silently coerced.
+    const file = buildFile([rowWith({ type: "consumable" })]);
+    await expect(parseIapItemsXlsx(file)).rejects.toThrow(
+      /Invalid Type value "consumable"/,
+    );
   });
 });
