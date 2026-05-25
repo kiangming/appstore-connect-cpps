@@ -377,6 +377,24 @@ data shows persistent low budget remaining or 429 cascades that
 `withRetry` can't recover from. The X-Rate-Limit visibility added in
 Phase A is the gate that decides Phase B's go/no-go.
 
+**Pre-Cycle-40 cap-figure conflict (resolution-pending).** KB §10.8
+carries two inconsistent claims about Apple's hourly request budget:
+
+| Source | Claim |
+|---|---|
+| Hotfix 25 | "Apple's 250 req/hour cap" |
+| Hotfix 26 | "Apple's documented ~1 req/sec/token cap" (≈ 3,600/hour) |
+
+These can't both be correct; the figures differ by an order of magnitude
+and would justify very different Phase B designs (250 → token bucket
+essential; 3,600 → bursts more tolerable). The conflict is documented
+honestly rather than papered over because **resolution is empirical** —
+the `user-hour-lim` value Apple sends in `X-Rate-Limit` (now logged via
+`[asc-client] budget=R/L` post-Phase A) is the authoritative source.
+Manager telemetry observation over 1–2 days post-deploy will surface the
+true cap and resolve which figure to treat as load-bearing. The Phase B
+subset trigger criteria (B2/B3/B4) explicitly depend on this resolution.
+
 ---
 
 ## 5. Database Schema
@@ -1082,11 +1100,18 @@ pivot. No backwards-compat shims (per project Don'ts).
 
 **Apple ASC institutional trap class — NEW.** Strategy A's "bulk
 prefetch on render" pattern is now documented as an anti-pattern for
-Apple-rate-limited integrations. Apple's 250 req/hour cap is shared
-across all API surfaces under a single ASC key; any pattern that fans
-out N requests per page render compounds across pages, apps, and
+Apple-rate-limited integrations. Apple's 250 req/hour cap [^h25cap] is
+shared across all API surfaces under a single ASC key; any pattern that
+fans out N requests per page render compounds across pages, apps, and
 manager tabs. Lazy-load + per-cell observers + client-side concurrency
 ceiling is the institutional answer.
+
+[^h25cap]: **Cap figure conflicts with Hotfix 26's "~1 req/sec/token"
+    (= 3,600/hour) claim.** See §4.9 — both figures pre-date Cycle 40
+    Phase A's `[asc-client] budget=` Railway log. Authoritative
+    `user-hour-lim` value will be revealed empirically from production
+    telemetry; Phase B subset selection (B2/B3/B4) depends on the
+    resolution.
 
 Cumulative Apple ASC rate-limit pattern stack (Hotfix-derived):
 - Hotfix 20 — cursor pagination over hardcoded limit=50.
@@ -1114,7 +1139,14 @@ cascade for *View* flows (column + bulk modal lazy-load + concurrency 3),
 but **Bulk Import** still cascaded — Manager's primary pain workflow.
 Each row generates ~6 sequential Apple calls (create → state → locales →
 screenshot → pricing → availability); with `CONCURRENCY_LIMIT = 5` the
-peak in-flight rate burst past Apple's documented ~1 req/sec/token cap.
+peak in-flight rate burst past Apple's documented ~1 req/sec/token cap [^h26cap].
+
+[^h26cap]: **Cap figure conflicts with Hotfix 25's "250 req/hour" claim
+    (above).** Hotfix 26's "~1 req/sec" ≈ 3,600/hour, an order of
+    magnitude higher. See §4.9 — both figures pre-date Cycle 40 Phase A's
+    `[asc-client] budget=` Railway log. Authoritative `user-hour-lim`
+    value will be revealed empirically from production telemetry; Phase
+    B subset selection (B2/B3/B4) depends on the resolution.
 Items pushed to Apple incomplete (availability not set, pricing schedule
 silently failed).
 
@@ -1330,6 +1362,46 @@ If all four check out and 429s no longer surface in Manager workflows,
 Phase B is deferred to Cycle 41+ backlog. If 429s persist despite
 recovery, the empirical Railway data justifies the Phase B token bucket
 refactor.
+
+#### Phase B1 — submit-batch concurrency alignment (shipped immediately)
+
+Phase B evaluation surfaced one zero-risk subset that ships now rather
+than waits for telemetry:
+
+| Knob | Pre-B1 | Post-B1 |
+|---|---|---|
+| `SUBMIT_CONCURRENCY` in `app/api/iap-management/apps/[appId]/iaps/submit-batch/route.ts` | 5 | **2** |
+
+Submit-batch already wraps every Apple call in `withRetry` (Hotfix 26
+audit), so the change only smooths the burst profile. It aligns with the
+Hotfix 26 Bulk Import (concurrency 2) + Cycle 40 Phase A Bulk
+Availability (concurrency 2) precedent — a single cross-flow constant
+for multi-row Apple POST orchestrators. No telemetry was required to
+justify it; the cost (slightly slower large submit batches) matches the
+already-Manager-accepted Hotfix 26 tradeoff.
+
+#### Phase B subset trigger criteria (telemetry-gated)
+
+The remaining Phase B subsets are explicitly deferred and selected à la
+carte based on the 1–2 day telemetry observation window:
+
+| Subset | Trigger | Estimate |
+|---|---|---|
+| **B2** auto-retry lazy-load cells after cool-down | Amber "(rate limited)" cells appear frequently in normal browsing | ~1h |
+| **B3** token bucket proactive throttler | Railway logs show `budget=` regularly < 500 remaining; multi-workflow contention saturates budget | ~2h |
+| **B4** universal `ascFetch` refactor (centralized handler) | B2 or B3 ships AND a shared rate-limit handler reduces duplication enough to justify the refactor | ~2h |
+
+The trigger discipline rejects speculative refactor: B2/B3/B4 are sized
+and ready, but Phase B's go/no-go for each subset depends on what the
+`[asc-client] budget=` logs and `actions_log.payload.rate_limit` rows
+actually show in production.
+
+**Cap-figure conflict.** §10.8's two pre-Phase-A figures (Hotfix 25 →
+250/hour, Hotfix 26 → ~3,600/hour) are now explicitly annotated as
+resolution-pending in §4.9. The empirical `user-hour-lim` value Manager
+observes during telemetry decides which figure was load-bearing —
+critical input for Phase B subset selection because B3's design depends
+on the true cap.
 
 **Cycle 37 Phase 2 deferral closure status (post Cycle 39):**
 

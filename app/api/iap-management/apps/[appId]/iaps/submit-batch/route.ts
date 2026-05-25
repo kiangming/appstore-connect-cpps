@@ -50,7 +50,19 @@ import { log } from "@/lib/logger";
 
 export const runtime = "nodejs";
 
-const SUBMIT_CONCURRENCY = 5;
+/**
+ * Cycle 40 Phase B1 — concurrency 5 → 2 alignment with Hotfix 26 Bulk
+ * Import + Cycle 40 Phase A Bulk Availability. Apple ASC ~1 req/sec
+ * conservative protection; each submit-batch row issues 1-3 Apple calls
+ * (preflight read + submit + post-submit refetch), so at concurrency 5
+ * the peak in-flight rate burst past Apple's sustained budget on larger
+ * batches. Zero-risk alignment — withRetry already wraps every call site
+ * in this route (Hotfix 26 audit confirmed), so this only smooths the
+ * burst profile. Telemetry from `[asc-client] budget=` Railway logs +
+ * actions_log.payload.rate_limit will reveal whether further Phase B
+ * subsets (token bucket, auto-retry) are needed.
+ */
+const SUBMIT_CONCURRENCY = 2;
 
 const BodySchema = z.object({
   iap_ids: z.array(z.string().uuid()).min(1).max(200),
