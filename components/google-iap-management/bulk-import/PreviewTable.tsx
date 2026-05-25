@@ -40,7 +40,12 @@ export function PreviewTable({
             <th className="px-3 py-2.5">#</th>
             <th className="px-3 py-2.5">SKU</th>
             <th className="px-3 py-2.5">Default title</th>
-            <th className="px-3 py-2.5 text-right">Base (USD)</th>
+            {/* Hotfix 28 — header was hardcoded "Base (USD)" pre-Hotfix-14
+                migration when every row had to be the app's default
+                currency. The Monetization API supports per-row currency,
+                so the header is now currency-agnostic and each row shows
+                its parser-resolved currency in the cell. */}
+            <th className="px-3 py-2.5 text-right">Base price</th>
             <th className="px-3 py-2.5">Tier</th>
             <th className="px-3 py-2.5">Locales</th>
             <th className="px-3 py-2.5">Status</th>
@@ -88,7 +93,12 @@ export function PreviewTable({
                   {defaultTitle}
                 </td>
                 <td className="px-3 py-2.5 text-xs text-right font-mono text-slate-700">
-                  {row.basePriceDecimal}
+                  <span>{row.basePriceDecimal}</span>
+                  {row.baseCurrency && (
+                    <span className="ml-1 text-[10px] text-slate-500">
+                      {row.baseCurrency}
+                    </span>
+                  )}
                 </td>
                 <td className="px-3 py-2.5 text-xs">
                   {row.tierCandidates.length === 0 ? (

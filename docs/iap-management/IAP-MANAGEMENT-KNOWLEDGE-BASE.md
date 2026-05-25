@@ -1285,6 +1285,76 @@ column present + valid, column present + invalid — so the parser can't
 drift back into positional strictness without a deliberate test
 deletion that would surface in review.
 
+#### Hotfix 28 — Google IAP wizard per-row currency drift (Hotfix 14 cross-surface miss)
+
+**Module**: Google IAP Management (not Apple). Shipped in parallel with
+Apple's Cycle 40 Phase A+B1 telemetry observation period.
+
+**Production symptom.** Manager uploaded a Bulk Import Excel with USD
+prices ("Price (USD)" column → 21.99, 4.99, 9.99) to an app whose
+default currency is VND (London1). The wizard's Preview step blocked
+with "16 row(s) violate VND precision — Google will reject these"
+followed by "Row 2 (...): VND only accepts whole numbers (got '21.99')."
+The same Excel rows pass the server orchestrator + Google API path —
+only the wizard's UI gate was wrong.
+
+**Root cause.** `BulkImportWizard.tsx` pre-flight validation passed
+`appDefaultCurrency` (VND) to `validateDecimalForCurrency` instead of
+`row.baseCurrency` (USD, resolved by the parser from the "Price (USD)"
+header). The accompanying comment ("same currency is used for every row
+since Google enforces app-wide") explained the historical Hotfix 5
+assumption — valid before Hotfix 14 migrated the writer to Google's
+Monetization API. Post-Hotfix-14 the orchestrator stamps
+`defaultPrice.currency` from `row.baseCurrency` (per-row) and Google
+accepts mixed-currency batches, but the wizard's pre-flight check was
+left on the old app-wide assumption.
+
+**NEW trap class — "post-migration cross-surface assumption drift".**
+A migration updates one surface (the server orchestrator) while another
+surface (the client validator) keeps the pre-migration invariant. Both
+read the same data but apply different rules; production is silent
+until a workflow whose Excel currency ≠ app default currency exercises
+the wedge. Discovery requires either a coverage audit at migration time
+or a Manager-reported symptom that maps the two surfaces. Going forward:
+when migrating an invariant on one surface, **grep every call site of
+the dropped constraint** before declaring the migration complete.
+
+**Fix.** One-line corrective in the wizard memo + helper extraction so
+the rule is unit-testable:
+
+```ts
+// before:
+const err = validateDecimalForCurrency(row.basePriceDecimal, appDefaultCurrency);
+// after:
+const err = validateDecimalForCurrency(row.basePriceDecimal, row.baseCurrency);
+```
+
+Cosmetic companion fix in `PreviewTable.tsx`: column header was
+hardcoded "Base (USD)" (pre-Hotfix-14 app-wide assumption); now reads
+"Base price" with each row's currency rendered next to its decimal
+value. UI clarity post-mixed-currency support.
+
+**Files touched (Hotfix 28):**
+
+| File | Change |
+|---|---|
+| `components/google-iap-management/bulk-import/BulkImportWizard.tsx` | `precisionViolations` memo extracted to pure helper `computePrecisionViolations(rows)` (exported for tests); validates each row against its own `baseCurrency`; defensive guard skips rows with empty currency; stale Hotfix 5 comment rewritten to document the per-row invariant + history. Two downstream UI copy strings updated to drop the app-default-currency framing (button title + red-banner heading). |
+| `components/google-iap-management/bulk-import/PreviewTable.tsx` | Column header "Base (USD)" → "Base price"; per-row cell shows `{basePriceDecimal} {baseCurrency}` (small grey currency suffix). |
+| `components/google-iap-management/bulk-import/BulkImportWizard.test.ts` | **NEW** — 8 tests pinning per-row validation: USD fractional passes; VND integer passes; VND fractional fails; production-regression case (USD column / VND-default app); mixed-currency rows validated independently; skip-decision excluded; empty `baseCurrency` defensive skip; empty preview. |
+
+Tests +8. Existing wizard render path unaffected.
+
+**Cumulative Google IAP currency-precision institutional learning:**
+
+| Marker | Pattern |
+|---|---|
+| Hotfix 4 | Per-app default currency + locale (banner + execute payload stamping) |
+| Hotfix 5 | ISO 4217 currency precision validation (zero-decimal VND/JPY/KRW/HUF/TWD…) |
+| Hotfix 14 | Monetization API migration — per-row currency replaces app-wide constraint |
+| Hotfix 16 | Excel column flexibility ("Price (XXX)" / generic "Price") |
+| Hotfix 19 | User-explicit tier disambiguation on multi-match |
+| **Hotfix 28** | Wizard pre-flight validator caught up with Hotfix 14's per-row invariant |
+
 ### 10.9 Cycle 40 Phase A — bulk-availability retry coverage + X-Rate-Limit visibility
 
 **Manager production evidence (post Hotfix 25 + 26).** Apple ASC rate

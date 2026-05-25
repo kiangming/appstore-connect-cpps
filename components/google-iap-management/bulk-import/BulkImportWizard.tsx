@@ -124,22 +124,23 @@ export function BulkImportWizard({
     return { total, existing, pending, willOverwrite, willSkip, willCreate };
   }, [previewRows]);
 
-  // Hotfix 5: precision violations for the app's currency. We check only
-  // actionable rows (Skip rows aren't sent to Google so their numeric
-  // shape doesn't matter). The same currency is used for every row since
-  // Google enforces app-wide.
-  const precisionViolations = useMemo(() => {
-    if (!appDefaultCurrency) return [] as Array<{ rowNumber: number; sku: string; error: string }>;
-    const violations: Array<{ rowNumber: number; sku: string; error: string }> = [];
-    for (const row of previewRows) {
-      if (row.decision === "skip") continue;
-      const err = validateDecimalForCurrency(row.basePriceDecimal, appDefaultCurrency);
-      if (err) {
-        violations.push({ rowNumber: row.rowNumber, sku: row.sku, error: err });
-      }
-    }
-    return violations;
-  }, [previewRows, appDefaultCurrency]);
+  // Hotfix 28 — pre-flight precision validation per-row currency.
+  //
+  // Pre-Hotfix-14 the legacy inappproducts.batchUpdate enforced
+  // defaultPrice.currency === app.defaultCurrency, so the wizard
+  // validated every row against `appDefaultCurrency`. Hotfix 14 Phase 3
+  // migrated to Google's Monetization API which accepts per-region
+  // pricing — the orchestrator now stamps defaultPrice.currency from
+  // each row's `baseCurrency` (resolved by the parser from the column
+  // header, e.g. "Price (USD)" → USD). This pre-flight check was left
+  // on the old app-wide assumption, which blocked USD-priced rows in
+  // VND-default apps (Hotfix 28 production symptom). Now validates
+  // each row against its own column-resolved currency to match the
+  // orchestrator path. Skip rows are excluded — they're not sent.
+  const precisionViolations = useMemo(
+    () => computePrecisionViolations(previewRows),
+    [previewRows],
+  );
 
   // Hotfix 19: derive disambiguation status for the banner + button counter.
   //   - ambiguous: rows whose template lookup found >1 candidate tiers
@@ -553,9 +554,9 @@ export function BulkImportWizard({
           {precisionViolations.length > 0 && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-3">
               <p className="text-xs font-medium text-red-900 mb-1">
-                {precisionViolations.length} row(s) violate {appDefaultCurrency}{" "}
-                precision — Google will reject these. Fix the Excel file and
-                re-upload, or remove the affected rows.
+                {precisionViolations.length} row(s) violate their column
+                currency&apos;s precision — Google will reject these. Fix the
+                Excel file and re-upload, or remove the affected rows.
               </p>
               <ul className="space-y-0.5 text-[11px] text-red-800 max-h-32 overflow-y-auto">
                 {precisionViolations.slice(0, 20).map((v) => (
@@ -599,7 +600,7 @@ export function BulkImportWizard({
               disabled={!canContinueFromPreview || executing}
               title={
                 precisionViolations.length > 0
-                  ? `${precisionViolations.length} row(s) violate ${appDefaultCurrency} precision`
+                  ? `${precisionViolations.length} row(s) violate per-row currency precision`
                   : tierStatus.pending > 0
                     ? `${tierStatus.pending} item${tierStatus.pending === 1 ? "" : "s"} need${tierStatus.pending === 1 ? "s" : ""} tier selection`
                     : !canContinueFromPreview
@@ -705,6 +706,35 @@ export function BulkImportWizard({
       )}
     </div>
   );
+}
+
+/** Hotfix 28 — pure helper extracted from the wizard's
+ *  `precisionViolations` memo so unit tests can pin per-row currency
+ *  validation behaviour without rendering the whole wizard.
+ *
+ *  Validates each non-skipped row's `basePriceDecimal` against its own
+ *  parser-resolved `baseCurrency`. The parser's currency comes from
+ *  the column header ("Price (USD)" → USD) and falls back to
+ *  appDefaultCurrency only for generic "Price" / "Default Price" /
+ *  "Base Price" headers (excel-parser.ts:resolvePriceColumn). The
+ *  caller's responsibility is to give us `previewRows` with
+ *  `baseCurrency` already populated.
+ *
+ *  Skip-decision rows are excluded — they're not sent to Google so
+ *  their numeric shape doesn't matter. */
+export function computePrecisionViolations(
+  previewRows: ReadonlyArray<PreviewRow>,
+): Array<{ rowNumber: number; sku: string; error: string }> {
+  const violations: Array<{ rowNumber: number; sku: string; error: string }> = [];
+  for (const row of previewRows) {
+    if (row.decision === "skip") continue;
+    if (!row.baseCurrency) continue;
+    const err = validateDecimalForCurrency(row.basePriceDecimal, row.baseCurrency);
+    if (err) {
+      violations.push({ rowNumber: row.rowNumber, sku: row.sku, error: err });
+    }
+  }
+  return violations;
 }
 
 function StepHeader({ step }: { step: Step }) {
