@@ -12,6 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { AppleRateLimitError } from "@/lib/iap-management/apple/fetch";
 
 const setAvailabilityToAllTerritories = vi.hoisted(() => vi.fn());
 const setAvailabilityRemoveFromSales = vi.hoisted(() => vi.fn());
@@ -210,5 +211,139 @@ describe("executeBulkAvailability — local-draft rows", () => {
     expect(draftRow?.error).toMatch(/not synced/i);
     // Apple helper called only once — for the synced row.
     expect(setAvailabilityToAllTerritories).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Cycle 40 Phase A — withRetry coverage + rate_limit telemetry ──────────
+
+describe("executeBulkAvailability — Cycle 40 Phase A rate-limit telemetry", () => {
+  it("retries on Apple 429 (withRetry wraps the helper call) — clean row reports zero counters", async () => {
+    setAvailabilityToAllTerritories.mockResolvedValueOnce({ data: { id: "av-1" } });
+    const out = await executeBulkAvailability({
+      creds,
+      iapIds: ["row-1"],
+      action: "set-all",
+      actor: "tester",
+    });
+    expect(out.results[0].ok).toBe(true);
+    expect(out.results[0].rate_limit).toEqual({
+      rate429_count: 0,
+      retry_attempts: 0,
+      backoff_total_ms: 0,
+      longest_backoff_ms: 0,
+    });
+    expect(out.rate_limit_total).toEqual({
+      rate429_count: 0,
+      retry_attempts: 0,
+      backoff_total_ms: 0,
+      longest_backoff_ms: 0,
+      rows_throttled: 0,
+    });
+  });
+
+  it("429 → success recovery: counters populated, row reports ok=true", async () => {
+    // Fresh Error instance per attempt (memory: feedback_vitest_mock_rejected.md).
+    setAvailabilityToAllTerritories
+      .mockRejectedValueOnce(
+        new AppleRateLimitError("POST", "/v1/inAppPurchaseAvailabilities", "", 100),
+      )
+      .mockResolvedValueOnce({ data: { id: "av-1" } });
+    const out = await executeBulkAvailability({
+      creds,
+      iapIds: ["row-1"],
+      action: "set-all",
+      actor: "tester",
+    });
+    expect(out.overall).toBe("SUCCESS");
+    expect(setAvailabilityToAllTerritories).toHaveBeenCalledTimes(2);
+    const rl = out.results[0].rate_limit!;
+    expect(rl.rate429_count).toBe(1);
+    expect(rl.retry_attempts).toBe(1);
+    expect(rl.backoff_total_ms).toBe(100);
+    expect(rl.longest_backoff_ms).toBe(100);
+    expect(out.rate_limit_total.rows_throttled).toBe(1);
+    expect(out.rate_limit_total.rate429_count).toBe(1);
+  });
+
+  it("audit payload includes rate_limit counters for both SUCCESS and ERROR rows", async () => {
+    setAvailabilityToAllTerritories.mockResolvedValueOnce({ data: { id: "av-1" } });
+    await executeBulkAvailability({
+      creds,
+      iapIds: ["row-1"],
+      action: "set-all",
+      actor: "tester",
+    });
+    const successPayload = (
+      auditInsert.mock.calls[0][0] as { payload: Record<string, unknown> }
+    ).payload;
+    expect(successPayload.result).toBe("SUCCESS");
+    expect(successPayload.rate_limit).toBeDefined();
+    expect((successPayload.rate_limit as { rate429_count: number }).rate429_count).toBe(0);
+
+    auditInsert.mockReset();
+    setAvailabilityToAllTerritories.mockRejectedValueOnce(new Error("Apple 500"));
+    await executeBulkAvailability({
+      creds,
+      iapIds: ["row-2"],
+      action: "set-all",
+      actor: "tester",
+    });
+    const errPayload = (
+      auditInsert.mock.calls[0][0] as { payload: Record<string, unknown> }
+    ).payload;
+    expect(errPayload.result).toBe("ERROR");
+    expect(errPayload.rate_limit).toBeDefined();
+  });
+
+  it("multi-row 429 roll-up: rows_throttled counts only rows that hit 429", async () => {
+    // Row 1: clean. Row 2: 429 then success. Row 3: clean.
+    setAvailabilityToAllTerritories
+      .mockResolvedValueOnce({ data: { id: "av-1" } })
+      .mockRejectedValueOnce(
+        new AppleRateLimitError("POST", "/v1/inAppPurchaseAvailabilities", "", 200),
+      )
+      .mockResolvedValueOnce({ data: { id: "av-2" } })
+      .mockResolvedValueOnce({ data: { id: "av-3" } });
+    const out = await executeBulkAvailability({
+      creds,
+      iapIds: ["row-1", "row-2", "row-3"],
+      action: "set-all",
+      actor: "tester",
+      concurrency: 1, // deterministic ordering for this test
+    });
+    expect(out.overall).toBe("SUCCESS");
+    expect(out.rate_limit_total.rows_throttled).toBe(1);
+    expect(out.rate_limit_total.rate429_count).toBe(1);
+    expect(out.rate_limit_total.backoff_total_ms).toBe(200);
+    expect(out.rate_limit_total.longest_backoff_ms).toBe(200);
+  });
+
+  it("local-draft rows do not contribute to rate_limit telemetry (no Apple call made)", async () => {
+    setAvailabilityToAllTerritories.mockResolvedValueOnce({ data: { id: "av-1" } });
+    const out = await executeBulkAvailability({
+      creds,
+      iapIds: ["draft-x", "row-1"],
+      action: "set-all",
+      actor: "tester",
+    });
+    const draftRow = out.results.find((r) => r.iapId === "draft-x");
+    expect(draftRow?.rate_limit).toBeUndefined();
+    expect(out.rate_limit_total.rows_throttled).toBe(0);
+  });
+
+  it("empty input — rate_limit_total still present (zeroed) so consumers can read uniformly", async () => {
+    const out = await executeBulkAvailability({
+      creds,
+      iapIds: [],
+      action: "set-all",
+      actor: "tester",
+    });
+    expect(out.rate_limit_total).toEqual({
+      rate429_count: 0,
+      retry_attempts: 0,
+      backoff_total_ms: 0,
+      longest_backoff_ms: 0,
+      rows_throttled: 0,
+    });
   });
 });

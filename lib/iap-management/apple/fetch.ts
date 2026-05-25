@@ -150,6 +150,49 @@ function parseRetryAfter(headers: Headers): number | null {
 }
 
 /**
+ * Cycle 40 Phase A — parse Apple's `X-Rate-Limit` header so Railway logs
+ * surface per-request budget consumption. Apple emits a semicolon-delimited
+ * key/value list, e.g.:
+ *
+ *     X-Rate-Limit: user-hour-lim:3600;user-hour-rem:1450;
+ *
+ * Returns `{ limit, remaining }` when both fields parse cleanly, otherwise
+ * null (defensive — Apple does not always emit the header, and the parser
+ * must never throw out of a successful request just because of header
+ * absence).
+ *
+ * Phase A intentionally observes only — no proactive throttling, no token
+ * bucket. The empirical budget data this surface gathers in production
+ * determines whether Phase B (token bucket + universal ascFetch refactor)
+ * is justified.
+ */
+export interface RateLimitInfo {
+  limit: number;
+  remaining: number;
+}
+
+export function parseRateLimit(headers: Headers): RateLimitInfo | null {
+  const raw = headers.get("x-rate-limit");
+  if (!raw) return null;
+  let limit: number | null = null;
+  let remaining: number | null = null;
+  for (const part of raw.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const sep = trimmed.indexOf(":");
+    if (sep < 0) continue;
+    const key = trimmed.slice(0, sep).trim().toLowerCase();
+    const value = trimmed.slice(sep + 1).trim();
+    const n = Number(value);
+    if (!Number.isFinite(n)) continue;
+    if (key === "user-hour-lim") limit = n;
+    else if (key === "user-hour-rem") remaining = n;
+  }
+  if (limit === null || remaining === null) return null;
+  return { limit, remaining };
+}
+
+/**
  * Thin fetch wrapper for Apple ASC API. Signs a fresh JWT, sets
  * Authorization + Content-Type, parses errors into typed exceptions, and
  * returns parsed JSON (or `undefined` for 204).
@@ -172,6 +215,7 @@ export async function iapFetch<T>(
     );
   }
 
+  const startedAt = Date.now();
   const res = await fetch(url, {
     method,
     headers: {
@@ -180,11 +224,24 @@ export async function iapFetch<T>(
     },
     body: body ? JSON.stringify(body) : undefined,
   });
+  const durationMs = Date.now() - startedAt;
 
   await log(
     "iap-apple",
     `[${creds.keyId}] ${method} ${endpoint} → ${res.status}`,
   );
+
+  // Cycle 40 Phase A — Apple ASC budget visibility. Emit a grep-friendly
+  // `[asc-client]` tagged line only when Apple returned X-Rate-Limit so
+  // Manager can audit budget consumption through Railway logs without
+  // changing the read shape for endpoints that omit the header.
+  const budget = parseRateLimit(res.headers);
+  if (budget) {
+    await log(
+      "iap-apple",
+      `[asc-client] ${method} ${endpoint} → ${res.status} budget=${budget.remaining}/${budget.limit} duration=${durationMs}ms`,
+    );
+  }
 
   if (!res.ok) {
     const errBody = await res.text();

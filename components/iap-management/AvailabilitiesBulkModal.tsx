@@ -52,6 +52,17 @@ interface RowResult {
   error?: string;
 }
 
+/** Cycle 40 Phase A — batch-level 429 telemetry surfaced from the
+ *  orchestrator response. Shape mirrors the Hotfix 26 Bulk Import wizard
+ *  so the amber chip renders consistently cross-flow. */
+interface RateLimitTotal {
+  rate429_count: number;
+  retry_attempts: number;
+  backoff_total_ms: number;
+  longest_backoff_ms: number;
+  rows_throttled: number;
+}
+
 interface ApiAvailabilityResponse {
   state: AvailabilityForIap | null;
   error?: "rate_limited" | "fetch_failed" | "iap_not_found" | "not_synced";
@@ -76,6 +87,9 @@ export function AvailabilitiesBulkModal({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [results, setResults] = useState<RowResult[] | null>(null);
+  const [rateLimitTotal, setRateLimitTotal] = useState<RateLimitTotal | null>(
+    null,
+  );
 
   // Hotfix 25 — Fetch availability for every visible (filtered) IAP that
   // has a local UUID, on modal open. Bounded by the shared queue.
@@ -156,6 +170,7 @@ export function AvailabilitiesBulkModal({
     setSelected(new Set());
     setConfirmOpen(false);
     setResults(null);
+    setRateLimitTotal(null);
     onClose();
   }
 
@@ -203,6 +218,10 @@ export function AvailabilitiesBulkModal({
             failed: number;
             summary: string;
             results: RowResult[];
+            /** Cycle 40 Phase A — batch-level 429 telemetry. Absent on
+             *  responses from older deploys; treat missing as "no
+             *  throttling occurred" so the chip simply doesn't render. */
+            rate_limit_total?: RateLimitTotal;
           }
         | { error: string };
       if (!res.ok) {
@@ -213,6 +232,7 @@ export function AvailabilitiesBulkModal({
       }
       if ("overall" in data) {
         setResults(data.results);
+        setRateLimitTotal(data.rate_limit_total ?? null);
         const verb =
           mode === "set-all" ? "Set Availabilities" : "Remove from Sales";
         if (data.overall === "SUCCESS") {
@@ -321,7 +341,29 @@ export function AvailabilitiesBulkModal({
           {fetching ? (
             <FetchingState progress={fetchProgress} destructive={destructive} />
           ) : results ? (
-            <ProgressList results={results} />
+            <>
+              {/* Cycle 40 Phase A — amber rate-limit chip mirrors the
+                  Hotfix 26 Bulk Import wizard surface. Renders only when
+                  Apple actually throttled this run; clean runs stay
+                  quiet. */}
+              {rateLimitTotal && rateLimitTotal.rate429_count > 0 && (
+                <div className="mb-3 rounded-lg border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+                  <p className="font-medium">
+                    Apple ASC throttled this batch — every row that hit a 429
+                    recovered via exponential backoff.
+                  </p>
+                  <p className="text-[11px] mt-0.5 text-amber-700 dark:text-amber-300/80">
+                    {rateLimitTotal.rows_throttled} of {results.length} rows
+                    hit 429 · {rateLimitTotal.rate429_count} retries total
+                    ·{" "}
+                    {Math.round(rateLimitTotal.backoff_total_ms / 1000)}s
+                    cumulative backoff · longest{" "}
+                    {Math.round(rateLimitTotal.longest_backoff_ms / 1000)}s.
+                  </p>
+                </div>
+              )}
+              <ProgressList results={results} />
+            </>
           ) : eligible.length === 0 ? (
             <EmptyState
               destructive={destructive}

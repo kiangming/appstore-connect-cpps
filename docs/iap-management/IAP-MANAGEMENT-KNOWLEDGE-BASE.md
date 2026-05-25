@@ -300,6 +300,83 @@ Apple's reject-reason emails cite sub-clauses with letter suffix:
 - Optional lowercase sub-letter capture
 - Canonical code preserves sub-letter: `2.1(b)` and `2.1(c)` aggregate as distinct buckets
 
+### 4.8 Orchestrator-bypass-retry trap class (Cycle 40 Phase A)
+
+**Pattern.** A multi-row orchestrator wraps each row in `withConcurrency`
+but the per-row work calls Apple via a *helper* (e.g.
+`setAvailabilityToAllTerritories`) that internally uses `iapFetch`
+*bare* — no `withRetry`. Helpers are intentionally retry-naive so
+callers compose retry policy; if a caller forgets, every 429 surfaces as
+a per-row failure with no backoff attempt and no `onRetry` telemetry.
+
+**Symptom.** Manager-visible: "rate limit hitting, no retry signal."
+Audit logs show ERROR rows with raw Apple 429 bodies, no `rate_limit`
+counters present. Railway logs show `[iap-apple] ... → 429
+rate-limited (retry-after=...ms)` followed by nothing — the orchestrator
+caught the throw and moved on.
+
+**Diagnostic fingerprint.** Grep `lib/iap-management/orchestrators/`
+for direct invocations of Apple helper functions; ensure every such
+call site is wrapped in `withRetry` (or the per-row tracked variant).
+At Cycle 40 Phase A only one orchestrator was leaking: the Cycle 39
+Phase 2 bulk-availability orchestrator. The Cycle 29 Bulk Import path
+was already covered by `trackedWithRetry` (Hotfix 26).
+
+**Fix.** Either thread `withRetry` through the orchestrator, or wrap
+helper internals — Phase A picked the orchestrator-side wrap to match
+the established Hotfix 26 pattern (`trackedWithRetry(counters, () =>
+helper(...))`). Future orchestrator additions should treat
+orchestrator-side retry as the default; helpers stay retry-naive so
+single-call routes can still tune backoff per use case.
+
+**Forensic.** Phase A's investigation found 2 bare call sites in
+`lib/iap-management/orchestrators/bulk-availability.ts:113-114`. Every
+other Apple-helper call site project-wide is already covered
+(create-on-apple, submit, submit-batch, sync-states, single-IAP
+availability lazy-load, all 10 bulk-import sites). Audit script:
+`grep -rn "setAvailability\|createInAppPurchase\|submitInAppPurchase"
+app/api lib/iap-management/orchestrators | grep -v withRetry`.
+
+### 4.9 X-Rate-Limit budget header (Cycle 40 Phase A institutional knowledge)
+
+Apple's ASC API emits a budget header on most (not all) responses:
+
+```
+X-Rate-Limit: user-hour-lim:3600;user-hour-rem:1450;
+```
+
+Format is semicolon-delimited key/value pairs. Two documented fields:
+
+| Field | Meaning |
+|---|---|
+| `user-hour-lim` | Hourly request budget for the ASC token (typically 3600) |
+| `user-hour-rem` | Remaining requests in the current hour window |
+
+**Parser discipline.** `parseRateLimit` in
+`lib/iap-management/apple/fetch.ts` is *defensive*: returns null when
+the header is absent, when only one of the two fields is present, or
+when values are non-numeric. The parser MUST NOT throw out of a
+successful Apple response just because the header changed shape — this
+is a read-only observability surface.
+
+**Phase A surface.** `iapFetch` emits a structured Railway log line on
+every response that carries the header:
+
+```
+[asc-client] GET /v2/inAppPurchases/abc → 200 budget=1234/3600 duration=180ms
+```
+
+Grep-friendly tag: `[asc-client] budget=`. Manager can audit budget
+consumption across a workflow by tailing Railway logs and filtering on
+this prefix. Endpoints that omit the header produce no `[asc-client]`
+line — the existing `[iap-apple]` line still records status + endpoint.
+
+**Phase B contingency.** A future Phase B (token bucket throttler +
+universal `ascFetch` refactor) is justified only if Phase A's empirical
+data shows persistent low budget remaining or 429 cascades that
+`withRetry` can't recover from. The X-Rate-Limit visibility added in
+Phase A is the gate that decides Phase B's go/no-go.
+
 ---
 
 ## 5. Database Schema
@@ -1096,12 +1173,14 @@ exactly which rows fell off after the rate-limit recovery budget.
 
 **Cycle 40 prerequisite.** The `onRetry` hook is the smallest piece of
 "systematic infrastructure" surfaced early because Hotfix 26 needs the
-telemetry now. Cycle 40 will:
+telemetry now. Cycle 40 Phase A (see §10.9) shipped the highest-ROI
+follow-on:
 
-- Build the centralized rate-limit handler (token bucket + X-Rate-Limit header parser).
-- Refactor `iapFetch` to thread server-side budget state into the same `onRetry` callback shape.
-- Audit all `withConcurrency` sites and align them with the documented Apple cap (Hotfix 26 covers Bulk Import; bulk-availability + screenshot-upload still default to concurrency 5).
-- Surface per-request Railway log instrumentation (`budget=X/3600`).
+- ✅ bulk-availability orchestrator `withRetry` coverage + concurrency 5 → 2.
+- ✅ X-Rate-Limit header parser + grep-friendly `[asc-client] budget=` Railway log line.
+- ✅ Amber rate-limit chip on the Bulk Availabilities modal (mirrors Hotfix 26 wizard).
+
+Phase B (token bucket throttler + universal `ascFetch` refactor + screenshot-upload concurrency audit) is deferred conditional on Phase A telemetry — see §4.9 for the go/no-go gate.
 
 #### Hotfix 27 — Bulk Import Type column tolerance (§3.3 institutional-lock restoration)
 
@@ -1173,6 +1252,84 @@ tests pin every branch of the §3.3 lock — column absent, cell empty,
 column present + valid, column present + invalid — so the parser can't
 drift back into positional strictness without a deliberate test
 deletion that would surface in review.
+
+### 10.9 Cycle 40 Phase A — bulk-availability retry coverage + X-Rate-Limit visibility
+
+**Manager production evidence (post Hotfix 25 + 26).** Apple ASC rate
+limits continued hitting Manager workflows. Hotfix 25 covered View
+flows, Hotfix 26 covered Bulk Import — but Manager reported "no retry
+signal visible" on Cycle 39 Phase 2 bulk Availabilities actions. The
+silent-path-instrumentation-first feedback (memory) flagged this as a
+diagnostic gap before a refactor gap: investigate first, refactor only
+with empirical evidence.
+
+**Investigation.** A coverage audit of every Apple-helper call site
+project-wide isolated the gap to **one orchestrator**: the Cycle 39
+Phase 2 bulk-availability path called `setAvailabilityToAllTerritories`
+/ `setAvailabilityRemoveFromSales` with bare `iapFetch` (no
+`withRetry`), concurrency 5. Every other path (single create/edit,
+submit, submit-batch, sync-states, single-IAP lazy-load, all 10 bulk-
+import sites) was already covered. Documented as the §4.8 orchestrator-
+bypass-retry trap class.
+
+**Phase A scope (~2h, targeted).**
+
+| Knob | Cycle 39 Phase 2 ship | Cycle 40 Phase A |
+|---|---|---|
+| bulk-availability orchestrator `withRetry` | absent | **per-row `trackedWithRetry`** (mirror Hotfix 26) |
+| bulk-availability concurrency | 5 | **2** (Hotfix 26 alignment) |
+| Per-row 429 telemetry | none | **rate429_count / retry_attempts / backoff_total_ms / longest_backoff_ms** |
+| Batch-level roll-up | none | **rate_limit_total + rows_throttled** |
+| Modal amber chip | none | **renders only when rate429_count > 0** |
+| X-Rate-Limit budget parsing | none | **`parseRateLimit` in `iapFetch` + `[asc-client] budget=R/L duration=Nms` Railway log** |
+
+**Phase B deferred — conditional on Phase A telemetry.** The full
+Cycle 40 design (token bucket throttler, universal `ascFetch` refactor,
+screenshot-upload concurrency audit) is held until X-Rate-Limit data
+from Phase A shows whether `withRetry` recovery is sufficient or
+proactive throttling is needed. See §4.9 for the go/no-go criteria.
+
+**Files touched (Phase A):**
+
+| File | Change |
+|---|---|
+| `lib/iap-management/orchestrators/bulk-availability.ts` | + `RetryCounters` / `trackedWithRetry` (inline, mirrors Hotfix 26); per-row counters threaded through helper call; `BulkAvailabilityRowResult.rate_limit?` field; `BulkAvailabilityOutcome.rate_limit_total` field; `DEFAULT_CONCURRENCY = 2`; audit payload includes `rate_limit`; complete-line console log includes throttle counters. |
+| `lib/iap-management/apple/fetch.ts` | + `parseRateLimit(headers): RateLimitInfo \| null` exported; `iapFetch` measures response duration and emits a `[asc-client]` tagged Railway log line when X-Rate-Limit is present. Existing `[iap-apple]` log line preserved. |
+| `lib/iap-management/apple/fetch.test.ts` | +9 tests pinning the parser (canonical format, whitespace, missing fields, non-numeric, unknown segments, header-absent path) + the iapFetch `[asc-client]` log emission contract. |
+| `lib/iap-management/orchestrators/bulk-availability.test.ts` | +6 tests pinning 429 retry recovery, counters population, audit payload `rate_limit` field, multi-row rows_throttled tally, local-draft exclusion, empty-input rate_limit_total zeroed. |
+| `components/iap-management/AvailabilitiesBulkModal.tsx` | + `RateLimitTotal` interface (server response shape); state hook `rateLimitTotal`; reset on close; amber chip block over the results progress list (renders only when `rate429_count > 0`). |
+
+Tests +15 net (orchestrator +6, fetch +9). Existing 30-test baseline
+across both suites preserved.
+
+**Apple ASC trap class cumulative learning post Phase A.**
+
+| Marker | Pattern |
+|---|---|
+| §4.1 LANDMARK (Cycle 31) | V2 `?include` relationship truncation at 10 IDs |
+| §4.6 (Cycle 31) | V2 `?include` whitelist enforced |
+| Hotfix 20 | cursor pagination over hardcoded limit=50 |
+| Hotfix 22 | V1 sub-resource pattern (dodge V2 ?include 50-cap) |
+| Hotfix 25 | client-side lazy load + per-cell observers + queue 3 |
+| Hotfix 26 | Bulk Import concurrency + per-row throttle + `onRetry` hook |
+| §4.8 / §4.9 (Cycle 40 Phase A) | orchestrator-bypass-retry trap; X-Rate-Limit budget visibility |
+
+**Phase A verification gate.** Manager checklist after Railway deploy:
+
+- Bulk Availability action on 25+ items completes without per-row Apple
+  429 ERROR cluster.
+- Amber chip renders in the modal when Apple throttled the batch;
+  clean runs stay quiet.
+- `actions_log.payload.rate_limit` populated on bulk-availability rows
+  (Supabase SQL Editor spot-check).
+- Railway logs show `[asc-client] budget=R/L` lines on responses where
+  Apple returned the header — empirical budget data for Phase B
+  decision.
+
+If all four check out and 429s no longer surface in Manager workflows,
+Phase B is deferred to Cycle 41+ backlog. If 429s persist despite
+recovery, the empirical Railway data justifies the Phase B token bucket
+refactor.
 
 **Cycle 37 Phase 2 deferral closure status (post Cycle 39):**
 

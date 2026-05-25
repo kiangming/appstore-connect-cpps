@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   iapFetch,
   withRetry,
+  parseRateLimit,
   AppleApiError,
   AppleRateLimitError,
 } from "./fetch";
@@ -325,6 +326,97 @@ describe("withRetry", () => {
       // Retry-After honored → 100 + 200 = 300.
       expect(counters.total).toBe(300);
     });
+  });
+});
+
+// ─── Cycle 40 Phase A — X-Rate-Limit budget header parser ──────────────────
+
+describe("parseRateLimit (Cycle 40 Phase A)", () => {
+  it("parses canonical Apple format: user-hour-lim:3600;user-hour-rem:1450;", () => {
+    const headers = new Headers({
+      "x-rate-limit": "user-hour-lim:3600;user-hour-rem:1450;",
+    });
+    expect(parseRateLimit(headers)).toEqual({ limit: 3600, remaining: 1450 });
+  });
+
+  it("handles header without trailing semicolon", () => {
+    const headers = new Headers({
+      "x-rate-limit": "user-hour-lim:3600;user-hour-rem:1450",
+    });
+    expect(parseRateLimit(headers)).toEqual({ limit: 3600, remaining: 1450 });
+  });
+
+  it("tolerates whitespace around keys and values", () => {
+    const headers = new Headers({
+      "x-rate-limit": " user-hour-lim : 3600 ; user-hour-rem : 0 ;",
+    });
+    expect(parseRateLimit(headers)).toEqual({ limit: 3600, remaining: 0 });
+  });
+
+  it("returns null when X-Rate-Limit header is absent", () => {
+    expect(parseRateLimit(new Headers())).toBeNull();
+  });
+
+  it("returns null when header present but either field missing (defensive)", () => {
+    expect(
+      parseRateLimit(new Headers({ "x-rate-limit": "user-hour-lim:3600;" })),
+    ).toBeNull();
+    expect(
+      parseRateLimit(new Headers({ "x-rate-limit": "user-hour-rem:1450;" })),
+    ).toBeNull();
+  });
+
+  it("returns null when values are non-numeric (Apple sends garbage — never throw)", () => {
+    expect(
+      parseRateLimit(
+        new Headers({
+          "x-rate-limit": "user-hour-lim:abc;user-hour-rem:xyz",
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("ignores unknown segment keys without affecting parse", () => {
+    const headers = new Headers({
+      "x-rate-limit":
+        "user-hour-lim:3600;user-hour-rem:1450;some-future-key:7;",
+    });
+    expect(parseRateLimit(headers)).toEqual({ limit: 3600, remaining: 1450 });
+  });
+});
+
+describe("iapFetch — X-Rate-Limit Railway log (Cycle 40 Phase A)", () => {
+  it("emits the [asc-client] budget line when Apple returns X-Rate-Limit", async () => {
+    const { log } = await import("@/lib/logger");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        mockResponse(200, { data: { id: "x" } }, {
+          "x-rate-limit": "user-hour-lim:3600;user-hour-rem:1234;",
+        }),
+      ),
+    );
+    await iapFetch(creds, "GET", "/v2/inAppPurchases/x");
+    const budgetCall = (log as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => typeof c[1] === "string" && c[1].includes("[asc-client]"),
+    );
+    expect(budgetCall).toBeDefined();
+    expect(budgetCall![1]).toContain("budget=1234/3600");
+    expect(budgetCall![1]).toContain("duration=");
+  });
+
+  it("does NOT emit [asc-client] line when Apple omits X-Rate-Limit (defensive)", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(mockResponse(200, { data: { id: "x" } })),
+    );
+    await iapFetch(creds, "GET", "/v2/inAppPurchases/x");
+    const budgetCall = (log as ReturnType<typeof vi.fn>).mock.calls.find(
+      (c) => typeof c[1] === "string" && c[1].includes("[asc-client]"),
+    );
+    expect(budgetCall).toBeUndefined();
   });
 });
 
