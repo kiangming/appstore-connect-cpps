@@ -1,0 +1,2432 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hướng dẫn sử dụng — IAP Management</title>
+<style>
+  /* ============================================================
+     Design tokens — palette aligned với existing tool mockups
+     (stone neutral + #0c447c primary). Dark mode via [data-theme].
+     ============================================================ */
+  :root {
+    --bg: #f5f5f4;
+    --surface: #ffffff;
+    --surface-2: #fafaf9;
+    --surface-3: #f1f0ee;
+    --border: #e7e5e4;
+    --border-strong: #d6d3d1;
+    --text: #1c1917;
+    --text-muted: #57534e;
+    --text-subtle: #78716c;
+    --primary: #0c447c;
+    --primary-hover: #185fa5;
+    --primary-bg: #e6f1fb;
+    --success: #27500a;
+    --success-bg: #eaf3de;
+    --warning: #633806;
+    --warning-bg: #faeeda;
+    --danger: #791f1f;
+    --danger-bg: #fcebeb;
+    --purple: #3c3489;
+    --purple-bg: #eeedfe;
+    --teal: #085041;
+    --teal-bg: #e1f5ee;
+    --code-bg: #1c1917;
+    --code-text: #fafaf9;
+    --code-comment: #a8a29e;
+    --code-keyword: #f5c98b;
+    --code-string: #b6e3a8;
+    --shadow-sm: 0 1px 2px rgba(28, 25, 23, 0.06);
+    --shadow-md: 0 4px 12px rgba(28, 25, 23, 0.08);
+    --shadow-lg: 0 12px 32px rgba(28, 25, 23, 0.16);
+  }
+  [data-theme="dark"] {
+    --bg: #0f0e0d;
+    --surface: #1c1917;
+    --surface-2: #232120;
+    --surface-3: #2a2624;
+    --border: #3a3633;
+    --border-strong: #4d4844;
+    --text: #f5f5f4;
+    --text-muted: #d6d3d1;
+    --text-subtle: #a8a29e;
+    --primary: #6ba8e6;
+    --primary-hover: #93c2ee;
+    --primary-bg: #173558;
+    --success: #b6e3a8;
+    --success-bg: #1d3010;
+    --warning: #f5c98b;
+    --warning-bg: #3a2a0e;
+    --danger: #f4a8a8;
+    --danger-bg: #3d1818;
+    --purple: #b7b0f3;
+    --purple-bg: #1f1c43;
+    --teal: #8edcc4;
+    --teal-bg: #0d2e26;
+    --code-bg: #0a0908;
+    --code-text: #f5f5f4;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.7);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.6;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  /* ============================================================
+     Layout
+     ============================================================ */
+  .app {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    min-height: 100vh;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow: hidden;
+  }
+  .sidebar-brand {
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .brand-logo {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: -0.5px;
+  }
+  .brand-text {
+    line-height: 1.2;
+  }
+  .brand-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text);
+  }
+  .brand-subtitle {
+    font-size: 11px;
+    color: var(--text-subtle);
+    margin-top: 1px;
+  }
+  .sidebar-search {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-search-input {
+    width: 100%;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: 6px;
+    padding: 7px 10px 7px 30px;
+    font-size: 13px;
+    color: var(--text);
+    font-family: inherit;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2378716c' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
+    background-repeat: no-repeat;
+    background-position: 9px center;
+  }
+  [data-theme="dark"] .sidebar-search-input {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23a8a29e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>");
+    background-color: var(--surface-2);
+  }
+  .sidebar-search-input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--primary-bg);
+  }
+  .sidebar-nav {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 12px 24px;
+  }
+  .nav-group {
+    margin-bottom: 6px;
+  }
+  .nav-group-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 10px 4px;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-subtle);
+    letter-spacing: 0.6px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+  }
+  .nav-group-icon {
+    transition: transform 0.15s ease;
+    color: var(--text-subtle);
+  }
+  .nav-group.collapsed .nav-group-icon {
+    transform: rotate(-90deg);
+  }
+  .nav-group.collapsed .nav-items {
+    display: none;
+  }
+  .nav-items {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 13px;
+    text-decoration: none;
+    transition: background 0.12s ease, color 0.12s ease;
+  }
+  .nav-item:hover {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  .nav-item.active {
+    background: var(--primary-bg);
+    color: var(--primary);
+    font-weight: 500;
+  }
+  .nav-item-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .nav-badge {
+    background: var(--surface-3);
+    color: var(--text-muted);
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .nav-badge.new {
+    background: var(--teal-bg);
+    color: var(--teal);
+  }
+  .nav-badge.todo {
+    background: var(--warning-bg);
+    color: var(--warning);
+  }
+  .nav-item.active .nav-badge {
+    background: var(--primary);
+    color: white;
+  }
+  .nav-empty {
+    padding: 12px 10px;
+    font-size: 12px;
+    color: var(--text-subtle);
+    text-align: center;
+    font-style: italic;
+  }
+
+  /* Main */
+  .main {
+    overflow-x: hidden;
+    min-width: 0;
+  }
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    backdrop-filter: saturate(180%) blur(8px);
+  }
+  .breadcrumb {
+    font-size: 13px;
+    color: var(--text-subtle);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .breadcrumb-sep {
+    opacity: 0.5;
+  }
+  .breadcrumb-current {
+    color: var(--text);
+    font-weight: 500;
+  }
+  .topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .icon-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--text-muted);
+    transition: all 0.12s ease;
+  }
+  .icon-btn:hover {
+    background: var(--surface-2);
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+  .theme-toggle .icon-sun { display: none; }
+  [data-theme="dark"] .theme-toggle .icon-sun { display: block; }
+  [data-theme="dark"] .theme-toggle .icon-moon { display: none; }
+  .user-badge {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 6px 10px;
+    background: var(--surface-2);
+    border-radius: 12px;
+    border: 1px solid var(--border);
+  }
+
+  /* Content */
+  .content {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 40px 32px 80px;
+  }
+  .page {
+    display: none;
+    animation: fadeIn 0.18s ease;
+  }
+  .page.active {
+    display: block;
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Typography */
+  h1.page-title {
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+    letter-spacing: -0.5px;
+    line-height: 1.2;
+  }
+  .page-lede {
+    font-size: 15px;
+    color: var(--text-muted);
+    margin-bottom: 28px;
+    line-height: 1.6;
+  }
+  h2.section-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 36px 0 12px;
+    letter-spacing: -0.2px;
+    padding-top: 8px;
+  }
+  h2.section-title:first-of-type {
+    margin-top: 4px;
+  }
+  h3.subsection-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 24px 0 10px;
+  }
+  p {
+    color: var(--text-muted);
+    margin-bottom: 14px;
+  }
+  p strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+  ul, ol {
+    color: var(--text-muted);
+    margin: 0 0 14px 22px;
+  }
+  li {
+    margin-bottom: 6px;
+  }
+  li::marker {
+    color: var(--text-subtle);
+  }
+  a.inline-link {
+    color: var(--primary);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--primary);
+    cursor: pointer;
+  }
+  a.inline-link:hover {
+    border-bottom-style: solid;
+  }
+  code.inline {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-family: "SF Mono", "Monaco", "Menlo", Consolas, monospace;
+    font-size: 12.5px;
+    color: var(--text);
+  }
+
+  /* Steps */
+  .steps {
+    counter-reset: step;
+    margin: 16px 0 24px;
+    padding: 0;
+    list-style: none;
+  }
+  .step {
+    position: relative;
+    padding: 16px 16px 16px 56px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 10px;
+    counter-increment: step;
+  }
+  .step::before {
+    content: counter(step);
+    position: absolute;
+    left: 16px;
+    top: 14px;
+    width: 28px;
+    height: 28px;
+    background: var(--primary);
+    color: white;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .step-title {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+    font-size: 14px;
+  }
+  .step-body {
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .step-body p { margin-bottom: 8px; }
+  .step-body p:last-child { margin-bottom: 0; }
+
+  /* Callouts */
+  .callout {
+    padding: 14px 16px;
+    border-radius: 8px;
+    border-left: 3px solid;
+    margin: 16px 0;
+    font-size: 13.5px;
+    line-height: 1.55;
+  }
+  .callout-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .callout p { margin-bottom: 0; }
+  .callout-tip {
+    background: var(--success-bg);
+    border-color: var(--success);
+    color: var(--success);
+  }
+  .callout-tip .callout-title { color: var(--success); }
+  .callout-warning {
+    background: var(--warning-bg);
+    border-color: var(--warning);
+    color: var(--warning);
+  }
+  .callout-warning .callout-title { color: var(--warning); }
+  .callout-danger {
+    background: var(--danger-bg);
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+  .callout-danger .callout-title { color: var(--danger); }
+  .callout-info {
+    background: var(--primary-bg);
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+  .callout-info .callout-title { color: var(--primary); }
+  .callout p, .callout li { color: inherit; opacity: 0.9; }
+
+  /* Code blocks */
+  .code-block {
+    background: var(--code-bg);
+    color: var(--code-text);
+    border-radius: 8px;
+    margin: 12px 0 18px;
+    position: relative;
+    overflow: hidden;
+    font-family: "SF Mono", "Monaco", "Menlo", Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+    background: rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    font-size: 11px;
+    color: var(--code-comment);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .copy-btn {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: var(--code-text);
+    padding: 3px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.12s ease;
+  }
+  .copy-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.3);
+  }
+  .copy-btn.copied {
+    background: var(--success);
+    color: white;
+    border-color: var(--success);
+  }
+  pre {
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 0;
+  }
+  .tok-c { color: var(--code-comment); font-style: italic; }
+  .tok-k { color: var(--code-keyword); }
+  .tok-s { color: var(--code-string); }
+  .tok-n { color: #87bef0; }
+
+  /* Screenshots / placeholders */
+  .screenshot {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 16px 0;
+    cursor: zoom-in;
+    transition: box-shadow 0.18s ease, transform 0.18s ease;
+    position: relative;
+  }
+  .screenshot:hover {
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+  }
+  .screenshot-frame {
+    aspect-ratio: 16 / 9;
+    background: var(--surface-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .screenshot-caption {
+    padding: 10px 14px;
+    font-size: 12.5px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .screenshot-caption-label {
+    background: var(--warning-bg);
+    color: var(--warning);
+    padding: 1px 8px;
+    border-radius: 10px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+  .screenshot-zoom-icon {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: rgba(28, 25, 23, 0.7);
+    color: white;
+    width: 28px;
+    height: 28px;
+    border-radius: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.18s ease;
+  }
+  .screenshot:hover .screenshot-zoom-icon {
+    opacity: 1;
+  }
+
+  /* Wireframe SVG placeholders — adapt color to theme */
+  .wf-bg { fill: var(--surface); }
+  .wf-card { fill: var(--surface-2); stroke: var(--border); stroke-width: 1; }
+  .wf-strong { fill: var(--border-strong); }
+  .wf-soft { fill: var(--border); }
+  .wf-primary { fill: var(--primary); }
+  .wf-primary-bg { fill: var(--primary-bg); }
+  .wf-text { fill: var(--text-subtle); font-family: -apple-system, sans-serif; font-size: 10px; }
+  .wf-success { fill: var(--success-bg); stroke: var(--success); stroke-width: 1; }
+  .wf-warning { fill: var(--warning-bg); stroke: var(--warning); stroke-width: 1; }
+
+  /* Lightbox */
+  .lightbox {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 14, 13, 0.85);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+    padding: 40px;
+    cursor: zoom-out;
+    backdrop-filter: blur(4px);
+  }
+  .lightbox.active {
+    display: flex;
+  }
+  .lightbox-content {
+    background: var(--surface);
+    border-radius: 12px;
+    overflow: hidden;
+    max-width: 100%;
+    max-height: 100%;
+    box-shadow: var(--shadow-lg);
+    position: relative;
+  }
+  .lightbox-frame {
+    width: 80vw;
+    max-width: 1100px;
+    aspect-ratio: 16 / 9;
+    background: var(--surface-2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .lightbox-caption {
+    padding: 14px 18px;
+    color: var(--text-muted);
+    font-size: 13px;
+    border-top: 1px solid var(--border);
+  }
+  .lightbox-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    border-radius: 16px;
+    background: rgba(28, 25, 23, 0.7);
+    color: white;
+    border: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+  }
+
+  /* Pattern strips for feature pages */
+  .meta-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 20px;
+  }
+  .meta-chip {
+    padding: 4px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .meta-chip.module-apple {
+    background: var(--primary-bg);
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+  .meta-chip.module-google {
+    background: var(--teal-bg);
+    border-color: var(--teal);
+    color: var(--teal);
+  }
+  .meta-chip.cycle {
+    background: var(--purple-bg);
+    border-color: var(--purple);
+    color: var(--purple);
+  }
+
+  /* Home hero */
+  .hero {
+    background: linear-gradient(135deg, var(--primary-bg), var(--surface));
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 36px 32px;
+    margin-bottom: 32px;
+  }
+  .hero-eyebrow {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--primary);
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .hero-title {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 12px;
+    letter-spacing: -0.5px;
+  }
+  .hero-subtitle {
+    color: var(--text-muted);
+    font-size: 15px;
+    max-width: 600px;
+    line-height: 1.6;
+  }
+  .hero-cards {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-top: 28px;
+  }
+  .hero-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+    cursor: pointer;
+    transition: all 0.18s ease;
+  }
+  .hero-card:hover {
+    border-color: var(--primary);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+  }
+  .hero-card-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 12px;
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .hero-card.apple .hero-card-icon {
+    background: var(--primary-bg);
+    color: var(--primary);
+  }
+  .hero-card.google .hero-card-icon {
+    background: var(--teal-bg);
+    color: var(--teal);
+  }
+  .hero-card-title {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+    font-size: 15px;
+  }
+  .hero-card-desc {
+    font-size: 12.5px;
+    color: var(--text-subtle);
+    line-height: 1.5;
+  }
+  .quick-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 12px;
+    margin: 20px 0 32px;
+  }
+  .quick-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: all 0.18s ease;
+  }
+  .quick-card:hover {
+    border-color: var(--border-strong);
+    background: var(--surface-2);
+  }
+  .quick-card-title {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 13.5px;
+    margin-bottom: 2px;
+  }
+  .quick-card-desc {
+    font-size: 12px;
+    color: var(--text-subtle);
+  }
+
+  /* Skeleton/stub pages */
+  .stub {
+    background: var(--surface);
+    border: 1px dashed var(--border-strong);
+    border-radius: 10px;
+    padding: 36px 28px;
+    text-align: center;
+    color: var(--text-muted);
+  }
+  .stub-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-subtle);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 14px;
+  }
+  .stub-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+  .stub-desc {
+    font-size: 13.5px;
+    color: var(--text-subtle);
+    max-width: 480px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
+  .stub-meta {
+    margin-top: 18px;
+    font-size: 12px;
+    color: var(--text-subtle);
+  }
+
+  /* Tables in docs */
+  .docs-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0 22px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    font-size: 13px;
+  }
+  .docs-table th {
+    background: var(--surface-2);
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 600;
+    color: var(--text);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    border-bottom: 1px solid var(--border);
+  }
+  .docs-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+  .docs-table tr:last-child td {
+    border-bottom: none;
+  }
+  .docs-table tr:hover td {
+    background: var(--surface-2);
+  }
+
+  /* Mobile */
+  .mobile-toggle {
+    display: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    width: 32px;
+    height: 32px;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--text-muted);
+  }
+  @media (max-width: 900px) {
+    .app {
+      grid-template-columns: 1fr;
+    }
+    .sidebar {
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 280px;
+      z-index: 50;
+      transform: translateX(-100%);
+      transition: transform 0.22s ease;
+      box-shadow: var(--shadow-lg);
+    }
+    .sidebar.open {
+      transform: translateX(0);
+    }
+    .mobile-toggle {
+      display: flex;
+    }
+    .content {
+      padding: 24px 18px 60px;
+    }
+    .topbar {
+      padding: 10px 18px;
+    }
+    .hero-cards, .quick-grid {
+      grid-template-columns: 1fr;
+    }
+    .scrim {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.4);
+      z-index: 40;
+    }
+    .scrim.active {
+      display: block;
+    }
+  }
+  @media (min-width: 901px) {
+    .scrim { display: none !important; }
+  }
+
+  /* Hidden when filtered out */
+  .nav-item.hidden { display: none; }
+  .nav-group.empty .nav-group-header { opacity: 0.4; }
+
+  /* Selection */
+  ::selection {
+    background: var(--primary-bg);
+    color: var(--primary);
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ============================================================
+       SIDEBAR
+       ============================================================ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-logo">IAP</div>
+      <div class="brand-text">
+        <div class="brand-title">IAP Management</div>
+        <div class="brand-subtitle">Hướng dẫn sử dụng</div>
+      </div>
+    </div>
+    <div class="sidebar-search">
+      <input
+        type="text"
+        class="sidebar-search-input"
+        id="navSearch"
+        placeholder="Tìm tính năng..."
+        aria-label="Tìm kiếm tính năng"
+      />
+    </div>
+    <nav class="sidebar-nav" id="sidebarNav">
+      <!-- Bắt đầu -->
+      <div class="nav-group" data-group="start">
+        <div class="nav-group-header">
+          <svg class="nav-group-icon" width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3 L5 7 L8 3 Z"/></svg>
+          <span>Bắt đầu</span>
+        </div>
+        <div class="nav-items">
+          <a class="nav-item active" data-page="home" data-keywords="home tổng quan welcome chào mừng">
+            <span class="nav-item-label">Tổng quan</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Apple IAP Management -->
+      <div class="nav-group" data-group="apple">
+        <div class="nav-group-header">
+          <svg class="nav-group-icon" width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3 L5 7 L8 3 Z"/></svg>
+          <span>Apple IAP Management</span>
+        </div>
+        <div class="nav-items">
+          <a class="nav-item" data-page="apple-overview" data-keywords="apple overview tổng quan giới thiệu">
+            <span class="nav-item-label">Giới thiệu</span>
+          </a>
+          <a class="nav-item" data-page="apple-apps" data-keywords="apple apps danh sách applications">
+            <span class="nav-item-label">Danh sách apps</span>
+          </a>
+          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách">
+            <span class="nav-item-label">Danh sách IAPs</span>
+          </a>
+          <a class="nav-item" data-page="apple-new-iap" data-keywords="apple new iap tạo mới create">
+            <span class="nav-item-label">Tạo IAP mới</span>
+          </a>
+          <a class="nav-item" data-page="apple-edit-iap" data-keywords="apple edit iap chỉnh sửa update">
+            <span class="nav-item-label">Chỉnh sửa IAP</span>
+          </a>
+          <a class="nav-item" data-page="apple-view-iap" data-keywords="apple view iap detail xem chi tiết">
+            <span class="nav-item-label">Xem chi tiết IAP</span>
+          </a>
+          <a class="nav-item" data-page="apple-bulk-import" data-keywords="apple bulk import wizard nhập hàng loạt excel csv">
+            <span class="nav-item-label">Bulk Import wizard</span>
+            <span class="nav-badge">Chi tiết</span>
+          </a>
+          <a class="nav-item" data-page="apple-pricing-templates" data-keywords="apple pricing templates mẫu giá default per-app">
+            <span class="nav-item-label">Pricing templates</span>
+          </a>
+          <a class="nav-item" data-page="apple-pricing-matrix" data-keywords="apple pricing matrix bảng giá tier cross-cutting">
+            <span class="nav-item-label">Pricing matrix</span>
+            <span class="nav-badge">Chi tiết</span>
+          </a>
+          <a class="nav-item" data-page="apple-bulk-availabilities" data-keywords="apple bulk availabilities territories khu vực hàng loạt">
+            <span class="nav-item-label">Bulk Availabilities</span>
+          </a>
+          <a class="nav-item" data-page="apple-submit-batch" data-keywords="apple submit batch gửi duyệt review">
+            <span class="nav-item-label">Submit batch</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Google IAP Management -->
+      <div class="nav-group" data-group="google">
+        <div class="nav-group-header">
+          <svg class="nav-group-icon" width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M2 3 L5 7 L8 3 Z"/></svg>
+          <span>Google IAP Management</span>
+        </div>
+        <div class="nav-items">
+          <a class="nav-item" data-page="google-overview" data-keywords="google overview tổng quan giới thiệu play">
+            <span class="nav-item-label">Giới thiệu</span>
+          </a>
+          <a class="nav-item" data-page="google-apps" data-keywords="google apps danh sách play store">
+            <span class="nav-item-label">Danh sách apps</span>
+          </a>
+          <a class="nav-item" data-page="google-iaps" data-keywords="google iaps items danh sách sku">
+            <span class="nav-item-label">Danh sách IAPs</span>
+          </a>
+          <a class="nav-item" data-page="google-create-iap" data-keywords="google create item tạo mới onetimeproduct">
+            <span class="nav-item-label">Tạo item mới</span>
+          </a>
+          <a class="nav-item" data-page="google-edit-iap" data-keywords="google edit item chỉnh sửa update">
+            <span class="nav-item-label">Chỉnh sửa item</span>
+          </a>
+          <a class="nav-item" data-page="google-bulk-import" data-keywords="google bulk import nhập hàng loạt csv excel">
+            <span class="nav-item-label">Bulk Import</span>
+          </a>
+          <a class="nav-item" data-page="google-pricing-matrix" data-keywords="google pricing matrix bảng giá template">
+            <span class="nav-item-label">Pricing matrix</span>
+          </a>
+          <a class="nav-item" data-page="google-bulk-activate" data-keywords="google bulk activate kích hoạt hàng loạt items batchupdate">
+            <span class="nav-item-label">Bulk Activate items</span>
+            <span class="nav-badge new">Mới</span>
+          </a>
+          <a class="nav-item" data-page="google-bulk-deactivate" data-keywords="google bulk deactivate ngừng kích hoạt hàng loạt">
+            <span class="nav-item-label">Bulk Deactivate items</span>
+            <span class="nav-badge new">Mới</span>
+          </a>
+          <a class="nav-item" data-page="google-settings" data-keywords="google settings cài đặt accounts pricing">
+            <span class="nav-item-label">Settings</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="nav-empty" id="navEmpty" style="display:none;">
+        Không tìm thấy tính năng phù hợp.
+      </div>
+    </nav>
+  </aside>
+
+  <div class="scrim" id="scrim"></div>
+
+  <!-- ============================================================
+       MAIN
+       ============================================================ -->
+  <main class="main">
+    <header class="topbar">
+      <div style="display:flex; align-items:center; gap:12px;">
+        <button class="mobile-toggle" id="mobileToggle" aria-label="Mở menu">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <nav class="breadcrumb" id="breadcrumb">
+          <span>Hướng dẫn sử dụng</span>
+          <span class="breadcrumb-sep">/</span>
+          <span class="breadcrumb-current">Tổng quan</span>
+        </nav>
+      </div>
+      <div class="topbar-actions">
+        <span class="user-badge">minhgv@vng.com.vn</span>
+        <button class="icon-btn theme-toggle" id="themeToggle" aria-label="Đổi chủ đề sáng/tối" title="Đổi chủ đề sáng/tối">
+          <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="content">
+
+      <!-- =====================================================
+           PAGE: HOME / TỔNG QUAN
+           ===================================================== -->
+      <section class="page active" data-page="home">
+        <div class="hero">
+          <div class="hero-eyebrow">Phiên bản tháng 5 / 2026 · Cycle 42</div>
+          <h1 class="hero-title">Hướng dẫn sử dụng IAP Management</h1>
+          <p class="hero-subtitle">
+            Bộ tài liệu hướng dẫn nội bộ cho công cụ quản lý In-App Purchases trên cả hai store
+            App Store Connect (Apple) và Google Play Console. Tài liệu được phân theo từng module
+            và từng tính năng, kèm hình ảnh minh họa thao tác trên giao diện thật.
+          </p>
+          <div class="hero-cards">
+            <div class="hero-card apple" data-goto="apple-overview">
+              <div class="hero-card-icon">🍎</div>
+              <div class="hero-card-title">Apple IAP Management</div>
+              <div class="hero-card-desc">
+                10 tính năng — quản lý IAP trên App Store Connect: tạo, sửa, xem chi tiết,
+                bulk import, pricing template/matrix, bulk availabilities, submit batch.
+              </div>
+            </div>
+            <div class="hero-card google" data-goto="google-overview">
+              <div class="hero-card-icon">▶</div>
+              <div class="hero-card-title">Google IAP Management</div>
+              <div class="hero-card-desc">
+                8+ tính năng — quản lý IAP trên Google Play Console: tạo item, bulk import,
+                pricing matrix, và bulk activate/deactivate items (mới Cycle 41).
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <h2 class="section-title">Bắt đầu nhanh</h2>
+        <p>
+          Nếu đây là lần đầu bạn dùng IAP Management, ba mục dưới đây giúp bạn nắm 80% workflow
+          hàng ngày của team:
+        </p>
+        <div class="quick-grid">
+          <div class="quick-card" data-goto="apple-bulk-import">
+            <div class="quick-card-title">Nhập hàng loạt IAP (Apple)</div>
+            <div class="quick-card-desc">Wizard 4 bước · Excel template · auto-retry rate limit</div>
+          </div>
+          <div class="quick-card" data-goto="apple-pricing-matrix">
+            <div class="quick-card-title">Pricing matrix</div>
+            <div class="quick-card-desc">Bảng giá tier-based cross-cutting Apple + Google</div>
+          </div>
+          <div class="quick-card" data-goto="google-bulk-activate">
+            <div class="quick-card-title">Bulk Activate items (Google)</div>
+            <div class="quick-card-desc">Modal · chọn nhiều SKU · kích hoạt 1 click</div>
+          </div>
+        </div>
+
+        <h2 class="section-title">Quy ước trong tài liệu</h2>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip</div>
+          <p>Mẹo, shortcut, best practice — đọc khi bạn muốn dùng tính năng hiệu quả hơn.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Lưu ý</div>
+          <p>Edge case, hành vi dễ nhầm — đọc trước khi thực hiện tránh phải redo.</p>
+        </div>
+        <div class="callout callout-danger">
+          <div class="callout-title">🚫 Cảnh báo</div>
+          <p>Hành động không thể undo, hoặc có thể ảnh hưởng dữ liệu production.</p>
+        </div>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Thông tin</div>
+          <p>Bối cảnh kỹ thuật, lý do thiết kế, lịch sử thay đổi — đọc nếu muốn hiểu sâu.</p>
+        </div>
+
+        <h2 class="section-title">Tìm kiếm nhanh</h2>
+        <p>
+          Dùng ô <code class="inline">Tìm tính năng...</code> ở thanh bên trái để lọc nhanh.
+          Sidebar hỗ trợ cả tiếng Việt lẫn từ khóa tiếng Anh
+          (ví dụ: <code class="inline">availabilities</code>, <code class="inline">submit</code>).
+        </p>
+        <p>
+          Dùng nút <span class="icon-btn" style="display:inline-flex; width:auto; height:auto; padding:2px 8px; vertical-align:middle; font-size:11px;">🌙 / ☀️</span>
+          ở góc trên phải để chuyển giữa chế độ <strong>sáng</strong> và <strong>tối</strong>.
+        </p>
+      </section>
+
+      <!-- =====================================================
+           PAGE: APPLE OVERVIEW
+           ===================================================== -->
+      <section class="page" data-page="apple-overview">
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip">10 tính năng</span>
+        </div>
+        <h1 class="page-title">Apple IAP Management — Giới thiệu</h1>
+        <p class="page-lede">
+          Module quản lý In-App Purchases trên App Store Connect thông qua App Store Connect API v2.
+          Cho phép tạo, chỉnh sửa, xem chi tiết, và nhập hàng loạt IAP mà không cần truy cập trực tiếp
+          giao diện App Store Connect.
+        </p>
+
+        <h2 class="section-title">Quy trình điển hình</h2>
+        <ol>
+          <li><strong>Chọn app</strong> từ <a class="inline-link" data-goto="apple-apps">Danh sách apps</a> (lấy từ App Store Connect theo ASC account đang đăng nhập).</li>
+          <li><strong>Tạo hoặc chỉnh sửa IAP</strong> qua <a class="inline-link" data-goto="apple-new-iap">Tạo IAP mới</a> / <a class="inline-link" data-goto="apple-edit-iap">Chỉnh sửa IAP</a>.</li>
+          <li><strong>Cấu hình giá</strong> theo <a class="inline-link" data-goto="apple-pricing-templates">Pricing template</a> (Default hoặc Per-App) — kiểm tra qua <a class="inline-link" data-goto="apple-pricing-matrix">Pricing matrix</a>.</li>
+          <li><strong>Cấu hình availabilities</strong> theo từng territory — hoặc dùng <a class="inline-link" data-goto="apple-bulk-availabilities">Bulk Availabilities</a> cho nhiều IAP cùng lúc.</li>
+          <li><strong>Submit batch</strong> để gửi review qua <a class="inline-link" data-goto="apple-submit-batch">Submit batch</a>.</li>
+        </ol>
+
+        <h2 class="section-title">Khi nào dùng Bulk Import?</h2>
+        <p>
+          Khi cần tạo từ <strong>20+ IAP</strong> trong một lần, ưu tiên dùng
+          <a class="inline-link" data-goto="apple-bulk-import">Bulk Import wizard</a> thay vì tạo từng cái thủ công.
+          Wizard hỗ trợ Excel template, validate per-row, auto-retry rate-limit, và rollback.
+        </p>
+
+        <h2 class="section-title">Khác biệt với Apple App Store Connect UI</h2>
+        <ul>
+          <li>Hỗ trợ <strong>bulk operations</strong> mà giao diện gốc của Apple không có.</li>
+          <li>Lưu lại <strong>pricing template per-app</strong> để áp dụng cho các IAP mới.</li>
+          <li>Hỗ trợ <strong>preview changes trước khi submit</strong> — tránh save oversight.</li>
+          <li>Tự động <strong>retry khi gặp rate-limit</strong> (X-Rate-Limit headers).</li>
+        </ul>
+      </section>
+
+      <!-- =====================================================
+           PAGE: APPLE - BULK IMPORT (FLESHED)
+           ===================================================== -->
+      <section class="page" data-page="apple-bulk-import">
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip">Wizard · 4 bước</span>
+          <span class="meta-chip cycle">Hotfix 26 · 27 · 28</span>
+        </div>
+        <h1 class="page-title">Bulk Import wizard</h1>
+        <p class="page-lede">
+          Tạo nhiều IAP cùng lúc trên App Store Connect bằng Excel template. Wizard 4 bước
+          với validate per-row, preview trước khi commit, và auto-retry khi gặp rate-limit
+          từ Apple API.
+        </p>
+
+        <h2 class="section-title">Khi nào dùng tính năng này?</h2>
+        <ul>
+          <li>Tạo từ <strong>20+ IAP mới</strong> trong cùng app — tiết kiệm thời gian so với tạo thủ công từng cái.</li>
+          <li>Setup hàng loạt IAP cho app mới chuẩn bị launch.</li>
+          <li>Onboarding game/app từ nguồn khác — đã có sẵn cấu hình giá trong Excel.</li>
+        </ul>
+
+        <h2 class="section-title">Yêu cầu trước khi bắt đầu</h2>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Cần chuẩn bị</div>
+          <p>
+            <strong>1.</strong> ASC account đã được setup ở <a class="inline-link" data-goto="apple-overview">Settings</a> (Key ID, Issuer ID, Private key .p8).<br>
+            <strong>2.</strong> Pricing template đã cấu hình (Default hoặc Per-App) — xem <a class="inline-link" data-goto="apple-pricing-templates">Pricing templates</a>.<br>
+            <strong>3.</strong> File Excel theo template chuẩn (tải template ở bước 1 của wizard).
+          </p>
+        </div>
+
+        <h2 class="section-title">Hướng dẫn sử dụng từng bước</h2>
+
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở wizard từ danh sách IAPs</div>
+            <div class="step-body">
+              <p>Từ <code class="inline">/iap-management/apps/[appId]</code>, click nút <strong>Bulk Import</strong> ở góc phải bảng IAPs. Wizard sẽ mở trang riêng với 4 bước.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Tải Excel template và điền dữ liệu</div>
+            <div class="step-body">
+              <p>Ở Step 1, click <strong>Tải template Excel</strong>. Template có 5 cột bắt buộc:</p>
+              <table class="docs-table" style="margin-top:8px;">
+                <thead><tr><th>Cột</th><th>Mô tả</th><th>Bắt buộc</th></tr></thead>
+                <tbody>
+                  <tr><td><code class="inline">productId</code></td><td>SKU duy nhất (vd: <code class="inline">com.app.coin100</code>)</td><td>Có</td></tr>
+                  <tr><td><code class="inline">referenceName</code></td><td>Tên nội bộ (≤ 64 ký tự)</td><td>Có</td></tr>
+                  <tr><td><code class="inline">type</code></td><td>Loại IAP: <code class="inline">CONSUMABLE</code>, <code class="inline">NON_CONSUMABLE</code>...</td><td>Không · Hotfix 27</td></tr>
+                  <tr><td><code class="inline">priceTier</code></td><td>Tier giá (vd: <code class="inline">USD_0_99</code>)</td><td>Có</td></tr>
+                  <tr><td><code class="inline">familySharable</code></td><td><code class="inline">true</code> / <code class="inline">false</code></td><td>Có</td></tr>
+                </tbody>
+              </table>
+              <p style="margin-top:8px;">Cột <code class="inline">type</code> đã được chuyển sang <strong>optional</strong> từ Hotfix 27 — nếu để trống, mặc định <code class="inline">CONSUMABLE</code>.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Upload file và xem preview validation</div>
+            <div class="step-body">
+              <p>Step 2: drag & drop file Excel hoặc click chọn file. Hệ thống parse và validate từng row:</p>
+              <ul>
+                <li><strong>Row hợp lệ</strong>: xanh, có thể commit.</li>
+                <li><strong>Row có lỗi</strong>: đỏ, kèm message giải thích (vd: <code class="inline">priceTier không tồn tại</code>).</li>
+                <li><strong>Row warning</strong>: vàng, có thể commit nhưng cần xem lại.</li>
+              </ul>
+              <div class="callout callout-warning" style="margin-top:8px;">
+                <div class="callout-title">⚠️ Lưu ý currency</div>
+                <p>Nếu pricing template chứa currency không match với app's primary currency, row sẽ bị flag warning. Xem thêm Hotfix 28 — currency validation cho Google bulk import (Apple-specific behavior).</p>
+              </div>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Review summary và xác nhận commit</div>
+            <div class="step-body">
+              <p>Step 3 hiển thị summary:</p>
+              <ul>
+                <li>Tổng số row sẽ được tạo</li>
+                <li>Tổng số row bị skip (do lỗi)</li>
+                <li>Estimated duration (dựa trên rate-limit của Apple API ~50 req/min)</li>
+              </ul>
+              <p>Click <strong>Commit</strong> để bắt đầu. Wizard sẽ POST từng IAP lên App Store Connect API tuần tự với auto-retry khi gặp 429 (rate-limit).</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Theo dõi progress và xem kết quả</div>
+            <div class="step-body">
+              <p>Step 4: realtime progress bar + log per-row:</p>
+              <ul>
+                <li>✅ <strong>Success</strong>: IAP đã tạo, hiển thị Apple ID</li>
+                <li>❌ <strong>Failed</strong>: kèm error code + message</li>
+                <li>⏳ <strong>Rate-limited</strong>: đang chờ retry (Hotfix 26 telemetry)</li>
+              </ul>
+              <p>Sau khi hoàn tất, có thể download CSV log đầy đủ.</p>
+            </div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+
+        <div class="screenshot" data-lightbox data-caption="Bulk Import wizard — Step 1: Tải template và upload file">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="40" rx="6"/>
+              <rect class="wf-strong" x="40" y="35" width="120" height="10" rx="2"/>
+              <rect class="wf-soft" x="500" y="32" width="100" height="16" rx="4"/>
+              <!-- step indicator -->
+              <g transform="translate(30, 80)">
+                <circle class="wf-primary" cx="14" cy="14" r="14"/>
+                <text x="14" y="18" fill="#fff" text-anchor="middle" font-size="11" font-weight="600">1</text>
+                <text class="wf-text" x="36" y="18" font-size="11">Template</text>
+                <rect class="wf-soft" x="105" y="13" width="80" height="2"/>
+                <circle class="wf-soft" cx="200" cy="14" r="14"/>
+                <text class="wf-text" x="222" y="18" font-size="11">Upload</text>
+                <rect class="wf-soft" x="275" y="13" width="80" height="2"/>
+                <circle class="wf-soft" cx="370" cy="14" r="14"/>
+                <text class="wf-text" x="392" y="18" font-size="11">Preview</text>
+                <rect class="wf-soft" x="450" y="13" width="80" height="2"/>
+                <circle class="wf-soft" cx="545" cy="14" r="14"/>
+                <text class="wf-text" x="567" y="18" font-size="11">Commit</text>
+              </g>
+              <!-- dropzone -->
+              <rect class="wf-card" x="60" y="130" width="520" height="180" rx="8" stroke-dasharray="4 4"/>
+              <text class="wf-text" x="320" y="220" text-anchor="middle" font-size="14" font-weight="600">📥 Kéo thả file Excel vào đây</text>
+              <text class="wf-text" x="320" y="240" text-anchor="middle">hoặc click để chọn file</text>
+              <rect class="wf-primary" x="280" y="265" width="80" height="28" rx="4"/>
+              <text x="320" y="284" fill="#fff" text-anchor="middle" font-size="11" font-weight="600">Tải template</text>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Step 1 · Tải Excel template và upload file</span>
+          </div>
+          <div class="screenshot-zoom-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+          </div>
+        </div>
+
+        <div class="screenshot" data-lightbox data-caption="Bulk Import wizard — Step 3: Preview validation per-row">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="40" rx="6"/>
+              <rect class="wf-strong" x="40" y="35" width="160" height="10" rx="2"/>
+              <!-- summary cards -->
+              <g transform="translate(20, 80)">
+                <rect class="wf-success" x="0" y="0" width="190" height="64" rx="6"/>
+                <text class="wf-text" x="14" y="22" font-size="10">Sẽ tạo</text>
+                <text x="14" y="46" fill="var(--success)" font-size="22" font-weight="700">87</text>
+                <rect class="wf-warning" x="205" y="0" width="190" height="64" rx="6"/>
+                <text class="wf-text" x="219" y="22" font-size="10">Warning</text>
+                <text x="219" y="46" fill="var(--warning)" font-size="22" font-weight="700">5</text>
+                <rect fill="var(--danger-bg)" stroke="var(--danger)" stroke-width="1" x="410" y="0" width="190" height="64" rx="6"/>
+                <text class="wf-text" x="424" y="22" font-size="10">Lỗi · skip</text>
+                <text x="424" y="46" fill="var(--danger)" font-size="22" font-weight="700">3</text>
+              </g>
+              <!-- preview table -->
+              <rect class="wf-card" x="20" y="166" width="600" height="174" rx="6"/>
+              <rect class="wf-soft" x="20" y="166" width="600" height="28"/>
+              <text class="wf-text" x="36" y="184" font-weight="600">Row</text>
+              <text class="wf-text" x="80" y="184" font-weight="600">Product ID</text>
+              <text class="wf-text" x="230" y="184" font-weight="600">Type</text>
+              <text class="wf-text" x="320" y="184" font-weight="600">Tier</text>
+              <text class="wf-text" x="400" y="184" font-weight="600">Trạng thái</text>
+              <!-- rows -->
+              <rect fill="var(--success-bg)" x="20" y="194" width="600" height="24"/>
+              <text class="wf-text" x="36" y="210">1</text>
+              <text class="wf-text" x="80" y="210">com.app.coin100</text>
+              <text class="wf-text" x="230" y="210">CONSUMABLE</text>
+              <text class="wf-text" x="320" y="210">USD_0_99</text>
+              <circle fill="var(--success)" cx="408" cy="206" r="4"/>
+              <text fill="var(--success)" x="418" y="210" font-size="10" font-weight="600">OK</text>
+              <rect x="20" y="218" width="600" height="24" fill="none"/>
+              <text class="wf-text" x="36" y="234">2</text>
+              <text class="wf-text" x="80" y="234">com.app.coin500</text>
+              <text class="wf-text" x="230" y="234">CONSUMABLE</text>
+              <text class="wf-text" x="320" y="234">USD_4_99</text>
+              <circle fill="var(--success)" cx="408" cy="230" r="4"/>
+              <text fill="var(--success)" x="418" y="234" font-size="10" font-weight="600">OK</text>
+              <rect fill="var(--warning-bg)" x="20" y="242" width="600" height="24"/>
+              <text class="wf-text" x="36" y="258">3</text>
+              <text class="wf-text" x="80" y="258">com.app.gem10</text>
+              <text class="wf-text" x="230" y="258">(empty)</text>
+              <text class="wf-text" x="320" y="258">USD_0_99</text>
+              <circle fill="var(--warning)" cx="408" cy="254" r="4"/>
+              <text fill="var(--warning)" x="418" y="254" font-size="10" font-weight="600">Default CONSUMABLE</text>
+              <rect fill="var(--danger-bg)" x="20" y="266" width="600" height="24"/>
+              <text class="wf-text" x="36" y="282">4</text>
+              <text class="wf-text" x="80" y="282">com.app.bundle</text>
+              <text class="wf-text" x="230" y="282">NON_CONSUMABLE</text>
+              <text class="wf-text" x="320" y="282">USD_99_99</text>
+              <circle fill="var(--danger)" cx="408" cy="278" r="4"/>
+              <text fill="var(--danger)" x="418" y="282" font-size="10" font-weight="600">Tier không tồn tại</text>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Step 3 · Preview validation kết quả per-row</span>
+          </div>
+          <div class="screenshot-zoom-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </div>
+        </div>
+
+        <h2 class="section-title">Excel template ví dụ</h2>
+
+        <div class="code-block">
+          <div class="code-header">
+            <span>bulk-import-template.csv</span>
+            <button class="copy-btn">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              Copy
+            </button>
+          </div>
+<pre><span class="tok-c">// 5 cột bắt buộc — Hotfix 27: type optional, default CONSUMABLE</span>
+<span class="tok-n">productId,referenceName,type,priceTier,familySharable</span>
+com.app.coin100,Coin Pack 100,CONSUMABLE,USD_0_99,false
+com.app.coin500,Coin Pack 500,CONSUMABLE,USD_4_99,false
+com.app.gem10,Gem Pack 10,,USD_0_99,false
+com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Chia batch lớn</div>
+          <p>
+            Nếu file có hơn <strong>50 IAP</strong>, nên chia thành nhiều file nhỏ (mỗi file 30–40 row).
+            Wizard vẫn xử lý được file lớn nhờ auto-retry (Hotfix 26), nhưng split giúp dễ debug
+            và rollback từng batch nếu cần.
+          </p>
+        </div>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Lưu ý — productId không thể đổi sau khi tạo</div>
+          <p>
+            Apple App Store Connect không cho phép sửa <code class="inline">productId</code> sau khi IAP đã được tạo.
+            Hãy chắc chắn naming convention của bạn trước khi commit batch. Nếu sai, phải xóa IAP và tạo lại
+            (không thể recover trên store cũ).
+          </p>
+        </div>
+
+        <div class="callout callout-danger">
+          <div class="callout-title">🚫 Cảnh báo — Không có "Undo"</div>
+          <p>
+            Sau khi click <strong>Commit</strong>, từng IAP sẽ được POST lên Apple. Không thể rollback
+            tự động — nếu cần xóa, phải vào từng IAP detail và xóa thủ công. Khuyến nghị chạy
+            <strong>dry-run preview</strong> kỹ ở Step 3 trước khi commit.
+          </p>
+        </div>
+
+        <h2 class="section-title">Tính năng liên quan</h2>
+        <ul>
+          <li><a class="inline-link" data-goto="apple-pricing-templates">Pricing templates</a> — cấu hình giá trước khi bulk import</li>
+          <li><a class="inline-link" data-goto="apple-pricing-matrix">Pricing matrix</a> — xem lại giá đã apply sau bulk import</li>
+          <li><a class="inline-link" data-goto="apple-submit-batch">Submit batch</a> — gửi review tất cả IAP vừa tạo</li>
+          <li><a class="inline-link" data-goto="apple-bulk-availabilities">Bulk Availabilities</a> — set territory hàng loạt sau bulk import</li>
+        </ul>
+      </section>
+
+      <!-- =====================================================
+           PAGE: APPLE - PRICING MATRIX (FLESHED — cross-cutting)
+           ===================================================== -->
+      <section class="page" data-page="apple-pricing-matrix">
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip module-google">+ Google parity</span>
+          <span class="meta-chip cycle">Cycle 36 · 38</span>
+        </div>
+        <h1 class="page-title">Pricing matrix — Bảng giá tier-based</h1>
+        <p class="page-lede">
+          Hiển thị toàn bộ ánh xạ <strong>price tier × territory × currency</strong> đã được apply cho
+          các IAP của app. Pattern này dùng chung cho cả Apple và Google — tài liệu này tập trung
+          vào Apple, Google có UX tương tự với một số khác biệt được note bên dưới.
+        </p>
+
+        <h2 class="section-title">Khi nào dùng tính năng này?</h2>
+        <ul>
+          <li>Kiểm tra giá thực tế áp dụng cho app/IAP sau khi cấu hình pricing template.</li>
+          <li>So sánh giữa Default template (toàn workspace) và Per-App override.</li>
+          <li>Debug khi user complain giá hiển thị trên store khác với expectation.</li>
+          <li>Export bảng giá ra CSV để chia sẻ với team Marketing / Finance.</li>
+        </ul>
+
+        <h2 class="section-title">Cấu trúc giao diện</h2>
+        <p>
+          Pricing matrix có <strong>2 tab</strong> ở trên cùng — chuyển giữa nguồn dữ liệu:
+        </p>
+        <table class="docs-table">
+          <thead><tr><th>Tab</th><th>Phạm vi</th><th>Override</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Default matrix</strong></td><td>Toàn workspace, áp dụng nếu app không có override.</td><td>Không</td></tr>
+            <tr><td><strong>Per-App matrix</strong></td><td>Override cho 1 app cụ thể (overlay lên Default).</td><td>Có</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở matrix từ Settings → Pricing tiers</div>
+            <div class="step-body">
+              <p>Đường dẫn: <code class="inline">/iap-management/settings/pricing-tiers</code>. Trang chia 2 tab — chọn <strong>Default</strong> hoặc <strong>Per-App</strong>.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Filter theo currency hoặc territory</div>
+            <div class="step-body">
+              <p>Filter bar phía trên:</p>
+              <ul>
+                <li><strong>Currency</strong>: dropdown 30+ currencies (USD, EUR, JPY...)</li>
+                <li><strong>Territory</strong>: dropdown 175 territories — multi-select.</li>
+                <li><strong>Tier range</strong>: từ tier nào đến tier nào.</li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Đọc cell trong matrix</div>
+            <div class="step-body">
+              <p>Mỗi cell hiển thị giá thực tế Apple sẽ tính cho user ở territory đó:</p>
+              <ul>
+                <li><strong>Giá có dấu tiền</strong>: giá đã làm tròn theo quy ước Apple (vd: <code class="inline">¥99</code>, <code class="inline">₫24,000</code>).</li>
+                <li><strong>Tooltip on hover</strong>: hiển thị raw value, conversion rate, ngày update.</li>
+                <li><strong>Cell màu vàng</strong>: giá đã override per-app khác với default.</li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Export CSV nếu cần</div>
+            <div class="step-body">
+              <p>Click nút <strong>Export CSV</strong> ở góc phải. File CSV bao gồm tất cả tier × territory × currency, có thể mở bằng Excel để filter/sort tiếp.</p>
+            </div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+
+        <div class="screenshot" data-lightbox data-caption="Pricing matrix — Default tab, view tier USD_0_99 → USD_9_99">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <!-- tabs -->
+              <g transform="translate(20, 20)">
+                <rect class="wf-card" x="0" y="0" width="600" height="36" rx="6"/>
+                <rect class="wf-primary-bg" x="8" y="6" width="120" height="24" rx="4"/>
+                <text fill="var(--primary)" x="68" y="22" text-anchor="middle" font-size="11" font-weight="600">Default matrix</text>
+                <text class="wf-text" x="200" y="22" text-anchor="middle">Per-App matrix</text>
+              </g>
+              <!-- filter -->
+              <g transform="translate(20, 70)">
+                <rect class="wf-card" x="0" y="0" width="160" height="28" rx="4"/>
+                <text class="wf-text" x="12" y="18">Currency: USD ▼</text>
+                <rect class="wf-card" x="170" y="0" width="200" height="28" rx="4"/>
+                <text class="wf-text" x="182" y="18">Territory: 175 selected ▼</text>
+                <rect class="wf-card" x="380" y="0" width="120" height="28" rx="4"/>
+                <text class="wf-text" x="392" y="18">Tier: 0.99 → 9.99 ▼</text>
+                <rect fill="var(--primary)" x="520" y="0" width="80" height="28" rx="4"/>
+                <text fill="#fff" x="560" y="18" text-anchor="middle" font-size="11" font-weight="600">Export CSV</text>
+              </g>
+              <!-- matrix -->
+              <rect class="wf-card" x="20" y="116" width="600" height="224" rx="6"/>
+              <rect class="wf-soft" x="20" y="116" width="600" height="28"/>
+              <text class="wf-text" x="36" y="134" font-weight="600">Tier</text>
+              <text class="wf-text" x="120" y="134" font-weight="600">US (USD)</text>
+              <text class="wf-text" x="220" y="134" font-weight="600">JP (JPY)</text>
+              <text class="wf-text" x="320" y="134" font-weight="600">VN (VND)</text>
+              <text class="wf-text" x="420" y="134" font-weight="600">DE (EUR)</text>
+              <text class="wf-text" x="520" y="134" font-weight="600">BR (BRL)</text>
+              <!-- rows -->
+              <g font-size="11">
+                <text class="wf-text" x="36" y="166">USD_0_99</text>
+                <text class="wf-text" x="120" y="166">$0.99</text>
+                <text class="wf-text" x="220" y="166">¥150</text>
+                <text class="wf-text" x="320" y="166">₫24,000</text>
+                <text class="wf-text" x="420" y="166">€0.99</text>
+                <text class="wf-text" x="520" y="166">R$4.90</text>
+                <line stroke="var(--border)" x1="20" y1="180" x2="620" y2="180"/>
+                <text class="wf-text" x="36" y="200">USD_1_99</text>
+                <text class="wf-text" x="120" y="200">$1.99</text>
+                <text class="wf-text" x="220" y="200">¥300</text>
+                <rect fill="var(--warning-bg)" x="305" y="186" width="100" height="20" rx="3"/>
+                <text fill="var(--warning)" x="320" y="200" font-weight="600">₫49,000</text>
+                <text class="wf-text" x="420" y="200">€1.99</text>
+                <text class="wf-text" x="520" y="200">R$9.90</text>
+                <line stroke="var(--border)" x1="20" y1="214" x2="620" y2="214"/>
+                <text class="wf-text" x="36" y="234">USD_2_99</text>
+                <text class="wf-text" x="120" y="234">$2.99</text>
+                <text class="wf-text" x="220" y="234">¥450</text>
+                <text class="wf-text" x="320" y="234">₫72,000</text>
+                <text class="wf-text" x="420" y="234">€2.99</text>
+                <text class="wf-text" x="520" y="234">R$14.90</text>
+                <line stroke="var(--border)" x1="20" y1="248" x2="620" y2="248"/>
+                <text class="wf-text" x="36" y="268">USD_4_99</text>
+                <text class="wf-text" x="120" y="268">$4.99</text>
+                <text class="wf-text" x="220" y="268">¥750</text>
+                <text class="wf-text" x="320" y="268">₫120,000</text>
+                <text class="wf-text" x="420" y="268">€4.99</text>
+                <text class="wf-text" x="520" y="268">R$24.90</text>
+                <line stroke="var(--border)" x1="20" y1="282" x2="620" y2="282"/>
+                <text class="wf-text" x="36" y="302">USD_9_99</text>
+                <text class="wf-text" x="120" y="302">$9.99</text>
+                <text class="wf-text" x="220" y="302">¥1,500</text>
+                <text class="wf-text" x="320" y="302">₫239,000</text>
+                <text class="wf-text" x="420" y="302">€9.99</text>
+                <text class="wf-text" x="520" y="302">R$49.90</text>
+              </g>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Default matrix · cell vàng = Per-App override</span>
+          </div>
+          <div class="screenshot-zoom-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </div>
+        </div>
+
+        <h2 class="section-title">Khác biệt giữa Apple và Google</h2>
+        <table class="docs-table">
+          <thead><tr><th>Khía cạnh</th><th>Apple</th><th>Google</th></tr></thead>
+          <tbody>
+            <tr><td>Số tier</td><td>~750 tier toàn cầu</td><td>~190 region prices</td></tr>
+            <tr><td>Tier naming</td><td><code class="inline">USD_0_99</code></td><td><code class="inline">price_900000_USD</code> (micros)</td></tr>
+            <tr><td>Currency precision</td><td>2 chữ số thập phân</td><td>6 chữ số (micros)</td></tr>
+            <tr><td>RegionsVersion</td><td>N/A</td><td>Bắt buộc khi update (Hotfix 9)</td></tr>
+            <tr><td>Currency country</td><td>1-1 mapping</td><td>Có thể đổi (vd: BG → EUR Jan 2026)</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Google parity</div>
+          <p>
+            Google Pricing matrix UI có cấu trúc gần như giống Apple, nhưng có thêm tab
+            <strong>"Google Default Reference"</strong> để so sánh với giá mặc định Google đề xuất.
+            Xem chi tiết tại <a class="inline-link" data-goto="google-pricing-matrix">Google Pricing matrix</a>.
+          </p>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Currency precision</div>
+          <p>
+            Khi xem JPY (yên Nhật), không có chữ số thập phân — cell hiển thị <code class="inline">¥150</code> chứ không phải <code class="inline">¥150.00</code>.
+            Tương tự VND (đồng Việt Nam) hiển thị nguyên (không có thập phân).
+            Đây là quy ước locale, không phải bug.
+          </p>
+        </div>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Lưu ý — Cell vàng = Per-App override</div>
+          <p>
+            Cell có nền vàng nghĩa là tier này đã được override cho app cụ thể (qua Per-App template).
+            Hover để xem giá Default tương ứng. Nếu muốn xóa override, vào tab <strong>Per-App matrix</strong>
+            và remove entry tương ứng.
+          </p>
+        </div>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Currency change incidents — Google specific</div>
+          <p>
+            Tháng 1/2026 Google chuyển BGN → EUR cho Bulgaria. Pricing matrix tự động dùng
+            <code class="inline">regionsVersion</code> từ catalog hiện tại (Hotfix 9). Nếu thấy giá
+            không match expectation, kiểm tra ngày sync gần nhất.
+          </p>
+        </div>
+
+        <h2 class="section-title">Tính năng liên quan</h2>
+        <ul>
+          <li><a class="inline-link" data-goto="apple-pricing-templates">Pricing templates</a> — quản lý Default + Per-App</li>
+          <li><a class="inline-link" data-goto="google-pricing-matrix">Google Pricing matrix</a> — phiên bản Google</li>
+          <li><a class="inline-link" data-goto="apple-bulk-import">Bulk Import</a> — áp template khi tạo IAP hàng loạt</li>
+        </ul>
+      </section>
+
+      <!-- =====================================================
+           PAGE: GOOGLE OVERVIEW
+           ===================================================== -->
+      <section class="page" data-page="google-overview">
+        <div class="meta-strip">
+          <span class="meta-chip module-google">Google IAP Management</span>
+          <span class="meta-chip">8+ tính năng</span>
+        </div>
+        <h1 class="page-title">Google IAP Management — Giới thiệu</h1>
+        <p class="page-lede">
+          Module quản lý In-App Purchases trên Google Play Console thông qua Google Play Developer API.
+          Cung cấp giao diện thống nhất với Apple module — cho phép team chuyển đổi mental model giữa
+          2 store dễ dàng.
+        </p>
+
+        <h2 class="section-title">Quy trình điển hình</h2>
+        <ol>
+          <li><strong>Chọn app</strong> từ <a class="inline-link" data-goto="google-apps">Danh sách apps</a> (theo Google Account đang active).</li>
+          <li><strong>Tạo hoặc chỉnh sửa item</strong> qua <a class="inline-link" data-goto="google-create-iap">Tạo item mới</a>.</li>
+          <li><strong>Cấu hình giá</strong> theo <a class="inline-link" data-goto="google-pricing-matrix">Pricing matrix</a> (region-based prices in micros).</li>
+          <li><strong>Activate / Deactivate items</strong> hàng loạt qua <a class="inline-link" data-goto="google-bulk-activate">Bulk Activate</a> / <a class="inline-link" data-goto="google-bulk-deactivate">Bulk Deactivate</a>.</li>
+        </ol>
+
+        <h2 class="section-title">Khác biệt chính so với Apple</h2>
+        <ul>
+          <li>Không có khái niệm "submit for review" — items có thể active ngay khi save.</li>
+          <li>Pricing tính bằng <strong>micros</strong> (1 USD = 1,000,000 micros) — UI hiển thị tự động.</li>
+          <li>Phải khai báo <code class="inline">regionsVersion</code> khi patch (xem <a class="inline-link" data-goto="google-pricing-matrix">Pricing matrix</a>).</li>
+          <li>Item state có 2 giá trị: <code class="inline">ACTIVE</code> / <code class="inline">INACTIVE</code> — quản lý qua Bulk Activate/Deactivate.</li>
+        </ul>
+      </section>
+
+      <!-- =====================================================
+           PAGE: GOOGLE - BULK ACTIVATE (FLESHED — Cycle 41)
+           ===================================================== -->
+      <section class="page" data-page="google-bulk-activate">
+        <div class="meta-strip">
+          <span class="meta-chip module-google">Google IAP Management</span>
+          <span class="meta-chip cycle">Cycle 41 · Hotfix 29</span>
+          <span class="meta-chip">Modal · multi-select</span>
+        </div>
+        <h1 class="page-title">Bulk Activate items</h1>
+        <p class="page-lede">
+          Kích hoạt nhiều IAP items cùng lúc trên Google Play Console — chuyển state từ
+          <code class="inline">INACTIVE</code> → <code class="inline">ACTIVE</code> qua một thao tác.
+          Tính năng mới Cycle 41, dùng Google Play API <code class="inline">batchUpdateStates</code>.
+        </p>
+
+        <h2 class="section-title">Khi nào dùng tính năng này?</h2>
+        <ul>
+          <li>Sau khi tạo hàng loạt IAP qua <a class="inline-link" data-goto="google-bulk-import">Bulk Import</a> — chuyển toàn bộ batch sang active.</li>
+          <li>Khi launch product mới — kích hoạt nhóm IAP cùng release timeline.</li>
+          <li>Recovery sau khi tạm thời deactivate (bug, maintenance...).</li>
+        </ul>
+
+        <h2 class="section-title">Hướng dẫn sử dụng từng bước</h2>
+
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Chọn các items cần activate</div>
+            <div class="step-body">
+              <p>Từ <a class="inline-link" data-goto="google-iaps">Danh sách IAPs</a>, dùng checkbox đầu mỗi row để chọn nhiều items. Hoặc click checkbox header để chọn tất cả (hiển thị) trong trang hiện tại.</p>
+              <p>Khi đã chọn ít nhất 1 item, action bar phía trên hiện ra với 2 nút: <strong>Bulk Activate</strong> và <strong>Bulk Deactivate</strong>.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Mở modal Bulk Activate</div>
+            <div class="step-body">
+              <p>Click <strong>Bulk Activate</strong>. Modal hiện ra với:</p>
+              <ul>
+                <li>Số lượng items được chọn (vd: <code class="inline">12 items selected</code>)</li>
+                <li>Bảng preview: SKU, tên, current state, target state</li>
+                <li>Items đã ở state <code class="inline">ACTIVE</code> sẽ skip (hiển thị "Already active")</li>
+                <li>Items <code class="inline">INACTIVE</code> sẽ được activate</li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Confirm và execute</div>
+            <div class="step-body">
+              <p>Click <strong>Activate {N} items</strong> ở footer modal. Hệ thống gửi 1 batch request lên Google Play API:</p>
+              <div class="code-block">
+                <div class="code-header">
+                  <span>POST /androidpublisher/v3/...:batchUpdate</span>
+                  <button class="copy-btn">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    Copy
+                  </button>
+                </div>
+<pre>{
+  <span class="tok-s">"requests"</span>: [
+    { <span class="tok-s">"productId"</span>: <span class="tok-s">"com.app.coin100"</span>, <span class="tok-s">"state"</span>: <span class="tok-s">"ACTIVE"</span> },
+    { <span class="tok-s">"productId"</span>: <span class="tok-s">"com.app.coin500"</span>, <span class="tok-s">"state"</span>: <span class="tok-s">"ACTIVE"</span> }
+  ]
+}</pre>
+              </div>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Xem kết quả và refetch state</div>
+            <div class="step-body">
+              <p>Modal hiển thị summary:</p>
+              <ul>
+                <li>✅ <strong>Activated</strong>: số items chuyển sang ACTIVE</li>
+                <li>⏭ <strong>Skipped</strong>: số items đã ACTIVE từ trước</li>
+                <li>❌ <strong>Failed</strong>: số items lỗi (hiếm — kèm error message)</li>
+              </ul>
+              <div class="callout callout-info" style="margin-top:8px;">
+                <div class="callout-title">ℹ️ Hotfix 12 — refetch sau batchUpdateStates</div>
+                <p>Google API trả về snapshot pre-update (state=DRAFT mặc định). Tool tự động refetch để hiển thị state thật sau khi activate. Bạn không cần reload trang thủ công.</p>
+              </div>
+            </div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+
+        <div class="screenshot" data-lightbox data-caption="Bulk Activate modal — preview 12 items selected">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <!-- modal scrim -->
+              <rect fill="rgba(0,0,0,0.3)" width="640" height="360"/>
+              <!-- modal -->
+              <rect class="wf-card" x="80" y="40" width="480" height="280" rx="10"/>
+              <!-- header -->
+              <rect class="wf-soft" x="80" y="40" width="480" height="44" rx="10"/>
+              <text class="wf-text" x="100" y="68" font-size="14" font-weight="600" fill="var(--text)">Bulk Activate · 12 items</text>
+              <text class="wf-text" x="530" y="68" font-size="16">✕</text>
+              <!-- preview table -->
+              <rect class="wf-soft" x="96" y="100" width="448" height="24"/>
+              <text class="wf-text" x="108" y="116" font-weight="600">SKU</text>
+              <text class="wf-text" x="240" y="116" font-weight="600">Current</text>
+              <text class="wf-text" x="340" y="116" font-weight="600">Target</text>
+              <text class="wf-text" x="440" y="116" font-weight="600">Action</text>
+              <g font-size="10">
+                <text class="wf-text" x="108" y="142">com.app.coin100</text>
+                <rect fill="var(--surface-3)" x="232" y="130" width="80" height="18" rx="9"/>
+                <text class="wf-text" x="272" y="142" text-anchor="middle">INACTIVE</text>
+                <rect fill="var(--success-bg)" x="332" y="130" width="80" height="18" rx="9"/>
+                <text fill="var(--success)" x="372" y="142" text-anchor="middle" font-weight="600">ACTIVE</text>
+                <text fill="var(--primary)" x="440" y="142" font-weight="500">→ Activate</text>
+
+                <text class="wf-text" x="108" y="170">com.app.coin500</text>
+                <rect fill="var(--surface-3)" x="232" y="158" width="80" height="18" rx="9"/>
+                <text class="wf-text" x="272" y="170" text-anchor="middle">INACTIVE</text>
+                <rect fill="var(--success-bg)" x="332" y="158" width="80" height="18" rx="9"/>
+                <text fill="var(--success)" x="372" y="170" text-anchor="middle" font-weight="600">ACTIVE</text>
+                <text fill="var(--primary)" x="440" y="170" font-weight="500">→ Activate</text>
+
+                <text class="wf-text" x="108" y="198">com.app.gem10</text>
+                <rect fill="var(--success-bg)" x="232" y="186" width="80" height="18" rx="9"/>
+                <text fill="var(--success)" x="272" y="198" text-anchor="middle" font-weight="600">ACTIVE</text>
+                <rect fill="var(--success-bg)" x="332" y="186" width="80" height="18" rx="9"/>
+                <text fill="var(--success)" x="372" y="198" text-anchor="middle" font-weight="600">ACTIVE</text>
+                <text class="wf-text" x="440" y="198">⏭ Skip</text>
+
+                <text class="wf-text" x="108" y="226">com.app.bundle</text>
+                <rect fill="var(--surface-3)" x="232" y="214" width="80" height="18" rx="9"/>
+                <text class="wf-text" x="272" y="226" text-anchor="middle">INACTIVE</text>
+                <rect fill="var(--success-bg)" x="332" y="214" width="80" height="18" rx="9"/>
+                <text fill="var(--success)" x="372" y="226" text-anchor="middle" font-weight="600">ACTIVE</text>
+                <text fill="var(--primary)" x="440" y="226" font-weight="500">→ Activate</text>
+              </g>
+              <text class="wf-text" x="108" y="258" font-size="10" font-style="italic">8 more items...</text>
+              <!-- footer -->
+              <rect fill="var(--surface-2)" x="80" y="276" width="480" height="44"/>
+              <rect class="wf-card" x="350" y="288" width="80" height="20" rx="4" stroke="var(--border-strong)"/>
+              <text class="wf-text" x="390" y="302" text-anchor="middle" font-size="11">Hủy</text>
+              <rect fill="var(--primary)" x="440" y="288" width="104" height="20" rx="4"/>
+              <text fill="#fff" x="492" y="302" text-anchor="middle" font-size="11" font-weight="600">Activate 11 items</text>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Modal Bulk Activate · preview SKU + current/target state</span>
+          </div>
+          <div class="screenshot-zoom-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </div>
+        </div>
+
+        <div class="screenshot" data-lightbox data-caption="Bulk Activate kết quả — 11 activated, 1 skipped">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect fill="rgba(0,0,0,0.3)" width="640" height="360"/>
+              <rect class="wf-card" x="120" y="60" width="400" height="240" rx="10"/>
+              <text fill="var(--success)" x="320" y="120" text-anchor="middle" font-size="40">✓</text>
+              <text fill="var(--text)" x="320" y="158" text-anchor="middle" font-size="16" font-weight="700">Hoàn tất</text>
+              <text class="wf-text" x="320" y="180" text-anchor="middle">Đã xử lý 12 items</text>
+              <g transform="translate(140, 200)">
+                <rect class="wf-success" x="0" y="0" width="110" height="60" rx="6"/>
+                <text class="wf-text" x="55" y="20" text-anchor="middle" font-size="10">Activated</text>
+                <text fill="var(--success)" x="55" y="46" text-anchor="middle" font-size="22" font-weight="700">11</text>
+                <rect fill="var(--surface-2)" stroke="var(--border)" x="125" y="0" width="110" height="60" rx="6"/>
+                <text class="wf-text" x="180" y="20" text-anchor="middle" font-size="10">Skipped</text>
+                <text fill="var(--text-muted)" x="180" y="46" text-anchor="middle" font-size="22" font-weight="700">1</text>
+                <rect fill="var(--surface-2)" stroke="var(--border)" x="250" y="0" width="110" height="60" rx="6"/>
+                <text class="wf-text" x="305" y="20" text-anchor="middle" font-size="10">Failed</text>
+                <text fill="var(--text-muted)" x="305" y="46" text-anchor="middle" font-size="22" font-weight="700">0</text>
+              </g>
+              <rect fill="var(--primary)" x="260" y="278" width="120" height="22" rx="4"/>
+              <text fill="#fff" x="320" y="293" text-anchor="middle" font-size="11" font-weight="600">Đóng</text>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Result summary · activated / skipped / failed counters</span>
+          </div>
+          <div class="screenshot-zoom-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Filter trước, select sau</div>
+          <p>
+            Trước khi chọn items, dùng filter ở thanh trên bảng IAPs (filter theo state, theo SKU prefix...)
+            để thu hẹp scope. Tránh "select all" trên bảng đầy đủ — dễ activate nhầm item đang giữ INACTIVE
+            có chủ ý.
+          </p>
+        </div>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Lưu ý — Items đã ACTIVE sẽ skip</div>
+          <p>
+            Modal preview hiển thị rõ items nào sẽ activate và items nào skip. Số trên nút <strong>Activate {N}</strong>
+            là số <em>thực tế</em> sẽ thay đổi (không tính items đã ACTIVE từ trước). Đây là design có chủ ý —
+            tránh gửi request không cần thiết lên Google.
+          </p>
+        </div>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Hotfix 29 — Apps list auto-refresh</div>
+          <p>
+            Khi switch Google account, Apps list tự động refresh (Hotfix 29). IAPs list trong từng app
+            vẫn cần refresh thủ công — đang trong scope wider (deferred Cycle 43+).
+          </p>
+        </div>
+
+        <h2 class="section-title">Tính năng liên quan</h2>
+        <ul>
+          <li><a class="inline-link" data-goto="google-bulk-deactivate">Bulk Deactivate items</a> — thao tác ngược</li>
+          <li><a class="inline-link" data-goto="google-bulk-import">Bulk Import</a> — workflow upstream</li>
+          <li><a class="inline-link" data-goto="google-iaps">Danh sách IAPs</a> — nơi mở modal</li>
+        </ul>
+      </section>
+
+      <!-- =====================================================
+           SKELETON PAGES — Apple
+           ===================================================== -->
+      <section class="page" data-page="apple-apps">
+        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
+        <h1 class="page-title">Danh sách apps</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Trang này sẽ mô tả: cách App Store Connect API trả về danh sách apps,
+            cách switch ASC account, search/filter theo bundleId hoặc tên app, và liên kết tới
+            IAPs của từng app.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="apple-iaps">
+        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
+        <h1 class="page-title">Danh sách IAPs</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Bảng IAPs của 1 app · cột Product ID / Reference Name / Type / Price Tier / State / Availability ·
+            filter + search · bulk actions row.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="apple-new-iap">
+        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
+        <h1 class="page-title">Tạo IAP mới</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Form tạo IAP · IapForm + LocaleSidebar + AvailabilitiesSection + PricingSourceSelector +
+            SubmitChecklist + ScreenshotUpload · validate per-field · save draft.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="apple-edit-iap">
+        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
+        <h1 class="page-title">Chỉnh sửa IAP</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Mode edit — IapForm + UpdateChangesPreviewModal · preview changes trước khi save ·
+            highlight thay đổi vs. version trên store.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="apple-view-iap">
+        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
+        <h1 class="page-title">Xem chi tiết IAP</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            View detail Apple-Connect parity · Header + Localization + Availabilities + PriceSchedule +
+            ReviewInfo + UpcomingChanges + PricesTableExpandable · read-only preview.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="apple-pricing-templates">
+        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
+        <h1 class="page-title">Pricing templates</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Default template + Per-App template · cấu hình mặc định và override · entries table per template.
+            Workflow: tạo template → assign IAP source → preview pricing matrix.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="apple-bulk-availabilities">
+        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
+        <h1 class="page-title">Bulk Availabilities</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Modal bulk-set territories cho nhiều IAP cùng lúc · Cycle 39 Phase 2 · pattern tương tự
+            Google Bulk Activate. Auto-retry rate-limit · telemetry tracking.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="apple-submit-batch">
+        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
+        <h1 class="page-title">Submit batch</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 4 12 14.01 9 11.01"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            SubmitBatchModal · gửi review nhiều IAP cùng version submission · checklist trước khi submit ·
+            Cycle 40 Phase B1 concurrency alignment.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <!-- =====================================================
+           SKELETON PAGES — Google
+           ===================================================== -->
+      <section class="page" data-page="google-apps">
+        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
+        <h1 class="page-title">Danh sách apps</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Apps list từ Google Play Console · auto-refresh khi switch Google account (Hotfix 29) ·
+            package name + tên app + last sync time.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="google-iaps">
+        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
+        <h1 class="page-title">Danh sách IAPs</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            IAPs list per app · SKU + name + state (ACTIVE/INACTIVE) + price · checkbox multi-select
+            để mở Bulk Activate / Bulk Deactivate modal.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="google-create-iap">
+        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
+        <h1 class="page-title">Tạo item mới</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Form tạo Google IAP · IapForm + GoogleLocaleSidebar + PricingSourceSelector · region-based
+            pricing tự động convert micros · validate SKU uniqueness.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="google-edit-iap">
+        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
+        <h1 class="page-title">Chỉnh sửa item</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Edit item · UpdateChangesPreviewModal · phải khai báo regionsVersion khi patch
+            (Hotfix 9) · preview diff giá theo region.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="google-bulk-import">
+        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
+        <h1 class="page-title">Bulk Import</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Wizard import Google IAP · CSV template · Hotfix 28 per-row currency validation ·
+            preview rows · auto-convert micros · batch create.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="google-pricing-matrix">
+        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
+        <h1 class="page-title">Google Pricing matrix</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Pattern UX tương tự Apple Pricing Matrix · thêm tab "Google Default Reference" so sánh
+            giá mặc định Google đề xuất · region-based prices in micros.
+          </div>
+          <div class="stub-meta">
+            Xem trước workflow chung tại <a class="inline-link" data-goto="apple-pricing-matrix">Apple Pricing matrix</a> ·
+            Phase 4 implementation · post mockup approval
+          </div>
+        </div>
+      </section>
+
+      <section class="page" data-page="google-bulk-deactivate">
+        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
+        <h1 class="page-title">Bulk Deactivate items</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Pattern tương tự <a class="inline-link" data-goto="google-bulk-activate">Bulk Activate</a> nhưng chuyển state
+            ACTIVE → INACTIVE · cùng modal + preview + result summary · cảnh báo về user đang
+            có subscription chưa expire.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+      <section class="page" data-page="google-settings">
+        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
+        <h1 class="page-title">Settings</h1>
+        <div class="stub">
+          <div class="stub-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </div>
+          <div class="stub-title">Tài liệu đang được biên soạn</div>
+          <div class="stub-desc">
+            Google Accounts management (service account key file upload) + Pricing Templates (Default +
+            Per-App + Google Default Reference) · multi-account support.
+          </div>
+          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<!-- ============================================================
+     LIGHTBOX
+     ============================================================ -->
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true">
+  <div class="lightbox-content" id="lightboxContent" onclick="event.stopPropagation();">
+    <button class="lightbox-close" id="lightboxClose" aria-label="Đóng">✕</button>
+    <div class="lightbox-frame" id="lightboxFrame"></div>
+    <div class="lightbox-caption" id="lightboxCaption"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  /* ============================================================
+     Page routing — show/hide based on data-page attribute
+     ============================================================ */
+  const pages = document.querySelectorAll('.page');
+  const navItems = document.querySelectorAll('.nav-item[data-page]');
+  const breadcrumbCurrent = document.querySelector('.breadcrumb-current');
+
+  function getCrumbForPage(pageId) {
+    const item = document.querySelector(`.nav-item[data-page="${pageId}"]`);
+    if (!item) return ['Tổng quan'];
+    const label = item.querySelector('.nav-item-label').textContent.trim();
+    const group = item.closest('.nav-group');
+    if (!group) return [label];
+    const groupHeader = group.querySelector('.nav-group-header span');
+    return groupHeader ? [groupHeader.textContent.trim(), label] : [label];
+  }
+
+  function setPage(pageId) {
+    if (!document.querySelector(`.page[data-page="${pageId}"]`)) return;
+    pages.forEach(p => p.classList.toggle('active', p.dataset.page === pageId));
+    navItems.forEach(n => n.classList.toggle('active', n.dataset.page === pageId));
+    const crumbs = getCrumbForPage(pageId);
+    if (crumbs.length > 1) {
+      breadcrumbCurrent.innerHTML = `${crumbs[0]} <span class="breadcrumb-sep">/</span> ${crumbs[1]}`;
+    } else {
+      breadcrumbCurrent.textContent = crumbs[0];
+    }
+    if (location.hash !== '#' + pageId) {
+      history.replaceState(null, '', '#' + pageId);
+    }
+    window.scrollTo({ top: 0, behavior: 'instant' });
+    if (window.innerWidth <= 900) {
+      document.getElementById('sidebar').classList.remove('open');
+      document.getElementById('scrim').classList.remove('active');
+    }
+  }
+
+  navItems.forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      setPage(item.dataset.page);
+    });
+  });
+
+  document.querySelectorAll('[data-goto]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      setPage(el.dataset.goto);
+    });
+  });
+
+  if (location.hash) {
+    setPage(location.hash.slice(1));
+  }
+
+  /* ============================================================
+     Nav group collapse/expand
+     ============================================================ */
+  document.querySelectorAll('.nav-group-header').forEach(h => {
+    h.addEventListener('click', () => {
+      h.parentElement.classList.toggle('collapsed');
+    });
+  });
+
+  /* ============================================================
+     Sidebar search filter
+     ============================================================ */
+  const searchInput = document.getElementById('navSearch');
+  const navEmpty = document.getElementById('navEmpty');
+  function filterNav() {
+    const q = searchInput.value.trim().toLowerCase();
+    let anyVisible = false;
+    document.querySelectorAll('.nav-group').forEach(group => {
+      let groupHasVisible = false;
+      group.querySelectorAll('.nav-item').forEach(item => {
+        const label = item.querySelector('.nav-item-label').textContent.toLowerCase();
+        const keywords = (item.dataset.keywords || '').toLowerCase();
+        const match = !q || label.includes(q) || keywords.includes(q);
+        item.classList.toggle('hidden', !match);
+        if (match) groupHasVisible = true;
+      });
+      group.classList.toggle('empty', !groupHasVisible);
+      if (groupHasVisible) anyVisible = true;
+    });
+    navEmpty.style.display = anyVisible ? 'none' : 'block';
+  }
+  searchInput.addEventListener('input', filterNav);
+
+  /* ============================================================
+     Theme toggle (persist via localStorage)
+     ============================================================ */
+  const themeToggle = document.getElementById('themeToggle');
+  const storedTheme = localStorage.getItem('docs-theme');
+  if (storedTheme) {
+    document.documentElement.setAttribute('data-theme', storedTheme);
+  } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+  themeToggle.addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme') || 'light';
+    const next = cur === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('docs-theme', next);
+  });
+
+  /* ============================================================
+     Code block copy buttons
+     ============================================================ */
+  document.querySelectorAll('.copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const pre = btn.closest('.code-block').querySelector('pre');
+      const text = pre.innerText;
+      navigator.clipboard?.writeText(text).then(() => {
+        const orig = btn.innerHTML;
+        btn.classList.add('copied');
+        btn.innerHTML = '✓ Copied';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          btn.innerHTML = orig;
+        }, 1500);
+      }).catch(() => {
+        btn.textContent = 'Failed';
+      });
+    });
+  });
+
+  /* ============================================================
+     Lightbox
+     ============================================================ */
+  const lightbox = document.getElementById('lightbox');
+  const lightboxFrame = document.getElementById('lightboxFrame');
+  const lightboxCaption = document.getElementById('lightboxCaption');
+  document.querySelectorAll('[data-lightbox]').forEach(shot => {
+    shot.addEventListener('click', () => {
+      const inner = shot.querySelector('.screenshot-frame').innerHTML;
+      lightboxFrame.innerHTML = inner;
+      lightboxCaption.textContent = shot.dataset.caption || '';
+      lightbox.classList.add('active');
+    });
+  });
+  function closeLightbox() {
+    lightbox.classList.remove('active');
+    lightboxFrame.innerHTML = '';
+  }
+  document.getElementById('lightboxClose').addEventListener('click', closeLightbox);
+  lightbox.addEventListener('click', (e) => {
+    if (e.target === lightbox) closeLightbox();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && lightbox.classList.contains('active')) closeLightbox();
+  });
+
+  /* ============================================================
+     Mobile sidebar toggle
+     ============================================================ */
+  const sidebar = document.getElementById('sidebar');
+  const scrim = document.getElementById('scrim');
+  document.getElementById('mobileToggle').addEventListener('click', () => {
+    sidebar.classList.toggle('open');
+    scrim.classList.toggle('active', sidebar.classList.contains('open'));
+  });
+  scrim.addEventListener('click', () => {
+    sidebar.classList.remove('open');
+    scrim.classList.remove('active');
+  });
+})();
+</script>
+</body>
+</html>
