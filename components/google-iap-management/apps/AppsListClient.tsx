@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   RefreshCw,
   Search,
@@ -15,15 +16,30 @@ import {
 import type { AppRow } from "@/lib/google-iap-management/repository/apps";
 import type { GoogleConsoleAccountPublic } from "@/lib/google-iap-management/repository/google-accounts";
 import { computePageMeta } from "@/lib/iap-management/pagination/page-slice";
+import { isStale } from "@/lib/google-iap-management/staleness";
 
 interface Props {
   activeAccount: GoogleConsoleAccountPublic;
   initialApps: AppRow[];
+  /** Hotfix 29 — MAX(last_synced_at) across cached apps; null when no
+   *  apps cached. Drives the auto-refresh staleness check on mount. */
+  initialLastRefreshedAt: string | null;
 }
 
 const PAGE_SIZE = 20;
 
-export function AppsListClient({ activeAccount, initialApps }: Props) {
+/**
+ * Hotfix 29 — auto-refresh staleness threshold. Manager workflow visits
+ * the apps page ~5-10x/day; 90s dodges rapid back-button re-fire while
+ * still feeling fresh after "I just added a new app on Google Play."
+ */
+const AUTO_REFRESH_THRESHOLD_SECONDS = 90;
+
+export function AppsListClient({
+  activeAccount,
+  initialApps,
+  initialLastRefreshedAt,
+}: Props) {
   const router = useRouter();
   // Apps are kept in sync via router.refresh() after a successful
   // POST — the server page re-reads the cache and the new initialApps
@@ -34,8 +50,19 @@ export function AppsListClient({ activeAccount, initialApps }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(
-    initialApps[0]?.last_synced_at ?? null,
+    initialLastRefreshedAt,
   );
+
+  // Hotfix 29 — last-write-wins sequence guard. Bumped on every
+  // handleRefresh() entry; only the latest sequence's response is
+  // allowed to mutate UI state. Lets the manual button stay clickable
+  // mid-auto-refresh (Manager directive) without state-update races.
+  const seqRef = useRef(0);
+
+  // Hotfix 29 — Strict-mode-safe single-shot auto-trigger guard.
+  // useEffect fires twice in dev under Strict Mode; the ref ensures
+  // we only fire one refresh per mount.
+  const autoFiredRef = useRef(false);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -48,9 +75,17 @@ export function AppsListClient({ activeAccount, initialApps }: Props) {
   const meta = computePageMeta(filtered.length, page, PAGE_SIZE);
   const slice = filtered.slice(meta.startIndex, meta.endIndex);
 
-  async function handleRefresh() {
+  /**
+   * Hotfix 29 — auto + manual coexistence:
+   *   • silent=true  → toast.error on failure (auto-trigger UX)
+   *   • silent=false → red banner on failure (explicit Manager intent)
+   * Both paths reuse this single fetch + cache-refresh machinery;
+   * differentiation is only in the failure surface.
+   */
+  async function handleRefresh({ silent = false }: { silent?: boolean } = {}) {
+    const seq = ++seqRef.current;
     setRefreshing(true);
-    setRefreshError(null);
+    if (!silent) setRefreshError(null);
     try {
       const res = await fetch("/api/google-iap-management/apps/refresh", {
         method: "POST",
@@ -60,8 +95,14 @@ export function AppsListClient({ activeAccount, initialApps }: Props) {
         apps_count?: number;
         error?: string;
       };
+      // Last-write-wins: if a newer refresh started after us, abandon
+      // our state updates so the latest call's result is what Manager
+      // sees.
+      if (seq !== seqRef.current) return;
       if (!res.ok) {
-        setRefreshError(body.error ?? `Refresh failed (HTTP ${res.status}).`);
+        const msg = body.error ?? `Refresh failed (HTTP ${res.status}).`;
+        if (silent) toast.error(msg);
+        else setRefreshError(msg);
         return;
       }
       // Server tree refresh — page.tsx re-reads the apps cache and feeds
@@ -69,11 +110,26 @@ export function AppsListClient({ activeAccount, initialApps }: Props) {
       router.refresh();
       setLastRefreshedAt(new Date().toISOString());
     } catch (err) {
-      setRefreshError(err instanceof Error ? err.message : "Network error");
+      if (seq !== seqRef.current) return;
+      const msg = err instanceof Error ? err.message : "Network error";
+      if (silent) toast.error(msg);
+      else setRefreshError(msg);
     } finally {
-      setRefreshing(false);
+      if (seq === seqRef.current) setRefreshing(false);
     }
   }
+
+  // Hotfix 29 — auto-trigger on mount if the cache is stale. Account
+  // switches go through window.location.reload() which mounts this
+  // component fresh, so the same effect handles both Manager triggers.
+  useEffect(() => {
+    if (autoFiredRef.current) return;
+    autoFiredRef.current = true;
+    if (isStale(initialLastRefreshedAt, AUTO_REFRESH_THRESHOLD_SECONDS)) {
+      void handleRefresh({ silent: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="p-8 max-w-5xl">
@@ -96,9 +152,9 @@ export function AppsListClient({ activeAccount, initialApps }: Props) {
           </p>
         </div>
         <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition disabled:opacity-50"
+          onClick={() => void handleRefresh({ silent: false })}
+          className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition"
+          title="Refresh apps list from Google Play"
         >
           <RefreshCw
             className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}

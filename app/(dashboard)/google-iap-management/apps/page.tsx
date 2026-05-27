@@ -50,10 +50,20 @@ export default async function GoogleAppsListPage() {
 
   const apps = await listAppsForAccount(activeAccountId).catch(() => []);
 
+  // Hotfix 29 — derive last-refreshed-at from the most recent cached
+  // app row so the auto-refresh staleness check is stable even when
+  // apps[0] happens to be a row that hasn't been touched lately.
+  const initialLastRefreshedAt = apps.reduce<string | null>((max, a) => {
+    if (!a.last_synced_at) return max;
+    if (!max || a.last_synced_at > max) return a.last_synced_at;
+    return max;
+  }, null);
+
   return (
     <AppsListClient
       activeAccount={activeAccount}
       initialApps={apps}
+      initialLastRefreshedAt={initialLastRefreshedAt}
     />
   );
 }

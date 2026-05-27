@@ -1585,6 +1585,99 @@ the Manager can't get from a second modal click.
 
 ---
 
+### 10.11 Hotfix 29 — Google Apps list auto-refresh (additive, manual preserved)
+
+**Manager directive:** auto-refresh the Google IAP Apps list when (1)
+Manager navigates to `/google-iap-management/apps` (left menu or Home
+Apps card) and (2) after switching the active Google Console account
+in the header. Manual **"Refresh from Google"** button MUST be preserved
+("tôi vẫn giữ lại nút Refresh from Google để sync thủ công khi cần,
+không được bỏ").
+
+#### Concrete UX problem this fixes
+
+Manager publishes a new app on Google Play → opens the internal tool →
+app missing from the cached list → tries to create an IAP → friction
+("App not cached, click Refresh first"). The cache-first server page
+plus a button-only refresh path made it too easy to act on stale data.
+
+#### Architecture pivot from the evaluation
+
+Manager's amendment after the eval explicitly forbade replacing the
+manual button. Pivot from the original "silent auto-only" sketch:
+**auto-refresh is additive, never a replacement.** New institutional
+pattern: **"Auto-trigger additive, manual preserved"** — automation
+adds convenience, the manual control stays as the explicit-intent
+fallback. Both paths reuse one fetch helper; the only differentiation
+is the failure surface.
+
+#### Implementation map
+
+| Layer | File | Surface |
+|---|---|---|
+| Pure helper | [`lib/google-iap-management/staleness.ts`](../../lib/google-iap-management/staleness.ts) (NEW) | `isStale(lastRefreshedAt, thresholdSeconds)` — null-safe, parse-safe, defensive (unparseable date → stale, never block a refresh) |
+| Server page | [`app/(dashboard)/google-iap-management/apps/page.tsx`](../../app/(dashboard)/google-iap-management/apps/page.tsx) | Computes `MAX(last_synced_at)` across cached apps + passes as `initialLastRefreshedAt` prop (more stable than `apps[0]?.last_synced_at` which assumed at least one cached row) |
+| Client | [`components/google-iap-management/apps/AppsListClient.tsx`](../../components/google-iap-management/apps/AppsListClient.tsx) | `handleRefresh({ silent })` with sequence guard via `useRef`; `useEffect` auto-trigger with Strict-mode guard + 90s staleness check; manual button never disabled |
+
+#### Q-HF29 architectural locks
+
+| Lock | Decision |
+|---|---|
+| Q-HF29.1 | Staleness threshold = **90s** (dodges rapid back-button re-fire; feels fresh after Manager publishes a new app) |
+| Q-HF29.2 | Failure surface = **`silent=true` → toast.error, `silent=false` → red banner** |
+| Q-HF29.3 | Manual button = **always visible, never `disabled`** (Manager directive verbatim) |
+| Q-HF29.4 | Race handling = **last-write-wins via `seqRef`**; manual click during in-flight auto cancels stale state updates from the auto-trigger but lets both POSTs run (idempotent endpoint, ~negligible quota cost) |
+| Q-HF29.5 | Account switch path = **free** (existing `window.location.reload()` in `GoogleAccountSwitcher` mounts the page fresh; same auto-trigger fires) |
+| Q-HF29.6 | Strict-mode guard = `autoFiredRef` sentinel so dev double-fire doesn't burn a redundant search call |
+
+#### Per-trigger cost
+
+Steady-state established account (apps cached + currency/language
+populated): ~1 search call per page mount or account switch. Realistic
+Manager workflow ~10 calls/day vs 200,000/day Google quota = **<0.01%**.
+First-time-on-new-account: 1 search + N × 3 enrichment calls (concurrency
+5), 10-15s; existing skip-if-both-set guard at [apps/refresh:101](../../app/api/google-iap-management/apps/refresh/route.ts#L101) means
+steady-state cost stays flat after first sync.
+
+#### Tests added (+6)
+
+`lib/google-iap-management/staleness.test.ts`:
+- `null`/`undefined` → stale (defensive)
+- Unparseable date → stale (defensive)
+- Now → fresh
+- 89s ago + threshold 90s → fresh
+- 91s ago + threshold 90s → stale
+- Threshold 0 + non-now timestamp → stale
+
+Component-level interaction tests (auto-fire, sequence guard, manual
+always-clickable) deferred — the existing manual `handleRefresh` test
+coverage was nil and adding RTL mount tests for this one component
+would be disproportionate. The sequence-guard discipline is small
+enough (~10 LOC) to be reviewed by inspection.
+
+#### New institutional pattern: "Auto-trigger additive, manual preserved"
+
+When automation closes a UX gap, the manual control that previously
+filled that gap stays. Two reasons:
+
+1. **Manager explicit-intent loud feedback channel.** Auto-trigger
+   silent-fails (toast) to avoid noise on every page mount; manual
+   click is a deliberate Manager action that deserves a banner if it
+   fails. Removing the manual button removes the loud channel.
+2. **Fallback discipline.** Auto-trigger logic (staleness threshold,
+   Strict-mode guard, sequence race) is more code than the manual
+   path. If any of it breaks, the manual button remains the always-
+   working escape hatch — no rollback needed.
+
+**Anti-pattern**: "automation removes the manual control" — moves the
+recovery surface area into the failure mode itself.
+
+Applies to: cross-module sync UX (Apple module is force-dynamic-fetch
+which has the same UX without a button; if the Apple module ever
+introduces a cache + button, the same discipline kicks in).
+
+---
+
 ## 11. Cumulative Metrics (Post-Cycle 34)
 
 | Metric | Value |
