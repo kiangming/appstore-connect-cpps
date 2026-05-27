@@ -12,12 +12,18 @@ import {
   AlertCircle,
   ChevronLeft,
   ChevronRight,
+  Check,
+  Minus,
 } from "lucide-react";
 
 import type { IapWithDefaultLocale } from "@/lib/google-iap-management/repository/iaps";
 import { computePageMeta } from "@/lib/iap-management/pagination/page-slice";
 import { microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
 import { StatusDot, type StatusTone } from "@/components/ui/iap/StatusDot";
+import {
+  BulkStatusModal,
+  type BulkStatusMode,
+} from "./BulkStatusModal";
 
 interface Props {
   packageName: string;
@@ -59,6 +65,7 @@ export function IapListClient({
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
+  const [bulkMode, setBulkMode] = useState<BulkStatusMode | null>(null);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -127,7 +134,26 @@ export function IapListClient({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+          <button
+            type="button"
+            onClick={() => setBulkMode("activate")}
+            disabled={iaps.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-emerald-700 border border-emerald-300 hover:bg-emerald-50 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Check className="h-4 w-4" />
+            Bulk Activate
+          </button>
+          <button
+            type="button"
+            onClick={() => setBulkMode("deactivate")}
+            disabled={iaps.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-700 border border-red-300 hover:bg-red-50 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Minus className="h-4 w-4" />
+            Bulk Deactivate
+          </button>
+          <div className="w-px h-6 bg-slate-200 mx-0.5" aria-hidden="true" />
           <Link
             href={`/google-iap-management/apps/${encodeURIComponent(packageName)}/iaps/new`}
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition"
@@ -242,6 +268,17 @@ export function IapListClient({
             </tbody>
           </table>
         </div>
+      )}
+
+      {bulkMode && (
+        <BulkStatusModal
+          open
+          mode={bulkMode}
+          packageName={packageName}
+          iaps={iaps}
+          onClose={() => setBulkMode(null)}
+          onComplete={() => router.refresh()}
+        />
       )}
 
       {filtered.length > PAGE_SIZE && (

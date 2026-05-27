@@ -17,6 +17,8 @@ export type ActionType =
   | "IAP_UPDATE"
   | "IAP_DELETE"
   | "BULK_IMPORT_BATCH"
+  | "BULK_ACTIVATE"
+  | "BULK_DEACTIVATE"
   | "PRICING_TEMPLATE_UPLOAD";
 
 export interface AppendActionArgs {

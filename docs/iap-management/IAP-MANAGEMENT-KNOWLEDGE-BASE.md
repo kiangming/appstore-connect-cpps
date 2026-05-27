@@ -1484,6 +1484,107 @@ on the true cap.
 
 ---
 
+### 10.10 Cycle 41 — Google IAP Bulk Activate / Bulk Deactivate
+
+**Manager directive verbatim:** flip the sale state of N selected items
+on Google Play in a single Manager action. Two new toolbar buttons on
+the **left** of the existing button row (green border + text for Bulk
+Activate, red border + text for Bulk Deactivate per destructive
+emphasis). Bulk Deactivate gates on a count-display confirm dialog
+("thông báo số lượng item sẽ bị inactive"). Per-item outcome + failed
+items red emphasis + success/fail counts. Rate-limit handling
+production-grade for apps with large item counts.
+
+**Mockup-first design discipline — 3rd iteration cementing.** Cycle 36
+(Google matrix), Cycle 39 Phase 2 (Apple bulk availabilities), and now
+Cycle 41 all followed the mockup → Manager review → architectural lock →
+implementation pipeline. The pattern is now institutional: any net-new
+UX surface ships a `docs/<module>/design/<feature>-mockup.html` first.
+
+#### Architecture pivot — Google ≠ Apple for bulk state writes
+
+The kickoff initially proposed mirroring the Apple Cycle 40 Phase A
+pattern (`withConcurrency(2)` + `trackedWithRetry` + `RetryCounters`
+per row). Phase 1 investigation surfaced a load-bearing API-shape
+difference that justified pivoting:
+
+| Concern | Apple Cycle 40 Phase A | Google Cycle 41 |
+|---|---|---|
+| Native shape | Per-IAP `POST /availabilities` | **Cross-product** `monetization.onetimeproducts.purchaseOptions.batchUpdateStates` with `productId="-"` |
+| N items | N HTTP calls | **1 HTTP call per ≤100-item chunk** |
+| Rate-limit need | concurrency 2 + retry + per-row 429 telemetry | sequential 1-POST-per-chunk; no per-item machinery |
+| Existing helper | `setAvailability*` per-IAP | `newCrossProductBatchActivate()` at [publisher-client.ts:675](../../lib/google-iap-management/google/publisher-client.ts#L675) (already shipped Hotfix 14) |
+
+1000 items ≈ 10 sequential batches × 1 POST each ≈ 30-50s wall time —
+well under Google's per-minute quota and faster than the Apple
+per-item path would have been. The pivot is a concrete instance of a
+**new institutional pattern: cross-module pattern reuse with
+architectural awareness** — recognize the abstract shape (Manager
+selects N items → fire a bulk verb → roll up results) but respect each
+provider's native API affordances rather than blindly cloning the
+sibling module's concurrency machinery.
+
+#### Implementation map
+
+| Layer | File | Surface |
+|---|---|---|
+| Publisher-client export | [`lib/google-iap-management/google/publisher-client.ts`](../../lib/google-iap-management/google/publisher-client.ts) | `batchUpdateProductStates(jwt, packageName, requests)` thin wrapper over the internal `newCrossProductBatchActivate` so orchestrators own chunking + per-batch error handling |
+| Audit log enum | [`lib/google-iap-management/repository/actions-log.ts`](../../lib/google-iap-management/repository/actions-log.ts) | `ActionType` += `BULK_ACTIVATE`, `BULK_DEACTIVATE` |
+| Orchestrator | [`lib/google-iap-management/orchestration/bulk-status.ts`](../../lib/google-iap-management/orchestration/bulk-status.ts) (NEW) | `executeBulkStatus({ jwt, appId, packageName, skus, action, actorEmail, chunkSize? })`; chunks at 100, sequential batches, per-chunk try/catch, cache-status writeback per successful chunk, one audit row per action |
+| API routes | `app/api/google-iap-management/apps/[packageName]/iaps/bulk-{activate,deactivate}/route.ts` (NEW) | POST, Zod `{ skus: string[].min(1).max(1000) }`, NextAuth session check, returns `BulkStatusOutcome` |
+| Modal | [`components/google-iap-management/iap-list/BulkStatusModal.tsx`](../../components/google-iap-management/iap-list/BulkStatusModal.tsx) (NEW) | Single component, `mode: "activate" | "deactivate"` prop drives filter / palette / confirm gate |
+| List wiring | [`components/google-iap-management/iap-list/IapListClient.tsx`](../../components/google-iap-management/iap-list/IapListClient.tsx) | Two buttons on the LEFT side of the existing row + separator + `<BulkStatusModal>` mount |
+
+Single-component approach over the kickoff-proposed shared-base
+abstraction: deferred per F3 ("ship parallel implementations if
+abstraction emerges natural"). The mode-prop branching is small enough
+that a separate base + two thin variants would have added churn without
+factoring out meaningful logic.
+
+#### Per-batch failure semantics
+
+If a chunk POST throws (network, 5xx, auth, etc.), every item in that
+chunk is surfaced as failed with the same error message. Sibling
+chunks continue. The Manager re-trigger workflow ("open Bulk Activate
+again, the failed items still appear as inactive, retry") was deemed
+sufficient recovery vs an orchestrator-owned legacy-fallback path —
+the legacy `inappproducts.patch` per-item fallback already lives
+inside `batchUpsertInAppProducts` for the Bulk Import flow, but
+applying it here would double the surface area without buying recovery
+the Manager can't get from a second modal click.
+
+#### Q-BULK architectural locks (Cycle 41)
+
+| Lock | Decision |
+|---|---|
+| Q-BULK.1 | Eligibility source = **all matching status** (cap 1000), not paginated subset |
+| Q-BULK.2 | Confirm dialog = **count-only display**, no item-list preview |
+| Q-BULK.3 | Progress = **single spinner** during the wait; no SSE (deferred) |
+| Q-BULK.4 | Result UX = **modal in-place result + list page refresh on Close** |
+| Q-BULK.5 | Failed item recovery = **error message per row**; retry button deferred |
+| Q-BULK.6 | Rate-limit handling = **batch-chunked sequential** (Google-native), not the Apple per-item-concurrency mirror |
+| Q-BULK.7 | Button placement = **left** of existing toolbar row; green border for Activate, red border for Deactivate |
+| Q-BULK.8 | Naming = **"Bulk Activate" / "Bulk Deactivate"** parallel pair |
+
+#### Tests added (+13)
+
+`lib/google-iap-management/orchestration/bulk-status.test.ts`:
+- `chunkArray` × 5 (empty, single chunk, boundary 100, order
+  preservation, size validation)
+- `executeBulkStatus` × 8 (NO_OP empty, single-chunk SUCCESS, deactivate
+  verb mapping, 250→3 batches, chunkSize override, partial failure
+  middle chunk, total failure, cache-update DB-failure non-fatal)
+
+#### Deferrals carried out of Cycle 41
+
+- Retry-failed-items button inside the result state (Manager re-trigger
+  workflow suffices for now)
+- SSE progress streaming (mirrors Cycle 39 Phase 2 deferral)
+- Shared BulkStatusModalBase abstraction (deferred until a third Google
+  IAP bulk modal emerges)
+
+---
+
 ## 11. Cumulative Metrics (Post-Cycle 34)
 
 | Metric | Value |

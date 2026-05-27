@@ -609,6 +609,36 @@ export async function deleteInAppProduct(
 export { DEFAULT_PURCHASE_OPTION_ID };
 
 /**
+ * Cycle 41 — exported entry point for bulk Activate / Deactivate flows.
+ * Wraps the internal cross-product `purchaseOptions:batchUpdateStates`
+ * helper that drives `monetization.onetimeproducts.purchaseOptions.
+ * batchUpdateStates` with `productId="-"` (cross-product wildcard).
+ *
+ * One POST per call activates / deactivates the state for many products
+ * in a single round-trip. Callers (the bulk-status orchestrator) own
+ * chunking — Google's documented batch guidance is ≤100 requests per
+ * call, so the orchestrator slices accordingly and invokes this helper
+ * sequentially per chunk.
+ *
+ * Throws on Google API error; the caller wraps individual chunk calls
+ * in try/catch so a single failed chunk does not abort sibling chunks.
+ */
+export interface BulkStateRequest {
+  productId: string;
+  purchaseOptionId: string;
+  state: "ACTIVATE" | "DEACTIVATE";
+}
+
+export async function batchUpdateProductStates(
+  jwt: JWT,
+  packageName: string,
+  requests: BulkStateRequest[],
+): Promise<void> {
+  if (requests.length === 0) return;
+  await newCrossProductBatchActivate(jwt, packageName, requests);
+}
+
+/**
  * Q-GIAP.E: batchUpdate runs the Manager's preview decisions in a single
  * round-trip. Each request is an insert / update / delete operation.
  */
