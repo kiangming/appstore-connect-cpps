@@ -1678,6 +1678,210 @@ introduces a cache + button, the same discipline kicks in).
 
 ---
 
+### 10.12 Cycle 42 — User documentation site (Apple + Google IAP Management)
+
+**Manager directive:** standalone HTML documentation site covering both
+Apple and Google IAP Management modules — left-menu nested navigation
+(module → feature), per-feature description + usage instructions + tool
+imagery, modern web UI/UX, `ui-ux-pro-max` skill leveraged. Two binding
+constraints emerged across the kickoff iterations: **design and
+organization 100% match mockup** (binding contract once approved), and
+**illustrations generated from codebase reads** (not Manager-captured
+screenshots upfront).
+
+#### What this fixes
+
+No internal docs existed for either IAP module. Onboarding new team
+members required walking through the running tool. The institutional
+knowledge accumulated across 9 Cycles + 30+ hotfix iterations lived in
+KB files (engineer-facing) and commit messages — nothing user-facing in
+Vietnamese for the actual Manager/PM workflow.
+
+#### Phase structure
+
+| Phase | Scope | Output | Commit |
+|---|---|---|---|
+| **1. Investigation + Q&A** | Feature inventory both modules + Q-DOCS lock confirmation + design-language alignment | Feature inventory + Q-DOCS recommendations | (in-conversation) |
+| **2. Mockup HTML build** | Site scaffold + nav + 3 fleshed representative pages + 14 skeletons + interactivity polish | `docs/user-docs/index.html` v1 (2432 lines / 112KB) | [`84c256a`](https://github.com/kiangming/appstore-connect-cpps/commit/84c256a) |
+| **3. Illustration feasibility eval** | Code-based SVG vs. existing mockup reuse comparison · revealed 7 design-contract mockup HTML files cover ~70% scope | Strategy proposal (Option 0 + Strategy B) | (in-conversation) |
+| **4. Implementation** | Flesh 15 skeleton pages + refine 3 fleshed · 18 features total · institutional knowledge baked | `docs/user-docs/index.html` v2 (4076 lines / 228KB) | [`da390cd`](https://github.com/kiangming/appstore-connect-cpps/commit/da390cd) |
+| **4b. KB §10.12 entry** | This section · cohesive cycle closure | This entry | (this commit) |
+
+#### Q-DOCS architectural locks
+
+| Lock | Decision |
+|---|---|
+| Q-DOCS.1 | Doc depth = **B Comprehensive** (overview + steps + illustrations + tips/pitfalls per feature) |
+| Q-DOCS.2 | Language = **A Vietnamese only** (Manager primary) — bilingual deferred |
+| Q-DOCS.3 | Search = **B Client-side sidebar filter** (label + keyword aliases, vi + en) — full-text deferred |
+| Q-DOCS.4 | Theme = **C Light + dark toggle** (persisted via localStorage + `prefers-color-scheme` fallback) |
+| Q-DOCS.5 | Nav structure = **B Two-level** (Module → Feature) per Manager "tên tính năng → các feature nhỏ" |
+| Q-DOCS.6 | Code blocks = **C Highlighted + copy button** (Clipboard API, success state) |
+| Q-DOCS.7 | Screenshots = **B Lightbox** (click to enlarge, ESC + scrim close) |
+| Q-DOCS.8 | Deployment = **A Standalone HTML in `docs/user-docs/`** — hosting decision deferred Cycle 43+ |
+| Q-DOCS.S1 | Top-level strategy = **Option 0 (existing mockup reuse + gap-fill)** over the originally-proposed Option 2 (code-SVG + Manager hybrid) — leverages the 7 pre-existing design-contract mockup HTMLs |
+| Q-DOCS.S2 | Integration = **Strategy B (extract + inline) UNIFORM all pages** — Manager override of the proposed hybrid (B for fleshed + A iframe for stubs); UX consistency + dark mode coordination + lightbox + no Tailwind CDN dep |
+| Q-DOCS.S3 | Real screenshots = **deferred Cycle 43+** — Manager production observation may surface gaps; Playwright capture decision empirical-evidence-based |
+
+#### Institutional insight — mockup-first discipline payoff cumulative
+
+Pre-existing design mockup HTML inventory (built as design contract
+during prior cycles):
+
+| Mockup file | Lines | Covers |
+|---|---|---|
+| `docs/iap-management/design/iap-management-mockup.html` | 1466 | Apple IAPs list, New/Edit IAP modals, Pricing detail |
+| `docs/iap-management/design/iap-detail-view-mockup.html` | 471 | Apple View Detail (Cycle 31) |
+| `docs/iap-management/design/availabilities-bulk-mockup.html` | 551 | Apple Bulk Availabilities (Cycle 39 Phase 2) |
+| `docs/google-iap-management/design/google-iap-mockup.html` | 1521 | Google IAPs list, Create/Edit item |
+| `docs/google-iap-management/design/bulk-status-mockup.html` | 568 | Google Bulk Activate/Deactivate all 5 states (Cycle 41) |
+| `docs/google-iap-management/design/pricing-template-matrix-mockup.html` | 590 | Pricing matrix Apple + Google parity (Cycle 36) |
+| `docs/google-iap-management/design/disambiguation-step-mockup.html` | 846 | Google Bulk Import disambiguation (Cycle 35-36) |
+
+Coverage map: **12 of 18 features (≈70%) had a pre-existing
+design-contract mockup**; 3 features (Apple Bulk Import wizard, Apple
+Submit batch, Google Settings) required code-based SVG gap-fill from
+component source (`BulkImportWizard.tsx` 857 lines, `SubmitBatchModal.tsx`
+472 lines, `GoogleAccountsClient.tsx` 387 lines).
+
+Strategy implementation: each docs page renders an inline SVG
+illustration that visually mirrors the mockup pattern (state-shell
+containers, modal-within-modal confirm gates, table layouts, multi-step
+wizards) using the docs site's own CSS variables — so dark mode +
+lightbox + search filter all participate uniformly, with no Tailwind
+CDN dependency in the docs HTML itself.
+
+#### Content scope
+
+Apple module (10 features + overview): Apps list, IAPs list, New IAP,
+Edit IAP, View Detail, Bulk Import wizard, Pricing templates, Pricing
+matrix, Bulk Availabilities, Submit batch.
+
+Google module (8 features + overview): Apps list, IAPs list, Create
+item, Edit item, Bulk Import, Pricing matrix, Bulk Activate, Bulk
+Deactivate, Settings.
+
+Per-feature structure: meta-strip (module + tags) → page title +
+lede → comparison table (where applicable) → step-by-step numbered
+cards → SVG illustration with lightbox + caption → tips/warnings/
+danger/info callouts → cross-feature links.
+
+#### Institutional knowledge baked into content
+
+Hotfix and Cycle references surfaced inline where relevant to user
+workflow:
+
+| Reference | Where surfaced |
+|---|---|
+| Hotfix 9 (Google `regionsVersion` cross-version trap) | Google Edit item · Google Pricing matrix |
+| Hotfix 12 (Google two-step write refetch) | Google Edit item · Google Bulk Activate |
+| Hotfix 25 (Apple Bulk Availabilities lazy-load) | Apple Bulk Availabilities |
+| Hotfix 26 (Apple Bulk Import rate-limit telemetry) | Apple Bulk Import |
+| Hotfix 27 (Apple Bulk Import Type optional column) | Apple Bulk Import (Excel template doc) |
+| Hotfix 28 (Google Bulk Import per-row currency validation) | Google Bulk Import |
+| Hotfix 29 (Google Apps list auto-refresh) | Google Apps list · Google Settings |
+| Cycle 35-36 (Google Bulk Import disambiguation) | Google Bulk Import |
+| Cycle 36 + 38 (Pricing matrix cross-module) | Both Pricing matrix pages |
+| Cycle 39 Phase 2 (Apple Bulk Availabilities modal) | Apple Bulk Availabilities |
+| Cycle 40 Phase A + B1 (rate-limit telemetry + concurrency alignment) | Apple Submit batch · Apple Bulk Availabilities |
+| Cycle 41 (Google Bulk Activate/Deactivate) | Both Google bulk pages |
+
+#### Technical implementation
+
+| Aspect | Decision |
+|---|---|
+| File | Single self-contained HTML — [`docs/user-docs/index.html`](../user-docs/index.html) (4076 lines / 228KB) |
+| Dependencies | None — vanilla HTML + inline `<style>` + inline `<script>`; opens in any browser, no build/server |
+| Layout | 280px sticky sidebar + main content grid · max-content-width 880px |
+| Palette | `#0c447c` primary + stone neutrals — preserved verbatim from existing tool/mockup palette to maintain sibling-not-different-product cohesion |
+| Theme | CSS variables on `[data-theme="dark"]` swap · localStorage persistence · `prefers-color-scheme` fallback |
+| Routing | Hash-based (`#feature-id`) deep links · breadcrumb sync · `popstate` not used (single-file) |
+| Search | Client-side label + `data-keywords` filter (label + Vietnamese/English aliases) · empty-state surfaced when no group has visible items |
+| Code blocks | Lexer-style tokenization classes (`tok-c` comment, `tok-k` keyword, `tok-s` string) · Clipboard API copy with success state |
+| Screenshots | Inline SVG wireframes using docs CSS variables — render correctly in both themes · click-to-lightbox with ESC + scrim close |
+| Mobile | Sidebar drawer with backdrop scrim at `< 901px` · single-column hero/quick grids |
+
+#### `ui-ux-pro-max` skill — applied for, not applied for
+
+**Applied:** information architecture (nav hierarchy + cross-feature
+linking density), typography hierarchy (30/20/16/14 scale, letter-spacing
+on titles), Vietnamese microcopy tone (warm/professional balance),
+interactivity polish (fadeIn page transitions, hover lift on cards,
+collapsible nav groups), dark mode token swap, mobile drawer pattern.
+
+**Not applied:** palette pivot (preserved existing tool tokens), stack
+swap (preserved vanilla HTML + inline `<style>` — no Tailwind CDN, no
+build), layout grid (preserved 280px sidebar precedent).
+
+Pattern: skill **enhances** foundation, doesn't **replace** it.
+
+#### Gauntlet (commit `da390cd`)
+
+- `npm run typecheck` clean
+- `npm test` 2233/2233 pass
+- `npm run lint` pre-existing warnings only (no new)
+- `npm run build` successful
+- File structure validation: 22 nav targets ↔ 22 page sections balanced; 90 cross-page `data-goto` links — all resolve; 0 stubs remaining; 21 pages with `page-lede` (fleshed)
+
+#### Deferred Cycle 43+
+
+1. Real screenshots — Manager-captured OR Playwright automated · decision empirical-evidence-based post Manager production observation.
+2. Documentation site hosting — current ship is `docs/user-docs/index.html` accessed via file:// or local server; future may host at `/docs` route or static site.
+3. Per-page illustration iteration — if Manager flags specific pages needing higher fidelity to a particular mockup state.
+4. IAPs list auto-refresh wider scope (Hotfix 29 only covered Apps list).
+5. Apple IAP Phase B subsets B2/B3/B4 — telemetry-gated, observation continues parallel.
+
+#### New institutional patterns crystallized
+
+**Pattern: "Mockup-first discipline payoff cumulative"**
+
+When the design phase consistently produces a contract-grade mockup
+HTML (Cycles 31, 36, 39 Phase 2, 41), those mockups become
+**reusable documentation assets cross-domain** at near-zero conversion
+cost. Cycle 42 was the first cross-domain reuse: 12 of 18 documentation
+illustrations derive from prior cycles' mockup HTML files (sometimes
+verbatim layout, sometimes converted to docs-site CSS variables).
+Anti-pattern: treat mockups as throw-away after a cycle ships.
+
+**Pattern: "Feasibility evaluation reveals optimal path"**
+
+The illustration-generation feasibility eval (Phase 3) reframed the
+original "code-based SVG vs. Manager-captured screenshots" trade-off
+when the existing-mockup inventory surfaced as a third axis. The eval
+itself was the load-bearing deliverable — a code-first attempt would
+have rebuilt visuals that already existed.
+Anti-pattern: implement-then-evaluate.
+
+**Pattern: "100% mockup fidelity discipline"**
+
+Once Manager approves a mockup, it becomes a binding design contract
+for the implementation phase. Content fills the structure; structure
+doesn't drift. This applies symmetrically: feature mockups bind
+implementation, **and** documentation mockups bind doc-site
+implementation.
+Anti-pattern: design drift during implementation phase.
+
+**Pattern: "Strategy B uniform overrides hybrid optimization"**
+
+When fidelity discipline is binding, a single integration strategy
+across all pages (Strategy B extract + inline UNIFORM) is preferable to
+a per-feature-optimal hybrid (Strategy B for fleshed + Strategy A
+iframe for stubs). The ~1h extra effort buys UX consistency,
+coordinated dark mode, search filter participation, and lightbox
+integration — all of which would fragment under a hybrid.
+Anti-pattern: optimize each unit independently, ship inconsistent UX.
+
+**Pattern: "Continuum diversification"**
+
+After 9 cycles + 30+ hotfixes in TypeScript/React feature engineering,
+Cycle 42 pivoted into the documentation domain. Same Pattern 10 reuse
+mechanics (kickoff structure, Q-locks, phased shipping, gauntlet,
+KB closure) work in a different output medium. Pattern 10 itself is
+domain-agnostic.
+Anti-pattern: assume continuum mechanics only fit feature engineering.
+
+---
+
 ## 11. Cumulative Metrics (Post-Cycle 34)
 
 | Metric | Value |
