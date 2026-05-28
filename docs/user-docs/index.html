@@ -1981,131 +1981,984 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
            SKELETON PAGES — Apple
            ===================================================== -->
       <section class="page" data-page="apple-apps">
-        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
-        <h1 class="page-title">Danh sách apps</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
-          </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Trang này sẽ mô tả: cách App Store Connect API trả về danh sách apps,
-            cách switch ASC account, search/filter theo bundleId hoặc tên app, và liên kết tới
-            IAPs của từng app.
-          </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip">Multi-account</span>
         </div>
+        <h1 class="page-title">Danh sách apps</h1>
+        <p class="page-lede">
+          Hiển thị danh sách apps lấy từ App Store Connect API theo ASC account đang đăng nhập.
+          Hỗ trợ nhiều ASC accounts — switch qua TopNav AccountSwitcher.
+        </p>
+
+        <h2 class="section-title">Khi nào dùng trang này?</h2>
+        <ul>
+          <li>Điểm vào chính của module Apple IAP — chọn app trước khi làm bất cứ thao tác nào.</li>
+          <li>Kiểm tra trạng thái sync gần nhất giữa tool và App Store Connect.</li>
+          <li>Switch giữa nhiều ASC accounts (nếu team có nhiều client/developer accounts).</li>
+        </ul>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở danh sách apps</div>
+            <div class="step-body"><p>Sidebar trái → <strong>Apple IAP Management</strong>. URL: <code class="inline">/iap-management/apps</code>. Tool fetch list từ ASC API và render dưới dạng grid cards.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Tìm app cần làm việc</div>
+            <div class="step-body">
+              <p>Search bar phía trên — match theo <strong>tên app</strong> hoặc <strong>Bundle ID</strong>:</p>
+              <ul>
+                <li><code class="inline">cashknight</code> → match tên</li>
+                <li><code class="inline">com.vng.</code> → match bundleId prefix</li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Switch ASC account (nếu cần)</div>
+            <div class="step-body">
+              <p>Góc trên phải → <strong>AccountSwitcher</strong> → chọn account khác. Apps list tự refresh.</p>
+              <p>Nếu account chưa setup, vào <a class="inline-link" data-goto="home">Settings</a> → ASC Accounts → upload Key ID + Issuer ID + Private key .p8.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Click vào app card</div>
+            <div class="step-body"><p>Chuyển sang trang <a class="inline-link" data-goto="apple-iaps">Danh sách IAPs</a> của app đó.</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Apps grid · Apple IAP Management · search + multi-account">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="40" rx="6"/>
+              <rect class="wf-strong" x="40" y="35" width="180" height="10" rx="2"/>
+              <rect class="wf-soft" x="450" y="30" width="150" height="20" rx="10"/>
+              <text class="wf-text" x="525" y="44" text-anchor="middle">minhgv@vng.com.vn ▼</text>
+              <rect class="wf-card" x="20" y="74" width="600" height="30" rx="4"/>
+              <text class="wf-text" x="40" y="93">🔍 Tìm app theo tên hoặc Bundle ID...</text>
+              <g transform="translate(20,118)">
+                <rect class="wf-card" x="0" y="0" width="190" height="100" rx="8"/>
+                <rect class="wf-primary-bg" x="14" y="14" width="44" height="44" rx="8"/>
+                <text fill="var(--primary)" x="36" y="42" text-anchor="middle" font-size="18" font-weight="700">CK</text>
+                <text class="wf-text" x="14" y="76" font-weight="600" font-size="11" fill="var(--text)">CashKnight</text>
+                <text class="wf-text" x="14" y="90" font-size="9">com.vng.cashknight</text>
+                <rect class="wf-card" x="205" y="0" width="190" height="100" rx="8"/>
+                <rect fill="var(--purple-bg)" x="219" y="14" width="44" height="44" rx="8"/>
+                <text fill="var(--purple)" x="241" y="42" text-anchor="middle" font-size="18" font-weight="700">DK</text>
+                <text class="wf-text" x="219" y="76" font-weight="600" font-size="11" fill="var(--text)">DungeonKing</text>
+                <text class="wf-text" x="219" y="90" font-size="9">com.vng.dungeon</text>
+                <rect class="wf-card" x="410" y="0" width="190" height="100" rx="8"/>
+                <rect fill="var(--teal-bg)" x="424" y="14" width="44" height="44" rx="8"/>
+                <text fill="var(--teal)" x="446" y="42" text-anchor="middle" font-size="18" font-weight="700">PS</text>
+                <text class="wf-text" x="424" y="76" font-weight="600" font-size="11" fill="var(--text)">PASS SDK</text>
+                <text class="wf-text" x="424" y="90" font-size="9">com.vng.passsdk</text>
+              </g>
+              <g transform="translate(20,232)">
+                <rect class="wf-card" x="0" y="0" width="190" height="100" rx="8"/>
+                <rect fill="var(--warning-bg)" x="14" y="14" width="44" height="44" rx="8"/>
+                <text fill="var(--warning)" x="36" y="42" text-anchor="middle" font-size="18" font-weight="700">MG</text>
+                <text class="wf-text" x="14" y="76" font-weight="600" font-size="11" fill="var(--text)">MyGame</text>
+                <text class="wf-text" x="14" y="90" font-size="9">com.vng.mygame</text>
+              </g>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Grid apps · search bar · AccountSwitcher góc phải</span>
+          </div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Sort theo activity</div>
+          <p>Apps thường được fetch theo thứ tự alphabetical từ Apple. Dùng search filter để zoom vào app cần làm — đặc biệt useful khi account có 20+ apps.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ App không hiển thị?</div>
+          <p>Có thể do (1) ASC account chưa được cấp quyền access app đó, (2) app vừa được tạo trên ASC và chưa propagate (đợi 5-10 phút), hoặc (3) sai ASC account đang active — switch sang account khác trong AccountSwitcher.</p>
+        </div>
+
+        <h2 class="section-title">Tính năng liên quan</h2>
+        <ul>
+          <li><a class="inline-link" data-goto="apple-iaps">Danh sách IAPs</a> — sau khi chọn app</li>
+          <li><a class="inline-link" data-goto="apple-overview">Apple IAP Management overview</a> — quy trình tổng thể</li>
+        </ul>
       </section>
 
       <section class="page" data-page="apple-iaps">
-        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
-        <h1 class="page-title">Danh sách IAPs</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-          </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Bảng IAPs của 1 app · cột Product ID / Reference Name / Type / Price Tier / State / Availability ·
-            filter + search · bulk actions row.
-          </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip cycle">Cycle 38 matrix view</span>
         </div>
+        <h1 class="page-title">Danh sách IAPs</h1>
+        <p class="page-lede">
+          Bảng IAPs của 1 app — cột Product ID, Reference Name, Type, Price Tier, State, Availability.
+          Hỗ trợ filter, search, multi-select cho bulk operations (Bulk Availabilities, Submit Batch).
+        </p>
+
+        <h2 class="section-title">Cấu trúc bảng</h2>
+        <table class="docs-table">
+          <thead><tr><th>Cột</th><th>Ý nghĩa</th><th>Sort/filter</th></tr></thead>
+          <tbody>
+            <tr><td><code class="inline">Product ID</code></td><td>SKU duy nhất (vd: <code class="inline">com.app.coin100</code>)</td><td>Sort + search</td></tr>
+            <tr><td><code class="inline">Reference Name</code></td><td>Tên nội bộ (≤ 64 ký tự)</td><td>Sort + search</td></tr>
+            <tr><td><code class="inline">Type</code></td><td>Consumable / Non-Consumable / Non-Renewing Subscription</td><td>Filter</td></tr>
+            <tr><td><code class="inline">Price Tier</code></td><td>Tier giá (vd: USD_0_99)</td><td>Sort</td></tr>
+            <tr><td><code class="inline">State</code></td><td>Trạng thái lifecycle (Draft, Waiting for Review, Approved, ...)</td><td>Filter</td></tr>
+            <tr><td><code class="inline">Availability</code></td><td>Số territories đang sale (vd: 175 / 175)</td><td>Sort · Cycle 39 added</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở bảng IAPs từ app row</div>
+            <div class="step-body"><p>Từ <a class="inline-link" data-goto="apple-apps">Danh sách apps</a> click vào card app → tool chuyển đến <code class="inline">/iap-management/apps/[appId]</code>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Filter và search</div>
+            <div class="step-body">
+              <p>Filter bar phía trên:</p>
+              <ul>
+                <li><strong>State</strong>: dropdown · multi-select (Draft / Approved / Waiting for Review / Rejected ...)</li>
+                <li><strong>Type</strong>: Consumable / Non-Consumable / Non-Renewing Subscription</li>
+                <li><strong>Search</strong>: theo Product ID hoặc Reference Name</li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Action mỗi row</div>
+            <div class="step-body">
+              <ul>
+                <li>Click vào Product ID hoặc Reference Name → <a class="inline-link" data-goto="apple-view-iap">View Detail</a></li>
+                <li>Nút <strong>Edit</strong> bên phải → <a class="inline-link" data-goto="apple-edit-iap">Chỉnh sửa IAP</a></li>
+                <li>Checkbox đầu row → multi-select cho bulk actions</li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Bulk actions (multi-select)</div>
+            <div class="step-body">
+              <p>Khi có ít nhất 1 IAP được tick checkbox, toolbar phía trên bảng xuất hiện 2 nút:</p>
+              <ul>
+                <li><strong>Bulk Availabilities</strong> → mở modal <a class="inline-link" data-goto="apple-bulk-availabilities">Set/Remove from Sales</a></li>
+                <li><strong>Submit Selected</strong> → mở modal <a class="inline-link" data-goto="apple-submit-batch">Submit batch</a></li>
+              </ul>
+            </div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="IAPs list · CashKnight · filter + multi-select bulk actions">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="36" rx="6"/>
+              <text class="wf-text" x="40" y="42" font-weight="600" fill="var(--text)">CashKnight · IAPs</text>
+              <rect class="wf-soft" x="430" y="28" width="80" height="20" rx="4"/>
+              <text class="wf-text" x="470" y="42" text-anchor="middle" font-size="10">+ New IAP</text>
+              <rect fill="var(--primary)" x="520" y="28" width="80" height="20" rx="4"/>
+              <text fill="#fff" x="560" y="42" text-anchor="middle" font-size="10" font-weight="600">Bulk Import</text>
+              <rect class="wf-card" x="20" y="66" width="600" height="28" rx="4"/>
+              <text class="wf-text" x="36" y="84">State: All ▼   Type: All ▼   🔍 Search...</text>
+              <rect fill="var(--primary-bg)" x="20" y="104" width="600" height="32" rx="4"/>
+              <text fill="var(--primary)" x="36" y="124" font-weight="600">3 selected · </text>
+              <text fill="var(--primary)" x="120" y="124" font-weight="600">Bulk Availabilities</text>
+              <text fill="var(--primary)" x="230" y="124" font-weight="600">Submit Selected</text>
+              <rect class="wf-card" x="20" y="146" width="600" height="194" rx="6"/>
+              <rect class="wf-soft" x="20" y="146" width="600" height="24"/>
+              <text class="wf-text" x="40" y="162" font-weight="600" font-size="10">☐</text>
+              <text class="wf-text" x="60" y="162" font-weight="600" font-size="10">Product ID</text>
+              <text class="wf-text" x="200" y="162" font-weight="600" font-size="10">Reference Name</text>
+              <text class="wf-text" x="340" y="162" font-weight="600" font-size="10">Type</text>
+              <text class="wf-text" x="420" y="162" font-weight="600" font-size="10">Tier</text>
+              <text class="wf-text" x="490" y="162" font-weight="600" font-size="10">State</text>
+              <text class="wf-text" x="560" y="162" font-weight="600" font-size="10">Avail.</text>
+              <g font-size="10">
+                <rect fill="var(--primary-bg)" x="20" y="170" width="600" height="28"/>
+                <text fill="var(--primary)" x="40" y="188">☑</text>
+                <text class="wf-text" x="60" y="188">com.ck.coin100</text>
+                <text class="wf-text" x="200" y="188">Coin Pack 100</text>
+                <text class="wf-text" x="340" y="188">CONSUM.</text>
+                <text class="wf-text" x="420" y="188">USD_0_99</text>
+                <rect fill="var(--success-bg)" x="485" y="178" width="60" height="14" rx="7"/>
+                <text fill="var(--success)" x="515" y="188" text-anchor="middle" font-weight="600">Approved</text>
+                <text class="wf-text" x="560" y="188">175/175</text>
+                <line stroke="var(--border)" x1="20" y1="198" x2="620" y2="198"/>
+                <rect fill="var(--primary-bg)" x="20" y="198" width="600" height="28"/>
+                <text fill="var(--primary)" x="40" y="216">☑</text>
+                <text class="wf-text" x="60" y="216">com.ck.coin500</text>
+                <text class="wf-text" x="200" y="216">Coin Pack 500</text>
+                <text class="wf-text" x="340" y="216">CONSUM.</text>
+                <text class="wf-text" x="420" y="216">USD_4_99</text>
+                <rect fill="var(--success-bg)" x="485" y="206" width="60" height="14" rx="7"/>
+                <text fill="var(--success)" x="515" y="216" text-anchor="middle" font-weight="600">Approved</text>
+                <text class="wf-text" x="560" y="216">175/175</text>
+                <line stroke="var(--border)" x1="20" y1="226" x2="620" y2="226"/>
+                <rect fill="var(--primary-bg)" x="20" y="226" width="600" height="28"/>
+                <text fill="var(--primary)" x="40" y="244">☑</text>
+                <text class="wf-text" x="60" y="244">com.ck.gem10</text>
+                <text class="wf-text" x="200" y="244">Gem Pack 10</text>
+                <text class="wf-text" x="340" y="244">CONSUM.</text>
+                <text class="wf-text" x="420" y="244">USD_0_99</text>
+                <rect fill="var(--warning-bg)" x="475" y="234" width="80" height="14" rx="7"/>
+                <text fill="var(--warning)" x="515" y="244" text-anchor="middle" font-weight="600">Waiting Rev.</text>
+                <text class="wf-text" x="560" y="244">160/175</text>
+                <line stroke="var(--border)" x1="20" y1="254" x2="620" y2="254"/>
+                <text class="wf-text" x="40" y="272">☐</text>
+                <text class="wf-text" x="60" y="272">com.ck.bundle</text>
+                <text class="wf-text" x="200" y="272">Starter Bundle</text>
+                <text class="wf-text" x="340" y="272">NON-CONS.</text>
+                <text class="wf-text" x="420" y="272">USD_4_99</text>
+                <rect fill="var(--surface-3)" x="485" y="262" width="60" height="14" rx="7"/>
+                <text class="wf-text" x="515" y="272" text-anchor="middle" font-weight="600">Draft</text>
+                <text class="wf-text" x="560" y="272">— / 175</text>
+              </g>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Bảng IAPs · filter bar · multi-select toolbar · column State + Availability</span>
+          </div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Filter trước khi multi-select</div>
+          <p>Filter State = "Waiting for Review" trước khi click <strong>Submit Selected</strong> — tránh chọn nhầm IAP đang Draft chưa hoàn thiện.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ IAP mới tạo chưa hiển thị?</div>
+          <p>App Store Connect có propagation delay 1-2 phút sau khi POST tạo IAP. Reload trang nếu không thấy IAP vừa tạo. Trang hiện chưa auto-refresh sau create (deferred scope wider — Hotfix 29 chỉ áp dụng Apps list Google).</p>
+        </div>
+
+        <h2 class="section-title">Tính năng liên quan</h2>
+        <ul>
+          <li><a class="inline-link" data-goto="apple-new-iap">Tạo IAP mới</a> · <a class="inline-link" data-goto="apple-bulk-import">Bulk Import</a> · <a class="inline-link" data-goto="apple-view-iap">View Detail</a></li>
+          <li><a class="inline-link" data-goto="apple-bulk-availabilities">Bulk Availabilities</a> · <a class="inline-link" data-goto="apple-submit-batch">Submit batch</a></li>
+        </ul>
       </section>
 
       <section class="page" data-page="apple-new-iap">
-        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
-        <h1 class="page-title">Tạo IAP mới</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Form tạo IAP · IapForm + LocaleSidebar + AvailabilitiesSection + PricingSourceSelector +
-            SubmitChecklist + ScreenshotUpload · validate per-field · save draft.
-          </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip">Form · multi-section</span>
         </div>
+        <h1 class="page-title">Tạo IAP mới</h1>
+        <p class="page-lede">
+          Form tạo IAP từng cái — phù hợp khi cần kiểm soát chi tiết từng field. Cho tạo hàng loạt
+          (20+ IAPs), dùng <a class="inline-link" data-goto="apple-bulk-import">Bulk Import wizard</a>.
+        </p>
+
+        <h2 class="section-title">Cấu trúc form</h2>
+        <p>Form chia 5 section trên 1 trang, scroll dọc — không phải wizard:</p>
+        <table class="docs-table">
+          <thead><tr><th>Section</th><th>Field bắt buộc</th><th>Tính chất</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Header</strong></td><td>Reference Name, Product ID, Type</td><td>Product ID không sửa được sau khi save</td></tr>
+            <tr><td><strong>Locales</strong></td><td>Display Name + Description per locale</td><td>Min 1 locale primary</td></tr>
+            <tr><td><strong>Availabilities</strong></td><td>Territories (default: 175)</td><td>Có thể edit qua <a class="inline-link" data-goto="apple-bulk-availabilities">Bulk Availabilities</a></td></tr>
+            <tr><td><strong>Pricing</strong></td><td>Pricing Source (Default / Per-App / Manual tier)</td><td>Source quyết định price tier</td></tr>
+            <tr><td><strong>Screenshot</strong></td><td>1 screenshot (1080×1920 hoặc tương đương)</td><td>Optional cho Consumable</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở form tạo IAP</div>
+            <div class="step-body"><p>Từ <a class="inline-link" data-goto="apple-iaps">Danh sách IAPs</a> → nút <strong>+ New IAP</strong> phía góc phải. URL: <code class="inline">/iap-management/apps/[appId]/iaps/new</code>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Điền Header section</div>
+            <div class="step-body">
+              <p><strong>Reference Name</strong> (≤ 64 ký tự) — tên nội bộ, không hiển thị cho user. <strong>Product ID</strong> — SKU duy nhất, immutable. <strong>Type</strong> — Consumable / Non-Consumable / Non-Renewing Subscription.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Thêm Locales (LocaleSidebar)</div>
+            <div class="step-body">
+              <p>Sidebar trái section → click <strong>+ Add Locale</strong> → chọn locale (vi, en-US, ja, ...). Per locale điền <strong>Display Name</strong> (≤ 30 ký tự, hiển thị trên store) + <strong>Description</strong> (≤ 45 ký tự).</p>
+              <p>Locale đầu tiên = primary locale (badge "Primary"). Có thể switch primary qua dropdown.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Set Availabilities + Pricing</div>
+            <div class="step-body">
+              <p><strong>Availabilities section</strong>: chọn territories — default 175. Có thể remove territories cụ thể (vd: chỉ bán ở Vietnam + Japan).</p>
+              <p><strong>Pricing section</strong>: chọn nguồn — Default template (toàn workspace), Per-App template (override), hoặc Manual (chọn tier USD trực tiếp).</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Upload Screenshot (nếu cần)</div>
+            <div class="step-body"><p>Drag &amp; drop ảnh PNG/JPG. Apple yêu cầu screenshot cho Non-Consumable và Subscription. Consumable thường không cần.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Save Draft hoặc Submit</div>
+            <div class="step-body">
+              <p><strong>Save Draft</strong> — lưu vào ASC với state Draft. <strong>Submit Checklist</strong> (góc phải dưới) sẽ check các điều kiện trước khi cho submit:</p>
+              <ul>
+                <li>✅ All required fields filled</li>
+                <li>✅ At least 1 locale</li>
+                <li>✅ Pricing tier resolved</li>
+                <li>✅ Screenshot uploaded (nếu type yêu cầu)</li>
+              </ul>
+            </div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="New IAP form · Header + LocaleSidebar + Submit Checklist">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="32" rx="6"/>
+              <text class="wf-text" x="40" y="40" font-weight="600" fill="var(--text)">← CashKnight / New IAP</text>
+              <rect class="wf-card" x="20" y="62" width="180" height="278" rx="6"/>
+              <text class="wf-text" x="36" y="80" font-size="9" font-weight="600">LOCALES</text>
+              <rect fill="var(--primary-bg)" x="32" y="86" width="156" height="24" rx="4"/>
+              <text fill="var(--primary)" x="42" y="102" font-size="10" font-weight="600">vi (Primary)</text>
+              <text class="wf-text" x="42" y="124" font-size="10">en-US</text>
+              <text class="wf-text" x="42" y="142" font-size="10">ja</text>
+              <text class="wf-text" x="42" y="160" font-size="10">+ Add Locale</text>
+              <rect class="wf-card" x="210" y="62" width="280" height="130" rx="6"/>
+              <text class="wf-text" x="226" y="82" font-size="11" font-weight="600" fill="var(--text)">Header</text>
+              <text class="wf-text" x="226" y="100" font-size="9">Reference Name</text>
+              <rect class="wf-card" x="226" y="106" width="248" height="22" rx="3"/>
+              <text class="wf-text" x="234" y="121" font-size="10">Coin Pack 100</text>
+              <text class="wf-text" x="226" y="140" font-size="9">Product ID</text>
+              <rect class="wf-card" x="226" y="146" width="248" height="22" rx="3"/>
+              <text class="wf-text" x="234" y="161" font-size="10" font-family="monospace">com.ck.coin100</text>
+              <rect class="wf-card" x="210" y="202" width="280" height="138" rx="6"/>
+              <text class="wf-text" x="226" y="222" font-size="11" font-weight="600" fill="var(--text)">Locale · Vietnamese</text>
+              <text class="wf-text" x="226" y="240" font-size="9">Display Name (≤ 30)</text>
+              <rect class="wf-card" x="226" y="246" width="248" height="22" rx="3"/>
+              <text class="wf-text" x="234" y="261" font-size="10">Gói 100 xu</text>
+              <text class="wf-text" x="226" y="280" font-size="9">Description (≤ 45)</text>
+              <rect class="wf-card" x="226" y="286" width="248" height="40" rx="3"/>
+              <text class="wf-text" x="234" y="304" font-size="10">100 xu để mua items trong game</text>
+              <rect class="wf-card" x="500" y="62" width="120" height="278" rx="6"/>
+              <text class="wf-text" x="516" y="80" font-size="9" font-weight="600">SUBMIT CHECKLIST</text>
+              <text fill="var(--success)" x="516" y="106" font-size="10">✓ Header filled</text>
+              <text fill="var(--success)" x="516" y="124" font-size="10">✓ 3 locales</text>
+              <text fill="var(--success)" x="516" y="142" font-size="10">✓ Pricing set</text>
+              <text fill="var(--warning)" x="516" y="160" font-size="10">⚠ Screenshot missing</text>
+              <rect fill="var(--primary)" x="516" y="304" width="92" height="22" rx="4"/>
+              <text fill="#fff" x="562" y="319" text-anchor="middle" font-size="10" font-weight="600">Save Draft</text>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Form layout · LocaleSidebar trái · Form chính giữa · Submit Checklist phải</span>
+          </div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Product ID không sửa được</div>
+          <p>Sau khi Save Draft thành công, Product ID bị lock — Apple không cho phép rename. Nếu sai, phải delete IAP và tạo lại.</p>
+        </div>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Naming convention</div>
+          <p>Pattern phổ biến: <code class="inline">com.{app}.{type}{value}</code> · vd: <code class="inline">com.ck.coin100</code>, <code class="inline">com.ck.gem500</code>. Giúp dễ filter và bulk import.</p>
+        </div>
+
+        <h2 class="section-title">Tính năng liên quan</h2>
+        <ul>
+          <li><a class="inline-link" data-goto="apple-edit-iap">Chỉnh sửa IAP</a> · <a class="inline-link" data-goto="apple-bulk-import">Bulk Import</a> · <a class="inline-link" data-goto="apple-pricing-templates">Pricing templates</a></li>
+        </ul>
       </section>
 
       <section class="page" data-page="apple-edit-iap">
-        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip">UpdateChangesPreviewModal</span>
+        </div>
         <h1 class="page-title">Chỉnh sửa IAP</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        <p class="page-lede">
+          Mode edit dùng cùng form với <a class="inline-link" data-goto="apple-new-iap">Tạo IAP mới</a>,
+          khác biệt chính: trước khi save tool sẽ hiện <strong>UpdateChangesPreviewModal</strong>
+          — preview chính xác những field nào sẽ thay đổi vs. version hiện tại trên ASC.
+        </p>
+
+        <h2 class="section-title">Field có thể edit</h2>
+        <table class="docs-table">
+          <thead><tr><th>Field</th><th>Edit được?</th><th>Ghi chú</th></tr></thead>
+          <tbody>
+            <tr><td>Reference Name</td><td>Có</td><td>Internal — không hiển thị user</td></tr>
+            <tr><td>Product ID</td><td><strong>Không</strong></td><td>Immutable sau khi tạo</td></tr>
+            <tr><td>Type</td><td><strong>Không</strong></td><td>Apple không cho đổi type</td></tr>
+            <tr><td>Locales (Display Name + Description)</td><td>Có</td><td>Apple sẽ re-review</td></tr>
+            <tr><td>Availabilities</td><td>Có</td><td>Effect immediate sau save</td></tr>
+            <tr><td>Pricing</td><td>Có</td><td>Thay đổi schedule mới</td></tr>
+            <tr><td>Screenshot</td><td>Có</td><td>Apple sẽ re-review nếu replace</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở form edit</div>
+            <div class="step-body"><p>Từ <a class="inline-link" data-goto="apple-iaps">Danh sách IAPs</a> → nút <strong>Edit</strong> ở row. URL: <code class="inline">/iap-management/apps/[appId]/iaps/[iapId]</code>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Sửa các field cần thay đổi</div>
+            <div class="step-body"><p>Form hiển thị giá trị hiện tại từ ASC. Sửa field nào cần đổi — Product ID + Type bị disable.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Click Save → Preview changes</div>
+            <div class="step-body">
+              <p>Tool gọi ASC API để fetch giá trị mới nhất (chống stale data), so sánh với form → mở <strong>UpdateChangesPreviewModal</strong>:</p>
+              <ul>
+                <li>Bảng diff per field: trước → sau</li>
+                <li>Highlight màu vàng những field thay đổi</li>
+                <li>Disclaimer: "Apple sẽ phải re-review các field localization"</li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Confirm Save</div>
+            <div class="step-body"><p>Click <strong>Confirm</strong> → tool PATCH lên ASC. Toast success → redirect về Danh sách IAPs.</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="UpdateChangesPreviewModal · diff Reference Name + Pricing tier">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect fill="rgba(0,0,0,0.3)" width="640" height="360"/>
+              <rect class="wf-card" x="80" y="40" width="480" height="280" rx="10"/>
+              <rect class="wf-soft" x="80" y="40" width="480" height="44" rx="10"/>
+              <text fill="var(--text)" x="100" y="68" font-weight="600">Preview Changes · com.ck.coin100</text>
+              <text class="wf-text" x="540" y="68" font-size="16">✕</text>
+              <rect class="wf-soft" x="96" y="100" width="448" height="24"/>
+              <text class="wf-text" x="108" y="116" font-weight="600" font-size="10">Field</text>
+              <text class="wf-text" x="240" y="116" font-weight="600" font-size="10">Trước</text>
+              <text class="wf-text" x="400" y="116" font-weight="600" font-size="10">Sau</text>
+              <g font-size="10">
+                <rect fill="var(--warning-bg)" x="96" y="124" width="448" height="32"/>
+                <text fill="var(--warning)" x="108" y="144" font-weight="600">Reference Name</text>
+                <text class="wf-text" x="240" y="144">Coin Pack 100</text>
+                <text fill="var(--warning)" x="400" y="144" font-weight="600">Coin Pack 100 (v2)</text>
+                <text class="wf-text" x="108" y="172">Display Name (vi)</text>
+                <text class="wf-text" x="240" y="172">Gói 100 xu</text>
+                <text class="wf-text" x="400" y="172">Gói 100 xu</text>
+                <rect fill="var(--warning-bg)" x="96" y="184" width="448" height="32"/>
+                <text fill="var(--warning)" x="108" y="204" font-weight="600">Price Tier</text>
+                <text class="wf-text" x="240" y="204">USD_0_99</text>
+                <text fill="var(--warning)" x="400" y="204" font-weight="600">USD_1_99</text>
+                <text class="wf-text" x="108" y="232">Availabilities</text>
+                <text class="wf-text" x="240" y="232">175 territories</text>
+                <text class="wf-text" x="400" y="232">175 territories</text>
+              </g>
+              <rect fill="var(--surface-2)" x="80" y="276" width="480" height="44"/>
+              <text class="wf-text" x="100" y="300" font-size="11" font-style="italic">Apple sẽ phải re-review các thay đổi localization</text>
+              <rect class="wf-card" x="380" y="288" width="70" height="22" rx="4"/>
+              <text class="wf-text" x="415" y="303" text-anchor="middle" font-size="10">Cancel</text>
+              <rect fill="var(--primary)" x="460" y="288" width="80" height="22" rx="4"/>
+              <text fill="#fff" x="500" y="303" text-anchor="middle" font-size="10" font-weight="600">Confirm</text>
+            </svg>
           </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Mode edit — IapForm + UpdateChangesPreviewModal · preview changes trước khi save ·
-            highlight thay đổi vs. version trên store.
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Diff modal · vàng = thay đổi · disclaimer re-review</span>
           </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Edit availability batch</div>
+          <p>Nếu chỉ cần edit availability cho nhiều IAP cùng lúc, dùng <a class="inline-link" data-goto="apple-bulk-availabilities">Bulk Availabilities</a> thay vì mở từng IAP edit.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Stale data risk</div>
+          <p>Nếu nhiều user cùng edit 1 IAP, preview có thể stale. Tool re-fetch ASC ngay trước khi mở modal preview để giảm rủi ro — nhưng vẫn nên coordinate với team.</p>
         </div>
       </section>
 
       <section class="page" data-page="apple-view-iap">
-        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
-        <h1 class="page-title">Xem chi tiết IAP</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip">Read-only · Apple-Connect parity</span>
+        </div>
+        <h1 class="page-title">Xem chi tiết IAP (View Detail)</h1>
+        <p class="page-lede">
+          Trang chi tiết read-only — Apple-Connect parity. Hiển thị 7 section đầy đủ thông tin IAP
+          được fetch real-time từ ASC API. Dùng để inspect trước khi quyết định edit, submit, hoặc
+          troubleshoot khi user complain.
+        </p>
+
+        <h2 class="section-title">7 section của trang</h2>
+        <table class="docs-table">
+          <thead><tr><th>Section</th><th>Hiển thị</th><th>Error boundary</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Header</strong></td><td>State + Type badge + "Real-time as of" timestamp · 2-col grid (Product ID, Apple ID, Reference Name, Type)</td><td>Có</td></tr>
+            <tr><td><strong>Localization</strong></td><td>Per locale Display Name + Description · primary locale badge</td><td>Có</td></tr>
+            <tr><td><strong>Availabilities</strong></td><td>175 / X territories đang sale · Cycle 39 inline</td><td>Có</td></tr>
+            <tr><td><strong>Price Schedule</strong></td><td>Current tier + start date + base territory · upcoming schedule</td><td>Có</td></tr>
+            <tr><td><strong>Review Information</strong></td><td>Review screenshot + Review notes cho Apple reviewer</td><td>Có</td></tr>
+            <tr><td><strong>Upcoming Changes</strong></td><td>Schedule changes chưa active (vd: price change in 7 days)</td><td>Có</td></tr>
+            <tr><td><strong>Prices Expandable</strong></td><td>Bảng giá per territory · expand/collapse</td><td>Có</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở View Detail</div>
+            <div class="step-body"><p>Từ <a class="inline-link" data-goto="apple-iaps">Danh sách IAPs</a> → click Product ID hoặc Reference Name. URL: <code class="inline">/iap-management/apps/[appId]/iaps/[iapId]/view</code>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Đọc Header section</div>
+            <div class="step-body"><p>Status dot (xanh = Approved, vàng = Waiting, đỏ = Rejected). Type badge màu (Consumable = xanh dương, Non-Consumable = tím, Non-Renewing Subscription = cam). Timestamp "Real-time as of …" cho biết tool fetch lần cuối.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Scroll xem các section khác</div>
+            <div class="step-body"><p>Mỗi section có <strong>SectionErrorBoundary</strong> riêng — nếu 1 section fail fetch, các section khác vẫn render bình thường (no full-page crash).</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Expand bảng prices</div>
+            <div class="step-body"><p>Section <strong>Prices</strong> mặc định collapsed (vì 175 rows). Click <strong>Show all</strong> để expand bảng giá per territory.</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="View Detail · Header + 2-col grid + Status dot · Apple-Connect parity">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="32" rx="6"/>
+              <text class="wf-text" x="40" y="40" font-weight="600" fill="var(--text)">← CashKnight / Coin Pack 100 (View)</text>
+              <rect fill="var(--primary)" x="540" y="28" width="60" height="20" rx="4"/>
+              <text fill="#fff" x="570" y="42" text-anchor="middle" font-size="10" font-weight="600">Edit</text>
+              <rect class="wf-card" x="20" y="62" width="600" height="140" rx="8"/>
+              <circle fill="var(--success)" cx="40" cy="86" r="6"/>
+              <text fill="var(--success)" x="52" y="90" font-weight="600" font-size="11">Approved</text>
+              <text class="wf-text" x="120" y="90">·</text>
+              <rect fill="var(--primary-bg)" x="130" y="78" width="90" height="20" rx="10"/>
+              <text fill="var(--primary)" x="175" y="91" text-anchor="middle" font-size="10" font-weight="600">Consumable</text>
+              <text class="wf-text" x="540" y="90" text-anchor="end" font-size="10">Real-time as of 14:32:01</text>
+              <line stroke="var(--border)" x1="20" y1="106" x2="620" y2="106"/>
+              <text class="wf-text" x="40" y="128" font-size="10" font-weight="600">PRODUCT ID</text>
+              <text class="wf-text" x="40" y="148" font-family="monospace" font-size="12" fill="var(--text)">com.ck.coin100</text>
+              <text class="wf-text" x="340" y="128" font-size="10" font-weight="600">APPLE ID</text>
+              <text class="wf-text" x="340" y="148" font-family="monospace" font-size="12" fill="var(--text)">6443827510</text>
+              <text class="wf-text" x="40" y="174" font-size="10" font-weight="600">REFERENCE NAME · 13/64</text>
+              <text class="wf-text" x="40" y="192" font-size="12" fill="var(--text)">Coin Pack 100</text>
+              <text class="wf-text" x="340" y="174" font-size="10" font-weight="600">TYPE</text>
+              <text class="wf-text" x="340" y="192" font-size="12" fill="var(--text)">Consumable</text>
+              <rect class="wf-card" x="20" y="212" width="290" height="128" rx="8"/>
+              <text class="wf-text" x="36" y="232" font-size="11" font-weight="600" fill="var(--text)">App Store Localization</text>
+              <rect class="wf-soft" x="36" y="244" width="60" height="14" rx="3"/>
+              <text class="wf-text" x="66" y="254" text-anchor="middle" font-size="9" font-weight="600">vi · Primary</text>
+              <text class="wf-text" x="36" y="278" font-size="11" fill="var(--text)">Gói 100 xu</text>
+              <text class="wf-text" x="36" y="294" font-size="10">100 xu để mua items trong game</text>
+              <rect class="wf-card" x="320" y="212" width="300" height="128" rx="8"/>
+              <text class="wf-text" x="336" y="232" font-size="11" font-weight="600" fill="var(--text)">Price Schedule</text>
+              <text class="wf-text" x="336" y="258" font-size="10">Current tier</text>
+              <text class="wf-text" x="336" y="278" font-family="monospace" font-size="14" fill="var(--text)" font-weight="600">USD_0_99</text>
+              <text class="wf-text" x="336" y="302" font-size="10">Base territory: USA · Started 2024-08-15</text>
+            </svg>
           </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            View detail Apple-Connect parity · Header + Localization + Availabilities + PriceSchedule +
-            ReviewInfo + UpcomingChanges + PricesTableExpandable · read-only preview.
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Header + 2-col grid + 2 section row · Localization + Price Schedule</span>
           </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Section error boundary</div>
+          <p>Nếu 1 section hiện "Failed to load — Retry" thay vì content, đừng panic — chỉ section đó fail fetch, các section khác vẫn render. Click Retry để fetch lại section đó.</p>
+        </div>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Upcoming Changes</div>
+          <p>Section <strong>Upcoming Changes</strong> rất quan trọng — hiển thị các thay đổi đã schedule nhưng chưa active. Vd: price change in 7 days, availability change in 30 days. Đọc kỹ trước khi edit để không override schedule sắp tới.</p>
         </div>
       </section>
 
       <section class="page" data-page="apple-pricing-templates">
-        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
-        <h1 class="page-title">Pricing templates</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-          </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Default template + Per-App template · cấu hình mặc định và override · entries table per template.
-            Workflow: tạo template → assign IAP source → preview pricing matrix.
-          </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip">Default + Per-App</span>
         </div>
+        <h1 class="page-title">Pricing templates</h1>
+        <p class="page-lede">
+          Quản lý 2 loại template giá: <strong>Default</strong> (toàn workspace) và <strong>Per-App</strong>
+          (override cho app cụ thể). Template = bảng entries map tier USD → price thực tế per territory.
+          Khi tạo IAP, chọn pricing source = template → tier sẽ được lookup từ template.
+        </p>
+
+        <h2 class="section-title">Default vs Per-App</h2>
+        <table class="docs-table">
+          <thead><tr><th>Khía cạnh</th><th>Default</th><th>Per-App</th></tr></thead>
+          <tbody>
+            <tr><td>Phạm vi</td><td>Toàn workspace</td><td>1 app cụ thể</td></tr>
+            <tr><td>Số lượng</td><td>Tối đa 1</td><td>Tối đa 1 / app</td></tr>
+            <tr><td>Override</td><td>—</td><td>Override Default cho app đó</td></tr>
+            <tr><td>Thời điểm tạo</td><td>Thường tạo trước cycle 1</td><td>Tạo khi app cần giá khác Default</td></tr>
+            <tr><td>Use case</td><td>Game thông thường — giá USD chuẩn</td><td>Game đặc biệt (vd: SDK, premium app) — giá VND cao hơn</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Vào Pricing Templates settings</div>
+            <div class="step-body"><p>Sidebar → <strong>Settings</strong> → <strong>Pricing Tiers</strong>. URL: <code class="inline">/iap-management/settings/pricing-tiers</code>. Trang chia 2 tab: <strong>Default Template</strong> và <strong>Per-App Templates</strong>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Setup Default template</div>
+            <div class="step-body">
+              <p>Tab Default → upload Excel (cột: tier_id, tier_name, currency, customer_price, territory). Tool parse và validate format:</p>
+              <ul>
+                <li>Tier IDs unique</li>
+                <li>Currency match territory (vd: USD cho US, JPY cho JP)</li>
+                <li>customer_price là số dương</li>
+              </ul>
+              <p>Click <strong>Save Default</strong> → entries lưu vào DB.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Setup Per-App template (nếu cần override)</div>
+            <div class="step-body">
+              <p>Tab Per-App → chọn app → upload Excel. Format giống Default nhưng chỉ chứa các tier cần override (không cần đầy đủ — phần thiếu sẽ fallback Default).</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">View Default Matrix / Per-App Matrix</div>
+            <div class="step-body"><p>Nút <strong>View Default Matrix</strong> → xem <a class="inline-link" data-goto="apple-pricing-matrix">Pricing Matrix</a> Default tab. Per-App → matrix với cell vàng highlight các override.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Apply template khi tạo IAP</div>
+            <div class="step-body"><p>Form <a class="inline-link" data-goto="apple-new-iap">Tạo IAP mới</a> hoặc <a class="inline-link" data-goto="apple-bulk-import">Bulk Import</a> → Pricing section chọn source:</p>
+              <ul>
+                <li><strong>Default</strong> — lookup từ Default template</li>
+                <li><strong>Per-App</strong> — lookup từ Per-App template (fallback Default cho missing tier)</li>
+                <li><strong>Manual</strong> — chọn tier USD trực tiếp (bypass template)</li>
+              </ul>
+            </div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Pricing Templates page · Default Template entries table">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="36" rx="6"/>
+              <rect class="wf-primary-bg" x="32" y="28" width="120" height="20" rx="4"/>
+              <text fill="var(--primary)" x="92" y="42" text-anchor="middle" font-size="11" font-weight="600">Default Template</text>
+              <text class="wf-text" x="170" y="42" font-size="11">Per-App Templates</text>
+              <rect fill="var(--primary)" x="500" y="28" width="100" height="20" rx="4"/>
+              <text fill="#fff" x="550" y="42" text-anchor="middle" font-size="10" font-weight="600">Upload Excel</text>
+              <rect class="wf-card" x="20" y="66" width="600" height="38" rx="6"/>
+              <text class="wf-text" x="36" y="84" font-weight="600" fill="var(--text)">Default Pricing Template</text>
+              <text class="wf-text" x="36" y="98" font-size="10">187 entries · Last upload 2026-04-15 · USD base</text>
+              <rect fill="var(--surface-2)" x="430" y="74" width="180" height="22" rx="4"/>
+              <text class="wf-text" x="520" y="89" text-anchor="middle" font-size="10">View Default Matrix →</text>
+              <rect class="wf-card" x="20" y="114" width="600" height="226" rx="6"/>
+              <rect class="wf-soft" x="20" y="114" width="600" height="24"/>
+              <text class="wf-text" x="36" y="130" font-weight="600" font-size="10">Tier ID</text>
+              <text class="wf-text" x="160" y="130" font-weight="600" font-size="10">Tier Name</text>
+              <text class="wf-text" x="280" y="130" font-weight="600" font-size="10">Currency</text>
+              <text class="wf-text" x="380" y="130" font-weight="600" font-size="10">Territory</text>
+              <text class="wf-text" x="500" y="130" font-weight="600" font-size="10" text-anchor="end">Customer Price</text>
+              <g font-size="10">
+                <text class="wf-text" x="36" y="156" font-family="monospace">USD_0_99</text>
+                <text class="wf-text" x="160" y="156">Tier 1</text>
+                <text class="wf-text" x="280" y="156">USD</text>
+                <text class="wf-text" x="380" y="156">USA</text>
+                <text class="wf-text" x="500" y="156" text-anchor="end" font-family="monospace">0.99</text>
+                <line stroke="var(--border)" x1="20" y1="170" x2="620" y2="170"/>
+                <text class="wf-text" x="36" y="190" font-family="monospace">USD_0_99</text>
+                <text class="wf-text" x="160" y="190">Tier 1</text>
+                <text class="wf-text" x="280" y="190">VND</text>
+                <text class="wf-text" x="380" y="190">Vietnam</text>
+                <text class="wf-text" x="500" y="190" text-anchor="end" font-family="monospace">24000</text>
+                <line stroke="var(--border)" x1="20" y1="204" x2="620" y2="204"/>
+                <text class="wf-text" x="36" y="224" font-family="monospace">USD_4_99</text>
+                <text class="wf-text" x="160" y="224">Tier 5</text>
+                <text class="wf-text" x="280" y="224">USD</text>
+                <text class="wf-text" x="380" y="224">USA</text>
+                <text class="wf-text" x="500" y="224" text-anchor="end" font-family="monospace">4.99</text>
+                <line stroke="var(--border)" x1="20" y1="238" x2="620" y2="238"/>
+                <text class="wf-text" x="36" y="258" font-family="monospace">USD_4_99</text>
+                <text class="wf-text" x="160" y="258">Tier 5</text>
+                <text class="wf-text" x="280" y="258">VND</text>
+                <text class="wf-text" x="380" y="258">Vietnam</text>
+                <text class="wf-text" x="500" y="258" text-anchor="end" font-family="monospace">120000</text>
+                <line stroke="var(--border)" x1="20" y1="272" x2="620" y2="272"/>
+                <text class="wf-text" x="36" y="292" font-family="monospace">USD_9_99</text>
+                <text class="wf-text" x="160" y="292">Tier 10</text>
+                <text class="wf-text" x="280" y="292">USD</text>
+                <text class="wf-text" x="380" y="292">USA</text>
+                <text class="wf-text" x="500" y="292" text-anchor="end" font-family="monospace">9.99</text>
+                <text class="wf-text" x="36" y="318" font-style="italic">… 182 more entries</text>
+              </g>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Default tab · 187 entries · upload Excel · View Default Matrix link</span>
+          </div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Per-App overlay logic</div>
+          <p>Per-App template chỉ cần chứa tier <em>khác Default</em>. Tool tự fallback Default cho các tier không có trong Per-App — không cần copy toàn bộ Default vào Per-App.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Currency mismatch warning</div>
+          <p>Nếu upload entry với currency không match territory (vd: <code class="inline">JPY</code> cho <code class="inline">USA</code>), parse sẽ warning. Apple sẽ reject submit nếu cấu hình sai. Hotfix 28 cải thiện currency validation cho Google Bulk Import — Apple side đã có sẵn từ Cycle 30.</p>
+        </div>
+
+        <h2 class="section-title">Tính năng liên quan</h2>
+        <ul>
+          <li><a class="inline-link" data-goto="apple-pricing-matrix">Pricing matrix</a> — visualize template entries</li>
+          <li><a class="inline-link" data-goto="apple-bulk-import">Bulk Import</a> · <a class="inline-link" data-goto="apple-new-iap">Tạo IAP mới</a> — áp dụng template</li>
+        </ul>
       </section>
 
       <section class="page" data-page="apple-bulk-availabilities">
-        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
-        <h1 class="page-title">Bulk Availabilities</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-          </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Modal bulk-set territories cho nhiều IAP cùng lúc · Cycle 39 Phase 2 · pattern tương tự
-            Google Bulk Activate. Auto-retry rate-limit · telemetry tracking.
-          </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip cycle">Cycle 39 Phase 2 · Hotfix 25</span>
+          <span class="meta-chip">2-mode modal</span>
         </div>
+        <h1 class="page-title">Bulk Availabilities</h1>
+        <p class="page-lede">
+          Modal đổi availability của nhiều IAP cùng lúc — 2 mode trong cùng modal: <strong>Set Availabilities</strong>
+          (kích hoạt sales) và <strong>Remove from Sales</strong> (ngừng sales · destructive variant với confirm gate).
+          Cycle 39 Phase 2 · Hotfix 25 lazy-load client strategy.
+        </p>
+
+        <h2 class="section-title">2 mode khác biệt</h2>
+        <table class="docs-table">
+          <thead><tr><th>Khía cạnh</th><th>Set Availabilities</th><th>Remove from Sales</th></tr></thead>
+          <tbody>
+            <tr><td>Đối tượng eligible</td><td>IAPs đang <code class="inline">Removed from Sales</code></td><td>IAPs đang <code class="inline">Available</code></td></tr>
+            <tr><td>Action</td><td>Re-enable sales</td><td>Stop sales</td></tr>
+            <tr><td>Palette modal</td><td>Neutral / primary</td><td>Red accent (destructive)</td></tr>
+            <tr><td>Confirm gate</td><td>Không (1-click submit)</td><td>Có (modal-within-modal)</td></tr>
+            <tr><td>Customer entitlements</td><td>—</td><td>Giữ nguyên · chỉ stop purchases mới</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở modal từ Danh sách IAPs</div>
+            <div class="step-body"><p>Multi-select các IAP qua checkbox → toolbar phía trên hiện nút <strong>Bulk Availabilities</strong>. Click để mở modal.</p>
+              <p>Hotfix 25: modal lazy-load — không fetch eligibility data cho đến khi modal thực sự mở. Giảm initial render cost cho IAPs list.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Chọn mode</div>
+            <div class="step-body"><p>Modal có 2 tab ngang trên đầu: <strong>Set Availabilities</strong> | <strong>Remove from Sales</strong>. Chuyển tab → filter IAPs eligible thay đổi.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Preview eligible items</div>
+            <div class="step-body"><p>Modal liệt kê IAPs eligible (theo mode đang chọn). IAPs không eligible (vd: đang Available nhưng đang ở mode Set) bị filter ra — không hiển thị "skip".</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Confirm (Set mode) hoặc Confirm + Modal-within (Remove mode)</div>
+            <div class="step-body">
+              <p><strong>Set mode</strong>: click <strong>Set Availabilities for N items</strong> → tool gửi PATCH per IAP. Auto-retry nếu gặp 429 rate-limit. Realtime progress bar.</p>
+              <p><strong>Remove mode</strong>: click <strong>Remove from Sales</strong> → mở confirm modal-within-modal với red palette, hiển thị số items + cảnh báo "Existing customer entitlements stay intact; only new purchases stop". Click <strong>Confirm</strong> để execute.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Xem kết quả</div>
+            <div class="step-body"><p>Result state: ✓ succeeded count · ⏭ skipped · ❌ failed. Failed rows hiển thị error message cụ thể. Danh sách IAPs background tự refresh sau khi đóng modal.</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Bulk Availabilities · Set Availabilities mode · 12 items eligible">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect fill="rgba(0,0,0,0.3)" width="640" height="360"/>
+              <rect class="wf-card" x="60" y="30" width="520" height="300" rx="12"/>
+              <rect class="wf-soft" x="60" y="30" width="520" height="48" rx="12"/>
+              <text fill="var(--text)" x="80" y="60" font-weight="600">Set Availabilities for items</text>
+              <text class="wf-text" x="558" y="60" font-size="16">✕</text>
+              <rect class="wf-card" x="80" y="94" width="480" height="32" rx="6"/>
+              <rect class="wf-primary-bg" x="88" y="100" width="160" height="20" rx="4"/>
+              <text fill="var(--primary)" x="168" y="114" text-anchor="middle" font-size="11" font-weight="600">Set Availabilities</text>
+              <text class="wf-text" x="332" y="114" text-anchor="middle" font-size="11">Remove from Sales</text>
+              <rect fill="var(--primary-bg)" x="80" y="138" width="480" height="28" rx="4"/>
+              <text fill="var(--primary)" x="96" y="156" font-size="11">Showing items currently Removed from Sales — eligible to re-enable</text>
+              <g font-size="10">
+                <rect fill="var(--surface-2)" x="80" y="176" width="480" height="22"/>
+                <text class="wf-text" x="96" y="192" font-weight="600">☑ Select all (12)</text>
+                <text class="wf-text" x="540" y="192" text-anchor="end" font-size="10">5 selected</text>
+                <text class="wf-text" x="96" y="218">☑ com.ck.bundle_starter — Starter Bundle</text>
+                <text class="wf-text" x="540" y="218" text-anchor="end">Removed</text>
+                <line stroke="var(--border)" x1="80" y1="226" x2="560" y2="226"/>
+                <text class="wf-text" x="96" y="244">☑ com.ck.bundle_pro — Pro Bundle</text>
+                <text class="wf-text" x="540" y="244" text-anchor="end">Removed</text>
+                <line stroke="var(--border)" x1="80" y1="252" x2="560" y2="252"/>
+                <text class="wf-text" x="96" y="270">☑ com.ck.gem500 — Gem Pack 500</text>
+                <text class="wf-text" x="540" y="270" text-anchor="end">Removed</text>
+                <line stroke="var(--border)" x1="80" y1="278" x2="560" y2="278"/>
+                <text class="wf-text" x="96" y="296">… 9 more eligible items</text>
+              </g>
+              <rect fill="var(--surface-2)" x="60" y="284" width="520" height="46"/>
+              <rect class="wf-card" x="380" y="298" width="70" height="22" rx="4"/>
+              <text class="wf-text" x="415" y="313" text-anchor="middle" font-size="10">Cancel</text>
+              <rect fill="var(--primary)" x="460" y="298" width="106" height="22" rx="4"/>
+              <text fill="#fff" x="513" y="313" text-anchor="middle" font-size="10" font-weight="600">Set Avail. for 5</text>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>2-tab modal · primary mode Set · 12 items eligible · 5 selected</span>
+          </div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Pre-filter IAPs list</div>
+          <p>Trước khi multi-select trong IAPs list, dùng filter State để zoom vào nhóm cần. Vd: filter <code class="inline">State = Approved</code> trước khi click <strong>Remove from Sales</strong>.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Auto-retry rate-limit</div>
+          <p>Cycle 40 Phase A telemetry: tool tự retry khi gặp 429 từ Apple. Modal sẽ pause progress bar và hiển thị "Throttled · retrying in Xs". Không cần action — đợi auto-resume.</p>
+        </div>
+        <div class="callout callout-danger">
+          <div class="callout-title">🚫 Remove from Sales — không stop customer entitlements</div>
+          <p>"Remove from Sales" chỉ stop <strong>purchases mới</strong>. Customers đã mua IAP đó vẫn giữ quyền access. Nếu cần revoke entitlement → liên hệ Apple Support / refund flow riêng.</p>
+        </div>
+
+        <h2 class="section-title">Tính năng liên quan</h2>
+        <ul>
+          <li><a class="inline-link" data-goto="apple-iaps">Danh sách IAPs</a> — multi-select để mở modal</li>
+          <li><a class="inline-link" data-goto="google-bulk-activate">Google Bulk Activate</a> — pattern tương tự cho Google</li>
+        </ul>
       </section>
 
       <section class="page" data-page="apple-submit-batch">
-        <div class="meta-strip"><span class="meta-chip module-apple">Apple IAP Management</span></div>
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip cycle">Cycle 40 Phase B1</span>
+          <span class="meta-chip">2-phase modal</span>
+        </div>
         <h1 class="page-title">Submit batch</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 4 12 14.01 9 11.01"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <p class="page-lede">
+          Gửi nhiều IAP cùng lúc lên Apple Review qua <strong>SubmitBatchModal</strong> 2-phase:
+          Phase 1 preflight (kiểm tra eligibility, không gửi) · Phase 2 execute (gửi thật).
+          Cycle 40 Phase B1 đảm bảo concurrency alignment giữa preflight và execute.
+        </p>
+
+        <h2 class="section-title">2-phase flow</h2>
+        <table class="docs-table">
+          <thead><tr><th>Phase</th><th>API call</th><th>Mục đích</th><th>UI state</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Phase 1 — Preflight</strong></td><td>POST /submit-batch · <code class="inline">execute=false</code></td><td>Kiểm tra IAPs nào eligible submit (state Draft + đủ field), không thực sự submit</td><td>Loading → preview eligible/ineligible/already-in-review</td></tr>
+            <tr><td><strong>Phase 2 — Execute</strong></td><td>POST /submit-batch · <code class="inline">execute=true</code></td><td>Submit thật vào ASC App Review</td><td>Sequential per IAP · progress bar · result summary</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Multi-select IAPs cần submit</div>
+            <div class="step-body"><p>Từ <a class="inline-link" data-goto="apple-iaps">Danh sách IAPs</a> filter State = Draft → check các IAP cần submit. Toolbar hiện nút <strong>Submit Selected</strong>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Click Submit Selected → Phase 1 Preflight</div>
+            <div class="step-body">
+              <p>Modal mở loading state, gọi preflight. Sau khi server response, modal hiển thị bảng phân loại:</p>
+              <ul>
+                <li>✅ <strong>Eligible</strong> — IAPs có thể submit (state Draft + đủ field)</li>
+                <li>⏭ <strong>Already in review</strong> — IAPs đã submit trước đó (skip silent)</li>
+                <li>❌ <strong>Ineligible</strong> — IAPs thiếu field bắt buộc (vd: thiếu localization, missing screenshot)</li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Review preflight và click Submit để Execute Phase 2</div>
+            <div class="step-body"><p>Footer hiển thị số IAPs sẽ submit thật (vd: <strong>Submit 8 IAPs to Apple Review</strong>). Click → tool POST execute=true.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Theo dõi progress Execute</div>
+            <div class="step-body"><p>Sequential per IAP — không parallel (Apple rate-limit nghiêm). Progress bar realtime, per-row outcome. Toast success cuối flow.</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="SubmitBatchModal Phase 1 preflight · 10 selected → 8 eligible">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect fill="rgba(0,0,0,0.3)" width="640" height="360"/>
+              <rect class="wf-card" x="60" y="30" width="520" height="300" rx="12"/>
+              <rect class="wf-soft" x="60" y="30" width="520" height="48" rx="12"/>
+              <text fill="var(--text)" x="80" y="60" font-weight="600">Submit Selected to Apple Review</text>
+              <text class="wf-text" x="558" y="60" font-size="16">✕</text>
+              <g transform="translate(80, 94)">
+                <rect fill="var(--success-bg)" stroke="var(--success)" x="0" y="0" width="150" height="56" rx="6"/>
+                <text class="wf-text" x="12" y="18" font-size="10">Eligible</text>
+                <text fill="var(--success)" x="12" y="42" font-size="22" font-weight="700">8</text>
+                <rect fill="var(--surface-2)" stroke="var(--border)" x="165" y="0" width="150" height="56" rx="6"/>
+                <text class="wf-text" x="177" y="18" font-size="10">Already in review</text>
+                <text class="wf-text" x="177" y="42" font-size="22" font-weight="700" fill="var(--text-muted)">1</text>
+                <rect fill="var(--danger-bg)" stroke="var(--danger)" x="330" y="0" width="150" height="56" rx="6"/>
+                <text class="wf-text" x="342" y="18" font-size="10">Ineligible</text>
+                <text fill="var(--danger)" x="342" y="42" font-size="22" font-weight="700">1</text>
+              </g>
+              <rect class="wf-card" x="80" y="166" width="480" height="112" rx="6"/>
+              <rect class="wf-soft" x="80" y="166" width="480" height="24"/>
+              <text class="wf-text" x="96" y="182" font-weight="600" font-size="10">Product ID</text>
+              <text class="wf-text" x="280" y="182" font-weight="600" font-size="10">Status</text>
+              <text class="wf-text" x="380" y="182" font-weight="600" font-size="10">Reason</text>
+              <g font-size="10">
+                <text class="wf-text" x="96" y="206">com.ck.coin100</text>
+                <rect fill="var(--success-bg)" x="275" y="196" width="60" height="14" rx="7"/>
+                <text fill="var(--success)" x="305" y="206" text-anchor="middle" font-size="9" font-weight="600">Eligible</text>
+                <text class="wf-text" x="380" y="206" font-size="9">Ready to submit</text>
+                <line stroke="var(--border)" x1="80" y1="214" x2="560" y2="214"/>
+                <text class="wf-text" x="96" y="234">com.ck.coin500</text>
+                <rect fill="var(--surface-3)" x="275" y="224" width="80" height="14" rx="7"/>
+                <text class="wf-text" x="315" y="234" text-anchor="middle" font-size="9" font-weight="600">In Review</text>
+                <text class="wf-text" x="380" y="234" font-size="9">Skipped silent</text>
+                <line stroke="var(--border)" x1="80" y1="242" x2="560" y2="242"/>
+                <text class="wf-text" x="96" y="262">com.ck.bundle</text>
+                <rect fill="var(--danger-bg)" x="275" y="252" width="60" height="14" rx="7"/>
+                <text fill="var(--danger)" x="305" y="262" text-anchor="middle" font-size="9" font-weight="600">Ineligible</text>
+                <text fill="var(--danger)" x="380" y="262" font-size="9">Missing screenshot</text>
+              </g>
+              <rect fill="var(--surface-2)" x="60" y="282" width="520" height="48"/>
+              <rect class="wf-card" x="380" y="296" width="70" height="22" rx="4"/>
+              <text class="wf-text" x="415" y="311" text-anchor="middle" font-size="10">Cancel</text>
+              <rect fill="var(--primary)" x="460" y="296" width="100" height="22" rx="4"/>
+              <text fill="#fff" x="510" y="311" text-anchor="middle" font-size="10" font-weight="600">Submit 8 IAPs</text>
+            </svg>
           </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            SubmitBatchModal · gửi review nhiều IAP cùng version submission · checklist trước khi submit ·
-            Cycle 40 Phase B1 concurrency alignment.
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Phase 1 preflight · 3 summary cards · per-row status + reason</span>
           </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Submit không thể "un-submit"</div>
+          <p>Sau khi Phase 2 execute, IAPs vào trạng thái <strong>Waiting for Review</strong>. Không thể recall — phải đợi Apple review (thường 24-48h). Nếu muốn thay đổi gì, phải đợi Approved hoặc Rejected rồi edit submit lại.</p>
+        </div>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Fix Ineligible trước khi submit lại</div>
+          <p>Click Product ID Ineligible → mở View Detail xem section nào thiếu. Sửa qua <a class="inline-link" data-goto="apple-edit-iap">Edit IAP</a> → quay lại multi-select submit lại.</p>
+        </div>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Cycle 40 Phase B1 concurrency alignment</div>
+          <p>Server-side đảm bảo eligibility tại preflight = eligibility tại execute. Nếu giữa 2 phase user khác submit IAP đó, execute sẽ skip silent thay vì lỗi.</p>
         </div>
       </section>
 
@@ -2113,135 +2966,926 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
            SKELETON PAGES — Google
            ===================================================== -->
       <section class="page" data-page="google-apps">
-        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
-        <h1 class="page-title">Danh sách apps</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        <div class="meta-strip">
+          <span class="meta-chip module-google">Google IAP Management</span>
+          <span class="meta-chip cycle">Hotfix 29 auto-refresh</span>
+        </div>
+        <h1 class="page-title">Danh sách apps (Google)</h1>
+        <p class="page-lede">
+          Apps list lấy từ Google Play Developer API theo Google service account đang active. Hỗ trợ
+          nhiều Google accounts — switch qua Settings → Google Accounts. <strong>Hotfix 29</strong>
+          (tháng 5/2026): tự động refresh khi switch account hoặc khi mount component.
+        </p>
+
+        <h2 class="section-title">Khi nào dùng trang này?</h2>
+        <ul>
+          <li>Điểm vào module Google IAP — chọn app trước khi làm bất cứ thao tác nào.</li>
+          <li>Verify tool đang dùng đúng Google account (vd: VNG vs partner).</li>
+          <li>Trigger sync nếu app mới tạo trên Play Console chưa hiển thị (manual refresh button).</li>
+        </ul>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở danh sách apps</div>
+            <div class="step-body"><p>Sidebar → <strong>Google IAP Management</strong>. URL: <code class="inline">/google-iap-management/apps</code>. Tool tự fetch list khi mount component (Hotfix 29).</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Switch Google account (nếu cần)</div>
+            <div class="step-body">
+              <p>Settings → Google Accounts → đặt account khác làm active → quay lại Apps list. Tool tự refresh list theo account mới (Hotfix 29 — trước đây phải reload trang thủ công).</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Manual refresh nếu app mới chưa hiển thị</div>
+            <div class="step-body"><p>Nút <strong>↻ Refresh</strong> phía trên grid. Hữu ích khi app vừa được publish trên Play Console và chưa propagate.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Click app card → IAPs list</div>
+            <div class="step-body"><p>Chuyển sang <a class="inline-link" data-goto="google-iaps">Danh sách IAPs</a> của app đó. URL dùng <code class="inline">packageName</code> làm key thay vì numeric ID (khác Apple).</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Google Apps list · auto-refresh on mount + account switch (Hotfix 29)">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="40" rx="6"/>
+              <rect class="wf-strong" x="40" y="35" width="180" height="10" rx="2"/>
+              <rect fill="var(--teal-bg)" x="430" y="30" width="190" height="20" rx="10"/>
+              <text fill="var(--teal)" x="525" y="44" text-anchor="middle" font-size="10">vng-publishing@iam.gserviceaccount</text>
+              <rect class="wf-card" x="20" y="74" width="540" height="30" rx="4"/>
+              <text class="wf-text" x="40" y="93">🔍 Tìm app theo package name hoặc tên...</text>
+              <rect class="wf-card" x="570" y="74" width="50" height="30" rx="4"/>
+              <text class="wf-text" x="595" y="93" text-anchor="middle">↻</text>
+              <g transform="translate(20,118)">
+                <rect class="wf-card" x="0" y="0" width="190" height="100" rx="8"/>
+                <rect fill="var(--teal-bg)" x="14" y="14" width="44" height="44" rx="8"/>
+                <text fill="var(--teal)" x="36" y="42" text-anchor="middle" font-size="18" font-weight="700">CK</text>
+                <text class="wf-text" x="14" y="76" font-weight="600" font-size="11" fill="var(--text)">CashKnight</text>
+                <text class="wf-text" x="14" y="90" font-family="monospace" font-size="9">com.vng.cashknight</text>
+                <rect class="wf-card" x="205" y="0" width="190" height="100" rx="8"/>
+                <rect fill="var(--purple-bg)" x="219" y="14" width="44" height="44" rx="8"/>
+                <text fill="var(--purple)" x="241" y="42" text-anchor="middle" font-size="18" font-weight="700">DK</text>
+                <text class="wf-text" x="219" y="76" font-weight="600" font-size="11" fill="var(--text)">DungeonKing</text>
+                <text class="wf-text" x="219" y="90" font-family="monospace" font-size="9">com.vng.dungeon</text>
+                <rect class="wf-card" x="410" y="0" width="190" height="100" rx="8"/>
+                <rect fill="var(--warning-bg)" x="424" y="14" width="44" height="44" rx="8"/>
+                <text fill="var(--warning)" x="446" y="42" text-anchor="middle" font-size="18" font-weight="700">PS</text>
+                <text class="wf-text" x="424" y="76" font-weight="600" font-size="11" fill="var(--text)">PASS SDK</text>
+                <text class="wf-text" x="424" y="90" font-family="monospace" font-size="9">com.vng.passsdk</text>
+              </g>
+            </svg>
           </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Apps list từ Google Play Console · auto-refresh khi switch Google account (Hotfix 29) ·
-            package name + tên app + last sync time.
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Google Apps grid · service account chip · refresh button</span>
           </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Hotfix 29 — auto-refresh</div>
+          <p>Trước Hotfix 29, switch Google account vẫn hiển thị apps của account cũ cho tới khi reload trang. Hotfix 29 thêm useEffect refresh khi mount + khi account thay đổi.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Service account permission</div>
+          <p>Apps không hiển thị thường vì Google service account chưa được cấp quyền trên Play Console. Vào Play Console → Users and permissions → invite service account email → assign role "Developer" hoặc "App owner".</p>
         </div>
       </section>
 
       <section class="page" data-page="google-iaps">
-        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
-        <h1 class="page-title">Danh sách IAPs</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        <div class="meta-strip">
+          <span class="meta-chip module-google">Google IAP Management</span>
+          <span class="meta-chip cycle">Cycle 41 bulk actions</span>
+        </div>
+        <h1 class="page-title">Danh sách IAPs (Google)</h1>
+        <p class="page-lede">
+          Bảng IAPs (Google gọi là "items") per app. Cột SKU, Title, State, Price · multi-select cho
+          Bulk Activate / Bulk Deactivate. Cycle 41 thêm 2 nút bulk action vào toolbar trên cùng.
+        </p>
+
+        <h2 class="section-title">Cấu trúc bảng</h2>
+        <table class="docs-table">
+          <thead><tr><th>Cột</th><th>Ý nghĩa</th></tr></thead>
+          <tbody>
+            <tr><td><code class="inline">SKU</code></td><td>ID duy nhất per app (vd: <code class="inline">coin_pack_100</code>)</td></tr>
+            <tr><td><code class="inline">Title</code></td><td>Display name từ default locale</td></tr>
+            <tr><td><code class="inline">State</code></td><td>ACTIVE (xanh) / INACTIVE (xám)</td></tr>
+            <tr><td><code class="inline">Default price</code></td><td>Giá ở default region (thường USD)</td></tr>
+            <tr><td><code class="inline">Last updated</code></td><td>Timestamp lần update gần nhất</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở bảng IAPs từ app card</div>
+            <div class="step-body"><p>Từ <a class="inline-link" data-goto="google-apps">Danh sách apps</a> → click app → URL <code class="inline">/google-iap-management/apps/[packageName]</code>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Filter và search</div>
+            <div class="step-body">
+              <p>Filter bar: <strong>State</strong> (ACTIVE / INACTIVE / All), search SKU/title.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Multi-select cho Bulk action</div>
+            <div class="step-body">
+              <p>Checkbox đầu row hoặc header (select all visible). Toolbar phía trên hiển thị 2 nút Cycle 41:</p>
+              <ul>
+                <li><strong>Bulk Activate</strong> (emerald) → mở modal <a class="inline-link" data-goto="google-bulk-activate">Bulk Activate items</a></li>
+                <li><strong>Bulk Deactivate</strong> (red) → mở modal <a class="inline-link" data-goto="google-bulk-deactivate">Bulk Deactivate items</a></li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Click row → Edit item</div>
+            <div class="step-body"><p>Click SKU/title → <a class="inline-link" data-goto="google-edit-iap">Chỉnh sửa item</a>.</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Google IAPs list · Cycle 41 toolbar · 2 bulk action buttons">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="36" rx="6"/>
+              <text class="wf-text" x="40" y="42" font-weight="600" fill="var(--text)">CashKnight · Items</text>
+              <rect fill="var(--surface)" stroke="var(--success)" x="290" y="28" width="110" height="20" rx="4"/>
+              <text fill="var(--success)" x="345" y="42" text-anchor="middle" font-size="10" font-weight="600">↑ Bulk Activate</text>
+              <rect fill="var(--surface)" stroke="var(--danger)" x="408" y="28" width="120" height="20" rx="4"/>
+              <text fill="var(--danger)" x="468" y="42" text-anchor="middle" font-size="10" font-weight="600">↓ Bulk Deactivate</text>
+              <rect fill="var(--teal)" x="540" y="28" width="80" height="20" rx="4"/>
+              <text fill="#fff" x="580" y="42" text-anchor="middle" font-size="10" font-weight="600">+ New</text>
+              <rect class="wf-card" x="20" y="66" width="600" height="30" rx="4"/>
+              <text class="wf-text" x="40" y="85">State: All ▼   🔍 Search SKU / title...</text>
+              <rect class="wf-card" x="20" y="106" width="600" height="234" rx="6"/>
+              <rect class="wf-soft" x="20" y="106" width="600" height="24"/>
+              <text class="wf-text" x="40" y="122" font-weight="600" font-size="10">☐</text>
+              <text class="wf-text" x="64" y="122" font-weight="600" font-size="10">SKU</text>
+              <text class="wf-text" x="240" y="122" font-weight="600" font-size="10">Title</text>
+              <text class="wf-text" x="420" y="122" font-weight="600" font-size="10">State</text>
+              <text class="wf-text" x="500" y="122" font-weight="600" font-size="10">Default</text>
+              <text class="wf-text" x="580" y="122" font-weight="600" font-size="10">Updated</text>
+              <g font-size="10">
+                <rect fill="var(--success-bg)" x="20" y="130" width="600" height="28"/>
+                <text class="wf-text" x="40" y="148">☐</text>
+                <text class="wf-text" x="64" y="148" font-family="monospace">coin_pack_100</text>
+                <text class="wf-text" x="240" y="148">Coin Pack 100</text>
+                <circle fill="var(--success)" cx="425" cy="144" r="4"/>
+                <text fill="var(--success)" x="435" y="148" font-weight="600">ACTIVE</text>
+                <text class="wf-text" x="500" y="148" font-family="monospace">$0.99</text>
+                <text class="wf-text" x="580" y="148" font-size="9">2 days ago</text>
+                <line stroke="var(--border)" x1="20" y1="158" x2="620" y2="158"/>
+                <rect fill="var(--success-bg)" x="20" y="158" width="600" height="28"/>
+                <text class="wf-text" x="40" y="176">☑</text>
+                <text class="wf-text" x="64" y="176" font-family="monospace">coin_pack_500</text>
+                <text class="wf-text" x="240" y="176">Coin Pack 500</text>
+                <circle fill="var(--success)" cx="425" cy="172" r="4"/>
+                <text fill="var(--success)" x="435" y="176" font-weight="600">ACTIVE</text>
+                <text class="wf-text" x="500" y="176" font-family="monospace">$4.99</text>
+                <text class="wf-text" x="580" y="176" font-size="9">2 days ago</text>
+                <line stroke="var(--border)" x1="20" y1="186" x2="620" y2="186"/>
+                <text class="wf-text" x="40" y="204">☐</text>
+                <text class="wf-text" x="64" y="204" font-family="monospace">gem_pack_10</text>
+                <text class="wf-text" x="240" y="204">Gem Pack 10</text>
+                <circle fill="var(--text-subtle)" cx="425" cy="200" r="4"/>
+                <text class="wf-text" x="435" y="204" font-weight="600">INACTIVE</text>
+                <text class="wf-text" x="500" y="204" font-family="monospace">$0.99</text>
+                <text class="wf-text" x="580" y="204" font-size="9">1 week ago</text>
+                <line stroke="var(--border)" x1="20" y1="214" x2="620" y2="214"/>
+                <text class="wf-text" x="40" y="232">☐</text>
+                <text class="wf-text" x="64" y="232" font-family="monospace">bundle_starter</text>
+                <text class="wf-text" x="240" y="232">Starter Bundle</text>
+                <circle fill="var(--text-subtle)" cx="425" cy="228" r="4"/>
+                <text class="wf-text" x="435" y="232" font-weight="600">INACTIVE</text>
+                <text class="wf-text" x="500" y="232" font-family="monospace">$4.99</text>
+                <text class="wf-text" x="580" y="232" font-size="9">1 week ago</text>
+              </g>
+            </svg>
           </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            IAPs list per app · SKU + name + state (ACTIVE/INACTIVE) + price · checkbox multi-select
-            để mở Bulk Activate / Bulk Deactivate modal.
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Cycle 41 toolbar · 2 bulk buttons emerald + red · state pill xanh/xám</span>
           </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Filter State trước Bulk</div>
+          <p>Filter State = INACTIVE trước khi click <strong>Bulk Activate</strong> → modal chỉ hiện items eligible. Tương tự State = ACTIVE trước <strong>Bulk Deactivate</strong>. Tiết kiệm scroll và tránh select nhầm.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ IAPs list không auto-refresh wider scope</div>
+          <p>Hotfix 29 chỉ apply cho Apps list. IAPs list (trong từng app) vẫn cần manual refresh sau khi tạo item mới ở Play Console — wider auto-refresh deferred Cycle 43+.</p>
         </div>
       </section>
 
       <section class="page" data-page="google-create-iap">
-        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
-        <h1 class="page-title">Tạo item mới</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <div class="meta-strip">
+          <span class="meta-chip module-google">Google IAP Management</span>
+          <span class="meta-chip">Form · region pricing</span>
+        </div>
+        <h1 class="page-title">Tạo item mới (Google)</h1>
+        <p class="page-lede">
+          Form tạo Google IAP (onetimeproduct). Cấu trúc tương tự Apple form nhưng thiếu phần
+          screenshot/review (Google không có flow Review). Pricing dùng region-based (190 regions),
+          tự convert sang micros khi POST lên Google Play API.
+        </p>
+
+        <h2 class="section-title">Khác biệt chính so với Apple</h2>
+        <ul>
+          <li>Không có submit review — item active ngay khi save.</li>
+          <li>Pricing tính bằng <strong>micros</strong> (1 USD = 1,000,000 micros) — UI hiển thị USD/VND, convert tự động.</li>
+          <li>Phải chỉ định <strong>defaultPrice</strong> + <strong>regionalPrices</strong> (Google không có "tier").</li>
+          <li>State = ACTIVE / INACTIVE — quản lý qua Bulk Activate/Deactivate.</li>
+        </ul>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở form từ IAPs list</div>
+            <div class="step-body"><p>Từ <a class="inline-link" data-goto="google-iaps">Danh sách IAPs</a> → nút <strong>+ New</strong> emerald phía góc phải. URL: <code class="inline">/google-iap-management/apps/[packageName]/iaps/new</code>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Điền Header</div>
+            <div class="step-body">
+              <p><strong>SKU</strong> (lower-case, underscore-separated, vd: <code class="inline">coin_pack_100</code>) — unique per app, immutable.</p>
+              <p><strong>Reference name</strong> (≤ 80 ký tự) — internal.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Thêm Locales (GoogleLocaleSidebar)</div>
+            <div class="step-body"><p>Sidebar trái → + Add Locale → điền Title (≤ 55 ký tự) + Description (≤ 200 ký tự). Default locale = en-US (Google convention).</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Set Pricing</div>
+            <div class="step-body">
+              <p>Chọn Pricing Source: Default template / Per-App template / Manual. Manual → nhập default price (USD), tool tự derive regional prices qua <code class="inline">convertRegionPrices</code> Google API.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Save</div>
+            <div class="step-body"><p>Click Save → tool POST item lên Google Play API. Item mặc định state INACTIVE — phải dùng <a class="inline-link" data-goto="google-bulk-activate">Bulk Activate</a> hoặc edit để chuyển sang ACTIVE.</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Google Create item form · Locale sidebar + Pricing source">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="32" rx="6"/>
+              <text class="wf-text" x="40" y="40" font-weight="600" fill="var(--text)">← CashKnight / New item</text>
+              <rect class="wf-card" x="20" y="62" width="180" height="278" rx="6"/>
+              <text class="wf-text" x="36" y="80" font-size="9" font-weight="600">LOCALES</text>
+              <rect fill="var(--teal-bg)" x="32" y="86" width="156" height="24" rx="4"/>
+              <text fill="var(--teal)" x="42" y="102" font-size="10" font-weight="600">en-US (Default)</text>
+              <text class="wf-text" x="42" y="124" font-size="10">vi</text>
+              <text class="wf-text" x="42" y="142" font-size="10">ja</text>
+              <text class="wf-text" x="42" y="160" font-size="10">+ Add Locale</text>
+              <rect class="wf-card" x="210" y="62" width="410" height="92" rx="6"/>
+              <text class="wf-text" x="226" y="82" font-size="11" font-weight="600" fill="var(--text)">Header</text>
+              <text class="wf-text" x="226" y="100" font-size="9">SKU (immutable)</text>
+              <rect class="wf-card" x="226" y="106" width="180" height="22" rx="3"/>
+              <text class="wf-text" x="234" y="121" font-size="10" font-family="monospace">coin_pack_100</text>
+              <text class="wf-text" x="420" y="100" font-size="9">Reference name</text>
+              <rect class="wf-card" x="420" y="106" width="184" height="22" rx="3"/>
+              <text class="wf-text" x="428" y="121" font-size="10">Coin Pack 100</text>
+              <rect class="wf-card" x="210" y="166" width="410" height="80" rx="6"/>
+              <text class="wf-text" x="226" y="186" font-size="11" font-weight="600" fill="var(--text)">Locale · en-US</text>
+              <text class="wf-text" x="226" y="204" font-size="9">Title</text>
+              <rect class="wf-card" x="226" y="210" width="378" height="22" rx="3"/>
+              <text class="wf-text" x="234" y="225" font-size="10">Coin Pack 100</text>
+              <rect class="wf-card" x="210" y="258" width="410" height="82" rx="6"/>
+              <text class="wf-text" x="226" y="278" font-size="11" font-weight="600" fill="var(--text)">Pricing</text>
+              <text class="wf-text" x="226" y="296" font-size="10">Source: <tspan font-weight="600" fill="var(--text)">Manual</tspan> ▼</text>
+              <text class="wf-text" x="226" y="316" font-size="9">Default price (USD)</text>
+              <rect class="wf-card" x="226" y="320" width="120" height="18" rx="3"/>
+              <text class="wf-text" x="234" y="333" font-family="monospace" font-size="10">0.99</text>
+              <text class="wf-text" x="356" y="333" font-size="9" font-style="italic">→ 990000 micros</text>
+            </svg>
           </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Form tạo Google IAP · IapForm + GoogleLocaleSidebar + PricingSourceSelector · region-based
-            pricing tự động convert micros · validate SKU uniqueness.
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Form layout · LocaleSidebar · Pricing source dropdown · micros auto-convert</span>
           </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ SKU immutable</div>
+          <p>Google không cho phép rename SKU sau khi tạo. Sai = phải delete + tạo lại với SKU mới.</p>
+        </div>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Item tạo ra INACTIVE</div>
+          <p>Default state sau khi POST = INACTIVE. Phải explicitly activate qua <a class="inline-link" data-goto="google-bulk-activate">Bulk Activate</a> hoặc edit từng item.</p>
         </div>
       </section>
 
       <section class="page" data-page="google-edit-iap">
-        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
-        <h1 class="page-title">Chỉnh sửa item</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        <div class="meta-strip">
+          <span class="meta-chip module-google">Google IAP Management</span>
+          <span class="meta-chip cycle">Hotfix 9 · 12</span>
+          <span class="meta-chip">regionsVersion</span>
+        </div>
+        <h1 class="page-title">Chỉnh sửa item (Google)</h1>
+        <p class="page-lede">
+          Edit mode dùng cùng form với <a class="inline-link" data-goto="google-create-iap">Tạo item mới</a>.
+          Khác biệt chính: khi patch lên Google Play API, tool phải khai báo <code class="inline">regionsVersion</code>
+          (Hotfix 9) và refetch state sau patch (Hotfix 12).
+        </p>
+
+        <h2 class="section-title">Field có thể edit</h2>
+        <table class="docs-table">
+          <thead><tr><th>Field</th><th>Edit được?</th><th>Ghi chú</th></tr></thead>
+          <tbody>
+            <tr><td>SKU</td><td><strong>Không</strong></td><td>Immutable</td></tr>
+            <tr><td>Reference name</td><td>Có</td><td>Internal · ≤ 80 ký tự</td></tr>
+            <tr><td>Locales (Title + Description)</td><td>Có</td><td>Effect immediate</td></tr>
+            <tr><td>Default price + regional prices</td><td>Có</td><td>Cần regionsVersion cập nhật</td></tr>
+            <tr><td>State (ACTIVE / INACTIVE)</td><td>Có · qua Bulk Activate/Deactivate hoặc inline toggle</td><td>—</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở form edit</div>
+            <div class="step-body"><p>Từ <a class="inline-link" data-goto="google-iaps">Danh sách IAPs</a> → click SKU/title row. URL: <code class="inline">/google-iap-management/apps/[packageName]/iaps/[sku]</code>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Sửa field cần thay đổi</div>
+            <div class="step-body"><p>SKU bị disable. Khi sửa default price, tool tự gọi <code class="inline">convertRegionPrices</code> Google API để recalculate regional prices.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Save → Preview Changes</div>
+            <div class="step-body">
+              <p><strong>UpdateChangesPreviewModal</strong> mở:</p>
+              <ul>
+                <li>Diff per field</li>
+                <li>Bảng "Regional price changes" (nếu default price thay đổi) — Google sẽ apply giá mới cho 190 regions</li>
+                <li>Disclaimer regionsVersion: tool lấy regionsVersion mới nhất từ Google response trước khi patch</li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Confirm + Refetch (Hotfix 12)</div>
+            <div class="step-body"><p>Tool PATCH lên Google Play API. Response = pre-update snapshot (state DRAFT). Tool tự fetch lại item qua GET để hiển thị state đúng trên UI (Hotfix 12 — trước đây UI hiển thị Inactive sau ACTIVATE thành công).</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Edit item · UpdateChangesPreviewModal · regional prices preview">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect fill="rgba(0,0,0,0.3)" width="640" height="360"/>
+              <rect class="wf-card" x="60" y="30" width="520" height="300" rx="12"/>
+              <rect class="wf-soft" x="60" y="30" width="520" height="44" rx="12"/>
+              <text fill="var(--text)" x="80" y="58" font-weight="600">Preview Changes · coin_pack_100</text>
+              <text class="wf-text" x="558" y="58" font-size="16">✕</text>
+              <text class="wf-text" x="80" y="98" font-size="11" font-weight="600" fill="var(--text)">Field changes</text>
+              <rect class="wf-soft" x="80" y="106" width="480" height="22"/>
+              <text class="wf-text" x="92" y="120" font-weight="600" font-size="9">Field</text>
+              <text class="wf-text" x="240" y="120" font-weight="600" font-size="9">Before</text>
+              <text class="wf-text" x="400" y="120" font-weight="600" font-size="9">After</text>
+              <g font-size="10">
+                <rect fill="var(--warning-bg)" x="80" y="128" width="480" height="22"/>
+                <text fill="var(--warning)" x="92" y="142" font-weight="600">Default price</text>
+                <text class="wf-text" x="240" y="142">$0.99</text>
+                <text fill="var(--warning)" x="400" y="142" font-weight="600">$1.99</text>
+              </g>
+              <text class="wf-text" x="80" y="170" font-size="11" font-weight="600" fill="var(--text)">Regional prices auto-recalculated</text>
+              <rect class="wf-card" x="80" y="178" width="480" height="100" rx="4"/>
+              <rect class="wf-soft" x="80" y="178" width="480" height="22"/>
+              <text class="wf-text" x="92" y="192" font-weight="600" font-size="9">Region</text>
+              <text class="wf-text" x="280" y="192" font-weight="600" font-size="9">Before</text>
+              <text class="wf-text" x="400" y="192" font-weight="600" font-size="9">After</text>
+              <g font-size="10">
+                <text class="wf-text" x="92" y="216">VN (VND)</text>
+                <text class="wf-text" x="280" y="216" font-family="monospace">24,000</text>
+                <text fill="var(--warning)" x="400" y="216" font-family="monospace" font-weight="600">49,000</text>
+                <line stroke="var(--border)" x1="80" y1="222" x2="560" y2="222"/>
+                <text class="wf-text" x="92" y="240">JP (JPY)</text>
+                <text class="wf-text" x="280" y="240" font-family="monospace">150</text>
+                <text fill="var(--warning)" x="400" y="240" font-family="monospace" font-weight="600">300</text>
+                <line stroke="var(--border)" x1="80" y1="246" x2="560" y2="246"/>
+                <text class="wf-text" x="92" y="264">DE (EUR)</text>
+                <text class="wf-text" x="280" y="264" font-family="monospace">0.99</text>
+                <text fill="var(--warning)" x="400" y="264" font-family="monospace" font-weight="600">1.99</text>
+              </g>
+              <rect fill="var(--surface-2)" x="60" y="286" width="520" height="44"/>
+              <text class="wf-text" x="76" y="306" font-size="10" font-style="italic">Will apply to 190 regions · regionsVersion 2026-01-15</text>
+              <rect fill="var(--primary)" x="460" y="296" width="80" height="22" rx="4"/>
+              <text fill="#fff" x="500" y="311" text-anchor="middle" font-size="10" font-weight="600">Confirm</text>
+            </svg>
           </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Edit item · UpdateChangesPreviewModal · phải khai báo regionsVersion khi patch
-            (Hotfix 9) · preview diff giá theo region.
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Diff field + regional prices · 190 regions · regionsVersion footer</span>
           </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Hotfix 9 — regionsVersion</div>
+          <p>Khi Google đổi currency cho 1 country (vd: BG → EUR Jan 2026), <code class="inline">convertRegionPrices</code> trả về <code class="inline">regionsVersion</code> mới. Tool phải forward giá trị này khi patch — nếu không Google reject 400.</p>
+        </div>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Hotfix 12 — refetch state</div>
+          <p>Google trả về pre-update snapshot trong PATCH response (state=DRAFT). Tool refetch qua GET để hiển thị state thật — tránh UI hiển thị nhầm Inactive sau khi activate thành công.</p>
         </div>
       </section>
 
       <section class="page" data-page="google-bulk-import">
-        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
-        <h1 class="page-title">Bulk Import</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <div class="meta-strip">
+          <span class="meta-chip module-google">Google IAP Management</span>
+          <span class="meta-chip cycle">Hotfix 28 currency validation</span>
+          <span class="meta-chip">Wizard · 4 bước</span>
+        </div>
+        <h1 class="page-title">Bulk Import (Google)</h1>
+        <p class="page-lede">
+          Wizard 4 bước tương tự <a class="inline-link" data-goto="apple-bulk-import">Apple Bulk Import</a>,
+          khác biệt chính ở bước disambiguation tier (Google không có "tier" thẳng — tool match
+          price → tier candidates → user chọn) và Hotfix 28 per-row currency validation.
+        </p>
+
+        <h2 class="section-title">4 bước wizard</h2>
+        <table class="docs-table">
+          <thead><tr><th>Bước</th><th>Mục đích</th><th>Tính năng đặc biệt</th></tr></thead>
+          <tbody>
+            <tr><td>1. Upload</td><td>Drag &amp; drop CSV/Excel template</td><td>Tải template với 5 cột</td></tr>
+            <tr><td>2. Disambiguation</td><td>User chọn tier khi có nhiều candidates</td><td>Cycle 35-36 institutional · select per-row</td></tr>
+            <tr><td>3. Preview</td><td>Per-row validation + currency check (Hotfix 28)</td><td>Currency vs region match</td></tr>
+            <tr><td>4. Execute</td><td>Batch create items lên Google Play API</td><td>Sequential per item · auto-retry rate-limit</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở wizard từ IAPs list</div>
+            <div class="step-body"><p>Từ <a class="inline-link" data-goto="google-iaps">Danh sách IAPs</a> → nút <strong>Bulk Import</strong>. URL: <code class="inline">/google-iap-management/apps/[packageName]/bulk-import</code>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Tải template + điền dữ liệu</div>
+            <div class="step-body">
+              <p>Template CSV 5 cột:</p>
+              <ul>
+                <li><code class="inline">sku</code> — unique per app</li>
+                <li><code class="inline">title</code> — display name default locale</li>
+                <li><code class="inline">description</code> — default locale</li>
+                <li><code class="inline">default_price</code> — số (vd: 0.99)</li>
+                <li><code class="inline">default_currency</code> — ISO 4217 (USD, VND, ...)</li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Disambiguation step</div>
+            <div class="step-body">
+              <p>Tool match từng row với tier candidates từ Google catalog. Khi có nhiều candidates (vd: price <code class="inline">0.99 USD</code> match Tier 1 standard và Alternate Tier A), user chọn qua dropdown per-row. Rows không ambiguity → Tier column read-only (đã resolve).</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Preview với currency validation (Hotfix 28)</div>
+            <div class="step-body">
+              <p>Hotfix 28 (tháng 5/2026): validate currency vs region match per-row. Vd: row default_currency=<code class="inline">USD</code> mà app default region = <code class="inline">JP</code> → warning. User có thể fix CSV và re-upload, hoặc bỏ qua warning.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Execute commit</div>
+            <div class="step-body"><p>Click <strong>Commit</strong>. Tool POST per item lên Google Play API tuần tự, auto-retry khi gặp rate-limit. Realtime progress + per-row outcome.</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Google Bulk Import · Step 2 Disambiguation · tier candidates dropdown">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="40" rx="6"/>
+              <text class="wf-text" x="40" y="44" font-weight="600" fill="var(--text)">Bulk Import · CashKnight</text>
+              <g transform="translate(30, 70)">
+                <circle fill="var(--success)" cx="14" cy="14" r="14"/>
+                <text x="14" y="18" fill="#fff" text-anchor="middle" font-size="11" font-weight="600">✓</text>
+                <text class="wf-text" x="36" y="18" font-size="11">Upload</text>
+                <rect class="wf-soft" x="100" y="13" width="60" height="2"/>
+                <circle class="wf-primary" cx="175" cy="14" r="14"/>
+                <text x="175" y="18" fill="#fff" text-anchor="middle" font-size="11" font-weight="600">2</text>
+                <text fill="var(--primary)" x="197" y="18" font-size="11" font-weight="600">Disambiguation</text>
+                <rect class="wf-soft" x="285" y="13" width="60" height="2"/>
+                <circle class="wf-soft" cx="360" cy="14" r="14"/>
+                <text class="wf-text" x="382" y="18" font-size="11">Preview</text>
+                <rect class="wf-soft" x="440" y="13" width="60" height="2"/>
+                <circle class="wf-soft" cx="515" cy="14" r="14"/>
+                <text class="wf-text" x="537" y="18" font-size="11">Execute</text>
+              </g>
+              <rect class="wf-card" x="20" y="110" width="600" height="32" rx="4"/>
+              <text class="wf-text" x="36" y="130" font-size="11">3 rows cần chọn tier · 12 rows đã resolve tự động</text>
+              <rect class="wf-card" x="20" y="152" width="600" height="188" rx="6"/>
+              <rect class="wf-soft" x="20" y="152" width="600" height="24"/>
+              <text class="wf-text" x="36" y="168" font-weight="600" font-size="10">#</text>
+              <text class="wf-text" x="64" y="168" font-weight="600" font-size="10">SKU</text>
+              <text class="wf-text" x="200" y="168" font-weight="600" font-size="10">Title</text>
+              <text class="wf-text" x="330" y="168" font-weight="600" font-size="10">Price</text>
+              <text class="wf-text" x="400" y="168" font-weight="600" font-size="10">Tier</text>
+              <g font-size="10">
+                <rect fill="var(--warning-bg)" x="20" y="176" width="600" height="40"/>
+                <text class="wf-text" x="36" y="200" font-family="monospace">4</text>
+                <text class="wf-text" x="64" y="200" font-family="monospace">⚠ gem_starter</text>
+                <text class="wf-text" x="200" y="200">Starter Gems</text>
+                <text class="wf-text" x="330" y="200" font-family="monospace">0.99 USD</text>
+                <rect fill="var(--surface)" stroke="var(--warning)" x="395" y="186" width="216" height="22" rx="3"/>
+                <text fill="var(--warning)" x="403" y="200" font-size="9" font-weight="600">Tier 1 — 27,000 VND · 175 regions ▼</text>
+                <line stroke="var(--border)" x1="20" y1="216" x2="620" y2="216"/>
+                <rect fill="var(--warning-bg)" x="20" y="216" width="600" height="40"/>
+                <text class="wf-text" x="36" y="240" font-family="monospace">6</text>
+                <text class="wf-text" x="64" y="240" font-family="monospace">⚠ gold_medium</text>
+                <text class="wf-text" x="200" y="240">Medium Gold Pack</text>
+                <text class="wf-text" x="330" y="240" font-family="monospace">2.99 USD</text>
+                <rect fill="var(--surface)" stroke="var(--warning)" x="395" y="226" width="216" height="22" rx="3"/>
+                <text fill="var(--warning)" x="403" y="240" font-size="9" font-weight="600">Tier 5 — 79,000 VND · 175 regions ▼</text>
+                <line stroke="var(--border)" x1="20" y1="256" x2="620" y2="256"/>
+                <text class="wf-text" x="36" y="280" font-family="monospace">1</text>
+                <text class="wf-text" x="64" y="280" font-family="monospace">coin_pack_100</text>
+                <text class="wf-text" x="200" y="280">Coin Pack 100</text>
+                <text class="wf-text" x="330" y="280" font-family="monospace">0.99 USD</text>
+                <text class="wf-text" x="400" y="280" font-style="italic">Tier 1 (auto)</text>
+                <line stroke="var(--border)" x1="20" y1="290" x2="620" y2="290"/>
+                <text class="wf-text" x="36" y="312" font-family="monospace">2</text>
+                <text class="wf-text" x="64" y="312" font-family="monospace">coin_pack_500</text>
+                <text class="wf-text" x="200" y="312">Coin Pack 500</text>
+                <text class="wf-text" x="330" y="312" font-family="monospace">4.99 USD</text>
+                <text class="wf-text" x="400" y="312" font-style="italic">Tier 7 (auto)</text>
+              </g>
+            </svg>
           </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Wizard import Google IAP · CSV template · Hotfix 28 per-row currency validation ·
-            preview rows · auto-convert micros · batch create.
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Step 2 Disambiguation · vàng = cần chọn · italic = auto-resolved</span>
           </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Hotfix 28 — currency validation</div>
+          <p>Trước Hotfix 28, currency mismatch chỉ surface lúc Execute (Google reject 400). Hotfix 28 validate per-row ở Step 3 Preview → user fix trước khi commit.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Items tạo ra INACTIVE</div>
+          <p>Sau bulk import thành công, items default INACTIVE. Dùng <a class="inline-link" data-goto="google-bulk-activate">Bulk Activate</a> để kích hoạt toàn batch một thao tác.</p>
         </div>
       </section>
 
       <section class="page" data-page="google-pricing-matrix">
-        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
+        <div class="meta-strip">
+          <span class="meta-chip module-google">Google IAP Management</span>
+          <span class="meta-chip cycle">Cycle 36 + 38</span>
+          <span class="meta-chip">3 tabs</span>
+        </div>
         <h1 class="page-title">Google Pricing matrix</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
+        <p class="page-lede">
+          Phiên bản Google của <a class="inline-link" data-goto="apple-pricing-matrix">Apple Pricing Matrix</a>.
+          UX gần như giống — bảng tier × region — nhưng thêm tab <strong>Google Default Reference</strong>
+          để so sánh với giá mặc định Google đề xuất, và đơn vị micros thay vì cents.
+        </p>
+
+        <h2 class="section-title">3 tabs</h2>
+        <table class="docs-table">
+          <thead><tr><th>Tab</th><th>Mục đích</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Default matrix</strong></td><td>Workspace-level template (tương tự Apple)</td></tr>
+            <tr><td><strong>Per-App matrix</strong></td><td>Override cho 1 app cụ thể</td></tr>
+            <tr><td><strong>Google Default Reference</strong></td><td>Bảng giá Google đề xuất (read-only) · benchmark khi build Default template</td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Khác biệt chính so với Apple</h2>
+        <ul>
+          <li><strong>Đơn vị micros</strong>: 1 USD = 1,000,000 micros · UI hiển thị USD/VND, convert tự động.</li>
+          <li><strong>regionsVersion</strong>: catalog Google đổi định kỳ (vd: Jan 2026 BGN→EUR). Tool hiển thị regionsVersion hiện tại ở footer · Hotfix 9.</li>
+          <li><strong>~190 regions</strong> thay vì ~175 territories như Apple.</li>
+          <li><strong>Google Default Reference</strong> tab: benchmark giá Google đề xuất cho mọi tier.</li>
+        </ul>
+
+        <h2 class="section-title">Hướng dẫn sử dụng</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Vào Settings → Pricing Templates</div>
+            <div class="step-body"><p>Sidebar → <strong>Settings</strong> → <strong>Pricing Templates</strong> (module Google). URL: <code class="inline">/google-iap-management/settings/pricing-templates</code>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Tab Default matrix — view giá workspace</div>
+            <div class="step-body"><p>Filter theo currency/region, view giá toàn template. Cell vàng = override per-app.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Tab Per-App matrix — view override theo app</div>
+            <div class="step-body"><p>Chọn app từ dropdown → bảng matrix overlay Per-App lên Default. Cell vàng highlight overrides.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Tab Google Default Reference</div>
+            <div class="step-body"><p>Read-only · giá Google đề xuất cho mỗi tier. Useful khi build Default template lần đầu — copy reference làm baseline rồi adjust per business.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Export CSV</div>
+            <div class="step-body"><p>Nút Export góc phải — file CSV bao gồm tier × region × currency × price · open Excel để analyze.</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Google Pricing matrix · 3 tabs · Default matrix view">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="36" rx="6"/>
+              <rect class="wf-primary-bg" x="32" y="28" width="120" height="20" rx="4"/>
+              <text fill="var(--primary)" x="92" y="42" text-anchor="middle" font-size="11" font-weight="600">Default matrix</text>
+              <text class="wf-text" x="180" y="42" font-size="11">Per-App matrix</text>
+              <text class="wf-text" x="290" y="42" font-size="11">Google Default Reference</text>
+              <rect fill="var(--teal)" x="510" y="28" width="80" height="20" rx="4"/>
+              <text fill="#fff" x="550" y="42" text-anchor="middle" font-size="10" font-weight="600">Export CSV</text>
+              <rect class="wf-card" x="20" y="66" width="600" height="30" rx="4"/>
+              <text class="wf-text" x="40" y="86">Currency: USD ▼   Region: 190 selected ▼   Tier: 1 → 12 ▼</text>
+              <rect class="wf-card" x="20" y="106" width="600" height="220" rx="6"/>
+              <rect class="wf-soft" x="20" y="106" width="600" height="24"/>
+              <text class="wf-text" x="40" y="122" font-weight="600" font-size="10">Tier</text>
+              <text class="wf-text" x="130" y="122" font-weight="600" font-size="10">US (USD)</text>
+              <text class="wf-text" x="230" y="122" font-weight="600" font-size="10">JP (JPY)</text>
+              <text class="wf-text" x="320" y="122" font-weight="600" font-size="10">VN (VND)</text>
+              <text class="wf-text" x="420" y="122" font-weight="600" font-size="10">DE (EUR)</text>
+              <text class="wf-text" x="520" y="122" font-weight="600" font-size="10">BR (BRL)</text>
+              <g font-size="11">
+                <text class="wf-text" x="40" y="148" font-family="monospace">Tier 1</text>
+                <text class="wf-text" x="130" y="148" font-family="monospace">$0.99</text>
+                <text class="wf-text" x="230" y="148" font-family="monospace">¥150</text>
+                <text class="wf-text" x="320" y="148" font-family="monospace">₫24,000</text>
+                <text class="wf-text" x="420" y="148" font-family="monospace">€0.99</text>
+                <text class="wf-text" x="520" y="148" font-family="monospace">R$4.90</text>
+                <line stroke="var(--border)" x1="20" y1="158" x2="620" y2="158"/>
+                <text class="wf-text" x="40" y="178" font-family="monospace">Tier 3</text>
+                <text class="wf-text" x="130" y="178" font-family="monospace">$1.99</text>
+                <text class="wf-text" x="230" y="178" font-family="monospace">¥300</text>
+                <rect fill="var(--warning-bg)" x="305" y="166" width="100" height="18" rx="3"/>
+                <text fill="var(--warning)" x="320" y="178" font-family="monospace" font-weight="600">₫49,000</text>
+                <text class="wf-text" x="420" y="178" font-family="monospace">€1.99</text>
+                <text class="wf-text" x="520" y="178" font-family="monospace">R$9.90</text>
+                <line stroke="var(--border)" x1="20" y1="188" x2="620" y2="188"/>
+                <text class="wf-text" x="40" y="208" font-family="monospace">Tier 5</text>
+                <text class="wf-text" x="130" y="208" font-family="monospace">$2.99</text>
+                <text class="wf-text" x="230" y="208" font-family="monospace">¥450</text>
+                <text class="wf-text" x="320" y="208" font-family="monospace">₫72,000</text>
+                <text class="wf-text" x="420" y="208" font-family="monospace">€2.99</text>
+                <text class="wf-text" x="520" y="208" font-family="monospace">R$14.90</text>
+                <line stroke="var(--border)" x1="20" y1="218" x2="620" y2="218"/>
+                <text class="wf-text" x="40" y="238" font-family="monospace">Tier 7</text>
+                <text class="wf-text" x="130" y="238" font-family="monospace">$4.99</text>
+                <text class="wf-text" x="230" y="238" font-family="monospace">¥750</text>
+                <text class="wf-text" x="320" y="238" font-family="monospace">₫120,000</text>
+                <text class="wf-text" x="420" y="238" font-family="monospace">€4.99</text>
+                <text class="wf-text" x="520" y="238" font-family="monospace">R$24.90</text>
+                <line stroke="var(--border)" x1="20" y1="248" x2="620" y2="248"/>
+                <text class="wf-text" x="40" y="268" font-family="monospace">Tier 12</text>
+                <text class="wf-text" x="130" y="268" font-family="monospace">$9.99</text>
+                <text class="wf-text" x="230" y="268" font-family="monospace">¥1,500</text>
+                <text class="wf-text" x="320" y="268" font-family="monospace">₫239,000</text>
+                <text class="wf-text" x="420" y="268" font-family="monospace">€9.99</text>
+                <text class="wf-text" x="520" y="268" font-family="monospace">R$49.90</text>
+              </g>
+              <text class="wf-text" x="40" y="312" font-size="9" font-style="italic">regionsVersion: 2026-01-15 · Hotfix 9 forward to patch calls</text>
+            </svg>
           </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Pattern UX tương tự Apple Pricing Matrix · thêm tab "Google Default Reference" so sánh
-            giá mặc định Google đề xuất · region-based prices in micros.
-          </div>
-          <div class="stub-meta">
-            Xem trước workflow chung tại <a class="inline-link" data-goto="apple-pricing-matrix">Apple Pricing matrix</a> ·
-            Phase 4 implementation · post mockup approval
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>3 tabs · Default + Per-App + Google Default Reference · regionsVersion footer</span>
           </div>
         </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Google Default Reference — benchmark</div>
+          <p>Tab này read-only · Google đề xuất giá cho mỗi tier theo PPP (Purchasing Power Parity) per region. Useful khi muốn align với Google recommendation thay vì tự build pricing strategy.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ regionsVersion drift</div>
+          <p>Khi Google đổi catalog (BGN→EUR Jan 2026), giá cũ trong template vẫn dùng được nhưng có thể stale. Resync template sau khi Google announce changes — tool sẽ refresh regionsVersion tự động.</p>
+        </div>
+
+        <h2 class="section-title">Tính năng liên quan</h2>
+        <ul>
+          <li><a class="inline-link" data-goto="apple-pricing-matrix">Apple Pricing matrix</a> · pattern tương đương</li>
+          <li><a class="inline-link" data-goto="google-settings">Google Settings</a> · quản lý templates</li>
+        </ul>
       </section>
 
       <section class="page" data-page="google-bulk-deactivate">
-        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
+        <div class="meta-strip">
+          <span class="meta-chip module-google">Google IAP Management</span>
+          <span class="meta-chip cycle">Cycle 41</span>
+          <span class="meta-chip">Destructive · confirm gate</span>
+        </div>
         <h1 class="page-title">Bulk Deactivate items</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+        <p class="page-lede">
+          Thao tác ngược của <a class="inline-link" data-goto="google-bulk-activate">Bulk Activate</a> —
+          chuyển items từ ACTIVE → INACTIVE. Cùng modal component (BulkStatusModal mode=deactivate)
+          nhưng thêm <strong>confirm gate</strong> bước 2 (Manager directive · destructive variant).
+        </p>
+
+        <h2 class="section-title">Khi nào dùng tính năng này?</h2>
+        <ul>
+          <li>Tạm dừng sales cho 1 batch items (vd: maintenance, đợi update content).</li>
+          <li>Sunset 1 nhóm IAP cũ (vd: legacy season pass).</li>
+          <li>Emergency stop khi phát hiện bug pricing/content trong nhiều items.</li>
+        </ul>
+
+        <h2 class="section-title">Hướng dẫn sử dụng từng bước</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Chọn items active</div>
+            <div class="step-body"><p>Từ <a class="inline-link" data-goto="google-iaps">Danh sách IAPs</a> filter <code class="inline">State = ACTIVE</code> → multi-select. Toolbar hiện nút <strong>Bulk Deactivate</strong> (red border).</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Mở modal · Selection state</div>
+            <div class="step-body">
+              <p>Modal mở với header red accent. Filter copy đỏ phía trên: "Showing items currently ACTIVE — eligible to deactivate". Multi-select checkbox + Select all.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Click Deactivate · confirm gate mở</div>
+            <div class="step-body">
+              <p>Modal-within-modal màu đỏ:</p>
+              <ul>
+                <li>Số items lớn red font</li>
+                <li>Disclaimer: "Existing customer entitlements stay intact; only new purchases stop"</li>
+                <li>2 nút: <strong>Cancel</strong> · <strong>Confirm</strong> (đỏ đậm)</li>
+              </ul>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Confirm execute</div>
+            <div class="step-body"><p>Click Confirm → tool gửi <code class="inline">batchUpdateStates</code> request với target state INACTIVE. Same orchestration as Bulk Activate · Hotfix 12 refetch sau khi execute để hiển thị state đúng.</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Bulk Deactivate · confirm gate red palette">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect fill="rgba(127, 29, 29, 0.35)" width="640" height="360"/>
+              <rect class="wf-card" x="100" y="60" width="440" height="240" rx="14" stroke="var(--danger)" stroke-width="3"/>
+              <rect fill="var(--danger-bg)" x="100" y="60" width="440" height="56" rx="14"/>
+              <g transform="translate(120, 76)">
+                <circle fill="var(--danger-bg)" stroke="var(--danger)" cx="20" cy="20" r="20"/>
+                <text fill="var(--danger)" x="20" y="26" text-anchor="middle" font-size="20" font-weight="700">⚠</text>
+              </g>
+              <text fill="var(--text)" x="180" y="98" font-weight="600">Confirm bulk deactivate</text>
+              <text class="wf-text" x="180" y="116" font-size="11">This will stop sales for the following number of items on Google Play. Continue?</text>
+              <rect fill="var(--danger-bg)" stroke="var(--danger)" x="120" y="140" width="400" height="74" rx="8"/>
+              <text fill="var(--danger)" x="140" y="184" font-size="40" font-weight="700">12</text>
+              <text class="wf-text" x="220" y="170" font-size="11" fill="var(--text)">items will become <tspan font-weight="700">inactive</tspan></text>
+              <text class="wf-text" x="220" y="188" font-size="10">Existing customer entitlements stay intact;</text>
+              <text class="wf-text" x="220" y="204" font-size="10">only new purchases stop.</text>
+              <rect fill="var(--surface-2)" x="100" y="244" width="440" height="56" rx="14"/>
+              <rect class="wf-card" x="320" y="262" width="80" height="22" rx="6"/>
+              <text class="wf-text" x="360" y="277" text-anchor="middle" font-size="11">Cancel</text>
+              <rect fill="var(--danger)" x="410" y="262" width="110" height="22" rx="6"/>
+              <text fill="#fff" x="465" y="277" text-anchor="middle" font-size="11" font-weight="600">Confirm</text>
+            </svg>
           </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Pattern tương tự <a class="inline-link" data-goto="google-bulk-activate">Bulk Activate</a> nhưng chuyển state
-            ACTIVE → INACTIVE · cùng modal + preview + result summary · cảnh báo về user đang
-            có subscription chưa expire.
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Confirm gate · red palette · 12 items · entitlements disclaimer</span>
           </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-danger">
+          <div class="callout-title">🚫 Customer entitlements không revoke</div>
+          <p>Bulk Deactivate chỉ stop <strong>new purchases</strong>. Users đã mua trước đó vẫn giữ entitlement. Nếu cần revoke, dùng Google Play Console refund flow riêng.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Subscriptions với active subscribers</div>
+          <p>Cẩn thận khi deactivate subscription products đang có active subscribers — họ vẫn được auto-renew theo billing cycle hiện tại. Để fully stop, cần cancel từng subscription qua Play Console.</p>
+        </div>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Reactivate workflow</div>
+          <p>Nếu deactivate nhầm, dùng ngay <a class="inline-link" data-goto="google-bulk-activate">Bulk Activate</a> để revert. State change idempotent — không phải undo destructive.</p>
         </div>
       </section>
 
       <section class="page" data-page="google-settings">
-        <div class="meta-strip"><span class="meta-chip module-google">Google IAP Management</span></div>
-        <h1 class="page-title">Settings</h1>
-        <div class="stub">
-          <div class="stub-icon">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          </div>
-          <div class="stub-title">Tài liệu đang được biên soạn</div>
-          <div class="stub-desc">
-            Google Accounts management (service account key file upload) + Pricing Templates (Default +
-            Per-App + Google Default Reference) · multi-account support.
-          </div>
-          <div class="stub-meta">Phase 4 implementation · post mockup approval</div>
+        <div class="meta-strip">
+          <span class="meta-chip module-google">Google IAP Management</span>
+          <span class="meta-chip">Service accounts</span>
         </div>
+        <h1 class="page-title">Settings (Google)</h1>
+        <p class="page-lede">
+          Trang quản lý kết nối Google của module: thêm/xóa service accounts, set account active,
+          và quản lý <a class="inline-link" data-goto="google-pricing-matrix">Pricing Templates</a>.
+          Module Google dùng <strong>service account JSON key file</strong> (không phải password).
+        </p>
+
+        <h2 class="section-title">2 phần settings</h2>
+        <table class="docs-table">
+          <thead><tr><th>Section</th><th>Mục đích</th><th>URL</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Google Accounts</strong></td><td>Quản lý service accounts kết nối Google Play API</td><td><code class="inline">/google-iap-management/settings/google-accounts</code></td></tr>
+            <tr><td><strong>Pricing Templates</strong></td><td>Default + Per-App + Google Default Reference matrix</td><td><code class="inline">/google-iap-management/settings/pricing-templates</code></td></tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Setup Google service account</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Tạo service account trên Google Cloud Console</div>
+            <div class="step-body">
+              <p>Google Cloud Console → IAM &amp; Admin → Service Accounts → Create. Service account email pattern: <code class="inline">{name}@{project}.iam.gserviceaccount.com</code>.</p>
+              <p>Roles cần: <code class="inline">Pub/Sub Subscriber</code>, <code class="inline">Service Account Token Creator</code>.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Download JSON key file</div>
+            <div class="step-body"><p>Service account → Keys → Add Key → Create new key → JSON. File download về máy. <strong>Lưu cẩn thận</strong> — file này chứa private key.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Invite service account vào Play Console</div>
+            <div class="step-body"><p>Google Play Console → Users and permissions → Invite new user → paste service account email → assign role <code class="inline">App owner</code> hoặc <code class="inline">Developer</code> per app.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Upload JSON key vào tool</div>
+            <div class="step-body">
+              <p>Tool: <strong>Settings → Google Accounts → + Add Account</strong> → drag &amp; drop JSON file. Tool parse + validate:</p>
+              <ul>
+                <li>JSON format đúng</li>
+                <li>Có field <code class="inline">private_key</code>, <code class="inline">client_email</code></li>
+                <li>Test call Play API → confirm credentials hợp lệ</li>
+              </ul>
+              <p>Service account được lưu encrypted vào DB.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Set account active</div>
+            <div class="step-body"><p>Trong list accounts, click <strong>Set Active</strong> bên cạnh account muốn dùng. Apps list tự refresh theo account active (Hotfix 29).</p></div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Google Accounts settings · 2 service accounts · 1 active">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="20" y="20" width="600" height="36" rx="6"/>
+              <text class="wf-text" x="40" y="42" font-weight="600" fill="var(--text)">Google Accounts</text>
+              <rect fill="var(--teal)" x="500" y="28" width="100" height="20" rx="4"/>
+              <text fill="#fff" x="550" y="42" text-anchor="middle" font-size="10" font-weight="600">+ Add Account</text>
+              <rect class="wf-card" x="20" y="66" width="600" height="100" rx="8" stroke="var(--teal)" stroke-width="2"/>
+              <rect fill="var(--teal-bg)" x="20" y="66" width="600" height="24" rx="8"/>
+              <text fill="var(--teal)" x="40" y="84" font-size="10" font-weight="600">✓ ACTIVE</text>
+              <text class="wf-text" x="40" y="112" font-size="13" font-weight="600" font-family="monospace" fill="var(--text)">vng-publishing@iam.gserviceaccount.com</text>
+              <text class="wf-text" x="40" y="130" font-size="11">VNG main publishing account</text>
+              <text class="wf-text" x="40" y="148" font-size="9">Added 2025-11-12 · Last used 2 hours ago · 12 apps accessible</text>
+              <rect class="wf-card" x="500" y="130" width="80" height="22" rx="4"/>
+              <text class="wf-text" x="540" y="145" text-anchor="middle" font-size="10">Remove</text>
+              <rect class="wf-card" x="20" y="176" width="600" height="100" rx="8"/>
+              <text class="wf-text" x="40" y="200" font-size="13" font-weight="600" font-family="monospace" fill="var(--text)">partner-studio@iam.gserviceaccount.com</text>
+              <text class="wf-text" x="40" y="218" font-size="11">Partner publishing collab</text>
+              <text class="wf-text" x="40" y="236" font-size="9">Added 2026-02-08 · Not used recently · 3 apps accessible</text>
+              <rect fill="var(--surface)" stroke="var(--primary)" x="410" y="220" width="80" height="22" rx="4"/>
+              <text fill="var(--primary)" x="450" y="235" text-anchor="middle" font-size="10" font-weight="600">Set Active</text>
+              <rect class="wf-card" x="500" y="220" width="80" height="22" rx="4"/>
+              <text class="wf-text" x="540" y="235" text-anchor="middle" font-size="10">Remove</text>
+              <rect class="wf-card" x="20" y="296" width="600" height="44" rx="6" stroke-dasharray="4 4"/>
+              <text class="wf-text" x="320" y="322" text-anchor="middle">📥 Kéo thả service account JSON file vào đây</text>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>2 accounts · 1 active (teal border) · drag-drop zone JSON</span>
+          </div>
+        </div>
+
+        <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-danger">
+          <div class="callout-title">🚫 JSON key bảo mật</div>
+          <p>Service account JSON file chứa private key — KHÔNG commit vào git, KHÔNG share qua chat. Tool encrypt khi lưu vào DB. Nếu compromised, vào Google Cloud Console revoke ngay rồi tạo key mới.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Permission propagation delay</div>
+          <p>Sau khi invite service account vào Play Console, propagation thường mất 5-15 phút. Nếu upload JSON ngay → tool có thể fail validate. Đợi 10 phút rồi retry.</p>
+        </div>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Multi-account workflow</div>
+          <p>Team có thể thêm nhiều service accounts (vd: VNG + partner studio). Active account quyết định Apps list. Switch nhanh qua nút <strong>Set Active</strong> — Hotfix 29 đảm bảo Apps list refresh đồng bộ.</p>
+        </div>
+
+        <h2 class="section-title">Tính năng liên quan</h2>
+        <ul>
+          <li><a class="inline-link" data-goto="google-apps">Danh sách apps</a> · phụ thuộc account active</li>
+          <li><a class="inline-link" data-goto="google-pricing-matrix">Pricing matrix</a> · section Pricing Templates</li>
+        </ul>
       </section>
 
     </div>
