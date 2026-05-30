@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { useState } from "react";
-import { Layers, Inbox, ShoppingBag, Settings, LogOut, PlayCircle } from "lucide-react";
+import { Layers, Inbox, ShoppingBag, Settings, LogOut, PlayCircle, BookOpen } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { getSettingsHref } from "./sidebar-helpers";
 import { ThemeToggle } from "./ThemeToggle";
@@ -14,6 +14,10 @@ interface NavItem {
   label: string;
   icon: LucideIcon;
   href: string;
+  /** Opens in a new tab. The standalone User Guide is a sibling experience
+   *  with its own chrome (sidebar, theme toggle, search) — embedding it in
+   *  this rail would create double-chrome conflicts, so it gets its own tab. */
+  external?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -40,6 +44,13 @@ const NAV_ITEMS: NavItem[] = [
     label: "Google IAP",
     icon: PlayCircle,
     href: "/google-iap-management",
+  },
+  {
+    id: "user-guide",
+    label: "User Guide",
+    icon: BookOpen,
+    href: "/user-guide",
+    external: true,
   },
 ];
 
@@ -92,11 +103,13 @@ export function AppSidebar() {
         {/* Tool icons */}
         <div className="flex flex-col items-center gap-1 flex-1">
           {NAV_ITEMS.map((item) => {
-            const isActive = pathname.startsWith(item.href);
+            const isActive = !item.external && pathname.startsWith(item.href);
             return (
               <Link
                 key={item.id}
                 href={item.href}
+                target={item.external ? "_blank" : undefined}
+                rel={item.external ? "noopener" : undefined}
                 title={item.label}
                 className={`relative w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
                   isActive
@@ -152,11 +165,13 @@ export function AppSidebar() {
           {/* Tool labels */}
           <div className="flex flex-col flex-1">
             {NAV_ITEMS.map((item) => {
-              const isActive = pathname.startsWith(item.href);
+              const isActive = !item.external && pathname.startsWith(item.href);
               return (
                 <Link
                   key={item.id}
                   href={item.href}
+                  target={item.external ? "_blank" : undefined}
+                  rel={item.external ? "noopener" : undefined}
                   className={`flex items-center gap-3 h-10 px-4 text-[13px] transition-colors ${
                     isActive
                       ? "text-[#0071E3] font-semibold bg-blue-50 dark:bg-blue-950/40"

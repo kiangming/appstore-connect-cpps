@@ -1,9 +1,30 @@
 <!DOCTYPE html>
-<html lang="vi" data-theme="light">
+<html lang="vi">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hướng dẫn sử dụng — IAP Management</title>
+<script>
+  // Cycle 42 Phase 4c — read the TOOL's theme signal (next-themes default
+  // localStorage key "theme", values "light" | "dark" | "system" | null).
+  // Apply BEFORE paint to avoid FOUC. The docs CSS keys off [data-theme="dark"];
+  // also set the .dark class so Tailwind dark mode (used by the tool, not
+  // by docs but kept for symmetry) sees the same signal.
+  (function () {
+    try {
+      var v = localStorage.getItem("theme");
+      var systemDark =
+        window.matchMedia &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches;
+      var dark = v === "dark" || ((v === "system" || !v) && systemDark);
+      var root = document.documentElement;
+      root.setAttribute("data-theme", dark ? "dark" : "light");
+      if (dark) root.classList.add("dark");
+    } catch (e) {
+      /* localStorage blocked → light mode default */
+    }
+  })();
+</script>
 <style>
   /* ============================================================
      Design tokens — palette aligned với existing tool mockups
@@ -3994,20 +4015,20 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
   searchInput.addEventListener('input', filterNav);
 
   /* ============================================================
-     Theme toggle (persist via localStorage)
+     Theme toggle — writes to the TOOL's localStorage key ("theme",
+     next-themes default) so toggling here propagates to the tool on
+     next reload. Initial paint is handled by the pre-paint script in
+     <head>; this only wires the toggle click.
      ============================================================ */
   const themeToggle = document.getElementById('themeToggle');
-  const storedTheme = localStorage.getItem('docs-theme');
-  if (storedTheme) {
-    document.documentElement.setAttribute('data-theme', storedTheme);
-  } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    document.documentElement.setAttribute('data-theme', 'dark');
-  }
   themeToggle.addEventListener('click', () => {
-    const cur = document.documentElement.getAttribute('data-theme') || 'light';
+    const root = document.documentElement;
+    const cur = root.getAttribute('data-theme') || 'light';
     const next = cur === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-theme', next);
-    localStorage.setItem('docs-theme', next);
+    root.setAttribute('data-theme', next);
+    if (next === 'dark') root.classList.add('dark');
+    else root.classList.remove('dark');
+    try { localStorage.setItem('theme', next); } catch (e) {}
   });
 
   /* ============================================================

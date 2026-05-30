@@ -18,6 +18,16 @@ const nextConfig = {
     // with ENOENT on re2.wasm. Marking it external makes the runtime load
     // from node_modules/re2-wasm/ via plain Node require().
     serverComponentsExternalPackages: ["re2-wasm"],
+
+    // Cycle 42 Phase 4c — User Guide route reads docs/user-docs/index.html
+    // at module init via fs.readFileSync. With output: "standalone",
+    // Next.js's file tracer does NOT auto-include files outside the
+    // module graph, so the standalone server would fail to boot on
+    // Railway with ENOENT. This explicit include copies the HTML into
+    // .next/standalone/docs/user-docs/ alongside the route handler.
+    outputFileTracingIncludes: {
+      "/user-guide": ["./docs/user-docs/index.html"],
+    },
   },
 };
 

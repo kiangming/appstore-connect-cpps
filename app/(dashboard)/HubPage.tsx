@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useSession } from "next-auth/react";
-import { Layers, Inbox, ShoppingBag, PlayCircle, ArrowRight } from "lucide-react";
+import { Layers, Inbox, ShoppingBag, PlayCircle, BookOpen, ArrowRight } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 interface ToolCard {
@@ -11,6 +11,8 @@ interface ToolCard {
   description: string;
   icon: LucideIcon;
   href: string;
+  /** If true, opens in a new tab. Used for the standalone User Guide. */
+  external?: boolean;
 }
 
 const TOOLS: ToolCard[] = [
@@ -41,6 +43,14 @@ const TOOLS: ToolCard[] = [
     description: "Manage Google Play in-app products + bulk-import via Service Account",
     icon: PlayCircle,
     href: "/google-iap-management",
+  },
+  {
+    id: "user-guide",
+    name: "User Guide",
+    description: "Hướng dẫn sử dụng — Apple + Google IAP Management",
+    icon: BookOpen,
+    href: "/user-guide",
+    external: true,
   },
 ];
 
@@ -73,6 +83,8 @@ export function HubPage() {
             <Link
               key={tool.id}
               href={tool.href}
+              target={tool.external ? "_blank" : undefined}
+              rel={tool.external ? "noopener" : undefined}
               className="group bg-white rounded-2xl border border-slate-200 p-6 transition-all duration-150 hover:border-[#0071E3] hover:shadow-sm"
             >
               <tool.icon

@@ -1826,10 +1826,41 @@ Pattern: skill **enhances** foundation, doesn't **replace** it.
 #### Deferred Cycle 43+
 
 1. Real screenshots — Manager-captured OR Playwright automated · decision empirical-evidence-based post Manager production observation.
-2. Documentation site hosting — current ship is `docs/user-docs/index.html` accessed via file:// or local server; future may host at `/docs` route or static site.
+2. ~~Documentation site hosting~~ → **RESOLVED Phase 4c**: route handler [`app/user-guide/route.ts`](../../app/user-guide/route.ts) serves `docs/user-docs/index.html` behind tool auth at `/user-guide`. `getServerSession` redirects unauthenticated users to `/login`; authenticated users get the standalone HTML via `new NextResponse(html, ...)` (NOT `dangerouslySetInnerHTML` — inline `<script>` execution required for theme/search/lightbox/copy). File read once at module init; copied into the standalone server output via `experimental.outputFileTracingIncludes['/user-guide'] = ['./docs/user-docs/index.html']` in [`next.config.mjs`](../../next.config.mjs). Theme aligned with the tool: docs reads the next-themes `theme` localStorage key on load (pre-paint, no FOUC), the docs' own toggle writes back to the same key so light/dark stays coherent across tool ↔ docs reloads. Entry points: User Guide card in [`HubPage.tsx`](../../app/(dashboard)/HubPage.tsx) `TOOLS` + nav entry in [`AppSidebar.tsx`](../../components/layout/AppSidebar.tsx) `NAV_ITEMS`, both `target="_blank"` (docs is a sibling experience with its own chrome — embedding would double-render sidebar + theme toggle).
 3. Per-page illustration iteration — if Manager flags specific pages needing higher fidelity to a particular mockup state.
 4. IAPs list auto-refresh wider scope (Hotfix 29 only covered Apps list).
 5. Apple IAP Phase B subsets B2/B3/B4 — telemetry-gated, observation continues parallel.
+
+#### Phase 4c — Tool integration (Cycle 42 closure addendum)
+
+**Trap class avoided — runtime fs read in `output: "standalone"`**: Next.js's
+file tracer follows the module import graph; `fs.readFileSync(path)`
+arguments are opaque to the tracer, so `docs/user-docs/index.html` would
+NOT have been copied into `.next/standalone/` and the server would have
+failed to boot on Railway with `ENOENT: docs/user-docs/index.html`.
+`experimental.outputFileTracingIncludes` is the load-bearing escape
+hatch — keyed by the route path (`/user-guide`), valued by a relative
+glob (`./docs/user-docs/index.html`). Build verification: `.next/standalone/
+docs/user-docs/index.html` (232KB) shipped alongside `server.js`.
+
+**Trap class avoided — `dangerouslySetInnerHTML` for self-contained HTML**:
+The docs site relies on inline `<script>` blocks for theme detection,
+sidebar search filter, lightbox, code-copy buttons, hash routing. React's
+`dangerouslySetInnerHTML` parses the HTML but does NOT execute inline
+scripts (a security-by-default behavior). Returning raw HTML via
+`new NextResponse(html, { headers: { 'Content-Type': 'text/html' }})`
+bypasses React rendering entirely and lets the browser execute scripts
+normally.
+
+**Theme alignment mechanism**: docs HTML now has a pre-paint `<script>`
+in `<head>` that reads `localStorage.getItem('theme')` (next-themes default
+key), resolves `'system'` / null via `prefers-color-scheme`, and sets both
+`data-theme` (docs CSS variables) and `.dark` class (Tailwind class
+strategy — for symmetry with the tool even though docs doesn't import
+Tailwind) on `<html>` before first paint. The docs' own toggle writes
+back to the same `'theme'` key, so toggling in docs propagates to the
+tool on next tool tab reload. No live cross-tab sync (deferred per
+Manager: "theme-on-load matching is sufficient").
 
 #### New institutional patterns crystallized
 
