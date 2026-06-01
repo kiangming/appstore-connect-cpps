@@ -63,7 +63,7 @@ import {
   findTemplateId,
 } from "../queries/templates";
 import {
-  isCrossCurrencyRow,
+  detectCrossCurrencyTrigger,
   findCrossCurrencyCandidates,
   resolveAppCurrencyEntryForTier,
   fileDecimalToAnchorMicros,
@@ -296,17 +296,29 @@ export async function executeBulkImport(
   const actionableRows = input.rows.filter((r) => r.decision !== "skip");
   const skippedCount = input.rows.length - actionableRows.length;
 
-  // Cross-currency resolution pre-pass (Cycle 43 feature).
+  // Cross-currency resolution pre-pass (Cycle 43 feature + 2026-06-01
+  // header-first correction).
   //
-  // A row qualifies for cross-currency resolution when its raw decimal
-  // price cannot be sent in its parser-resolved currency (e.g. "4.99"
-  // against a VND-default app). Resolution:
+  // Trigger order (detectCrossCurrencyTrigger):
+  //   1. EXPLICIT header "Price (XXX)" with XXX ≠ app currency →
+  //      header-first cross-currency, anchor = XXX (parameterized; may
+  //      be USD, EUR, etc — NOT hardcoded).
+  //   2. INFERRED header (generic "Price"/"Default Price"/"Base Price")
+  //      with raw value that violates app-currency precision →
+  //      value-based fallback cross-currency, anchor = USD by
+  //      Manager-template convention.
+  //   3. Neither → same-currency, current orchestrator path runs
+  //      unchanged.
+  //
+  // Resolution (when cross-currency):
   //   - google_default source: refuse — no template to resolve against.
-  //   - template source: look up USD-anchor candidates in the template.
+  //   - template source: look up (anchorCurrency, anchorMicros)
+  //     candidates in the template.
   //       0 candidates → refuse (template miss).
   //       1 candidate  → load tier entries, pick app-currency entry,
   //                      stamp resolvedDefaultPrice + regionOverrides
-  //                      so buildProduct sends the resolved VND amount.
+  //                      so buildProduct sends the resolved app-currency
+  //                      amount.
   //      >1 candidates → refuse (handler must pick via chosenTierIdentifier
   //                      from the wizard's multi-match dropdown; on the
   //                      next push that branch resolves the chosen tier).
@@ -315,7 +327,6 @@ export async function executeBulkImport(
   //
   // Refused rows are excluded from the Google batch (per-row fail-soft,
   // Q-K) and surfaced in BulkImportResult.refusedRows + the audit log.
-  // Same-currency rows are untouched — current behavior preserved.
   const appCurrencyNorm = (input.appDefaultCurrency ?? "").trim().toUpperCase();
   const crossCurrencyScope: "GLOBAL" | "APP" =
     input.pricingSource === "app_template" ? "APP" : "GLOBAL";
@@ -323,11 +334,25 @@ export async function executeBulkImport(
     crossCurrencyScope === "APP" ? input.appId : null;
   let crossCurrencyResolved = 0;
   let crossCurrencyRefused = 0;
+  let crossCurrencyByExplicitHeader = 0;
+  let crossCurrencyByValueFallback = 0;
 
   for (const row of actionableRows) {
-    if (!isCrossCurrencyRow(row.basePriceDecimal, row.baseCurrency)) continue;
+    const trigger = detectCrossCurrencyTrigger({
+      basePriceDecimal: row.basePriceDecimal,
+      baseCurrency: row.baseCurrency,
+      priceHeaderSource: row.priceHeaderSource,
+      appDefaultCurrency: input.appDefaultCurrency ?? null,
+    });
+    if (!trigger) continue;
 
-    const usdAnchorMicros = fileDecimalToAnchorMicros(row.basePriceDecimal);
+    if (trigger.kind === "explicit_header") crossCurrencyByExplicitHeader += 1;
+    else crossCurrencyByValueFallback += 1;
+
+    const anchorMicros = fileDecimalToAnchorMicros(
+      row.basePriceDecimal,
+      trigger.anchorCurrency,
+    );
     const appCurrencyForMsg = appCurrencyNorm || row.baseCurrency || "(unknown)";
 
     // google_default OR missing app currency → no template to resolve against.
@@ -337,19 +362,20 @@ export async function executeBulkImport(
         reason: REFUSAL_REASONS.googleDefault(
           appCurrencyForMsg,
           row.basePriceDecimal,
+          trigger.anchorCurrency,
         ),
-        usdAnchorMicros,
+        usdAnchorMicros: anchorMicros,
       };
       crossCurrencyRefused += 1;
       console.info(
-        `[google-iap:bulk-import:cross-currency] refused sku=${row.sku} kind=google_default price=${row.basePriceDecimal} app_currency=${appCurrencyForMsg}`,
+        `[google-iap:bulk-import:cross-currency] refused sku=${row.sku} kind=google_default trigger=${trigger.kind} anchor=${trigger.anchorCurrency} price=${row.basePriceDecimal} app_currency=${appCurrencyForMsg}`,
       );
       continue;
     }
 
     // Template-based source. If the handler already picked a tier
     // (multi-match flow), resolve from it directly. Otherwise look up
-    // candidates via USD-anchor match.
+    // candidates via the trigger's anchor currency.
     if (row.chosenTierIdentifier) {
       const outcome = await resolveAppCurrencyEntryForTier({
         scope: crossCurrencyScope,
@@ -360,7 +386,7 @@ export async function executeBulkImport(
       applyResolveOutcome(
         row,
         outcome,
-        usdAnchorMicros,
+        anchorMicros,
         appCurrencyNorm,
         row.chosenTierIdentifier,
       );
@@ -369,6 +395,7 @@ export async function executeBulkImport(
         scope: crossCurrencyScope,
         appId: crossCurrencyAppId,
         filePriceDecimal: row.basePriceDecimal,
+        anchorCurrency: trigger.anchorCurrency,
       });
 
       if (candidates.length === 0) {
@@ -377,8 +404,9 @@ export async function executeBulkImport(
           reason: REFUSAL_REASONS.templateMiss(
             appCurrencyNorm,
             row.basePriceDecimal,
+            trigger.anchorCurrency,
           ),
-          usdAnchorMicros,
+          usdAnchorMicros: anchorMicros,
         };
       } else if (candidates.length > 1) {
         row.crossCurrencyRefusal = {
@@ -387,8 +415,9 @@ export async function executeBulkImport(
             appCurrencyNorm,
             row.basePriceDecimal,
             candidates.length,
+            trigger.anchorCurrency,
           ),
-          usdAnchorMicros,
+          usdAnchorMicros: anchorMicros,
         };
         // Surface candidate count so the wizard's tier dropdown wires up
         // correctly on the next preview round.
@@ -405,7 +434,7 @@ export async function executeBulkImport(
         applyResolveOutcome(
           row,
           outcome,
-          usdAnchorMicros,
+          anchorMicros,
           appCurrencyNorm,
           tier.identifier,
         );
@@ -415,12 +444,12 @@ export async function executeBulkImport(
     if (row.crossCurrencyRefusal) {
       crossCurrencyRefused += 1;
       console.info(
-        `[google-iap:bulk-import:cross-currency] refused sku=${row.sku} kind=${row.crossCurrencyRefusal.kind} price=${row.basePriceDecimal} app_currency=${appCurrencyForMsg}`,
+        `[google-iap:bulk-import:cross-currency] refused sku=${row.sku} kind=${row.crossCurrencyRefusal.kind} trigger=${trigger.kind} anchor=${trigger.anchorCurrency} price=${row.basePriceDecimal} app_currency=${appCurrencyForMsg}`,
       );
     } else if (row.resolvedDefaultPrice) {
       crossCurrencyResolved += 1;
       console.info(
-        `[google-iap:bulk-import:cross-currency] resolved sku=${row.sku} usd_price=${row.basePriceDecimal} → ${row.resolvedDefaultPrice.currency}/${row.resolvedDefaultPrice.priceMicros} tier=${row.chosenTierIdentifier ?? "?"}`,
+        `[google-iap:bulk-import:cross-currency] resolved sku=${row.sku} trigger=${trigger.kind} anchor=${trigger.anchorCurrency} src_price=${row.basePriceDecimal} → ${row.resolvedDefaultPrice.currency}/${row.resolvedDefaultPrice.priceMicros} tier=${row.chosenTierIdentifier ?? "?"}`,
       );
     }
   }
@@ -731,6 +760,8 @@ export async function executeBulkImport(
         refused_rows: refusedRowsDetail,
         cross_currency_resolved: crossCurrencyResolved,
         cross_currency_refused: crossCurrencyRefused,
+        cross_currency_by_explicit_header: crossCurrencyByExplicitHeader,
+        cross_currency_by_value_fallback: crossCurrencyByValueFallback,
         duration_ms: Date.now() - t0,
       },
     });
@@ -904,6 +935,8 @@ export async function executeBulkImport(
         refused_rows: refusedRowsDetail,
         cross_currency_resolved: crossCurrencyResolved,
         cross_currency_refused: crossCurrencyRefused,
+        cross_currency_by_explicit_header: crossCurrencyByExplicitHeader,
+        cross_currency_by_value_fallback: crossCurrencyByValueFallback,
         error: err instanceof Error ? err.message : String(err),
         duration_ms: Date.now() - t0,
       },

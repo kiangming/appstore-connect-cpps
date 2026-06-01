@@ -43,6 +43,12 @@ interface ExecuteBody {
     chosenTierIdentifier?: string | null;
     defaultTierIdentifier?: string | null;
     tierCandidateCount?: number;
+    /** Cycle 43: parser provenance of the row's baseCurrency. "explicit"
+     *  when the Excel header was "Price (XXX)" (header-first cross-currency
+     *  trigger applies); "inferred" when generic "Price"/"Default Price"/
+     *  "Base Price" (value-based fallback). Legacy clients that don't
+     *  send this default to "inferred" (preserves pre-Cycle-43 behavior). */
+    priceHeaderSource?: "explicit" | "inferred";
   }>;
 }
 
@@ -145,6 +151,11 @@ export async function POST(
           ? r.defaultTierIdentifier
           : null,
       tierCandidateCount: typeof r.tierCandidateCount === "number" ? r.tierCandidateCount : 0,
+      // Cycle 43 header-first cross-currency trigger needs the parser's
+      // provenance. Default "inferred" for legacy clients (pre-Cycle-43
+      // wizard) so detection falls back to the value-based path.
+      priceHeaderSource:
+        r.priceHeaderSource === "explicit" ? "explicit" : "inferred",
     });
   }
 

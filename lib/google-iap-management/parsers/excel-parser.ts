@@ -173,6 +173,13 @@ export interface ParsedIapRow {
   basePriceDecimal: string;
   regionOverrides: ParsedRegionOverride[];
   listings: ParsedListing[];
+  /** Cycle 43: provenance of the row's baseCurrency. "explicit" when the
+   *  column header was "Price (XXX)" (parser Pass 1); "inferred" when
+   *  the column was a generic "Price"/"Default Price"/"Base Price" and
+   *  the currency fell back to the app's default. The orchestrator's
+   *  cross-currency trigger is header-first when explicit, value-based
+   *  fallback when inferred (Cycle 43 directive). */
+  priceHeaderSource: "explicit" | "inferred";
 }
 
 export interface ParseResult {
@@ -509,6 +516,10 @@ export function parseIapTemplate(
       basePriceDecimal,
       regionOverrides,
       listings,
+      // Cycle 43: propagate header provenance so the orchestrator's
+      // cross-currency pre-pass can prefer the explicit declaration
+      // (header-first) over the value-based fallback (inferred).
+      priceHeaderSource: priceResolution.source,
     });
   }
 

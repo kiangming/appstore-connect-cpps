@@ -47,21 +47,77 @@ import {
 } from "../queries/templates";
 import type { ParsedPricingEntry } from "../parsers/pricing-template-parser";
 
-/** Anchor currency for cross-currency resolution. The Manager-uploaded
- *  bulk-import templates carry tier anchors in USD; templates store the
- *  USD entry alongside per-region equivalents. */
-export const ANCHOR_CURRENCY = "USD";
+/** Default anchor currency for cross-currency resolution when the row's
+ *  header was generic (parser source = "inferred"). Manager's templates
+ *  carry USD entries alongside per-region equivalents, so USD is the
+ *  established convention for the value-based fallback path. Explicit
+ *  "Price (XXX)" headers override this with their declared currency. */
+export const DEFAULT_ANCHOR_CURRENCY = "USD";
+
+/** Backward-compat alias — kept so existing tests / external callers
+ *  that imported `ANCHOR_CURRENCY` don't break. New code should reference
+ *  `DEFAULT_ANCHOR_CURRENCY` to make the fallback nature explicit. */
+export const ANCHOR_CURRENCY = DEFAULT_ANCHOR_CURRENCY;
 
 /**
- * A row qualifies for cross-currency resolution when its raw decimal
- * price cannot be sent as-is in its resolved currency (precision
- * violation). The trigger is value-driven, not header-driven, so it
- * fires for both generic "Price" headers (parser-resolved to app
- * currency) and explicit "Price (VND)" headers when the value has
- * disallowed precision.
+ * Cycle 43 header-first trigger. Returns the trigger classification +
+ * the anchor currency to use for template lookup, or null when the row
+ * is same-currency and the existing flow handles it bit-for-bit.
  *
- * Returns false when the value passes precision validation (same-
- * currency path, current behavior preserved).
+ * Resolution order (Manager directive 2026-06-01):
+ *   1. EXPLICIT header "Price (XXX)" (parser source = "explicit"):
+ *        - XXX ≠ app currency → cross-currency, anchor = XXX (the
+ *          declared currency, NOT hardcoded USD).
+ *        - XXX == app currency → same-currency (null).
+ *   2. INFERRED header "Price"/"Default Price"/"Base Price" (parser
+ *      source = "inferred"):
+ *        - Raw value violates app-currency precision → cross-currency,
+ *          anchor = USD (Manager-template convention).
+ *        - Raw value passes precision → same-currency (null).
+ *
+ * appDefaultCurrency null/empty → returns null (caller can't resolve
+ * without knowing app currency; same-currency path lets the existing
+ * orchestrator code handle the row, where validation already exists).
+ */
+export type CrossCurrencyTrigger =
+  | { kind: "explicit_header"; anchorCurrency: string }
+  | { kind: "value_based"; anchorCurrency: string };
+
+export function detectCrossCurrencyTrigger(args: {
+  basePriceDecimal: string;
+  baseCurrency: string;
+  priceHeaderSource: "explicit" | "inferred";
+  appDefaultCurrency: string | null;
+}): CrossCurrencyTrigger | null {
+  if (!args.basePriceDecimal.trim() || !args.baseCurrency.trim()) return null;
+  const appCur = (args.appDefaultCurrency ?? "").trim().toUpperCase();
+  const rowCur = args.baseCurrency.trim().toUpperCase();
+  if (!appCur) return null;
+
+  if (args.priceHeaderSource === "explicit") {
+    // Header-first: parser declared an explicit currency. Compare to
+    // the app's default currency; the declared XXX is the anchor.
+    if (rowCur === appCur) return null;
+    return { kind: "explicit_header", anchorCurrency: rowCur };
+  }
+
+  // Inferred header: fall back to the value-based detection from the
+  // initial Cycle 43 ship. The anchor is USD by convention (Manager's
+  // templates index Tier 1..N by USD anchor).
+  const violates =
+    validateDecimalForCurrency(args.basePriceDecimal, args.baseCurrency) !==
+    null;
+  if (!violates) return null;
+  return { kind: "value_based", anchorCurrency: DEFAULT_ANCHOR_CURRENCY };
+}
+
+/**
+ * Legacy value-based predicate. Pre-Cycle-43 cross-currency.ts used this
+ * standalone; the new `detectCrossCurrencyTrigger` subsumes its role for
+ * the orchestrator. Kept exported for any caller still depending on it.
+ *
+ * @deprecated Use {@link detectCrossCurrencyTrigger} which honours the
+ * header-first directive (explicit "Price (XXX)" beats value-based).
  */
 export function isCrossCurrencyRow(
   basePriceDecimal: string,
@@ -72,24 +128,31 @@ export function isCrossCurrencyRow(
 }
 
 /**
- * Convert the file's Price decimal to USD micros. Returns null when
- * the value itself is not a valid USD-precision decimal (e.g. more
- * than 2 fractional digits) — caller treats that as a refusal.
+ * Convert the file's Price decimal to anchor-currency micros. Returns
+ * null when the value is not a valid decimal for the anchor's precision
+ * (e.g. "4.999" against USD which only allows 2 decimals) — caller
+ * treats that as a refusal.
+ *
+ * Anchor currency defaults to USD for back-compat with the initial
+ * Cycle 43 ship; the orchestrator passes the trigger's
+ * `anchorCurrency` (XXX for explicit headers, USD for inferred).
  */
 export function fileDecimalToAnchorMicros(
   filePriceDecimal: string,
+  anchorCurrency: string = DEFAULT_ANCHOR_CURRENCY,
 ): string | null {
   try {
-    return decimalToMicros(filePriceDecimal, ANCHOR_CURRENCY);
+    return decimalToMicros(filePriceDecimal, anchorCurrency);
   } catch {
     return null;
   }
 }
 
 /**
- * Look up tier candidates whose USD entry matches the file's Price
- * value. Returns an empty array when no template exists or no tier
- * carries that USD price. Throws on DB error.
+ * Look up tier candidates whose anchor-currency entry matches the
+ * file's Price value. Returns an empty array when no template exists
+ * or no tier carries that (anchorCurrency, anchorMicros) pair. Throws
+ * on DB error.
  *
  * Caller behavior by candidate count:
  *   0 → refuse the row (template-miss)
@@ -100,14 +163,22 @@ export async function findCrossCurrencyCandidates(args: {
   scope: TemplateScope;
   appId: string | null;
   filePriceDecimal: string;
+  /** Anchor currency for template lookup. Defaults to USD (Manager-
+   *  template convention) when omitted, matching the pre-Cycle-43
+   *  inferred-header behavior. Explicit "Price (XXX)" headers pass
+   *  XXX here. */
+  anchorCurrency?: string;
 }): Promise<TierCandidate[]> {
-  const usdMicros = fileDecimalToAnchorMicros(args.filePriceDecimal);
-  if (usdMicros === null) return [];
+  const anchor = (args.anchorCurrency ?? DEFAULT_ANCHOR_CURRENCY)
+    .trim()
+    .toUpperCase();
+  const anchorMicros = fileDecimalToAnchorMicros(args.filePriceDecimal, anchor);
+  if (anchorMicros === null) return [];
   return findCandidateTiersForCurrencyPrice({
     scope: args.scope,
     appId: args.appId,
-    currencyCode: ANCHOR_CURRENCY,
-    priceMicros: usdMicros,
+    currencyCode: anchor,
+    priceMicros: anchorMicros,
   });
 }
 
@@ -161,16 +232,21 @@ export async function resolveAppCurrencyEntryForTier(args: {
 /** Standard refusal-reason strings — kept here so the preview API, the
  *  orchestrator, and the wizard all surface the same wording. */
 export const REFUSAL_REASONS = {
-  googleDefault: (appCurrency: string, price: string) =>
-    `App currency is ${appCurrency} but source is Google Default — non-integer Price "${price}" cannot be resolved without a pricing template. Select Default Template or Per-App Template, or provide whole-number ${appCurrency} prices in the file.`,
-  templateMiss: (appCurrency: string, price: string) =>
-    `No template tier matches USD price ${price}. App currency ${appCurrency} requires a template entry for resolution.`,
+  googleDefault: (appCurrency: string, price: string, anchorCurrency?: string) =>
+    `App currency is ${appCurrency} but source is Google Default — Price "${price}"${
+      anchorCurrency && anchorCurrency !== appCurrency
+        ? ` (${anchorCurrency} anchor)`
+        : ""
+    } cannot be resolved without a pricing template. Select Default Template or Per-App Template, or provide ${appCurrency} prices in the file.`,
+  templateMiss: (appCurrency: string, price: string, anchorCurrency?: string) =>
+    `No template tier matches ${anchorCurrency ?? DEFAULT_ANCHOR_CURRENCY} price ${price}. App currency ${appCurrency} requires a template entry for resolution.`,
   multiMatchUnresolved: (
     appCurrency: string,
     price: string,
     candidateCount: number,
+    anchorCurrency?: string,
   ) =>
-    `${candidateCount} template tiers share USD price ${price}; the wizard must surface a chooser. App currency ${appCurrency} resolution paused pending handler pick.`,
+    `${candidateCount} template tiers share ${anchorCurrency ?? DEFAULT_ANCHOR_CURRENCY} price ${price}; the wizard must surface a chooser. App currency ${appCurrency} resolution paused pending handler pick.`,
   missingEntries: (identifier: string) =>
     `Template tier "${identifier}" has no entries. Re-upload the pricing template or pick a different tier.`,
   noAppCurrencyEntry: (identifier: string, appCurrency: string) =>

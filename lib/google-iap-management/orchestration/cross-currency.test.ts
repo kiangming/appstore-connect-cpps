@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 
 import {
   ANCHOR_CURRENCY,
+  DEFAULT_ANCHOR_CURRENCY,
+  detectCrossCurrencyTrigger,
   fileDecimalToAnchorMicros,
   isCrossCurrencyRow,
   pickAppCurrencyEntry,
@@ -39,12 +41,20 @@ describe("isCrossCurrencyRow", () => {
 });
 
 describe("fileDecimalToAnchorMicros", () => {
-  it("converts standard USD anchor prices to micros", () => {
+  it("converts standard USD anchor prices to micros (default anchor)", () => {
     expect(fileDecimalToAnchorMicros("4.99")).toBe("4990000");
     expect(fileDecimalToAnchorMicros("9.99")).toBe("9990000");
     expect(fileDecimalToAnchorMicros("21.99")).toBe("21990000");
     expect(fileDecimalToAnchorMicros("35.99")).toBe("35990000");
     expect(fileDecimalToAnchorMicros("0.99")).toBe("990000");
+  });
+
+  it("accepts an explicit anchor currency parameter (Cycle 43 generalisation)", () => {
+    // EUR also exponent 2 — same precision rules as USD.
+    expect(fileDecimalToAnchorMicros("4.99", "EUR")).toBe("4990000");
+    // JPY exponent 0 — only whole numbers.
+    expect(fileDecimalToAnchorMicros("150", "JPY")).toBe("150000000");
+    expect(fileDecimalToAnchorMicros("150.50", "JPY")).toBeNull();
   });
 
   it("returns null when value has more than 2 fractional digits (invalid USD precision)", () => {
@@ -58,8 +68,166 @@ describe("fileDecimalToAnchorMicros", () => {
     expect(fileDecimalToAnchorMicros("-1.99")).toBeNull();
   });
 
-  it("uses USD as the anchor currency (constant exported)", () => {
-    expect(ANCHOR_CURRENCY).toBe("USD");
+  it("uses USD as the default anchor currency (constant exported)", () => {
+    expect(DEFAULT_ANCHOR_CURRENCY).toBe("USD");
+    expect(ANCHOR_CURRENCY).toBe("USD"); // back-compat alias
+  });
+});
+
+describe("detectCrossCurrencyTrigger (Cycle 43 header-first)", () => {
+  // PRIMARY: explicit "Price (XXX)" headers — header-first.
+  describe("explicit header (Pass 1) — header-first trigger", () => {
+    it("Price (USD) header + VND app → cross-currency, anchor=USD (the REAL VN.xlsx repro)", () => {
+      // EXACT repro fixture: real file uses explicit "Price (USD)" header
+      // (cell B1) against the VND-default app "CookieRun: Bánh Quy Đại
+      // Chiến". Each of the four real prices must trigger header-first.
+      for (const price of ["4.99", "9.99", "21.99", "35.99"]) {
+        const trigger = detectCrossCurrencyTrigger({
+          basePriceDecimal: price,
+          baseCurrency: "USD",
+          priceHeaderSource: "explicit",
+          appDefaultCurrency: "VND",
+        });
+        expect(trigger).toEqual({
+          kind: "explicit_header",
+          anchorCurrency: "USD",
+        });
+      }
+    });
+
+    it("Price (USD) header + USD app → null (same currency, current path)", () => {
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "4.99",
+          baseCurrency: "USD",
+          priceHeaderSource: "explicit",
+          appDefaultCurrency: "USD",
+        }),
+      ).toBeNull();
+    });
+
+    it("Price (VND) header + VND app → null (same currency)", () => {
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "25000",
+          baseCurrency: "VND",
+          priceHeaderSource: "explicit",
+          appDefaultCurrency: "VND",
+        }),
+      ).toBeNull();
+    });
+
+    it("Price (EUR) header + VND app → cross-currency, anchor=EUR (NOT hardcoded USD)", () => {
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "4.99",
+          baseCurrency: "EUR",
+          priceHeaderSource: "explicit",
+          appDefaultCurrency: "VND",
+        }),
+      ).toEqual({ kind: "explicit_header", anchorCurrency: "EUR" });
+    });
+
+    it("Price (USD) header + VND app with an INTEGER value (e.g. 25) → cross-currency", () => {
+      // Pre-Cycle-43 (value-based only) would have MISSED this: 25 passes
+      // VND precision when wizard stomped baseCurrency=VND. Header-first
+      // catches it.
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "25",
+          baseCurrency: "USD",
+          priceHeaderSource: "explicit",
+          appDefaultCurrency: "VND",
+        }),
+      ).toEqual({ kind: "explicit_header", anchorCurrency: "USD" });
+    });
+
+    it("is case-insensitive on currency code comparison", () => {
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "4.99",
+          baseCurrency: "usd",
+          priceHeaderSource: "explicit",
+          appDefaultCurrency: "vnd",
+        }),
+      ).toEqual({ kind: "explicit_header", anchorCurrency: "USD" });
+    });
+  });
+
+  // FALLBACK: generic "Price" headers — value-based.
+  describe("inferred header (Pass 2) — value-based fallback trigger", () => {
+    it("generic Price + VND app + 4.99 → cross-currency, anchor=USD (fallback)", () => {
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "4.99",
+          baseCurrency: "VND", // parser inferred VND from app default
+          priceHeaderSource: "inferred",
+          appDefaultCurrency: "VND",
+        }),
+      ).toEqual({ kind: "value_based", anchorCurrency: "USD" });
+    });
+
+    it("generic Price + VND app + whole-number 25000 → null (passes VND precision)", () => {
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "25000",
+          baseCurrency: "VND",
+          priceHeaderSource: "inferred",
+          appDefaultCurrency: "VND",
+        }),
+      ).toBeNull();
+    });
+
+    it("generic Price + USD app + 4.99 → null (passes USD precision)", () => {
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "4.99",
+          baseCurrency: "USD",
+          priceHeaderSource: "inferred",
+          appDefaultCurrency: "USD",
+        }),
+      ).toBeNull();
+    });
+  });
+
+  describe("guards", () => {
+    it("returns null when appDefaultCurrency is null/empty (can't classify)", () => {
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "4.99",
+          baseCurrency: "USD",
+          priceHeaderSource: "explicit",
+          appDefaultCurrency: null,
+        }),
+      ).toBeNull();
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "4.99",
+          baseCurrency: "USD",
+          priceHeaderSource: "explicit",
+          appDefaultCurrency: "",
+        }),
+      ).toBeNull();
+    });
+
+    it("returns null on empty inputs (defensive)", () => {
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "",
+          baseCurrency: "USD",
+          priceHeaderSource: "explicit",
+          appDefaultCurrency: "VND",
+        }),
+      ).toBeNull();
+      expect(
+        detectCrossCurrencyTrigger({
+          basePriceDecimal: "4.99",
+          baseCurrency: "",
+          priceHeaderSource: "explicit",
+          appDefaultCurrency: "VND",
+        }),
+      ).toBeNull();
+    });
   });
 });
 

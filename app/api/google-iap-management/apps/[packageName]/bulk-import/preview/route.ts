@@ -26,7 +26,7 @@ import {
   type TierCandidate,
 } from "@/lib/google-iap-management/queries/templates";
 import {
-  isCrossCurrencyRow,
+  detectCrossCurrencyTrigger,
   findCrossCurrencyCandidates,
   resolveAppCurrencyEntryForTier,
   fileDecimalToAnchorMicros,
@@ -181,16 +181,24 @@ export async function POST(
     parsed.rows,
     CANDIDATE_LOOKUP_CONCURRENCY,
     async (row): Promise<RowCandidateData> => {
-      const isCrossCurrency = isCrossCurrencyRow(
-        row.basePriceDecimal,
-        row.baseCurrency,
-      );
+      const trigger = detectCrossCurrencyTrigger({
+        basePriceDecimal: row.basePriceDecimal,
+        baseCurrency: row.baseCurrency,
+        priceHeaderSource: row.priceHeaderSource,
+        appDefaultCurrency: app.default_currency,
+      });
 
-      if (isCrossCurrency) {
+      if (trigger) {
         // Cross-currency row: surface resolution outcome up front so
-        // the wizard's preview shows the resolved VND price (or refusal
-        // reason) before push instead of failing only at push time.
-        const anchorMicros = fileDecimalToAnchorMicros(row.basePriceDecimal);
+        // the wizard's preview shows the resolved app-currency price
+        // (or refusal reason) before push instead of failing only at
+        // push time. Anchor currency comes from the trigger — XXX for
+        // explicit "Price (XXX)" headers, USD for the value-based
+        // fallback path.
+        const anchorMicros = fileDecimalToAnchorMicros(
+          row.basePriceDecimal,
+          trigger.anchorCurrency,
+        );
         if (pricingSource === "google_default" || !appCurrencyNorm) {
           return {
             candidates: [],
@@ -202,6 +210,7 @@ export async function POST(
               reason: REFUSAL_REASONS.googleDefault(
                 appCurrencyNorm || row.baseCurrency || "(unknown)",
                 row.basePriceDecimal,
+                trigger.anchorCurrency,
               ),
               refusalKind: "google_default",
             },
@@ -212,6 +221,7 @@ export async function POST(
             scope,
             appId: scopeAppId,
             filePriceDecimal: row.basePriceDecimal,
+            anchorCurrency: trigger.anchorCurrency,
           });
           if (crossCandidates.length === 0) {
             return {
@@ -224,6 +234,7 @@ export async function POST(
                 reason: REFUSAL_REASONS.templateMiss(
                   appCurrencyNorm,
                   row.basePriceDecimal,
+                  trigger.anchorCurrency,
                 ),
                 refusalKind: "template_miss",
               },
@@ -270,8 +281,9 @@ export async function POST(
               },
             };
           }
-          // Tier matched USD but has no entry for the app's currency,
-          // or has no entries at all — surface as refusal.
+          // Tier matched the anchor price but has no entry for the
+          // app's currency, or has no entries at all — surface as
+          // refusal.
           const refusalReason =
             outcome.kind === "missing-entries"
               ? REFUSAL_REASONS.missingEntries(tier.identifier)

@@ -88,6 +88,12 @@ export interface PreviewRow {
    *  `same_currency` when the server didn't populate it (legacy
    *  response shape backward-compat). */
   resolution?: PreviewResolution;
+  /** Cycle 43 — parser provenance of the baseCurrency. "explicit" for
+   *  "Price (XXX)" headers (drives header-first cross-currency
+   *  detection); "inferred" for generic "Price"/"Default Price"/"Base
+   *  Price" (drives value-based fallback). Optional for legacy preview
+   *  responses; the orchestrator defaults to "inferred" when absent. */
+  priceHeaderSource?: "explicit" | "inferred";
 }
 
 interface ExecuteResult {
@@ -310,15 +316,28 @@ export function BulkImportWizard({
             rows: previewRows.map((r) => ({
               rowNumber: r.rowNumber,
               sku: r.sku,
-              // Hotfix 4: stamp the app's configured currency. Excel
-              // template column is named "Price (USD)" but the numeric
-              // value is interpreted in the app's currency (Google
-              // enforces app-wide consistency).
-              baseCurrency: appDefaultCurrency ?? r.baseCurrency,
+              // Cycle 43 (2026-06-01): send the parser-resolved
+              // baseCurrency verbatim. Pre-Cycle-43 the wizard stomped
+              // this to appDefaultCurrency (Hotfix 4) so the legacy
+              // batchUpdate endpoint's "defaultPrice.currency == app
+              // currency" check would pass; Hotfix 14 migrated to the
+              // Monetization API which accepts per-row currency, and
+              // Cycle 43's orchestrator cross-currency pre-pass now
+              // honours the parser's explicit "Price (XXX)" declaration
+              // (header-first trigger) — the stomp obscured this and
+              // forced the value-based fallback even on explicit
+              // headers, which silently mishandled integer cross-
+              // currency values like "25 USD" → "25 VND".
+              baseCurrency: r.baseCurrency,
               basePriceDecimal: r.basePriceDecimal,
               regionOverrides: r.regionOverrides,
               listings: r.listings,
               decision: r.decision,
+              // Cycle 43 — forward parser header provenance so the
+              // orchestrator's pre-pass can choose explicit_header vs
+              // value_based trigger correctly. Default "inferred" when
+              // a stale preview response lacks the field.
+              priceHeaderSource: r.priceHeaderSource ?? "inferred",
               // Hotfix 19: explicit tier selection (null when no
               // template lookup applied). Orchestrator honours it
               // verbatim — no silent fallback. The companion fields
