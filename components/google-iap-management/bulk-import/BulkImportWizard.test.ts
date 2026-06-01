@@ -113,4 +113,90 @@ describe("computePrecisionViolations (Hotfix 28)", () => {
   it("empty preview returns empty violations", () => {
     expect(computePrecisionViolations([])).toEqual([]);
   });
+
+  // Cycle 43 — cross-currency rows that resolved via template do NOT trip
+  // the precision gate because their raw price is no longer the value sent
+  // to Google; the push uses the resolved app-currency micros instead.
+  describe("Cycle 43 — cross-currency resolution exempts the precision gate", () => {
+    it("cross_currency_resolved row with 4.99 + VND is NOT a violation (push sends resolved VND)", () => {
+      const violations = computePrecisionViolations([
+        row({
+          sku: "sku.cookie.tier5",
+          basePriceDecimal: "4.99",
+          baseCurrency: "VND",
+          resolution: {
+            kind: "cross_currency_resolved",
+            anchorUsdMicros: "4990000",
+            chosenTier: "Tier 5",
+            appCurrencyPrice: {
+              currency: "VND",
+              priceMicros: "120000000000",
+              priceDecimal: "120000",
+            },
+          },
+        }),
+      ]);
+      expect(violations).toEqual([]);
+    });
+
+    it("cross_currency_needs_choice row is NOT a violation (push gated by tier-pick, not precision)", () => {
+      const violations = computePrecisionViolations([
+        row({
+          sku: "sku.cookie.tier5",
+          basePriceDecimal: "0.99",
+          baseCurrency: "VND",
+          resolution: {
+            kind: "cross_currency_needs_choice",
+            anchorUsdMicros: "990000",
+          },
+        }),
+      ]);
+      expect(violations).toEqual([]);
+    });
+
+    it("cross_currency_refused row is NOT a violation (push fail-soft refuses; precision irrelevant)", () => {
+      const violations = computePrecisionViolations([
+        row({
+          sku: "sku.cookie.tier5",
+          basePriceDecimal: "4.99",
+          baseCurrency: "VND",
+          resolution: {
+            kind: "cross_currency_refused",
+            anchorUsdMicros: "4990000",
+            reason: "No template tier matches USD price 4.99.",
+            refusalKind: "template_miss",
+          },
+        }),
+      ]);
+      expect(violations).toEqual([]);
+    });
+
+    it("same_currency rows still receive the precision check (regression guard)", () => {
+      const violations = computePrecisionViolations([
+        row({
+          rowNumber: 2,
+          sku: "sku.vnd.bad",
+          basePriceDecimal: "21.99",
+          baseCurrency: "VND",
+          resolution: { kind: "same_currency" },
+        }),
+      ]);
+      expect(violations).toHaveLength(1);
+      expect(violations[0].error).toMatch(/VND only accepts whole numbers/);
+    });
+
+    it("missing resolution field defaults to same_currency (backward-compat with legacy preview shape)", () => {
+      const violations = computePrecisionViolations([
+        // No `resolution` field — pre-Cycle-43 preview responses look
+        // this way; the gate must still enforce precision.
+        row({
+          rowNumber: 7,
+          sku: "sku.legacy.vnd.bad",
+          basePriceDecimal: "4.99",
+          baseCurrency: "VND",
+        }),
+      ]);
+      expect(violations).toHaveLength(1);
+    });
+  });
 });

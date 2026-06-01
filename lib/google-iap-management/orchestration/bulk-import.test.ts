@@ -93,4 +93,46 @@ describe("buildProduct (bulk-import row → InAppProduct)", () => {
     );
     expect(Object.keys(out.listings ?? {}).sort()).toEqual(["en-US", "ja"]);
   });
+
+  // Cycle 43 — cross-currency rows that resolved via template carry a
+  // resolvedDefaultPrice; buildProduct must send that exact (currency,
+  // priceMicros) instead of decimalToMicros(rawPrice, baseCurrency).
+  describe("Cycle 43 — resolvedDefaultPrice overrides raw conversion", () => {
+    it("uses resolvedDefaultPrice for defaultPrice when set (cross-currency: USD anchor → VND resolved)", () => {
+      const out = buildProduct(
+        "com.example.app",
+        row({
+          sku: "sku.cookie.tier5",
+          basePriceDecimal: "4.99", // USD anchor — invalid as VND on its own
+          baseCurrency: "VND", // would throw under raw decimalToMicros path
+          resolvedDefaultPrice: {
+            currency: "VND",
+            priceMicros: "120000000000", // ₫120,000
+          },
+        }),
+      );
+      expect(out.defaultPrice).toEqual({
+        currency: "VND",
+        priceMicros: "120000000000",
+      });
+    });
+
+    it("upper-cases the resolved currency code (defensive)", () => {
+      const out = buildProduct(
+        "com.example.app",
+        row({
+          basePriceDecimal: "4.99",
+          baseCurrency: "VND",
+          resolvedDefaultPrice: { currency: "vnd", priceMicros: "120000000000" },
+        }),
+      );
+      expect(out.defaultPrice?.currency).toBe("VND");
+    });
+
+    it("does not touch defaultPrice for same-currency rows (no resolvedDefaultPrice, behavior bit-for-bit)", () => {
+      // Same-currency USD/USD row — current path: decimalToMicros("1.99", "USD") = "1990000".
+      const out = buildProduct("com.example.app", row());
+      expect(out.defaultPrice).toEqual({ currency: "USD", priceMicros: "1990000" });
+    });
+  });
 });

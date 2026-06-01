@@ -158,6 +158,12 @@ export async function POST(
       sourceFilename: body.sourceFilename ?? null,
       rows,
       actorEmail: session.user.email ?? null,
+      // Cycle 43 cross-currency resolution needs the app's default
+      // currency to pick the matching entry from a template tier
+      // (e.g. the tier's VND entry when the app's default currency is
+      // VND). Null is tolerated by the orchestrator — cross-currency
+      // rows then refuse with the google_default message.
+      appDefaultCurrency: app.default_currency,
     });
     return NextResponse.json(result);
   } catch (err) {

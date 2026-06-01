@@ -42,6 +42,35 @@ export interface PreviewTierCandidate {
   vnPriceDecimal: string | null;
 }
 
+/** Cycle 43 — cross-currency resolution outcome surfaced by the Preview
+ *  API per row. Drives:
+ *   - whether the precision gate skips this row (raw price not sent)
+ *   - the Resolved column display
+ *   - the per-row refusal indicator banner */
+export type PreviewResolution =
+  | { kind: "same_currency" }
+  | {
+      kind: "cross_currency_resolved";
+      anchorUsdMicros: string;
+      chosenTier: string;
+      appCurrencyPrice: {
+        currency: string;
+        priceMicros: string;
+        priceDecimal: string;
+      };
+    }
+  | { kind: "cross_currency_needs_choice"; anchorUsdMicros: string }
+  | {
+      kind: "cross_currency_refused";
+      anchorUsdMicros: string | null;
+      reason: string;
+      refusalKind:
+        | "google_default"
+        | "template_miss"
+        | "missing_entries"
+        | "no_app_currency_entry";
+    };
+
 export interface PreviewRow {
   rowNumber: number;
   sku: string;
@@ -55,6 +84,10 @@ export interface PreviewRow {
   tierCandidates: PreviewTierCandidate[];
   defaultTierSelection: string | null;
   tierMatchedBy: "sku" | "currency_price" | "none";
+  /** Cycle 43 — cross-currency resolution outcome. Defaults to
+   *  `same_currency` when the server didn't populate it (legacy
+   *  response shape backward-compat). */
+  resolution?: PreviewResolution;
 }
 
 interface ExecuteResult {
@@ -63,6 +96,14 @@ interface ExecuteResult {
   rowsOverwritten: number;
   rowsSkipped: number;
   rowsFailed: number;
+  /** Cycle 43 — per-row cross-currency fail-soft refusals. */
+  rowsRefused?: number;
+  refusedRows?: Array<{
+    sku: string;
+    rowNumber: number;
+    reason: string;
+    kind: string;
+  }>;
   durationMs: number;
 }
 
@@ -665,7 +706,7 @@ export function BulkImportWizard({
               <p className="text-xs text-slate-500 mb-3">
                 {appDisplayName ?? packageName} · {executeResult.durationMs}ms
               </p>
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-5 gap-2">
                 <Stat label="Created" value={executeResult.rowsCreated} tone="emerald" />
                 <Stat
                   label="Overwritten"
@@ -674,7 +715,36 @@ export function BulkImportWizard({
                 />
                 <Stat label="Skipped" value={executeResult.rowsSkipped} tone="slate" />
                 <Stat label="Failed" value={executeResult.rowsFailed} tone="red" />
+                {/* Cycle 43 — per-row cross-currency fail-soft refusals.
+                    Distinct from "Failed" (Google-side errors): refused rows
+                    were rejected by our pre-pass (unresolvable cross-currency)
+                    and never sent to Google. */}
+                <Stat
+                  label="Refused"
+                  value={executeResult.rowsRefused ?? 0}
+                  tone="red"
+                />
               </div>
+              {executeResult.refusedRows && executeResult.refusedRows.length > 0 && (
+                <div className="mt-3 bg-red-50 border border-red-200 rounded-lg p-3">
+                  <p className="text-xs font-medium text-red-900 mb-1">
+                    {executeResult.refusedRows.length} row(s) refused (per-row
+                    fail-soft — not sent to Google):
+                  </p>
+                  <ul className="space-y-0.5 text-[11px] text-red-800 max-h-40 overflow-y-auto">
+                    {executeResult.refusedRows.slice(0, 20).map((r) => (
+                      <li key={`${r.rowNumber}-${r.sku}`}>
+                        · Row {r.rowNumber} ({r.sku}): {r.reason}
+                      </li>
+                    ))}
+                    {executeResult.refusedRows.length > 20 && (
+                      <li className="italic text-red-700">
+                        …and {executeResult.refusedRows.length - 20} more.
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
               <div className="mt-6 flex gap-2">
                 <button
                   onClick={() => {
@@ -729,6 +799,14 @@ export function computePrecisionViolations(
   for (const row of previewRows) {
     if (row.decision === "skip") continue;
     if (!row.baseCurrency) continue;
+    // Cycle 43: cross-currency rows do NOT send the raw basePriceDecimal —
+    // they either resolve via template (push uses the resolved app-currency
+    // amount, not the raw USD anchor), need a chooser pick, or get refused
+    // (per-row fail-soft, also doesn't send raw). In all three cases the
+    // precision check doesn't apply because the raw value never reaches
+    // Google. Only same-currency rows are precision-gated.
+    const resolutionKind = row.resolution?.kind ?? "same_currency";
+    if (resolutionKind !== "same_currency") continue;
     const err = validateDecimalForCurrency(row.basePriceDecimal, row.baseCurrency);
     if (err) {
       violations.push({ rowNumber: row.rowNumber, sku: row.sku, error: err });

@@ -62,6 +62,13 @@ import {
   templateExists,
   findTemplateId,
 } from "../queries/templates";
+import {
+  isCrossCurrencyRow,
+  findCrossCurrencyCandidates,
+  resolveAppCurrencyEntryForTier,
+  fileDecimalToAnchorMicros,
+  REFUSAL_REASONS,
+} from "./cross-currency";
 
 /** Bound on per-row convertRegionPrices fanout. Google's Publisher API
  *  doesn't publish a documented rate limit for read endpoints but bulk
@@ -90,6 +97,30 @@ export interface BulkImportRow extends ParsedIapRow {
   chosenTierIdentifier?: string | null;
   defaultTierIdentifier?: string | null;
   tierCandidateCount?: number;
+  /** Cross-currency resolution outcome stamped by the orchestrator's
+   *  cross-currency pre-pass. When set, `buildProduct` uses this
+   *  {currency, priceMicros} pair for `defaultPrice` instead of
+   *  decimalToMicros(basePriceDecimal, baseCurrency). Only set for
+   *  cross-currency rows that resolved successfully via template
+   *  lookup; null/undefined for same-currency rows (current path). */
+  resolvedDefaultPrice?: { currency: string; priceMicros: string } | null;
+  /** Cross-currency refusal — the row qualified for resolution but
+   *  could not be resolved (no template, template miss, ambiguous
+   *  without chooser pick, etc.). Per-row fail-soft: the row is
+   *  excluded from the Google batch, audit-logged, and returned to
+   *  the caller in `refusedRows`. The batch as a whole still ships
+   *  the resolvable rows. */
+  crossCurrencyRefusal?: {
+    reason: string;
+    /** Which refusal class fired — for audit + UI grouping. */
+    kind:
+      | "google_default"
+      | "template_miss"
+      | "multi_match_unresolved"
+      | "missing_entries"
+      | "no_app_currency_entry";
+    usdAnchorMicros: string | null;
+  } | null;
 }
 
 export interface BulkImportInput {
@@ -99,6 +130,13 @@ export interface BulkImportInput {
   sourceFilename: string | null;
   rows: BulkImportRow[];
   actorEmail: string | null;
+  /** Cross-currency resolution needs the app's default currency to
+   *  pick the matching entry from a template tier (e.g. tier's VND
+   *  entry when app currency is VND). Pass through from the execute
+   *  route, which already reads it via getAppByPackage. Null on
+   *  legacy callers; cross-currency rows then refuse with the
+   *  google_default message. */
+  appDefaultCurrency?: string | null;
 }
 
 export interface BulkImportResult {
@@ -108,6 +146,17 @@ export interface BulkImportResult {
   rowsOverwritten: number;
   rowsSkipped: number;
   rowsFailed: number;
+  /** Per-row fail-soft refusal count (cross-currency unresolvable). */
+  rowsRefused: number;
+  /** Refused rows surfaced for caller display — each carries its SKU
+   *  and the human-readable reason. Order matches input order for
+   *  affected rows. */
+  refusedRows: Array<{
+    sku: string;
+    rowNumber: number;
+    reason: string;
+    kind: string;
+  }>;
   durationMs: number;
 }
 
@@ -144,21 +193,77 @@ export function buildProduct(
     };
   }
 
+  // Cross-currency resolution (Cycle 43 feature): when the orchestrator's
+  // pre-pass resolved the row to a template entry, use that entry's
+  // (currency, priceMicros) verbatim for defaultPrice instead of
+  // re-computing decimalToMicros(basePriceDecimal, baseCurrency). The raw
+  // basePriceDecimal in cross-currency rows is a USD anchor (e.g. "4.99")
+  // and would throw under VND precision; this branch sends the resolved
+  // VND amount (e.g. "120000000000" micros = ₫120,000) instead.
+  const defaultPrice = row.resolvedDefaultPrice
+    ? {
+        currency: row.resolvedDefaultPrice.currency.trim().toUpperCase(),
+        priceMicros: row.resolvedDefaultPrice.priceMicros,
+      }
+    : {
+        currency: row.baseCurrency.trim().toUpperCase(),
+        // Hotfix 5: base price must match the app's configured currency
+        // precision — VND rejects fractions, etc.
+        priceMicros: decimalToMicros(row.basePriceDecimal, row.baseCurrency),
+      };
+
   return {
     packageName,
     sku: row.sku,
     status: "active",
     purchaseType: "managedUser",
     defaultLanguage: "en-US",
-    defaultPrice: {
-      currency: row.baseCurrency.trim().toUpperCase(),
-      // Hotfix 5: base price must match the app's configured currency
-      // precision — VND rejects fractions, etc.
-      priceMicros: decimalToMicros(row.basePriceDecimal, row.baseCurrency),
-    },
+    defaultPrice,
     listings,
     ...(Object.keys(prices).length > 0 ? { prices } : {}),
   };
+}
+
+/** Stamp a row with the outcome of a cross-currency tier resolution.
+ *  Mutates the row in place: either sets `resolvedDefaultPrice` +
+ *  `regionOverrides` (success) or `crossCurrencyRefusal` (failure).
+ *  Also stamps `chosenTierIdentifier` on success so downstream audit
+ *  logging picks up the tier the orchestrator actually used. */
+function applyResolveOutcome(
+  row: BulkImportRow,
+  outcome: Awaited<ReturnType<typeof resolveAppCurrencyEntryForTier>>,
+  usdAnchorMicros: string | null,
+  appDefaultCurrency: string,
+  tierIdentifier: string,
+): void {
+  if (outcome.kind === "resolved") {
+    row.resolvedDefaultPrice = {
+      currency: outcome.entry.currency,
+      priceMicros: outcome.entry.priceMicros,
+    };
+    row.regionOverrides = outcome.allEntries.map((e) => ({
+      region: e.regionCode,
+      currency: e.currency,
+      priceDecimal: microsToDecimal(e.priceMicros, 6),
+    }));
+    row.chosenTierIdentifier = tierIdentifier;
+    row.tierCandidateCount = Math.max(row.tierCandidateCount ?? 0, 1);
+  } else if (outcome.kind === "missing-entries") {
+    row.crossCurrencyRefusal = {
+      kind: "missing_entries",
+      reason: REFUSAL_REASONS.missingEntries(tierIdentifier),
+      usdAnchorMicros,
+    };
+  } else {
+    row.crossCurrencyRefusal = {
+      kind: "no_app_currency_entry",
+      reason: REFUSAL_REASONS.noAppCurrencyEntry(
+        tierIdentifier,
+        appDefaultCurrency,
+      ),
+      usdAnchorMicros,
+    };
+  }
 }
 
 export async function executeBulkImport(
@@ -190,6 +295,147 @@ export async function executeBulkImport(
 
   const actionableRows = input.rows.filter((r) => r.decision !== "skip");
   const skippedCount = input.rows.length - actionableRows.length;
+
+  // Cross-currency resolution pre-pass (Cycle 43 feature).
+  //
+  // A row qualifies for cross-currency resolution when its raw decimal
+  // price cannot be sent in its parser-resolved currency (e.g. "4.99"
+  // against a VND-default app). Resolution:
+  //   - google_default source: refuse — no template to resolve against.
+  //   - template source: look up USD-anchor candidates in the template.
+  //       0 candidates → refuse (template miss).
+  //       1 candidate  → load tier entries, pick app-currency entry,
+  //                      stamp resolvedDefaultPrice + regionOverrides
+  //                      so buildProduct sends the resolved VND amount.
+  //      >1 candidates → refuse (handler must pick via chosenTierIdentifier
+  //                      from the wizard's multi-match dropdown; on the
+  //                      next push that branch resolves the chosen tier).
+  //   - chosenTierIdentifier already set + cross-currency: handler picked
+  //     from a prior preview; resolve from that tier directly.
+  //
+  // Refused rows are excluded from the Google batch (per-row fail-soft,
+  // Q-K) and surfaced in BulkImportResult.refusedRows + the audit log.
+  // Same-currency rows are untouched — current behavior preserved.
+  const appCurrencyNorm = (input.appDefaultCurrency ?? "").trim().toUpperCase();
+  const crossCurrencyScope: "GLOBAL" | "APP" =
+    input.pricingSource === "app_template" ? "APP" : "GLOBAL";
+  const crossCurrencyAppId =
+    crossCurrencyScope === "APP" ? input.appId : null;
+  let crossCurrencyResolved = 0;
+  let crossCurrencyRefused = 0;
+
+  for (const row of actionableRows) {
+    if (!isCrossCurrencyRow(row.basePriceDecimal, row.baseCurrency)) continue;
+
+    const usdAnchorMicros = fileDecimalToAnchorMicros(row.basePriceDecimal);
+    const appCurrencyForMsg = appCurrencyNorm || row.baseCurrency || "(unknown)";
+
+    // google_default OR missing app currency → no template to resolve against.
+    if (input.pricingSource === "google_default" || !appCurrencyNorm) {
+      row.crossCurrencyRefusal = {
+        kind: "google_default",
+        reason: REFUSAL_REASONS.googleDefault(
+          appCurrencyForMsg,
+          row.basePriceDecimal,
+        ),
+        usdAnchorMicros,
+      };
+      crossCurrencyRefused += 1;
+      console.info(
+        `[google-iap:bulk-import:cross-currency] refused sku=${row.sku} kind=google_default price=${row.basePriceDecimal} app_currency=${appCurrencyForMsg}`,
+      );
+      continue;
+    }
+
+    // Template-based source. If the handler already picked a tier
+    // (multi-match flow), resolve from it directly. Otherwise look up
+    // candidates via USD-anchor match.
+    if (row.chosenTierIdentifier) {
+      const outcome = await resolveAppCurrencyEntryForTier({
+        scope: crossCurrencyScope,
+        appId: crossCurrencyAppId,
+        identifier: row.chosenTierIdentifier,
+        appDefaultCurrency: appCurrencyNorm,
+      });
+      applyResolveOutcome(
+        row,
+        outcome,
+        usdAnchorMicros,
+        appCurrencyNorm,
+        row.chosenTierIdentifier,
+      );
+    } else {
+      const candidates = await findCrossCurrencyCandidates({
+        scope: crossCurrencyScope,
+        appId: crossCurrencyAppId,
+        filePriceDecimal: row.basePriceDecimal,
+      });
+
+      if (candidates.length === 0) {
+        row.crossCurrencyRefusal = {
+          kind: "template_miss",
+          reason: REFUSAL_REASONS.templateMiss(
+            appCurrencyNorm,
+            row.basePriceDecimal,
+          ),
+          usdAnchorMicros,
+        };
+      } else if (candidates.length > 1) {
+        row.crossCurrencyRefusal = {
+          kind: "multi_match_unresolved",
+          reason: REFUSAL_REASONS.multiMatchUnresolved(
+            appCurrencyNorm,
+            row.basePriceDecimal,
+            candidates.length,
+          ),
+          usdAnchorMicros,
+        };
+        // Surface candidate count so the wizard's tier dropdown wires up
+        // correctly on the next preview round.
+        row.tierCandidateCount = candidates.length;
+      } else {
+        // Exactly 1 candidate — auto-resolve.
+        const tier = candidates[0];
+        const outcome = await resolveAppCurrencyEntryForTier({
+          scope: crossCurrencyScope,
+          appId: crossCurrencyAppId,
+          identifier: tier.identifier,
+          appDefaultCurrency: appCurrencyNorm,
+        });
+        applyResolveOutcome(
+          row,
+          outcome,
+          usdAnchorMicros,
+          appCurrencyNorm,
+          tier.identifier,
+        );
+      }
+    }
+
+    if (row.crossCurrencyRefusal) {
+      crossCurrencyRefused += 1;
+      console.info(
+        `[google-iap:bulk-import:cross-currency] refused sku=${row.sku} kind=${row.crossCurrencyRefusal.kind} price=${row.basePriceDecimal} app_currency=${appCurrencyForMsg}`,
+      );
+    } else if (row.resolvedDefaultPrice) {
+      crossCurrencyResolved += 1;
+      console.info(
+        `[google-iap:bulk-import:cross-currency] resolved sku=${row.sku} usd_price=${row.basePriceDecimal} → ${row.resolvedDefaultPrice.currency}/${row.resolvedDefaultPrice.priceMicros} tier=${row.chosenTierIdentifier ?? "?"}`,
+      );
+    }
+  }
+
+  // Split actionable into pushable (will hit Google) and refused
+  // (cross-currency fail-soft). Order is preserved for both groups.
+  const pushableRows = actionableRows.filter((r) => !r.crossCurrencyRefusal);
+  const refusedRowsDetail = actionableRows
+    .filter((r) => r.crossCurrencyRefusal)
+    .map((r) => ({
+      sku: r.sku,
+      rowNumber: r.rowNumber,
+      reason: r.crossCurrencyRefusal!.reason,
+      kind: r.crossCurrencyRefusal!.kind,
+    }));
 
   // Q-GIAP.D + Hotfix 15 → Hotfix 19: template-driven price resolution.
   //
@@ -270,6 +516,15 @@ export async function executeBulkImport(
 
     for (let rowIndex = 0; rowIndex < actionableRows.length; rowIndex += 1) {
       const row = actionableRows[rowIndex];
+
+      // Cross-currency pre-pass already handled this row — either
+      // resolved (regionOverrides + resolvedDefaultPrice stamped) or
+      // refused (excluded from pushable). In both cases the existing
+      // same-currency template lookup below would call
+      // decimalToMicros(row.basePriceDecimal, row.baseCurrency) which
+      // throws for cross-currency. Skip.
+      if (row.crossCurrencyRefusal || row.resolvedDefaultPrice) continue;
+
       const baseMicros = decimalToMicros(
         row.basePriceDecimal,
         row.baseCurrency,
@@ -433,10 +688,10 @@ export async function executeBulkImport(
     }
   }
 
-  if (actionableRows.length > BATCH_MAX) {
+  if (pushableRows.length > BATCH_MAX) {
     throw new Error(
       `Bulk import exceeds Google's per-call cap (${BATCH_MAX}). ` +
-        `Got ${actionableRows.length} rows after skips. Reduce the file or split into batches.`,
+        `Got ${pushableRows.length} rows after skips and cross-currency refusals. Reduce the file or split into batches.`,
     );
   }
 
@@ -444,14 +699,17 @@ export async function executeBulkImport(
   let overwritten = 0;
   let failed = 0;
 
-  if (actionableRows.length === 0) {
-    // Nothing to send to Google; close out the batch.
+  if (pushableRows.length === 0) {
+    // Nothing to send to Google; close out the batch. Cross-currency
+    // refusals are still recorded so the caller (and audit log) see
+    // exactly which rows were rejected and why.
     await db
       .from("import_batches")
       .update({
-        status: "COMPLETE",
+        status: refusedRowsDetail.length > 0 ? "FAILED" : "COMPLETE",
         rows_skipped: skippedCount,
         rows_success: 0,
+        rows_failed: refusedRowsDetail.length,
         executed_at: new Date().toISOString(),
       })
       .eq("id", batchId);
@@ -469,6 +727,10 @@ export async function executeBulkImport(
         rows_created: 0,
         rows_overwritten: 0,
         rows_failed: 0,
+        rows_refused: refusedRowsDetail.length,
+        refused_rows: refusedRowsDetail,
+        cross_currency_resolved: crossCurrencyResolved,
+        cross_currency_refused: crossCurrencyRefused,
         duration_ms: Date.now() - t0,
       },
     });
@@ -480,6 +742,8 @@ export async function executeBulkImport(
       rowsOverwritten: 0,
       rowsSkipped: skippedCount,
       rowsFailed: 0,
+      rowsRefused: refusedRowsDetail.length,
+      refusedRows: refusedRowsDetail,
       durationMs: Date.now() - t0,
     };
   }
@@ -490,21 +754,31 @@ export async function executeBulkImport(
   // regionsVersion threads through to the batch upsert so the resource
   // is pinned to the same catalog the conversion came from (Hotfix 9
   // pattern carries forward to the batch path).
+  //
+  // Cross-currency rows that resolved via template use the
+  // resolvedDefaultPrice (app-currency micros) as the bootstrap anchor;
+  // their raw basePriceDecimal is a USD anchor that would throw under
+  // VND precision.
   type RowBootstrap = {
     regions: Array<{ region: string; currency: string; priceMicros: string }>;
     regionsVersion?: string;
   };
   const bootstraps = await withConcurrency(
-    actionableRows,
+    pushableRows,
     REGIONS_BOOTSTRAP_CONCURRENCY,
     async (row): Promise<RowBootstrap> => {
       try {
-        const baseMicros = decimalToMicros(row.basePriceDecimal, row.baseCurrency);
+        const baseMicros = row.resolvedDefaultPrice
+          ? row.resolvedDefaultPrice.priceMicros
+          : decimalToMicros(row.basePriceDecimal, row.baseCurrency);
+        const baseCurrencyForBootstrap = row.resolvedDefaultPrice
+          ? row.resolvedDefaultPrice.currency
+          : row.baseCurrency;
         const result = await buildRegionMapFromBasePrice(
           jwt,
           input.packageName,
           baseMicros,
-          row.baseCurrency,
+          baseCurrencyForBootstrap,
         );
         return {
           regions: result.regions,
@@ -525,7 +799,7 @@ export async function executeBulkImport(
   // row.regionOverrides after the template-resolution loop above) win
   // over auto-converted catalog values — explicit intent beats
   // catalog defaults.
-  const upsertInputs = actionableRows.map((row, i) => {
+  const upsertInputs = pushableRows.map((row, i) => {
     const product = buildProduct(input.packageName, row);
     const bootstrap = bootstraps[i];
     const existing: NonNullable<InAppProduct["prices"]> = {
@@ -574,8 +848,8 @@ export async function executeBulkImport(
 
     // Map responses back to decisions. Order-preserved — index i
     // matches the request order. Missing positions = row failed.
-    for (let i = 0; i < actionableRows.length; i += 1) {
-      const row = actionableRows[i];
+    for (let i = 0; i < pushableRows.length; i += 1) {
+      const row = pushableRows[i];
       const product = returned[i];
       if (!product || !product.sku) {
         failed += 1;
@@ -605,12 +879,12 @@ export async function executeBulkImport(
       })
       .eq("id", batchId);
   } catch (err) {
-    failed = actionableRows.length;
+    failed = pushableRows.length;
     await db
       .from("import_batches")
       .update({
         status: "FAILED",
-        rows_failed: failed,
+        rows_failed: failed + refusedRowsDetail.length,
         rows_skipped: skippedCount,
         executed_at: new Date().toISOString(),
       })
@@ -626,6 +900,10 @@ export async function executeBulkImport(
         rows_total: input.rows.length,
         rows_skipped: skippedCount,
         rows_failed: failed,
+        rows_refused: refusedRowsDetail.length,
+        refused_rows: refusedRowsDetail,
+        cross_currency_resolved: crossCurrencyResolved,
+        cross_currency_refused: crossCurrencyRefused,
         error: err instanceof Error ? err.message : String(err),
         duration_ms: Date.now() - t0,
       },
@@ -676,6 +954,13 @@ export async function executeBulkImport(
       template_scope_used: templateScopeUsed,
       template_app_id_used: templateAppIdUsed,
       per_row_diagnostic: perRowDiagnostic,
+      // Cycle 43 cross-currency telemetry — per-row fail-soft counts +
+      // detail so Manager debugging can correlate refused-row SKUs with
+      // the wizard preview and the file's Price column.
+      rows_refused: refusedRowsDetail.length,
+      refused_rows: refusedRowsDetail,
+      cross_currency_resolved: crossCurrencyResolved,
+      cross_currency_refused: crossCurrencyRefused,
       rows_total: input.rows.length,
       rows_created: created,
       rows_overwritten: overwritten,
@@ -692,6 +977,8 @@ export async function executeBulkImport(
     rowsOverwritten: overwritten,
     rowsSkipped: skippedCount,
     rowsFailed: failed,
+    rowsRefused: refusedRowsDetail.length,
+    refusedRows: refusedRowsDetail,
     durationMs: Date.now() - t0,
   };
 }

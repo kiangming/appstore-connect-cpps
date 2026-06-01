@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, AlertTriangle } from "lucide-react";
+import { Check, AlertTriangle, ArrowRight, XCircle } from "lucide-react";
 
 import type { PreviewRow, PreviewTierCandidate } from "./BulkImportWizard";
 
@@ -98,6 +98,34 @@ export function PreviewTable({
                     <span className="ml-1 text-[10px] text-slate-500">
                       {row.baseCurrency}
                     </span>
+                  )}
+                  {/* Cycle 43 — cross-currency resolution outcome inline.
+                      For same-currency rows nothing extra is shown (current
+                      behavior bit-for-bit). */}
+                  {row.resolution?.kind === "cross_currency_resolved" && (
+                    <div className="flex items-center justify-end gap-1 text-[10px] text-emerald-700 mt-0.5">
+                      <ArrowRight className="h-3 w-3" />
+                      <span className="font-semibold">
+                        {row.resolution.appCurrencyPrice.priceDecimal}
+                      </span>
+                      <span>{row.resolution.appCurrencyPrice.currency}</span>
+                    </div>
+                  )}
+                  {row.resolution?.kind === "cross_currency_needs_choice" && (
+                    <div className="text-[10px] text-amber-700 mt-0.5">
+                      → pick tier
+                    </div>
+                  )}
+                  {row.resolution?.kind === "cross_currency_refused" && (
+                    <div
+                      className="flex items-center justify-end gap-1 text-[10px] text-red-700 mt-0.5"
+                      title={row.resolution.reason}
+                    >
+                      <XCircle className="h-3 w-3" />
+                      <span className="font-semibold uppercase tracking-wide">
+                        Refused
+                      </span>
+                    </div>
                   )}
                 </td>
                 <td className="px-3 py-2.5 text-xs">
