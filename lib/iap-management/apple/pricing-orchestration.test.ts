@@ -60,6 +60,8 @@ vi.mock("@/lib/iap-management/db", () => ({
 }));
 
 import { applyPricingSchedule } from "./pricing-orchestration";
+import { createBatchPricePointCatalog } from "./batch-price-point-catalog";
+import { encodePricePointId } from "./price-point-id";
 import type { AscCredentials } from "@/lib/asc-jwt";
 
 const creds: AscCredentials = {
@@ -628,5 +630,101 @@ describe("applyPricingSchedule — three-source pricing model (IAP.p1.e)", () =>
     });
     expect(lastAuditPayload().source).toBe("APP_TEMPLATE");
     expect(lastAuditPayload().source_app_id).toBe("app-xyz");
+  });
+});
+
+/**
+ * Cycle 44 — batch price-point catalog PARITY.
+ *
+ * The load-bearing guarantee: routing price-point DATA through the batch
+ * catalog must produce BYTE-IDENTICAL price selection + submitted ids vs the
+ * pre-optimization per-item fetch. Price selection (customerPrice matching)
+ * is untouched; only the data source + id derivation change.
+ */
+describe("applyPricingSchedule — Cycle 44 batch-catalog parity", () => {
+  // Catalog identical across IAPs: same customerPrice → same tier `p`; ids
+  // encode the requesting IAP (so the catalog's round-trip guard passes).
+  function pointsFor(iap: string, territory: string) {
+    return ["0.99", "1.99", "4.99"].map((cp, i) => ({
+      type: "inAppPurchasePricePoints",
+      id: encodePricePointId({ s: iap, t: territory, p: `${10000 + i}` }),
+      attributes: { customerPrice: cp, proceeds: "0.70" },
+    }));
+  }
+
+  const TEMPLATE = {
+    template: { id: "tpl-1", scope_type: "APP", scope_app_id: "app-1" },
+    entries: [
+      { tier_id: "TIER_1", territory_code: "USA", currency_code: "USD", customer_price: 0.99, proceeds: null },
+      { tier_id: "TIER_1", territory_code: "COL", currency_code: "COP", customer_price: 1.99, proceeds: null },
+      { tier_id: "TIER_1", territory_code: "JPN", currency_code: "JPY", customer_price: 4.99, proceeds: null },
+    ],
+  };
+  const common = {
+    localTierId: "TIER_1",
+    usdPrice: 0.99,
+    source: { kind: "APP_TEMPLATE" as const, app_id: "app-1" },
+    audit: baseAudit,
+  };
+
+  beforeEach(() => {
+    listPricePointsForIap.mockReset();
+    setPriceSchedule.mockReset();
+    auditInsert.mockReset();
+    listPricePointsForIap.mockImplementation((_c: unknown, iap: string, terr: string) =>
+      Promise.resolve(pointsFor(iap, terr)),
+    );
+    setPriceSchedule.mockResolvedValue({ ok: true, schedule_id: "sch", attempts: 1 });
+    getAppTemplate.mockResolvedValue(TEMPLATE);
+  });
+
+  function lastScheduleArgs() {
+    const call = setPriceSchedule.mock.calls.at(-1);
+    if (!call) throw new Error("setPriceSchedule not called");
+    return call[1] as { applePricePointId: string; additionalPricePointIds: string[] };
+  }
+
+  it("catalog path selects identical prices AND submits byte-identical ids vs per-item fetch", async () => {
+    // (1) per-item path (no catalog) for iap-B — the baseline behavior.
+    await applyPricingSchedule({ creds, appleIapId: "iap-B", ...common });
+    const perItem = lastScheduleArgs();
+
+    // (2) catalog path: warm with iap-A, then run iap-B from cache.
+    setPriceSchedule.mockClear();
+    listPricePointsForIap.mockClear();
+    const catalog = createBatchPricePointCatalog(creds);
+    await applyPricingSchedule({ creds, appleIapId: "iap-A", iapType: "CONSUMABLE", catalog, ...common });
+    const fetchesAfterWarm = listPricePointsForIap.mock.calls.length;
+    await applyPricingSchedule({ creds, appleIapId: "iap-B", iapType: "CONSUMABLE", catalog, ...common });
+    const fetchesAfterSecond = listPricePointsForIap.mock.calls.length;
+    const viaCatalog = lastScheduleArgs();
+
+    // Byte-identical base + per-territory override ids → identical price choice.
+    expect(viaCatalog.applePricePointId).toBe(perItem.applePricePointId);
+    expect([...viaCatalog.additionalPricePointIds].sort()).toEqual(
+      [...perItem.additionalPricePointIds].sort(),
+    );
+
+    // Amortization: warming iap-A fetched 3 territories (USA+COL+JPN); the
+    // SECOND item added ZERO fetches (the whole point of the optimization).
+    expect(fetchesAfterWarm).toBe(3);
+    expect(fetchesAfterSecond).toBe(3);
+  });
+
+  it("outcome reports the DERIVED (submitted) price_point_id for the current IAP", async () => {
+    const catalog = createBatchPricePointCatalog(creds);
+    await applyPricingSchedule({ creds, appleIapId: "iap-A", iapType: "CONSUMABLE", catalog, ...common });
+    const out = await applyPricingSchedule({
+      creds,
+      appleIapId: "iap-B",
+      iapType: "CONSUMABLE",
+      catalog,
+      ...common,
+    });
+    expect(out.kind).toBe("set");
+    if (out.kind === "set") {
+      // the id Apple would return for iap-B at (USA, base tier)
+      expect(out.price_point_id).toBe(encodePricePointId({ s: "iap-B", t: "USA", p: "10000" }));
+    }
   });
 });

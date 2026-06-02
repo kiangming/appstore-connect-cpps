@@ -48,7 +48,11 @@ import {
   getAppTemplate,
   type TemplateWithEntries,
 } from "@/lib/iap-management/queries/templates";
-import { createTerritoryPricePointsCache } from "./territory-price-points-cache";
+import {
+  createTerritoryPricePointsCache,
+  type TerritoryPricePointsCache,
+} from "./territory-price-points-cache";
+import type { BatchPricePointCatalog } from "./batch-price-point-catalog";
 
 export type PricingSource =
   | { kind: "APPLE" }
@@ -107,6 +111,14 @@ export interface ApplyPricingArgs {
   baseTerritory?: string;
   /** Pricing source — defaults to APPLE for backward compat. */
   source?: PricingSource;
+  /** Cycle 44: batch-level price-point catalog. When provided (bulk-import
+   *  path), per-territory price points are fetched ONCE for the whole batch
+   *  and each item's price-point id is derived locally. When absent (single
+   *  create-on-apple path), the per-item fetch behavior is unchanged. */
+  catalog?: BatchPricePointCatalog;
+  /** Cycle 44: IAP type — cache key for the batch catalog (catalogs may vary
+   *  by type). Only consulted when `catalog` is provided. */
+  iapType?: string;
   /** Optional pre-flight poll result. */
   precheck?: { ready: boolean; reason?: string; attempts?: number; total_ms?: number };
   audit: {
@@ -177,16 +189,35 @@ async function runPricingFlow(
   }
 
   const baseTerritory = args.baseTerritory ?? "USA";
+  const catalog = args.catalog;
+  const iapType = args.iapType ?? "UNKNOWN";
   console.log(
-    `[pricing] fetching price points apple_iap_id=${args.appleIapId} territory=${baseTerritory}`,
+    `[pricing] fetching price points apple_iap_id=${args.appleIapId} territory=${baseTerritory} source_data=${catalog ? "batch-catalog" : "per-item"}`,
   );
+
+  // Cycle 44: resolve the USA base price points + an id-mapper. Bulk path
+  // pulls from the batch catalog (fetched once across all items, ids derived
+  // per IAP); single create-on-apple path fetches per-IAP and primes a
+  // per-item cache exactly as before. Matching below is byte-for-byte the
+  // same regardless of source — only WHERE the data came from changes.
   let pricePoints: InAppPurchasePricePoint[];
+  let baseDeriveId: (id: string) => string;
+  let perItemCache: TerritoryPricePointsCache | null = null;
   try {
-    pricePoints = await listPricePointsForIap(
-      args.creds,
-      args.appleIapId,
-      baseTerritory,
-    );
+    if (catalog) {
+      const base = await catalog.territory(args.appleIapId, iapType, baseTerritory);
+      pricePoints = base.points;
+      baseDeriveId = base.deriveId;
+    } else {
+      pricePoints = await listPricePointsForIap(
+        args.creds,
+        args.appleIapId,
+        baseTerritory,
+      );
+      baseDeriveId = (id) => id;
+      perItemCache = createTerritoryPricePointsCache(args.creds, args.appleIapId);
+      perItemCache.prime(baseTerritory, pricePoints);
+    }
   } catch (err) {
     const errStr =
       err instanceof AppleApiError
@@ -218,8 +249,11 @@ async function runPricingFlow(
       sample_apple_prices: samplePrices,
     };
   }
+  // Derived = byte-identical to what a per-item fetch would return for this
+  // IAP (guard-verified in the catalog); identity in the per-item path.
+  const applePricePointId = baseDeriveId(match.id);
   console.log(
-    `[pricing] match found apple_iap_id=${args.appleIapId} price_point_id=${match.id} usd_price=${args.usdPrice}`,
+    `[pricing] match found apple_iap_id=${args.appleIapId} price_point_id=${applePricePointId} usd_price=${args.usdPrice}`,
   );
 
   // ── Template branch: resolve per-territory overrides ───────────────────
@@ -245,12 +279,26 @@ async function runPricingFlow(
       console.log(
         `[pricing] template entries source=${source.kind} tier=${args.localTierId} count=${tierEntries.length} apple_iap_id=${args.appleIapId}`,
       );
-      const cache = createTerritoryPricePointsCache(args.creds, args.appleIapId);
-      cache.prime(baseTerritory, pricePoints);
+      // Per-territory point source. Bulk path → batch catalog (fetched once
+      // across items, id derived per IAP). Single path → per-item cache
+      // primed with the USA base above; identity id-mapper. Either way the
+      // customerPrice match below is unchanged.
       for (const entry of tierEntries) {
         let pointsForTerritory: InAppPurchasePricePoint[];
+        let deriveId: (id: string) => string;
         try {
-          pointsForTerritory = await cache.get(entry.territory_code);
+          if (catalog) {
+            const tp = await catalog.territory(
+              args.appleIapId,
+              iapType,
+              entry.territory_code,
+            );
+            pointsForTerritory = tp.points;
+            deriveId = tp.deriveId;
+          } else {
+            pointsForTerritory = await perItemCache!.get(entry.territory_code);
+            deriveId = (id) => id;
+          }
         } catch (err) {
           const errStr =
             err instanceof AppleApiError
@@ -273,7 +321,7 @@ async function runPricingFlow(
           entry.customer_price,
         );
         if (territoryMatch) {
-          additionalPricePointIds.push(territoryMatch.id);
+          additionalPricePointIds.push(deriveId(territoryMatch.id));
         } else {
           console.warn(
             `[pricing] no Apple catalog match apple_iap_id=${args.appleIapId} territory=${entry.territory_code} customer_price=${entry.customer_price}`,
@@ -286,17 +334,17 @@ async function runPricingFlow(
         }
       }
       console.log(
-        `[pricing] template overrides resolved apple_iap_id=${args.appleIapId} matched=${additionalPricePointIds.length} missing=${missing.length} cache_size=${cache.size()}`,
+        `[pricing] template overrides resolved apple_iap_id=${args.appleIapId} matched=${additionalPricePointIds.length} missing=${missing.length}`,
       );
     }
   }
 
   console.log(
-    `[pricing] POST schedule starting apple_iap_id=${args.appleIapId} price_point_id=${match.id} additional=${additionalPricePointIds.length}`,
+    `[pricing] POST schedule starting apple_iap_id=${args.appleIapId} price_point_id=${applePricePointId} additional=${additionalPricePointIds.length}`,
   );
   const setResult = await setPriceSchedule(args.creds, {
     appleIapId: args.appleIapId,
-    applePricePointId: match.id,
+    applePricePointId,
     additionalPricePointIds,
     baseTerritory,
   });
@@ -307,7 +355,7 @@ async function runPricingFlow(
     return {
       kind: "failed-set",
       tier_id: args.localTierId,
-      price_point_id: match.id,
+      price_point_id: applePricePointId,
       usd_price: args.usdPrice,
       error: setResult.error,
       attempts: setResult.attempts,
@@ -330,7 +378,7 @@ async function runPricingFlow(
 
   return {
     kind: "set",
-    price_point_id: match.id,
+    price_point_id: applePricePointId,
     schedule_id: setResult.schedule_id,
     usd_price: args.usdPrice,
     attempts: setResult.attempts,

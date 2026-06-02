@@ -71,6 +71,10 @@ import {
 import type { UsdTierEntry } from "@/lib/iap-management/queries/price-tiers";
 import { listUsdTiersForSource } from "@/lib/iap-management/queries/templates";
 import { withConcurrency } from "@/lib/iap-management/concurrency";
+import {
+  createBatchPricePointCatalog,
+  type BatchPricePointCatalog,
+} from "@/lib/iap-management/apple/batch-price-point-catalog";
 import { log } from "@/lib/logger";
 import type {
   AscCredentials,
@@ -401,6 +405,13 @@ export async function POST(
   }
   console.log(`[bulk-execute] pricing source=${pricingSource.kind} batch=${batchId}`);
 
+  // Cycle 44: one batch-level price-point catalog shared across every row.
+  // Per-territory price points are fetched ONCE for the whole batch and each
+  // item's price-point id is derived locally — collapsing the prior
+  // ~175 GETs/item fan-out. Guarded + auto-falls-back to per-item fetch if
+  // Apple's id encoding ever diverges (see batch-price-point-catalog.ts).
+  const pricePointCatalog = createBatchPricePointCatalog(creds);
+
   // ── Orchestrate per-IAP with bounded concurrency ────────────────────────
   //    Hotfix 26 — concurrency 2 (was 5) + 1000ms inter-row delay so each
   //    worker spaces its successive rows. Manager-locked tradeoff: ~4-5
@@ -424,6 +435,7 @@ export async function POST(
         actor,
         tierOverrides,
         pricingSource,
+        pricePointCatalog,
         // Hotfix 26 — one counter bag per row, mutated by every
         // trackedWithRetry call across the row's stages.
         rateCounters: createRetryCounters(),
@@ -491,6 +503,11 @@ export async function POST(
       rate_limit: rate_limit_total,
       concurrency_limit: CONCURRENCY_LIMIT,
       inter_row_delay_ms: INTER_ROW_DELAY_MS,
+      // Cycle 44 — price-point fetch amortization: territories fetched once
+      // for the batch vs the prior per-item fan-out. `derivation_enabled`
+      // false means Apple's id encoding diverged and the batch fell back to
+      // per-item fetches.
+      price_point_catalog: pricePointCatalog.stats(),
     },
   });
 
@@ -534,6 +551,9 @@ interface OrchestrateArgs {
    *  row. Already discriminated server-side (APP_TEMPLATE carries the
    *  internal app_id). */
   pricingSource: PricingSource;
+  /** Cycle 44: batch-level price-point catalog shared across all rows so the
+   *  per-territory price points are fetched once per batch, not once per IAP. */
+  pricePointCatalog: BatchPricePointCatalog;
   /** Hotfix 26 — per-row 429 telemetry. Populated by `orchestrateOne`
    *  before delegating to runCreate/runOverwrite; every Apple call in
    *  the row's stages threads through `trackedWithRetry(args.rateCounters, …)`
@@ -639,6 +659,8 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     localTierId: resolvedTier,
     usdPrice,
     source: args.pricingSource,
+    catalog: args.pricePointCatalog,
+    iapType: item.type,
     precheck: {
       ready: pollResult.ready,
       reason: pollResult.ready ? undefined : pollResult.reason,
@@ -948,6 +970,8 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
       localTierId: resolvedTier,
       usdPrice,
       source: args.pricingSource,
+      catalog: args.pricePointCatalog,
+      iapType: item.type,
       audit: {
         iapId: args.existingByProductId.get(item.product_id) ?? null,
         actor: args.actor,
