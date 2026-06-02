@@ -68,7 +68,8 @@ import {
   type ConflictMode,
   type ConflictDecision,
 } from "@/lib/iap-management/bulk-import/conflict-resolution";
-import { listUsdTiers } from "@/lib/iap-management/queries/price-tiers";
+import type { UsdTierEntry } from "@/lib/iap-management/queries/price-tiers";
+import { listUsdTiersForSource } from "@/lib/iap-management/queries/templates";
 import { withConcurrency } from "@/lib/iap-management/concurrency";
 import { log } from "@/lib/logger";
 import type {
@@ -289,6 +290,23 @@ export async function POST(
     return NextResponse.json({ error: msg }, { status: 502 });
   }
 
+  // ── IAP.p1.g: resolve pricing source — Q-E batch-level applies to every row.
+  //    Resolved BEFORE the tier gate so the gate (enrichWithTiers) and the
+  //    pricing application (applyPricingSchedule) read ONE source of truth.
+  //    Cycle 43: pre-fix the gate always read the legacy price_tier_territories
+  //    cache via listUsdTiers(), diverging from the template the orchestrator
+  //    applies — new template tiers ERRORed here before reaching pricing.
+  const pricingSourceKind: PricingSource["kind"] = config.pricing_source ?? "APPLE";
+  const pricingSource: PricingSource =
+    pricingSourceKind === "APP_TEMPLATE"
+      ? { kind: "APP_TEMPLATE", app_id: internalAppId }
+      : pricingSourceKind === "DEFAULT_TEMPLATE"
+        ? { kind: "DEFAULT_TEMPLATE" }
+        : { kind: "APPLE" };
+  console.log(
+    `[bulk-execute] pricing source=${pricingSource.kind}`,
+  );
+
   // ── Conflict resolution + tier inference (IAP.h2) ───────────────────────
   const conflicts = resolveConflicts({
     parsed: parsed.items,
@@ -296,9 +314,11 @@ export async function POST(
     default_mode: config.default_mode,
     overrides: config.overrides,
   });
-  let usdTiers: Awaited<ReturnType<typeof listUsdTiers>>;
+  // Cycle 43: resolve USD tiers from the SELECTED source (same helper the
+  // preview page uses). PricingSource is structurally a UsdTierSource.
+  let usdTiers: UsdTierEntry[];
   try {
-    usdTiers = await listUsdTiers();
+    usdTiers = await listUsdTiersForSource(pricingSource);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "USD tiers fetch failed";
     return NextResponse.json({ error: msg }, { status: 500 });
@@ -372,23 +392,14 @@ export async function POST(
   // Build tier_id → USA/USD customer_price lookup once (IAP.o.10a). Apple
   // price-point matching switched from priceTier integer (volatile across
   // Apple's 2024 numbering rollover) to customerPrice string — local USD is
-  // the canonical match key.
+  // the canonical match key. Cycle 43: built from the SAME source-aware
+  // `usdTiers` the gate used above — never a second list (a divergence here
+  // is precisely the class of bug this fix closes).
   const usdPriceByTier = new Map<string, number>();
   for (const t of usdTiers) {
     usdPriceByTier.set(t.tier_id, t.customer_price);
   }
-
-  // ── IAP.p1.g: resolve pricing source — Q-E batch-level applies to every row.
-  const pricingSourceKind: PricingSource["kind"] = config.pricing_source ?? "APPLE";
-  const pricingSource: PricingSource =
-    pricingSourceKind === "APP_TEMPLATE"
-      ? { kind: "APP_TEMPLATE", app_id: internalAppId }
-      : pricingSourceKind === "DEFAULT_TEMPLATE"
-        ? { kind: "DEFAULT_TEMPLATE" }
-        : { kind: "APPLE" };
-  console.log(
-    `[bulk-execute] pricing source=${pricingSource.kind} batch=${batchId}`,
-  );
+  console.log(`[bulk-execute] pricing source=${pricingSource.kind} batch=${batchId}`);
 
   // ── Orchestrate per-IAP with bounded concurrency ────────────────────────
   //    Hotfix 26 — concurrency 2 (was 5) + 1000ms inter-row delay so each

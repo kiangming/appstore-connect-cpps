@@ -49,7 +49,11 @@ interface Props {
   appId: string;
   appName: string;
   existingProductIds: string[];
-  usdTiers: UsdTierEntry[];
+  /** Cycle 43: per-source USA/USD tier lists. The active list is selected by
+   *  `pricingSource` so preview tier-resolution reads the SAME source the
+   *  matrix + /execute read (template tables for the template sources, the
+   *  legacy USA/USD cache for APPLE). Keyed by PricingSourceKind. */
+  usdTiersBySource: Record<PricingSourceKind, UsdTierEntry[]>;
   /** IAP.p1.g: Manager-uploaded global Default Template availability. */
   defaultTemplateAvailable?: boolean;
   /** IAP.p1.g: this app has its own pricing template. */
@@ -121,7 +125,7 @@ export function BulkImportWizard({
   appId,
   appName,
   existingProductIds,
-  usdTiers,
+  usdTiersBySource,
   defaultTemplateAvailable = false,
   appTemplateAvailable = false,
   defaultTemplateEntryCount,
@@ -135,6 +139,14 @@ export function BulkImportWizard({
   const [pricingSource, setPricingSource] = useState<PricingSourceKind>(() =>
     defaultPricingSource(defaultTemplateAvailable, appTemplateAvailable),
   );
+
+  // Cycle 43: the USA/USD tier list ACTIVE for the selected pricing source.
+  // Changing the source swaps this list, which (a) is in the `resolved`
+  // useMemo deps below so dispositions recompute, and (b) flows into the
+  // Step 3 TierCell candidate dropdown. This is the heart of the cross-path
+  // fix: the gate now resolves tiers from the SAME source the orchestrator
+  // applies them from.
+  const usdTiers = usdTiersBySource[pricingSource] ?? usdTiersBySource.APPLE ?? [];
   const [excelFile, setExcelFile] = useState<File | null>(null);
   const [parsed, setParsed] = useState<IapItemsParseResult | null>(null);
   const [screenshots, setScreenshots] = useState<ScreenshotEntry[]>([]);
@@ -162,7 +174,14 @@ export function BulkImportWizard({
       overrides,
     });
     return enrichWithTiers(conflicts, usdTiers);
-  }, [parsed, existingSet, conflictMode, overrides, usdTiers]);
+    // `usdTiers` is the per-source active list; `pricingSource` is listed
+    // explicitly so switching the source selector recomputes dispositions
+    // even if the list reference were ever memoised upstream (Cycle 43
+    // regression guard — pre-fix the selector had no effect on preview).
+    // exhaustive-deps flags pricingSource as redundant today (usdTiers
+    // already changes with it); the extra dep is the deliberate guard.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [parsed, existingSet, conflictMode, overrides, usdTiers, pricingSource]);
 
   const typeColumnPopulated = useMemo(() => {
     if (!parsed) return { fromColumn: 0, defaulted: 0 };
@@ -232,6 +251,9 @@ export function BulkImportWizard({
     }
   }
 
+  // Cycle 43: emptiness is now per-source — reflect the SELECTED source so
+  // the remediation hint points at the right place (legacy tier cache for
+  // APPLE, the relevant template upload for the template sources).
   const tiersEmpty = usdTiers.length === 0;
 
   return (
@@ -241,18 +263,36 @@ export function BulkImportWizard({
           role="alert"
           className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-900 dark:text-amber-200"
         >
-          <p className="font-medium">No pricing tiers cached.</p>
+          <p className="font-medium">
+            No USA/USD tiers for the selected pricing source.
+          </p>
           <p className="text-xs mt-0.5">
-            Tier resolution requires the price-tier cache populated first.
-            Bulk-import rows will downgrade to <span className="font-mono">ERROR</span>{" "}
-            until tiers are imported via{" "}
-            <a
-              href="/iap-management/settings/pricing-tiers"
-              className="underline hover:text-amber-700 dark:hover:text-amber-100"
-            >
-              Settings → Pricing Tiers
-            </a>
-            .
+            Tier resolution reads the active pricing source. Bulk-import rows
+            will downgrade to <span className="font-mono">ERROR</span> until{" "}
+            {pricingSource === "APPLE" ? (
+              <>
+                tiers are imported via{" "}
+                <a
+                  href="/iap-management/settings/pricing-tiers"
+                  className="underline hover:text-amber-700 dark:hover:text-amber-100"
+                >
+                  Settings → Pricing Tiers
+                </a>
+              </>
+            ) : pricingSource === "DEFAULT_TEMPLATE" ? (
+              <>
+                a Default Template is uploaded via{" "}
+                <a
+                  href="/iap-management/settings/pricing-tiers"
+                  className="underline hover:text-amber-700 dark:hover:text-amber-100"
+                >
+                  Settings → Pricing Templates
+                </a>
+              </>
+            ) : (
+              <>this app&apos;s pricing template is uploaded on its detail page</>
+            )}
+            . You can also switch the pricing source below.
           </p>
         </div>
       )}

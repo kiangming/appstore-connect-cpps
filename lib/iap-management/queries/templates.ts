@@ -19,6 +19,7 @@ import type {
   PriceTiersParseResult,
 } from "../parsers/price-tiers";
 import { flattenTemplateEntries } from "../parsers/price-tiers";
+import { listUsdTiers, type UsdTierEntry } from "./price-tiers";
 import { findAllAccounts } from "@/lib/asc-account-repository";
 
 const ENTRY_BATCH_SIZE = 1000;
@@ -191,6 +192,66 @@ export async function getAppTemplate(
   if (!template) return null;
   const entries = await fetchEntries(template.id);
   return { template, entries };
+}
+
+/**
+ * Cycle 43 cross-path consistency fix. The bulk-import tier gate
+ * (`enrichWithTiers` in preview + /execute) must resolve USD tier prices
+ * from the SAME source that the matrix view and the pricing orchestration
+ * read — the template tables — not the legacy `price_tier_territories`
+ * cache. Before this helper, "Update App-Pricing Template" wrote only to
+ * `price_tier_template_entries`, so newly-added tiers showed in the matrix
+ * but ERRORed in bulk import ("Price $X does not match any Apple tier").
+ *
+ * Returns the USA/USD `{ tier_id, customer_price }` list for the selected
+ * pricing source — one source of truth shared by preview and execute:
+ *
+ *   APPLE            → legacy `price_tier_territories` USA/USD (back-compat;
+ *                      delegates to the existing `listUsdTiers`).
+ *   DEFAULT_TEMPLATE → the GLOBAL template's USA/USD entries.
+ *   APP_TEMPLATE     → this app's template USA/USD entries.
+ *
+ * Returns `[]` when the selected template scope has no uploaded template.
+ * The gate then downgrades priced rows to ERROR — the correct, loud signal
+ * that the chosen source carries no tiers. (In the UI the source selector
+ * disables unavailable template options, so this case is unreachable via
+ * normal flow; it's a defensive floor, not a silent legacy fallback.)
+ */
+export type UsdTierSource =
+  | { kind: "APPLE" }
+  | { kind: "DEFAULT_TEMPLATE" }
+  | { kind: "APP_TEMPLATE"; app_id: string };
+
+export async function listUsdTiersForSource(
+  source: UsdTierSource,
+): Promise<UsdTierEntry[]> {
+  if (source.kind === "APPLE") {
+    // Back-compat: Apple-passthrough keeps resolving against the legacy
+    // USA/USD cache exactly as before this fix.
+    return listUsdTiers();
+  }
+
+  const scope: TemplateScope =
+    source.kind === "DEFAULT_TEMPLATE"
+      ? { kind: "GLOBAL" }
+      : { kind: "APP", app_id: source.app_id };
+  const header = await fetchTemplateHeader(scope);
+  if (!header) return [];
+
+  const db = iapDb();
+  const res = await db
+    .from("price_tier_template_entries")
+    .select("tier_id, customer_price")
+    .eq("template_id", header.id)
+    .eq("territory_code", "USA")
+    .eq("currency_code", "USD")
+    .order("customer_price", { ascending: true });
+  if (res.error) {
+    throw new Error(
+      `USD tiers (template ${source.kind}) fetch failed: ${res.error.message}`,
+    );
+  }
+  return (res.data ?? []) as UsdTierEntry[];
 }
 
 /**
