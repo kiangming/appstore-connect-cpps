@@ -112,6 +112,10 @@ interface ExecuteResult {
       | "failed-set"
       | "failed-exception";
     pricing_error?: string;
+    /** Problem 2 fix: territories whose template override found no Apple
+     *  price-point match on a `partial-template-fail` (base + matched
+     *  territories DID apply; these fell back to Apple auto-equalization). */
+    pricing_missing?: Array<{ territory_code: string; customer_price: number }>;
     submitted?: boolean;
     /** Hotfix 26 — per-row 429 telemetry attached by the route. Absent
      *  on rows that never touched Apple (SKIP / validation ERROR). */
@@ -1302,7 +1306,7 @@ function OutcomeBadge({
  * needed) — we render a neutral "Unchanged" pill so Manager isn't left
  * guessing whether pricing was attempted.
  */
-function PriceBadge({
+export function PriceBadge({
   result,
 }: {
   result: ExecuteResult["results"][number];
@@ -1325,6 +1329,28 @@ function PriceBadge({
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-emerald-50 text-emerald-700 border-emerald-200">
         Price set
+      </span>
+    );
+  }
+  // Problem 2 fix: partial-template-fail is NOT a failure — the price schedule
+  // POST succeeded; the base price + matched territories applied. Only these
+  // territories had no Apple price-point match and fell back to Apple's
+  // auto-equalization. Amber (not red), and list exactly which territories so
+  // the Manager can correct the template (e.g. "MYS @ 12" — Problem 3).
+  if (outcome === "partial-template-fail") {
+    const missing = result.pricing_missing ?? [];
+    const detail =
+      missing.length > 0
+        ? missing
+            .map((m) => `${m.territory_code} @ ${m.customer_price}`)
+            .join(", ")
+        : "some territories";
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-amber-50 text-amber-700 border-amber-200"
+        title={`Base price + matched territories applied. No Apple price-point match for: ${detail}. These territories use Apple's auto-equalized price — adjust the template to a valid Apple price point if a specific price is required.`}
+      >
+        Partial: {missing.length} unmatched
       </span>
     );
   }

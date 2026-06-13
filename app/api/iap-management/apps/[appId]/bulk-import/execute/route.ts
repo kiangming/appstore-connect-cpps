@@ -34,6 +34,8 @@ import { getActiveAccount } from "@/lib/get-active-account";
 import {
   createInAppPurchase,
   createInAppPurchaseLocalization,
+  updateInAppPurchaseLocalization,
+  deleteInAppPurchaseLocalization,
   listAllInAppPurchases,
   listInAppPurchaseLocalizations,
   reserveInAppPurchaseScreenshot,
@@ -45,6 +47,7 @@ import {
 import { replaceScreenshotOnApple } from "@/lib/iap-management/apple/screenshot-upload";
 import { setAvailabilityToAllTerritories } from "@/lib/iap-management/apple/availabilities";
 import { decideOverwritePricing } from "@/lib/iap-management/bulk-import/overwrite-pricing-decision";
+import { planLocalizationSync } from "@/lib/iap-management/bulk-import/localization-sync";
 import {
   applyPricingSchedule,
   type PricingSource,
@@ -54,7 +57,6 @@ import { pollIapReadyForPricing } from "@/lib/iap-management/apple/poll-iap-read
 import {
   withRetry,
   AppleApiError,
-  iapFetch,
 } from "@/lib/iap-management/apple/fetch";
 import { iapDb } from "@/lib/iap-management/db";
 import {
@@ -171,6 +173,12 @@ interface PerIapResult {
   price_schedule_set?: boolean;
   pricing_outcome?: PricingOutcome["kind"];
   pricing_error?: string;
+  /** Problem 2 fix: per-territory overrides that found no Apple price-point
+   *  match on a `partial-template-fail` outcome. The base price + matched
+   *  territories DID apply; these territories fell back to Apple's
+   *  auto-equalization. Surfaced so the UI can show "Partial: N unmatched"
+   *  with the exact territories instead of a misleading "Price failed". */
+  pricing_missing?: Array<{ territory_code: string; customer_price: number }>;
   /** Cycle 37 Phase 1 — set true when the CREATE path successfully
    *  defaulted the IAP availability to "All territories." False when
    *  Apple rejected the call (recorded in `availability_error`); absent
@@ -780,6 +788,14 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
         pricing.kind === "failed-exception"
           ? { pricing_error: pricing.error }
           : {}),
+        ...(pricing.kind === "partial-template-fail"
+          ? {
+              pricing_missing: pricing.missing_price_points.map((m) => ({
+                territory_code: m.territory_code,
+                customer_price: m.customer_price,
+              })),
+            }
+          : {}),
         availability_set: availabilitySet,
         ...(availabilityErr ? { availability_error: availabilityErr } : {}),
         error: errMsg(err),
@@ -801,6 +817,14 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     pricing.kind === "failed-set" ||
     pricing.kind === "failed-exception"
       ? { pricing_error: pricing.error }
+      : {}),
+    ...(pricing.kind === "partial-template-fail"
+      ? {
+          pricing_missing: pricing.missing_price_points.map((m) => ({
+            territory_code: m.territory_code,
+            customer_price: m.customer_price,
+          })),
+        }
       : {}),
     availability_set: availabilitySet,
     ...(availabilityErr ? { availability_error: availabilityErr } : {}),
@@ -830,25 +854,80 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     });
   }
 
-  // 2. Replace localizations: list + delete + POST new
+  // 2. Sync localizations via delta (Problem 3b fix). Apple forbids deleting
+  //    the last localization, so delete-all-then-recreate broke on the final
+  //    locale (stale content retained). Instead: PATCH shared locales, POST
+  //    new ones, DELETE only genuinely-removed ones — and run PATCH+POST
+  //    BEFORE DELETE so the desired locales already exist when leftovers are
+  //    removed (never drops the IAP to zero localizations).
   const failedLocales: string[] = [];
   try {
     const existing = await trackedWithRetry(args.rateCounters, () =>
       listInAppPurchaseLocalizations(creds, appleIapId),
     );
-    for (const loc of existing.data ?? []) {
+    const plan = planLocalizationSync(
+      (existing.data ?? []).map((l) => ({ id: l.id, locale: l.attributes.locale })),
+      item.localizations,
+    );
+    if (plan.deletionsSuppressed) {
+      await log(
+        "iap-bulk-execute",
+        `localization deletions suppressed on ${item.product_id} (would remove last localization)`,
+        "WARN",
+      );
+    }
+
+    // 2a. PATCH shared locales — update content in place, no delete.
+    for (const p of plan.toPatch) {
       try {
         await trackedWithRetry(args.rateCounters, () =>
-          iapFetch<unknown>(
-            creds,
-            "DELETE",
-            `/v1/inAppPurchaseLocalizations/${loc.id}`,
-          ),
+          updateInAppPurchaseLocalization(creds, p.id, {
+            name: p.name,
+            description: p.description,
+          }),
+        );
+      } catch (err) {
+        failedLocales.push(p.locale);
+        await log(
+          "iap-bulk-execute",
+          `patch loc ${p.locale} on ${item.product_id}: ${errMsg(err)}`,
+          "WARN",
+        );
+      }
+    }
+
+    // 2b. POST new locales.
+    for (const c of plan.toCreate) {
+      try {
+        await trackedWithRetry(args.rateCounters, () =>
+          createInAppPurchaseLocalization(creds, {
+            iapId: appleIapId,
+            locale: c.locale,
+            name: c.name,
+            description: c.description,
+          }),
+        );
+      } catch (err) {
+        failedLocales.push(c.locale);
+        await log(
+          "iap-bulk-execute",
+          `create loc ${c.locale} on ${item.product_id}: ${errMsg(err)}`,
+          "WARN",
+        );
+      }
+    }
+
+    // 2c. DELETE genuinely-removed locales last (plan guarantees this never
+    //     removes the final localization).
+    for (const d of plan.toDelete) {
+      try {
+        await trackedWithRetry(args.rateCounters, () =>
+          deleteInAppPurchaseLocalization(creds, d.id),
         );
       } catch (err) {
         await log(
           "iap-bulk-execute",
-          `delete loc ${loc.id} failed: ${errMsg(err)}`,
+          `delete loc ${d.locale} (${d.id}) on ${item.product_id}: ${errMsg(err)}`,
           "WARN",
         );
       }
@@ -859,26 +938,6 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
       `list locales failed on ${item.product_id}: ${errMsg(err)}`,
       "WARN",
     );
-  }
-
-  for (const loc of item.localizations) {
-    try {
-      await trackedWithRetry(args.rateCounters, () =>
-        createInAppPurchaseLocalization(creds, {
-          iapId: appleIapId,
-          locale: loc.locale,
-          name: loc.display_name,
-          description: loc.description,
-        }),
-      );
-    } catch (err) {
-      failedLocales.push(loc.locale);
-      await log(
-        "iap-bulk-execute",
-        `repost loc ${loc.locale} on ${item.product_id}: ${errMsg(err)}`,
-        "WARN",
-      );
-    }
   }
 
   // Screenshot replace (IAP.o.8a). Manager MV30 Issue 1: re-importing an IAP
@@ -973,7 +1032,13 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
       catalog: args.pricePointCatalog,
       iapType: item.type,
       audit: {
-        iapId: args.existingByProductId.get(item.product_id) ?? null,
+        // Problem 1 fix: mirror the CREATE caller — pass null, NOT the Apple
+        // numeric id. `existingByProductId` holds Apple's resource id
+        // (e.g. "6775742430"), and `actions_log.iap_id` is uuid-typed, so
+        // passing it made every OVERWRITE SET_PRICE_SCHEDULE audit row fail
+        // ("invalid input syntax for type uuid"). The payload below carries
+        // apple_iap_id + product_id + app_id + batch_id for correlation.
+        iapId: null,
         actor: args.actor,
         batchId: args.batchId,
         productId: item.product_id,
@@ -1001,6 +1066,14 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
           pricing.kind === "failed-set" ||
           pricing.kind === "failed-exception"
             ? { pricing_error: pricing.error }
+            : {}),
+          ...(pricing.kind === "partial-template-fail"
+            ? {
+                pricing_missing: pricing.missing_price_points.map((m) => ({
+                  territory_code: m.territory_code,
+                  customer_price: m.customer_price,
+                })),
+              }
             : {}),
         }
       : {}),
