@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en" class="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Google IAP — Unified item detail + per-country pricing (mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            brand: { DEFAULT: "#0c447c", hover: "#0d4f8f", soft: "#eaf1f8", softdark: "#11233a" },
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; }
+    .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+    /* Editable cell affordance — looks like a real input */
+    .edit-field {
+      display:inline-flex; align-items:center; gap:6px;
+      border:1px solid #cbd5e1; border-radius:8px; padding:5px 9px;
+      background:#fff; min-width:118px; font-size:13px;
+    }
+    .dark .edit-field { background:#0b1220; border-color:#334155; color:#e2e8f0; }
+    .edit-field:focus-within { border-color:#0c447c; box-shadow:0 0 0 3px rgba(12,68,124,.12); }
+    .edit-field.amber { border-color:#f59e0b; background:#fffbeb; }
+    .dark .edit-field.amber { background:#2a1f06; border-color:#b45309; }
+    .edit-field .cur { font-size:11px; color:#78716c; font-weight:600; }
+    .edit-field input { border:0; outline:0; width:64px; background:transparent; font-family: ui-monospace, Menlo, monospace; color:inherit; }
+    /* Read-only Google reference cell — visually muted, not an input */
+    .ref-cell { font-family: ui-monospace, Menlo, monospace; font-size:13px; color:#57534e; }
+    .dark .ref-cell { color:#a8a29e; }
+    .ref-tag { font-size:9px; text-transform:uppercase; letter-spacing:.06em; color:#a8a29e; border:1px solid #e7e5e4; border-radius:4px; padding:1px 4px; margin-left:6px; }
+    .dark .ref-tag { border-color:#44403c; color:#78716c; }
+    .pill { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; border:1px solid transparent; }
+    .pill-match { background:#ecfdf5; color:#047857; border-color:#a7f3d0; }
+    .dark .pill-match { background:#052e22; color:#34d399; border-color:#065f46; }
+    .pill-amber { background:#fffbeb; color:#b45309; border-color:#fcd34d; }
+    .dark .pill-amber { background:#2a1f06; color:#fbbf24; border-color:#92400e; }
+    .row-amber { background:#fffdf5; }
+    .dark .row-amber { background:#1b1505; }
+    .zone-label { font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:#0c447c; }
+    .dark .zone-label { color:#7ea8d8; }
+    .spinner { width:14px;height:14px;border:2px solid #cbd5e1;border-top-color:#0c447c;border-radius:999px;display:inline-block;animation:spin .7s linear infinite;vertical-align:middle;}
+    @keyframes spin { to { transform:rotate(360deg);} }
+  </style>
+</head>
+<body class="bg-stone-100 dark:bg-stone-950 text-stone-900 dark:text-stone-100">
+  <div class="max-w-6xl mx-auto px-8 py-7">
+
+    <!-- Mockup meta bar -->
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <p class="zone-label">Google IAP Management — design mockup</p>
+        <h1 class="text-xl font-semibold mt-1">Unified item detail · merge Pricing edit + live-vs-Google compare</h1>
+        <p class="text-sm text-stone-500 dark:text-stone-400 mt-0.5">Pre-implementation review · palette #0c447c + stone · one per-country table doing edit + drift audit</p>
+      </div>
+      <button onclick="document.documentElement.classList.toggle('dark')"
+        class="text-xs font-medium px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800">
+        ☾ / ☀ toggle theme
+      </button>
+    </div>
+
+    <!-- ============ THE DETAIL PAGE ============ -->
+    <div class="rounded-2xl border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-stone-900/40 p-6">
+
+      <!-- Breadcrumb -->
+      <a class="inline-flex items-center gap-1 text-xs text-stone-500 hover:text-brand dark:hover:text-brand-soft mb-3">← All apps · Cookie Run Kingdom</a>
+
+      <!-- Item header / metadata (kept compact + clean) -->
+      <div class="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 p-5 mb-5">
+        <div class="flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <div class="flex items-center gap-2 flex-wrap">
+              <h2 class="text-lg font-semibold">Edit IAP</h2>
+              <span class="mono text-sm text-emerald-700 dark:text-emerald-400">coins_pack_large</span>
+            </div>
+            <p class="text-xs text-stone-500 dark:text-stone-400 mt-1">
+              <span class="mono">com.devsisters.crk</span> ·
+              <span class="inline-flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-emerald-500"></span>Active</span> ·
+              Managed product · Default locale en-US
+            </p>
+          </div>
+          <div class="text-right flex-shrink-0">
+            <p class="text-[11px] text-stone-400">Tool last synced</p>
+            <p class="text-xs text-stone-600 dark:text-stone-300">Jun 27, 2026 · 14:02</p>
+            <button class="mt-2 text-xs font-medium px-3 py-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white">Save changes</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Listings collapsed summary (shows page isn't only pricing, kept tidy) -->
+      <details class="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 mb-5">
+        <summary class="cursor-pointer list-none px-5 py-3 flex items-center justify-between text-sm font-medium">
+          <span>Store listings <span class="text-stone-400 font-normal">· 3 locales</span></span>
+          <span class="text-stone-400 text-xs">▾ expand</span>
+        </summary>
+        <div class="px-5 pb-4 text-xs text-stone-500 dark:text-stone-400 border-t border-stone-100 dark:border-stone-800 pt-3">
+          en-US · ko-KR · ja-JP — titles & descriptions (collapsed for brevity in this mockup)
+        </div>
+      </details>
+
+      <!-- ===================================================================== -->
+      <!-- ZONE A — BASE PRICE + BULK CONTROLS  (configure base, separate zone)   -->
+      <!-- ===================================================================== -->
+      <div class="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 p-5 mb-5">
+        <p class="zone-label mb-3">Zone A · Base price & pricing source</p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-stone-600 dark:text-stone-300 mb-1">Base price (USD)</label>
+            <div class="edit-field"><span class="cur">USD</span><input value="0.99" /></div>
+            <p class="text-[11px] text-stone-400 mt-1">Google auto-equalizes this into every territory you don't override below.</p>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-stone-600 dark:text-stone-300 mb-1">Pricing source</label>
+            <select class="w-full text-sm rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-2.5 py-2">
+              <option>Google default (auto-equalize)</option>
+              <option>Default template</option>
+              <option>App-specific template</option>
+            </select>
+            <p class="text-[11px] text-stone-400 mt-1">Unchanged from today — selection logic untouched.</p>
+          </div>
+          <div class="flex flex-col justify-end">
+            <button class="text-xs font-medium px-3 py-2 rounded-lg border border-brand/30 text-brand dark:text-brand-soft hover:bg-brand-soft dark:hover:bg-brand-softdark">
+              ↧ Apply base to all territories
+            </button>
+            <p class="text-[11px] text-stone-400 mt-1">Bulk action — you don't hand-edit 175 rows.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===================================================================== -->
+      <!-- ZONE B — UNIFIED PER-COUNTRY TABLE (edit + live compare in ONE)        -->
+      <!-- ===================================================================== -->
+      <div class="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 overflow-hidden">
+        <!-- toolbar -->
+        <div class="px-5 py-3 border-b border-stone-100 dark:border-stone-800 flex items-center justify-between gap-3 flex-wrap">
+          <div class="min-w-0">
+            <p class="zone-label">Zone B · Per-country pricing</p>
+            <p class="text-[11px] text-stone-500 dark:text-stone-400 mt-0.5">
+              <span class="font-semibold text-stone-700 dark:text-stone-200">Tool</span> column is editable (your overrides).
+              <span class="font-semibold text-stone-700 dark:text-stone-200">Live on Google</span> is read-only reference — current store value right now.
+            </p>
+          </div>
+          <div class="flex items-center gap-2 flex-shrink-0">
+            <span class="pill pill-amber">⚠ 3 divergent</span>
+            <button class="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-stone-100 dark:bg-stone-800 text-stone-700 dark:text-stone-200 hover:bg-stone-200 dark:hover:bg-stone-700">
+              ⟳ Sync from Google
+            </button>
+          </div>
+        </div>
+
+        <!-- legend -->
+        <div class="px-5 py-2 bg-stone-50 dark:bg-stone-900/60 border-b border-stone-100 dark:border-stone-800 flex items-center gap-4 text-[11px] text-stone-500">
+          <span class="inline-flex items-center gap-1.5"><span class="inline-block w-3 h-3 rounded border border-stone-300 bg-white"></span> editable (tool)</span>
+          <span class="inline-flex items-center gap-1.5"><span class="inline-block w-3 h-3 rounded bg-stone-200 dark:bg-stone-700"></span> read-only (Google live)</span>
+          <span class="ml-auto">Divergent rows sorted to top · auto-equalized matches collapsed below</span>
+        </div>
+
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-[10px] uppercase tracking-wide text-stone-400 border-b border-stone-100 dark:border-stone-800">
+              <th class="px-5 py-2 font-medium">Country</th>
+              <th class="px-5 py-2 font-medium">Price from tool <span class="normal-case text-stone-300">· editable</span></th>
+              <th class="px-5 py-2 font-medium">Price live on Google <span class="normal-case text-stone-300">· reference</span></th>
+              <th class="px-5 py-2 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-stone-100 dark:divide-stone-800">
+
+            <!-- (b) DIVERGENT — both exist, differ -->
+            <tr class="row-amber">
+              <td class="px-5 py-2.5">United States <span class="text-stone-400 mono text-xs">(US)</span></td>
+              <td class="px-5 py-2.5"><span class="edit-field amber"><span class="cur">USD</span><input value="0.99" /></span></td>
+              <td class="px-5 py-2.5"><span class="ref-cell">USD 1.99</span><span class="ref-tag">live</span></td>
+              <td class="px-5 py-2.5"><span class="pill pill-amber">⚠ Differs</span></td>
+            </tr>
+
+            <!-- (d) GOOGLE-ONLY — common auto-equalized / direct-console case -->
+            <tr class="row-amber">
+              <td class="px-5 py-2.5">Malaysia <span class="text-stone-400 mono text-xs">(MY)</span></td>
+              <td class="px-5 py-2.5">
+                <span class="edit-field"><span class="cur">MYR</span><input placeholder="add override" class="placeholder:text-stone-300" /></span>
+              </td>
+              <td class="px-5 py-2.5"><span class="ref-cell">MYR 12.90</span><span class="ref-tag">live</span></td>
+              <td class="px-5 py-2.5"><span class="pill pill-amber">＋ On Google, not in tool</span></td>
+            </tr>
+
+            <!-- (c) TOOL-ONLY — tool has it, Google doesn't -->
+            <tr class="row-amber">
+              <td class="px-5 py-2.5">Vietnam <span class="text-stone-400 mono text-xs">(VN)</span></td>
+              <td class="px-5 py-2.5"><span class="edit-field amber"><span class="cur">VND</span><input value="23000" /></span></td>
+              <td class="px-5 py-2.5"><span class="ref-cell text-stone-400">—</span></td>
+              <td class="px-5 py-2.5"><span class="pill pill-amber">− In tool, not on Google</span></td>
+            </tr>
+
+            <!-- (a) MATCH — explicit override that matches live -->
+            <tr>
+              <td class="px-5 py-2.5">United Kingdom <span class="text-stone-400 mono text-xs">(GB)</span></td>
+              <td class="px-5 py-2.5"><span class="edit-field"><span class="cur">GBP</span><input value="0.79" /></span></td>
+              <td class="px-5 py-2.5"><span class="ref-cell">GBP 0.79</span><span class="ref-tag">live</span></td>
+              <td class="px-5 py-2.5"><span class="pill pill-match">✓ Match</span></td>
+            </tr>
+
+            <!-- (e) INHERITS BASE — no explicit override; live = auto-equalized base. Graceful empty editable state. -->
+            <tr>
+              <td class="px-5 py-2.5">Thailand <span class="text-stone-400 mono text-xs">(TH)</span></td>
+              <td class="px-5 py-2.5">
+                <span class="inline-flex items-center gap-1.5 text-xs text-stone-400 italic px-2 py-1 rounded-md border border-dashed border-stone-300 dark:border-stone-700">
+                  inherits base · <button class="not-italic font-medium text-brand dark:text-brand-soft">override</button>
+                </span>
+              </td>
+              <td class="px-5 py-2.5"><span class="ref-cell">THB 35.00</span><span class="ref-tag">live</span></td>
+              <td class="px-5 py-2.5"><span class="pill pill-match">✓ Match <span class="font-normal opacity-70">(auto-eq)</span></span></td>
+            </tr>
+
+            <!-- collapsed matched bulk -->
+            <tr>
+              <td colspan="4" class="px-5 py-3 text-center">
+                <button class="text-xs font-medium text-brand dark:text-brand-soft hover:underline">
+                  ▾ Show 160 auto-equalized territories that match live Google
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="px-5 py-2.5 border-t border-stone-100 dark:border-stone-800 text-[11px] text-stone-400 flex items-center justify-between">
+          <span>165 territories total · 162 match · 3 divergent</span>
+          <span>Tool manages 3 explicit overrides + base; Google has 165 live prices.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ COMPONENT STATES STRIP ============ -->
+    <p class="zone-label mt-9 mb-3">Representative states (for review)</p>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+      <!-- Sync confirm (light two-step) -->
+      <div class="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 p-4">
+        <p class="text-[11px] font-semibold text-stone-500 mb-2">Sync from Google — light confirm</p>
+        <div class="flex items-center gap-2 text-xs">
+          <span class="text-stone-600 dark:text-stone-300">Replace the tool's stored prices with Google's live values?</span>
+        </div>
+        <div class="mt-3 flex items-center gap-2">
+          <button class="text-xs font-medium px-2.5 py-1.5 rounded-lg bg-brand hover:bg-brand-hover text-white">Confirm</button>
+          <button class="text-xs font-medium px-2.5 py-1.5 rounded-lg text-stone-500 hover:text-stone-700">Cancel</button>
+        </div>
+        <p class="text-[10px] text-stone-400 mt-2">DB-only overwrite · no Play Store mutation · audit-logged.</p>
+      </div>
+
+      <!-- Live loading -->
+      <div class="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 p-4">
+        <p class="text-[11px] font-semibold text-stone-500 mb-2">Live column — loading (non-blocking)</p>
+        <div class="text-xs space-y-2">
+          <div class="flex justify-between"><span>United States (US)</span><span class="mono">USD 0.99</span></div>
+          <div class="flex justify-between text-stone-400"><span>live on Google…</span><span class="spinner"></span></div>
+        </div>
+        <p class="text-[10px] text-stone-400 mt-3">Tool column renders instantly; live loads async.</p>
+      </div>
+
+      <!-- Live degraded -->
+      <div class="rounded-xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 p-4">
+        <p class="text-[11px] font-semibold text-stone-500 mb-2">Live fetch failed — graceful degrade</p>
+        <div class="rounded-lg border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300">
+          ⚠ Couldn't load live prices: Google rate limited.
+          <button class="ml-1 underline font-medium">Retry</button>
+        </div>
+        <p class="text-[10px] text-stone-400 mt-2">Tool column still fully usable — page never breaks.</p>
+      </div>
+    </div>
+
+    <!-- ============ DARK TABLE PREVIEW NOTE ============ -->
+    <p class="text-[11px] text-stone-400 mt-8">Toggle theme (top-right) to preview light + dark. All row states above render in both.</p>
+  </div>
+</body>
+</html>

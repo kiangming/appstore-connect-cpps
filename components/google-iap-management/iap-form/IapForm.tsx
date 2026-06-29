@@ -14,10 +14,12 @@ import {
 
 import { GoogleLocaleSidebar } from "./GoogleLocaleSidebar";
 import { UpdateChangesPreviewModal } from "./UpdateChangesPreviewModal";
+import { UnifiedPricingTable } from "./UnifiedPricingTable";
 import {
   PricingSourceSelector,
   type PricingSource,
 } from "./PricingSourceSelector";
+import { buildIapSaveBody } from "@/lib/google-iap-management/iap-save-body";
 import {
   COMMON_CURRENCIES,
   defaultCurrencyForRegion,
@@ -257,6 +259,24 @@ export function IapForm({
     setRegionOverrides((prev) => prev.filter((_, i) => i !== idx));
   }
 
+  // Unified-table promote-to-override: an inherit/live-only row becomes an
+  // explicit override for that exact region. Mirrors addRegionOverride's row
+  // shape so the save payload is built identically; no-op if the region is
+  // already present (the table keeps regions unique).
+  function addOverrideForRegion(region: string, currency: string) {
+    setRegionOverrides((prev) => {
+      if (prev.some((r) => r.region === region)) return prev;
+      return [
+        ...prev,
+        {
+          region,
+          currency: currency || defaultCurrencyForRegion(region),
+          priceDecimal: "",
+        },
+      ];
+    });
+  }
+
   function validate(): boolean {
     const errors: Record<string, string> = {};
     if (!sku.trim()) errors.sku = "SKU is required.";
@@ -332,32 +352,21 @@ export function IapForm({
     void submitCreate();
   }
 
+  // Save payload is built by the shared pure builder (lib/iap-save-body) so the
+  // unified-table UI reorganization cannot change what's written to Google/DB.
   function buildBody() {
-    return {
-      sku: sku.trim(),
+    return buildIapSaveBody({
+      sku,
       purchaseType,
       status,
       defaultLanguage,
-      listings: Object.entries(listings)
-        .filter(([, l]) => l.title.trim().length > 0)
-        .map(([locale, l]) => ({
-          locale,
-          title: l.title,
-          description: l.description,
-        })),
+      listings,
       baseCurrency,
       basePriceDecimal,
-      regionOverrides: regionOverrides
-        .filter((r) => r.priceDecimal.trim().length > 0)
-        .map((r) => ({
-          region: r.region,
-          currency: r.currency,
-          priceDecimal: r.priceDecimal,
-        })),
+      regionOverrides,
       pricingSource,
-      tierIdentifier:
-        pricingSource === "google_default" ? null : tierIdentifier.trim() || null,
-    };
+      tierIdentifier,
+    });
   }
 
   async function submitCreate() {
@@ -687,6 +696,10 @@ export function IapForm({
           </div>
         </div>
 
+        {/* Create mode keeps the manual region-overrides editor. Edit mode
+            (the item detail page) uses the unified per-country table below,
+            which merges this editor with the live-vs-Google comparison. */}
+        {!isEdit && (
         <div>
           <button
             type="button"
@@ -768,7 +781,25 @@ export function IapForm({
             </div>
           )}
         </div>
+        )}
       </section>
+
+      {/* Zone B — unified per-country table (edit + live-vs-Google compare).
+          Edit mode only: needs an existing SKU to fetch live Google prices.
+          Edits the SAME regionOverrides state the save payload reads. */}
+      {isEdit && (
+        <UnifiedPricingTable
+          packageName={packageName}
+          sku={initial?.sku ?? sku}
+          regionOverrides={regionOverrides}
+          baseCurrency={baseCurrency}
+          basePriceDecimal={basePriceDecimal}
+          fieldErrors={fieldErrors}
+          onUpdateOverride={updateOverride}
+          onRemoveOverride={removeOverride}
+          onAddOverrideForRegion={addOverrideForRegion}
+        />
+      )}
 
       {formError && (
         <div className="flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
