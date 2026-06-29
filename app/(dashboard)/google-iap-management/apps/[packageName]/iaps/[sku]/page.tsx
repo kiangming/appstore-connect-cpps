@@ -12,6 +12,7 @@ import { getIapDetail } from "@/lib/google-iap-management/repository/iaps";
 import { readActiveAccountId } from "@/lib/google-iap-management/active-account";
 import { iapDetailToInitial } from "@/lib/google-iap-management/form-state";
 import { IapForm } from "@/components/google-iap-management/iap-form/IapForm";
+import { LivePriceComparison } from "@/components/google-iap-management/iap-detail/LivePriceComparison";
 
 export default async function EditIapPage({
   params,
@@ -68,6 +69,15 @@ export default async function EditIapPage({
         appId={app.id}
         appDefaults={appDefaults}
         mode={{ kind: "edit", initial }}
+      />
+      <LivePriceComparison
+        packageName={packageName}
+        sku={sku}
+        toolPrices={detail.prices.map((p) => ({
+          region_code: p.region_code,
+          currency: p.currency,
+          price_micros: p.price_micros,
+        }))}
       />
     </div>
   );
