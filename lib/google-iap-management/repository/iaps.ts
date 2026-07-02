@@ -248,10 +248,122 @@ export async function syncIapFromGoogle(
   }
 }
 
+/* ──────────────────────────────────────────────────────────────────────
+ *  Bulk list-refresh (part 1 of the >1000-item "Failed to fetch" fix).
+ *
+ *  The old batch path ran syncIapFromGoogle sequentially per product —
+ *  ~5 Supabase round-trips each (upsert iaps + delete/insert listings +
+ *  delete/insert prices). At Google's 1000-IAP-per-app ceiling that is
+ *  ~5,000 sequential round-trips (~2-5 min), exceeding the platform
+ *  request timeout → the browser's ambiguous "Failed to fetch".
+ *
+ *  This path collapses that to a few dozen set-wide operations:
+ *    1. Bulk-UPSERT all iaps (onConflict app_id,sku), chunked.
+ *    2. For listings + prices, bulk-UPSERT the current rows FIRST
+ *       (onConflict iap_id,locale / iap_id,region_code), THEN delete only
+ *       the stale rows left behind. Upserting-before-deleting is the
+ *       safety property: an item's current prices/listings are written and
+ *       confirmed BEFORE anything is removed, so no failure path can leave
+ *       an item with deleted-but-not-reinserted prices. A failed upsert
+ *       chunk marks those items failed and EXCLUDES them from the delete
+ *       pass, so their existing rows are never touched.
+ *
+ *  Stale detection is clock-safe: `syncFloor` is the minimum updated_at
+ *  RETURNED by this run's upserts (a DB-generated value), and stale rows
+ *  are those with updated_at strictly below it — a DB-value vs DB-value
+ *  comparison, immune to app/DB clock skew. Every row upserted this run
+ *  has updated_at >= syncFloor, so a current row is never deleted; only
+ *  rows untouched this run (removed regions/locales, or an item that now
+ *  has none) fall below the floor. Strict `<` errs toward keeping rows.
+ * ──────────────────────────────────────────────────────────────────── */
+
+const IAP_UPSERT_CHUNK = 500;
+const CHILD_UPSERT_CHUNK = 1000;
+const DELETE_ID_CHUNK = 200;
+
+function chunk<T>(arr: readonly T[], size: number): T[][] {
+  if (size < 1) throw new Error("chunk size must be >= 1");
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+interface ChildRow {
+  iap_id: string;
+  [key: string]: string;
+}
+
 /**
- * Sequentially sync a batch of IAPs from a Publisher API list response.
- * Returns { synced, failed } counts; failed IAPs surface their errors
- * in the per-sku log line but don't abort the batch.
+ * Replace all child rows (listings or prices) for the given set of clean
+ * iap_ids using upsert-then-delete-stale. `rows` is the full current set
+ * across all items. Any iap_id whose upsert chunk fails is reported via
+ * onFail and dropped from the delete pass (its existing rows stay intact).
+ */
+async function replaceChildRows(opts: {
+  db: ReturnType<typeof googleIapDb>;
+  table: "iap_listings" | "iap_prices";
+  cleanIapIds: string[];
+  rows: ChildRow[];
+  conflict: string;
+  onFail: (iapId: string) => void;
+}): Promise<void> {
+  const { db, table, cleanIapIds, rows, conflict, onFail } = opts;
+
+  // 1. Upsert current rows first — confirmed before any delete.
+  let syncFloor: string | null = null;
+  const failedUpsert = new Set<string>();
+  for (const rowChunk of chunk(rows, CHILD_UPSERT_CHUNK)) {
+    const { data, error } = await db
+      .from(table)
+      .upsert(rowChunk, { onConflict: conflict })
+      .select("iap_id, updated_at");
+    if (error) {
+      for (const r of rowChunk) {
+        failedUpsert.add(r.iap_id);
+        onFail(r.iap_id);
+      }
+      console.error(
+        `[google-iap:iap-sync] ${table} upsert chunk failed: ${error.message.replace(/"/g, "'")}`,
+      );
+      continue;
+    }
+    for (const row of (data ?? []) as Array<{ updated_at: string }>) {
+      const u = row.updated_at;
+      if (syncFloor === null || u < syncFloor) syncFloor = u;
+    }
+  }
+
+  // 2. Delete stale rows only for items whose upsert fully succeeded, so a
+  //    failed item's existing rows are never removed.
+  const deletableIds = cleanIapIds.filter((id) => !failedUpsert.has(id));
+  if (deletableIds.length === 0) return;
+
+  for (const idChunk of chunk(deletableIds, DELETE_ID_CHUNK)) {
+    // syncFloor === null → nothing was upserted this run (every item's
+    // current set is empty), so clear all their child rows.
+    const query =
+      syncFloor === null
+        ? db.from(table).delete().in("iap_id", idChunk)
+        : db.from(table).delete().in("iap_id", idChunk).lt("updated_at", syncFloor);
+    const { error } = await query;
+    if (error) {
+      for (const id of idChunk) onFail(id);
+      console.error(
+        `[google-iap:iap-sync] ${table} stale-delete chunk failed: ${error.message.replace(/"/g, "'")}`,
+      );
+    }
+  }
+}
+
+/**
+ * Bulk-sync a batch of IAPs from a Publisher API list response. Returns
+ * per-item { synced, failed } counts (preserved for the audit log). A
+ * failed chunk taints only the items in it; siblings still sync. The
+ * final DB state is equivalent to the old per-item delete-then-insert
+ * loop, produced with a few dozen round-trips instead of ~5 per item.
+ *
+ * Safety: current listings/prices are upserted (and confirmed) before any
+ * stale row is deleted, so no failure path strips an item's prices.
  *
  * Hotfix 4: opportunistically write the app's default_currency +
  * default_language from the first product that carries both. Google
@@ -263,20 +375,115 @@ export async function batchSyncIapsFromGoogle(
   appId: string,
   products: InAppProduct[],
 ): Promise<{ synced: number; failed: number }> {
-  let synced = 0;
-  let failed = 0;
-  for (const product of products) {
-    try {
-      await syncIapFromGoogle(appId, product);
-      synced += 1;
-    } catch (err) {
-      failed += 1;
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(
-        `[google-iap:iap-sync] sku=${product.sku ?? "?"} err="${msg.replace(/"/g, "'")}"`,
-      );
+  const db = googleIapDb();
+  const now = new Date().toISOString();
+
+  // Products without a sku can't be synced — count as failed up front.
+  const withSku = products.filter(
+    (p): p is InAppProduct & { sku: string } => Boolean(p.sku),
+  );
+  let noSkuFailures = 0;
+  for (const p of products) {
+    if (!p.sku) {
+      noSkuFailures += 1;
+      console.error(`[google-iap:iap-sync] skipped product without sku`);
     }
   }
+
+  const failedSkus = new Set<string>();
+  const iapIdToSku = new Map<string, string>();
+  const failByIapId = (iapId: string) => {
+    const sku = iapIdToSku.get(iapId);
+    if (sku) failedSkus.add(sku);
+  };
+
+  // ── Phase 1: bulk upsert iaps, resolve sku → id ──
+  const iapRows = withSku.map((product) => ({
+    app_id: appId,
+    sku: product.sku,
+    purchase_type: mapPurchaseType(product.purchaseType),
+    status: mapStatus(product.status),
+    default_currency: product.defaultPrice?.currency ?? null,
+    default_price_micros: product.defaultPrice?.priceMicros ?? null,
+    last_synced_at: now,
+  }));
+
+  const skuToIapId = new Map<string, string>();
+  for (const rowChunk of chunk(iapRows, IAP_UPSERT_CHUNK)) {
+    const { data, error } = await db
+      .from("iaps")
+      .upsert(rowChunk, { onConflict: "app_id,sku" })
+      .select("id, sku");
+    if (error) {
+      for (const r of rowChunk) failedSkus.add(r.sku);
+      console.error(
+        `[google-iap:iap-sync] iaps upsert chunk failed: ${error.message.replace(/"/g, "'")}`,
+      );
+      continue;
+    }
+    for (const row of (data ?? []) as Array<{ id: string; sku: string }>) {
+      skuToIapId.set(row.sku, row.id);
+      iapIdToSku.set(row.id, row.sku);
+    }
+  }
+
+  // Items whose iap row resolved and haven't already failed are "clean".
+  const cleanIapIds: string[] = [];
+  const listingRows: ChildRow[] = [];
+  const priceRows: ChildRow[] = [];
+  for (const product of withSku) {
+    const iapId = skuToIapId.get(product.sku);
+    if (!iapId || failedSkus.has(product.sku)) continue;
+    cleanIapIds.push(iapId);
+
+    if (product.listings) {
+      for (const [locale, l] of Object.entries(product.listings)) {
+        listingRows.push({
+          iap_id: iapId,
+          locale,
+          title: l.title ?? "",
+          description: l.description ?? "",
+        });
+      }
+    }
+    if (product.prices) {
+      for (const [region, p] of Object.entries(product.prices)) {
+        if (p?.priceMicros && p?.currency) {
+          priceRows.push({
+            iap_id: iapId,
+            region_code: region,
+            currency: p.currency,
+            price_micros: p.priceMicros,
+          });
+        }
+      }
+    }
+  }
+
+  // ── Phase 2: replace listings + prices (upsert-then-delete-stale) ──
+  await replaceChildRows({
+    db,
+    table: "iap_listings",
+    cleanIapIds,
+    rows: listingRows,
+    conflict: "iap_id,locale",
+    onFail: failByIapId,
+  });
+  await replaceChildRows({
+    db,
+    table: "iap_prices",
+    cleanIapIds,
+    rows: priceRows,
+    conflict: "iap_id,region_code",
+    onFail: failByIapId,
+  });
+
+  // ── Accounting: per-item synced/failed (audit-log fidelity) ──
+  let failed = noSkuFailures;
+  for (const product of withSku) {
+    if (!skuToIapId.has(product.sku) || failedSkus.has(product.sku)) failed += 1;
+  }
+  const synced = products.length - failed;
 
   // Capture app-level defaults from the first IAP that carries them.
   const sample = products.find(

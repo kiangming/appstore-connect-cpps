@@ -21,6 +21,11 @@ import { computePageMeta } from "@/lib/iap-management/pagination/page-slice";
 import { microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
 import { StatusDot, type StatusTone } from "@/components/ui/iap/StatusDot";
 import {
+  fetchWithTimeout,
+  describeRefreshError,
+  REFRESH_TIMEOUT_MS,
+} from "@/lib/google-iap-management/client/refresh-fetch";
+import {
   BulkStatusModal,
   type BulkStatusMode,
 } from "./BulkStatusModal";
@@ -83,9 +88,10 @@ export function IapListClient({
     setRefreshError(null);
     setRefreshSummary(null);
     try {
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `/api/google-iap-management/apps/${encodeURIComponent(packageName)}/iaps/refresh`,
         { method: "POST" },
+        REFRESH_TIMEOUT_MS,
       );
       const body = (await res.json().catch(() => ({}))) as {
         ok?: boolean;
@@ -105,7 +111,7 @@ export function IapListClient({
         }.`,
       );
     } catch (err) {
-      setRefreshError(err instanceof Error ? err.message : "Network error");
+      setRefreshError(describeRefreshError(err));
     } finally {
       setRefreshing(false);
     }

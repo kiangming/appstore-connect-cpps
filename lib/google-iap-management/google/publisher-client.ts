@@ -130,8 +130,22 @@ async function legacyListInAppProducts(
 ): Promise<InAppProduct[]> {
   return timed("inappproducts.list", packageName, undefined, async () => {
     const client = buildClient(jwt);
-    const res = await client.inappproducts.list({ packageName });
-    return (res.data.inappproduct ?? []) as InAppProduct[];
+    // Legacy list paginates via a `token` request param and returns the
+    // next cursor in `tokenPagination.nextPageToken`. A single call caps at
+    // ~1000 items — apps sit exactly at Google's 1000-IAP ceiling, so the
+    // un-paginated call would silently drop the tail if the new API ever
+    // falls back. Follow the cursor to match the new-API path's full set.
+    const all: InAppProduct[] = [];
+    let token: string | undefined;
+    let pages = 0;
+    do {
+      const res = await client.inappproducts.list({ packageName, token });
+      all.push(...((res.data.inappproduct ?? []) as InAppProduct[]));
+      token = res.data.tokenPagination?.nextPageToken ?? undefined;
+      pages += 1;
+      if (pages >= NEW_API_LIST_PAGE_CAP) break;
+    } while (token);
+    return all;
   });
 }
 
