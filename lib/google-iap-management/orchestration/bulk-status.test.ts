@@ -24,15 +24,35 @@ vi.mock("../repository/actions-log", () => ({
 
 import { chunkArray, executeBulkStatus } from "./bulk-status";
 
+// Builder supports BOTH the flagged pre-check (select→eq→not→in, resolves to
+// {data:[]} = no flagged) and the cache write (update→eq→in, resolves to
+// updateResult). Mode is tracked per chain so `.in()` returns the right shape.
+function makeBuilder(updateResult: { error: unknown }) {
+  const b: Record<string, unknown> = {};
+  let mode: "select" | "update" | null = null;
+  b.select = vi.fn(() => {
+    mode = "select";
+    return b;
+  });
+  b.update = vi.fn(() => {
+    mode = "update";
+    return b;
+  });
+  b.eq = vi.fn(() => b);
+  b.not = vi.fn(() => b);
+  b.in = vi.fn(() =>
+    Promise.resolve(mode === "select" ? { data: [], error: null } : updateResult),
+  );
+  return b;
+}
+
 function fakeDbWithUpdate() {
-  const update = vi.fn().mockReturnThis();
-  const eq = vi.fn().mockReturnThis();
-  const inFn = vi.fn().mockResolvedValue({ error: null });
+  const b = makeBuilder({ error: null });
   return {
-    from: vi.fn().mockReturnValue({ update, eq, in: inFn }),
-    _update: update,
-    _eq: eq,
-    _in: inFn,
+    from: vi.fn().mockReturnValue(b),
+    _update: b.update,
+    _eq: b.eq,
+    _in: b.in,
   };
 }
 
@@ -230,6 +250,49 @@ describe("executeBulkStatus", () => {
     expect(succeeded.map((r) => r.sku)).toEqual(["a1", "a2", "c1", "c2"]);
   });
 
+  it("excludes flagged (deleted-on-Google) skus from the push; surfaces them blocked", async () => {
+    // Builder whose flagged pre-check (select) reports "gone" as flagged.
+    const b: Record<string, unknown> = {};
+    let mode: "select" | "update" | null = null;
+    b.select = vi.fn(() => {
+      mode = "select";
+      return b;
+    });
+    b.update = vi.fn(() => {
+      mode = "update";
+      return b;
+    });
+    b.eq = vi.fn(() => b);
+    b.not = vi.fn(() => b);
+    b.in = vi.fn(() =>
+      Promise.resolve(
+        mode === "select" ? { data: [{ sku: "gone" }], error: null } : { error: null },
+      ),
+    );
+    dbSpy.mockReturnValue({ from: vi.fn(() => b) });
+    batchSpy.mockResolvedValueOnce(undefined);
+
+    const out = await executeBulkStatus({
+      jwt: {} as never,
+      appId: "app-1",
+      packageName: "com.example.app",
+      skus: ["ok", "gone"],
+      action: "activate",
+      actorEmail: null,
+    });
+
+    // Only the non-flagged sku was pushed to Google.
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+    expect(batchSpy.mock.calls[0][2].map((r: { productId: string }) => r.productId)).toEqual(["ok"]);
+    // "gone" surfaces as a blocked failure with the deleted-on-Google reason.
+    const gone = out.results.find((r) => r.sku === "gone");
+    expect(gone?.ok).toBe(false);
+    expect(gone?.error).toMatch(/deleted on Google/i);
+    const ok = out.results.find((r) => r.sku === "ok");
+    expect(ok?.ok).toBe(true);
+    expect(out.overall).toBe("PARTIAL");
+  });
+
   it("total failure: every chunk fails → overall=FAILURE", async () => {
     const db = fakeDbWithUpdate();
     dbSpy.mockReturnValue(db);
@@ -250,12 +313,9 @@ describe("executeBulkStatus", () => {
   });
 
   it("cache update DB failure is swallowed (non-fatal) — result still SUCCESS", async () => {
+    // Flagged pre-check succeeds (select→{data:[]}); the cache update fails.
     const failingDb = {
-      from: vi.fn().mockReturnValue({
-        update: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        in: vi.fn().mockResolvedValue({ error: { message: "db down" } }),
-      }),
+      from: vi.fn().mockReturnValue(makeBuilder({ error: { message: "db down" } })),
     };
     dbSpy.mockReturnValue(failingDb);
     batchSpy.mockResolvedValueOnce(undefined);

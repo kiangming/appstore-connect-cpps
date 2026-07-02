@@ -16,6 +16,7 @@ export type ActionType =
   | "IAP_CREATE"
   | "IAP_UPDATE"
   | "IAP_DELETE"
+  | "IAP_ACKNOWLEDGE_REMOVE"
   | "BULK_IMPORT_BATCH"
   | "BULK_ACTIVATE"
   | "BULK_DEACTIVATE"

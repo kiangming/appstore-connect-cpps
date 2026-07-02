@@ -26,13 +26,18 @@ const { dbSpy, appDefaultsSpy } = vi.hoisted(() => ({
 vi.mock("../db", () => ({ googleIapDb: dbSpy }));
 vi.mock("./apps", () => ({ updateAppDefaults: appDefaultsSpy }));
 
-import { batchSyncIapsFromGoogle } from "./iaps";
+import {
+  batchSyncIapsFromGoogle,
+  reconcileDeletedOnGoogle,
+  acknowledgeRemoveIaps,
+  listFlaggedSkusAmong,
+} from "./iaps";
 import type { InAppProduct } from "../google/publisher-client";
 
 /* ── In-memory fake DB ───────────────────────────────────────────────── */
 
 type Row = Record<string, unknown>;
-type Filter = { kind: "eq" | "in" | "lt"; col: string; val: unknown };
+type Filter = { kind: "eq" | "in" | "lt" | "notNull"; col: string; val: unknown };
 
 class FakeDb {
   tables: Record<string, Row[]> = { iaps: [], iap_listings: [], iap_prices: [] };
@@ -51,10 +56,14 @@ class FakeDb {
 }
 
 class FakeBuilder {
-  private op: "upsert" | "insert" | "delete" | "select" = "select";
+  private op: "upsert" | "insert" | "delete" | "update" | "select" = "select";
   private rows: Row[] = [];
+  private patch: Row = {};
   private conflict?: string;
   private isSingle = false;
+  private selected = false;
+  private rangeFrom: number | null = null;
+  private rangeTo = 0;
   private filters: Filter[] = [];
 
   constructor(private db: FakeDb, private table: string) {}
@@ -70,15 +79,26 @@ class FakeBuilder {
     this.rows = Array.isArray(rows) ? rows : [rows];
     return this;
   }
+  update(patch: Row) {
+    this.op = "update";
+    this.patch = patch;
+    return this;
+  }
   delete() {
     this.op = "delete";
     return this;
   }
   select() {
+    this.selected = true;
     return this;
   }
   single() {
     this.isSingle = true;
+    return this;
+  }
+  range(from: number, to: number) {
+    this.rangeFrom = from;
+    this.rangeTo = to;
     return this;
   }
   eq(col: string, val: unknown) {
@@ -93,6 +113,11 @@ class FakeBuilder {
     this.filters.push({ kind: "lt", col, val });
     return this;
   }
+  not(col: string, _op: string, _val: unknown) {
+    // Only used as .not(col, "is", null) → "col IS NOT NULL".
+    this.filters.push({ kind: "notNull", col, val: null });
+    return this;
+  }
   then<R>(resolve: (v: { data: unknown; error: { message: string } | null }) => R) {
     return Promise.resolve(this.exec()).then(resolve);
   }
@@ -101,6 +126,7 @@ class FakeBuilder {
     return this.filters.every((f) => {
       if (f.kind === "eq") return x[f.col] === f.val;
       if (f.kind === "in") return (f.val as unknown[]).includes(x[f.col]);
+      if (f.kind === "notNull") return x[f.col] !== null && x[f.col] !== undefined;
       return (x[f.col] as string) < (f.val as string); // lt
     });
   }
@@ -137,12 +163,23 @@ class FakeBuilder {
       return { data: null, error: null };
     }
 
-    if (this.op === "delete") {
-      this.db.tables[this.table] = store.filter((x) => !this.matches(x));
+    if (this.op === "update") {
+      for (const x of store) {
+        if (this.matches(x)) Object.assign(x, this.patch);
+      }
       return { data: null, error: null };
     }
 
-    return { data: store, error: null };
+    if (this.op === "delete") {
+      const removed = store.filter((x) => this.matches(x));
+      this.db.tables[this.table] = store.filter((x) => !this.matches(x));
+      return { data: this.selected ? removed : null, error: null };
+    }
+
+    // select: apply filters, then range slice.
+    let out = store.filter((x) => this.matches(x));
+    if (this.rangeFrom !== null) out = out.slice(this.rangeFrom, this.rangeTo + 1);
+    return { data: out, error: null };
   }
 }
 
@@ -400,5 +437,179 @@ describe("batchSyncIapsFromGoogle — replace + accounting", () => {
     expect(synced).toBe(2);
     expect(failed).toBe(1);
     expect(synced + failed).toBe(products.length);
+  });
+});
+
+/* ── Soft-delete flag reconcile ──────────────────────────────────────── */
+
+function seedIap(
+  db: FakeDb,
+  appId: string,
+  sku: string,
+  deleted_on_google_at: string | null = null,
+) {
+  db.tables.iaps.push({
+    id: `iap-${sku}`,
+    app_id: appId,
+    sku,
+    deleted_on_google_at,
+  });
+}
+
+describe("reconcileDeletedOnGoogle — flag / unflag / preserve", () => {
+  const base = { allProductsHadSku: true, fetchComplete: true, now: "2026-07-02T00:00:00Z" };
+
+  it("flags items absent from Google; items in both stay clear", async () => {
+    const db = new FakeDb();
+    dbSpy.mockReturnValue(db);
+    // 4 cached, 2 incoming (≥50% — clears the anomaly guard).
+    seedIap(db, "app-1", "live.a");
+    seedIap(db, "app-1", "live.b");
+    seedIap(db, "app-1", "gone.c");
+    seedIap(db, "app-1", "gone.d");
+
+    const r = await reconcileDeletedOnGoogle({
+      ...base,
+      appId: "app-1",
+      incomingSkus: ["live.a", "live.b"],
+    });
+    expect(r.flagged).toBe(2);
+    expect(r.flaggedSkus.sort()).toEqual(["gone.c", "gone.d"]);
+    expect(r.skippedReason).toBeNull();
+    // live items stay clear; the two absent ones are flagged.
+    const byS = Object.fromEntries(db.tables.iaps.map((r2) => [r2.sku, r2.deleted_on_google_at]));
+    expect(byS["live.a"]).toBeNull();
+    expect(byS["gone.c"]).toBe(base.now);
+  });
+
+  it("un-flags a reappearing item (self-correcting)", async () => {
+    const db = new FakeDb();
+    dbSpy.mockReturnValue(db);
+    seedIap(db, "app-1", "back.a", "2026-06-01T00:00:00Z"); // was flagged
+
+    const r = await reconcileDeletedOnGoogle({ ...base, appId: "app-1", incomingSkus: ["back.a"] });
+    expect(r.unflagged).toBe(1);
+    expect(r.unflaggedSkus).toEqual(["back.a"]);
+    expect(db.tables.iaps[0].deleted_on_google_at).toBeNull();
+  });
+
+  it("preserves the ORIGINAL detection date for a still-missing flagged item", async () => {
+    const db = new FakeDb();
+    dbSpy.mockReturnValue(db);
+    const original = "2026-06-01T00:00:00Z";
+    seedIap(db, "app-1", "still.gone", original);
+    seedIap(db, "app-1", "live.a");
+
+    const r = await reconcileDeletedOnGoogle({ ...base, appId: "app-1", incomingSkus: ["live.a"] });
+    // Already flagged → NOT re-flagged, date untouched.
+    expect(r.flagged).toBe(0);
+    expect(db.tables.iaps.find((x) => x.sku === "still.gone")!.deleted_on_google_at).toBe(original);
+  });
+
+  it("clean sync of an unchanged set flags nothing", async () => {
+    const db = new FakeDb();
+    dbSpy.mockReturnValue(db);
+    seedIap(db, "app-1", "a");
+    seedIap(db, "app-1", "b");
+    const r = await reconcileDeletedOnGoogle({ ...base, appId: "app-1", incomingSkus: ["a", "b"] });
+    expect(r.flagged).toBe(0);
+    expect(r.unflagged).toBe(0);
+  });
+});
+
+describe("reconcileDeletedOnGoogle — anomaly guard (never spuriously flags)", () => {
+  const now = "2026-07-02T00:00:00Z";
+  function seeded() {
+    const db = new FakeDb();
+    dbSpy.mockReturnValue(db);
+    for (let i = 0; i < 100; i++) seedIap(db, "app-1", `sku.${i}`);
+    return db;
+  }
+
+  it("empty response → skip", async () => {
+    const db = seeded();
+    const r = await reconcileDeletedOnGoogle({ appId: "app-1", incomingSkus: [], allProductsHadSku: true, fetchComplete: true, now });
+    expect(r.skippedReason).toBe("empty_response");
+    expect(r.flagged).toBe(0);
+    expect(db.tables.iaps.every((x) => x.deleted_on_google_at === null)).toBe(true);
+  });
+
+  it("a product missing a SKU → skip", async () => {
+    seeded();
+    const r = await reconcileDeletedOnGoogle({ appId: "app-1", incomingSkus: ["sku.0"], allProductsHadSku: false, fetchComplete: true, now });
+    expect(r.skippedReason).toBe("product_missing_sku");
+    expect(r.flagged).toBe(0);
+  });
+
+  it("fetch incomplete → skip", async () => {
+    seeded();
+    const r = await reconcileDeletedOnGoogle({ appId: "app-1", incomingSkus: ["sku.0"], allProductsHadSku: true, fetchComplete: false, now });
+    expect(r.skippedReason).toBe("fetch_incomplete");
+  });
+
+  it("incoming < 50% of cached → skip (protects the warning's credibility)", async () => {
+    const db = seeded(); // 100 cached
+    const incoming = Array.from({ length: 40 }, (_, i) => `sku.${i}`); // 40 < 50
+    const r = await reconcileDeletedOnGoogle({ appId: "app-1", incomingSkus: incoming, allProductsHadSku: true, fetchComplete: true, now });
+    expect(r.skippedReason).toMatch(/incoming_below_50pct/);
+    expect(r.flagged).toBe(0);
+    expect(db.tables.iaps.every((x) => x.deleted_on_google_at === null)).toBe(true);
+  });
+
+  it("incoming ≥ 50% of cached → proceeds", async () => {
+    seeded(); // 100 cached
+    const incoming = Array.from({ length: 60 }, (_, i) => `sku.${i}`); // 60 ≥ 50
+    const r = await reconcileDeletedOnGoogle({ appId: "app-1", incomingSkus: incoming, allProductsHadSku: true, fetchComplete: true, now });
+    expect(r.skippedReason).toBeNull();
+    expect(r.flagged).toBe(40); // sku.60..99 absent
+  });
+});
+
+describe("batchSyncIapsFromGoogle — 293/109 end-to-end flagging + audit counts", () => {
+  it("cached 402, incoming 293 (>50%) → 109 flagged, 293 clear", async () => {
+    const db = new FakeDb();
+    dbSpy.mockReturnValue(db);
+    const all = Array.from({ length: 402 }, (_, i) => product(`sku.${i}`));
+    // First sync seeds all 402.
+    await batchSyncIapsFromGoogle("app-1", all);
+    expect(db.tables.iaps.length).toBe(402);
+
+    // Second sync: Google now returns only the first 293.
+    const incoming = all.slice(0, 293);
+    const res = await batchSyncIapsFromGoogle("app-1", incoming);
+
+    expect(res.flagReconcile.skippedReason).toBeNull();
+    expect(res.flagReconcile.flagged).toBe(109);
+    const flaggedCount = db.tables.iaps.filter((x) => x.deleted_on_google_at !== null).length;
+    expect(flaggedCount).toBe(109);
+    const clearCount = db.tables.iaps.filter((x) => x.deleted_on_google_at === null).length;
+    expect(clearCount).toBe(293);
+    // Table still holds all 402 rows (soft-delete, not removed).
+    expect(db.tables.iaps.length).toBe(402);
+  });
+});
+
+describe("acknowledgeRemoveIaps + listFlaggedSkusAmong", () => {
+  it("removes ONLY flagged rows; a present-on-Google sku cannot be removed", async () => {
+    const db = new FakeDb();
+    dbSpy.mockReturnValue(db);
+    seedIap(db, "app-1", "flagged.a", "2026-07-02T00:00:00Z");
+    seedIap(db, "app-1", "live.b"); // NOT flagged
+
+    const { removed } = await acknowledgeRemoveIaps("app-1", ["flagged.a", "live.b"]);
+    expect(removed).toEqual(["flagged.a"]);
+    // live.b survives (guard: only deleted_on_google_at IS NOT NULL rows deleted).
+    expect(db.tables.iaps.map((x) => x.sku)).toEqual(["live.b"]);
+  });
+
+  it("listFlaggedSkusAmong returns only the flagged subset", async () => {
+    const db = new FakeDb();
+    dbSpy.mockReturnValue(db);
+    seedIap(db, "app-1", "a", "2026-07-02T00:00:00Z");
+    seedIap(db, "app-1", "b");
+    seedIap(db, "app-1", "c", "2026-07-02T00:00:00Z");
+
+    const flagged = await listFlaggedSkusAmong("app-1", ["a", "b", "c"]);
+    expect([...flagged].sort()).toEqual(["a", "c"]);
   });
 });

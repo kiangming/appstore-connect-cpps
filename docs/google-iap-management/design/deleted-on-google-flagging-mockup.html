@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="en" class="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Google IAP — Deleted-on-Google flagging (mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            brand: { DEFAULT: "#0c447c", hover: "#0d4f8f", soft: "#eaf1f8", softdark: "#11233a" },
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; }
+    .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+    .zone-label { font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:#0c447c; }
+    .dark .zone-label { color:#7ea8d8; }
+
+    /* Status + state pills (reused language from unified-pricing mockup) */
+    .pill { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; border:1px solid transparent; }
+    .pill-ok    { background:#ecfdf5; color:#047857; border-color:#a7f3d0; }
+    .dark .pill-ok    { background:#052e22; color:#34d399; border-color:#065f46; }
+    .pill-neutral { background:#f5f5f4; color:#57534e; border-color:#e7e5e4; }
+    .dark .pill-neutral { background:#292524; color:#a8a29e; border-color:#44403c; }
+    .pill-amber { background:#fffbeb; color:#b45309; border-color:#fcd34d; }
+    .dark .pill-amber { background:#2a1f06; color:#fbbf24; border-color:#92400e; }
+    .pill-red   { background:#fef2f2; color:#b91c1c; border-color:#fecaca; }
+    .dark .pill-red   { background:#2a1113; color:#f87171; border-color:#7f1d1d; }
+
+    /* Status dots */
+    .dot { width:7px; height:7px; border-radius:999px; display:inline-block; }
+    .dot-ok { background:#10b981; }
+    .dot-off { background:#a8a29e; }
+
+    /* Flagged (deleted-on-Google) row tint */
+    .row-red { background:#fef5f5; }
+    .dark .row-red { background:#1c0f10; }
+    .row-red:hover { background:#fdecec; }
+    .dark .row-red:hover { background:#241315; }
+
+    /* Filter chip */
+    .chip { display:inline-flex; align-items:center; gap:7px; font-size:12px; font-weight:600; padding:6px 11px; border-radius:999px; border:1px solid #d6d3d1; background:#fff; color:#57534e; cursor:pointer; }
+    .dark .chip { background:#1c1917; border-color:#44403c; color:#d6d3d1; }
+    .chip[aria-pressed="true"] { background:#eaf1f8; border-color:#0c447c; color:#0c447c; }
+    .dark .chip[aria-pressed="true"] { background:#11233a; border-color:#2f5b8c; color:#9cc2ea; }
+    .switch { width:30px; height:17px; border-radius:999px; background:#d6d3d1; position:relative; transition:.15s; flex:none; }
+    .dark .switch { background:#44403c; }
+    .chip[aria-pressed="true"] .switch { background:#0c447c; }
+    .switch::after { content:""; position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:999px; background:#fff; transition:.15s; }
+    .chip[aria-pressed="true"] .switch::after { left:15px; }
+
+    .btn { font-size:13px; font-weight:600; padding:7px 13px; border-radius:9px; border:1px solid transparent; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+    .btn-brand { background:#0c447c; color:#fff; }
+    .btn-brand:hover { background:#0d4f8f; }
+    .btn-outline { border-color:#d6d3d1; background:#fff; color:#44403c; }
+    .dark .btn-outline { background:#1c1917; border-color:#44403c; color:#d6d3d1; }
+    .btn-outline:hover { background:#f5f5f4; }
+    .dark .btn-outline:hover { background:#292524; }
+    .btn-danger { background:#dc2626; color:#fff; }
+    .btn-danger:hover { background:#b91c1c; }
+    .btn-danger-outline { border-color:#fca5a5; background:#fff; color:#b91c1c; }
+    .dark .btn-danger-outline { background:#1c0f10; border-color:#7f1d1d; color:#f87171; }
+    .btn-ghost { color:#78716c; }
+    .btn-ghost:hover { color:#0c447c; }
+
+    th { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.04em; }
+    td { font-size:13px; }
+  </style>
+</head>
+<body class="bg-stone-100 dark:bg-stone-950 text-stone-900 dark:text-stone-100">
+  <div class="max-w-6xl mx-auto px-8 py-7">
+
+    <!-- Mockup meta bar -->
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <p class="zone-label">Google IAP Management — design mockup</p>
+        <h1 class="text-xl font-semibold mt-1">Item list · flag items deleted-on-Google (soft-delete)</h1>
+        <p class="text-sm text-stone-500 dark:text-stone-400 mt-0.5">Pre-implementation review · palette #0c447c + stone · warn → review → acknowledge/remove · no hard auto-delete</p>
+      </div>
+      <button onclick="document.documentElement.classList.toggle('dark')"
+        class="text-xs font-medium px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800">
+        ☾ / ☀ toggle theme
+      </button>
+    </div>
+
+    <!-- ============ THE ITEM-LIST PAGE ============ -->
+    <div class="rounded-2xl border border-stone-200 dark:border-stone-800 bg-stone-50 dark:bg-stone-900/40 p-6">
+
+      <!-- Breadcrumb -->
+      <a class="inline-flex items-center gap-1 text-xs text-stone-500 hover:text-brand dark:hover:text-brand-soft mb-3">← All apps</a>
+
+      <!-- Page header -->
+      <div class="flex items-start justify-between gap-4 mb-4">
+        <div class="flex items-start gap-3 min-w-0">
+          <div class="w-12 h-12 rounded-xl bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center flex-shrink-0">
+            <span class="text-emerald-600 dark:text-emerald-400 text-xl">🛍️</span>
+          </div>
+          <div class="min-w-0">
+            <h2 class="text-2xl font-semibold truncate">Play Together VNG</h2>
+            <p class="text-xs text-stone-500 dark:text-stone-400 mt-0.5 mono">com.vng.playtogether</p>
+            <!-- Count summary: live vs flagged -->
+            <div class="flex items-center gap-2 mt-2 flex-wrap">
+              <span class="pill pill-ok">293 on Google Play</span>
+              <span class="pill pill-red">109 not on Google</span>
+              <span class="text-[11px] text-stone-400">last synced Jul 2, 11:38</span>
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 flex-none">
+          <button class="btn btn-outline">↻ Refresh</button>
+          <button class="btn btn-brand">＋ New IAP</button>
+        </div>
+      </div>
+
+      <!-- ====== WARNING BANNER (amber, not red) ====== -->
+      <div class="rounded-xl border border-amber-300 dark:border-amber-800/70 bg-amber-50 dark:bg-amber-950/30 p-4 mb-4 flex items-start gap-3">
+        <span class="text-amber-500 text-lg leading-none mt-0.5">⚠️</span>
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-semibold text-amber-800 dark:text-amber-300">
+            109 items exist in the tool’s cache but are no longer on Google Play
+          </p>
+          <p class="text-[13px] text-amber-700/90 dark:text-amber-400/80 mt-0.5">
+            Someone may have deleted or renamed them on the Play Console. They’re still shown below (flagged) so nothing disappears silently — review and remove the ones that are genuinely gone.
+          </p>
+        </div>
+        <button onclick="scrollToFlagged()" class="btn btn-outline flex-none border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-300 whitespace-nowrap">Review flagged ↓</button>
+      </div>
+
+      <!-- Toolbar: search + filter chip -->
+      <div class="flex items-center gap-3 mb-3">
+        <div class="relative flex-1">
+          <span class="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400">🔍</span>
+          <input placeholder="Search by name or SKU…" class="w-full rounded-lg border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 pl-9 pr-3 py-2 text-sm" />
+        </div>
+        <!-- SHOW / HIDE flagged filter -->
+        <button id="flagChip" class="chip" aria-pressed="true" onclick="toggleFlagged()">
+          <span class="switch"></span>
+          <span>Show deleted-on-Google</span>
+          <span class="pill pill-red" style="padding:0 6px;">109</span>
+        </button>
+      </div>
+
+      <!-- ====== THE TABLE ====== -->
+      <div class="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl overflow-hidden">
+        <table class="w-full">
+          <thead class="bg-stone-50 dark:bg-stone-800/60 border-b border-stone-200 dark:border-stone-800 text-stone-500 dark:text-stone-400">
+            <tr class="text-left">
+              <th class="px-4 py-2.5">Name</th>
+              <th class="px-4 py-2.5">SKU</th>
+              <th class="px-4 py-2.5 text-right">Price</th>
+              <th class="px-4 py-2.5">Status</th>
+              <th class="px-4 py-2.5">Type</th>
+              <th class="px-4 py-2.5">Last synced</th>
+              <th class="px-4 py-2.5"></th>
+            </tr>
+          </thead>
+
+          <!-- Normal items (present on Google) — listed first -->
+          <tbody class="divide-y divide-stone-100 dark:divide-stone-800">
+            <tr class="hover:bg-stone-50 dark:hover:bg-stone-800/50">
+              <td class="px-4 py-3"><a class="font-medium text-brand dark:text-brand-soft hover:underline">100 Diamonds</a></td>
+              <td class="px-4 py-3 mono text-xs text-stone-500">pt.diamonds.100</td>
+              <td class="px-4 py-3 text-right mono">0.99 USD</td>
+              <td class="px-4 py-3"><span class="pill pill-ok"><span class="dot dot-ok"></span>Active</span></td>
+              <td class="px-4 py-3 text-stone-500">Managed</td>
+              <td class="px-4 py-3 text-stone-400 text-xs">Jul 2, 11:38</td>
+              <td></td>
+            </tr>
+            <tr class="hover:bg-stone-50 dark:hover:bg-stone-800/50">
+              <td class="px-4 py-3"><a class="font-medium text-brand dark:text-brand-soft hover:underline">550 Diamonds</a></td>
+              <td class="px-4 py-3 mono text-xs text-stone-500">pt.diamonds.550</td>
+              <td class="px-4 py-3 text-right mono">4.99 USD</td>
+              <td class="px-4 py-3"><span class="pill pill-ok"><span class="dot dot-ok"></span>Active</span></td>
+              <td class="px-4 py-3 text-stone-500">Managed</td>
+              <td class="px-4 py-3 text-stone-400 text-xs">Jul 2, 11:38</td>
+              <td></td>
+            </tr>
+            <tr class="hover:bg-stone-50 dark:hover:bg-stone-800/50">
+              <td class="px-4 py-3"><a class="font-medium text-brand dark:text-brand-soft hover:underline">Starter Pack</a></td>
+              <td class="px-4 py-3 mono text-xs text-stone-500">pt.pack.starter</td>
+              <td class="px-4 py-3 text-right mono">2.99 USD</td>
+              <td class="px-4 py-3"><span class="pill pill-neutral"><span class="dot dot-off"></span>Inactive</span></td>
+              <td class="px-4 py-3 text-stone-500">Managed</td>
+              <td class="px-4 py-3 text-stone-400 text-xs">Jul 2, 11:38</td>
+              <td></td>
+            </tr>
+            <tr class="hover:bg-stone-50 dark:hover:bg-stone-800/50">
+              <td class="px-4 py-3"><a class="font-medium text-brand dark:text-brand-soft hover:underline">Monthly VIP</a></td>
+              <td class="px-4 py-3 mono text-xs text-stone-500">pt.vip.monthly</td>
+              <td class="px-4 py-3 text-right mono">9.99 USD</td>
+              <td class="px-4 py-3"><span class="pill pill-ok"><span class="dot dot-ok"></span>Active</span></td>
+              <td class="px-4 py-3 text-stone-500">Managed</td>
+              <td class="px-4 py-3 text-stone-400 text-xs">Jul 2, 11:38</td>
+              <td></td>
+            </tr>
+            <tr class="hover:bg-stone-50 dark:hover:bg-stone-800/50">
+              <td class="px-4 py-3 text-stone-400 text-xs italic" colspan="7">…288 more items on Google Play…</td>
+            </tr>
+          </tbody>
+
+          <!-- ====== FLAGGED block (deleted on Google) — sorted to BOTTOM ====== -->
+          <tbody id="flaggedBlock" class="divide-y divide-red-100 dark:divide-red-950/60">
+            <!-- Section divider + bulk action -->
+            <tr class="bg-red-50/70 dark:bg-red-950/30 border-t-2 border-red-200 dark:border-red-900/60">
+              <td colspan="6" class="px-4 py-2.5">
+                <span class="text-[11px] font-bold uppercase tracking-wide text-red-700 dark:text-red-400">⚠ Not on Google Play · 109 items</span>
+                <span class="text-[11px] text-stone-500 dark:text-stone-400 ml-2">in the tool’s cache but absent from the latest sync</span>
+              </td>
+              <td class="px-4 py-2.5 text-right">
+                <button class="btn btn-danger-outline text-xs" onclick="openBulk()">Remove all 109</button>
+              </td>
+            </tr>
+
+            <!-- Flagged row 1 -->
+            <tr class="row-red">
+              <td class="px-4 py-3">
+                <span class="font-medium text-stone-700 dark:text-stone-300 line-through decoration-red-400/70">Lunar Festival Bundle</span>
+                <span class="pill pill-red ml-2">Deleted on Google</span>
+              </td>
+              <td class="px-4 py-3 mono text-xs text-stone-500">pt.bundle.lunar2025</td>
+              <td class="px-4 py-3 text-right mono text-stone-400">1.99 USD</td>
+              <td class="px-4 py-3"><span class="pill pill-neutral">—</span></td>
+              <td class="px-4 py-3 text-stone-400">Managed</td>
+              <td class="px-4 py-3 text-[11px] text-red-600 dark:text-red-400">detected missing<br>Jul 2</td>
+              <td class="px-4 py-3 text-right whitespace-nowrap">
+                <button class="btn btn-danger-outline text-xs" onclick="revealConfirm('c1')">Acknowledge / Remove</button>
+              </td>
+            </tr>
+            <!-- Inline confirm strip for row 1 (hidden until Remove clicked) -->
+            <tr id="c1" class="row-red hidden">
+              <td colspan="7" class="px-4 py-3">
+                <div class="flex items-center justify-between gap-4 rounded-lg border border-red-200 dark:border-red-900/60 bg-white dark:bg-stone-900 px-4 py-3">
+                  <p class="text-[13px] text-stone-700 dark:text-stone-300">
+                    <span class="font-semibold">Remove “Lunar Festival Bundle” from the tool?</span>
+                    It’s already gone from Google Play. This cannot be undone.
+                  </p>
+                  <div class="flex items-center gap-2 flex-none">
+                    <button class="btn btn-ghost text-xs" onclick="hideConfirm('c1')">Cancel</button>
+                    <button class="btn btn-danger text-xs">Confirm remove</button>
+                  </div>
+                </div>
+              </td>
+            </tr>
+
+            <!-- Flagged row 2 -->
+            <tr class="row-red">
+              <td class="px-4 py-3">
+                <span class="font-medium text-stone-700 dark:text-stone-300 line-through decoration-red-400/70">Beta Test Coins</span>
+                <span class="pill pill-red ml-2">Deleted on Google</span>
+              </td>
+              <td class="px-4 py-3 mono text-xs text-stone-500">pt.coins.betatest</td>
+              <td class="px-4 py-3 text-right mono text-stone-400">0.99 USD</td>
+              <td class="px-4 py-3"><span class="pill pill-neutral">—</span></td>
+              <td class="px-4 py-3 text-stone-400">Consumable</td>
+              <td class="px-4 py-3 text-[11px] text-red-600 dark:text-red-400">detected missing<br>Jul 2</td>
+              <td class="px-4 py-3 text-right whitespace-nowrap">
+                <button class="btn btn-danger-outline text-xs" onclick="revealConfirm('c2')">Acknowledge / Remove</button>
+              </td>
+            </tr>
+            <tr id="c2" class="row-red hidden">
+              <td colspan="7" class="px-4 py-3">
+                <div class="flex items-center justify-between gap-4 rounded-lg border border-red-200 dark:border-red-900/60 bg-white dark:bg-stone-900 px-4 py-3">
+                  <p class="text-[13px] text-stone-700 dark:text-stone-300">
+                    <span class="font-semibold">Remove “Beta Test Coins” from the tool?</span>
+                    It’s already gone from Google Play. This cannot be undone.
+                  </p>
+                  <div class="flex items-center gap-2 flex-none">
+                    <button class="btn btn-ghost text-xs" onclick="hideConfirm('c2')">Cancel</button>
+                    <button class="btn btn-danger text-xs">Confirm remove</button>
+                  </div>
+                </div>
+              </td>
+            </tr>
+
+            <!-- Flagged row 3 — renamed-SKU orphan example -->
+            <tr class="row-red">
+              <td class="px-4 py-3">
+                <span class="font-medium text-stone-700 dark:text-stone-300 line-through decoration-red-400/70">Old Weekly Pass</span>
+                <span class="pill pill-red ml-2">Deleted on Google</span>
+                <span class="pill pill-amber ml-1" title="A similarly-named live SKU exists — likely renamed">possibly renamed</span>
+              </td>
+              <td class="px-4 py-3 mono text-xs text-stone-500">pt.pass.weekly.v1</td>
+              <td class="px-4 py-3 text-right mono text-stone-400">3.99 USD</td>
+              <td class="px-4 py-3"><span class="pill pill-neutral">—</span></td>
+              <td class="px-4 py-3 text-stone-400">Managed</td>
+              <td class="px-4 py-3 text-[11px] text-red-600 dark:text-red-400">detected missing<br>Jul 2</td>
+              <td class="px-4 py-3 text-right whitespace-nowrap">
+                <button class="btn btn-danger-outline text-xs" onclick="revealConfirm('c3')">Acknowledge / Remove</button>
+              </td>
+            </tr>
+            <tr id="c3" class="row-red hidden">
+              <td colspan="7" class="px-4 py-3">
+                <div class="flex items-center justify-between gap-4 rounded-lg border border-red-200 dark:border-red-900/60 bg-white dark:bg-stone-900 px-4 py-3">
+                  <p class="text-[13px] text-stone-700 dark:text-stone-300">
+                    <span class="font-semibold">Remove “Old Weekly Pass” from the tool?</span>
+                    It’s already gone from Google Play. This cannot be undone.
+                  </p>
+                  <div class="flex items-center gap-2 flex-none">
+                    <button class="btn btn-ghost text-xs" onclick="hideConfirm('c3')">Cancel</button>
+                    <button class="btn btn-danger text-xs">Confirm remove</button>
+                  </div>
+                </div>
+              </td>
+            </tr>
+
+            <tr class="row-red">
+              <td class="px-4 py-3 text-stone-400 text-xs italic" colspan="7">…106 more items not on Google Play…</td>
+            </tr>
+          </tbody>
+
+          <!-- Collapsed note (shown when flagged hidden) -->
+          <tbody id="flaggedCollapsed" class="hidden">
+            <tr class="bg-red-50/50 dark:bg-red-950/20 border-t-2 border-red-200 dark:border-red-900/60">
+              <td colspan="7" class="px-4 py-3 text-center">
+                <span class="text-[13px] text-red-700 dark:text-red-400 font-medium">109 deleted-on-Google items hidden</span>
+                <button class="btn btn-ghost text-xs ml-1 underline" onclick="toggleFlagged()">Show</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pagination footer (client-side, normal items only) -->
+      <div class="flex items-center justify-between mt-3 text-xs text-stone-500 dark:text-stone-400">
+        <span>Showing 1–20 of 293 on Google Play <span class="text-red-500">· 109 flagged shown separately below</span></span>
+        <div class="flex items-center gap-1">
+          <button class="btn btn-outline text-xs">‹ Prev</button>
+          <span class="px-2">Page 1 / 15</span>
+          <button class="btn btn-outline text-xs">Next ›</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Caption -->
+    <p class="text-[11px] text-stone-400 mt-4 leading-relaxed">
+      Soft-delete flow: sync flags DB items absent from Google’s latest (successful) response as “Deleted on Google” rather than hard-deleting them — the amber banner surfaces the anomaly for multi-operator awareness, flagged rows sort to the bottom in red (reusing the divergence-first language), the filter chip collapses them for everyday use, and removal is an explicit per-row (or bulk) acknowledge with a light confirm. Nothing is deleted without a human clicking Confirm.
+    </p>
+  </div>
+
+  <!-- ====== BULK REMOVE CONFIRM MODAL ====== -->
+  <div id="bulkModal" class="hidden fixed inset-0 bg-black/40 dark:bg-black/60 flex items-center justify-center z-50 p-4">
+    <div class="bg-white dark:bg-stone-900 rounded-2xl border border-stone-200 dark:border-stone-800 shadow-xl max-w-md w-full p-6">
+      <div class="flex items-start gap-3">
+        <div class="w-10 h-10 rounded-full bg-red-50 dark:bg-red-950/50 flex items-center justify-center flex-none">
+          <span class="text-red-500 text-lg">🗑️</span>
+        </div>
+        <div class="min-w-0">
+          <h3 class="text-base font-semibold">Remove all 109 deleted items?</h3>
+          <p class="text-[13px] text-stone-600 dark:text-stone-400 mt-1">
+            These items are in the tool’s cache but no longer on Google Play. Removing them clears the cache rows (and their prices/listings). This cannot be undone — it does not affect Google Play.
+          </p>
+          <label class="flex items-center gap-2 mt-3 text-[13px] text-stone-600 dark:text-stone-400">
+            <input type="checkbox" class="rounded border-stone-300" />
+            Keep any flagged “possibly renamed” items (skip 3)
+          </label>
+        </div>
+      </div>
+      <div class="flex items-center justify-end gap-2 mt-5">
+        <button class="btn btn-ghost" onclick="closeBulk()">Cancel</button>
+        <button class="btn btn-danger">Remove 109 items</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toggleFlagged() {
+      const chip = document.getElementById('flagChip');
+      const shown = chip.getAttribute('aria-pressed') === 'true';
+      chip.setAttribute('aria-pressed', String(!shown));
+      document.getElementById('flaggedBlock').classList.toggle('hidden', shown);
+      document.getElementById('flaggedCollapsed').classList.toggle('hidden', !shown);
+    }
+    function revealConfirm(id) { document.getElementById(id).classList.remove('hidden'); }
+    function hideConfirm(id) { document.getElementById(id).classList.add('hidden'); }
+    function openBulk() { document.getElementById('bulkModal').classList.remove('hidden'); }
+    function closeBulk() { document.getElementById('bulkModal').classList.add('hidden'); }
+    function scrollToFlagged() {
+      const b = document.getElementById('flaggedBlock');
+      if (b.classList.contains('hidden')) toggleFlagged();
+      b.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  </script>
+</body>
+</html>

@@ -46,6 +46,7 @@ import {
 } from "../google/publisher-client";
 import { googleIapDb } from "../db";
 import { appendAction } from "../repository/actions-log";
+import { listFlaggedSkusAmong } from "../repository/iaps";
 
 export type BulkStatusAction = "activate" | "deactivate";
 
@@ -106,7 +107,28 @@ export async function executeBulkStatus(
     };
   }
 
-  const chunks = chunkArray(skus, chunkSize);
+  // Guard: flagged (deleted-on-Google) items must never be pushed — they no
+  // longer exist on Google, so activate/deactivate would error. Exclude them
+  // up front and surface each as a blocked failure so the outcome is visible.
+  const flagged = await listFlaggedSkusAmong(appId, skus);
+  const actionable = skus.filter((s) => !flagged.has(s));
+  const blockedResults: BulkStatusItemResult[] = [];
+  for (const sku of skus) {
+    if (flagged.has(sku)) {
+      blockedResults.push({
+        sku,
+        ok: false,
+        error: "Item was deleted on Google — refresh, then re-create if needed.",
+      });
+    }
+  }
+  if (flagged.size > 0) {
+    console.warn(
+      `[bulk-status] excluded ${flagged.size} flagged (deleted-on-Google) item(s) from ${action} pkg=${packageName}`,
+    );
+  }
+
+  const chunks = chunkArray(actionable, chunkSize);
   const apiState: "ACTIVATE" | "DEACTIVATE" =
     action === "activate" ? "ACTIVATE" : "DEACTIVATE";
   const newCacheStatus: "active" | "inactive" =
@@ -116,7 +138,7 @@ export async function executeBulkStatus(
     `[bulk-status] start action=${action} pkg=${packageName} count=${skus.length} chunks=${chunks.length} actor=${actorEmail ?? "?"}`,
   );
 
-  const results: BulkStatusItemResult[] = [];
+  const results: BulkStatusItemResult[] = [...blockedResults];
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
     const requests: BulkStateRequest[] = chunk.map((sku) => ({

@@ -24,6 +24,9 @@ export interface IapRow {
   default_currency: string | null;
   default_price_micros: string | null;
   last_synced_at: string | null;
+  /** NULL = present on Google. Set = flagged deleted-on-Google (soft-delete);
+   *  value is the first-detected-missing timestamp. */
+  deleted_on_google_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -58,7 +61,7 @@ export async function listIapsForApp(appId: string): Promise<IapRow[]> {
   const { data, error } = await googleIapDb()
     .from("iaps")
     .select(
-      "id, app_id, sku, purchase_type, status, default_currency, default_price_micros, last_synced_at, created_at, updated_at",
+      "id, app_id, sku, purchase_type, status, default_currency, default_price_micros, last_synced_at, deleted_on_google_at, created_at, updated_at",
     )
     .eq("app_id", appId)
     .order("sku", { ascending: true });
@@ -167,7 +170,7 @@ export async function getIapDetail(
   const { data: iapRow, error: iapErr } = await db
     .from("iaps")
     .select(
-      "id, app_id, sku, purchase_type, status, default_currency, default_price_micros, last_synced_at, created_at, updated_at",
+      "id, app_id, sku, purchase_type, status, default_currency, default_price_micros, last_synced_at, deleted_on_google_at, created_at, updated_at",
     )
     .eq("app_id", appId)
     .eq("sku", sku)
@@ -247,6 +250,10 @@ export async function syncIapFromGoogle(
         default_currency: product.defaultPrice?.currency ?? null,
         default_price_micros: product.defaultPrice?.priceMicros ?? null,
         last_synced_at: new Date().toISOString(),
+        // A single-item sync means we just pulled/pushed this item live on
+        // Google — it exists there, so clear any stale deleted-on-Google flag
+        // (self-corrects a re-created SKU without waiting for a full refresh).
+        deleted_on_google_at: null,
       },
       { onConflict: "app_id,sku" },
     )
@@ -399,15 +406,219 @@ async function replaceChildRows(opts: {
   }
 }
 
+/* ──────────────────────────────────────────────────────────────────────
+ *  Soft-delete flagging: items in the cache but absent from Google.
+ *
+ *  Items deleted/renamed on the Play Console linger in the cache forever
+ *  (the upsert never removes them). Instead of hard-deleting on sync — a
+ *  degraded fetch could then wipe the live catalog — the reconcile FLAGS
+ *  absent items (deleted_on_google_at = now) so they stay visible and are
+ *  removed only by explicit Manager acknowledge-remove.
+ *
+ *  Self-correcting: a flagged SKU that reappears in Google's response is
+ *  un-flagged; a still-missing flagged SKU keeps its ORIGINAL detection
+ *  date (we never overwrite an existing timestamp).
+ * ──────────────────────────────────────────────────────────────────── */
+
+/** Existing cache flag state for one app, paginated (an app can exceed the
+ *  1000-row default once orphans accumulate). */
+async function listIapFlagState(
+  appId: string,
+): Promise<Array<{ id: string; sku: string; deleted_on_google_at: string | null }>> {
+  const db = googleIapDb();
+  const out: Array<{ id: string; sku: string; deleted_on_google_at: string | null }> = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await db
+      .from("iaps")
+      .select("id, sku, deleted_on_google_at")
+      .eq("app_id", appId)
+      .range(from, from + ROW_PAGE - 1);
+    if (error) throw new Error(`Failed to load IAP flag state: ${error.message}`);
+    const rows = (data ?? []) as Array<{
+      id: string;
+      sku: string;
+      deleted_on_google_at: string | null;
+    }>;
+    out.push(...rows);
+    if (rows.length < ROW_PAGE) break;
+    from += ROW_PAGE;
+  }
+  return out;
+}
+
+export interface FlagReconcileResult {
+  flagged: number;
+  unflagged: number;
+  flaggedSkus: string[];
+  unflaggedSkus: string[];
+  /** Set when the anomaly guard skipped reconcile — no flag changes made. */
+  skippedReason: string | null;
+}
+
+/** Fraction of the cached count below which an incoming set is treated as a
+ *  degraded fetch and flag-reconcile is skipped (protects the warning's
+ *  credibility — a partial fetch must not flag the whole catalog). */
+const FLAG_MIN_INCOMING_FRACTION = 0.5;
+
+/**
+ * Reconcile the deleted-on-Google flag for one app against the SKUs Google
+ * returned this sync. ANOMALY-GUARDED: skips all flag changes (and says why)
+ * on any degraded-fetch signal, so a bad fetch never spuriously flags live
+ * items. Upserts have already run; only the flag reconcile is gated here.
+ */
+export async function reconcileDeletedOnGoogle(args: {
+  appId: string;
+  incomingSkus: string[];
+  /** True if EVERY product in the fetch carried a SKU (no missing-SKU rows). */
+  allProductsHadSku: boolean;
+  /** True if the list fetch completed (not partial/errored). */
+  fetchComplete: boolean;
+  now: string;
+}): Promise<FlagReconcileResult> {
+  const { appId, incomingSkus, allProductsHadSku, fetchComplete, now } = args;
+  const empty: FlagReconcileResult = {
+    flagged: 0,
+    unflagged: 0,
+    flaggedSkus: [],
+    unflaggedSkus: [],
+    skippedReason: null,
+  };
+
+  const cached = await listIapFlagState(appId);
+  const cachedCount = cached.length;
+  const incomingSet = new Set(incomingSkus);
+
+  // ── Anomaly guard — skip flag-reconcile on any degraded-fetch signal ──
+  let skip: string | null = null;
+  if (!fetchComplete) skip = "fetch_incomplete";
+  else if (incomingSkus.length === 0) skip = "empty_response";
+  else if (!allProductsHadSku) skip = "product_missing_sku";
+  else if (
+    cachedCount > 0 &&
+    incomingSkus.length < cachedCount * FLAG_MIN_INCOMING_FRACTION
+  ) {
+    skip = `incoming_below_${Math.round(FLAG_MIN_INCOMING_FRACTION * 100)}pct_of_cached`;
+  }
+  if (skip) {
+    console.warn(
+      `[google-iap:flag-reconcile] SKIPPED appId=${appId} reason=${skip} incoming=${incomingSkus.length} cached=${cachedCount} — no items flagged`,
+    );
+    return { ...empty, skippedReason: skip };
+  }
+
+  // Absent from Google + not already flagged → flag (preserve any existing
+  // detection date by only touching rows where the flag is currently NULL).
+  const toFlag = cached.filter(
+    (c) => !incomingSet.has(c.sku) && c.deleted_on_google_at === null,
+  );
+  // Reappeared on Google while flagged → clear (self-correcting un-delete).
+  const toUnflag = cached.filter(
+    (c) => incomingSet.has(c.sku) && c.deleted_on_google_at !== null,
+  );
+
+  const db = googleIapDb();
+  for (const idChunk of chunk(toFlag.map((c) => c.id), ID_IN_CHUNK)) {
+    const { error } = await db
+      .from("iaps")
+      .update({ deleted_on_google_at: now })
+      .in("id", idChunk);
+    if (error) {
+      console.error(
+        `[google-iap:flag-reconcile] flag chunk failed appId=${appId}: ${error.message.replace(/"/g, "'")}`,
+      );
+    }
+  }
+  for (const idChunk of chunk(toUnflag.map((c) => c.id), ID_IN_CHUNK)) {
+    const { error } = await db
+      .from("iaps")
+      .update({ deleted_on_google_at: null })
+      .in("id", idChunk);
+    if (error) {
+      console.error(
+        `[google-iap:flag-reconcile] unflag chunk failed appId=${appId}: ${error.message.replace(/"/g, "'")}`,
+      );
+    }
+  }
+
+  return {
+    flagged: toFlag.length,
+    unflagged: toUnflag.length,
+    flaggedSkus: toFlag.map((c) => c.sku),
+    unflaggedSkus: toUnflag.map((c) => c.sku),
+    skippedReason: null,
+  };
+}
+
+/**
+ * Of the given SKUs for one app, return the subset that is currently flagged
+ * deleted-on-Google. Used to EXCLUDE flagged items from push operations
+ * (activate/deactivate) — acting on an item gone from Google would error.
+ */
+export async function listFlaggedSkusAmong(
+  appId: string,
+  skus: readonly string[],
+): Promise<Set<string>> {
+  const flagged = new Set<string>();
+  if (skus.length === 0) return flagged;
+  const db = googleIapDb();
+  for (const skuChunk of chunk(skus as string[], ID_IN_CHUNK)) {
+    const { data, error } = await db
+      .from("iaps")
+      .select("sku")
+      .eq("app_id", appId)
+      .not("deleted_on_google_at", "is", null)
+      .in("sku", skuChunk);
+    if (error) throw new Error(`Failed to check flagged SKUs: ${error.message}`);
+    for (const row of (data ?? []) as Array<{ sku: string }>) flagged.add(row.sku);
+  }
+  return flagged;
+}
+
+/**
+ * Acknowledge + hard-remove flagged (deleted-on-Google) items from the
+ * cache. Guarded: deletes ONLY rows that are actually flagged
+ * (deleted_on_google_at IS NOT NULL) for this app — a present-on-Google
+ * item can never be acknowledge-removed. Children cascade via FK. Returns
+ * the SKUs actually removed (for the audit entry).
+ */
+export async function acknowledgeRemoveIaps(
+  appId: string,
+  skus: string[],
+): Promise<{ removed: string[] }> {
+  if (skus.length === 0) return { removed: [] };
+  const db = googleIapDb();
+  const removed: string[] = [];
+  for (const skuChunk of chunk(skus, ID_IN_CHUNK)) {
+    const { data, error } = await db
+      .from("iaps")
+      .delete()
+      .eq("app_id", appId)
+      .not("deleted_on_google_at", "is", null) // only flagged rows
+      .in("sku", skuChunk)
+      .select("sku");
+    if (error) {
+      throw new Error(`Failed to remove flagged IAPs: ${error.message}`);
+    }
+    for (const row of (data ?? []) as Array<{ sku: string }>) removed.push(row.sku);
+  }
+  return { removed };
+}
+
 /**
  * Bulk-sync a batch of IAPs from a Publisher API list response. Returns
- * per-item { synced, failed } counts (preserved for the audit log). A
- * failed chunk taints only the items in it; siblings still sync. The
- * final DB state is equivalent to the old per-item delete-then-insert
- * loop, produced with a few dozen round-trips instead of ~5 per item.
+ * per-item { synced, failed } counts plus flag-reconcile counts (all for
+ * the audit log). A failed chunk taints only the items in it; siblings
+ * still sync. The final DB state is equivalent to the old per-item
+ * delete-then-insert loop, produced with a few dozen round-trips.
  *
  * Safety: current listings/prices are upserted (and confirmed) before any
  * stale row is deleted, so no failure path strips an item's prices.
+ *
+ * Soft-delete: after child replace, reconcileDeletedOnGoogle flags items
+ * absent from Google (anomaly-guarded — a degraded fetch flags nothing).
+ * Pass fetchComplete=false to suppress flagging when the caller knows the
+ * list fetch was partial.
  *
  * Hotfix 4: opportunistically write the app's default_currency +
  * default_language from the first product that carries both. Google
@@ -418,9 +629,15 @@ async function replaceChildRows(opts: {
 export async function batchSyncIapsFromGoogle(
   appId: string,
   products: InAppProduct[],
-): Promise<{ synced: number; failed: number }> {
+  options: { fetchComplete?: boolean } = {},
+): Promise<{
+  synced: number;
+  failed: number;
+  flagReconcile: FlagReconcileResult;
+}> {
   const db = googleIapDb();
   const now = new Date().toISOString();
+  const fetchComplete = options.fetchComplete ?? true;
 
   // Products without a sku can't be synced — count as failed up front.
   const withSku = products.filter(
@@ -529,6 +746,16 @@ export async function batchSyncIapsFromGoogle(
   }
   const synced = products.length - failed;
 
+  // ── Soft-delete reconcile: flag items absent from Google (anomaly-guarded).
+  //    Runs after child replace so the current catalog is fully written first.
+  const flagReconcile = await reconcileDeletedOnGoogle({
+    appId,
+    incomingSkus: withSku.map((p) => p.sku),
+    allProductsHadSku: noSkuFailures === 0,
+    fetchComplete,
+    now,
+  });
+
   // Capture app-level defaults from the first IAP that carries them.
   const sample = products.find(
     (p) => p.defaultPrice?.currency || p.defaultLanguage,
@@ -548,5 +775,5 @@ export async function batchSyncIapsFromGoogle(
     }
   }
 
-  return { synced, failed };
+  return { synced, failed, flagReconcile };
 }

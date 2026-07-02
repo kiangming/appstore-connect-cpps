@@ -45,17 +45,44 @@ export default async function EditIapPage({
     currency: app.default_currency,
     language: app.default_language,
   };
+
+  const backLink = (
+    <Link
+      href={`/google-iap-management/apps/${encodeURIComponent(packageName)}`}
+      className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 transition mb-3"
+    >
+      <ArrowLeft className="h-3 w-3" />
+      Back to {app.display_name ?? packageName}
+    </Link>
+  );
+
+  // Deleted-on-Google guard: a flagged item no longer exists on Google, so
+  // editing/syncing it would error. Show a deleted state instead of the form.
+  if (detail.iap.deleted_on_google_at) {
+    return (
+      <div className="p-8 max-w-5xl">
+        {backLink}
+        <div className="rounded-xl border border-red-200 bg-red-50 p-6">
+          <h1 className="text-lg font-semibold text-slate-900 mb-1">
+            This item was deleted on Google Play
+          </h1>
+          <p className="text-sm text-slate-600">
+            <span className="font-mono text-red-700">{sku}</span> is in the
+            tool&rsquo;s cache but no longer on Google Play (detected{" "}
+            {new Date(detail.iap.deleted_on_google_at).toLocaleDateString()}).
+            It can&rsquo;t be edited or synced. Remove it from the list, or
+            re-create it on Google Play and Refresh.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const initial = iapDetailToInitial(detail, appDefaults);
 
   return (
     <div className="p-8 max-w-5xl">
-      <Link
-        href={`/google-iap-management/apps/${encodeURIComponent(packageName)}`}
-        className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 transition mb-3"
-      >
-        <ArrowLeft className="h-3 w-3" />
-        Back to {app.display_name ?? packageName}
-      </Link>
+      {backLink}
       <h1 className="text-2xl font-semibold text-slate-900 mb-1">
         Edit IAP
       </h1>

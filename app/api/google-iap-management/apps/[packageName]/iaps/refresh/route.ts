@@ -62,8 +62,14 @@ export async function POST(
   try {
     const encrypted = await getEncryptedCredentials(accountId);
     const jwt = jwtClientFromEncrypted(encrypted);
+    // listInAppProducts fully paginates or throws — reaching here means the
+    // fetch completed, so flag-reconcile may run.
     const products = await listInAppProducts(jwt, packageName);
-    const { synced, failed } = await batchSyncIapsFromGoogle(app.id, products);
+    const { synced, failed, flagReconcile } = await batchSyncIapsFromGoogle(
+      app.id,
+      products,
+      { fetchComplete: true },
+    );
 
     await appendAction({
       actionType: "IAPS_LIST_SYNC",
@@ -75,6 +81,12 @@ export async function POST(
         failed,
         total: products.length,
         duration_ms: Date.now() - t0,
+        // Soft-delete reconcile — SEPARATE from synced/failed accounting.
+        flagged: flagReconcile.flagged,
+        unflagged: flagReconcile.unflagged,
+        flagged_skus: flagReconcile.flaggedSkus,
+        unflagged_skus: flagReconcile.unflaggedSkus,
+        flag_reconcile_skipped: flagReconcile.skippedReason,
       },
     });
 
@@ -83,6 +95,9 @@ export async function POST(
       synced,
       failed,
       total: products.length,
+      flagged: flagReconcile.flagged,
+      unflagged: flagReconcile.unflagged,
+      flag_reconcile_skipped: flagReconcile.skippedReason,
       duration_ms: Date.now() - t0,
     });
   } catch (err) {
