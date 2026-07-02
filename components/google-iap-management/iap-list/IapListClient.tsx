@@ -35,6 +35,9 @@ interface Props {
   appDisplayName: string | null;
   appLastSyncedAt: string | null;
   initialIaps: IapWithDefaultLocale[];
+  /** True when the server-side list read threw (vs. a genuinely empty app).
+   *  Drives an error state instead of the misleading "No IAPs" empty state. */
+  loadError?: boolean;
 }
 
 const PAGE_SIZE = 20;
@@ -62,6 +65,7 @@ export function IapListClient({
   appDisplayName,
   appLastSyncedAt,
   initialIaps,
+  loadError = false,
 }: Props) {
   const router = useRouter();
   const iaps = initialIaps;
@@ -211,7 +215,18 @@ export function IapListClient({
         />
       </div>
 
-      {iaps.length === 0 ? (
+      {loadError ? (
+        <div className="bg-white border border-red-200 rounded-xl p-10 text-center">
+          <AlertCircle className="h-10 w-10 text-red-300 mx-auto mb-3" strokeWidth={1.5} />
+          <p className="text-sm font-medium text-slate-700 mb-1">
+            Failed to load IAPs
+          </p>
+          <p className="text-xs text-slate-500 mb-4">
+            The list couldn&rsquo;t be loaded. Reload the page or click
+            &ldquo;Refresh&rdquo; to try again.
+          </p>
+        </div>
+      ) : iaps.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-xl p-10 text-center">
           <Package2 className="h-10 w-10 text-slate-300 mx-auto mb-3" strokeWidth={1.5} />
           <p className="text-sm font-medium text-slate-700 mb-1">

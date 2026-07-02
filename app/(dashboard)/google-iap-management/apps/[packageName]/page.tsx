@@ -40,7 +40,20 @@ export default async function AppDetailPage({
     notFound();
   }
 
-  const iaps = await listIapsWithDefaultLocale(app.id).catch(() => []);
+  // Distinguish "genuinely no items" from "the read failed". Swallowing a
+  // load error into [] previously masked the >200-item read failure as an
+  // empty list. Surface the failure so the UI can show an error state.
+  let iaps: Awaited<ReturnType<typeof listIapsWithDefaultLocale>> = [];
+  let loadError = false;
+  try {
+    iaps = await listIapsWithDefaultLocale(app.id);
+  } catch (err) {
+    loadError = true;
+    console.error(
+      `[google-iap] failed to load IAPs for ${packageName}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
 
   return (
     <div className="p-8 max-w-6xl">
@@ -56,6 +69,7 @@ export default async function AppDetailPage({
         appDisplayName={app.display_name}
         appLastSyncedAt={app.last_synced_at}
         initialIaps={iaps}
+        loadError={loadError}
       />
     </div>
   );

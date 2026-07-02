@@ -70,8 +70,61 @@ export async function listIapsForApp(appId: string): Promise<IapRow[]> {
 }
 
 /**
+ * ID-chunk size for `.in("iap_id", …)` filters. supabase-js does NOT chunk
+ * `.in()`, so a large id set produces one oversized request whose query
+ * string exceeds the Supabase gateway's ~8 KB URI limit → the request
+ * errors. At ~200 UUIDs the `.in()` URL stays comfortably under the cap.
+ * Shared by both the reads here and the write path's stale-delete so read
+ * and write treat large id sets identically.
+ */
+const ID_IN_CHUNK = 200;
+
+/** PostgREST caps a response at 1000 rows by default. Range-paginate reads
+ *  in pages of this size so a large row set is never silently truncated. */
+const ROW_PAGE = 1000;
+
+/**
+ * Fetch ALL iap_listings rows for the given iap_ids, resilient to scale:
+ * id-chunked (so the `.in()` URL never overflows the gateway) AND
+ * range-paginated within each chunk (so an id-chunk with >1000 listing
+ * rows — many locales × many items — is never truncated at the 1000-row
+ * default). Both caps are why the un-chunked read returned empty at ~293
+ * items.
+ */
+async function fetchListingsForIaps(
+  iapIds: string[],
+): Promise<Array<{ iap_id: string; locale: string; title: string }>> {
+  const db = googleIapDb();
+  const out: Array<{ iap_id: string; locale: string; title: string }> = [];
+  for (const idChunk of chunk(iapIds, ID_IN_CHUNK)) {
+    let from = 0;
+    for (;;) {
+      const { data, error } = await db
+        .from("iap_listings")
+        .select("iap_id, locale, title")
+        .in("iap_id", idChunk)
+        .range(from, from + ROW_PAGE - 1);
+      if (error) {
+        throw new Error(`Failed to load IAP listings: ${error.message}`);
+      }
+      const rows = (data ?? []) as Array<{
+        iap_id: string;
+        locale: string;
+        title: string;
+      }>;
+      out.push(...rows);
+      if (rows.length < ROW_PAGE) break;
+      from += ROW_PAGE;
+    }
+  }
+  return out;
+}
+
+/**
  * Load IAPs joined with their default-locale title (en-US first, falling
- * back to whatever the first available locale is). One round-trip per page.
+ * back to whatever the first available locale is). The listings enrichment
+ * is id-chunked + row-paginated (see fetchListingsForIaps) so it holds up
+ * past the ~200-item / 1000-row caps that previously made the list empty.
  */
 export async function listIapsWithDefaultLocale(
   appId: string,
@@ -80,18 +133,10 @@ export async function listIapsWithDefaultLocale(
   if (iaps.length === 0) return [];
 
   const iapIds = iaps.map((i) => i.id);
-  const { data: listings, error } = await googleIapDb()
-    .from("iap_listings")
-    .select("iap_id, locale, title")
-    .in("iap_id", iapIds);
-
-  if (error) {
-    throw new Error(`Failed to load IAP listings: ${error.message}`);
-  }
+  const listings = await fetchListingsForIaps(iapIds);
 
   const byIap = new Map<string, Array<{ locale: string; title: string }>>();
-  for (const row of listings ?? []) {
-    const r = row as { iap_id: string; locale: string; title: string };
+  for (const r of listings) {
     const list = byIap.get(r.iap_id) ?? [];
     list.push({ locale: r.locale, title: r.title });
     byIap.set(r.iap_id, list);
@@ -279,7 +324,6 @@ export async function syncIapFromGoogle(
 
 const IAP_UPSERT_CHUNK = 500;
 const CHILD_UPSERT_CHUNK = 1000;
-const DELETE_ID_CHUNK = 200;
 
 function chunk<T>(arr: readonly T[], size: number): T[][] {
   if (size < 1) throw new Error("chunk size must be >= 1");
@@ -338,7 +382,7 @@ async function replaceChildRows(opts: {
   const deletableIds = cleanIapIds.filter((id) => !failedUpsert.has(id));
   if (deletableIds.length === 0) return;
 
-  for (const idChunk of chunk(deletableIds, DELETE_ID_CHUNK)) {
+  for (const idChunk of chunk(deletableIds, ID_IN_CHUNK)) {
     // syncFloor === null → nothing was upserted this run (every item's
     // current set is empty), so clear all their child rows.
     const query =
