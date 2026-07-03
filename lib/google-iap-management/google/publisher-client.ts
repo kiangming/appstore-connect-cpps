@@ -23,8 +23,10 @@ import {
   inAppProductToOneTimeProduct,
   DEFAULT_PURCHASE_OPTION_ID,
   type OneTimeProduct,
+  type OneTimeProductPurchaseOption,
   type ToolInAppProduct,
 } from "./onetime-product-adapter";
+import { withConcurrency } from "@/lib/iap-management/concurrency";
 
 export type Publisher = androidpublisher_v3.Androidpublisher;
 export type InAppProduct = androidpublisher_v3.Schema$InAppProduct;
@@ -769,6 +771,18 @@ export interface BatchUpsertInput {
   /** Catalog version Google used when bootstrapping this row's regional
    *  pricing (Hotfix 9). When omitted, falls back to REGIONS_VERSION. */
   regionsVersion?: string;
+  /**
+   * True when this row is an UPDATE (the SKU already exists on Google).
+   * `batchUpsertInAppProducts` will GET the live product first to retrieve
+   * its real purchaseOptionIds, then include ALL existing options in the
+   * PATCH body (read-modify-write). Google requires the complete set —
+   * sending a partial list is rejected with "must list all existing purchase
+   * options. Missing: <id>", which fires when products created via the
+   * legacy inappproducts.* API carry purchaseOptionId "legacy-base".
+   *
+   * When false/omitted (new product): single "buy" option, allowMissing:true.
+   */
+  isOverwrite?: boolean;
 }
 
 /**
@@ -800,31 +814,114 @@ export async function batchUpsertInAppProducts(
 ): Promise<InAppProduct[]> {
   if (inputs.length === 0) return [];
 
+  // ── READ-MODIFY-WRITE: fetch existing purchase options for overwrite rows ──
+  //
+  // Google requires the PATCH body to include ALL of a product's existing
+  // purchase options (updateMask includes "purchaseOptions" → full-replace).
+  // Products originally created via the legacy inappproducts.* API surface a
+  // purchaseOptionId of "legacy-base"; sending only our hardcoded "buy" option
+  // is rejected: "must list all existing purchase options. Missing: legacy-base".
+  //
+  // For overwrite (existing) rows: GET the live product first to retrieve its
+  // real purchaseOptions (with actual IDs), then pass them to the adapter so
+  // it updates pricing on the target option while preserving all others.
+  // Per-row GET failures are isolated — that row is marked failed (null), the
+  // batch continues without patching it with a guessed option set.
+  //
+  // For create (new) rows: no GET needed; single "buy" option, allowMissing:true.
+  //
+  // Concurrency: bounded at 5 to avoid saturating the Google API quota.
+  const OVERWRITE_GET_CONCURRENCY = 5;
+  const overwriteIndices = inputs
+    .map((inp, i) => (inp.isOverwrite ? i : null))
+    .filter((i): i is number => i !== null);
+
+  // Keyed by input index → live purchaseOptions (or null if GET failed).
+  const liveOptions = new Map<number, OneTimeProductPurchaseOption[] | null>();
+
+  if (overwriteIndices.length > 0) {
+    await withConcurrency(overwriteIndices, OVERWRITE_GET_CONCURRENCY, async (i) => {
+      const sku = inputs[i].body.sku;
+      if (!sku) {
+        liveOptions.set(i, null);
+        return;
+      }
+      try {
+        const live = await newGetOneTimeProduct(jwt, packageName, sku);
+        const opts = live.purchaseOptions as OneTimeProductPurchaseOption[] | undefined;
+        liveOptions.set(i, opts ?? null);
+      } catch (err) {
+        // Per-row GET failure → mark this row as failed; do NOT PATCH with
+        // a guessed option set (that would risk silent option deletion).
+        liveOptions.set(i, null);
+        console.error(
+          `[google-iap:publisher] overwrite-rmw GET failed pkg=${packageName} sku=${sku} err="${
+            err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
+          }" — row will be skipped`,
+        );
+      }
+    });
+  }
+
+  // Rows whose GET failed are excluded from the batch (null sentinel).
+  // Callers interpret a missing position as a failed row (same as today).
+  // A GET-failed overwrite row: in liveOptions with value null AND is an overwrite.
+  const getFailedIndices = new Set<number>(
+    [...liveOptions.entries()]
+      .filter(([i, opts]) => opts === null && overwriteIndices.includes(i))
+      .map(([i]) => i),
+  );
+
   try {
-    const writeShapes = inputs.map((input) =>
-      inAppProductToOneTimeProduct({
-        ...input.body,
-        packageName,
-      } as ToolInAppProduct),
-    );
+    // Build write shapes. Overwrite rows that have live options use the
+    // RMW adapter path (real purchaseOptionIds); others use the create path.
+    const writeShapes = inputs.map((input, i) => {
+      const existing = liveOptions.get(i) ?? undefined;
+      return inAppProductToOneTimeProduct(
+        { ...input.body, packageName } as ToolInAppProduct,
+        existing && existing.length > 0 ? existing : undefined,
+      );
+    });
 
-    const batchRequests = writeShapes.map((shape, i) => ({
-      oneTimeProduct: shape.product,
-      regionsVersion: inputs[i].regionsVersion ?? REGIONS_VERSION,
-      allowMissing: true,
-    }));
+    // Exclude GET-failed overwrite rows from the batch request; their
+    // position in the result array will be null (failed accounting).
+    const batchRequests = writeShapes
+      .map((shape, i) => {
+        if (getFailedIndices.has(i)) return null;
+        return {
+          oneTimeProduct: shape.product,
+          regionsVersion: inputs[i].regionsVersion ?? REGIONS_VERSION,
+          allowMissing: !inputs[i].isOverwrite,
+        };
+      })
+      .filter((r): r is NonNullable<typeof r> => r !== null);
 
-    const products = await newBatchUpdateOneTimeProducts(
+    if (batchRequests.length === 0) {
+      // Every row was an overwrite whose GET failed — nothing to send.
+      return inputs.map(() => null as unknown as InAppProduct);
+    }
+
+    // Map batch response back to the full input index space. GET-failed
+    // rows get a null slot so the caller's position accounting stays correct.
+    const batchProducts = await newBatchUpdateOneTimeProducts(
       jwt,
       packageName,
       batchRequests,
     );
 
+    // Reconstruct full-length result (null for GET-failed positions).
+    let batchCursor = 0;
+    const products: (OneTimeProduct | null)[] = inputs.map((_, i) => {
+      if (getFailedIndices.has(i)) return null;
+      return batchProducts[batchCursor++] ?? null;
+    });
+
     // Fire one cross-product state batch. Match response position so
     // the right state is applied to the right product.
     const stateRequests = products
       .map((product, i) => {
-        const productId = product?.productId ?? writeShapes[i].product.productId;
+        if (!product) return null; // GET-failed or batch-missing row
+        const productId = product.productId ?? writeShapes[i].product.productId;
         if (!productId) return null;
         return {
           productId,
@@ -867,7 +964,8 @@ export async function batchUpsertInAppProducts(
     if (stateApplied) {
       for (const req of stateRequests) {
         const product = products[req.responseIndex];
-        const target = product?.purchaseOptions?.find(
+        if (!product) continue;
+        const target = product.purchaseOptions?.find(
           (o) => o.purchaseOptionId === req.purchaseOptionId,
         );
         if (target) target.state = req.desiredState;
@@ -875,7 +973,7 @@ export async function batchUpsertInAppProducts(
     }
 
     return products.map(
-      (p) => oneTimeProductToInAppProduct(p) as unknown as InAppProduct,
+      (p) => (p ? (oneTimeProductToInAppProduct(p) as unknown as InAppProduct) : null as unknown as InAppProduct),
     );
   } catch (err) {
     try {

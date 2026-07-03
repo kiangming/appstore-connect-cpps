@@ -867,6 +867,10 @@ export async function executeBulkImport(
         ...(Object.keys(existing).length > 0 ? { prices: existing } : {}),
       },
       regionsVersion: bootstrap.regionsVersion,
+      // Signal the publisher layer to do a read-modify-write GET for overwrite
+      // rows so it can include the product's FULL existing purchase options in
+      // the PATCH body (Google rejects partial sets — "Missing: legacy-base").
+      isOverwrite: row.decision === "overwrite",
     };
   });
 

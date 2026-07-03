@@ -214,15 +214,93 @@ export interface OneTimeProductWriteShape {
   purchaseOptionId: string;
 }
 
-/** Stable purchase-option id for tool-managed products. We use a fixed
- *  string because the tool's single-option model means there's never
- *  more than one option per product, and the new API requires the id
- *  to round-trip on updates. "buy" satisfies the API's id format
- *  constraint (lowercase letters / numbers / hyphens, ≤63 chars). */
+/** Stable purchase-option id for NEW products created by this tool. We
+ *  use a fixed string because the API requires the id to round-trip on
+ *  updates. "buy" satisfies the id format constraint (lowercase a-z /
+ *  0-9 / hyphens, ≤63 chars). For UPDATE (overwrite) paths, use the
+ *  REAL purchaseOptionId from the live product (e.g. "legacy-base" for
+ *  products originally created via the legacy inappproducts.* API) — see
+ *  inAppProductToOneTimeProduct's `existingPurchaseOptions` parameter. */
 export const DEFAULT_PURCHASE_OPTION_ID = "buy";
 
+/* ── helpers for the write path ────────────────────────────────────────── */
+
+/** Build the new regional pricing config array from the tool's IAP shape. */
+function buildRegionalPricing(
+  iap: ToolInAppProduct,
+): NonNullable<
+  OneTimeProductPurchaseOption["regionalPricingAndAvailabilityConfigs"]
+> {
+  const configs: NonNullable<
+    OneTimeProductPurchaseOption["regionalPricingAndAvailabilityConfigs"]
+  > = [];
+  const regionsSeen = new Set<string>();
+
+  for (const [regionCode, p] of Object.entries(iap.prices ?? {})) {
+    if (regionsSeen.has(regionCode)) continue;
+    regionsSeen.add(regionCode);
+    configs.push({
+      regionCode,
+      price: microsToMoney(p.priceMicros, p.currency),
+      availability: "AVAILABLE",
+    });
+  }
+
+  // Stamp a US-region default from `defaultPrice` if no explicit US
+  // config exists. Preserves legacy semantics where Google's
+  // auto-equalisation used `defaultPrice` for unlisted regions.
+  if (iap.defaultPrice && !regionsSeen.has("US")) {
+    configs.push({
+      regionCode: "US",
+      price: microsToMoney(iap.defaultPrice.priceMicros, iap.defaultPrice.currency),
+      availability: "AVAILABLE",
+    });
+  }
+  return configs;
+}
+
+/**
+ * Pick the "target" purchase option from the live product's options —
+ * the one whose pricing we will update with our new pricing data.
+ *
+ * Selection rule (order of preference):
+ *   1. The buyOption that has legacyCompatible:true (the legacy-base case).
+ *   2. Any buyOption (a tool-created "buy" option, or a non-legacy buy).
+ *   3. The first option overall (fallback — no buyOption at all).
+ *
+ * This is deliberately the same preference order as pickCanonicalPurchaseOption
+ * on the READ path so the tool consistently targets the same option in both
+ * directions.
+ */
+export function pickTargetPurchaseOption(
+  existingOptions: OneTimeProductPurchaseOption[],
+): OneTimeProductPurchaseOption | null {
+  if (existingOptions.length === 0) return null;
+  const legacyBuy = existingOptions.find(
+    (o) => o.buyOption && o.buyOption.legacyCompatible === true,
+  );
+  if (legacyBuy) return legacyBuy;
+  const anyBuy = existingOptions.find((o) => o.buyOption);
+  return anyBuy ?? existingOptions[0];
+}
+
+/**
+ * Convert a ToolInAppProduct to the OneTimeProduct write shape.
+ *
+ * `existingPurchaseOptions` — when provided (UPDATE / overwrite path):
+ *   The caller must pass the FULL set of purchase options fetched live
+ *   from Google for this product. The PATCH will include ALL of them
+ *   (Google requires it — sending a partial set is rejected with
+ *   "must list all existing purchase options. Missing: <id>"). We update
+ *   pricing on the target option (picked by pickTargetPurchaseOption)
+ *   and preserve all other options unchanged.
+ *
+ *   When omitted (CREATE / new product path): a single fresh "buy"
+ *   option is constructed with legacyCompatible:true as before.
+ */
 export function inAppProductToOneTimeProduct(
   iap: ToolInAppProduct,
+  existingPurchaseOptions?: OneTimeProductPurchaseOption[],
 ): OneTimeProductWriteShape {
   if (!iap.sku) {
     throw new Error("ToolInAppProduct.sku is required to build a OneTimeProduct.");
@@ -243,49 +321,48 @@ export function inAppProductToOneTimeProduct(
     listings.push({ languageCode, title, description });
   }
 
-  // Regional pricing: combine `defaultPrice` (treated as a regional
-  // override too) with `prices` map. If a region appears in both, the
-  // explicit `prices` entry wins.
-  const regionalPricing: NonNullable<
-    OneTimeProductPurchaseOption["regionalPricingAndAvailabilityConfigs"]
-  > = [];
+  const regionalPricing = buildRegionalPricing(iap);
 
-  const regionsSeen = new Set<string>();
+  let purchaseOptions: OneTimeProductPurchaseOption[];
+  let activePurchaseOptionId: string;
 
-  for (const [regionCode, p] of Object.entries(iap.prices ?? {})) {
-    if (regionsSeen.has(regionCode)) continue;
-    regionsSeen.add(regionCode);
-    regionalPricing.push({
-      regionCode,
-      price: microsToMoney(p.priceMicros, p.currency),
-      availability: "AVAILABLE",
+  if (existingPurchaseOptions && existingPurchaseOptions.length > 0) {
+    // UPDATE path: preserve ALL existing options; update pricing on the target.
+    const target = pickTargetPurchaseOption(existingPurchaseOptions);
+    activePurchaseOptionId =
+      target?.purchaseOptionId ?? DEFAULT_PURCHASE_OPTION_ID;
+
+    purchaseOptions = existingPurchaseOptions.map((opt) => {
+      if (opt.purchaseOptionId !== activePurchaseOptionId) {
+        // Non-target option: pass through unchanged (preserve as-is).
+        return opt;
+      }
+      // Target option: replace pricing; preserve all other option fields
+      // (buyOption flags, rentOption, offerTags, taxAndComplianceSettings, etc.)
+      return {
+        ...opt,
+        regionalPricingAndAvailabilityConfigs: regionalPricing,
+        // Do not set state — it's output-only on the product body.
+        state: undefined,
+      };
     });
+  } else {
+    // CREATE path: single fresh "buy" option (unchanged from original).
+    activePurchaseOptionId = DEFAULT_PURCHASE_OPTION_ID;
+    purchaseOptions = [
+      {
+        purchaseOptionId: DEFAULT_PURCHASE_OPTION_ID,
+        buyOption: { legacyCompatible: true },
+        regionalPricingAndAvailabilityConfigs: regionalPricing,
+      },
+    ];
   }
-
-  // Stamp a US-region default from `defaultPrice` if no explicit US
-  // config exists. This preserves the legacy semantics where Google's
-  // auto-equalisation used `defaultPrice` for any unlisted region.
-  if (iap.defaultPrice && !regionsSeen.has("US")) {
-    regionalPricing.push({
-      regionCode: "US",
-      price: microsToMoney(iap.defaultPrice.priceMicros, iap.defaultPrice.currency),
-      availability: "AVAILABLE",
-    });
-  }
-
-  const purchaseOption: OneTimeProductPurchaseOption = {
-    purchaseOptionId: DEFAULT_PURCHASE_OPTION_ID,
-    buyOption: {
-      legacyCompatible: true,
-    },
-    regionalPricingAndAvailabilityConfigs: regionalPricing,
-  };
 
   const product: OneTimeProduct = {
     packageName: iap.packageName,
     productId: iap.sku,
     listings,
-    purchaseOptions: [purchaseOption],
+    purchaseOptions,
   };
 
   const desiredState: "ACTIVE" | "INACTIVE" =
@@ -294,6 +371,6 @@ export function inAppProductToOneTimeProduct(
   return {
     product,
     desiredState,
-    purchaseOptionId: DEFAULT_PURCHASE_OPTION_ID,
+    purchaseOptionId: activePurchaseOptionId,
   };
 }

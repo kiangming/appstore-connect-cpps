@@ -32,9 +32,13 @@ export function PreviewTable({
   tierSelections,
   onTierSelectionChange,
 }: Props) {
+  // overflow-x-auto (not overflow-hidden) so the 8-column table stays
+  // horizontally scrollable inside the max-w-5xl wizard — the rightmost
+  // "Action" column was previously clipped and unreachable. min-w keeps
+  // columns at natural width so a scrollbar appears instead of squashing.
   return (
-    <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-      <table className="w-full">
+    <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
+      <table className="w-full min-w-[960px]">
         <thead className="bg-slate-50 border-b border-slate-200">
           <tr className="text-left text-[11px] font-medium uppercase tracking-wide text-slate-500">
             <th className="px-3 py-2.5">#</th>

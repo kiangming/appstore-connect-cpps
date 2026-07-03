@@ -3,8 +3,10 @@ import { describe, it, expect } from "vitest";
 import {
   oneTimeProductToInAppProduct,
   inAppProductToOneTimeProduct,
+  pickTargetPurchaseOption,
   DEFAULT_PURCHASE_OPTION_ID,
   type OneTimeProduct,
+  type OneTimeProductPurchaseOption,
   type ToolInAppProduct,
 } from "./onetime-product-adapter";
 
@@ -259,5 +261,88 @@ describe("bidirectional round-trip", () => {
     expect(regionCodes).toEqual(["US", "VN"]);
     // state preserved
     expect(writeShape.desiredState).toBe("ACTIVE");
+  });
+});
+
+describe("pickTargetPurchaseOption — target selection for RMW", () => {
+  const opt = (id: string, flags: Partial<OneTimeProductPurchaseOption> = {}): OneTimeProductPurchaseOption => ({
+    purchaseOptionId: id,
+    ...flags,
+  });
+
+  it("prefers legacyCompatible buyOption (the 'legacy-base' case)", () => {
+    const options = [
+      opt("other", { rentOption: {} }),
+      opt("legacy-base", { buyOption: { legacyCompatible: true } }),
+    ];
+    expect(pickTargetPurchaseOption(options)?.purchaseOptionId).toBe("legacy-base");
+  });
+
+  it("falls back to any buyOption when no legacyCompatible one exists", () => {
+    const options = [
+      opt("rent1", { rentOption: {} }),
+      opt("buy1", { buyOption: { legacyCompatible: false } }),
+    ];
+    expect(pickTargetPurchaseOption(options)?.purchaseOptionId).toBe("buy1");
+  });
+
+  it("falls back to first option when no buyOption at all", () => {
+    const options = [opt("first", { rentOption: {} }), opt("second", { rentOption: {} })];
+    expect(pickTargetPurchaseOption(options)?.purchaseOptionId).toBe("first");
+  });
+
+  it("returns null for empty array", () => {
+    expect(pickTargetPurchaseOption([])).toBeNull();
+  });
+});
+
+describe("inAppProductToOneTimeProduct — RMW path (existingPurchaseOptions)", () => {
+  const base: ToolInAppProduct = {
+    sku: "sku.a",
+    packageName: "com.example.app",
+    status: "active",
+    prices: { US: { currency: "USD", priceMicros: "1990000" } },
+    listings: { "en-US": { title: "T", description: "D" } },
+  };
+
+  it("uses 'legacy-base' as purchaseOptionId (not 'buy') when live option is legacy-base", () => {
+    const existing: OneTimeProductPurchaseOption[] = [
+      { purchaseOptionId: "legacy-base", buyOption: { legacyCompatible: true } },
+    ];
+    const shape = inAppProductToOneTimeProduct(base, existing);
+    expect(shape.purchaseOptionId).toBe("legacy-base");
+    expect(shape.product.purchaseOptions).toHaveLength(1);
+    expect(shape.product.purchaseOptions![0].purchaseOptionId).toBe("legacy-base");
+  });
+
+  it("preserves ALL options, updating only the target's pricing", () => {
+    const existing: OneTimeProductPurchaseOption[] = [
+      {
+        purchaseOptionId: "legacy-base",
+        buyOption: { legacyCompatible: true },
+        regionalPricingAndAvailabilityConfigs: [{ regionCode: "OLD", availability: "AVAILABLE" }],
+      },
+      { purchaseOptionId: "extra", rentOption: {} },
+    ];
+    const shape = inAppProductToOneTimeProduct(base, existing);
+    const ids = shape.product.purchaseOptions!.map((o) => o.purchaseOptionId).sort();
+    expect(ids).toEqual(["extra", "legacy-base"]);
+
+    const target = shape.product.purchaseOptions!.find((o) => o.purchaseOptionId === "legacy-base")!;
+    // Pricing updated (no OLD region).
+    expect(target.regionalPricingAndAvailabilityConfigs?.some((c) => c.regionCode === "OLD")).toBe(false);
+    expect(target.regionalPricingAndAvailabilityConfigs?.some((c) => c.regionCode === "US")).toBe(true);
+
+    const extra = shape.product.purchaseOptions!.find((o) => o.purchaseOptionId === "extra")!;
+    // Non-target preserved unchanged.
+    expect(extra.rentOption).toBeDefined();
+  });
+
+  it("create path (no existingPurchaseOptions): single 'buy' option", () => {
+    const shape = inAppProductToOneTimeProduct(base);
+    expect(shape.purchaseOptionId).toBe(DEFAULT_PURCHASE_OPTION_ID);
+    expect(shape.product.purchaseOptions).toHaveLength(1);
+    expect(shape.product.purchaseOptions![0].purchaseOptionId).toBe("buy");
+    expect(shape.product.purchaseOptions![0].buyOption?.legacyCompatible).toBe(true);
   });
 });
