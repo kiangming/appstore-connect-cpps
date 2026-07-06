@@ -12,6 +12,7 @@ import {
   Pencil,
   FileText,
   Upload,
+  Download,
   RefreshCw,
   Send,
   Loader2,
@@ -129,6 +130,7 @@ export function IapListClient({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [modalOpen, setModalOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [page, setPage] = useState(1);
   // Cycle 39 Phase 2 — bulk modal state. Null = closed.
   // Hotfix 25: the modal now fetches availability on open via the
@@ -273,6 +275,60 @@ export function IapListClient({
     }
   }
 
+  // Apple has no per-territory price cache, so export is a live per-IAP
+  // fetch (2-3 Apple calls each) — a large app can take a few minutes.
+  // Generous client-side ceiling so it doesn't look hung mid-way.
+  const EXPORT_TIMEOUT_MS = 10 * 60 * 1000;
+
+  async function handleExport() {
+    setExporting(true);
+    const toastId = toast.loading("Generating export… this can take a few minutes for large apps.");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), EXPORT_TIMEOUT_MS);
+    try {
+      const res = await fetch(`/api/iap-management/apps/${appId}/export`, {
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        toast.error(data.error ?? `Export failed (${res.status})`, { id: toastId });
+        return;
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const match = /filename="?([^"]+)"?/.exec(disposition);
+      const filename = match?.[1] ?? `Apple-IAP-export-${appId}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      const count = res.headers.get("X-Export-Item-Count");
+      const failedCount = Number(res.headers.get("X-Export-Failed-Count") ?? "0");
+      const summary = count ? `Exported ${count} item${count === "1" ? "" : "s"}.` : "Export ready.";
+      if (failedCount > 0) {
+        toast.warning(`${summary} · ${failedCount} item(s) skipped (fetch failed).`, { id: toastId });
+      } else {
+        toast.success(summary, { id: toastId });
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error && err.name === "AbortError"
+          ? `Export timed out after ${Math.round(EXPORT_TIMEOUT_MS / 60000)} min — the app may have many IAPs; try again.`
+          : err instanceof Error
+            ? err.message
+            : "Network error";
+      toast.error(message, { id: toastId });
+    } finally {
+      clearTimeout(timer);
+      setExporting(false);
+    }
+  }
+
   const allSelected =
     selectableAppleIds.length > 0 &&
     selectableAppleIds.every((id) => selected.has(id));
@@ -346,6 +402,20 @@ export function IapListClient({
           <Upload className="h-3.5 w-3.5" />
           Bulk Import
         </Link>
+        <button
+          type="button"
+          onClick={handleExport}
+          disabled={exporting}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition disabled:opacity-50"
+          title="Export all IAPs (live from Apple) to xlsx"
+        >
+          {exporting ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Download className="h-3.5 w-3.5" />
+          )}
+          Export list
+        </button>
         <Link
           href={`/iap-management/apps/${appId}/iaps/new`}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition"
