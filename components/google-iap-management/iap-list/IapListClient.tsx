@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Plus,
   Upload,
+  Download,
   Package2,
   Search,
   AlertCircle,
@@ -88,6 +89,9 @@ export function IapListClient({
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportSummary, setExportSummary] = useState<string | null>(null);
   const [bulkMode, setBulkMode] = useState<BulkStatusMode | null>(null);
 
   // Soft-delete: split present-on-Google (live) from flagged deleted-on-Google.
@@ -157,6 +161,44 @@ export function IapListClient({
       setRefreshError(describeRefreshError(err));
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function handleExport() {
+    setExporting(true);
+    setExportError(null);
+    setExportSummary(null);
+    try {
+      const res = await fetchWithTimeout(
+        `/api/google-iap-management/apps/${encodeURIComponent(packageName)}/export`,
+        { method: "GET" },
+        REFRESH_TIMEOUT_MS,
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setExportError(body.error ?? `Export failed (HTTP ${res.status}).`);
+        return;
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const match = /filename="?([^"]+)"?/.exec(disposition);
+      const filename = match?.[1] ?? `IAP-export-${packageName}.xlsx`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      const count = res.headers.get("X-Export-Item-Count");
+      setExportSummary(
+        count ? `Exported ${count} item${count === "1" ? "" : "s"}.` : "Export ready.",
+      );
+    } catch (err) {
+      setExportError(describeRefreshError(err));
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -268,6 +310,14 @@ export function IapListClient({
             <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
             {refreshing ? "Refreshing…" : "Refresh"}
           </button>
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-lg transition disabled:opacity-50"
+          >
+            <Download className="h-4 w-4" />
+            {exporting ? "Generating…" : "Export list"}
+          </button>
         </div>
       </div>
 
@@ -311,6 +361,17 @@ export function IapListClient({
       {refreshSummary && (
         <div className="mb-4 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
           {refreshSummary}
+        </div>
+      )}
+      {exportError && (
+        <div className="mb-4 flex items-start gap-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <span>{exportError}</span>
+        </div>
+      )}
+      {exportSummary && (
+        <div className="mb-4 text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+          {exportSummary}
         </div>
       )}
       {ackMessage && (
