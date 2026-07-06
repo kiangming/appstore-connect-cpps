@@ -1084,13 +1084,13 @@
           <a class="nav-item" data-page="google-apps" data-keywords="google apps danh sách play store">
             <span class="nav-item-label">Danh sách apps</span>
           </a>
-          <a class="nav-item" data-page="google-iaps" data-keywords="google iaps items danh sách sku">
+          <a class="nav-item" data-page="google-iaps" data-keywords="google iaps items danh sách sku deleted flagged xóa không còn play console refresh">
             <span class="nav-item-label">Danh sách IAPs</span>
           </a>
           <a class="nav-item" data-page="google-create-iap" data-keywords="google create item tạo mới onetimeproduct">
             <span class="nav-item-label">Tạo item mới</span>
           </a>
-          <a class="nav-item" data-page="google-edit-iap" data-keywords="google edit item chỉnh sửa update">
+          <a class="nav-item" data-page="google-edit-iap" data-keywords="google edit item chỉnh sửa update unified pricing live stored sync">
             <span class="nav-item-label">Chỉnh sửa item</span>
           </a>
           <a class="nav-item" data-page="google-bulk-import" data-keywords="google bulk import nhập hàng loạt csv excel">
@@ -3079,12 +3079,14 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
       <section class="page" data-page="google-iaps">
         <div class="meta-strip">
           <span class="meta-chip module-google">Google IAP Management</span>
-          <span class="meta-chip cycle">Cycle 41 bulk actions</span>
+          <span class="meta-chip cycle">Cycle 41 · Cycle 43</span>
+          <span class="meta-chip">Bulk actions · Deleted-on-Google flag</span>
         </div>
         <h1 class="page-title">Danh sách IAPs (Google)</h1>
         <p class="page-lede">
           Bảng IAPs (Google gọi là "items") per app. Cột SKU, Title, State, Price · multi-select cho
-          Bulk Activate / Bulk Deactivate. Cycle 41 thêm 2 nút bulk action vào toolbar trên cùng.
+          Bulk Activate / Bulk Deactivate (Cycle 41). Cycle 43 bổ sung phát hiện và xử lý items đã
+          bị xóa trên Google Play nhưng vẫn còn trong cache của tool.
         </p>
 
         <h2 class="section-title">Cấu trúc bảng</h2>
@@ -3193,14 +3195,53 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
           </div>
         </div>
 
+        <h2 class="section-title">Items bị xóa trên Google Play (Cycle 43)</h2>
+        <p>Sau mỗi lần <strong>Refresh</strong>, tool so sánh danh sách từ Google với cache trong DB.
+        Nếu phát hiện items tồn tại trong tool nhưng <em>không còn trên Google Play</em>
+        (bị xóa hoặc đổi tên ở Play Console), tool sẽ:</p>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Hiển thị banner cảnh báo màu vàng (amber)</div>
+            <div class="step-body">
+              <p>Banner xuất hiện ở đầu trang: <em>"N items exist in the tool's cache but are no longer on Google Play — someone may have deleted or renamed them on the Play Console."</em></p>
+              <p>Đây là tín hiệu thông tin, không phải lỗi nghiêm trọng — không có gì bị xóa tự động.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Count chip "N not on Google" trên header</div>
+            <div class="step-body">
+              <p>Header hiển thị 2 chip: <strong>"X on Google Play"</strong> (items hiện có) và <strong>"N not on Google"</strong> (màu đỏ, items bị flag). Danh sách chính chỉ đếm X items — N items flagged hiển thị riêng ở phần dưới.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Block đỏ ở cuối danh sách</div>
+            <div class="step-body">
+              <p>Items flagged được nhóm riêng ở cuối bảng (không mix vào phần pagination chính). Mỗi row có gạch ngang tên + pill <strong>"Deleted on Google"</strong> + ngày phát hiện (<em>"detected missing Jul 2"</em>).</p>
+              <p>Dùng nút <strong>"Show / Hide deleted-on-Google"</strong> (chip toggle) để ẩn/hiện block này khi không cần xem.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Acknowledge / Remove để dọn dẹp</div>
+            <div class="step-body">
+              <p>Với mỗi item flagged, click <strong>"Acknowledge / Remove"</strong> → confirm dialog → xóa item đó khỏi cache của tool (không ảnh hưởng Google Play — item đã không còn ở đó rồi).</p>
+              <p>Để xóa tất cả cùng một lúc: nút <strong>"Remove all N"</strong> ở đầu block đỏ.</p>
+              <p><strong>Lưu ý:</strong> chỉ xóa item thực sự đã gone khỏi Google Play. Nếu bạn thấy một item bị flag nhưng thực ra vẫn còn trên Play Console, hãy nhấn <strong>Refresh</strong> lại — tool tự uncheck flag khi item reappear.</p>
+            </div>
+          </li>
+        </ol>
+
         <h2 class="section-title">Tips và pitfalls</h2>
         <div class="callout callout-tip">
           <div class="callout-title">💡 Filter State trước Bulk</div>
           <p>Filter State = INACTIVE trước khi click <strong>Bulk Activate</strong> → modal chỉ hiện items eligible. Tương tự State = ACTIVE trước <strong>Bulk Deactivate</strong>. Tiết kiệm scroll và tránh select nhầm.</p>
         </div>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Refresh lớn (>200 items) — Cycle 43</div>
+          <p>Refresh cho app có nhiều items (vd: 293 items) nay hoạt động ổn — Cycle 43 đã sửa lỗi timeout. Kết quả Refresh hiển thị thêm <em>"N newly flagged, M restored"</em> nếu có items bị phát hiện missing hoặc reappear.</p>
+        </div>
         <div class="callout callout-warning">
-          <div class="callout-title">⚠️ IAPs list không auto-refresh wider scope</div>
-          <p>Hotfix 29 chỉ apply cho Apps list. IAPs list (trong từng app) vẫn cần manual refresh sau khi tạo item mới ở Play Console — wider auto-refresh deferred Cycle 43+.</p>
+          <div class="callout-title">⚠️ Banner "not on Google" không phải lỗi khẩn cấp</div>
+          <p>Items bị flag vẫn hiển thị trong tool — không có gì bị tự động xóa. Đây là cảnh báo để Manager review: ai đó có thể đã xóa/đổi tên item trên Play Console. Confirm với team trước khi Acknowledge / Remove.</p>
         </div>
       </section>
 
@@ -3309,14 +3350,15 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
       <section class="page" data-page="google-edit-iap">
         <div class="meta-strip">
           <span class="meta-chip module-google">Google IAP Management</span>
-          <span class="meta-chip cycle">Hotfix 9 · 12</span>
-          <span class="meta-chip">regionsVersion</span>
+          <span class="meta-chip cycle">Hotfix 9 · 12 · Cycle 43</span>
+          <span class="meta-chip">regionsVersion · Unified Pricing · Live vs Stored</span>
         </div>
         <h1 class="page-title">Chỉnh sửa item (Google)</h1>
         <p class="page-lede">
           Edit mode dùng cùng form với <a class="inline-link" data-goto="google-create-iap">Tạo item mới</a>.
           Khác biệt chính: khi patch lên Google Play API, tool phải khai báo <code class="inline">regionsVersion</code>
-          (Hotfix 9) và refetch state sau patch (Hotfix 12).
+          (Hotfix 9) và refetch state sau patch (Hotfix 12). Cycle 43 bổ sung bảng giá hợp nhất
+          (Unified Pricing) hiển thị giá trong tool và giá live trên Google cùng một bảng.
         </p>
 
         <h2 class="section-title">Field có thể edit</h2>
@@ -3410,6 +3452,37 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
           </div>
         </div>
 
+        <h2 class="section-title">Bảng giá hợp nhất — Live vs Stored (Cycle 43)</h2>
+        <p>Trong Edit mode, phần giá per-country hiển thị dưới dạng bảng hợp nhất với 3 cột chính:</p>
+        <table class="docs-table">
+          <thead><tr><th>Cột</th><th>Ý nghĩa</th><th>Có thể edit?</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Country</strong></td><td>Tên quốc gia / region code</td><td>—</td></tr>
+            <tr><td><strong>Price from tool</strong></td><td>Giá đang lưu trong tool (sẽ được push lên Google khi Save)</td><td><strong>Có</strong></td></tr>
+            <tr><td><strong>Price live on Google</strong></td><td>Giá hiện tại trên Google Play (fetch live, không phải snapshot)</td><td>Không</td></tr>
+            <tr><td><strong>Status</strong></td><td><em>match</em> / <em>diff</em> / <em>tool-only</em> / <em>live-only</em></td><td>—</td></tr>
+          </tbody>
+        </table>
+
+        <h3 class="section-title" style="font-size:1rem; margin-top:1rem;">Khi nào dùng nút "Sync from Google"?</h3>
+        <p>Nếu ai đó thay đổi giá trực tiếp trên Play Console (ngoài tool), cột <strong>Price live on Google</strong>
+        sẽ khác cột <strong>Price from tool</strong> → row hiển thị status <strong>diff</strong> (màu amber).</p>
+        <ul>
+          <li><strong>Sync from Google</strong> (nút ở góc phải bảng giá) — cập nhật snapshot trong tool từ giá live trên Google. Dùng khi muốn tool khớp với Play Console.</li>
+          <li><strong>Save</strong> (nút chính của form) — push giá từ tool lên Google Play. Dùng khi muốn áp dụng giá đang chỉnh sửa trong tool.</li>
+        </ul>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Hai chiều khác nhau</div>
+          <p><strong>Save</strong> = tool → Google (ghi đè giá trên Google bằng giá trong tool).<br>
+          <strong>Sync from Google</strong> = Google → tool (cập nhật snapshot, không push gì lên Google). Chọn đúng hướng trước khi action.</p>
+        </div>
+
+        <h2 class="section-title">Item bị xóa trên Google (Deleted-on-Google)</h2>
+        <p>Nếu item đã bị xóa hoặc đổi tên trên Play Console, trang Edit sẽ hiển thị trạng thái
+        <strong>"This item was deleted on Google Play"</strong> thay vì form edit thông thường.
+        Không thể edit hoặc Sync item ở trạng thái này. Để khôi phục: tạo lại item trên Play Console
+        rồi Refresh IAPs list — tool tự uncheck flag khi item reappear.</p>
+
         <h2 class="section-title">Tips và pitfalls</h2>
         <div class="callout callout-info">
           <div class="callout-title">ℹ️ Hotfix 9 — regionsVersion</div>
@@ -3424,7 +3497,7 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
       <section class="page" data-page="google-bulk-import">
         <div class="meta-strip">
           <span class="meta-chip module-google">Google IAP Management</span>
-          <span class="meta-chip cycle">Hotfix 28 currency validation</span>
+          <span class="meta-chip cycle">Hotfix 28 · Cycle 43 cross-currency</span>
           <span class="meta-chip">Wizard · 4 bước</span>
         </div>
         <h1 class="page-title">Bulk Import (Google)</h1>
@@ -3432,6 +3505,7 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
           Wizard 4 bước tương tự <a class="inline-link" data-goto="apple-bulk-import">Apple Bulk Import</a>,
           khác biệt chính ở bước disambiguation tier (Google không có "tier" thẳng — tool match
           price → tier candidates → user chọn) và Hotfix 28 per-row currency validation.
+          Cycle 43 bổ sung hỗ trợ <strong>cross-currency</strong>: file dùng USD nhưng app default currency là VND (hoặc bất kỳ non-USD).
         </p>
 
         <h2 class="section-title">4 bước wizard</h2>
@@ -3550,6 +3624,30 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
           </div>
         </div>
 
+        <h2 class="section-title">Nhập giá USD vào app VND (Cross-currency — Cycle 43)</h2>
+        <p>Từ Cycle 43, file CSV không cần phải dùng đúng currency của app. Tool tự resolve giá app-currency từ pricing template:</p>
+        <table class="docs-table">
+          <thead><tr><th>Trường hợp</th><th>Tool xử lý thế nào</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Single match</strong><br><small>USD anchor → 1 tier candidate trong template</small></td>
+              <td>Auto-resolve: tool điền giá VND tương ứng từ template. Không cần action từ user.</td>
+            </tr>
+            <tr>
+              <td><strong>Multi-match</strong><br><small>USD anchor → nhiều tier candidates</small></td>
+              <td>Step 2 Disambiguation: user chọn tier từ dropdown (giống rows ambiguous thông thường). Tool hiển thị cả giá VND từng option.</td>
+            </tr>
+            <tr>
+              <td><strong>No match / No template</strong><br><small>Không tìm thấy USD anchor trong template, hoặc chưa upload template</small></td>
+              <td>Row bị <strong>refuse</strong> — hiển thị error, không push lên Google. Upload template trước hoặc dùng VND price trực tiếp trong file.</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Cách bật cross-currency</div>
+          <p>Không cần cài đặt gì. Nếu file CSV có cột <code class="inline">Price (USD)</code> (header ghi rõ currency) hoặc giá USD không vừa VND precision → tool tự detect cross-currency mode. Điều kiện cần: đã upload <a class="inline-link" data-goto="google-pricing-matrix">Pricing template</a> cho app này.</p>
+        </div>
+
         <h2 class="section-title">Tips và pitfalls</h2>
         <div class="callout callout-info">
           <div class="callout-title">ℹ️ Hotfix 28 — currency validation</div>
@@ -3558,6 +3656,10 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
         <div class="callout callout-warning">
           <div class="callout-title">⚠️ Items tạo ra INACTIVE</div>
           <p>Sau bulk import thành công, items default INACTIVE. Dùng <a class="inline-link" data-goto="google-bulk-activate">Bulk Activate</a> để kích hoạt toàn batch một thao tác.</p>
+        </div>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Bulk Import cho items đã tồn tại trên Google (overwrite)</div>
+          <p>Khi import SKU đã có trên Google Play (decision = overwrite), tool fetch giá trị hiện tại của item từ Google trước khi patch — đảm bảo không mất purchase option nào. Nếu fetch thất bại cho 1 row thì row đó fail riêng, các rows khác vẫn tiếp tục.</p>
         </div>
       </section>
 

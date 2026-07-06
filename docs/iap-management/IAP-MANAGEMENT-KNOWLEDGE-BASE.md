@@ -1913,6 +1913,323 @@ Anti-pattern: assume continuum mechanics only fit feature engineering.
 
 ---
 
+### 10.13 Cycle 43 — Google IAP hardening + Apple pricing fixes (2026-07)
+
+**Session scope:** A series of diagnosis-then-implement tasks on the Google IAP
+Management and Apple IAP Management modules. Each task followed the same
+discipline: investigation (report findings, no code) → implementation →
+gauntlet 4/4 → commit on a feature branch → green-light merge to main (Path-G
+auto-deploy).
+
+---
+
+#### 10.13.A Google — cross-currency bulk import (USD file → VND app)
+
+**Symptom:** Bulk Import wizard with a USD-priced CSV into a VND-default app
+showed no tier candidates and refused to proceed (the old path expected the
+file currency to match the app currency).
+
+**Fix (Cycle 43 cross-currency template resolution):**
+
+| Signal | Trigger | Resolution |
+|---|---|---|
+| Header `Price (XXX)` where XXX ≠ app currency | *header-first* | Cross-currency mode: re-interpret `Price` as an XXX anchor, resolve app-currency price from template |
+| Value: price decimal that can't fit app-currency precision | *value-based* | Same cross-currency path |
+| Same currency | normal path | unchanged |
+
+Resolution ladder for each row:
+1. Look up template tiers by `(XXX, anchorMicros)` — a USD anchor from the file → match in the template → surface the matching app-currency price.
+2. **Single match** → auto-resolve (no user action needed).
+3. **Multiple matches** → disambiguation chooser (same dropdown UX as existing multi-candidate rows).
+4. **No template / no match** → refuse with a row-level error; that row is excluded from the pushable set.
+
+**Implementation note:** The existing "Hotfix 4 stomp" bug was also removed here — a prior hotfix had inadvertently overwritten the resolved pricing source back to `google_default` after template resolution. The fix pins the resolved source through to the batch write.
+
+**File:** `lib/google-iap-management/orchestration/bulk-import.ts`; query helper `listUsdTiersForSource` in `lib/iap-management/queries/templates.ts`.
+
+---
+
+#### 10.13.B Google — live-vs-stored price comparison on item detail
+
+**Context:** After syncing, iap_prices holds a snapshot. If a price changes
+directly in Play Console the snapshot becomes stale — previously invisible
+in the tool.
+
+**Feature:** The item detail page now fetches the live price from Google
+(per-item GET, not a full list refresh) and compares it against the DB
+snapshot using **BigInt-exact micros** comparison (no epsilon, no false
+diffs from formatting). Divergent regions are flagged and a per-item
+**"Sync from Google"** button updates the DB snapshot for that item.
+
+Key constraints:
+- Live prices are **never persisted on view** — only the explicit Sync button writes to DB.
+- Comparison engine reuses `comparePrices` / `microsEqual` from `lib/google-iap-management/price-comparison.ts`.
+- The live fetch is a separate async call to `/api/google-iap-management/apps/[packageName]/iaps/[sku]/live-prices`; the page renders immediately with DB data.
+
+**File:** `components/google-iap-management/iap-detail/LivePriceComparison.tsx` (later absorbed into the unified table — see §10.13.C).
+
+---
+
+#### 10.13.C Google — unified pricing table (merged edit + live comparison)
+
+**Context:** Previously the item-detail page had two separate blocks: the edit
+form's region-override table and the live-vs-stored comparison below it.
+Duplication was confusing and the edit block's scrolling was separate from the
+live block.
+
+**Feature:** A single per-country table replacing both surfaces:
+- **"Price from tool"** column — editable (mutates `regionOverrides`, same handlers as before).
+- **"Price live on Google"** column — read-only (async fetch to `/live-prices`).
+- **Status** column — `match` / `diff` / `tool-only` / `live-only` / `auto-eq` (BigInt-exact).
+- Auto-eq rows (live == base, same currency) collapse by default.
+- The **save payload is byte-identical** to the old edit block — `buildIapSaveBody` was extracted verbatim as a pure tested function before the redesign to prove equivalence.
+- Live column is excluded from the save payload.
+
+**Cardinal rule (must not regress):** This was a UI/layout reorganisation.
+The edit/save logic, pricing-source selection, currency handling, and what
+gets written to Google/DB are unchanged.
+
+**Files:** `components/google-iap-management/iap-form/UnifiedPricingTable.tsx`
+(NEW), `lib/google-iap-management/unified-pricing.ts` (NEW),
+`lib/google-iap-management/iap-save-body.ts` (NEW regression anchor).
+
+---
+
+#### 10.13.D Google — bulk-refresh bulk-writes ("Failed to fetch" at ~1000 items)
+
+**Root cause:** `batchSyncIapsFromGoogle` ran `syncIapFromGoogle` sequentially
+per product — ~5 Supabase round-trips each (upsert iaps + delete/insert
+listings + delete/insert prices). At Google's 1000-IAP-per-app ceiling:
+~5,000 sequential round-trips → 2–5 min → exceeded the platform request
+timeout → browser surfaced the ambiguous "Failed to fetch" TypeError.
+
+**Fix — upsert-then-delete-stale:**
+
+1. Bulk-upsert all iaps in chunks of 500 (resolves sku → id).
+2. For child tables (iap_listings, iap_prices): bulk-**upsert current rows first**, then delete stale rows using `syncFloor`.
+3. `syncFloor` = `MIN(updated_at)` returned by this run's upserts — a DB value vs DB value comparison, immune to app/DB clock skew. Strict `<` errs toward keeping rows.
+4. A failed upsert chunk marks those items failed and **excludes them from the delete pass** (their existing rows untouched) — no failure path strips prices.
+5. The legacy `inappproducts.list` fallback now also paginates via `tokenPagination.nextPageToken` (single call previously truncated silently at ~1000).
+6. Client refresh wraps fetch in an `AbortController` (`REFRESH_TIMEOUT_MS=120s`) with a clear timeout message.
+
+Round-trip reduction: ~5,000 sequential → **<20 set-wide operations** for 100 items (tested, bounded, non-linear).
+
+**File:** `lib/google-iap-management/repository/iaps.ts`, `lib/google-iap-management/google/publisher-client.ts`.
+
+---
+
+#### 10.13.E Google — list-read .in() chunking (empty list at >~200 items)
+
+**Root cause:** `listIapsWithDefaultLocale` fetched iap_listings via
+`.in("iap_id", [all iap ids])` in one request. supabase-js does NOT
+auto-chunk `.in()`. At ~293 items: ~293 UUIDs × ~39 chars/UUID ≈ 11.4 KB
+query string → exceeded Supabase gateway's ~8 KB URI limit → error thrown →
+`page.tsx`'s `.catch(() => [])` swallowed it → "No IAPs cached yet" despite
+293 items in DB. Break-even ≈ 210 items.
+
+**Fix:**
+- `ID_IN_CHUNK = 200` — shared between the read path's `.in()` and the write
+  path's stale-delete (ensures both treat large id sets identically).
+- `ROW_PAGE = 1000` — range-paginate within each id-chunk to avoid PostgREST's
+  1000-row default silently truncating heavily-localised apps.
+- `page.tsx` error-swallow removed: `try/catch` + `loadError` prop → UI
+  renders "Failed to load IAPs" (distinct from the empty-app "No IAPs yet").
+
+**Institutional rule born here:** the write path (bulk-writes, 80c0bdd)
+already chunked its `.in()` at `DELETE_ID_CHUNK=200` for exactly this reason.
+The read path was never given the same treatment. → **Recurring pattern §P1
+below** (twin-path hardening).
+
+**File:** `lib/google-iap-management/repository/iaps.ts` (read and write now
+share `ID_IN_CHUNK`).
+
+---
+
+#### 10.13.F Google — soft-delete flagging (`deleted_on_google_at`)
+
+**Context:** Items deleted/renamed on the Play Console accumulated in the cache
+(an app showed 293 live on Google + 109 orphans = 402 in DB). The bug was
+confirmed via diagnostic SQL: `total_rows=402`, `distinct_skus=402`,
+`duplicate_rows=0` → 109 are distinct orphan SKUs not touched by the latest sync.
+
+**Feature — soft-delete instead of hard-delete:**
+
+- New column `iap_mgmt.iaps.deleted_on_google_at` (nullable TIMESTAMPTZ).
+  `NULL` = present on Google. Set = flagged; value = first-detected-missing timestamp.
+- **Sync reconcile** (runs after child replace, in `batchSyncIapsFromGoogle`):
+  - Absent from Google + not already flagged → flag now.
+  - Reappeared while flagged → clear (self-correcting un-delete).
+  - Already flagged + still missing → **preserve original date** (never overwrite).
+- **Anomaly guard** — skip ALL flagging (log reason) when ANY of:
+  `fetch_incomplete`, `empty_response`, `product_missing_sku`,
+  `incoming < 50% of cached count`. Upserts still proceed; only the flag
+  reconcile is gated. Protects the warning's credibility — a partial fetch must
+  not spuriously flag the live catalog.
+
+**UI effects:**
+- Amber warning banner at top of IAPs list when flagged count > 0.
+- Count chips: "293 on Google Play" / "109 not on Google".
+- Flagged rows sorted to the bottom in a separate red block (excluded from main pagination count).
+- Show/hide filter chip; per-row **Acknowledge / Remove** (inline confirm) + bulk **Remove all N** modal.
+- **Flagged items excluded from activate/deactivate** (a gone-from-Google item cannot be pushed).
+- Detail/edit page for a flagged item shows a deleted state (no edit/sync form).
+
+**Migration:** `supabase/migrations/20260702120000_google_iap_mgmt_deleted_on_google.sql` —
+adds `deleted_on_google_at`, partial index on flagged rows, expands
+`actions_log.action_type` CHECK with `IAP_ACKNOWLEDGE_REMOVE` and closes
+the `BULK_ACTIVATE`/`BULK_DEACTIVATE` gap (both were emitted but absent
+from the CHECK → silently failed on every bulk operation since Cycle 41).
+
+---
+
+#### 10.13.G Google — purchase-options RMW ("Missing: legacy-base") ← LANDMARK
+
+**Symptom:** Bulk Import overwrite rows (existing SKUs) failed with Google API
+error: "Product must list all of its existing purchase options. Missing:
+legacy-base."
+
+**Root cause confirmed (B — not A):**
+- `FULL_UPDATE_MASK = "listings,purchaseOptions,..."` — the PATCH **replaces
+  the entire `purchaseOptions` array**.
+- Our code always sent exactly one option: `{ purchaseOptionId: "buy", buyOption: { legacyCompatible: true }, ... }`.
+- Products originally created via the **legacy `inappproducts.*` API** surface
+  under the new Monetization API with `purchaseOptionId: "legacy-base"`.
+- Our single-`"buy"` PATCH tries to delete `"legacy-base"` by omission → Google rejects.
+- `legacyCompatible: true` was **already correctly set** — Hypothesis A
+  (missing flag) is dead. The real cause is omitting an existing option.
+
+**Fix — read-modify-write for overwrite rows only:**
+
+| Path | Change |
+|---|---|
+| **Overwrite rows** | GET the live product via `newGetOneTimeProduct` (the raw function, NOT `getInAppProduct` which normalises through the adapter and discards purchaseOptionIds) → extract full `purchaseOptions` array with real IDs → pass to adapter |
+| **Create rows** | Unchanged — single `"buy"` option, `allowMissing:true` |
+
+Adapter (`inAppProductToOneTimeProduct`) new `existingPurchaseOptions` param:
+- Target option selection: `pickTargetPurchaseOption` — prefers `legacyCompatible buyOption` → any `buyOption` → first option (same preference as the read-path `pickCanonicalPurchaseOption`).
+- Updates `regionalPricingAndAvailabilityConfigs` on the target only.
+- Passes ALL other options through **unchanged** (multi-option products preserved).
+
+Publisher (`batchUpsertInAppProducts`):
+- `BatchUpsertInput.isOverwrite` flag; GETs run with bounded concurrency (5 parallel).
+- Per-row GET failure: that row fails cleanly (null in result array), batch continues — **no PATCH with a guessed option set**.
+- `allowMissing` is now `false` for overwrite rows (not `true`).
+
+**Core invariant:** An overwrite PATCH always includes the **complete** existing purchase-option set with real IDs. Sending a subset is rejected now; if Google relaxed the guard it would silently delete purchase options from live products.
+
+**Discovery JSON** (in repo at `docs/google-iap-management/api/google-android-publisher-v3-discovery.json`) confirms field names:
+- `Schema$OneTimeProductPurchaseOption.purchaseOptionId` — "Required. Immutable."
+- `Schema$OneTimeProductBuyPurchaseOption.legacyCompatible` — the correct field name.
+
+---
+
+#### 10.13.H Apple — tier-gate source alignment
+
+The bulk-import preview gate read IAP tier data from `iap_prices` /
+`price_tier_territories` while the template-resolve path wrote to
+`price_tier_template_entries`. A mismatch meant preview could pass tiers
+that execute then couldn't find. Fixed by a single-source helper
+`listUsdTiersForSource` (in `lib/iap-management/queries/templates.ts`)
+used by both preview and execute, reading from the same table.
+
+→ **Recurring pattern §P1 below** (twin-path hardening).
+
+---
+
+#### 10.13.I Apple — batch price-point cache + ID encoding (LANDMARK)
+
+**Context:** Apple's pricing-schedule POST requires a `pricePointId` per
+territory (opaque string per territory+customerPrice+IAP combination).
+Naïvely fetching one per item per territory = ~175 round-trips per IAP.
+
+**Discovery:** Apple price-point IDs are deterministically derivable:
+```
+id = base64_standard_UNPADDED(JSON({ s: iapId, t: territory, p: priceTier }))
+```
+(Confirmed by decoding IDs captured from real Apple API responses.)
+
+**Fix — batch price-point catalog:**
+1. Fetch the **global (territory, customerPrice) → tier** catalog **once per
+   batch** using Apple's `listAllPricePoints` — a single set of calls, not
+   per-item.
+2. Cache it keyed by `iapType` (managed / subscription tiers differ).
+3. Per-item: derive IDs by reconstructing `JSON({ s: iapId, t: territory, p: tier })` → base64_standard_UNPADDED.
+4. **First-item round-trip verification**: after building the derived ID for
+   the first item, verify it against a real Apple API GET. If the encoding
+   diverges → auto-fallback to the per-item fetch path.
+
+Reduction: ~175 Apple API calls per IAP → ~dozens total per batch (constant, not per-item).
+
+**Files:** `lib/iap-management/apple/batch-price-point-catalog.ts` (NEW),
+`lib/iap-management/apple/price-point-id.ts` (NEW).
+
+---
+
+#### 10.13.J Apple — overwrite-pricing cycle
+
+Three inter-related fixes to the Apple "overwrite existing IAP" path:
+
+1. **Partial-template-fail amber badge**: when some territories can't be matched in the pricing template, the base price is applied to matched territories and unmatched are left to Apple's auto-equalisation. Previously the row turned red (full failure). Now: amber badge "Partial match — N territories applied; M unmatched auto-equalized by Apple". Distinction matters: a partial match is informational, not a hard failure.
+
+2. **Overwrite audit uuid fix**: the audit row was being created with `iapId: <new>` instead of the existing IAP's UUID (mirroring the create-path behaviour). Fixed: overwrite path passes the existing `iapId: null` sentinel to the audit helper so it looks up the live UUID, matching the create audit shape.
+
+3. **Localization delta planner**: on overwrite, the tool must create new locales, patch changed locales, and delete removed locales — but it must **never delete the last localization** (Apple rejects an IAP with 0 locales). Delta planner: compute additions/updates/deletions; execute creates + patches first, confirm, then delete-only-if-remaining ≥ 1.
+
+---
+
+#### 10.13.K Recurring patterns / meta-rules crystallized
+
+**P1 — Twin-path hardening audit**
+
+When hardening a data-access pattern on one path (chunk a `.in()`, migrate a
+source table, fix a currency stamp), grep for **every twin path** and apply the
+same treatment. Validation gates and readers are systematically left behind on
+the old pattern.
+
+Confirmed instances: tier-gate source (preview vs execute), `.in()` chunking
+(write path chunked at 200; read path never was → empty list at >~200 items),
+Hotfix-4-stomp (cross-currency stamped pricing source overwritten back to
+`google_default` after resolve).
+
+**P2 — `actions_log` CHECK constraint must include new action types**
+
+New `action_type` values are silently ignored when the DB CHECK constraint
+doesn't include them (the insert errors and `appendAction` swallows it).
+Confirmed silent failures: `BULK_ACTIVATE` + `BULK_DEACTIVATE` (Cycle 41 —
+emitted since day 1, never in CHECK). Always verify the CHECK before
+shipping a new `ActionType` enum value.
+
+Fix pattern: include the new type in the migration's `DROP CONSTRAINT / ADD
+CONSTRAINT` block. Use a single additive migration rather than mutating in-place
+(forward-only migration discipline).
+
+**P3 — Surface divergence from external state; don't silently reconcile**
+
+When the tool's cached state diverges from the authoritative external system
+(Google/Apple prices, deleted-on-Google items), show the divergence to the
+operator and let them decide. Don't silently re-sync or hide the gap.
+
+Evidence: live-vs-stored price comparison (divergence badge per region);
+deleted-on-Google soft-delete flagging (amber warning banner, explicit
+acknowledge/remove).
+
+**P4 — PATCH with replace-semantics updateMask requires read-modify-write**
+
+When an API PATCH lists a collection field (`purchaseOptions`, availability
+schedules, …) in its `updateMask`, the field is **fully replaced** with the
+request body's value. Sending a subset deletes the omitted members.
+
+Canonical fix: GET the existing resource first, merge your changes into the
+full existing collection, then PATCH the merged set. Do NOT hardcode a
+synthetic member (e.g. `purchaseOptionId: "buy"`) when the live resource may
+have a different ID (`"legacy-base"`).
+
+This pattern applies to any Apple or Google API where the update mask
+replaces a collection. Audit every update path when a new collection
+field is added to a mask.
+
+---
+
 ## 11. Cumulative Metrics (Post-Cycle 34)
 
 | Metric | Value |

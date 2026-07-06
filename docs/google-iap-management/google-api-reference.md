@@ -379,3 +379,71 @@ by Google (signal: `inappproducts.list` returns 403 for *all* apps).
 Until then, keep both paths. Rolling deprecation timelines aren't
 published — re-evaluate quarterly.
 
+---
+
+## 13. Purchase-options and the "Missing: legacy-base" error
+
+**Symptom:** Bulk Import overwrite rows (existing SKUs) fail with:
+`"Product must list all of its existing purchase options. Missing: legacy-base"`
+
+**Why it happens:**
+
+The `monetization.onetimeproducts.patch` (and `.batchUpdate`) call uses an
+`updateMask` that includes `purchaseOptions`. This means the entire
+`purchaseOptions` array on the product is **replaced** with whatever the
+request body contains. Sending a partial set deletes the omitted options.
+
+Products originally created via the legacy `inappproducts.*` API are surfaced
+by the new Monetization API with `purchaseOptionId = "legacy-base"` (Google's
+auto-assigned ID for migrated legacy items). The tool was hardcoding
+`purchaseOptionId: "buy"` in every write, so the patch tried to delete
+`"legacy-base"` by omission → Google rejected.
+
+Note: `buyOption.legacyCompatible = true` **was already set** — setting this
+flag is NOT the fix. The issue is the option ID and the incomplete option set.
+
+**The `OneTimeProductPurchaseOption` schema (from discovery.json):**
+
+```json
+{
+  "purchaseOptionId": "Required. Immutable. Unique within the product.",
+  "state": "Output only. Set via purchaseOptions:batchUpdateStates.",
+  "buyOption": {
+    "legacyCompatible": "Optional. Whether available in legacy PBL flows."
+  },
+  "rentOption": { ... },
+  "regionalPricingAndAvailabilityConfigs": [ ... ]
+}
+```
+
+**Core invariant:** every PATCH of an existing product must include the
+**complete** set of existing `purchaseOptions` with their real IDs.
+
+**Fix — read-modify-write for overwrite rows:**
+
+1. GET the live product via `newGetOneTimeProduct(jwt, packageName, sku)` — this is the **raw** function, not the public `getInAppProduct()` which normalises through the adapter and discards `purchaseOptionId`s.
+2. Extract all existing `purchaseOptions` from the GET response.
+3. Select the **target option** (the one to update pricing on) using `pickTargetPurchaseOption`:
+   - Prefer a `buyOption` with `legacyCompatible: true` (the `"legacy-base"` case).
+   - Fall back to any `buyOption`.
+   - Fall back to the first option overall.
+4. Build the PATCH body's `purchaseOptions` = [all existing options], where:
+   - Target option → replace `regionalPricingAndAvailabilityConfigs` with new pricing.
+   - All other options → pass through **unchanged**.
+5. Use the target option's real `purchaseOptionId` (not `"buy"`) in the `batchUpdateStates` state call too.
+
+**Failure isolation:** if the per-row GET fails, that row fails cleanly (null
+in the batch result); the batch continues and the failed row is NOT patched
+with a guessed option set.
+
+**Where implemented:**
+- `inAppProductToOneTimeProduct(iap, existingPurchaseOptions?)` — adapter,
+  `lib/google-iap-management/google/onetime-product-adapter.ts`
+- `batchUpsertInAppProducts` — publisher layer,
+  `lib/google-iap-management/google/publisher-client.ts`
+- `BatchUpsertInput.isOverwrite` flag — wired in the bulk-import orchestrator
+  (`lib/google-iap-management/orchestration/bulk-import.ts`)
+
+**Create (new product) path:** unchanged — single `"buy"` option,
+`allowMissing: true`. No GET needed.
+
