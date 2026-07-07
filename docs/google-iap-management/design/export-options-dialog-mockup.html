@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en" class="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Export options dialog — country/currency picker (mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            brand: { DEFAULT: "#0c447c", hover: "#0d4f8f", soft: "#eaf1f8", softdark: "#11233a" },
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; }
+    .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+    .zone-label { font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:#0c447c; }
+    .dark .zone-label { color:#7ea8d8; }
+
+    /* Buttons — same language as the other Cycle 43 mockups */
+    .btn { font-size:13px; font-weight:600; padding:7px 13px; border-radius:9px; border:1px solid transparent; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+    .btn-brand { background:#0c447c; color:#fff; }
+    .btn-brand:hover { background:#0d4f8f; }
+    .btn-brand:disabled { background:#94a3b8; cursor:not-allowed; }
+    .dark .btn-brand:disabled { background:#44403c; color:#a8a29e; }
+    .btn-outline { border-color:#d6d3d1; background:#fff; color:#44403c; }
+    .dark .btn-outline { background:#1c1917; border-color:#44403c; color:#d6d3d1; }
+    .btn-outline:hover { background:#f5f5f4; }
+    .dark .btn-outline:hover { background:#292524; }
+    .btn-ghost { color:#78716c; font-size:13px; font-weight:600; }
+    .btn-ghost:hover { color:#0c447c; }
+    .dark .btn-ghost:hover { color:#7ea8d8; }
+    .btn-tiny { font-size:11.5px; font-weight:600; padding:3px 9px; border-radius:6px; border:1px solid #d6d3d1; background:#fff; color:#44403c; cursor:pointer; }
+    .dark .btn-tiny { background:#1c1917; border-color:#44403c; color:#d6d3d1; }
+    .btn-tiny:hover { background:#f5f5f4; }
+    .dark .btn-tiny:hover { background:#292524; }
+    .btn-tiny.active { background:#eaf1f8; border-color:#0c447c; color:#0c447c; }
+    .dark .btn-tiny.active { background:#11233a; border-color:#2f5b8c; color:#9cc2ea; }
+
+    .pill { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; border:1px solid transparent; }
+    .pill-ok { background:#ecfdf5; color:#047857; border-color:#a7f3d0; }
+    .dark .pill-ok { background:#052e22; color:#34d399; border-color:#065f46; }
+
+    /* ── Modal shell ── */
+    .modal-shell { background:#fff; border-radius:16px; box-shadow:0 25px 50px -12px rgba(0,0,0,.35); border:1px solid #e7e5e4; max-width:560px; width:100%; }
+    .dark .modal-shell { background:#1c1917; border-color:#44403c; }
+    .modal-header { padding:18px 20px 14px; border-bottom:1px solid #f5f5f4; }
+    .dark .modal-header { border-color:#292524; }
+    .modal-footer { padding:12px 20px; border-top:1px solid #f5f5f4; background:#fafaf9; border-radius:0 0 16px 16px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .dark .modal-footer { border-color:#292524; background:#171412; }
+
+    /* ── Search box ── */
+    .search-box { position:relative; }
+    .search-box input { width:100%; border-radius:9px; border:1px solid #d6d3d1; background:#fff; padding:8px 12px 8px 32px; font-size:13px; }
+    .dark .search-box input { background:#1c1917; border-color:#44403c; color:#e7e5e4; }
+    .search-box input:focus { outline:none; border-color:#0c447c; box-shadow:0 0 0 3px rgba(12,68,124,.12); }
+    .search-box svg { position:absolute; left:10px; top:50%; transform:translateY(-50%); width:14px; height:14px; color:#a8a29e; pointer-events:none; }
+
+    /* ── Country list ── */
+    .country-list { max-height:360px; overflow-y:auto; border:1px solid #e7e5e4; border-radius:10px; }
+    .dark .country-list { border-color:#44403c; }
+    .region-header { position:sticky; top:0; z-index:1; background:#f5f5f4; color:#78716c; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; padding:6px 12px; border-bottom:1px solid #e7e5e4; }
+    .dark .region-header { background:#232019; color:#a8a29e; border-color:#3a352e; }
+    .country-row { display:flex; align-items:center; gap:10px; padding:7px 12px; cursor:pointer; border-bottom:1px solid #f5f5f4; }
+    .dark .country-row { border-color:#292524; }
+    .country-row:last-child { border-bottom:0; }
+    .country-row:hover { background:#fafaf9; }
+    .dark .country-row:hover { background:#232019; }
+    .country-row input[type="checkbox"] { accent-color:#0c447c; width:14px; height:14px; flex:none; cursor:pointer; }
+    .country-name { font-size:13px; color:#1c1917; flex:1; min-width:0; }
+    .dark .country-name { color:#e7e5e4; }
+    .currency-badge { font-size:11px; color:#78716c; background:#f5f5f4; border-radius:6px; padding:2px 7px; flex:none; }
+    .dark .currency-badge { color:#a8a29e; background:#292524; }
+    .empty-search { padding:36px 16px; text-align:center; color:#a8a29e; font-size:13px; }
+
+    /* ── Backdrop page context (dimmed) ── */
+    .ctx-dim { position:relative; }
+    .ctx-dim::after { content:""; position:absolute; inset:0; background:rgba(28,25,23,.55); border-radius:16px; }
+    .dark .ctx-dim::after { background:rgba(0,0,0,.65); }
+  </style>
+</head>
+<body class="bg-stone-100 dark:bg-stone-950 text-stone-900 dark:text-stone-100">
+  <div class="max-w-6xl mx-auto px-8 py-7">
+
+    <!-- Mockup meta bar -->
+    <div class="flex items-start justify-between mb-6 gap-4">
+      <div>
+        <p class="zone-label">Google IAP Management + Apple IAP Management — design mockup</p>
+        <h1 class="text-xl font-semibold mt-1">"Export options" dialog — choose countries &amp; currencies before export</h1>
+        <p class="text-sm text-stone-500 dark:text-stone-400 mt-0.5">
+          Pre-implementation review · palette #0c447c + stone · <strong>one dialog, shared by both modules</strong> — mocked once here, not duplicated per platform.
+        </p>
+      </div>
+      <button onclick="document.documentElement.classList.toggle('dark')"
+        class="text-xs font-medium px-3 py-1.5 rounded-lg border border-stone-300 dark:border-stone-700 hover:bg-stone-50 dark:hover:bg-stone-800 flex-none">
+        ☾ / ☀ toggle theme
+      </button>
+    </div>
+
+    <!-- Demo controls (NOT part of the real UI — mockup navigation aids only) -->
+    <div class="rounded-xl border border-dashed border-stone-300 dark:border-stone-700 bg-white/60 dark:bg-stone-900/40 p-4 mb-6">
+      <p class="text-[11px] font-bold uppercase tracking-wide text-stone-500 dark:text-stone-400 mb-2.5">Demo controls (this box is not part of the shipped UI)</p>
+      <div class="flex flex-wrap items-center gap-4">
+        <div class="flex items-center gap-1.5">
+          <span class="text-[11px] text-stone-500 dark:text-stone-400 mr-1">Opens from:</span>
+          <button id="ctxGoogleBtn" class="btn-tiny active" onclick="setContext('google')">Google IAP list</button>
+          <button id="ctxAppleBtn" class="btn-tiny" onclick="setContext('apple')">Apple IAP list</button>
+        </div>
+        <div class="w-px h-5 bg-stone-300 dark:bg-stone-700"></div>
+        <div class="flex items-center gap-1.5">
+          <span class="text-[11px] text-stone-500 dark:text-stone-400 mr-1">Jump to state:</span>
+          <button class="btn-tiny" onclick="preset('all')">① All selected (default)</button>
+          <button class="btn-tiny" onclick="preset('eur')">② Search "EUR"</button>
+          <button class="btn-tiny" onclick="preset('partial')">③ Partial selection</button>
+          <button class="btn-tiny" onclick="preset('zero')">④ Zero selected</button>
+        </div>
+      </div>
+      <p class="text-[11px] text-stone-400 dark:text-stone-500 mt-2.5">
+        The dialog below is a real, working prototype — type in the search box, click checkboxes, use Select all / Clear all. The buttons above just jump to the three named states so you don't have to reproduce them by hand.
+      </p>
+    </div>
+
+    <!-- ============ TRIGGER CONTEXT + DIALOG ============ -->
+    <div class="ctx-dim rounded-2xl border border-stone-200 dark:border-stone-800 overflow-hidden">
+
+      <!-- Backdrop: Google context -->
+      <div id="ctxGoogle" class="bg-stone-50 dark:bg-stone-900/40 p-6">
+        <a class="inline-flex items-center gap-1 text-xs text-stone-500 mb-3">← All apps</a>
+        <div class="flex items-start justify-between gap-4 mb-4">
+          <div class="flex items-start gap-3 min-w-0">
+            <div class="w-12 h-12 rounded-xl bg-emerald-50 dark:bg-emerald-900/30 flex items-center justify-center flex-shrink-0">
+              <span class="text-emerald-600 dark:text-emerald-400 text-xl">🛍️</span>
+            </div>
+            <div class="min-w-0">
+              <h2 class="text-2xl font-semibold truncate">Play Together VNG</h2>
+              <p class="text-xs text-stone-500 dark:text-stone-400 mt-0.5 mono">com.vng.playtogether</p>
+              <div class="flex items-center gap-2 mt-2 flex-wrap">
+                <span class="pill pill-ok">293 on Google Play</span>
+                <span class="text-[11px] text-stone-400">last synced Jul 2, 11:38</span>
+              </div>
+            </div>
+          </div>
+          <div class="flex items-center gap-2 flex-none">
+            <button class="btn btn-outline">↻ Refresh</button>
+            <button class="btn btn-outline">⬆ Bulk Import</button>
+            <button class="btn btn-outline ring-2 ring-brand ring-offset-2 dark:ring-offset-stone-900">⬇ Export list</button>
+            <button class="btn btn-brand">＋ New IAP</button>
+          </div>
+        </div>
+        <div class="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl h-24"></div>
+      </div>
+
+      <!-- Backdrop: Apple context (hidden by default) -->
+      <div id="ctxApple" class="hidden bg-stone-50 dark:bg-stone-900/40 p-6">
+        <a class="inline-flex items-center gap-1 text-xs text-stone-500 mb-3">← All apps</a>
+        <div class="flex items-center gap-4 mb-4">
+          <div class="w-[52px] h-[52px] rounded-2xl bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center flex-none">
+            <span class="text-[#0071E3] text-xl">🎮</span>
+          </div>
+          <div class="min-w-0 flex-1">
+            <h2 class="text-xl font-semibold truncate">CashKnight</h2>
+            <p class="text-xs mono text-stone-400 truncate">com.vng.cashknight</p>
+          </div>
+          <span class="rounded-full bg-stone-100 dark:bg-stone-800 px-3 py-1 text-xs font-medium text-stone-600 dark:text-stone-300">214 IAPs</span>
+          <button class="btn btn-outline" style="color:#0071E3;border-color:#bfe0ff;">🌐 Set Availabilities</button>
+          <button class="btn btn-outline">↻ Refresh from Apple</button>
+          <button class="btn btn-outline">⬆ Bulk Import</button>
+          <button class="btn btn-outline ring-2 ring-brand ring-offset-2 dark:ring-offset-stone-900">⬇ Export list</button>
+        </div>
+        <div class="bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 rounded-xl h-24"></div>
+      </div>
+    </div>
+
+    <!-- Floating modal, centered over the dimmed context above -->
+    <div class="relative">
+      <div class="-mt-[190px] flex justify-center px-4 relative z-10">
+        <div class="modal-shell">
+
+          <!-- Header -->
+          <div class="modal-header">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <h3 class="text-base font-semibold">Export options</h3>
+                <p class="text-xs text-stone-500 dark:text-stone-400 mt-0.5">Choose which countries &amp; currencies to include in the exported file.</p>
+              </div>
+              <button class="text-stone-400 hover:text-stone-600 dark:hover:text-stone-200 flex-none">✕</button>
+            </div>
+            <p class="text-[11px] text-stone-400 dark:text-stone-500 mt-2">
+              Same dialog for Google IAP Management and Apple IAP Management. Each country has exactly one store currency — pick the country, its currency comes along.
+            </p>
+          </div>
+
+          <!-- Body -->
+          <div class="px-5 py-4">
+            <!-- Search -->
+            <div class="search-box mb-3">
+              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path stroke-linecap="round" d="m20 20-3.5-3.5"/></svg>
+              <input id="searchInput" type="text" placeholder="Search country, code, or currency… (try “eur” or “viet”)" oninput="onSearch(this.value)" />
+            </div>
+
+            <!-- Select all / clear all + live count -->
+            <div class="flex items-center justify-between mb-2">
+              <div class="flex items-center gap-3">
+                <button class="btn-ghost" onclick="selectAll()">Select all</button>
+                <span class="text-stone-300 dark:text-stone-700">|</span>
+                <button class="btn-ghost" onclick="clearAll()">Clear all</button>
+              </div>
+              <span id="selectedCount" class="text-xs font-medium text-stone-600 dark:text-stone-300"></span>
+            </div>
+
+            <!-- The list -->
+            <div id="countryList" class="country-list"></div>
+
+            <p class="text-[11px] text-stone-400 dark:text-stone-500 mt-2.5">
+              Showing 39 representative countries for this mockup — the production dialog lists all ~175 store territories, scrollable + searchable exactly like this.
+            </p>
+          </div>
+
+          <!-- Footer -->
+          <div class="modal-footer">
+            <span class="text-[11px] text-stone-400 dark:text-stone-500" id="footerHint"></span>
+            <div class="flex items-center gap-2">
+              <button class="btn btn-outline">Cancel</button>
+              <button id="exportBtn" class="btn btn-brand" onclick="alert('Mockup only — no export wired up.')">Export 39 countries</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Caption -->
+    <p class="text-[11px] text-stone-400 mt-6 leading-relaxed max-w-3xl">
+      Default state = every country selected (preserves today's export-everything behavior — nothing regresses for anyone who just clicks Export immediately). Deselecting narrows the xlsx's territory price columns to the chosen subset; fixed columns (Product ID/Name, Status, localizations, …) are unaffected — this dialog only controls the per-territory (Price, Currency) columns. Region grouping (Asia / Europe / Americas / Africa / Middle East / Oceania) is a scan aid over the ~175-row real list, not a selection unit — selection is always per-country.
+    </p>
+  </div>
+
+  <script>
+    const COUNTRIES = [
+      // Asia
+      {region:"Asia", name:"Vietnam", code:"VN", currency:"VND"},
+      {region:"Asia", name:"Thailand", code:"TH", currency:"THB"},
+      {region:"Asia", name:"Indonesia", code:"ID", currency:"IDR"},
+      {region:"Asia", name:"Philippines", code:"PH", currency:"PHP"},
+      {region:"Asia", name:"Malaysia", code:"MY", currency:"MYR"},
+      {region:"Asia", name:"Singapore", code:"SG", currency:"SGD"},
+      {region:"Asia", name:"Japan", code:"JP", currency:"JPY"},
+      {region:"Asia", name:"South Korea", code:"KR", currency:"KRW"},
+      {region:"Asia", name:"India", code:"IN", currency:"INR"},
+      {region:"Asia", name:"China", code:"CN", currency:"CNY"},
+      {region:"Asia", name:"Taiwan", code:"TW", currency:"TWD"},
+      {region:"Asia", name:"Hong Kong", code:"HK", currency:"HKD"},
+      // Europe (note: 5 EUR countries — same currency, different countries)
+      {region:"Europe", name:"Germany", code:"DE", currency:"EUR"},
+      {region:"Europe", name:"France", code:"FR", currency:"EUR"},
+      {region:"Europe", name:"Italy", code:"IT", currency:"EUR"},
+      {region:"Europe", name:"Spain", code:"ES", currency:"EUR"},
+      {region:"Europe", name:"Netherlands", code:"NL", currency:"EUR"},
+      {region:"Europe", name:"United Kingdom", code:"GB", currency:"GBP"},
+      {region:"Europe", name:"Switzerland", code:"CH", currency:"CHF"},
+      {region:"Europe", name:"Sweden", code:"SE", currency:"SEK"},
+      {region:"Europe", name:"Poland", code:"PL", currency:"PLN"},
+      {region:"Europe", name:"Norway", code:"NO", currency:"NOK"},
+      // Americas (Ecuador shares USD with the US — dollarized economy)
+      {region:"Americas", name:"United States", code:"US", currency:"USD"},
+      {region:"Americas", name:"Canada", code:"CA", currency:"CAD"},
+      {region:"Americas", name:"Brazil", code:"BR", currency:"BRL"},
+      {region:"Americas", name:"Mexico", code:"MX", currency:"MXN"},
+      {region:"Americas", name:"Argentina", code:"AR", currency:"ARS"},
+      {region:"Americas", name:"Ecuador", code:"EC", currency:"USD"},
+      // Africa (Senegal + Côte d'Ivoire share the West African CFA franc)
+      {region:"Africa", name:"Senegal", code:"SN", currency:"XOF"},
+      {region:"Africa", name:"Côte d'Ivoire", code:"CI", currency:"XOF"},
+      {region:"Africa", name:"Nigeria", code:"NG", currency:"NGN"},
+      {region:"Africa", name:"South Africa", code:"ZA", currency:"ZAR"},
+      {region:"Africa", name:"Egypt", code:"EG", currency:"EGP"},
+      // Middle East
+      {region:"Middle East", name:"United Arab Emirates", code:"AE", currency:"AED"},
+      {region:"Middle East", name:"Saudi Arabia", code:"SA", currency:"SAR"},
+      {region:"Middle East", name:"Turkey", code:"TR", currency:"TRY"},
+      {region:"Middle East", name:"Israel", code:"IL", currency:"ILS"},
+      // Oceania
+      {region:"Oceania", name:"Australia", code:"AU", currency:"AUD"},
+      {region:"Oceania", name:"New Zealand", code:"NZ", currency:"NZD"},
+    ];
+
+    let selected = new Set(COUNTRIES.map(c => c.code)); // default: all selected
+    let query = "";
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"']/g, (m) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+    }
+
+    function matchesQuery(c, q) {
+      if (!q) return true;
+      const needle = q.toLowerCase();
+      return (
+        c.name.toLowerCase().includes(needle) ||
+        c.code.toLowerCase().includes(needle) ||
+        c.currency.toLowerCase().includes(needle)
+      );
+    }
+
+    function render() {
+      const q = query.trim();
+      const visible = COUNTRIES.filter((c) => matchesQuery(c, q));
+      const listEl = document.getElementById("countryList");
+
+      if (visible.length === 0) {
+        listEl.innerHTML = `<div class="empty-search">No countries match "${escapeHtml(q)}".</div>`;
+      } else {
+        const regions = [];
+        const byRegion = new Map();
+        for (const c of visible) {
+          if (!byRegion.has(c.region)) { byRegion.set(c.region, []); regions.push(c.region); }
+          byRegion.get(c.region).push(c);
+        }
+        let html = "";
+        for (const region of regions) {
+          html += `<div class="region-header">${region}</div>`;
+          for (const c of byRegion.get(region)) {
+            const checked = selected.has(c.code) ? "checked" : "";
+            html += `
+              <label class="country-row">
+                <input type="checkbox" ${checked} onchange="toggleCountry('${c.code}')" />
+                <span class="country-name">${c.name}</span>
+                <span class="currency-badge mono">${c.code} · ${c.currency}</span>
+              </label>`;
+          }
+        }
+        listEl.innerHTML = html;
+      }
+
+      updateFooter(visible.length, q);
+    }
+
+    function updateFooter(visibleCount, q) {
+      const n = selected.size;
+      const total = COUNTRIES.length;
+      document.getElementById("selectedCount").textContent = `${n} of ${total} selected`;
+
+      const hint = document.getElementById("footerHint");
+      hint.textContent = q ? `Filtered: ${visibleCount} of ${total} match "${q}"` : "";
+
+      const btn = document.getElementById("exportBtn");
+      if (n === 0) {
+        btn.disabled = true;
+        btn.textContent = "Select at least 1 country";
+      } else {
+        btn.disabled = false;
+        btn.textContent = `Export ${n} countr${n === 1 ? "y" : "ies"}`;
+      }
+    }
+
+    function toggleCountry(code) {
+      if (selected.has(code)) selected.delete(code); else selected.add(code);
+      render();
+    }
+
+    function selectAll() {
+      COUNTRIES.forEach((c) => selected.add(c.code));
+      render();
+    }
+
+    function clearAll() {
+      selected.clear();
+      render();
+    }
+
+    function onSearch(v) {
+      query = v;
+      render();
+    }
+
+    function preset(name) {
+      const input = document.getElementById("searchInput");
+      if (name === "all") {
+        selected = new Set(COUNTRIES.map((c) => c.code));
+        input.value = "";
+        query = "";
+      } else if (name === "eur") {
+        input.value = "eur";
+        query = "eur";
+      } else if (name === "partial") {
+        input.value = "";
+        query = "";
+        // Illustrative partial pick: all of Asia + the 5 EUR countries + UK (18 of 39)
+        // — mirrors a real scenario like "18 of 175 selected".
+        selected = new Set(COUNTRIES.slice(0, 18).map((c) => c.code));
+      } else if (name === "zero") {
+        input.value = "";
+        query = "";
+        selected.clear();
+      }
+      render();
+    }
+
+    function setContext(which) {
+      document.getElementById("ctxGoogle").classList.toggle("hidden", which !== "google");
+      document.getElementById("ctxApple").classList.toggle("hidden", which !== "apple");
+      document.getElementById("ctxGoogleBtn").classList.toggle("active", which === "google");
+      document.getElementById("ctxAppleBtn").classList.toggle("active", which === "apple");
+    }
+
+    render();
+  </script>
+</body>
+</html>
