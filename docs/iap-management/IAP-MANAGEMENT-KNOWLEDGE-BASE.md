@@ -2230,6 +2230,190 @@ field is added to a mask.
 
 ---
 
+### 10.14 Cycle 44 — IAP Export (Google + Apple) (2026-07)
+
+**Session scope:** Two paired "investigation-first" tasks — export an app's
+IAP catalog to xlsx, one per platform, delivered as two separate commits
+(`e42a937` Google, `fbea49a` Apple). Same "Export list" affordance and file
+layout across both modules; each platform's fetch strategy follows from its
+own price-read shape rather than a shared implementation.
+
+---
+
+#### 10.14.A Shared design
+
+- **Trigger:** "Export list" button on each module's IAP list page (next to
+  Refresh / Bulk Import) → GET route → browser downloads an `.xlsx`.
+- **Read-only:** no DB write, no sync side-effect, no audit-log entry. Both
+  modules chose migration-free — per **P2** above, an `action_type` not in
+  the `actions_log` CHECK constraint fails silently, so skipping the audit
+  avoided a migration for a feature that never mutates state.
+- **Layout** — one row per item, a two-row merged header:
+  - Fixed left columns: Product ID / Product Name (Google) or SKU Name
+    (Apple) / Status / Base Country (Apple only).
+  - **Fixed territory price groups**: one (Price, Currency) pair per
+    territory that has a price on ANY exported item — the sorted
+    (alphabetical by code) **union** across the whole set, not a per-item
+    list. A territory missing on a given item renders blank there.
+  - **Positional localization groups**: "Localization N" merged header,
+    filled left-to-right per item (Localization 1 = the item's 1st locale,
+    etc.). Group count = the MAX locale count across all items; unused
+    groups on a given row are blank.
+  - Column determination = two passes over the fetched set (build the
+    territory union + the max-locale-count) before the sheet is built.
+- **Scope:** ALL items of the app — the full live set, not the current
+  filtered/paginated list view.
+- **Plain/unstyled:** both modules use `xlsx@0.18.5` (SheetJS Community
+  Edition), which writes merged cells + column widths but NOT cell styling
+  (fills/fonts/borders). Both approved sample layouts have a styled navy
+  header; both times the styling-dependency question (`xlsx-js-style` /
+  `exceljs`) was raised explicitly and green-lit to **ship plain-for-now**
+  rather than add a new dependency.
+
+---
+
+#### 10.14.B Google — live full-catalog fetch (commit `e42a937`)
+
+Google's `monetization.onetimeproducts.list` — the same paginated call
+`listInAppProducts` (and therefore Refresh) already uses — returns COMPLETE
+`OneTimeProduct` resources in one pass: every listing (title + description,
+all locales) and every regional price, no truncation. This is the opposite
+of Apple's V2 `?include` shape (§4.1): Google's list endpoint uses the
+identical schema as its per-item `get`, so there is no "list returns less
+than get" trap to work around here.
+
+**Consequence:** the export reuses the Refresh fetch as-is — a handful of
+paginated calls for the whole app, no per-item GET, bounded and fast.
+
+| Column | Source |
+|---|---|
+| Product ID | `sku` |
+| Product Name | Default title — same `en-US`-preferred / first-listing-fallback resolution as the list's `default_title` (mirrors `listIapsWithDefaultLocale` in `repository/iaps.ts`) |
+| Status | `active` / `inactive` (already 2-state on Google — no raw-enum concern) |
+| Localization sub-columns (2) | Locale Code, Description — locales with an EMPTY description are omitted entirely (not counted toward the group-count max) |
+
+Deleted-on-Google items (§10.13.F soft-delete flagging) are excluded
+automatically — the export reads live from Google, so a flagged/absent item
+simply isn't in the response. No separate filter needed.
+
+**Files:** `lib/google-iap-management/xlsx-export.ts` (pure
+`buildExportPlan` / `buildExportWorkbook` / `xlsxExportFilename`),
+`app/api/google-iap-management/apps/[packageName]/export/route.ts` (GET),
+`IapListClient.tsx` button + loading/error/summary banners.
+
+**Design reference:**
+`docs/google-iap-management/design/IAP-export-SAMPLE-layout-v2.xlsx`
+(approved sample, committed for structural comparison).
+
+---
+
+#### 10.14.C Apple — live per-IAP fetch, View Detail reuse (commit `fbea49a`) ← LANDMARK inheritance
+
+Apple has no equivalent of Google's `iap_prices` cache and no single
+endpoint that returns every IAP's pricing in one call — `iap_mgmt` has no
+prices table at all (confirmed against the init migration: `apps`, `iaps`,
+`iap_localizations`, `iap_screenshots`, `price_tiers`,
+`price_tier_territories` — no `iap_prices`). Every row therefore needs a
+live per-IAP fetch.
+
+**Why reuse instead of reimplement:** View Detail (§4 / IAP.p2, see the
+[apple-api-reference.md](apple-api-reference.md) "IAP View Detail" section)
+already solved the hard part of this read — the **§4.1 LANDMARK** V2
+`?include=manualPrices` truncation (caps at 10 IDs even when the schedule
+has more). `getPriceScheduleForIap`
+(`lib/iap-management/apple/price-schedules.ts`) works around it by treating
+Stage 1's V2 relationship enumeration as advisory-only and walking Stage
+2's V1 `/inAppPurchasePriceSchedules/{id}/manualPrices` sub-resource for
+the authoritative full set. The export composes this function **UNCHANGED**
+— new export code never touches `price-schedules.ts`, so the truncation fix
+is inherited for free rather than re-derived (or worse, silently re-broken
+by a naive re-implementation that goes back to trusting the V2 relationship
+count).
+
+Export orchestration (`lib/iap-management/apple/export-fetch.ts`, NEW)
+composes the same primitives View Detail's `getIapViewData` does —
+`getIapDetailFromApple` (IAP attributes + localizations) and
+`getPriceScheduleForIap` + `unpackPriceSchedule` — but skips the
+availability fetch and territory-count denominator (`getAvailabilityForIap`
+/ `getAllTerritoryIds`) that `getIapViewData` also does, since export
+doesn't need them. This trims the per-IAP cost from View Detail's 4
+parallel calls down to ~2-3.
+
+**Two-tier resilience** (mirrors View Detail's own per-stage error
+boundary — see apple-api-reference.md "Per-stage error boundaries"):
+
+| Failure | Effect |
+|---|---|
+| `getIapDetailFromApple` throws (critical path — no product id / SKU name / localizations to fall back on) | Row **skipped**. Counted in a warning total surfaced via the `X-Export-Failed-Count` response header; the export still completes for every other row. |
+| `getPriceScheduleForIap` throws (404 "no schedule yet", or any other error) | Row **kept** with `priceSchedule: null` → blank pricing + blank Base Country for that row. Metadata + localizations still export. |
+
+This is a deliberate asymmetry, not a shortcut: View Detail already treats
+the IAP fetch as critical and the price-schedule fetch as best-effort (its
+own docstring says so — see `getIapViewData` in
+`lib/iap-management/queries/iap-detail.ts`), so the export inherits the
+same philosophy rather than inventing a flatter "any failure = skip" rule.
+
+**Cost + concurrency:** ~2-3 Apple calls per IAP (IAP+localizations,
+schedule Stage 1, schedule Stage 2 — usually one page since Apple has
+~175 territories against a 200-per-page limit). Bounded concurrency of 8
+via the existing `lib/iap-management/concurrency.ts` `withConcurrency`
+helper (the same generic utility Google's `batchUpsertInAppProducts` also
+imports). Apple's 429/500 retry (`withRetry`, `AppleRateLimitError`) is
+reused unchanged on the list call and inside `getPriceScheduleForIap`'s own
+pagination. Rough wall-time: well under a minute for apps with a few
+hundred IAPs; multi-minute for apps with 1000+. The client sets a 10-minute
+`AbortController` ceiling + a "generating…" `sonner` toast (the Apple list
+page already uses toast, not inline banners, for Refresh feedback — the
+export follows that existing pattern rather than Google's inline-banner
+style).
+
+| Column | Source |
+|---|---|
+| Product ID | `productId` |
+| SKU Name | Apple's `name` attribute — the internal REFERENCE NAME, distinct from the localized display name shown in each Localization group |
+| Status | Raw `inAppPurchaseState` string (APPROVED / MISSING_METADATA / REMOVED_FROM_SALE / …) — no 2-state collapse, unlike Google |
+| Base Country | `PriceScheduleView.baseTerritory`, converted alpha-3 → alpha-2 (`i18n-iso-countries`'s `alpha3ToAlpha2` — the same package `territory-name.ts` already depends on, no new dependency) |
+| Territory columns | Apple auto-equalizes across ~175 territories, so a fully-priced catalog produces a very wide sheet — this is expected, not a bug |
+| Localization sub-columns (3) | Locale, Display Name, Description |
+
+Only effective-now price entries (`startDate === null`) populate the price
+columns — a future-dated upcoming-change entry (the same concept
+`UpcomingChangesTable` surfaces separately in View Detail) is excluded from
+this point-in-time snapshot.
+
+**Files:** `lib/iap-management/xlsx-export.ts` (pure plan/workbook
+builder), `lib/iap-management/apple/export-fetch.ts` (NEW —
+bounded-concurrency orchestration with dependency-injected fetch
+primitives for testability), `app/api/iap-management/apps/[appId]/export/route.ts`
+(GET), `IapListClient.tsx` button.
+
+**Design reference:**
+`docs/iap-management/design/Apple-IAP-export-SAMPLE-layout.xlsx` (approved
+sample).
+
+---
+
+#### 10.14.D Cross-reference — "reuse the platform's own price read, don't reinvent it"
+
+Both exports follow the same meta-rule from opposite directions:
+
+- **Google** reuses **Refresh's list fetch** because Google's list endpoint
+  already returns complete data — reusing it is a matter of not
+  re-fetching what's already cheap and complete.
+- **Apple** reuses **View Detail's fetch** because Apple's list endpoint
+  returns none of the pricing detail — reusing View Detail's already-
+  hardened 2-stage read avoids re-deriving (and risking re-breaking) the
+  §4.1 truncation fix.
+
+Neither module invented new Apple/Google API calls for this feature. This
+is a concrete instance of the "cross-module pattern reuse with
+architectural awareness" principle first named at Cycle 41 (§10.10) — same
+abstract shape (export = fetch full catalog → shape into a two-row-merged-
+header xlsx), each platform's implementation respects its own API's
+affordances rather than cloning the sibling module's fetch strategy.
+
+---
+
 ## 11. Cumulative Metrics (Post-Cycle 34)
 
 | Metric | Value |

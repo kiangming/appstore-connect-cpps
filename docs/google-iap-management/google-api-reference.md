@@ -447,3 +447,34 @@ with a guessed option set.
 **Create (new product) path:** unchanged — single `"buy"` option,
 `allowMissing: true`. No GET needed.
 
+## 14. IAP Export — reusing the Refresh list fetch (Cycle 44)
+
+`GET /api/google-iap-management/apps/{packageName}/export` (read-only, no DB
+write, no sync) builds an xlsx of every IAP currently on Google for the app.
+Unlike Apple, Google's `monetization.onetimeproducts.list` — the exact call
+§3's `listInAppProducts` (and therefore Refresh) already makes — returns a
+COMPLETE `OneTimeProduct` per page: every listing (all locales, with
+descriptions) and every regional price. There is no "list is thinner than
+get" trap here (contrast Apple's V2 `?include` truncation), so the export
+reuses that one paginated fetch verbatim:
+
+```ts
+const products = await listInAppProducts(jwt, packageName); // same call Refresh uses
+const plan = buildExportPlan(products);                     // pure — no extra I/O
+```
+
+Consequences:
+- No per-item GET. Cost is a handful of paginated list calls for the whole
+  app, same as a Refresh click.
+- Deleted-on-Google items (§10.13.F / the `deleted_on_google_at` soft-delete
+  flag) are excluded automatically — they're simply absent from Google's
+  live response, no separate filter needed.
+- Product Name resolution mirrors `default_title` (§ Column determination:
+  prefer `en-US`, else the first listing encountered).
+
+Column mapping, the paired Apple-side design (which — inverted from
+Google's — reuses View Detail's per-IAP fetch because Apple's list endpoint
+returns no pricing at all), and the shared xlsx layout rules live in the
+shared KB:
+[IAP-MANAGEMENT-KNOWLEDGE-BASE.md §10.14](../iap-management/IAP-MANAGEMENT-KNOWLEDGE-BASE.md#1014-cycle-44--iap-export-google--apple-2026-07).
+

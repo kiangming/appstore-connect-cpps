@@ -1,4 +1,4 @@
-# Apple App Store Connect API — IAP reference
+                                                                                                              ``  # Apple App Store Connect API — IAP reference
 
 The endpoint surface this module hits, pinned by integration tests in
 `lib/iap-management/apple/api-schemas.integration.test.ts`. When Apple's
@@ -458,4 +458,44 @@ https://appstoreconnect.apple.com/apps/{appAppleId}/inappPurchases/{iapAppleId}
 
 `appAppleId` is the numeric Apple ID of the parent app (route param `appId`);
 `iapAppleId` is the IAP's Apple opaque id from `iap.id`.
+
+## IAP Export — composing View Detail's fetch directly (Cycle 44)
+
+`GET /api/iap-management/apps/{appId}/export` (read-only, no DB write)
+builds an xlsx of every IAP in the app. There is no per-territory price
+cache and no Apple endpoint that returns pricing for more than one IAP at
+a time, so the route calls `listAllInAppPurchases` once for the item list,
+then fans out per-IAP via `lib/iap-management/apple/export-fetch.ts`:
+
+```ts
+const detail = await getIapDetailFromApple(creds, iap.id);   // critical path
+let priceSchedule = null;
+try {
+  priceSchedule = unpackPriceSchedule(
+    await getPriceScheduleForIap(creds, iap.id),              // §4.1-safe — Stage 2 V1 read
+  );
+} catch { /* best-effort — blank pricing, row still included */ }
+```
+
+This is deliberately a **leaner** composition than `getIapViewData` (the
+View Detail composer above) — it drops the availability fetch and the
+`getAllTerritoryIds` denominator, neither of which the export needs, cutting
+per-IAP Apple calls from View Detail's 4 down to ~2-3. It does NOT touch
+`price-schedules.ts` — the §4.1 truncation workaround (Stage 1's
+`manualPrices` relationship is advisory-only; Stage 2's V1 sub-resource is
+authoritative) is inherited unchanged.
+
+**Per-IAP failure boundary** (same critical-vs-best-effort split as the
+table under "Per-stage error boundaries" above, minus the section-level
+render tier since export has no UI sections to isolate):
+
+| Stage | Failure behavior |
+|---|---|
+| `getIapDetailFromApple` | Critical. Row skipped; counted in `X-Export-Failed-Count`. Sibling rows unaffected. |
+| `getPriceScheduleForIap` (any error, 404 or not) | Best-effort. Row kept with blank pricing / blank Base Country. |
+
+Bounded concurrency = 8 (`lib/iap-management/concurrency.ts`
+`withConcurrency`). Full design rationale, column mapping, and the paired
+Google-side design: see the shared KB,
+[IAP-MANAGEMENT-KNOWLEDGE-BASE.md §10.14](IAP-MANAGEMENT-KNOWLEDGE-BASE.md#1014-cycle-44--iap-export-google--apple-2026-07).
 

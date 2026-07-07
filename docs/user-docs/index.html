@@ -1039,7 +1039,7 @@
           <a class="nav-item" data-page="apple-apps" data-keywords="apple apps danh sách applications">
             <span class="nav-item-label">Danh sách apps</span>
           </a>
-          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách">
+          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách export xlsx excel xuất file">
             <span class="nav-item-label">Danh sách IAPs</span>
           </a>
           <a class="nav-item" data-page="apple-new-iap" data-keywords="apple new iap tạo mới create">
@@ -1084,7 +1084,7 @@
           <a class="nav-item" data-page="google-apps" data-keywords="google apps danh sách play store">
             <span class="nav-item-label">Danh sách apps</span>
           </a>
-          <a class="nav-item" data-page="google-iaps" data-keywords="google iaps items danh sách sku deleted flagged xóa không còn play console refresh">
+          <a class="nav-item" data-page="google-iaps" data-keywords="google iaps items danh sách sku deleted flagged xóa không còn play console refresh export xlsx excel xuất file">
             <span class="nav-item-label">Danh sách IAPs</span>
           </a>
           <a class="nav-item" data-page="google-create-iap" data-keywords="google create item tạo mới onetimeproduct">
@@ -2169,6 +2169,17 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
               </ul>
             </div>
           </li>
+          <li class="step">
+            <div class="step-title">Export danh sách IAPs (xlsx) — Cycle 44</div>
+            <div class="step-body">
+              <p>Nút <strong>"Export list"</strong> trên toolbar (cạnh Refresh from Apple / Bulk Import) tải về file
+              Excel chứa <strong>toàn bộ IAPs của app</strong> (mọi state, không chỉ phần đang filter/hiển thị trên
+              màn hình). Mỗi IAP là 1 dòng, gồm: Product ID, SKU Name, Status, Base Country, 1 cột giá + tiền tệ
+              cho mỗi territory app đang bán, và các nhóm localization (Locale · Display Name · Description).</p>
+              <p>Click xong tool hiện chỉ báo <em>"Generating…"</em> — chờ tải xong rồi trình duyệt tự tải file
+              <code class="inline">Apple-IAP-export-&lt;appId&gt;-YYYYMMDD.xlsx</code> về máy.</p>
+            </div>
+          </li>
         </ol>
 
         <h2 class="section-title">Hình ảnh minh họa</h2>
@@ -2253,6 +2264,19 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
         <div class="callout callout-warning">
           <div class="callout-title">⚠️ IAP mới tạo chưa hiển thị?</div>
           <p>App Store Connect có propagation delay 1-2 phút sau khi POST tạo IAP. Reload trang nếu không thấy IAP vừa tạo. Trang hiện chưa auto-refresh sau create (deferred scope wider — Hotfix 29 chỉ áp dụng Apps list Google).</p>
+        </div>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Export app nhiều IAPs sẽ chậm — bình thường</div>
+          <p>Export đọc dữ liệu <strong>live từ Apple cho từng IAP một</strong> (không có cache giá per-territory
+          như Google), nên app có vài trăm IAP trở lên có thể mất vài phút để tạo xong file. Chỉ báo
+          <em>"Generating…"</em> hiển thị suốt quá trình đó là bình thường với app lớn — không phải bug, không cần
+          bấm lại.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Dòng có giá để trống trong file export?</div>
+          <p>Nếu 1 IAP trong file export có <strong>tên/status/localization đầy đủ nhưng cột giá để trống</strong>,
+          nghĩa là lần fetch giá của riêng item đó bị lỗi tạm thời (network/Apple rate-limit) — item vẫn được
+          liệt kê, không bị bỏ sót. Chạy <strong>Export list</strong> lại để lấy đầy đủ giá cho item đó.</p>
         </div>
 
         <h2 class="section-title">Tính năng liên quan</h2>
@@ -3127,6 +3151,16 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
             <div class="step-title">Click row → Edit item</div>
             <div class="step-body"><p>Click SKU/title → <a class="inline-link" data-goto="google-edit-iap">Chỉnh sửa item</a>.</p></div>
           </li>
+          <li class="step">
+            <div class="step-title">Export danh sách items (xlsx) — Cycle 44</div>
+            <div class="step-body">
+              <p>Nút <strong>"Export list"</strong> trên toolbar tải về file Excel chứa <strong>toàn bộ items của
+              app hiện có trên Google Play</strong> (không chỉ phần đang filter/hiển thị). Mỗi item là 1 dòng, gồm:
+              Product ID, Product Name, Status, 1 cột giá + tiền tệ cho mỗi territory item đang bán, và các nhóm
+              localization (Locale Code · Description).</p>
+              <p>File tải về tên dạng <code class="inline">IAP-export-&lt;packageName&gt;-YYYYMMDD.xlsx</code>.</p>
+            </div>
+          </li>
         </ol>
 
         <h2 class="section-title">Hình ảnh minh họa</h2>
@@ -3242,6 +3276,13 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
         <div class="callout callout-warning">
           <div class="callout-title">⚠️ Banner "not on Google" không phải lỗi khẩn cấp</div>
           <p>Items bị flag vẫn hiển thị trong tool — không có gì bị tự động xóa. Đây là cảnh báo để Manager review: ai đó có thể đã xóa/đổi tên item trên Play Console. Confirm với team trước khi Acknowledge / Remove.</p>
+        </div>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Export list đọc dữ liệu live — có thể khác bảng đang xem</div>
+          <p>Export gọi trực tiếp Google Play tại thời điểm bấm nút, nên phản ánh trạng thái <strong>mới nhất trên
+          Google</strong> — có thể khác một chút so với bảng trên màn hình nếu bạn chưa Refresh gần đây. Items đã
+          <strong>bị xóa trên Google Play</strong> (xem mục "Items bị xóa trên Google Play" ở trên) sẽ
+          <strong>không xuất hiện</strong> trong file export, vì export chỉ lấy những gì hiện đang có trên Google.</p>
         </div>
       </section>
 
