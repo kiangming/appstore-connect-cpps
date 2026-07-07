@@ -113,8 +113,25 @@ function toExportRow(source: ExportSource): ExportRow {
   };
 }
 
-/** Two-pass column determination + per-row extraction. Pure — no I/O. */
-export function buildExportPlan(sources: ExportSource[]): ExportPlan {
+/**
+ * Two-pass column determination + per-row extraction. Pure — no I/O.
+ *
+ * `selectedTerritories` (Export options dialog, shared with the Google
+ * export): when provided and non-empty, the territory PRICE columns are
+ * narrowed to (union of territories-with-a-price) ∩ (selected codes) —
+ * codes are alpha-2 display codes, matching `ExportRow.prices`' keys
+ * (already converted from Apple's native alpha-3 by `toExportRow`).
+ * Absent or empty means "no filter" — every priced territory, i.e.
+ * today's unfiltered behavior. Fixed columns and localization groups are
+ * per-item/per-locale, not per-territory, and are never affected by this
+ * parameter. The selection does NOT change the fetch — every IAP's full
+ * price schedule is still fetched regardless; this only narrows which
+ * columns the workbook renders.
+ */
+export function buildExportPlan(
+  sources: ExportSource[],
+  selectedTerritories?: readonly string[] | null,
+): ExportPlan {
   const rows = sources.map(toExportRow);
 
   const territorySet = new Set<string>();
@@ -124,8 +141,17 @@ export function buildExportPlan(sources: ExportSource[]): ExportPlan {
     localizationGroupCount = Math.max(localizationGroupCount, row.localizations.length);
   }
 
+  const allTerritories = [...territorySet].sort();
+  const selection =
+    selectedTerritories && selectedTerritories.length > 0
+      ? new Set(selectedTerritories)
+      : null;
+  const territories = selection
+    ? allTerritories.filter((t) => selection.has(t))
+    : allTerritories;
+
   return {
-    territories: [...territorySet].sort(),
+    territories,
     localizationGroupCount,
     rows,
   };

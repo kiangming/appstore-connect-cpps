@@ -9,6 +9,15 @@
  * mutation. Scope: ALL IAPs of the app, ALL states (Manager wants every
  * state, not just READY_TO_SUBMIT/etc — no filter is applied to the list
  * fetch).
+ *
+ * POST, not GET (Export options dialog, shared with the Google export):
+ * the operator's territory selection can be up to ~180 country codes —
+ * travels in the POST body, not a query string, avoiding the URL-length
+ * trap this session already hit twice on Supabase `.in()` calls (KB
+ * §10.13.E). `territories: string[] | null`; `null` (or omitted/empty)
+ * means "no filter," matching pre-dialog behavior exactly. The selection
+ * only narrows which columns the workbook renders — it does NOT change
+ * the fetch; every IAP's full price schedule is still fetched regardless.
  */
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
@@ -31,8 +40,12 @@ import {
 
 export const runtime = "nodejs";
 
-export async function GET(
-  _req: Request,
+interface ExportRequestBody {
+  territories?: string[] | null;
+}
+
+export async function POST(
+  req: Request,
   ctx: { params: { appId: string } },
 ) {
   try {
@@ -45,6 +58,8 @@ export async function GET(
   }
 
   const appleAppId = ctx.params.appId;
+  const body = (await req.json().catch(() => ({}))) as ExportRequestBody;
+  const territories = Array.isArray(body.territories) ? body.territories : null;
 
   try {
     const creds = await getActiveAccount();
@@ -60,7 +75,7 @@ export async function GET(
       getPriceScheduleForIap,
     });
 
-    const plan = buildExportPlan(sources);
+    const plan = buildExportPlan(sources, territories);
     const workbook = buildExportWorkbook(plan);
     const buffer = XLSX.write(workbook, {
       type: "buffer",

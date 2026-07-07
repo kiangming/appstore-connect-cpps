@@ -10,6 +10,14 @@
  *
  * Scope: ALL items currently on Google for this app (not the cached /
  * paginated view).
+ *
+ * POST, not GET (Export options dialog, shared with the Apple export):
+ * the operator's territory selection can be up to ~180 country codes.
+ * This session already hit Supabase's `.in()` ~8KB URL limit twice
+ * (see KB §10.13.E) — rather than repeat that trap with a query string,
+ * the selection travels in the POST body. `territories: string[] | null`;
+ * `null` (or omitted/empty) means "no filter," matching pre-dialog
+ * behavior exactly.
  */
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
@@ -36,8 +44,12 @@ import {
 
 export const dynamic = "force-dynamic";
 
-export async function GET(
-  _req: Request,
+interface ExportRequestBody {
+  territories?: string[] | null;
+}
+
+export async function POST(
+  req: Request,
   { params }: { params: { packageName: string } },
 ) {
   const session = await getServerSession(authOptions);
@@ -66,6 +78,9 @@ export async function GET(
     );
   }
 
+  const body = (await req.json().catch(() => ({}))) as ExportRequestBody;
+  const territories = Array.isArray(body.territories) ? body.territories : null;
+
   try {
     const encrypted = await getEncryptedCredentials(accountId);
     const jwt = jwtClientFromEncrypted(encrypted);
@@ -73,7 +88,7 @@ export async function GET(
     // cast to InAppProduct (see publisher-client.ts) — the adapter already
     // normalised listings + prices into that shape.
     const products = await listInAppProducts(jwt, packageName);
-    const plan = buildExportPlan(products as unknown as ToolInAppProduct[]);
+    const plan = buildExportPlan(products as unknown as ToolInAppProduct[], territories);
     const workbook = buildExportWorkbook(plan);
     const buffer = XLSX.write(workbook, {
       type: "buffer",

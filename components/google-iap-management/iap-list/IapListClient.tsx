@@ -32,6 +32,7 @@ import {
   BulkStatusModal,
   type BulkStatusMode,
 } from "./BulkStatusModal";
+import { ExportOptionsDialog } from "@/components/iap-management/ExportOptionsDialog";
 
 interface Props {
   packageName: string;
@@ -92,6 +93,7 @@ export function IapListClient({
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportSummary, setExportSummary] = useState<string | null>(null);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [bulkMode, setBulkMode] = useState<BulkStatusMode | null>(null);
 
   // Soft-delete: split present-on-Google (live) from flagged deleted-on-Google.
@@ -164,14 +166,19 @@ export function IapListClient({
     }
   }
 
-  async function handleExport() {
+  async function handleConfirmExport(selectedTerritories: string[] | null) {
+    setExportDialogOpen(false);
     setExporting(true);
     setExportError(null);
     setExportSummary(null);
     try {
       const res = await fetchWithTimeout(
         `/api/google-iap-management/apps/${encodeURIComponent(packageName)}/export`,
-        { method: "GET" },
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ territories: selectedTerritories }),
+        },
         REFRESH_TIMEOUT_MS,
       );
       if (!res.ok) {
@@ -311,7 +318,7 @@ export function IapListClient({
             {refreshing ? "Refreshing…" : "Refresh"}
           </button>
           <button
-            onClick={handleExport}
+            onClick={() => setExportDialogOpen(true)}
             disabled={exporting}
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-lg transition disabled:opacity-50"
           >
@@ -596,6 +603,12 @@ export function IapListClient({
           onComplete={() => router.refresh()}
         />
       )}
+
+      <ExportOptionsDialog
+        open={exportDialogOpen}
+        onCancel={() => setExportDialogOpen(false)}
+        onExport={handleConfirmExport}
+      />
 
       {/* ── BULK REMOVE CONFIRM MODAL ── */}
       {bulkConfirmOpen && (

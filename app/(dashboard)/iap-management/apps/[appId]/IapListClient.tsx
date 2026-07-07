@@ -34,6 +34,7 @@ import {
   type BulkMode,
 } from "@/components/iap-management/AvailabilitiesBulkModal";
 import { AvailabilityCell } from "@/components/iap-management/AvailabilityCell";
+import { ExportOptionsDialog } from "@/components/iap-management/ExportOptionsDialog";
 
 const PAGE_SIZE = 100;
 
@@ -131,6 +132,7 @@ export function IapListClient({
   const [modalOpen, setModalOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [page, setPage] = useState(1);
   // Cycle 39 Phase 2 — bulk modal state. Null = closed.
   // Hotfix 25: the modal now fetches availability on open via the
@@ -280,13 +282,17 @@ export function IapListClient({
   // Generous client-side ceiling so it doesn't look hung mid-way.
   const EXPORT_TIMEOUT_MS = 10 * 60 * 1000;
 
-  async function handleExport() {
+  async function handleConfirmExport(selectedTerritories: string[] | null) {
+    setExportDialogOpen(false);
     setExporting(true);
     const toastId = toast.loading("Generating export… this can take a few minutes for large apps.");
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), EXPORT_TIMEOUT_MS);
     try {
       const res = await fetch(`/api/iap-management/apps/${appId}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ territories: selectedTerritories }),
         signal: controller.signal,
       });
       if (!res.ok) {
@@ -404,7 +410,7 @@ export function IapListClient({
         </Link>
         <button
           type="button"
-          onClick={handleExport}
+          onClick={() => setExportDialogOpen(true)}
           disabled={exporting}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition disabled:opacity-50"
           title="Export all IAPs (live from Apple) to xlsx"
@@ -774,6 +780,12 @@ export function IapListClient({
           onComplete={() => router.refresh()}
         />
       )}
+
+      <ExportOptionsDialog
+        open={exportDialogOpen}
+        onCancel={() => setExportDialogOpen(false)}
+        onExport={handleConfirmExport}
+      />
     </div>
   );
 }

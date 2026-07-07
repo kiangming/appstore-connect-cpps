@@ -107,6 +107,67 @@ describe("buildExportPlan — territory columns", () => {
   });
 });
 
+describe("buildExportPlan — territory selection (Export options dialog)", () => {
+  const twoTerritorySources = [
+    source({
+      priceSchedule: schedule(
+        [
+          entry({ territory: "USA", customerPrice: "0.99", currency: "USD" }),
+          entry({ territory: "VNM", customerPrice: "24000", currency: "VND" }),
+        ],
+        "USA",
+      ),
+    }),
+  ];
+
+  it("no selection (absent) → unchanged: every priced territory", () => {
+    const plan = buildExportPlan(twoTerritorySources);
+    expect(plan.territories).toEqual(["US", "VN"]);
+  });
+
+  it("empty selection ([]) is treated as 'no filter' too", () => {
+    const plan = buildExportPlan(twoTerritorySources, []);
+    expect(plan.territories).toEqual(["US", "VN"]);
+  });
+
+  it("a subset selection (alpha-2 codes) narrows to exactly the intersection", () => {
+    const plan = buildExportPlan(twoTerritorySources, ["US"]);
+    expect(plan.territories).toEqual(["US"]);
+  });
+
+  it("a selected territory no item actually has a price for → no column, no crash", () => {
+    const plan = buildExportPlan(twoTerritorySources, ["US", "DE"]);
+    expect(plan.territories).toEqual(["US"]);
+  });
+
+  it("does not affect Base Country, localization groups, or fixed columns", () => {
+    const withLoc = [
+      source({
+        productId: "sku-1",
+        skuName: "Item One",
+        status: "APPROVED",
+        priceSchedule: schedule(
+          [
+            entry({ territory: "USA", customerPrice: "0.99", currency: "USD" }),
+            entry({ territory: "VNM", customerPrice: "24000", currency: "VND" }),
+          ],
+          "USA",
+        ),
+        localizations: [{ locale: "en-US", displayName: "Item One", description: "Desc" }],
+      }),
+    ];
+    const unfiltered = buildExportPlan(withLoc);
+    const filtered = buildExportPlan(withLoc, ["US"]);
+    expect(filtered.localizationGroupCount).toBe(unfiltered.localizationGroupCount);
+    expect(filtered.rows[0].productId).toBe(unfiltered.rows[0].productId);
+    expect(filtered.rows[0].skuName).toBe(unfiltered.rows[0].skuName);
+    expect(filtered.rows[0].status).toBe(unfiltered.rows[0].status);
+    expect(filtered.rows[0].baseTerritory).toBe(unfiltered.rows[0].baseTerritory);
+    expect(filtered.rows[0].localizations).toEqual(unfiltered.rows[0].localizations);
+    expect(filtered.rows[0].prices).toEqual(unfiltered.rows[0].prices);
+  });
+});
+
 describe("buildExportPlan — localization groups", () => {
   it("group count is the max localization count across all rows", () => {
     const plan = buildExportPlan([

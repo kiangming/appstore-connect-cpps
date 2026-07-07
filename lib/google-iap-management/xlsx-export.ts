@@ -92,8 +92,21 @@ function toExportRow(product: ToolInAppProduct): ExportRow {
   };
 }
 
-/** Two-pass column determination + per-row extraction. Pure — no I/O. */
-export function buildExportPlan(products: ToolInAppProduct[]): ExportPlan {
+/**
+ * Two-pass column determination + per-row extraction. Pure — no I/O.
+ *
+ * `selectedTerritories` (Export options dialog, shared with the Apple
+ * export): when provided and non-empty, the territory PRICE columns are
+ * narrowed to (union of territories-with-a-price) ∩ (selected codes).
+ * Absent or empty means "no filter" — every priced territory, i.e.
+ * today's unfiltered behavior. Fixed columns and localization groups are
+ * per-item/per-locale, not per-territory, and are never affected by this
+ * parameter.
+ */
+export function buildExportPlan(
+  products: ToolInAppProduct[],
+  selectedTerritories?: readonly string[] | null,
+): ExportPlan {
   const rows = products.map(toExportRow);
 
   const territorySet = new Set<string>();
@@ -106,8 +119,17 @@ export function buildExportPlan(products: ToolInAppProduct[]): ExportPlan {
     );
   }
 
+  const allTerritories = [...territorySet].sort();
+  const selection =
+    selectedTerritories && selectedTerritories.length > 0
+      ? new Set(selectedTerritories)
+      : null;
+  const territories = selection
+    ? allTerritories.filter((t) => selection.has(t))
+    : allTerritories;
+
   return {
-    territories: [...territorySet].sort(),
+    territories,
     localizationGroupCount,
     rows,
   };

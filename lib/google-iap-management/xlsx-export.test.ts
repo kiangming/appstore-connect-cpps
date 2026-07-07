@@ -73,6 +73,66 @@ describe("buildExportPlan — territory columns", () => {
   });
 });
 
+describe("buildExportPlan — territory selection (Export options dialog)", () => {
+  const twoTerritoryProducts = [
+    product({
+      sku: "a",
+      prices: {
+        US: { currency: "USD", priceMicros: "1990000" },
+        VN: { currency: "VND", priceMicros: "149000000000" },
+      },
+    }),
+  ];
+
+  it("no selection (absent) → unchanged: every priced territory", () => {
+    const plan = buildExportPlan(twoTerritoryProducts);
+    expect(plan.territories).toEqual(["US", "VN"]);
+  });
+
+  it("empty selection ([]) is treated as 'no filter' too", () => {
+    const plan = buildExportPlan(twoTerritoryProducts, []);
+    expect(plan.territories).toEqual(["US", "VN"]);
+  });
+
+  it("a subset selection narrows to exactly the intersection", () => {
+    const plan = buildExportPlan(twoTerritoryProducts, ["US"]);
+    expect(plan.territories).toEqual(["US"]);
+  });
+
+  it("a selected territory no item actually has a price for → no column, no crash", () => {
+    const plan = buildExportPlan(twoTerritoryProducts, ["US", "DE"]);
+    expect(plan.territories).toEqual(["US"]);
+  });
+
+  it("selecting every priced territory explicitly is equivalent to no filter", () => {
+    const plan = buildExportPlan(twoTerritoryProducts, ["US", "VN"]);
+    expect(plan.territories).toEqual(["US", "VN"]);
+  });
+
+  it("does not affect localization groups or fixed columns", () => {
+    const withLoc = [
+      product({
+        sku: "a",
+        prices: {
+          US: { currency: "USD", priceMicros: "1990000" },
+          VN: { currency: "VND", priceMicros: "149000000000" },
+        },
+        listings: { "en-US": { title: "Item A", description: "Desc" } },
+      }),
+    ];
+    const unfiltered = buildExportPlan(withLoc);
+    const filtered = buildExportPlan(withLoc, ["US"]);
+    expect(filtered.localizationGroupCount).toBe(unfiltered.localizationGroupCount);
+    expect(filtered.rows[0].sku).toBe(unfiltered.rows[0].sku);
+    expect(filtered.rows[0].productName).toBe(unfiltered.rows[0].productName);
+    expect(filtered.rows[0].status).toBe(unfiltered.rows[0].status);
+    expect(filtered.rows[0].localizations).toEqual(unfiltered.rows[0].localizations);
+    // Row-level prices are untouched — only `plan.territories` (which
+    // drives the workbook's columns) is narrowed.
+    expect(filtered.rows[0].prices).toEqual(unfiltered.rows[0].prices);
+  });
+});
+
 describe("buildExportPlan — localization groups", () => {
   it("group count is the max described-locale count across all rows", () => {
     const plan = buildExportPlan([
