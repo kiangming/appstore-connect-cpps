@@ -7,12 +7,15 @@ process.env.ENCRYPTION_KEY = "a".repeat(64);
 const fromMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/iap-management/db", () => ({ iapDb: () => ({ from: fromMock }) }));
 
+const log = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/logger", () => ({ log }));
+
 import {
   getActiveHubTrackingCredentials,
+  getHubTrackingGate,
   getHubTrackingConfigPublic,
   saveHubTrackingConfig,
   resolveTokenForValidation,
-  invalidateHubTrackingCache,
 } from "./config";
 import { encryptPrivateKey } from "@/lib/asc-crypto";
 
@@ -56,10 +59,10 @@ function makeSelectChain() {
 }
 
 beforeEach(() => {
-  invalidateHubTrackingCache();
   selectResult = { data: null, error: null };
   upsertCalls = [];
   upsertResult = { error: null };
+  log.mockReset();
   fromMock.mockReset();
   fromMock.mockImplementation((table: string) => {
     expect(table).toBe("hub_tracking_config");
@@ -70,6 +73,69 @@ beforeEach(() => {
         return Promise.resolve(upsertResult);
       },
     };
+  });
+});
+
+describe("no in-memory cache — every read hits the DB", () => {
+  // Root-cause fix for two Manager-reported bugs: a stale cached read (up
+  // to 5 min, or on a different Railway process/replica than the one that
+  // wrote) made a blank-token save wrongly see "no existing row" (Part 2)
+  // and made the `enabled` toggle appear to silently revert across
+  // sessions (Part 3). This table is read only a handful of times per
+  // bulk-import batch — nowhere near hot enough to justify the staleness
+  // risk a cache introduces.
+  it("getActiveHubTrackingCredentials re-queries on every call, never caches", async () => {
+    selectResult = { data: makeRow(), error: null };
+    await getActiveHubTrackingCredentials();
+    await getActiveHubTrackingCredentials();
+    expect(fromMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a save is immediately visible to the very next read — no TTL window", async () => {
+    selectResult = { data: null, error: null };
+    await expect(getHubTrackingConfigPublic()).resolves.toMatchObject({ configured: false });
+
+    selectResult = { data: makeRow(), error: null };
+    await expect(getHubTrackingConfigPublic()).resolves.toMatchObject({ configured: true });
+  });
+});
+
+describe("getHubTrackingGate — GATE logging source of truth", () => {
+  it("reports configured=false enabled=false credentials=null when no row exists", async () => {
+    await expect(getHubTrackingGate()).resolves.toEqual({
+      configured: false,
+      enabled: false,
+      credentials: null,
+    });
+  });
+
+  it("reports configured=true enabled=false credentials=null when the toggle is off", async () => {
+    selectResult = { data: makeRow({ enabled: false }), error: null };
+    await expect(getHubTrackingGate()).resolves.toEqual({
+      configured: true,
+      enabled: false,
+      credentials: null,
+    });
+  });
+
+  it("reports full credentials when configured and enabled", async () => {
+    selectResult = {
+      data: makeRow({ workflow_id: "wf-x", token_enc: encryptPrivateKey("shh") }),
+      error: null,
+    };
+    await expect(getHubTrackingGate()).resolves.toEqual({
+      configured: true,
+      enabled: true,
+      credentials: { workflowId: "wf-x", token: "shh" },
+    });
+  });
+
+  it("returns credentials:null (not a throw) when the token fails to decrypt", async () => {
+    selectResult = { data: makeRow({ token_enc: "not-valid-base64-ciphertext" }), error: null };
+    const gate = await getHubTrackingGate();
+    expect(gate.configured).toBe(true);
+    expect(gate.enabled).toBe(true);
+    expect(gate.credentials).toBeNull();
   });
 });
 
@@ -92,13 +158,6 @@ describe("getActiveHubTrackingCredentials — the one no-op gate", () => {
       workflowId: "wf-x",
       token: "shh",
     });
-  });
-
-  it("caches the row — a second call within TTL doesn't re-query", async () => {
-    selectResult = { data: makeRow(), error: null };
-    await getActiveHubTrackingCredentials();
-    await getActiveHubTrackingCredentials();
-    expect(fromMock).toHaveBeenCalledTimes(1);
   });
 
   it("throws when the underlying query errors", async () => {
@@ -133,14 +192,14 @@ describe("getHubTrackingConfigPublic — never returns the token", () => {
 });
 
 describe("saveHubTrackingConfig", () => {
-  it("throws when configuring for the first time without a token", async () => {
+  it("throws when configuring for the first time without a token (blank + NO existing token)", async () => {
     await expect(
       saveHubTrackingConfig({ workflowId: "wf", enabled: true, updatedBy: "a@b.com" }),
     ).rejects.toThrow(/Token is required/);
     expect(upsertCalls).toHaveLength(0);
   });
 
-  it("includes an encrypted token_enc on first-time save", async () => {
+  it("includes an encrypted token_enc on first-time save (token value given)", async () => {
     await saveHubTrackingConfig({
       workflowId: "wf",
       token: "secret",
@@ -155,7 +214,7 @@ describe("saveHubTrackingConfig", () => {
     expect(payload.token_enc).not.toBe("secret");
   });
 
-  it("keeps the existing token when omitted on update — no token_enc key in the payload", async () => {
+  it("Part 2 fix — blank token + EXISTING token saved: succeeds, token_enc untouched, other fields updated", async () => {
     selectResult = { data: makeRow(), error: null };
     await saveHubTrackingConfig({
       workflowId: "wf-renamed",
@@ -179,17 +238,45 @@ describe("saveHubTrackingConfig", () => {
     expect(upsertCalls[0].payload).toHaveProperty("token_enc");
   });
 
-  it("invalidates the cache so a subsequent read reflects the save", async () => {
-    await getHubTrackingConfigPublic(); // populate cache with "no row"
-    selectResult = { data: makeRow(), error: null };
+  it("Part 3 fix — enabled persists across a blank-token re-save (was silently reverting)", async () => {
+    // First save: token + enabled=true, as if configuring for the first time.
     await saveHubTrackingConfig({
       workflowId: "wf",
       token: "secret",
       enabled: true,
       updatedBy: "a@b.com",
     });
-    const result = await getHubTrackingConfigPublic();
-    expect(result.configured).toBe(true);
+    const firstPayload = upsertCalls[0].payload;
+    expect(firstPayload.enabled).toBe(true);
+
+    // Simulate the DB now holding that row, as a real DB would after the upsert.
+    selectResult = {
+      data: {
+        id: "default",
+        workflow_id: "wf",
+        token_enc: firstPayload.token_enc as string,
+        enabled: true,
+        updated_at: "2026-07-01T00:00:00.000Z",
+      },
+      error: null,
+    };
+
+    // GET reflects the persisted true — no staleness.
+    await expect(getHubTrackingConfigPublic()).resolves.toMatchObject({
+      enabled: true,
+      configured: true,
+    });
+
+    // Re-save with a BLANK token (the exact reported bug scenario) — enabled
+    // must stay true, not silently reset to false.
+    await saveHubTrackingConfig({
+      workflowId: "wf",
+      enabled: true,
+      updatedBy: "a@b.com",
+    });
+    const secondPayload = upsertCalls[1].payload;
+    expect(secondPayload.enabled).toBe(true);
+    expect(secondPayload).not.toHaveProperty("token_enc");
   });
 
   it("surfaces the Supabase error message on upsert failure", async () => {
@@ -219,5 +306,46 @@ describe("resolveTokenForValidation — Settings save-time validation input", ()
 
   it("returns null when omitted and nothing is stored", async () => {
     await expect(resolveTokenForValidation({})).resolves.toBeNull();
+  });
+});
+
+describe("Railway logging — [hub-tracking] config: found/enabled, token never logged", () => {
+  function loggedMessages(): string[] {
+    return log.mock.calls.map((c) => String(c[1]));
+  }
+
+  it("logs found=false enabled=false when no row exists", async () => {
+    await getHubTrackingConfigPublic();
+    expect(loggedMessages()).toContain("[hub-tracking] config: found=false enabled=false");
+  });
+
+  it("logs found=true enabled=true when configured and enabled", async () => {
+    selectResult = { data: makeRow({ enabled: true }), error: null };
+    await getHubTrackingConfigPublic();
+    expect(loggedMessages()).toContain("[hub-tracking] config: found=true enabled=true");
+  });
+
+  it("logs found=true enabled=false when configured but disabled", async () => {
+    selectResult = { data: makeRow({ enabled: false }), error: null };
+    await getHubTrackingConfigPublic();
+    expect(loggedMessages()).toContain("[hub-tracking] config: found=true enabled=false");
+  });
+
+  it("logs a decrypt error without the token/ciphertext value", async () => {
+    selectResult = { data: makeRow({ token_enc: "not-valid-base64-ciphertext" }), error: null };
+    await getHubTrackingGate();
+    const messages = loggedMessages();
+    expect(messages.some((m) => m.startsWith("[hub-tracking] config: decrypt error (no token logged):"))).toBe(
+      true,
+    );
+    expect(messages.join("\n")).not.toContain("not-valid-base64-ciphertext");
+  });
+
+  it("logs a DB read error without ever including token_enc", async () => {
+    selectResult = { data: null, error: { message: "connection refused" } };
+    await expect(getHubTrackingConfigPublic()).rejects.toThrow();
+    expect(
+      loggedMessages().some((m) => m.startsWith("[hub-tracking] config: read error (no token logged):")),
+    ).toBe(true);
   });
 });

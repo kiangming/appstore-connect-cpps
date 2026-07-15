@@ -90,7 +90,7 @@ export async function POST(req: Request) {
   } catch (err) {
     await log(
       "iap-hub-tracking",
-      `save-time validation errored (non-fatal): ${err instanceof Error ? err.message : err}`,
+      `[hub-tracking] validate: save-time credential check errored (non-fatal): ${err instanceof Error ? err.message : err}`,
       "WARN",
     );
     validation = { ok: false, reason: "network-error" };

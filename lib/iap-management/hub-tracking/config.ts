@@ -3,20 +3,34 @@
  *
  * Reads/writes the singleton VNGGames Hub tracking config row
  * (iap_mgmt.hub_tracking_config): workflow_id + encrypted ingest token +
- * the Settings `enabled` toggle. Mirrors lib/asc-account-repository.ts —
- * in-memory 5-minute TTL cache, encrypted-at-rest secret via the SAME
+ * the Settings `enabled` toggle. Encrypted-at-rest secret via the SAME
  * AES-256-GCM helpers ASC accounts use (no new crypto).
  *
- * `getActiveHubTrackingCredentials` is the ONE no-op gate every Hub call
- * goes through: returns null when no row exists OR `enabled` is false, so
- * callers never need a separate "is tracking on" check.
+ * NO in-memory cache — deliberately, unlike lib/asc-account-repository.ts.
+ * An earlier version cached reads for 5 minutes; that cache was the root
+ * cause of two bugs (Manager report, 2026-07-xx UAT):
+ *   1. Saving with the token field blank ("keep existing") intermittently
+ *      failed with "Token is required" — `saveHubTrackingConfig`'s
+ *      existing-row check read a STALE cached `null` from before the row
+ *      was ever created/visible to this read, even though the row existed
+ *      in the DB.
+ *   2. The `enabled` Settings toggle appeared to "silently revert" across
+ *      sessions — a GET could read a stale cached row from before a save
+ *      landed (a Railway rolling deploy briefly runs two processes, each
+ *      with its own independent in-memory cache; a save on one process
+ *      never invalidates the other's cache within the 5-minute TTL).
+ * This table is read a handful of times per bulk-import batch (once on
+ * the wizard's step 1→2 transition, once on execute-route finalize/cancel)
+ * — nowhere near a hot path — so the cache bought negligible performance
+ * benefit against a real correctness risk. Every read now hits the DB.
  */
 
 import { iapDb } from "@/lib/iap-management/db";
 import { encryptPrivateKey, decryptPrivateKey } from "@/lib/asc-crypto";
+import { log } from "@/lib/logger";
 
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const CONFIG_ID = "default";
+const LOG_FEATURE = "iap-hub-tracking";
 
 interface HubTrackingConfigRow {
   id: string;
@@ -26,25 +40,7 @@ interface HubTrackingConfigRow {
   updated_at: string;
 }
 
-let _cache: { row: HubTrackingConfigRow | null; expiresAt: number } | null = null;
-
-function getCached(): { row: HubTrackingConfigRow | null } | null {
-  if (_cache && Date.now() < _cache.expiresAt) return { row: _cache.row };
-  return null;
-}
-
-function setCache(row: HubTrackingConfigRow | null): void {
-  _cache = { row, expiresAt: Date.now() + CACHE_TTL_MS };
-}
-
-export function invalidateHubTrackingCache(): void {
-  _cache = null;
-}
-
 async function fetchRow(): Promise<HubTrackingConfigRow | null> {
-  const cached = getCached();
-  if (cached) return cached.row;
-
   const { data, error } = await iapDb()
     .from("hub_tracking_config")
     .select("id, workflow_id, token_enc, enabled, updated_at")
@@ -53,10 +49,12 @@ async function fetchRow(): Promise<HubTrackingConfigRow | null> {
     .maybeSingle();
 
   if (error) {
+    // Never log token_enc — this destructures only the fields we log below.
+    await log(LOG_FEATURE, `[hub-tracking] config: read error (no token logged): ${error.message}`, "ERROR");
     throw new Error(`Failed to load Hub tracking config: ${error.message}`);
   }
   const row = (data as HubTrackingConfigRow | null) ?? null;
-  setCache(row);
+  await log(LOG_FEATURE, `[hub-tracking] config: found=${Boolean(row)} enabled=${Boolean(row?.enabled)}`);
   return row;
 }
 
@@ -65,15 +63,53 @@ export interface HubTrackingCredentials {
   token: string;
 }
 
+export interface HubTrackingGate {
+  /** A row exists in the config table (a workflow_id/token has been saved). */
+  configured: boolean;
+  /** The Settings toggle's persisted value. */
+  enabled: boolean;
+  /** Non-null only when configured AND enabled AND the token decrypted OK —
+   *  the single no-op gate every Hub call goes through. */
+  credentials: HubTrackingCredentials | null;
+}
+
+/**
+ * Resolves configured/enabled/credentials in one DB read — used by the
+ * start/finalize GATE logging so both booleans are available even when
+ * `credentials` collapses them into a single null.
+ */
+export async function getHubTrackingGate(): Promise<HubTrackingGate> {
+  const row = await fetchRow();
+  if (!row) return { configured: false, enabled: false, credentials: null };
+
+  if (!row.enabled) {
+    return { configured: true, enabled: false, credentials: null };
+  }
+
+  try {
+    const token = decryptPrivateKey(row.token_enc);
+    return {
+      configured: true,
+      enabled: true,
+      credentials: { workflowId: row.workflow_id, token },
+    };
+  } catch (err) {
+    await log(
+      LOG_FEATURE,
+      `[hub-tracking] config: decrypt error (no token logged): ${err instanceof Error ? err.message : err}`,
+      "ERROR",
+    );
+    return { configured: true, enabled: true, credentials: null };
+  }
+}
+
 /**
  * The single no-op gate: null means "no Hub call should be attempted"
- * (either unconfigured or the Settings toggle is off). Callers never need
- * a separate enabled check.
+ * (unconfigured, disabled, or the token failed to decrypt). Callers never
+ * need a separate enabled check.
  */
 export async function getActiveHubTrackingCredentials(): Promise<HubTrackingCredentials | null> {
-  const row = await fetchRow();
-  if (!row || !row.enabled) return null;
-  return { workflowId: row.workflow_id, token: decryptPrivateKey(row.token_enc) };
+  return (await getHubTrackingGate()).credentials;
 }
 
 export interface HubTrackingConfigPublic {
@@ -128,7 +164,6 @@ export async function saveHubTrackingConfig(input: SaveHubTrackingConfigInput): 
     .upsert(updates, { onConflict: "id" });
 
   if (error) throw new Error(`Failed to save Hub tracking config: ${error.message}`);
-  invalidateHubTrackingCache();
 }
 
 /**
@@ -139,5 +174,15 @@ export async function saveHubTrackingConfig(input: SaveHubTrackingConfigInput): 
 export async function resolveTokenForValidation(input: { token?: string }): Promise<string | null> {
   if (input.token) return input.token;
   const row = await fetchRow();
-  return row ? decryptPrivateKey(row.token_enc) : null;
+  if (!row) return null;
+  try {
+    return decryptPrivateKey(row.token_enc);
+  } catch (err) {
+    await log(
+      LOG_FEATURE,
+      `[hub-tracking] config: decrypt error (no token logged): ${err instanceof Error ? err.message : err}`,
+      "ERROR",
+    );
+    throw err;
+  }
 }

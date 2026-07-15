@@ -1,4 +1,8 @@
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+
+const log = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/logger", () => ({ log }));
+
 import {
   hubStartRun,
   hubCloseRun,
@@ -34,6 +38,10 @@ function bodyOf(fetchImpl: ReturnType<typeof vi.fn>, callIndex = 0): unknown {
 }
 
 describe("hub-client", () => {
+  beforeEach(() => {
+    log.mockReset();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -211,6 +219,87 @@ describe("hub-client", () => {
         .mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
       const result = await hubValidateCredentials({ workflowId: "wf", token: "tok" }, 1000, fetchImpl);
       expect(result).toEqual({ ok: true });
+    });
+  });
+
+  describe("Railway logging — [hub-tracking] ATTEMPT/OUTCOME, token never logged", () => {
+    function loggedMessages(): string[] {
+      return log.mock.calls.map((c) => String(c[1]));
+    }
+
+    it("hubStartRun success logs ATTEMPT then SUCCESS with workflow_id + run_id", async () => {
+      const fetchImpl = vi.fn(async () => jsonResponse(201, { id: "run-abc" }));
+      await hubStartRun({ workflowId: "wf-1", token: "super-secret-token", actor: "a@b.com" }, 1000, fetchImpl);
+
+      const messages = loggedMessages();
+      expect(messages).toEqual([
+        "[hub-tracking] start: POST /runs/start workflow_id=wf-1 → ATTEMPT",
+        expect.stringMatching(/^\[hub-tracking] start: POST \/runs\/start workflow_id=wf-1 → SUCCESS run_id=run-abc \(\d+ms\)$/),
+      ]);
+      expect(messages.join("\n")).not.toContain("super-secret-token");
+    });
+
+    it("hubStartRun timeout logs ATTEMPT then TIMEOUT (3s)", async () => {
+      const fetchImpl = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const e = new Error("aborted");
+            e.name = "AbortError";
+            reject(e);
+          });
+        });
+      });
+      await hubStartRun({ workflowId: "wf-2", token: "another-secret" }, 15, fetchImpl);
+
+      const messages = loggedMessages();
+      expect(messages[0]).toBe("[hub-tracking] start: POST /runs/start workflow_id=wf-2 → ATTEMPT");
+      expect(messages[1]).toMatch(/→ TIMEOUT \(3s\) \(\d+ms\)$/);
+      expect(messages.join("\n")).not.toContain("another-secret");
+    });
+
+    it("hubStartRun HTTP rejection logs ATTEMPT then FAILED <status>", async () => {
+      const fetchImpl = vi.fn(async () => jsonResponse(422, { error: "unregistered" }));
+      await hubStartRun({ workflowId: "wf-3", token: "tok-3" }, 1000, fetchImpl);
+
+      const messages = loggedMessages();
+      expect(messages[1]).toMatch(/→ FAILED 422 \(\d+ms\)$/);
+    });
+
+    it("hubCloseRun success logs ATTEMPT then SUCCESS with the run's status", async () => {
+      const fetchImpl = vi.fn(async () => jsonResponse(200, {}));
+      await hubCloseRun({ token: "close-secret", runId: "run-9", status: "SUCCESS" }, 1000, fetchImpl);
+
+      const messages = loggedMessages();
+      expect(messages).toEqual([
+        "[hub-tracking] finalize: PATCH /runs/run-9 status=SUCCESS → ATTEMPT",
+        expect.stringMatching(/^\[hub-tracking] finalize: PATCH \/runs\/run-9 status=SUCCESS → SUCCESS \(\d+ms\)$/),
+      ]);
+      expect(messages.join("\n")).not.toContain("close-secret");
+    });
+
+    it("hubCloseRun for a CANCELLED close logs status=CANCELLED (distinguishes cancel from a real completion)", async () => {
+      const fetchImpl = vi.fn(async () => jsonResponse(200, {}));
+      await hubCloseRun({ token: "tok", runId: "run-10", status: "CANCELLED" }, 1000, fetchImpl);
+
+      const messages = loggedMessages();
+      expect(messages.some((m) => m.includes("status=CANCELLED"))).toBe(true);
+    });
+
+    it("the token never appears in ANY log line across start/close/validate", async () => {
+      const secretToken = "sekrit-token-xyz-999";
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(jsonResponse(201, { id: "run-x" }))
+        .mockResolvedValueOnce(jsonResponse(200, {}))
+        .mockResolvedValueOnce(jsonResponse(201, { id: "run-y" }))
+        .mockResolvedValueOnce(jsonResponse(200, {}));
+
+      await hubStartRun({ workflowId: "wf", token: secretToken }, 1000, fetchImpl);
+      await hubCloseRun({ token: secretToken, runId: "run-x", status: "SUCCESS" }, 1000, fetchImpl);
+      await hubValidateCredentials({ workflowId: "wf", token: secretToken }, 1000, fetchImpl);
+
+      const allMessages = loggedMessages().join("\n");
+      expect(allMessages).not.toContain(secretToken);
     });
   });
 });

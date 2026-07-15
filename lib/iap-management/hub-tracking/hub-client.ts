@@ -65,14 +65,31 @@ async function hubFetch(
   }
 }
 
+const LOG_FEATURE = "iap-hub-tracking";
+
+/** Formats a failed HubFetchResult into the ATTEMPT/OUTCOME log vocabulary
+ *  the Manager asked for: TIMEOUT(3s) | FAILED <status> | ERROR <msg>. */
+function describeFailure(res: Extract<HubFetchResult, { ok: false }>): string {
+  if (res.kind === "timeout") return `TIMEOUT (${HUB_TIMEOUT_MS / 1000}s)`;
+  if (res.kind === "http") return `FAILED ${res.status}`;
+  return `ERROR ${res.detail}`;
+}
+
 /** POST /runs/start — best-effort. Never throws; null means "no run opened"
  *  (config absent/disabled is filtered out before this is called; here it's
- *  timeout/network/http failure). */
+ *  timeout/network/http failure). Logs ATTEMPT before the call and the
+ *  OUTCOME after — a hung call shows as ATTEMPT with no OUTCOME in Railway
+ *  logs, distinguishing it from a fast no-op. Never logs the token. */
 export async function hubStartRun(
   args: { workflowId: string; token: string; actor?: string },
   timeoutMs?: number,
   fetchImpl?: typeof fetch,
 ): Promise<string | null> {
+  await log(
+    LOG_FEATURE,
+    `[hub-tracking] start: POST /runs/start workflow_id=${args.workflowId} → ATTEMPT`,
+  );
+  const startedAt = Date.now();
   const res = await hubFetch(
     "/runs/start",
     {
@@ -83,28 +100,45 @@ export async function hubStartRun(
     timeoutMs,
     fetchImpl,
   );
+  const elapsedMs = Date.now() - startedAt;
   if (!res.ok) {
     await log(
-      "iap-hub-tracking",
-      `start failed (${res.kind}${res.status ? ` ${res.status}` : ""}): ${res.detail}`,
+      LOG_FEATURE,
+      `[hub-tracking] start: POST /runs/start workflow_id=${args.workflowId} → ${describeFailure(res)} (${elapsedMs}ms)`,
       "WARN",
     );
     return null;
   }
   const runId = (res.json as { id?: unknown } | null)?.id;
   if (typeof runId !== "string" || runId.length === 0) {
-    await log("iap-hub-tracking", "start response missing id", "WARN");
+    await log(
+      LOG_FEATURE,
+      `[hub-tracking] start: POST /runs/start workflow_id=${args.workflowId} → ERROR response missing id (${elapsedMs}ms)`,
+      "WARN",
+    );
     return null;
   }
+  await log(
+    LOG_FEATURE,
+    `[hub-tracking] start: POST /runs/start workflow_id=${args.workflowId} → SUCCESS run_id=${runId} (${elapsedMs}ms)`,
+  );
   return runId;
 }
 
-/** PATCH /runs/:id — best-effort. Never throws. */
+/** PATCH /runs/:id — best-effort. Never throws. Used for both the execute
+ *  route's terminal close and the explicit/beforeunload cancel path (the
+ *  `status` field in the log line distinguishes them). Logs ATTEMPT before
+ *  the call and the OUTCOME after; never logs the token. */
 export async function hubCloseRun(
   args: { token: string; runId: string; status: HubTerminalStatus; errorMessage?: string },
   timeoutMs?: number,
   fetchImpl?: typeof fetch,
 ): Promise<void> {
+  await log(
+    LOG_FEATURE,
+    `[hub-tracking] finalize: PATCH /runs/${args.runId} status=${args.status} → ATTEMPT`,
+  );
+  const startedAt = Date.now();
   const res = await hubFetch(
     `/runs/${args.runId}`,
     {
@@ -118,13 +152,19 @@ export async function hubCloseRun(
     timeoutMs,
     fetchImpl,
   );
+  const elapsedMs = Date.now() - startedAt;
   if (!res.ok) {
     await log(
-      "iap-hub-tracking",
-      `close failed (${res.kind}${res.status ? ` ${res.status}` : ""}) run=${args.runId}: ${res.detail}`,
+      LOG_FEATURE,
+      `[hub-tracking] finalize: PATCH /runs/${args.runId} status=${args.status} → ${describeFailure(res)} (${elapsedMs}ms)`,
       "WARN",
     );
+    return;
   }
+  await log(
+    LOG_FEATURE,
+    `[hub-tracking] finalize: PATCH /runs/${args.runId} status=${args.status} → SUCCESS (${elapsedMs}ms)`,
+  );
 }
 
 export type HubValidationResult =
