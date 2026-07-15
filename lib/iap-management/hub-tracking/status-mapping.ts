@@ -1,14 +1,24 @@
 /**
  * Pure terminal-status mapping for a bulk-import batch's Hub tracking close
- * call. Extracted from the execute route so the mapping (incl. the
- * total===0 edge case) is unit-testable without mocking the entire Apple
- * orchestration pipeline.
+ * call. Extracted from the execute route so the mapping (incl. edge cases)
+ * is unit-testable without mocking the entire Apple orchestration pipeline.
  *
  * A submit-deferred/failed row still counts as `succeeded` — create
  * succeeded = import succeeded; submit is a separate concern (IAP.q.2).
- * A batch where every row was SKIPPED (no successes, no failures) maps to
- * FAILED per the locked spec (succeeded === 0 && total > 0) — a known
- * nuance of the literal formula, not an oversight.
+ *
+ * Driven by "did anything fail", not "did everything succeed": a batch
+ * with zero failures is SUCCESS even if some/all rows were SKIPPED
+ * (conflict-skip isn't a failure). Only a batch with failures and zero
+ * successes is FAILED; any mix of successes and failures is PARTIAL.
+ *   - failed === 0                    → SUCCESS (incl. all-skipped, or a
+ *                                        skipped+succeeded mix with no
+ *                                        failures, or total === 0)
+ *   - failed > 0 && succeeded === 0   → FAILED
+ *   - failed > 0 && succeeded > 0     → PARTIAL
+ *
+ * Early-return route exits (before any row is processed — bad form body,
+ * missing excel, Apple sync failure, etc.) are NOT computed here; the
+ * route sets FAILED with its own specific reason for those directly.
  */
 import type { HubTerminalStatus } from "./hub-client";
 
@@ -23,10 +33,7 @@ export function computeBulkImportTerminalStatus(counts: {
   failed: number;
 }): BulkImportTerminalStatus {
   const { total, succeeded, failed } = counts;
-  if (total === 0) {
-    return { status: "FAILED", errorMessage: "no rows to import" };
-  }
-  if (succeeded === total) {
+  if (failed === 0) {
     return { status: "SUCCESS" };
   }
   if (succeeded === 0) {

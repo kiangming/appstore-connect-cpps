@@ -16,6 +16,18 @@ describe("computeBulkImportTerminalStatus", () => {
     });
   });
 
+  it("maps a batch that was entirely SKIPPED (no successes, no failures) to SUCCESS — conflict-skip isn't a failure", () => {
+    expect(computeBulkImportTerminalStatus({ total: 3, succeeded: 0, failed: 0 })).toEqual({
+      status: "SUCCESS",
+    });
+  });
+
+  it("maps a mix of succeeded + skipped rows with zero failures to SUCCESS", () => {
+    expect(computeBulkImportTerminalStatus({ total: 5, succeeded: 3, failed: 0 })).toEqual({
+      status: "SUCCESS",
+    });
+  });
+
   it("maps all rows failing to FAILED with a count-based reason", () => {
     expect(computeBulkImportTerminalStatus({ total: 4, succeeded: 0, failed: 4 })).toEqual({
       status: "FAILED",
@@ -23,31 +35,41 @@ describe("computeBulkImportTerminalStatus", () => {
     });
   });
 
-  it("maps a mixed batch to PARTIAL", () => {
+  it("maps some-failed-none-succeeded (remainder skipped) to FAILED", () => {
+    expect(computeBulkImportTerminalStatus({ total: 5, succeeded: 0, failed: 2 })).toEqual({
+      status: "FAILED",
+      errorMessage: "2/5 rows failed",
+    });
+  });
+
+  it("maps a mix of succeeded + failed rows to PARTIAL", () => {
     expect(computeBulkImportTerminalStatus({ total: 10, succeeded: 6, failed: 4 })).toEqual({
       status: "PARTIAL",
     });
   });
 
-  it("maps an empty batch (total===0) to FAILED — the run already started at step 1", () => {
-    expect(computeBulkImportTerminalStatus({ total: 0, succeeded: 0, failed: 0 })).toEqual({
-      status: "FAILED",
-      errorMessage: "no rows to import",
+  it("maps succeeded + failed + skipped all present to PARTIAL (skipped doesn't change the verdict)", () => {
+    expect(computeBulkImportTerminalStatus({ total: 10, succeeded: 3, failed: 2 })).toEqual({
+      status: "PARTIAL",
     });
   });
 
-  it("maps a batch that was entirely SKIPPED (no successes, no failures) to FAILED per the locked formula", () => {
-    // Known nuance: skipped rows aren't "succeeded", so succeeded===0 here
-    // even though nothing technically errored either.
-    expect(computeBulkImportTerminalStatus({ total: 3, succeeded: 0, failed: 0 })).toEqual({
-      status: "FAILED",
-      errorMessage: "0/3 rows failed",
+  it("maps an empty batch (total===0) to SUCCESS — nothing failed", () => {
+    expect(computeBulkImportTerminalStatus({ total: 0, succeeded: 0, failed: 0 })).toEqual({
+      status: "SUCCESS",
     });
   });
 
   it("maps succeeded=1 of total=1 (single-row batch) to SUCCESS, not PARTIAL", () => {
     expect(computeBulkImportTerminalStatus({ total: 1, succeeded: 1, failed: 0 })).toEqual({
       status: "SUCCESS",
+    });
+  });
+
+  it("maps a single failed row (total=1) to FAILED", () => {
+    expect(computeBulkImportTerminalStatus({ total: 1, succeeded: 0, failed: 1 })).toEqual({
+      status: "FAILED",
+      errorMessage: "1/1 rows failed",
     });
   });
 });
