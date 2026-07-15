@@ -117,6 +117,13 @@ interface ExecuteResult {
      *  territories DID apply; these fell back to Apple auto-equalization). */
     pricing_missing?: Array<{ territory_code: string; customer_price: number }>;
     submitted?: boolean;
+    /** IAP.q.2 — set whenever submit was attempted. "deferred" means the
+     *  post-screenshot state guard didn't observe READY_TO_SUBMIT (created
+     *  row stays valid, submittable later via Submit Selected); "failed"
+     *  means Apple rejected the submit call itself after the guard passed. */
+    submit_outcome?: "submitted" | "deferred" | "failed";
+    submit_deferred_state?: string;
+    submit_error?: string;
     /** Hotfix 26 — per-row 429 telemetry attached by the route. Absent
      *  on rows that never touched Apple (SKIP / validation ERROR). */
     rate_limit?: RateLimitCounters;
@@ -1222,15 +1229,19 @@ function Step4Result({
                   <td className="px-3 py-2 text-[11px] text-slate-500">
                     {r.error
                       ? `${r.stage ?? ""}: ${r.error.slice(0, 120)}`
-                      : r.failed_locales && r.failed_locales.length > 0
-                        ? `Failed locales: ${r.failed_locales.join(", ")}`
-                        : r.screenshot_note === "delete-locked"
-                          ? "Apple wouldn't let us swap the screenshot — IAP is in review or approved. Swap manually in App Store Connect."
-                          : r.screenshot_note === "failed"
-                            ? "Screenshot upload failed — check the file and re-run the import row."
-                            : r.apple_iap_id
-                              ? `apple_iap_id ${r.apple_iap_id.slice(0, 12)}…`
-                              : "—"}
+                      : r.submit_outcome === "deferred"
+                        ? `Created (${r.apple_iap_id?.slice(0, 12)}…) — Apple reports "${r.submit_deferred_state ?? "unknown"}", not yet READY_TO_SUBMIT. Retry via Submit Selected.`
+                        : r.submit_outcome === "failed"
+                          ? `Created (${r.apple_iap_id?.slice(0, 12)}…) — submit failed: ${(r.submit_error ?? "").slice(0, 100)}. Retry via Submit Selected.`
+                          : r.failed_locales && r.failed_locales.length > 0
+                            ? `Failed locales: ${r.failed_locales.join(", ")}`
+                            : r.screenshot_note === "delete-locked"
+                              ? "Apple wouldn't let us swap the screenshot — IAP is in review or approved. Swap manually in App Store Connect."
+                              : r.screenshot_note === "failed"
+                                ? "Screenshot upload failed — check the file and re-run the import row."
+                                : r.apple_iap_id
+                                  ? `apple_iap_id ${r.apple_iap_id.slice(0, 12)}…`
+                                  : "—"}
                   </td>
                 </tr>
               );
@@ -1251,7 +1262,7 @@ function Step4Result({
   );
 }
 
-function OutcomeBadge({
+export function OutcomeBadge({
   result,
 }: {
   result: ExecuteResult["results"][number];
@@ -1285,11 +1296,37 @@ function OutcomeBadge({
       </span>
     );
   }
-  // Create path: bifurcate by submitted state.
+  // Create path: bifurcate by submit outcome.
   if (result.submitted) {
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-emerald-50 text-emerald-700 border-emerald-200">
         Created + submitted
+      </span>
+    );
+  }
+  // IAP.q.2 — submit was attempted but the state guard didn't see
+  // READY_TO_SUBMIT yet (Apple propagation lag). Amber, not red: the item
+  // was created successfully and remains submittable via Submit Selected.
+  if (result.submit_outcome === "deferred") {
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-amber-50 text-amber-700 border-amber-200"
+        title={`Apple wasn't reporting READY_TO_SUBMIT yet (state="${result.submit_deferred_state ?? "unknown"}"). Submit later via Submit Selected once Apple finishes propagating.`}
+      >
+        Created — submit deferred
+      </span>
+    );
+  }
+  // Guard passed (state WAS READY_TO_SUBMIT) but Apple's submit call itself
+  // errored — a genuine failure, distinct from a readiness problem. Still
+  // amber, not red ERROR: the created item is valid and retryable.
+  if (result.submit_outcome === "failed") {
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-orange-50 text-orange-700 border-orange-200"
+        title={result.submit_error ?? "Apple rejected the submission."}
+      >
+        Created — submit failed
       </span>
     );
   }

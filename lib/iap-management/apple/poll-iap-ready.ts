@@ -1,20 +1,23 @@
 /**
- * Poll Apple until a freshly-created IAP is ready for downstream calls
- * (IAP.o.11a, Manager Q-B).
+ * Poll Apple until a freshly-created IAP reaches a required state (IAP.o.11a
+ * Stage 1→2 guard; IAP.q.2 Stage 4→5 guard).
  *
- * Even though Apple returns 200 on the CREATE IAP POST, downstream endpoints
- * (price points, price schedules) occasionally appear to race against the
- * propagation of the new IAP across Apple's services. The IAP.o.11 hotfix
- * cycle introduces this poll as a precautionary gate between Stage 1 (CREATE)
- * and Stage 2 (set price schedule).
+ * Even though Apple returns 200 on the CREATE IAP POST (and on the screenshot
+ * confirm PATCH), downstream endpoints occasionally appear to race against
+ * propagation of that write across Apple's services. Both exported pollers
+ * share the same bounded retry-with-backoff loop below and differ only in
+ * their readiness predicate:
+ *
+ *   • `pollIapReadyForPricing` — Stage 1 (CREATE) → Stage 2 (price schedule).
+ *     Ready as soon as `attributes.state` is populated at all.
+ *   • `pollIapReadyForSubmit` — Stage 4 (screenshot confirm) → Stage 5
+ *     (submit). Ready only once `attributes.state === "READY_TO_SUBMIT"` —
+ *     a populated-but-wrong state (e.g. still `MISSING_METADATA` because the
+ *     screenshot relationship hasn't propagated yet) is NOT ready.
  *
  * Manager Q-B locked: poll, do not blind-delay. The fast-path IAP gets through
  * in ~200ms; the slow-path IAP waits up to 2 s. A blind 2 s wait would
  * uniformly penalize every IAP, including ones Apple has already propagated.
- *
- * Success criterion: a `GET /v2/inAppPurchases/{id}` succeeds and the response
- * has `data.attributes.state` populated. That signals Apple has fully written
- * the IAP record and we can proceed with pricing/screenshot/submit.
  */
 import type { AscCredentials } from "@/lib/asc-jwt";
 import { iapFetch, AppleApiError } from "./fetch";
@@ -45,6 +48,11 @@ export type PollIapReadyResult =
       /** Why we gave up — last error message, or "no state" if we got a 200
        *  response but `attributes.state` was missing/empty for every attempt. */
       reason: string;
+      /** Most recent non-empty state Apple reported, if any attempt got one —
+       *  even though it didn't satisfy the readiness predicate. Lets callers
+       *  (e.g. a submit-time state guard) make a fresh-state decision without
+       *  issuing a second GET right after giving up on this poll. */
+      last_seen_state?: string;
     };
 
 const DEFAULT_INTERVAL_MS = 200;
@@ -54,16 +62,14 @@ const defaultSleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
- * Poll Apple's GET IAP endpoint until the IAP record is queryable with a
- * populated `state` attribute. Returns a typed result so callers can branch
- * on `ready` without re-running checks.
- *
- * Console-logs every attempt with `[poll-iap-ready]` prefix so Railway tail
- * shows poll progression for diagnostic purposes (IAP.o.11 instrumentation
- * requirement).
+ * Shared bounded retry-with-backoff loop. Polls `GET /v2/inAppPurchases/{id}`
+ * until `isReady(state)` is true or attempts are exhausted. Console-logs every
+ * attempt with `[poll-iap-ready]` prefix so Railway tail shows poll
+ * progression for diagnostic purposes (IAP.o.11 instrumentation requirement).
  */
-export async function pollIapReadyForPricing(
+async function pollIapState(
   args: PollIapReadyArgs,
+  isReady: (state: string) => boolean,
 ): Promise<PollIapReadyResult> {
   const intervalMs = args.config?.intervalMs ?? DEFAULT_INTERVAL_MS;
   const maxAttempts = args.config?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
@@ -75,6 +81,7 @@ export async function pollIapReadyForPricing(
 
   const startedAt = Date.now();
   let lastReason = "no state";
+  let lastSeenState: string | undefined;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const res = await iapFetch<AscApiResponse<InAppPurchase>>(
@@ -84,16 +91,24 @@ export async function pollIapReadyForPricing(
       );
       const state = res.data.attributes.state;
       if (typeof state === "string" && state.length > 0) {
-        const totalMs = Date.now() - startedAt;
+        lastSeenState = state;
+        if (isReady(state)) {
+          const totalMs = Date.now() - startedAt;
+          console.log(
+            `[poll-iap-ready] ready apple_iap_id=${args.appleIapId} attempt=${attempt} total=${totalMs}ms state=${state}`,
+          );
+          return { ready: true, attempts: attempt, total_ms: totalMs, final_state: state };
+        }
+        lastReason = `not ready: state=${state}`;
         console.log(
-          `[poll-iap-ready] ready apple_iap_id=${args.appleIapId} attempt=${attempt} total=${totalMs}ms state=${state}`,
+          `[poll-iap-ready] attempt=${attempt} apple_iap_id=${args.appleIapId} state=${state} not-ready`,
         );
-        return { ready: true, attempts: attempt, total_ms: totalMs, final_state: state };
+      } else {
+        lastReason = "no state";
+        console.log(
+          `[poll-iap-ready] attempt=${attempt} apple_iap_id=${args.appleIapId} state-missing`,
+        );
       }
-      lastReason = "no state";
-      console.log(
-        `[poll-iap-ready] attempt=${attempt} apple_iap_id=${args.appleIapId} state-missing`,
-      );
     } catch (err) {
       lastReason =
         err instanceof AppleApiError
@@ -114,5 +129,37 @@ export async function pollIapReadyForPricing(
   console.warn(
     `[poll-iap-ready] timeout apple_iap_id=${args.appleIapId} attempts=${maxAttempts} total=${totalMs}ms reason=${lastReason}`,
   );
-  return { ready: false, attempts: maxAttempts, total_ms: totalMs, reason: lastReason };
+  return {
+    ready: false,
+    attempts: maxAttempts,
+    total_ms: totalMs,
+    reason: lastReason,
+    ...(lastSeenState ? { last_seen_state: lastSeenState } : {}),
+  };
+}
+
+/**
+ * Stage 1 (CREATE) → Stage 2 (price schedule) guard. Ready as soon as a
+ * `GET /v2/inAppPurchases/{id}` succeeds with any populated `state` — that
+ * signals Apple has fully written the IAP record and we can proceed with
+ * pricing/screenshot/submit.
+ */
+export function pollIapReadyForPricing(
+  args: PollIapReadyArgs,
+): Promise<PollIapReadyResult> {
+  return pollIapState(args, (state) => state.length > 0);
+}
+
+/**
+ * IAP.q.2 — Stage 4 (screenshot confirm) → Stage 5 (submit) guard. Apple's
+ * screenshot confirm PATCH returns 200 before the review-screenshot
+ * relationship necessarily shows up on the IAP itself; submitting too early
+ * throws `RELATIONSHIP.REQUIRED` (missing appStoreReviewScreenshot) and/or
+ * `IAP_SUBMISSION_NOT_ALLOWED` (state still MISSING_METADATA). Ready only
+ * once Apple reports `state === "READY_TO_SUBMIT"`.
+ */
+export function pollIapReadyForSubmit(
+  args: PollIapReadyArgs,
+): Promise<PollIapReadyResult> {
+  return pollIapState(args, (state) => state === "READY_TO_SUBMIT");
 }

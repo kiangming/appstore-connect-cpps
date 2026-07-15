@@ -14,7 +14,7 @@ vi.mock("./fetch", async () => {
   };
 });
 
-import { pollIapReadyForPricing } from "./poll-iap-ready";
+import { pollIapReadyForPricing, pollIapReadyForSubmit } from "./poll-iap-ready";
 import { AppleApiError } from "./fetch";
 import type { AscCredentials } from "@/lib/asc-jwt";
 
@@ -138,5 +138,76 @@ describe("pollIapReadyForPricing", () => {
     });
     expect(out.ready).toBe(false);
     if (!out.ready) expect(out.reason).toContain("network unreachable");
+  });
+});
+
+describe("pollIapReadyForSubmit", () => {
+  beforeEach(() => iapFetch.mockReset());
+
+  it("is NOT ready on a populated-but-wrong state (unlike pollIapReadyForPricing)", async () => {
+    iapFetch.mockResolvedValueOnce(iapResponse("MISSING_METADATA"));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const out = await pollIapReadyForSubmit({
+      creds,
+      appleIapId: "iap-1",
+      config: { intervalMs: 10, maxAttempts: 1, sleep },
+    });
+    expect(out.ready).toBe(false);
+    if (!out.ready) {
+      expect(out.reason).toContain("MISSING_METADATA");
+      expect(out.last_seen_state).toBe("MISSING_METADATA");
+    }
+  });
+
+  it("becomes ready once Apple reports READY_TO_SUBMIT", async () => {
+    iapFetch
+      .mockResolvedValueOnce(iapResponse("MISSING_METADATA"))
+      .mockResolvedValueOnce(iapResponse("MISSING_METADATA"))
+      .mockResolvedValueOnce(iapResponse("READY_TO_SUBMIT"));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const out = await pollIapReadyForSubmit({
+      creds,
+      appleIapId: "iap-1",
+      config: { intervalMs: 200, maxAttempts: 10, sleep },
+    });
+    expect(out.ready).toBe(true);
+    if (out.ready) {
+      expect(out.attempts).toBe(3);
+      expect(out.final_state).toBe("READY_TO_SUBMIT");
+    }
+  });
+
+  it("gives up after maxAttempts, surfacing the last non-ready state seen", async () => {
+    iapFetch
+      .mockResolvedValueOnce(iapResponse("MISSING_METADATA"))
+      .mockResolvedValueOnce(iapResponse("MISSING_METADATA"));
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const out = await pollIapReadyForSubmit({
+      creds,
+      appleIapId: "iap-1",
+      config: { intervalMs: 10, maxAttempts: 2, sleep },
+    });
+    expect(out.ready).toBe(false);
+    if (!out.ready) {
+      expect(out.last_seen_state).toBe("MISSING_METADATA");
+      expect(out.reason).toContain("MISSING_METADATA");
+    }
+  });
+
+  it("has no last_seen_state when every attempt errors (e.g. persistent 404)", async () => {
+    const make404 = () =>
+      new AppleApiError(404, "GET", "/v2/inAppPurchases/iap-1", "NOT_FOUND");
+    iapFetch.mockRejectedValueOnce(make404()).mockRejectedValueOnce(make404());
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const out = await pollIapReadyForSubmit({
+      creds,
+      appleIapId: "iap-1",
+      config: { intervalMs: 10, maxAttempts: 2, sleep },
+    });
+    expect(out.ready).toBe(false);
+    if (!out.ready) {
+      expect(out.last_seen_state).toBeUndefined();
+      expect(out.reason).toContain("404");
+    }
   });
 });

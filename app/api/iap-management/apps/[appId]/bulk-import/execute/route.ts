@@ -13,7 +13,15 @@
  *      to Apple price-point id and set the manual price (non-fatal).
  *   4. POST /v1/inAppPurchaseAppStoreReviewScreenshots reserve + PUT chunks
  *      + PATCH confirm (deferral 1 absorbed).
- *   5. (optional, when submit_on_create=true) POST /v1/inAppPurchaseSubmissions.
+ *   5. (optional, when submit_on_create=true) `checkSubmitEligibility`
+ *      (IAP.q.2, lib/iap-management/apple/submit-eligibility.ts) polls for
+ *      READY_TO_SUBMIT — waiting out the propagation lag between screenshot
+ *      confirm and submit — then runs the decision through the SAME Cycle 32
+ *      `partitionByStateGuard` the submit-batch endpoint uses. POST
+ *      /v1/inAppPurchaseSubmissions only fires when Apple's fresh state is
+ *      READY_TO_SUBMIT; otherwise the row is left SUCCESS/created with
+ *      `submit_outcome: "deferred"` so it can be submitted later via Submit
+ *      Selected, never a hard error.
  *   6. Insert iap_mgmt.iaps + iap_localizations + iap_screenshots audit rows.
  *
  * OVERWRITE path: PATCH attributes + DELETE existing localizations + POST new
@@ -54,6 +62,7 @@ import {
   type PricingOutcome,
 } from "@/lib/iap-management/apple/pricing-orchestration";
 import { pollIapReadyForPricing } from "@/lib/iap-management/apple/poll-iap-ready";
+import { checkSubmitEligibility } from "@/lib/iap-management/apple/submit-eligibility";
 import {
   withRetry,
   AppleApiError,
@@ -186,6 +195,20 @@ interface PerIapResult {
   availability_set?: boolean;
   availability_error?: string;
   submitted?: boolean;
+  /** IAP.q.2 — set whenever submit was attempted (screenshot ok + no failed
+   *  locales). "submitted": the state guard passed and Apple accepted the
+   *  submission (mirrors `submitted: true`). "deferred": the post-screenshot
+   *  poll + state guard did not observe READY_TO_SUBMIT — the IAP stays
+   *  CREATE/SUCCESS, submittable later via Submit Selected. "failed": the
+   *  guard passed (fresh state WAS READY_TO_SUBMIT) but Apple's submit call
+   *  itself errored — a genuine submit failure, not a readiness problem. */
+  submit_outcome?: "submitted" | "deferred" | "failed";
+  /** Present when submit_outcome === "deferred" — Apple's freshest observed
+   *  state (e.g. "MISSING_METADATA", or "UNKNOWN" if every poll attempt
+   *  errored) at the moment the state guard blocked submission. */
+  submit_deferred_state?: string;
+  /** Present when submit_outcome === "failed". */
+  submit_error?: string;
   stage?: string;
   error?: string;
   /** Hotfix 26 — per-row Apple 429 telemetry. Absent on rows that never
@@ -766,40 +789,54 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
       },
     });
 
-  // 5. Optional submit
+  // 5. Optional submit (IAP.q.2). The screenshot 3-step completing with a 200
+  // does not mean Apple has propagated the review-screenshot relationship
+  // onto the IAP yet — submitting immediately can 409 with both
+  // RELATIONSHIP.REQUIRED (missing appStoreReviewScreenshot) and
+  // IAP_SUBMISSION_NOT_ALLOWED (state still MISSING_METADATA). Poll for
+  // READY_TO_SUBMIT first (waits out the common-case lag), then run the
+  // eligibility decision through the SAME `partitionByStateGuard` the
+  // submit-batch endpoint uses (Cycle 32 / IAP.q.1) — twin-path convergence,
+  // not a reimplementation. A not-yet-ready IAP is DEFERRED, never a hard
+  // error: the create half above is never rolled back by what happens here,
+  // and a deferred row stays selectable via the ordinary Submit Selected flow.
   let submitted = false;
+  let submitOutcome: PerIapResult["submit_outcome"];
+  let submitDeferredState: string | undefined;
+  let submitError: string | undefined;
   if (submit && screenshotOk && failedLocales.length === 0) {
-    try {
-      await trackedWithRetry(args.rateCounters, () => submitInAppPurchase(creds, appleIapId));
-      submitted = true;
-    } catch (err) {
-      return await persistResult(args, {
-        product_id: item.product_id,
-        disposition: "CREATE",
-        status: "ERROR",
-        stage: "apple-submit",
-        apple_iap_id: appleIapId,
-        failed_locales: failedLocales,
-        screenshot_uploaded: screenshotOk,
-        price_schedule_set: pricing.kind === "set",
-        pricing_outcome: pricing.kind,
-        ...(pricing.kind === "failed-lookup" ||
-        pricing.kind === "failed-set" ||
-        pricing.kind === "failed-exception"
-          ? { pricing_error: pricing.error }
-          : {}),
-        ...(pricing.kind === "partial-template-fail"
-          ? {
-              pricing_missing: pricing.missing_price_points.map((m) => ({
-                territory_code: m.territory_code,
-                customer_price: m.customer_price,
-              })),
-            }
-          : {}),
-        availability_set: availabilitySet,
-        ...(availabilityErr ? { availability_error: availabilityErr } : {}),
-        error: errMsg(err),
-      });
+    console.log(
+      `[bulk-execute] Stage 4→5 submit-readiness poll starting product_id=${item.product_id} apple_iap_id=${appleIapId}`,
+    );
+    const eligibility = await checkSubmitEligibility({ creds, appleIapId });
+    console.log(
+      `[bulk-execute] Stage 4→5 submit-readiness poll result product_id=${item.product_id} ready=${eligibility.poll.ready} attempts=${eligibility.poll.attempts} total_ms=${eligibility.poll.total_ms} state=${eligibility.fresh_state} eligible=${eligibility.eligible}`,
+    );
+
+    if (!eligibility.eligible) {
+      submitOutcome = "deferred";
+      submitDeferredState = eligibility.fresh_state;
+      await log(
+        "iap-bulk-execute",
+        `submit deferred on product=${item.product_id} apple_iap_id=${appleIapId}: state guard reports "${eligibility.fresh_state}"`,
+        "WARN",
+      );
+    } else {
+      try {
+        await trackedWithRetry(args.rateCounters, () =>
+          submitInAppPurchase(creds, appleIapId),
+        );
+        submitted = true;
+        submitOutcome = "submitted";
+      } catch (err) {
+        submitOutcome = "failed";
+        submitError = errMsg(err);
+        await log(
+          "iap-bulk-execute",
+          `submit failed (post-guard) on product=${item.product_id} apple_iap_id=${appleIapId}: ${submitError}`,
+          "WARN",
+        );
+      }
     }
   }
 
@@ -811,6 +848,9 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     failed_locales: failedLocales,
     screenshot_uploaded: screenshotOk,
     submitted,
+    ...(submitOutcome ? { submit_outcome: submitOutcome } : {}),
+    ...(submitDeferredState ? { submit_deferred_state: submitDeferredState } : {}),
+    ...(submitError ? { submit_error: submitError } : {}),
     price_schedule_set: pricing.kind === "set",
     pricing_outcome: pricing.kind,
     ...(pricing.kind === "failed-lookup" ||
@@ -1128,7 +1168,13 @@ async function persistResult(
             reference_name: item.reference_name,
             type: item.type,
             tier_id: args.decision.resolved_tier_id ?? null,
-            state: result.submitted ? "WAITING_FOR_REVIEW" : "READY_TO_SUBMIT",
+            // IAP.q.2: a deferred submit means Apple's fresh state wasn't
+            // READY_TO_SUBMIT — mirror that observed state locally instead of
+            // defaulting to READY_TO_SUBMIT, so the app IAP list / Submit
+            // Selected preflight aren't misled by a stale optimistic cache.
+            state: result.submitted
+              ? "WAITING_FOR_REVIEW"
+              : (result.submit_deferred_state ?? "READY_TO_SUBMIT"),
             synced_at: new Date().toISOString(),
           },
           { onConflict: "app_id,product_id" },
