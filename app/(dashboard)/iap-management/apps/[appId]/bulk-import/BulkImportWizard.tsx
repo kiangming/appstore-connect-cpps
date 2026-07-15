@@ -177,22 +177,38 @@ export function BulkImportWizard({
   // tracking isn't configured/enabled, or the start call failed — both
   // cases are treated identically (no-op) everywhere it's threaded.
   const [hubRunId, setHubRunId] = useState<string | null>(null);
-  // Refs so the beforeunload listener (registered once) always reads the
-  // LATEST step/executing/hubRunId without re-binding the listener on
-  // every render.
-  const hubTrackingRef = useRef({ hubRunId, step, executing });
+  // Ref so the beforeunload listener (registered once) always reads the
+  // LATEST hubRunId without re-binding the listener on every render.
+  const hubRunIdRef = useRef<string | null>(hubRunId);
   useEffect(() => {
-    hubTrackingRef.current = { hubRunId, step, executing };
+    hubRunIdRef.current = hubRunId;
   });
+
+  // PERMANENT flag — set true the instant handleExecute is invoked and NEVER
+  // reset back to false. This is deliberately NOT the same thing as
+  // `executing`: `executing` is transient and flips back to false in
+  // handleExecute's `finally` regardless of outcome — success, failure, OR
+  // a client-side hiccup reading/parsing the response AFTER the server has
+  // already closed the run. Using `executing` (or `step < 4`, which only
+  // ever reaches 4 via the success branch) as the cancel-on-exit guard left
+  // a window open: once the execute request settled for ANY reason,
+  // `executing` went back to `false` while `step` could still be < 4 (any
+  // non-success response, or a response the client failed to parse) — and
+  // a SUBSEQUENT exit/tab-close would then fire a spurious CANCELLED,
+  // overwriting whatever real terminal status (including SUCCESS) the
+  // server's own `finally` had already recorded for that run. Once execute
+  // has been submitted, the server owns the run's terminal status, full
+  // stop — the client must never send cancel for it again.
+  const executeStartedRef = useRef(false);
 
   useEffect(() => {
     function handleBeforeUnload() {
-      const { hubRunId: runId, step: currentStep, executing: isExecuting } =
-        hubTrackingRef.current;
+      const runId = hubRunIdRef.current;
       // Best-effort only — doesn't catch hard crashes/force-quit. Skipped
-      // once execute is in flight or has completed: the execute route's own
-      // `finally` owns closing the run in those cases.
-      if (runId && currentStep < 4 && !isExecuting) {
+      // once execute has ever been invoked: the execute route's own
+      // `finally` owns closing the run from that point on, regardless of
+      // what happens client-side afterward.
+      if (runId && !executeStartedRef.current) {
         const blob = new Blob([JSON.stringify({ run_id: runId })], {
           type: "application/json",
         });
@@ -211,7 +227,22 @@ export function BulkImportWizard({
       fetch("/api/iap-management/hub-tracking/start", { method: "POST" })
         .then((res) => (res.ok ? res.json() : null))
         .then((data: { run_id?: string } | null) => {
-          if (data && typeof data.run_id === "string") setHubRunId(data.run_id);
+          if (!data || typeof data.run_id !== "string") return;
+          if (executeStartedRef.current) {
+            // The user raced through the wizard fast enough that execute
+            // was already submitted (with an empty hub_run_id — this run
+            // never got threaded through) before this slow `start` response
+            // arrived. The server will never close this run; best-effort
+            // close it now instead of adopting it into state, rather than
+            // leaving it RUNNING forever.
+            fetch("/api/iap-management/hub-tracking/cancel", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ run_id: data.run_id }),
+            }).catch(() => {});
+            return;
+          }
+          setHubRunId(data.run_id);
         })
         .catch(() => {
           // Swallowed — tracking is purely additive instrumentation.
@@ -221,9 +252,11 @@ export function BulkImportWizard({
   }
 
   function handleExit() {
-    // Explicit back-out before the import ran — close the run CANCELLED.
-    // No-ops server-side if hubRunId is null.
-    if (hubRunId && step < 4 && !executing) {
+    // Explicit back-out — cancel ONLY if execute was never invoked. Once it
+    // has been, the server's own `finally` owns the terminal status
+    // (SUCCESS/FAILED/PARTIAL) regardless of what happens client-side after
+    // that point. No-ops server-side if hubRunId is null.
+    if (hubRunId && !executeStartedRef.current) {
       fetch("/api/iap-management/hub-tracking/cancel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -282,6 +315,11 @@ export function BulkImportWizard({
 
   async function handleExecute() {
     if (!excelFile || !resolved) return;
+    // Permanent — from this point on the server owns the run's terminal
+    // status; the client must never send cancel for it again (see
+    // executeStartedRef's definition above for why `executing` alone isn't
+    // a sufficient guard).
+    executeStartedRef.current = true;
     setExecuting(true);
     try {
       const fd = new FormData();
