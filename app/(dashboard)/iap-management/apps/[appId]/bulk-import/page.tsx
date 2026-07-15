@@ -1,5 +1,3 @@
-import Link from "next/link";
-import { ChevronLeft } from "lucide-react";
 import { requireIapSession } from "@/lib/iap-management/auth";
 import { getApp } from "@/lib/asc-client";
 import { listAllInAppPurchases } from "@/lib/iap-management/apple/client";
@@ -83,13 +81,6 @@ export default async function BulkImportPage({ params }: PageProps) {
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
-      <Link
-        href={`/iap-management/apps/${params.appId}`}
-        className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-[#0071E3] transition mb-4"
-      >
-        <ChevronLeft className="h-4 w-4" />
-        IAPs · {appName || params.appId}
-      </Link>
       <h1 className="text-2xl font-semibold text-slate-900 mb-1">
         Bulk Import IAPs
       </h1>

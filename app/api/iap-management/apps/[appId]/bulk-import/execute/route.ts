@@ -87,6 +87,11 @@ import {
   type BatchPricePointCatalog,
 } from "@/lib/iap-management/apple/batch-price-point-catalog";
 import { log } from "@/lib/logger";
+import {
+  finalizeHubTracking,
+  type HubTerminalStatus,
+} from "@/lib/iap-management/hub-tracking/tracking";
+import { computeBulkImportTerminalStatus } from "@/lib/iap-management/hub-tracking/status-mapping";
 import type {
   AscCredentials,
 } from "@/lib/asc-jwt";
@@ -229,16 +234,44 @@ interface ExecuteSummary {
   rate_limit_total: RetryCounters & { rows_throttled: number };
 }
 
+/**
+ * Hub-tracking lifecycle state, threaded by reference through `runExecute`.
+ * `runId` is parsed as early as the request body is available (its own
+ * FormData field, independent of `config` JSON parsing); `status`/
+ * `errorMessage` default to FAILED and are only overwritten right before
+ * a legitimate exit, so the outer `POST` wrapper's `finally` closes the Hub
+ * run correctly on every early-return AND on any unforeseen exception.
+ */
+interface HubTrackingState {
+  runId: string | null;
+  status: HubTerminalStatus;
+  errorMessage?: string;
+}
+
 export async function POST(
   req: Request,
   ctx: { params: { appId: string } },
 ) {
+  const tracking: HubTrackingState = { runId: null, status: "FAILED" };
+  try {
+    return await runExecute(req, ctx, tracking);
+  } finally {
+    await finalizeHubTracking(tracking.runId, tracking.status, tracking.errorMessage);
+  }
+}
+
+async function runExecute(
+  req: Request,
+  ctx: { params: { appId: string } },
+  tracking: HubTrackingState,
+): Promise<NextResponse> {
   let session;
   try {
     // Hotfix 10: member-accessible (was requireIapAdmin pre-Hotfix-10).
     session = await requireIapSession();
   } catch (err) {
     if (err instanceof IapUnauthorizedError) {
+      tracking.errorMessage = err.message;
       return NextResponse.json({ error: err.message }, { status: 401 });
     }
     throw err;
@@ -250,11 +283,19 @@ export async function POST(
   try {
     form = await req.formData();
   } catch {
+    tracking.errorMessage = "Invalid form body";
     return NextResponse.json({ error: "Invalid form body" }, { status: 400 });
   }
 
+  // Parsed as early as the body is available — its own field, not nested in
+  // `config`, so it's still readable even if the config JSON below fails.
+  const hubRunIdRaw = form.get("hub_run_id");
+  tracking.runId =
+    typeof hubRunIdRaw === "string" && hubRunIdRaw.length > 0 ? hubRunIdRaw : null;
+
   const excel = form.get("excel");
   if (!(excel instanceof File)) {
+    tracking.errorMessage = 'Missing "excel" field (xlsx file).';
     return NextResponse.json(
       { error: 'Missing "excel" field (xlsx file).' },
       { status: 400 },
@@ -287,6 +328,7 @@ export async function POST(
       config.default_mode = "OVERWRITE";
     }
   } catch {
+    tracking.errorMessage = 'Invalid "config" field (expected JSON).';
     return NextResponse.json(
       { error: 'Invalid "config" field (expected JSON).' },
       { status: 400 },
@@ -299,6 +341,7 @@ export async function POST(
     parsed = await parseIapItemsXlsx(excel);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Parse failed";
+    tracking.errorMessage = msg;
     return NextResponse.json({ error: msg }, { status: 422 });
   }
 
@@ -322,6 +365,7 @@ export async function POST(
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Apple sync failed";
     await log("iap-bulk-execute", `apple resolve failed: ${msg}`, "ERROR");
+    tracking.errorMessage = msg;
     return NextResponse.json({ error: msg }, { status: 502 });
   }
 
@@ -356,6 +400,7 @@ export async function POST(
     usdTiers = await listUsdTiersForSource(pricingSource);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "USD tiers fetch failed";
+    tracking.errorMessage = msg;
     return NextResponse.json({ error: msg }, { status: 500 });
   }
   const enriched = enrichWithTiers(conflicts, usdTiers);
@@ -417,6 +462,7 @@ export async function POST(
     .select("id")
     .single();
   if (batchIns.error || !batchIns.data) {
+    tracking.errorMessage = `audit batch open failed: ${batchIns.error?.message}`;
     return NextResponse.json(
       { error: `audit batch open failed: ${batchIns.error?.message}` },
       { status: 500 },
@@ -542,9 +588,15 @@ export async function POST(
     },
   });
 
+  // ── Hub-tracking terminal status (SUCCESS/FAILED/PARTIAL) ──────────────
+  const total = parsed.items.length;
+  const terminal = computeBulkImportTerminalStatus({ total, succeeded, failed });
+  tracking.status = terminal.status;
+  tracking.errorMessage = terminal.errorMessage;
+
   const summary: ExecuteSummary = {
     batch_id: batchId,
-    total: parsed.items.length,
+    total,
     succeeded,
     failed,
     skipped,

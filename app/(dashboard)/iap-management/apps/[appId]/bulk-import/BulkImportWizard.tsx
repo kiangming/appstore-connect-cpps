@@ -13,6 +13,7 @@ import {
   Loader2,
   ArrowRight,
   ArrowLeft,
+  ChevronLeft,
   Play,
   Info,
   RefreshCw,
@@ -171,6 +172,70 @@ export function BulkImportWizard({
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<ExecuteResult | null>(null);
 
+  // Hub tracking (VNGGames Hub run-tracking integration). RUN_ID lives only
+  // in wizard client state — no server-side persistence. null means either
+  // tracking isn't configured/enabled, or the start call failed — both
+  // cases are treated identically (no-op) everywhere it's threaded.
+  const [hubRunId, setHubRunId] = useState<string | null>(null);
+  // Refs so the beforeunload listener (registered once) always reads the
+  // LATEST step/executing/hubRunId without re-binding the listener on
+  // every render.
+  const hubTrackingRef = useRef({ hubRunId, step, executing });
+  useEffect(() => {
+    hubTrackingRef.current = { hubRunId, step, executing };
+  });
+
+  useEffect(() => {
+    function handleBeforeUnload() {
+      const { hubRunId: runId, step: currentStep, executing: isExecuting } =
+        hubTrackingRef.current;
+      // Best-effort only — doesn't catch hard crashes/force-quit. Skipped
+      // once execute is in flight or has completed: the execute route's own
+      // `finally` owns closing the run in those cases.
+      if (runId && currentStep < 4 && !isExecuting) {
+        const blob = new Blob([JSON.stringify({ run_id: runId })], {
+          type: "application/json",
+        });
+        navigator.sendBeacon("/api/iap-management/hub-tracking/cancel", blob);
+      }
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
+
+  function handleNext() {
+    if (step === 1) {
+      // Fires on the step 1→2 transition. Best-effort, never awaited —
+      // never delays advancing the wizard. Config unconfigured/disabled or
+      // any Hub failure both resolve server-side to `{ run_id: null }`.
+      fetch("/api/iap-management/hub-tracking/start", { method: "POST" })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { run_id?: string } | null) => {
+          if (data && typeof data.run_id === "string") setHubRunId(data.run_id);
+        })
+        .catch(() => {
+          // Swallowed — tracking is purely additive instrumentation.
+        });
+    }
+    setStep((s) => ((s + 1) as Step));
+  }
+
+  function handleExit() {
+    // Explicit back-out before the import ran — close the run CANCELLED.
+    // No-ops server-side if hubRunId is null.
+    if (hubRunId && step < 4 && !executing) {
+      fetch("/api/iap-management/hub-tracking/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_id: hubRunId }),
+        keepalive: true,
+      }).catch(() => {
+        // Swallowed — best-effort, mirrors the non-blocking discipline.
+      });
+    }
+    router.push(`/iap-management/apps/${appId}`);
+  }
+
   const existingSet = useMemo(
     () => new Set(existingProductIds),
     [existingProductIds],
@@ -234,6 +299,11 @@ export function BulkImportWizard({
           pricing_source: pricingSource,
         }),
       );
+      // Threaded to the execute route's `finally` block, which closes the
+      // Hub run with the batch's terminal status. Empty string when no run
+      // was opened (tracking unconfigured/disabled/start failed) — the
+      // route treats that identically to a missing field (no-op).
+      fd.append("hub_run_id", hubRunId ?? "");
 
       const res = await fetch(
         `/api/iap-management/apps/${appId}/bulk-import/execute`,
@@ -269,6 +339,15 @@ export function BulkImportWizard({
 
   return (
     <div className="space-y-6">
+      <button
+        type="button"
+        onClick={handleExit}
+        className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-[#0071E3] transition"
+      >
+        <ChevronLeft className="h-4 w-4" />
+        IAPs · {appName || appId}
+      </button>
+
       {tiersEmpty && (
         <div
           role="alert"
@@ -400,7 +479,7 @@ export function BulkImportWizard({
         {step < 3 && (
           <button
             type="button"
-            onClick={() => setStep((s) => ((s + 1) as Step))}
+            onClick={handleNext}
             disabled={(step === 1 && !parsed) || executing}
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-40"
           >
