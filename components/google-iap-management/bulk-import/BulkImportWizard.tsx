@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Upload,
@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronRight,
   ChevronLeft,
+  ArrowLeft,
   X,
 } from "lucide-react";
 
@@ -143,6 +144,10 @@ export function BulkImportWizard({
   const [file, setFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  // Drag-drop visual feedback + the actual fix: the label previously had
+  // no drag/drop handlers at all, so the browser's default action
+  // (navigate to / download the dropped file) fired instead of importing.
+  const [dragActive, setDragActive] = useState(false);
 
   // Step 3: preview
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
@@ -158,6 +163,62 @@ export function BulkImportWizard({
   const [executing, setExecuting] = useState(false);
   const [executeError, setExecuteError] = useState<string | null>(null);
   const [executeResult, setExecuteResult] = useState<ExecuteResult | null>(null);
+
+  // Hub tracking (VNGGames Hub run-tracking integration — mirrors the
+  // Apple IAP Management fix, commits 95d9413/613a9c3/4ba8e6f/9ed7845).
+  // RUN_ID lives only in wizard client state — no server-side persistence.
+  const [hubRunId, setHubRunId] = useState<string | null>(null);
+  // Ref so the beforeunload listener (registered once) always reads the
+  // LATEST hubRunId without re-binding the listener on every render.
+  const hubRunIdRef = useRef<string | null>(hubRunId);
+  useEffect(() => {
+    hubRunIdRef.current = hubRunId;
+  });
+
+  // PERMANENT flag — set true the instant handleExecute is invoked and
+  // NEVER reset back to false (this was a real bug on the Apple side:
+  // using transient `executing`/step state re-opened the cancel-on-exit
+  // guard after the execute request settled — success, failure, or a
+  // client-side hiccup reading the response — firing a spurious
+  // CANCELLED that overwrote whatever real terminal status the server's
+  // own `finally` had already recorded). Once execute has been submitted,
+  // the server owns the run's terminal status, full stop.
+  const executeStartedRef = useRef(false);
+
+  useEffect(() => {
+    function handleBeforeUnload() {
+      const runId = hubRunIdRef.current;
+      // Best-effort only — doesn't catch hard crashes/force-quit. Skipped
+      // once execute has ever been invoked: the execute route's own
+      // `finally` owns closing the run from that point on.
+      if (runId && !executeStartedRef.current) {
+        const blob = new Blob([JSON.stringify({ run_id: runId })], {
+          type: "application/json",
+        });
+        navigator.sendBeacon("/api/google-iap-management/hub-tracking/cancel", blob);
+      }
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
+
+  function handleExit() {
+    // Explicit back-out — cancel ONLY if execute was never invoked. Once
+    // it has been, the server's own `finally` owns the terminal status
+    // (SUCCESS/FAILED/PARTIAL) regardless of what happens client-side
+    // after that point. No-ops server-side if hubRunId is null.
+    if (hubRunId && !executeStartedRef.current) {
+      fetch("/api/google-iap-management/hub-tracking/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_id: hubRunId }),
+        keepalive: true,
+      }).catch(() => {
+        // Swallowed — best-effort, mirrors the non-blocking discipline.
+      });
+    }
+    router.push(`/google-iap-management/apps/${encodeURIComponent(packageName)}`);
+  }
 
   const counts = useMemo(() => {
     const total = previewRows.length;
@@ -269,6 +330,33 @@ export function BulkImportWizard({
       setPreviewWarnings(body.warnings ?? []);
       setTierSelections(seedSelections);
       setStep("preview");
+
+      // Fires on the upload→preview transition — the moment the user has
+      // finished uploading data. Best-effort, never awaited — never delays
+      // advancing the wizard. Config unconfigured/disabled or any Hub
+      // failure both resolve server-side to `{ run_id: null }`.
+      fetch("/api/google-iap-management/hub-tracking/start", { method: "POST" })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { run_id?: string } | null) => {
+          if (!data || typeof data.run_id !== "string") return;
+          if (executeStartedRef.current) {
+            // The user raced through the wizard fast enough that execute
+            // was already submitted (with an empty hub_run_id — this run
+            // never got threaded through) before this slow `start`
+            // response arrived. The server will never close this run;
+            // best-effort close it now instead of adopting it into state.
+            fetch("/api/google-iap-management/hub-tracking/cancel", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ run_id: data.run_id }),
+            }).catch(() => {});
+            return;
+          }
+          setHubRunId(data.run_id);
+        })
+        .catch(() => {
+          // Swallowed — tracking is purely additive instrumentation.
+        });
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -301,6 +389,11 @@ export function BulkImportWizard({
   }
 
   async function handleExecute() {
+    // Permanent — from this point on the server owns the run's terminal
+    // status; the client must never send cancel for it again (see
+    // executeStartedRef's definition above for why transient state isn't
+    // a sufficient guard).
+    executeStartedRef.current = true;
     setExecuteError(null);
     setExecuting(true);
     setStep("execute");
@@ -313,6 +406,12 @@ export function BulkImportWizard({
           body: JSON.stringify({
             pricingSource,
             sourceFilename: file?.name ?? null,
+            // Threaded to the execute route's `finally` block, which
+            // closes the Hub run with the batch's terminal status. Null
+            // when no run was opened (tracking unconfigured/disabled/
+            // start failed, or lost the slow-start race) — the route
+            // treats that identically to a missing field (no-op).
+            hub_run_id: hubRunId,
             rows: previewRows.map((r) => ({
               rowNumber: r.rowNumber,
               sku: r.sku,
@@ -384,6 +483,15 @@ export function BulkImportWizard({
 
   return (
     <div className="space-y-4">
+      <button
+        type="button"
+        onClick={handleExit}
+        className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 transition"
+      >
+        <ArrowLeft className="h-3 w-3" />
+        Back to {appDisplayName ?? packageName}
+      </button>
+
       <StepHeader step={step} />
 
       {/* App defaults banner (Hotfix 4) */}
@@ -473,7 +581,38 @@ export function BulkImportWizard({
 
           <label
             htmlFor="bulk-upload-file"
-            className="flex flex-col items-center gap-2 border-2 border-dashed border-slate-300 rounded-lg p-8 cursor-pointer hover:border-emerald-400 hover:bg-emerald-50/30 transition"
+            onDragEnter={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setDragActive(true);
+            }}
+            onDragOver={(e) => {
+              // REQUIRED: without preventDefault() here, the browser never
+              // fires `drop` at all — it falls through to its OWN default
+              // handling (navigating to / downloading the dropped file)
+              // instead. This label previously had no drag handlers at
+              // all, so dragging an .xlsx onto it opened a new tab/
+              // downloaded the file instead of importing it.
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onDragLeave={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setDragActive(false);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setDragActive(false);
+              const dropped = e.dataTransfer.files?.[0];
+              if (dropped) setFile(dropped);
+            }}
+            className={`flex flex-col items-center gap-2 border-2 border-dashed rounded-lg p-8 cursor-pointer transition ${
+              dragActive
+                ? "border-emerald-500 bg-emerald-50"
+                : "border-slate-300 hover:border-emerald-400 hover:bg-emerald-50/30"
+            }`}
           >
             <Upload className="h-8 w-8 text-slate-400" strokeWidth={1.5} />
             {file ? (
@@ -783,6 +922,14 @@ export function BulkImportWizard({
                     setPreviewRows([]);
                     setPreviewWarnings([]);
                     setExecuteResult(null);
+                    // Reset the tracking state machine for a fresh cycle —
+                    // without this, executeStartedRef staying true would
+                    // block cancel-on-exit for the NEXT import's run
+                    // before it's even executed, and the stale hubRunId
+                    // (already closed) would linger until a new `start`
+                    // call overwrites it.
+                    setHubRunId(null);
+                    executeStartedRef.current = false;
                   }}
                   className="px-3 py-2 text-sm font-medium text-slate-700 border border-slate-200 hover:bg-slate-50 rounded-lg transition"
                 >
