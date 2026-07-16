@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import {
   Plus,
   Trash2,
@@ -177,13 +178,21 @@ export function GoogleAccountsClient({ initialAccounts }: Props) {
 
   return (
     <div className="p-8 max-w-3xl">
-      <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-slate-900">
-          Google Console Accounts
-        </h1>
-        <p className="text-sm text-slate-500 mt-0.5">
-          Service Account credentials for Google Play Android Publisher + Reporting APIs
-        </p>
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-slate-900">
+            Google Console Accounts
+          </h1>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Service Account credentials for Google Play Android Publisher + Reporting APIs
+          </p>
+        </div>
+        <Link
+          href="/google-iap-management/settings/hub-tracking"
+          className="text-sm text-slate-500 hover:text-emerald-700 transition shrink-0"
+        >
+          Hub Tracking →
+        </Link>
       </div>
 
       {pageError && (
