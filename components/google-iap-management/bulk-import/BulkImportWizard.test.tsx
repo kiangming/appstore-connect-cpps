@@ -258,7 +258,10 @@ describe("BulkImportWizard (Google) — Hub tracking cancel-on-exit guard", () =
     expect(cancelCalls).toHaveLength(0);
   });
 
-  it("a start response that resolves AFTER execute already began is not adopted, and is cancelled instead", async () => {
+  it("start resolving DURING the ≤1s capped await window is threaded into execute — SUCCESS with the real id, not SKIP", async () => {
+    // Reported-bug regression: a fast click reaching Execute before
+    // /hub-tracking/start resolves must still get the real run_id, as
+    // long as start settles within the 1s cap.
     let resolveStart!: (value: { ok: boolean; json: () => Promise<unknown> }) => void;
     const startPromise = new Promise<{ ok: boolean; json: () => Promise<unknown> }>((resolve) => {
       resolveStart = resolve;
@@ -285,29 +288,99 @@ describe("BulkImportWizard (Google) — Hub tracking cancel-on-exit guard", () =
       await Promise.resolve();
     });
     await waitFor(() => expect(screen.getByRole("button", { name: /Push to Google Play/ })).toBeInTheDocument());
-    await clickExecuteAndSettle(); // execute already ran with hub_run_id=null (never adopted)
 
-    // NOW the slow start response finally arrives, racing in after execute.
+    const executeButton = await screen.findByRole("button", { name: /Push to Google Play/ });
+    fireEvent.click(executeButton); // handleExecute begins its capped await (start still pending)
+
+    // Resolve start QUICKLY — well within the 1s cap (real elapsed time
+    // here is milliseconds, nowhere near the 1000ms ceiling).
+    await new Promise((resolve) => setTimeout(resolve, 20));
     await act(async () => {
-      resolveStart({ ok: true, json: async () => ({ run_id: "run-race-loser" }) });
+      resolveStart({ ok: true, json: async () => ({ run_id: "run-in-time" }) });
+      await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
     });
 
     await waitFor(() =>
-      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes(CANCEL_URL))).toBe(true),
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes(EXECUTE_URL_FRAGMENT))).toBe(true),
     );
-    const cancelCall = fetchMock.mock.calls.find((c) => String(c[0]).includes(CANCEL_URL))!;
-    expect(JSON.parse((cancelCall[1] as RequestInit).body as string)).toEqual({
-      run_id: "run-race-loser",
-    });
-
-    // And the race-lost run must NOT have been adopted — a subsequent
-    // exit sends no FURTHER cancel for it.
-    fireEvent.click(screen.getByRole("button", { name: "Back to Test App" }));
-    const cancelCallsAfterExit = fetchMock.mock.calls.filter((c) => String(c[0]).includes(CANCEL_URL));
-    expect(cancelCallsAfterExit).toHaveLength(1);
+    const executeCall = fetchMock.mock.calls.find((c) => String(c[0]).includes(EXECUTE_URL_FRAGMENT))!;
+    const executeBody = JSON.parse((executeCall[1] as RequestInit).body as string);
+    expect(executeBody.hub_run_id).toBe("run-in-time");
   });
+
+  it(
+    "Part 1 fix: a start response resolving AFTER the 1s cap elapsed is dropped SILENTLY — never cancelled (the exact reported bug)",
+    async () => {
+      // This is the precise mechanism from the production logs: start
+      // hasn't resolved by the time Execute is clicked, the 1s cap in
+      // handleExecute elapses first (execute proceeds with hub_run_id:
+      // null — a MISSED track), and only afterward does the slow start
+      // response finally arrive. It must NOT send CANCELLED — that run
+      // is real and was actively executing/succeeding.
+      let resolveStart!: (value: { ok: boolean; json: () => Promise<unknown> }) => void;
+      const startPromise = new Promise<{ ok: boolean; json: () => Promise<unknown> }>((resolve) => {
+        resolveStart = resolve;
+      });
+      const fetchMock = vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes(AVAILABILITY_URL_FRAGMENT)) return Promise.resolve({ ok: false, json: async () => ({}) });
+        if (url.includes(START_URL)) return startPromise; // hangs until resolveStart() below
+        if (url.includes(CANCEL_URL)) return Promise.resolve({ ok: true, json: async () => ({}) });
+        if (url.includes(PREVIEW_URL_FRAGMENT)) return Promise.resolve(previewResponse());
+        if (url.includes(EXECUTE_URL_FRAGMENT)) return Promise.resolve(successExecuteResponse());
+        return Promise.reject(new Error(`unexpected fetch: ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const { container } = renderWizard();
+      await goToUploadStep();
+      selectFile(container);
+      await waitFor(() => expect(screen.getByRole("button", { name: /Preview/ })).not.toBeDisabled());
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /Preview/ })); // start fetch now in flight (hangs)
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(screen.getByRole("button", { name: /Push to Google Play/ })).toBeInTheDocument());
+
+      const executeButton = await screen.findByRole("button", { name: /Push to Google Play/ });
+      const clickedAt = Date.now();
+      fireEvent.click(executeButton); // handleExecute's 1s cap starts now
+
+      // The execute fetch must fire once the cap elapses — proving the
+      // import is NOT blocked waiting on the hung start call — and the
+      // cap must be the ~1s ceiling, not the full 3s Hub timeout.
+      await waitFor(
+        () => expect(fetchMock.mock.calls.some((c) => String(c[0]).includes(EXECUTE_URL_FRAGMENT))).toBe(true),
+        { timeout: 2000 },
+      );
+      const elapsedMs = Date.now() - clickedAt;
+      expect(elapsedMs).toBeGreaterThanOrEqual(950); // the cap genuinely waited ~1s...
+      expect(elapsedMs).toBeLessThan(2000); // ...but nowhere near the 3s Hub timeout, and bounded.
+
+      const executeCall = fetchMock.mock.calls.find((c) => String(c[0]).includes(EXECUTE_URL_FRAGMENT))!;
+      const executeBody = JSON.parse((executeCall[1] as RequestInit).body as string);
+      expect(executeBody.hub_run_id).toBeNull(); // cap won — a MISSED track, not a wrong one.
+
+      // NOW the slow start response finally arrives, long after execute
+      // already proceeded without it.
+      await act(async () => {
+        resolveStart({ ok: true, json: async () => ({ run_id: "run-late-arrival" }) });
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      // Must be dropped silently — no cancel call, ever.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const cancelCalls = fetchMock.mock.calls.filter((c) => String(c[0]).includes(CANCEL_URL));
+      expect(cancelCalls).toHaveLength(0);
+    },
+    8000,
+  );
 
   it("'Import another' resets the tracking state machine for a fresh cycle", async () => {
     const fetchMock = installFetchMock({ runId: "run-first", executeResponse: successExecuteResponse });

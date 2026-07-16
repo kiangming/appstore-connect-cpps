@@ -174,6 +174,12 @@ export function BulkImportWizard({
   useEffect(() => {
     hubRunIdRef.current = hubRunId;
   });
+  // Holds the in-flight /hub-tracking/start call's resolved run_id (or
+  // null), set once per upload→preview cycle. handleExecute races this
+  // against a HARD 1s cap so a fast click still gets the real run_id
+  // threaded through when start resolves quickly, without ever blocking
+  // the import beyond that cap.
+  const hubStartPromiseRef = useRef<Promise<string | null> | null>(null);
 
   // PERMANENT flag — set true the instant handleExecute is invoked and
   // NEVER reset back to false (this was a real bug on the Apple side:
@@ -332,31 +338,37 @@ export function BulkImportWizard({
       setStep("preview");
 
       // Fires on the upload→preview transition — the moment the user has
-      // finished uploading data. Best-effort, never awaited — never delays
-      // advancing the wizard. Config unconfigured/disabled or any Hub
-      // failure both resolve server-side to `{ run_id: null }`.
-      fetch("/api/google-iap-management/hub-tracking/start", { method: "POST" })
+      // finished uploading data. Best-effort, never awaited here — never
+      // delays advancing the wizard. Config unconfigured/disabled or any
+      // Hub failure both resolve server-side to `{ run_id: null }`. The
+      // promise itself is stored so handleExecute can race a capped await
+      // against it (a fast click shouldn't lose the real run_id).
+      const startPromise: Promise<string | null> = fetch(
+        "/api/google-iap-management/hub-tracking/start",
+        { method: "POST" },
+      )
         .then((res) => (res.ok ? res.json() : null))
-        .then((data: { run_id?: string } | null) => {
-          if (!data || typeof data.run_id !== "string") return;
-          if (executeStartedRef.current) {
-            // The user raced through the wizard fast enough that execute
-            // was already submitted (with an empty hub_run_id — this run
-            // never got threaded through) before this slow `start`
-            // response arrived. The server will never close this run;
-            // best-effort close it now instead of adopting it into state.
-            fetch("/api/google-iap-management/hub-tracking/cancel", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ run_id: data.run_id }),
-            }).catch(() => {});
-            return;
-          }
-          setHubRunId(data.run_id);
-        })
-        .catch(() => {
-          // Swallowed — tracking is purely additive instrumentation.
-        });
+        .then((data: { run_id?: string } | null) =>
+          data && typeof data.run_id === "string" ? data.run_id : null,
+        )
+        .catch(() => null);
+      hubStartPromiseRef.current = startPromise;
+
+      startPromise.then((runId) => {
+        if (!runId) return;
+        if (executeStartedRef.current) {
+          // Execute already began without this run_id threaded through
+          // (a fast click losing the race against this call, OR
+          // handleExecute's own capped await already timed out on it).
+          // This run is REAL and actively executing/succeeding — it is
+          // NOT abandoned. Do NOT cancel it: a run that can't be closed
+          // (orphaned RUNNING — the already-accepted lifecycle
+          // limitation) is far better than one closed with the WRONG
+          // terminal status. Drop silently: no cancel call, no adoption.
+          return;
+        }
+        setHubRunId(runId);
+      });
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Upload failed");
     } finally {
@@ -392,11 +404,28 @@ export function BulkImportWizard({
     // Permanent — from this point on the server owns the run's terminal
     // status; the client must never send cancel for it again (see
     // executeStartedRef's definition above for why transient state isn't
-    // a sufficient guard).
+    // a sufficient guard). Set FIRST, before the capped await below, so
+    // the guard state is correct for the whole wait window.
     executeStartedRef.current = true;
     setExecuteError(null);
     setExecuting(true);
     setStep("execute");
+
+    // A fast click can reach here before /hub-tracking/start resolves —
+    // give it a bounded chance to land the real run_id anyway, so the
+    // execute route's own finalize gets a real SUCCESS/FAILED/PARTIAL
+    // close instead of silently no-opping. HARD-capped at 1s (never the
+    // full 3s Hub timeout): the import must not be blocked waiting on
+    // tracking. If the cap wins, hub_run_id stays null — a MISSED track,
+    // never a WRONG one (see the start .then() handler above).
+    let runIdForExecute = hubRunId;
+    if (!runIdForExecute && hubStartPromiseRef.current) {
+      const capped: Promise<null> = new Promise((resolve) => {
+        setTimeout(() => resolve(null), 1000);
+      });
+      runIdForExecute = await Promise.race([hubStartPromiseRef.current, capped]);
+    }
+
     try {
       const res = await fetch(
         `/api/google-iap-management/apps/${encodeURIComponent(packageName)}/bulk-import/execute`,
@@ -408,10 +437,10 @@ export function BulkImportWizard({
             sourceFilename: file?.name ?? null,
             // Threaded to the execute route's `finally` block, which
             // closes the Hub run with the batch's terminal status. Null
-            // when no run was opened (tracking unconfigured/disabled/
-            // start failed, or lost the slow-start race) — the route
-            // treats that identically to a missing field (no-op).
-            hub_run_id: hubRunId,
+            // when no run was opened (tracking unconfigured/disabled,
+            // start failed, or the 1s cap won) — the route treats that
+            // identically to a missing field (no-op).
+            hub_run_id: runIdForExecute,
             rows: previewRows.map((r) => ({
               rowNumber: r.rowNumber,
               sku: r.sku,
@@ -930,6 +959,7 @@ export function BulkImportWizard({
                     // call overwrites it.
                     setHubRunId(null);
                     executeStartedRef.current = false;
+                    hubStartPromiseRef.current = null;
                   }}
                   className="px-3 py-2 text-sm font-medium text-slate-700 border border-slate-200 hover:bg-slate-50 rounded-lg transition"
                 >
