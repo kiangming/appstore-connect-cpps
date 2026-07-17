@@ -53,6 +53,9 @@ interface ExecuteResponse {
   /** IAP.q.1.IV — count of rows blocked by the server-side state guard. */
   skipped?: number;
   results: ExecuteResultRow[];
+  /** Hub-tracking run id — always null here (this phase is always
+   *  terminal; the run has already been finalized server-side). */
+  hub_run_id?: string | null;
 }
 
 /** v2 only — Decision A conflict dialog data. No Apple writes have
@@ -68,6 +71,9 @@ interface ConflictResponse {
   reviewSubmissionId: string;
   eligibleCount: number;
   foreignItemsSummary: ForeignItemsSummary;
+  /** Hub-tracking run id — the run stays RUNNING while this dialog shows.
+   *  Threaded into the cancel call or the confirmConflict re-POST. */
+  hub_run_id?: string | null;
 }
 
 /** v2 only — some reviewSubmissionItem adds (or the final submit) failed.
@@ -86,6 +92,10 @@ interface PartialFailResponse {
   reused: boolean;
   items: PartialFailItem[];
   skipped: ExecuteResultRow[];
+  /** Hub-tracking run id. Non-null when the run stays RUNNING pending
+   *  proceedPartial/rollback; null when the confirm-PATCH-failed-after-
+   *  all-adds-succeeded sub-case already finalized this run as FAILED. */
+  hub_run_id?: string | null;
 }
 
 interface ConfirmedResponse {
@@ -199,15 +209,74 @@ export function SubmitBatchModal({
   // selection.
   const readyIapIdsRef = useRef<string[]>([]);
 
+  // ─── Hub tracking — three-state cancel guard (design doc §2/§B) ─────────
+  // `hubRunIdRef` mirrors whatever `hub_run_id` the server last returned
+  // (conflict / partial-fail) so it survives across the dialog round-trips
+  // and is readable from the `beforeunload` handler without a stale closure.
+  const hubRunIdRef = useRef<string | null>(null);
+  // Permanent — set true the instant the write phase is known to have
+  // begun and NEVER reset. Distinct from Bulk Import's `executeStartedRef`:
+  // "started" here (the first execute POST) is not the same moment as
+  // "committed to a real Apple write" once a conflict dialog intervenes.
+  // State 1 (not started): no run exists, ref stays false.
+  // State 2 (started, conflict dialog showing, zero Apple writes): ref
+  //   stays false — cancel is allowed (conflict dialog Cancel / modal
+  //   close / beforeunload all fire a real CANCEL, nothing to undo).
+  // State 3 (committed, partial-fail dialog showing, writes already
+  //   happened): ref is true — client-side cancel is suppressed; the
+  //   proceedPartial/rollback request itself finalizes the run.
+  const executeCommittedRef = useRef(false);
+
+  // Best-effort — fire the SAME /hub-tracking/cancel route Bulk Import
+  // uses. Only ever called while `!executeCommittedRef.current` (state 2).
+  async function cancelHubRun() {
+    const runId = hubRunIdRef.current;
+    if (!runId) return;
+    try {
+      await fetch("/api/iap-management/hub-tracking/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_id: runId }),
+      });
+    } catch {
+      // Best-effort — a failed cancel call must not block the user from
+      // closing the modal.
+    }
+  }
+
+  // Tab/browser close while the conflict dialog is showing (state 2) —
+  // sendBeacon can't set a custom Authorization header, so this hits our
+  // own backend route (session cookie rides along same-origin), which
+  // holds the Hub token server-side. Mirrors BulkImportWizard's beforeunload
+  // handler; this component has none today.
+  useEffect(() => {
+    if (!open) return;
+    function handleBeforeUnload() {
+      if (hubRunIdRef.current && !executeCommittedRef.current) {
+        const blob = new Blob(
+          [JSON.stringify({ run_id: hubRunIdRef.current })],
+          { type: "application/json" },
+        );
+        navigator.sendBeacon("/api/iap-management/hub-tracking/cancel", blob);
+      }
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [open]);
+
   function handleExecuteResult(data: ExecutePhaseResponse) {
     if (data.phase === "conflict") {
+      hubRunIdRef.current = data.hub_run_id ?? null;
       setStage({ kind: "conflict", data });
       return;
     }
     if (data.phase === "partial-fail") {
+      hubRunIdRef.current = data.hub_run_id ?? null;
+      executeCommittedRef.current = true;
       setStage({ kind: "partial-fail", data });
       return;
     }
+    executeCommittedRef.current = true;
     setStage({ kind: "result", data });
     const skipped = data.skipped ?? 0;
     if (data.failed === 0 && skipped === 0) {
@@ -259,14 +328,19 @@ export function SubmitBatchModal({
   }
 
   /** Decision A — user explicitly chose to co-submit whatever else is
-   *  already in the shared reviewSubmission ("Submit all N to Apple review"). */
+   *  already in the shared reviewSubmission ("Submit all N to Apple review").
+   *  This re-POST IS the write attempt — set the commit guard the instant
+   *  it fires, mirroring Bulk Import's "set the instant the mutating call
+   *  is invoked" rule. */
   async function handleConfirmConflict() {
+    executeCommittedRef.current = true;
     setStage({ kind: "submitting" });
     try {
       const data = await postExecute({
         iap_ids: readyIapIdsRef.current,
         execute: true,
         confirmConflict: true,
+        hub_run_id: hubRunIdRef.current,
       });
       handleExecuteResult(data as ExecutePhaseResponse);
     } catch (err) {
@@ -277,12 +351,35 @@ export function SubmitBatchModal({
     }
   }
 
+  /** Decision A / state 2 — conflict dialog "Cancel". Zero Apple writes
+   *  have happened (checkForConflict is read-only), so this is a true
+   *  cancel: best-effort close the Hub run as CANCEL, then close the modal. */
+  async function handleCancelConflict() {
+    await cancelHubRun();
+    onClose();
+  }
+
+  /** Backdrop click / X button — routes through the same cancel-conflict
+   *  path when the conflict dialog is showing (state 2), so closing the
+   *  modal that way doesn't silently discard the open Hub run. */
+  function handleModalClose() {
+    if (stage.kind === "submitting" || stage.kind === "resolving") return;
+    if (stage.kind === "conflict") {
+      void handleCancelConflict();
+      return;
+    }
+    onClose();
+  }
+
   /** CPP-style partial-fail recovery: submit the container as-is (only
    *  successfully-added items go to review). */
   async function handleProceedPartial() {
     if (stage.kind !== "partial-fail") return;
     const submittedIapIds = stage.data.items
       .filter((i) => i.status === "SUCCESS")
+      .map((i) => i.iap_id);
+    const failedIapIds = stage.data.items
+      .filter((i) => i.status === "ERROR")
       .map((i) => i.iap_id);
     setStage({ kind: "resolving" });
     try {
@@ -291,7 +388,9 @@ export function SubmitBatchModal({
         proceedPartial: {
           reviewSubmissionId: stage.data.reviewSubmissionId,
           submittedIapIds,
+          failedIapIds,
         },
+        hub_run_id: hubRunIdRef.current,
       });
       toast.success(`Submitted ${submittedIapIds.length} IAP${submittedIapIds.length === 1 ? "" : "s"} for review.`);
       setStage({
@@ -327,6 +426,9 @@ export function SubmitBatchModal({
     const addedIapIds = stage.data.items
       .filter((i) => i.status === "SUCCESS")
       .map((i) => i.iap_id);
+    const failedIapIds = stage.data.items
+      .filter((i) => i.status === "ERROR")
+      .map((i) => i.iap_id);
     setStage({ kind: "resolving" });
     try {
       await postExecute({
@@ -335,7 +437,9 @@ export function SubmitBatchModal({
           reviewSubmissionId: stage.data.reviewSubmissionId,
           reused: stage.data.reused,
           addedIapIds,
+          failedIapIds,
         },
+        hub_run_id: hubRunIdRef.current,
       });
       toast.warning("Submission cancelled — no IAPs were sent for review.");
       onClose();
@@ -357,9 +461,7 @@ export function SubmitBatchModal({
   return (
     <div
       className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4"
-      onClick={() =>
-        stage.kind !== "submitting" && stage.kind !== "resolving" && onClose()
-      }
+      onClick={handleModalClose}
     >
       <div
         className="bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 w-full max-w-2xl max-h-[85vh] flex flex-col"
@@ -377,7 +479,7 @@ export function SubmitBatchModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
+            onClick={handleModalClose}
             disabled={stage.kind === "submitting" || stage.kind === "resolving"}
             className="p-1 rounded text-slate-400 hover:text-slate-700 disabled:opacity-30"
           >
@@ -453,7 +555,7 @@ export function SubmitBatchModal({
             <>
               <button
                 type="button"
-                onClick={onClose}
+                onClick={handleCancelConflict}
                 className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
               >
                 Cancel
