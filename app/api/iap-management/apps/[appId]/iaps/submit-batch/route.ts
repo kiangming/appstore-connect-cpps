@@ -7,18 +7,32 @@
  *
  *   • Phase 1 (preflight, default): one Apple `listInAppPurchases` call,
  *     fresh state bucketed per selected IAP. Returns ready / missing_metadata
- *     / other / not_on_apple lists for the Manager preview modal.
+ *     / other / not_on_apple lists for the Manager preview modal. Identical
+ *     regardless of submit mechanism (v1 or v2) — Apple state bucketing
+ *     doesn't depend on how submission is triggered.
  *
- *   • Phase 2 (execute, body.execute=true): submits the supplied iap_ids in
- *     parallel via `submitInAppPurchase` (concurrency 5). Each result is
- *     audit-logged with action_type=SUBMIT_APPLE_REVIEW.
+ *   • Phase 2 (execute, body.execute=true): submits the supplied iap_ids.
+ *     Branches on `IAP_SUBMIT_V2_APPS` (lib/iap-management/submit-v2-toggle.ts):
  *
- * Apple state is canonical — the local cache (iap_mgmt.iaps.state) is the
- * mirror, refreshed by both phases (post-listInAppPurchases for preflight,
- * post-submitInAppPurchase GET for execute).
+ *       - v2 OFF (default) — LEGACY path, unchanged: one
+ *         `POST /v1/inAppPurchaseSubmissions` per item via
+ *         `submitInAppPurchase`, concurrency 2. Kept fully intact for
+ *         rollback safety — see design doc.
+ *
+ *       - v2 ON for this app — reviewSubmissions-based path
+ *         (lib/iap-management/apple/submit-v2.ts): create-or-reuse the
+ *         app's open reviewSubmission (NEVER blind-creates — Decision A),
+ *         check for foreign items already in it (conflict dialog, see
+ *         `phase: "conflict"` response below), then add each item as a
+ *         reviewSubmissionItem (paced + retried) and PATCH-submit once.
  *
  * Body shape:
- *   { iap_ids: string[]; execute?: boolean }
+ *   { iap_ids: string[]; execute?: boolean; confirmConflict?: boolean;
+ *     proceedPartial?: { reviewSubmissionId; submittedIapIds }
+ *     rollback?: { reviewSubmissionId; reused; addedIapIds } }
+ *
+ * Apple state is canonical — the local cache (iap_mgmt.iaps.state) is the
+ * mirror, refreshed by both phases.
  */
 
 import { NextResponse } from "next/server";
@@ -46,6 +60,15 @@ import {
   type NotOnAppleRow,
   type PreflightRow,
 } from "@/lib/iap-management/submit-batch/bucket";
+import { v2ToggleDecision } from "@/lib/iap-management/submit-v2-toggle";
+import {
+  checkForConflict,
+  executeSubmitV2,
+  confirmSubmitV2,
+  rollbackOrLeaveSubmitV2,
+  type SubmitV2Item,
+} from "@/lib/iap-management/apple/submit-v2";
+import type { ForeignItemsSummary } from "@/lib/shared/review-submission";
 import { log } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -61,12 +84,36 @@ export const runtime = "nodejs";
  * burst profile. Telemetry from `[asc-client] budget=` Railway logs +
  * actions_log.payload.rate_limit will reveal whether further Phase B
  * subsets (token bucket, auto-retry) are needed.
+ *
+ * LEGACY PATH ONLY — the v2 path (submit-v2.ts) uses sequential
+ * inter-item pacing instead of a concurrency pool; see design doc §5.
  */
 const SUBMIT_CONCURRENCY = 2;
 
 const BodySchema = z.object({
   iap_ids: z.array(z.string().uuid()).min(1).max(200),
   execute: z.boolean().optional().default(false),
+  /** v2 only — user has seen the conflict dialog and explicitly chose to
+   *  co-submit everything already in the shared reviewSubmission. */
+  confirmConflict: z.boolean().optional().default(false),
+  /** v2 only — user chose "proceed" after a partial item-add failure:
+   *  submit the container as-is (only successfully-added items go to
+   *  review). `submittedIapIds` lets the server finalize DB mirror +
+   *  audit logging without needing server-side session state. */
+  proceedPartial: z
+    .object({
+      reviewSubmissionId: z.string(),
+      submittedIapIds: z.array(z.string().uuid()),
+    })
+    .optional(),
+  /** v2 only — user chose "rollback" after a partial item-add failure. */
+  rollback: z
+    .object({
+      reviewSubmissionId: z.string(),
+      reused: z.boolean(),
+      addedIapIds: z.array(z.string().uuid()).optional().default([]),
+    })
+    .optional(),
 });
 
 interface PreflightResponse {
@@ -101,6 +148,47 @@ interface ExecuteResponse {
   results: ExecuteResultRow[];
 }
 
+/** v2 only — Decision A conflict dialog data. Zero Apple writes have
+ *  happened when this is returned. */
+interface ConflictResponse {
+  phase: "conflict";
+  reviewSubmissionId: string;
+  eligibleCount: number;
+  foreignItemsSummary: ForeignItemsSummary;
+}
+
+/** v2 only — some reviewSubmissionItem adds failed after retries. Client
+ *  must show proceed/rollback choice (CPP's existing partial-fail UX). */
+interface PartialFailResponse {
+  phase: "partial-fail";
+  reviewSubmissionId: string;
+  reused: boolean;
+  items: Array<{
+    iap_id: string;
+    apple_iap_id: string;
+    status: "SUCCESS" | "ERROR";
+    error?: string;
+    orphanedVersionWarning?: boolean;
+  }>;
+  skipped: ExecuteResultRow[];
+}
+
+interface ConfirmedResponse {
+  phase: "confirmed";
+}
+
+interface RolledBackResponse {
+  phase: "rolled-back";
+  deleted: boolean;
+}
+
+type LocalRow = {
+  id: string;
+  apple_iap_id: string | null;
+  product_id: string;
+  reference_name: string;
+};
+
 export async function POST(
   req: Request,
   ctx: { params: { appId: string } },
@@ -130,6 +218,14 @@ export async function POST(
     );
   }
 
+  // ─── v2-only follow-up actions (proceed / rollback after partial fail) ──
+  if (body.rollback) {
+    return await runRollback(actor, body.rollback);
+  }
+  if (body.proceedPartial) {
+    return await runProceedPartial(actor, body.proceedPartial);
+  }
+
   // Load local rows for the selected IAPs (need apple_iap_id mapping + names).
   const db = iapDb();
   const localRes = await db
@@ -142,12 +238,7 @@ export async function POST(
       { status: 500 },
     );
   }
-  const localRows = (localRes.data ?? []) as Array<{
-    id: string;
-    apple_iap_id: string | null;
-    product_id: string;
-    reference_name: string;
-  }>;
+  const localRows = (localRes.data ?? []) as LocalRow[];
 
   // ─── Phase 1 — preflight ─────────────────────────────────────────────────
   if (!body.execute) {
@@ -161,17 +252,28 @@ export async function POST(
   // automation / replay scripts that have already verified state out-of-band.
   const url = new URL(req.url);
   const skipCheck = url.searchParams.get("skipCheck") === "true";
-  return await runExecute(appleAppId, localRows, actor, skipCheck);
+
+  const { enabled: v2Enabled, reason: toggleReason } = v2ToggleDecision(appleAppId);
+  await log(
+    "iap-submit-v2",
+    `app=${appleAppId} → ${v2Enabled ? "v2" : "legacy"} path (${toggleReason})`,
+  );
+
+  if (v2Enabled) {
+    return await runExecuteV2(
+      appleAppId,
+      localRows,
+      actor,
+      skipCheck,
+      body.confirmConflict,
+    );
+  }
+  return await runExecuteLegacy(appleAppId, localRows, actor, skipCheck);
 }
 
 async function runPreflight(
   appleAppId: string,
-  localRows: Array<{
-    id: string;
-    apple_iap_id: string | null;
-    product_id: string;
-    reference_name: string;
-  }>,
+  localRows: LocalRow[],
 ): Promise<NextResponse> {
   const appleIdsToFetch = new Set<string>();
   for (const row of localRows) {
@@ -230,14 +332,84 @@ async function runPreflight(
   return NextResponse.json(response);
 }
 
-async function runExecute(
+/**
+ * Shared state-guard step used by both the legacy and v2 execute paths.
+ * Refetches Apple state and partitions `onApple` into eligible vs skipped —
+ * defence-in-depth against a race between preflight and execute.
+ */
+async function runStateGuard(
   appleAppId: string,
-  localRows: Array<{
-    id: string;
-    apple_iap_id: string | null;
-    product_id: string;
-    reference_name: string;
-  }>,
+  onApple: LocalRow[],
+  actor: string,
+  skipCheck: boolean,
+): Promise<
+  | { ok: true; eligible: LocalRow[]; skippedResults: ExecuteResultRow[] }
+  | { ok: false; response: NextResponse }
+> {
+  if (skipCheck) {
+    return { ok: true, eligible: onApple, skippedResults: [] };
+  }
+
+  const creds = await getActiveAccount();
+  const db = iapDb();
+  let stateByAppleId: Map<string, string>;
+  try {
+    const res = await withRetry(() => listInAppPurchases(creds, appleAppId));
+    stateByAppleId = new Map(
+      (res.data ?? []).map((iap) => [iap.id, iap.attributes.state]),
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: `State recheck failed: ${errMsg(err)}` },
+        { status: err instanceof AppleApiError && err.status < 500 ? err.status : 502 },
+      ),
+    };
+  }
+
+  const partition = partitionByStateGuard(
+    onApple.map((r) => ({ id: r.id, apple_iap_id: r.apple_iap_id! })),
+    stateByAppleId,
+  );
+
+  const skippedResults: ExecuteResultRow[] = [];
+  for (const skip of partition.skipped) {
+    skippedResults.push({
+      iap_id: skip.id,
+      apple_iap_id: skip.apple_iap_id,
+      status: "SKIPPED_BY_STATE_GUARD",
+      state: skip.apple_state,
+      error: `State guard blocked: Apple reports state="${skip.apple_state}".`,
+    });
+    await db
+      .from("iaps")
+      .update({ state: skip.apple_state, synced_at: new Date().toISOString() })
+      .eq("id", skip.id);
+    await db.from("actions_log").insert({
+      iap_id: skip.id,
+      actor,
+      action_type: "SUBMIT_APPLE_REVIEW",
+      payload: {
+        apple_iap_id: skip.apple_iap_id,
+        result: "SKIPPED",
+        reason: "state_guard",
+        apple_state: skip.apple_state,
+        via: "batch",
+      },
+    });
+  }
+
+  const eligibleIds = new Set(partition.eligible.map((e) => e.id));
+  const eligible = onApple.filter((r) => eligibleIds.has(r.id));
+  return { ok: true, eligible, skippedResults };
+}
+
+// ─── Legacy execute path (unchanged behavior) ───────────────────────────────
+
+async function runExecuteLegacy(
+  appleAppId: string,
+  localRows: LocalRow[],
   actor: string,
   skipCheck: boolean,
 ): Promise<NextResponse> {
@@ -252,78 +424,10 @@ async function runExecute(
   const creds = await getActiveAccount();
   const db = iapDb();
 
-  // ─── IAP.q.1.IV — server-side state guard ───────────────────────────────
-  // Defence-in-depth: even when the modal preflight passed only `ready` IDs,
-  // a race (Apple flipped state) or direct API call could land non-ready
-  // submissions here. Refetch Apple state and partition `onApple` into
-  // `eligible` (state === READY_TO_SUBMIT) vs `skipped` (anything else).
-  // `?skipCheck=true` bypasses the guard for explicit internal callers.
-  let eligible: Array<{
-    id: string;
-    apple_iap_id: string | null;
-    product_id: string;
-    reference_name: string;
-  }> = onApple;
-  const skippedResults: ExecuteResultRow[] = [];
+  const guard = await runStateGuard(appleAppId, onApple, actor, skipCheck);
+  if (!guard.ok) return guard.response;
+  const { eligible, skippedResults } = guard;
 
-  if (!skipCheck) {
-    let stateByAppleId: Map<string, string>;
-    try {
-      const res = await withRetry(() =>
-        listInAppPurchases(creds, appleAppId),
-      );
-      stateByAppleId = new Map(
-        (res.data ?? []).map((iap) => [iap.id, iap.attributes.state]),
-      );
-    } catch (err) {
-      return NextResponse.json(
-        { error: `State recheck failed: ${errMsg(err)}` },
-        { status: err instanceof AppleApiError && err.status < 500 ? err.status : 502 },
-      );
-    }
-
-    const partition = partitionByStateGuard(
-      onApple.map((r) => ({ id: r.id, apple_iap_id: r.apple_iap_id! })),
-      stateByAppleId,
-    );
-
-    // Audit + mirror skipped rows; surface in results.
-    for (const skip of partition.skipped) {
-      skippedResults.push({
-        iap_id: skip.id,
-        apple_iap_id: skip.apple_iap_id,
-        status: "SKIPPED_BY_STATE_GUARD",
-        state: skip.apple_state,
-        error: `State guard blocked: Apple reports state="${skip.apple_state}".`,
-      });
-      await db
-        .from("iaps")
-        .update({
-          state: skip.apple_state,
-          synced_at: new Date().toISOString(),
-        })
-        .eq("id", skip.id);
-      await db.from("actions_log").insert({
-        iap_id: skip.id,
-        actor,
-        action_type: "SUBMIT_APPLE_REVIEW",
-        payload: {
-          apple_iap_id: skip.apple_iap_id,
-          result: "SKIPPED",
-          reason: "state_guard",
-          apple_state: skip.apple_state,
-          via: "batch",
-        },
-      });
-    }
-
-    // Rehydrate eligible rows from the original onApple list (helper returns
-    // the narrow {id, apple_iap_id} shape but downstream needs full row).
-    const eligibleIds = new Set(partition.eligible.map((e) => e.id));
-    eligible = onApple.filter((r) => eligibleIds.has(r.id));
-  }
-
-  // ─── Submit eligible rows ──────────────────────────────────────────────
   const submitResults: ExecuteResultRow[] = await withConcurrency(
     eligible,
     SUBMIT_CONCURRENCY,
@@ -401,6 +505,259 @@ async function runExecute(
     skipped,
     results,
   };
+  return NextResponse.json(response);
+}
+
+// ─── v2 execute path (reviewSubmissions) ────────────────────────────────────
+
+async function runExecuteV2(
+  appleAppId: string,
+  localRows: LocalRow[],
+  actor: string,
+  skipCheck: boolean,
+  confirmConflict: boolean,
+): Promise<NextResponse> {
+  const onApple = localRows.filter((r) => r.apple_iap_id);
+  if (onApple.length === 0) {
+    return NextResponse.json(
+      { error: "No selected IAPs are on Apple — Create on Apple first." },
+      { status: 422 },
+    );
+  }
+
+  const creds = await getActiveAccount();
+  const db = iapDb();
+
+  const guard = await runStateGuard(appleAppId, onApple, actor, skipCheck);
+  if (!guard.ok) return guard.response;
+  const { eligible, skippedResults } = guard;
+
+  if (eligible.length === 0) {
+    const response: ExecuteResponse = {
+      phase: "execute",
+      submitted: 0,
+      failed: 0,
+      skipped: skippedResults.length,
+      results: skippedResults,
+    };
+    return NextResponse.json(response);
+  }
+
+  // ─── Decision A — conflict check (read-only) before any write ──────────
+  if (!confirmConflict) {
+    let conflict;
+    try {
+      conflict = await checkForConflict(creds, appleAppId);
+    } catch (err) {
+      return NextResponse.json(
+        { error: errMsg(err) },
+        { status: err instanceof AppleApiError && err.status < 500 ? err.status : 502 },
+      );
+    }
+    if (conflict.kind === "conflict") {
+      const response: ConflictResponse = {
+        phase: "conflict",
+        reviewSubmissionId: conflict.reviewSubmissionId,
+        eligibleCount: eligible.length,
+        foreignItemsSummary: conflict.foreignItemsSummary,
+      };
+      return NextResponse.json(response);
+    }
+    // clear-no-existing / clear-reuse — nothing to confirm, fall through.
+  }
+
+  // ─── Write phase ─────────────────────────────────────────────────────────
+  const items: SubmitV2Item[] = eligible.map((r) => ({
+    iapId: r.id,
+    appleIapId: r.apple_iap_id!,
+    productId: r.product_id,
+  }));
+
+  let writeResult;
+  try {
+    writeResult = await executeSubmitV2(creds, appleAppId, items);
+  } catch (err) {
+    return NextResponse.json(
+      { error: errMsg(err) },
+      { status: err instanceof AppleApiError && err.status < 500 ? err.status : 502 },
+    );
+  }
+
+  const allSucceeded = writeResult.items.every((i) => i.status === "SUCCESS");
+
+  if (!allSucceeded) {
+    const response: PartialFailResponse = {
+      phase: "partial-fail",
+      reviewSubmissionId: writeResult.reviewSubmissionId,
+      reused: writeResult.reused,
+      items: writeResult.items.map((i) => ({
+        iap_id: i.iapId,
+        apple_iap_id: i.appleIapId,
+        status: i.status,
+        error: i.error,
+        orphanedVersionWarning: i.orphanedVersionWarning,
+      })),
+      skipped: skippedResults,
+    };
+    // Audit every item now — partial-fail may never be confirmed/rolled
+    // back if the user abandons the modal, so log outcomes as they happen.
+    for (const item of writeResult.items) {
+      await db.from("actions_log").insert({
+        iap_id: item.iapId,
+        actor,
+        action_type: "SUBMIT_APPLE_REVIEW",
+        payload: {
+          apple_iap_id: item.appleIapId,
+          result: item.status === "SUCCESS" ? "ADDED_TO_SUBMISSION" : "ERROR",
+          error: item.error,
+          via: "batch_v2",
+          review_submission_id: writeResult.reviewSubmissionId,
+          orphaned_version_warning: item.orphanedVersionWarning ?? false,
+        },
+      });
+    }
+    return NextResponse.json(response);
+  }
+
+  // All items added successfully — auto-confirm (mirrors CPP's
+  // all-succeeded auto-confirm behavior).
+  try {
+    await confirmSubmitV2(creds, writeResult.reviewSubmissionId);
+  } catch (err) {
+    // Items are added but the submit PATCH failed — surface as partial-fail
+    // so the user can retry confirm (proceedPartial) or leave/rollback,
+    // rather than silently losing the "added but not submitted" state.
+    const confirmErrorMsg = `Added to submission, but the final submit failed: ${errMsg(err)}`;
+    const response: PartialFailResponse = {
+      phase: "partial-fail",
+      reviewSubmissionId: writeResult.reviewSubmissionId,
+      reused: writeResult.reused,
+      items: writeResult.items.map((i) => ({
+        iap_id: i.iapId,
+        apple_iap_id: i.appleIapId,
+        status: i.status,
+        error: confirmErrorMsg,
+      })),
+      skipped: skippedResults,
+    };
+    await log(
+      "iap-submit-v2",
+      `confirm PATCH failed for reviewSubmission=${writeResult.reviewSubmissionId}: ${errMsg(err)}`,
+      "ERROR",
+    );
+    return NextResponse.json(response);
+  }
+
+  const results: ExecuteResultRow[] = [];
+  for (const item of writeResult.items) {
+    await db
+      .from("iaps")
+      .update({ state: "WAITING_FOR_REVIEW", synced_at: new Date().toISOString() })
+      .eq("id", item.iapId);
+    await db.from("actions_log").insert({
+      iap_id: item.iapId,
+      actor,
+      action_type: "SUBMIT_APPLE_REVIEW",
+      payload: {
+        apple_iap_id: item.appleIapId,
+        result: "SUCCESS",
+        state: "WAITING_FOR_REVIEW",
+        via: "batch_v2",
+        review_submission_id: writeResult.reviewSubmissionId,
+      },
+    });
+    results.push({
+      iap_id: item.iapId,
+      apple_iap_id: item.appleIapId,
+      status: "SUCCESS",
+      state: "WAITING_FOR_REVIEW",
+    });
+  }
+
+  const response: ExecuteResponse = {
+    phase: "execute",
+    submitted: results.length,
+    failed: 0,
+    skipped: skippedResults.length,
+    results: [...results, ...skippedResults],
+  };
+  return NextResponse.json(response);
+}
+
+// ─── v2 follow-up actions ───────────────────────────────────────────────────
+
+async function runProceedPartial(
+  actor: string,
+  args: { reviewSubmissionId: string; submittedIapIds: string[] },
+): Promise<NextResponse> {
+  const creds = await getActiveAccount();
+  const db = iapDb();
+  try {
+    await confirmSubmitV2(creds, args.reviewSubmissionId);
+  } catch (err) {
+    return NextResponse.json(
+      { error: errMsg(err) },
+      { status: err instanceof AppleApiError && err.status < 500 ? err.status : 502 },
+    );
+  }
+
+  for (const iapId of args.submittedIapIds) {
+    await db
+      .from("iaps")
+      .update({ state: "WAITING_FOR_REVIEW", synced_at: new Date().toISOString() })
+      .eq("id", iapId);
+    await db.from("actions_log").insert({
+      iap_id: iapId,
+      actor,
+      action_type: "SUBMIT_APPLE_REVIEW",
+      payload: {
+        result: "SUCCESS",
+        state: "WAITING_FOR_REVIEW",
+        via: "batch_v2_proceed_partial",
+        review_submission_id: args.reviewSubmissionId,
+      },
+    });
+  }
+
+  const response: ConfirmedResponse = { phase: "confirmed" };
+  return NextResponse.json(response);
+}
+
+async function runRollback(
+  actor: string,
+  args: { reviewSubmissionId: string; reused: boolean; addedIapIds: string[] },
+): Promise<NextResponse> {
+  const creds = await getActiveAccount();
+  const db = iapDb();
+  let deleted: boolean;
+  try {
+    const result = await rollbackOrLeaveSubmitV2(
+      creds,
+      args.reviewSubmissionId,
+      args.reused,
+    );
+    deleted = result.deleted;
+  } catch (err) {
+    return NextResponse.json(
+      { error: errMsg(err) },
+      { status: err instanceof AppleApiError && err.status < 500 ? err.status : 502 },
+    );
+  }
+
+  for (const iapId of args.addedIapIds) {
+    await db.from("actions_log").insert({
+      iap_id: iapId,
+      actor,
+      action_type: "SUBMIT_APPLE_REVIEW",
+      payload: {
+        result: deleted ? "ROLLED_BACK" : "LEFT_UNSUBMITTED",
+        via: "batch_v2_rollback",
+        review_submission_id: args.reviewSubmissionId,
+      },
+    });
+  }
+
+  const response: RolledBackResponse = { phase: "rolled-back", deleted };
   return NextResponse.json(response);
 }
 

@@ -163,3 +163,31 @@ export type InAppPurchasePriceSchedule = AscResource<
   "inAppPurchasePriceSchedules",
   Record<string, never>
 >;
+
+// ─── IAP Version (v2 reviewSubmission migration) ─────────────────────────────
+//
+// The resource actually attached to a reviewSubmissionItem — mirrors CPP's
+// AppCustomProductPageVersion. Confirmed empirically (design doc §0 Q1)
+// that a READY_TO_SUBMIT IAP already has one of these in PREPARE_FOR_SUBMISSION;
+// `POST /v1/inAppPurchaseVersions` is a rare defensive fallback only.
+
+export type InAppPurchaseVersionState =
+  | "PREPARE_FOR_SUBMISSION"
+  | "READY_FOR_REVIEW"
+  | "WAITING_FOR_REVIEW"
+  | "IN_REVIEW"
+  | "ACCEPTED"
+  | "APPROVED"
+  | "REPLACED_WITH_NEW_VERSION"
+  | "REJECTED"
+  | "DEVELOPER_REJECTED";
+
+export interface InAppPurchaseVersionAttributes {
+  version?: number;
+  state: InAppPurchaseVersionState;
+}
+
+export type InAppPurchaseVersion = AscResource<
+  "inAppPurchaseVersions",
+  InAppPurchaseVersionAttributes
+>;

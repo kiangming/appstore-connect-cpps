@@ -251,3 +251,65 @@ export type AppInfoLocalization = AscResource<
   "appInfoLocalizations",
   AppInfoLocalizationAttributes
 >;
+
+// ─── Review Submissions (shared by CPP + IAP v2 submit) ──────────────────────
+//
+// Both CPP custom-product-page submission and IAP's v2 submission mechanism
+// go through the same `reviewSubmissions` / `reviewSubmissionItems`
+// container — introduced here once so both modules share a single typed
+// model instead of each carrying its own inline/untyped shapes.
+
+export type ReviewSubmissionState =
+  | "READY_FOR_REVIEW"
+  | "WAITING_FOR_REVIEW"
+  | "IN_REVIEW"
+  | "UNRESOLVED_ISSUES"
+  | "CANCELING"
+  | "COMPLETING"
+  | "COMPLETE";
+
+export interface ReviewSubmissionAttributes {
+  platform?: string | null;
+  submitted?: boolean | null;
+  canceled?: boolean | null;
+  state?: ReviewSubmissionState;
+}
+
+export type ReviewSubmission = AscResource<
+  "reviewSubmissions",
+  ReviewSubmissionAttributes
+>;
+
+export interface ReviewSubmissionItemRelationshipRef {
+  data?: { type: string; id: string };
+}
+
+/**
+ * A `reviewSubmissionItem` points at exactly one of these relationships
+ * depending on what's being submitted (CPP version, IAP version, app store
+ * version, etc.) — only the one matching the item's actual content carries
+ * a `data` object; the rest are absent. Index signature covers item kinds
+ * this app doesn't submit yet (app events, subscriptions, Game Center, …)
+ * so `classifyReviewSubmissionItem` can still detect *something* is there.
+ */
+export interface ReviewSubmissionItemRelationships {
+  reviewSubmission?: ReviewSubmissionItemRelationshipRef;
+  appCustomProductPageVersion?: ReviewSubmissionItemRelationshipRef;
+  inAppPurchaseVersion?: ReviewSubmissionItemRelationshipRef;
+  appStoreVersion?: ReviewSubmissionItemRelationshipRef;
+  appEvent?: ReviewSubmissionItemRelationshipRef;
+  subscriptionVersion?: ReviewSubmissionItemRelationshipRef;
+  [key: string]: ReviewSubmissionItemRelationshipRef | undefined;
+}
+
+export interface ReviewSubmissionItemAttributes {
+  state?: string;
+}
+
+export interface ReviewSubmissionItem {
+  type: "reviewSubmissionItems";
+  id: string;
+  attributes?: ReviewSubmissionItemAttributes;
+  relationships?: ReviewSubmissionItemRelationships;
+  links?: { self: string };
+}

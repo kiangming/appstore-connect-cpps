@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   X,
@@ -55,6 +55,69 @@ interface ExecuteResponse {
   results: ExecuteResultRow[];
 }
 
+/** v2 only — Decision A conflict dialog data. No Apple writes have
+ *  happened yet when this phase is returned. */
+interface ForeignItemsSummary {
+  count: number;
+  byKind: Record<string, number>;
+  typesKnown: boolean;
+}
+
+interface ConflictResponse {
+  phase: "conflict";
+  reviewSubmissionId: string;
+  eligibleCount: number;
+  foreignItemsSummary: ForeignItemsSummary;
+}
+
+/** v2 only — some reviewSubmissionItem adds (or the final submit) failed.
+ *  Mirrors CPP's proceed-with-partial / rollback UX. */
+interface PartialFailItem {
+  iap_id: string;
+  apple_iap_id: string;
+  status: "SUCCESS" | "ERROR";
+  error?: string;
+  orphanedVersionWarning?: boolean;
+}
+
+interface PartialFailResponse {
+  phase: "partial-fail";
+  reviewSubmissionId: string;
+  reused: boolean;
+  items: PartialFailItem[];
+  skipped: ExecuteResultRow[];
+}
+
+interface ConfirmedResponse {
+  phase: "confirmed";
+}
+
+interface RolledBackResponse {
+  phase: "rolled-back";
+  deleted: boolean;
+}
+
+type ExecutePhaseResponse =
+  | ExecuteResponse
+  | ConflictResponse
+  | PartialFailResponse;
+
+const KIND_LABELS: Record<string, string> = {
+  appCustomProductPageVersion: "Custom Product Page",
+  inAppPurchaseVersion: "other In-App Purchase",
+  appStoreVersion: "App Version",
+  appEvent: "In-App Event",
+  subscriptionVersion: "Subscription",
+  subscriptionGroupVersion: "Subscription Group",
+  backgroundAssetVersion: "Background Asset",
+  unknown: "other item",
+};
+
+function kindLabel(kind: string, count: number): string {
+  const label = KIND_LABELS[kind] ?? kind;
+  return `${count} ${label}${count === 1 ? "" : "s"}`;
+}
+
 interface Props {
   open: boolean;
   appAppleId: string;
@@ -67,6 +130,9 @@ type Stage =
   | { kind: "loading" }
   | { kind: "preflight"; data: PreflightResponse }
   | { kind: "submitting" }
+  | { kind: "conflict"; data: ConflictResponse }
+  | { kind: "partial-fail"; data: PartialFailResponse }
+  | { kind: "resolving" }
   | { kind: "result"; data: ExecuteResponse }
   | { kind: "error"; message: string };
 
@@ -128,41 +194,151 @@ export function SubmitBatchModal({
     };
   }, [open, appAppleId, selectedIapIds]);
 
+  // Remembers the ready iap_ids for this modal session so a conflict-dialog
+  // "confirm" retry (or the initial execute call) always resends the same
+  // selection.
+  const readyIapIdsRef = useRef<string[]>([]);
+
+  function handleExecuteResult(data: ExecutePhaseResponse) {
+    if (data.phase === "conflict") {
+      setStage({ kind: "conflict", data });
+      return;
+    }
+    if (data.phase === "partial-fail") {
+      setStage({ kind: "partial-fail", data });
+      return;
+    }
+    setStage({ kind: "result", data });
+    const skipped = data.skipped ?? 0;
+    if (data.failed === 0 && skipped === 0) {
+      toast.success(`Submitted ${data.submitted} IAP${data.submitted === 1 ? "" : "s"} for review.`);
+    } else {
+      const parts = [`Submitted ${data.submitted}`];
+      if (data.failed > 0) parts.push(`${data.failed} failed`);
+      if (skipped > 0) parts.push(`${skipped} blocked by state guard`);
+      toast.warning(`${parts.join(" · ")} — see details.`);
+    }
+  }
+
+  async function postExecute(body: Record<string, unknown>) {
+    const res = await fetch(
+      `/api/iap-management/apps/${appAppleId}/iaps/submit-batch`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+    const data = (await res.json()) as
+      | ExecutePhaseResponse
+      | ConfirmedResponse
+      | RolledBackResponse
+      | { error: string };
+    if (!res.ok || "error" in data) {
+      throw new Error("error" in data ? data.error : `Request failed (${res.status})`);
+    }
+    return data;
+  }
+
   async function handleExecute() {
     if (stage.kind !== "preflight" || stage.data.ready.length === 0) return;
+    readyIapIdsRef.current = stage.data.ready.map((r) => r.iap_id);
     setStage({ kind: "submitting" });
     try {
-      const res = await fetch(
-        `/api/iap-management/apps/${appAppleId}/iaps/submit-batch`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            iap_ids: stage.data.ready.map((r) => r.iap_id),
-            execute: true,
-          }),
+      const data = await postExecute({
+        iap_ids: readyIapIdsRef.current,
+        execute: true,
+      });
+      handleExecuteResult(data as ExecutePhaseResponse);
+    } catch (err) {
+      setStage({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Network error",
+      });
+    }
+  }
+
+  /** Decision A — user explicitly chose to co-submit whatever else is
+   *  already in the shared reviewSubmission ("Submit all N to Apple review"). */
+  async function handleConfirmConflict() {
+    setStage({ kind: "submitting" });
+    try {
+      const data = await postExecute({
+        iap_ids: readyIapIdsRef.current,
+        execute: true,
+        confirmConflict: true,
+      });
+      handleExecuteResult(data as ExecutePhaseResponse);
+    } catch (err) {
+      setStage({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Network error",
+      });
+    }
+  }
+
+  /** CPP-style partial-fail recovery: submit the container as-is (only
+   *  successfully-added items go to review). */
+  async function handleProceedPartial() {
+    if (stage.kind !== "partial-fail") return;
+    const submittedIapIds = stage.data.items
+      .filter((i) => i.status === "SUCCESS")
+      .map((i) => i.iap_id);
+    setStage({ kind: "resolving" });
+    try {
+      await postExecute({
+        iap_ids: readyIapIdsRef.current,
+        proceedPartial: {
+          reviewSubmissionId: stage.data.reviewSubmissionId,
+          submittedIapIds,
         },
-      );
-      const data = (await res.json()) as
-        | ExecuteResponse
-        | { error: string };
-      if (!res.ok || "error" in data) {
-        setStage({
-          kind: "error",
-          message: "error" in data ? data.error : `Submit failed (${res.status})`,
-        });
-        return;
-      }
-      setStage({ kind: "result", data });
-      const skipped = data.skipped ?? 0;
-      if (data.failed === 0 && skipped === 0) {
-        toast.success(`Submitted ${data.submitted} IAP${data.submitted === 1 ? "" : "s"} for review.`);
-      } else {
-        const parts = [`Submitted ${data.submitted}`];
-        if (data.failed > 0) parts.push(`${data.failed} failed`);
-        if (skipped > 0) parts.push(`${skipped} blocked by state guard`);
-        toast.warning(`${parts.join(" · ")} — see details.`);
-      }
+      });
+      toast.success(`Submitted ${submittedIapIds.length} IAP${submittedIapIds.length === 1 ? "" : "s"} for review.`);
+      setStage({
+        kind: "result",
+        data: {
+          phase: "execute",
+          submitted: submittedIapIds.length,
+          failed: stage.data.items.length - submittedIapIds.length,
+          skipped: stage.data.skipped.length,
+          results: [
+            ...stage.data.items.map((i) => ({
+              iap_id: i.iap_id,
+              apple_iap_id: i.apple_iap_id,
+              status: i.status,
+              error: i.error,
+            })),
+            ...stage.data.skipped,
+          ],
+        },
+      });
+    } catch (err) {
+      setStage({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Network error",
+      });
+    }
+  }
+
+  /** CPP-style partial-fail recovery: cancel. A REUSED reviewSubmission is
+   *  never deleted server-side — see rollbackOrLeaveSubmitV2. */
+  async function handleRollbackPartial() {
+    if (stage.kind !== "partial-fail") return;
+    const addedIapIds = stage.data.items
+      .filter((i) => i.status === "SUCCESS")
+      .map((i) => i.iap_id);
+    setStage({ kind: "resolving" });
+    try {
+      await postExecute({
+        iap_ids: readyIapIdsRef.current,
+        rollback: {
+          reviewSubmissionId: stage.data.reviewSubmissionId,
+          reused: stage.data.reused,
+          addedIapIds,
+        },
+      });
+      toast.warning("Submission cancelled — no IAPs were sent for review.");
+      onClose();
     } catch (err) {
       setStage({
         kind: "error",
@@ -181,7 +357,9 @@ export function SubmitBatchModal({
   return (
     <div
       className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4"
-      onClick={() => stage.kind !== "submitting" && onClose()}
+      onClick={() =>
+        stage.kind !== "submitting" && stage.kind !== "resolving" && onClose()
+      }
     >
       <div
         className="bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200 dark:border-slate-800 w-full max-w-2xl max-h-[85vh] flex flex-col"
@@ -200,7 +378,7 @@ export function SubmitBatchModal({
           <button
             type="button"
             onClick={onClose}
-            disabled={stage.kind === "submitting"}
+            disabled={stage.kind === "submitting" || stage.kind === "resolving"}
             className="p-1 rounded text-slate-400 hover:text-slate-700 disabled:opacity-30"
           >
             <X className="h-4 w-4" />
@@ -228,13 +406,21 @@ export function SubmitBatchModal({
             <PreflightView data={stage.data} />
           )}
 
-          {stage.kind === "submitting" && (
+          {(stage.kind === "submitting" || stage.kind === "resolving") && (
             <div className="py-12 text-center">
               <Loader2 className="mx-auto h-6 w-6 animate-spin text-[#0071E3]" />
               <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                Submitting to Apple Review…
+                {stage.kind === "submitting"
+                  ? "Submitting to Apple Review…"
+                  : "Applying your choice…"}
               </p>
             </div>
+          )}
+
+          {stage.kind === "conflict" && <ConflictView data={stage.data} />}
+
+          {stage.kind === "partial-fail" && (
+            <PartialFailView data={stage.data} />
           )}
 
           {stage.kind === "result" && (
@@ -260,6 +446,47 @@ export function SubmitBatchModal({
               >
                 <Send className="h-3.5 w-3.5" />
                 Submit {stage.data.ready.length} ready
+              </button>
+            </>
+          )}
+          {stage.kind === "conflict" && (
+            <>
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmConflict}
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition"
+              >
+                <Send className="h-3.5 w-3.5" />
+                Submit all {stage.data.eligibleCount + stage.data.foreignItemsSummary.count} to Apple review
+              </button>
+            </>
+          )}
+          {stage.kind === "partial-fail" && (
+            <>
+              <button
+                type="button"
+                onClick={handleRollbackPartial}
+                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
+              >
+                Cancel — don&apos;t submit
+              </button>
+              <button
+                type="button"
+                onClick={handleProceedPartial}
+                disabled={
+                  stage.data.items.filter((i) => i.status === "SUCCESS").length === 0
+                }
+                className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Send className="h-3.5 w-3.5" />
+                Submit the {stage.data.items.filter((i) => i.status === "SUCCESS").length} that succeeded
               </button>
             </>
           )}
@@ -462,6 +689,111 @@ function ResultView({ data }: { data: ExecuteResponse }) {
                 }`}
               >
                 {row.error}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Decision A conflict dialog. This app's existing open reviewSubmission
+ * already contains items the Manager did NOT select in this batch — state
+ * exactly what's already in it so the choice to co-submit is informed, not
+ * a reflex click. Never auto-proceeds.
+ */
+function ConflictView({ data }: { data: ConflictResponse }) {
+  const { foreignItemsSummary: summary } = data;
+  const kindEntries = Object.entries(summary.byKind).filter(
+    ([kind]) => kind !== "unknown",
+  );
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <p className="font-semibold">
+          This app already has an open Apple review submission with other
+          items in it.
+        </p>
+        <p className="mt-1 text-xs">
+          Apple allows only one non-app-version submission per app at a
+          time — submitting will send your {data.eligibleCount} selected
+          IAP{data.eligibleCount === 1 ? "" : "s"} together with what&apos;s
+          already there.
+        </p>
+      </div>
+
+      <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3">
+        <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+          Already in this submission
+        </p>
+        {summary.typesKnown && kindEntries.length > 0 ? (
+          <ul className="text-xs text-slate-600 dark:text-slate-400 list-disc list-inside space-y-0.5">
+            {kindEntries.map(([kind, count]) => (
+              <li key={kind}>{kindLabel(kind, count)}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-slate-600 dark:text-slate-400">
+            {summary.count} other item{summary.count === 1 ? "" : "s"} —
+            Apple didn&apos;t return enough detail to identify the exact
+            type.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * CPP-style partial-fail recovery view: some reviewSubmissionItem adds (or
+ * the final submit) failed after retries. Mirrors CppList.tsx's
+ * proceed-with-partial / rollback pattern — failures are listed, never
+ * silently dropped.
+ */
+function PartialFailView({ data }: { data: PartialFailResponse }) {
+  const succeeded = data.items.filter((i) => i.status === "SUCCESS").length;
+  const failed = data.items.filter((i) => i.status === "ERROR").length;
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <p className="font-semibold">
+          {succeeded} added successfully · {failed} failed
+        </p>
+        <p className="mt-1 text-xs">
+          Choose whether to submit the {succeeded} that succeeded now, or
+          cancel without submitting anything.
+        </p>
+      </div>
+
+      <ul className="divide-y divide-slate-100 dark:divide-slate-800 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+        {data.items.map((row) => (
+          <li key={row.iap_id} className="px-3 py-2 text-xs">
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-mono text-[11px] text-slate-600 dark:text-slate-400 truncate">
+                {row.apple_iap_id}
+              </span>
+              <span
+                className={`text-[10px] font-medium uppercase tracking-wide ${
+                  row.status === "SUCCESS"
+                    ? "text-emerald-700 dark:text-emerald-400"
+                    : "text-red-700 dark:text-red-400"
+                }`}
+              >
+                {row.status}
+              </span>
+            </div>
+            {row.error && (
+              <p className="mt-0.5 text-[11px] text-red-600 dark:text-red-400">
+                {row.error}
+              </p>
+            )}
+            {row.orphanedVersionWarning && (
+              <p className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-400">
+                A version was created on Apple for this IAP before this
+                failure and cannot be auto-removed — check App Store
+                Connect if this recurs.
               </p>
             )}
           </li>

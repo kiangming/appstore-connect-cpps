@@ -38,6 +38,16 @@ import { ExportOptionsDialog } from "@/components/iap-management/ExportOptionsDi
 
 const PAGE_SIZE = 100;
 
+/**
+ * Decision B — Apple's official per-reviewSubmission cap (confirmed via
+ * Apple's "Submit an In-App Purchase" help docs, see
+ * docs/iap-management/design-iap-v2-submission-migration.md §0 Q4).
+ * Enforced client-side so a >200 selection can never reach Apple:
+ * multi-select is capped at this many, and "select all" on a larger
+ * filtered set is blocked entirely rather than silently truncated.
+ */
+const MAX_SUBMIT_SELECTION = 200;
+
 interface Props {
   appId: string;
   appName: string;
@@ -208,11 +218,25 @@ export function IapListClient({
     [filtered, appleToInternal],
   );
 
+  // Decision B — Apple's official 200-item-per-reviewSubmission cap,
+  // enforced client-side so a >200 selection can never reach Apple.
+  // Invariant maintained here: `selected.size` never exceeds
+  // MAX_SUBMIT_SELECTION at any point, for either single-checkbox or
+  // select-all interaction.
   function toggleOne(appleIapId: string) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(appleIapId)) next.delete(appleIapId);
-      else next.add(appleIapId);
+      if (next.has(appleIapId)) {
+        next.delete(appleIapId);
+        return next;
+      }
+      if (next.size >= MAX_SUBMIT_SELECTION) {
+        toast.warning(
+          `Max ${MAX_SUBMIT_SELECTION} IAPs per submission (Apple's limit) — deselect one before adding another.`,
+        );
+        return prev;
+      }
+      next.add(appleIapId);
       return next;
     });
   }
@@ -221,9 +245,15 @@ export function IapListClient({
     if (selectableAppleIds.every((id) => selected.has(id))) {
       // All selected → deselect
       setSelected(new Set());
-    } else {
-      setSelected(new Set(selectableAppleIds));
+      return;
     }
+    if (selectableAppleIds.length > MAX_SUBMIT_SELECTION) {
+      toast.error(
+        `${selectableAppleIds.length} eligible IAPs, but Apple allows max ${MAX_SUBMIT_SELECTION} per submission. Select up to ${MAX_SUBMIT_SELECTION} manually and submit in batches.`,
+      );
+      return;
+    }
+    setSelected(new Set(selectableAppleIds));
   }
 
   function clearSelection() {

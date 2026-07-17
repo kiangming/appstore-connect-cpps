@@ -1,5 +1,11 @@
-import { generateAscToken } from "./asc-jwt";
 import type { AscCredentials } from "@/lib/asc-jwt";
+import { appleFetch, withRetry } from "@/lib/shared/apple-fetch";
+import {
+  createOrReuseReviewSubmission,
+  addReviewSubmissionItem,
+  submitReviewSubmission,
+  deleteReviewSubmission,
+} from "@/lib/shared/review-submission";
 import { log } from "@/lib/logger";
 import type {
   AscApiResponse,
@@ -22,8 +28,6 @@ import type {
   UploadOperation,
 } from "@/types/asc";
 
-const ASC_BASE_URL = "https://api.appstoreconnect.apple.com";
-
 /**
  * Hotfix 20 — page-size + safety cap for the apps catalogue fetch.
  *
@@ -40,45 +44,23 @@ const ASC_BASE_URL = "https://api.appstoreconnect.apple.com";
 const APPS_PAGE_SIZE = 200;
 const APPS_MAX_PAGES = 50;
 
+/**
+ * Thin wrapper over the shared Apple fetch primitive (`lib/shared/apple-fetch.ts`).
+ * Extracted during the IAP reviewSubmissions v2 migration — CPP previously
+ * had a fully separate `ascFetch` with ZERO 429/rate-limit detection.
+ * Delegating to `appleFetch` gives every CPP call site typed
+ * `AppleRateLimitError` detection + budget-header logging for free; nothing
+ * else about CPP's call patterns changes (still no automatic retry except
+ * where explicitly composed with `withRetry` below, in the review-submission
+ * flow).
+ */
 async function ascFetch<T>(
   creds: AscCredentials,
   method: string,
   endpoint: string,
   body?: unknown
 ): Promise<T> {
-  const token = await generateAscToken(creds);
-  // Hotfix 20: accept either a path (`/v1/apps?...`) or a full URL
-  // (Apple's `links.next` carries the full origin). Detect via prefix.
-  const url = endpoint.startsWith("http")
-    ? endpoint
-    : `${ASC_BASE_URL}${endpoint}`;
-
-  if (body) {
-    await log("asc-client", `[${creds.keyId}] ${method} ${endpoint} body: ${JSON.stringify(body)}`);
-  }
-
-  const res = await fetch(url, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  await log("asc-client", `[${creds.keyId}] ${method} ${endpoint} → ${res.status}`);
-
-  if (!res.ok) {
-    const errorBody = await res.text();
-    await log("asc-client", `[${creds.keyId}] ${method} ${endpoint} ERROR ${res.status}: ${errorBody}`, "ERROR");
-    throw new Error(`ASC API error ${res.status} on ${method} ${endpoint}: ${errorBody}`);
-  }
-
-  if (res.status === 204) {
-    return undefined as T;
-  }
-
-  return res.json() as Promise<T>;
+  return appleFetch<T>(creds, method, endpoint, body, "asc-client");
 }
 
 /**
@@ -359,6 +341,11 @@ export interface PrepareItemResult {
 
 export interface PrepareCppSubmissionResult {
   submissionId: string;
+  /** True when an existing open reviewSubmission was reused rather than
+   *  created fresh — an IAP v2 submit batch (or another CPP session) may
+   *  already have items in it. Rollback must NEVER delete a reused
+   *  submission (see `rollbackCppSubmission`). */
+  reused: boolean;
   items: PrepareItemResult[];
 }
 
@@ -367,31 +354,24 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Step 1+2 of the new submit flow:
- * - Creates one reviewSubmission container
- * - Sequentially POSTs reviewSubmissionItems (200ms gap, up to 3 attempts each)
- * - Returns per-item results so the caller can decide to confirm or rollback
+ * Step 1+2 of the submit flow:
+ * - Create-or-reuse the app's open reviewSubmission container (never
+ *   blind-creates — closes the latent 409 CPP used to hit whenever Apple
+ *   already had one open, e.g. from an IAP v2 submit batch on the same app).
+ * - Sequentially POSTs reviewSubmissionItems (200ms gap between items,
+ *   `withRetry` on each — retries only on 429, honors Retry-After, unlike
+ *   the old blind "retry any error 3x" loop this replaces).
+ * - Returns per-item results so the caller can decide to confirm or rollback.
  */
 export async function prepareCppSubmission(
   creds: AscCredentials,
   appId: string,
   items: Array<{ cppId: string; cppName: string; versionId: string }>
 ): Promise<PrepareCppSubmissionResult> {
-  const submissionRes = await ascFetch<{ data: { id: string } }>(
-    creds,
-    "POST",
-    "/v1/reviewSubmissions",
-    {
-      data: {
-        type: "reviewSubmissions",
-        attributes: { platform: "IOS" },
-        relationships: {
-          app: { data: { type: "apps", id: appId } },
-        },
-      },
-    }
+  const { submission, reused } = await withRetry(() =>
+    createOrReuseReviewSubmission(creds, appId, "IOS", "asc-client"),
   );
-  const submissionId = submissionRes.data.id;
+  const submissionId = submission.id;
 
   const results: PrepareItemResult[] = [];
 
@@ -399,41 +379,30 @@ export async function prepareCppSubmission(
     const { cppId, cppName, versionId } = items[i];
     if (i > 0) await sleep(200);
 
-    let lastError: string | undefined;
-    let succeeded = false;
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        await ascFetch<unknown>(creds, "POST", "/v1/reviewSubmissionItems", {
-          data: {
-            type: "reviewSubmissionItems",
-            relationships: {
-              reviewSubmission: {
-                data: { type: "reviewSubmissions", id: submissionId },
-              },
-              appCustomProductPageVersion: {
-                data: { type: "appCustomProductPageVersions", id: versionId },
-              },
-            },
-          },
-        });
-        succeeded = true;
-        break;
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : "Unknown error";
-      }
+    try {
+      await withRetry(() =>
+        addReviewSubmissionItem(
+          creds,
+          submissionId,
+          "appCustomProductPageVersion",
+          "appCustomProductPageVersions",
+          versionId,
+          "asc-client",
+        ),
+      );
+      results.push({ cppId, cppName, versionId, status: "success" });
+    } catch (err) {
+      results.push({
+        cppId,
+        cppName,
+        versionId,
+        status: "failed",
+        error: err instanceof Error ? err.message : "Unknown error",
+      });
     }
-
-    results.push({
-      cppId,
-      cppName,
-      versionId,
-      status: succeeded ? "success" : "failed",
-      error: succeeded ? undefined : lastError,
-    });
   }
 
-  return { submissionId, items: results };
+  return { submissionId, reused, items: results };
 }
 
 /**
@@ -443,32 +412,22 @@ export async function confirmCppSubmission(
   creds: AscCredentials,
   submissionId: string
 ): Promise<void> {
-  await ascFetch<unknown>(
-    creds,
-    "PATCH",
-    `/v1/reviewSubmissions/${submissionId}`,
-    {
-      data: {
-        type: "reviewSubmissions",
-        id: submissionId,
-        attributes: { submitted: true },
-      },
-    }
-  );
+  await withRetry(() => submitReviewSubmission(creds, submissionId, "asc-client"));
 }
 
 /**
- * Rollback: DELETE the submission container (cancels all added items)
+ * Rollback: DELETE the submission container (cancels all added items).
+ *
+ * CALLER MUST ONLY invoke this for a submission `prepareCppSubmission`
+ * created fresh (`reused === false`). Deleting a REUSED submission would
+ * cancel items this flow never added (e.g. IAP v2 items already pending
+ * review on the same app) — see `PrepareCppSubmissionResult.reused`.
  */
 export async function rollbackCppSubmission(
   creds: AscCredentials,
   submissionId: string
 ): Promise<void> {
-  await ascFetch<void>(
-    creds,
-    "DELETE",
-    `/v1/reviewSubmissions/${submissionId}`
-  );
+  await deleteReviewSubmission(creds, submissionId, "asc-client");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

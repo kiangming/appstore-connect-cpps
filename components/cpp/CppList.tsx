@@ -468,6 +468,10 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
   const [submitPhase, setSubmitPhase] = useState<SubmitPhase>(null);
   const [prepareResult, setPrepareResult] = useState<{
     submissionId: string;
+    /** True when the reviewSubmission was an existing open one Apple
+     *  already had for this app (reused, not created by this flow) —
+     *  rollback must never DELETE a reused submission. */
+    reused?: boolean;
     items: Array<{ cppId: string; cppName: string; versionId: string; status: "success" | "failed"; error?: string }>;
   } | null>(null);
   const [confirmError, setConfirmError] = useState<string | null>(null);
@@ -679,6 +683,7 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
 
     const data = await res.json() as {
       submissionId: string;
+      reused?: boolean;
       items: Array<{ cppId: string; cppName: string; versionId: string; status: "success" | "failed"; error?: string }>;
     };
     setPrepareResult(data);
@@ -703,6 +708,14 @@ export function CppList({ cpps, appId, versionStates, versionIds, rejectReasons 
 
   async function handleRollbackSubmit() {
     if (!prepareResult?.submissionId) {
+      resetSubmitState();
+      return;
+    }
+    // A reused reviewSubmission may contain items this flow never added
+    // (e.g. another CPP session, or an IAP v2 submit batch on the same
+    // app) — deleting it would cancel those too. Never DELETE a reused
+    // submission; just leave it as-is and reset local UI state.
+    if (prepareResult.reused) {
       resetSubmitState();
       return;
     }

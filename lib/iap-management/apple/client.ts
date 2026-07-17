@@ -22,6 +22,7 @@ import type {
   InAppPurchase,
   InAppPurchaseLocalization,
   InAppPurchaseAppStoreReviewScreenshot,
+  InAppPurchaseVersion,
   CreateInAppPurchasePayload,
   UpdateInAppPurchasePayload,
   CreateInAppPurchaseLocalizationPayload,
@@ -344,6 +345,53 @@ export async function uploadScreenshotToOperations(
       );
     }
   }
+}
+
+// ─── IAP Versions (reviewSubmissions v2 migration) ──────────────────────────
+
+/**
+ * List the versions Apple already has for this IAP. Confirmed empirically
+ * (design doc §0 Q1) that a READY_TO_SUBMIT IAP already has one in
+ * PREPARE_FOR_SUBMISSION — the v2 submit flow READS this, it does not
+ * create a version in the common path.
+ */
+export async function listInAppPurchaseVersions(
+  creds: AscCredentials,
+  iapId: string,
+): Promise<AscApiResponse<InAppPurchaseVersion[]>> {
+  return iapFetch<AscApiResponse<InAppPurchaseVersion[]>>(
+    creds,
+    "GET",
+    `/v2/inAppPurchases/${iapId}/versions`,
+  );
+}
+
+/**
+ * Rare defensive fallback for the v2 submit flow — only called when
+ * `listInAppPurchaseVersions` returns no submittable version (should be
+ * rare-to-never given the empirical finding above). The created version
+ * cannot be deleted (no DELETE endpoint exists) — callers MUST log this
+ * explicitly and surface an orphan warning if the subsequent
+ * reviewSubmissionItem add then fails, since the version now permanently
+ * exists on Apple regardless of whether submission completes.
+ */
+export async function createInAppPurchaseVersion(
+  creds: AscCredentials,
+  iapId: string,
+): Promise<AscApiResponse<InAppPurchaseVersion>> {
+  return iapFetch<AscApiResponse<InAppPurchaseVersion>>(
+    creds,
+    "POST",
+    "/v1/inAppPurchaseVersions",
+    {
+      data: {
+        type: "inAppPurchaseVersions",
+        relationships: {
+          inAppPurchase: { data: { type: "inAppPurchases", id: iapId } },
+        },
+      },
+    },
+  );
 }
 
 // ─── Submit for Apple Review ─────────────────────────────────────────────────
