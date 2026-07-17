@@ -11,8 +11,10 @@ Kiến trúc modular: shared shell (Sidebar + Hub + TopNav + login) + per-tool m
 |---|---|---|
 | CPP Manager | `/apps/*`, `/api/asc/*` | Upload Custom Product Pages lên App Store Connect |
 | Store Management | `/store-submissions/*`, `/api/store-submissions/*` | Quản lý submission multi-platform qua email |
+| Apple IAP Management | `/iap-management/*`, `/api/iap-management/*` | Quản lý Apple In-App Purchases (create/edit/bulk-import/pricing/submit) không qua ASC web UI. **Own knowledge base**: `docs/iap-management/IAP-MANAGEMENT-KNOWLEDGE-BASE.md` — đọc trước khi code bất kỳ IAP-related work nào. |
+| Google IAP Management | `/google-iap-management/*`, `/api/google-iap-management/*` | Tương tự IAP Management nhưng cho Google Play. Own reference: `docs/google-iap-management/google-api-reference.md` + `operational-guide.md`. |
 
-Khi Claude bắt đầu session, **hỏi user đang làm việc với module nào** trước khi code. Mỗi module có conventions riêng, KHÔNG mix cross-module trong cùng session.
+Khi Claude bắt đầu session, **hỏi user đang làm việc với module nào** trước khi code. Mỗi module có conventions riêng, KHÔNG mix cross-module trong cùng session. Apple/Google IAP Management have their own detailed knowledge bases (linked above) — this file gives shared/CPP/Store Management conventions only; don't duplicate IAP-specific content here.
 
 ---
 
@@ -434,6 +436,24 @@ Next.js rejects non-async exports in any module whose first line is `'use server
 Packages that ship a `.wasm` binary (e.g. `re2-wasm`) fail at Next.js's "Collecting page data" phase with `ENOENT: ... re2.wasm` because webpack doesn't copy the binary into the expected output path. Fix: add the package to `experimental.serverComponentsExternalPackages` in `next.config.mjs` so Next.js treats it as external and resolves via `require()` against `node_modules/` at runtime.
 
 Current externalized packages: `re2-wasm`. Add new WASM-shipping dependencies to this array.
+
+### 4. IAP Management modules keep their own crystallized meta-rules — read them, don't re-derive
+
+Apple IAP Management and Google IAP Management (both undocumented above in
+"Available modules" until now — they have their own dedicated knowledge
+bases) have accumulated 9+ cross-cutting meta-rules from real incidents:
+twin-path hardening (grep for every sibling path when hardening one),
+`actions_log` CHECK-constraint silent-fail, surface-divergence-don't-
+reconcile, store-write read-modify-write, **the status principle**
+(a terminal/tracking status must reflect the real outcome, never the
+button clicked or a same-named-but-different-meaning per-item field),
+cross-process cache staleness (no cache on a cold path beats a stale
+multi-instance cache), prefer-a-missed-signal-over-a-wrong-one, twin-
+*structure* asymmetry (twin modules aren't symmetric — check the
+target's extra surfaces too), and design-first-when-surface-similar.
+Full detail + instances: `docs/iap-management/IAP-MANAGEMENT-KNOWLEDGE-BASE.md`
+§9 and §10.13.K (P1-P9). These generalize beyond IAP — read them before
+assuming a "port this fix to the sibling path" task is a 1:1 copy.
 
 ## Pre-push checklist (both modules)
 

@@ -3,6 +3,12 @@
 > **Purpose.** Self-contained reference for the IAP Management feature. Read this first to understand *what is built and why*. For operational specifics see `apple-api-reference.md` (endpoint contracts), `pricing-templates-guide.md` (Manager UX), and the `SESSION-ARC-*` files (chronological "what happened when").
 >
 > **Authoritative as of** commit `f81032c` (2026-05-20, post-Cycle 34 / IAP.q.3). All file paths verified against the working tree.
+>
+> **Addendum (2026-07-17):** §§4.10-4.11, 10.15-10.16, and §10.13.K **P5-P9**
+> added to capture the reviewSubmissions v2 submit migration and the
+> three Hub-tracking integrations (Cycles 45-46) — verified against the
+> working tree at the time of writing. Cycles 35-44 predate this
+> addendum and were not re-verified as part of it.
 
 ---
 
@@ -96,6 +102,10 @@ Each capability ties to an Apple endpoint (or composite) and a tool entry point.
 | Apply template at IAP create | `PricingSourceSelector` on form | Resolved server-side at orchestration | 30 (IAP.p1.f) |
 | View detail (Apple parity) | `/iap-management/apps/[appId]/iaps/[iapId]/view` | `GET /v2/inAppPurchases/{id}` + 2-stage `/v1/inAppPurchasePriceSchedules/{id}/manualPrices` | 31 |
 | Submit state guard (defence-in-depth) | Server-side recheck in submit-batch route | `GET /v2/inAppPurchases?filter[apps]={id}` | 32 (IAP.q.1) |
+| Export IAP catalog (xlsx) | `Export list` button on IAP list page | Live per-IAP fetch reusing View Detail's price-schedule read (§4.1) | 44 (commit `fbea49a`) |
+| Submit batch — reviewSubmissions v2 (per-app toggle) | Same `Submit Selected` modal | `POST/PATCH /v1/reviewSubmissions`, `POST /v1/reviewSubmissionItems` → `inAppPurchaseVersion` | 46 (§4.10/§4.11/§10.16, commit `6bb7023`) |
+| Hub run tracking — Bulk Import | Automatic (no UI toggle; Settings page controls config) | N/A (external VNGGames Hub REST API) | 45 (§10.15, commits `95d9413`/`613a9c3`/`4ba8e6f`/`9ed7845`) |
+| Hub run tracking — Submit batch | Automatic, reuses Bulk Import's config | N/A (external) | 45 (§10.15, commit `867386a`) |
 
 ---
 
@@ -394,6 +404,63 @@ the `user-hour-lim` value Apple sends in `X-Rate-Limit` (now logged via
 Manager telemetry observation over 1–2 days post-deploy will surface the
 true cap and resolve which figure to treat as load-bearing. The Phase B
 subset trigger criteria (B2/B3/B4) explicitly depend on this resolution.
+
+### 4.10 LANDMARK — CPP and IAP share ONE items-only reviewSubmission slot per (app, platform)
+
+Apple allows **up to two** open `reviewSubmissions` per (app, platform) at
+a time: one that includes an app version, and one **items-only**
+submission (no app version) that carries things like Custom Product
+Pages, In-App Events, or (as of the v2 migration, §10.16) In-App
+Purchases. **CPP submissions and IAP submissions are BOTH items-only —
+they compete for the exact same single slot.**
+
+Source: Apple's official Help doc, [Overview of submitting for
+review](https://developer.apple.com/help/app-store-connect/manage-submissions-to-app-review/overview-of-submitting-for-review/)
+— "Each platform can have one app version submission under review at a
+time. A platform can have a maximum of two submissions under review at a
+time: one that includes an app version and one that includes items... 200
+items per submission" is Apple's own stated cap ([Submit an In-App
+Purchase](https://developer.apple.com/help/app-store-connect/manage-submissions-to-app-review/submit-an-in-app-purchase/)).
+
+**Consequence — any submission code for EITHER module must create-or-reuse
+the app's open items-only `reviewSubmission`, never blind-create.**
+Blind-creating 409s whenever the other module (or a prior partial batch)
+already has the slot occupied. This was a **latent, pre-existing bug in
+CPP** — CPP's `reviewSubmissions` implementation always POSTed a new
+container and had no pre-check — only surfaced and fixed when the IAP v2
+migration made the slot-sharing collision routine rather than rare
+(`6bb7023`; shared fix in `lib/shared/review-submission.ts`, backported to
+CPP's `prepareCppSubmission`). See §10.16 for the full migration and
+§10.15/Decision A for the conflict-dialog UX this enables (never silently
+co-submit the other module's items).
+
+### 4.11 LANDMARK — IAP submission migrated to the reviewSubmissions mechanism (v2)
+
+IAPs are now submitted via the same `reviewSubmissions` /
+`reviewSubmissionItems` container mechanism CPP already used — a new
+`reviewSubmissionItem` relationship (`inAppPurchaseVersion` →
+`inAppPurchaseVersions`) sits alongside CPP's
+`appCustomProductPageVersion`, confirmed directly against Apple's OpenAPI
+spec schema for `ReviewSubmissionItemCreateRequest`. The old
+`POST /v1/inAppPurchaseSubmissions` mechanism was announced deprecated by
+Apple on 2026-07-15 with **no sunset date** — kept fully intact behind a
+toggle for rollback (§10.16), not removed.
+
+**Confirmed empirically** (live `GET /v2/inAppPurchases/{id}/versions`
+against 5 real production IAPs): a `READY_TO_SUBMIT` IAP already has an
+`inAppPurchaseVersion` in state `PREPARE_FOR_SUBMISSION` — the new submit
+flow only needs to **read** the version id, not create one, in the common
+path (`POST /v1/inAppPurchaseVersions` exists only as a rare defensive
+fallback with no observed real-world trigger yet).
+
+**Caveat inherited from §4.9's pattern (spec vs. behavior)**: the OpenAPI
+spec's `deprecated` flag is **not reliably set** — `/v1/inAppPurchaseSubmissions`
+shows `deprecated:false` in the spec despite Apple's own announcement
+saying otherwise, while unrelated old GET endpoints (`GET
+/v1/inAppPurchases/{id}`) DO show `deprecated:true`. **Treat Apple's
+announcement as authoritative on deprecation status; treat the spec as
+authoritative on new endpoint request/response shapes.** Full migration
+design: §10.16 and [design-iap-v2-submission-migration.md](design-iap-v2-submission-migration.md).
 
 ---
 
@@ -1925,6 +1992,9 @@ auto-deploy).
 
 #### 10.13.A Google — cross-currency bulk import (USD file → VND app)
 
+**Commits:** `84d64b6` (feature) + same-day correction `a54f9fe` ("header-first
+cross-currency trigger + explicit-anchor" — verified against git).
+
 **Symptom:** Bulk Import wizard with a USD-priced CSV into a VND-default app
 showed no tier candidates and refused to proceed (the old path expected the
 file currency to match the app currency).
@@ -1971,6 +2041,10 @@ Key constraints:
 ---
 
 #### 10.13.C Google — unified pricing table (merged edit + live comparison)
+
+**Commit:** `c2b7b24` (verified against git — this is the specific commit for
+this item; §10.13.A's cross-currency import is a separate, earlier commit,
+`84d64b6`).
 
 **Context:** Previously the item-detail page had two separate blocks: the edit
 form's region-override table and the live-vs-stored comparison below it.
@@ -2228,6 +2302,147 @@ This pattern applies to any Apple or Google API where the update mask
 replaces a collection. Audit every update path when a new collection
 field is added to a mask.
 
+**P5 — The status principle: terminal status must reflect REAL outcome, not the button clicked or a per-item label**
+
+A tracking/Hub terminal status (or any aggregate success/fail signal) must
+answer "did the underlying goal state actually get reached" — not "which
+UI action did the user take" and not "does some per-item field say
+SUCCESS." Confirmed instances, spanning three otherwise-unrelated
+features:
+
+| Instance | Naive read | Correct read |
+|---|---|---|
+| All-skipped bulk-import batch (**P2** above / 613a9c3) | 0 succeeded → looks like FAILED | Nothing was attempted-and-failed → SUCCESS |
+| Google bulk operation, every row refused by Google | Same shape as above | SUCCESS (no real failures occurred) |
+| Submit-batch partial-fail, user clicks "Cancel — don't submit" (§10.15) | User clicked a "cancel"-labeled button → looks like CANCELLED | 0 IAPs reached Apple review, and real Apple writes already happened → FAIL, not CANCEL |
+| Submit-batch: all reviewSubmissionItem adds succeed, but the final submit PATCH fails (§10.15 / §10.16) | Every item's own `status` field says `"SUCCESS"` → looks like SUCCESS | `"SUCCESS"` there means "added to the container," not "reached review" — 0 items reached review → FAIL |
+
+**Rule of application**: before wiring ANY terminal-status computation,
+name explicitly what the "goal state" is (reached review? item persisted?
+external system accepted it?) and compute the status from THAT, never
+from a UI label or an intermediate-step's per-item field that shares a
+name with — but doesn't mean — final success.
+
+**P6 — Cross-process cache staleness (multi-instance deploy)**
+
+An in-memory cache on a service that runs 2+ instances (Railway rolling
+deploys run old + new instance side by side during a deploy) will serve
+stale reads that a single-process mental model never catches — a write on
+instance A doesn't invalidate instance B's cache. For a **cold path**
+(read a handful of times per batch/request, not a hot loop), the fix is
+**no cache at all**, not building cross-process invalidation — the
+performance the cache buys is negligible against the correctness risk.
+
+Instance: `hub_tracking_config`'s original 5-minute in-memory cache caused
+the `enabled` Settings toggle to appear to "silently revert" and a
+just-saved token to read back as missing (`9ed7845`) — removed entirely,
+every read now hits the DB (see §10.15).
+
+**P7 — Tracking: prefer a missed signal over a wrong one**
+
+A fire-and-forget auxiliary call (telemetry, tracking, audit) that can't
+yet determine the correct status must stay silent rather than send a
+guessed/wrong one. A dropped signal is a gap; a wrong signal is
+misinformation that looks authoritative.
+
+Instance: Google's Hub-tracking slow-start race (`ce169a8`) — when a
+fire-and-forget `/hub-tracking/start` call resolves AFTER the real
+execute has already begun, the late `run_id` is dropped silently (never
+adopted, never cancelled) rather than auto-labeling that real, actively-
+succeeding run as CANCELLED.
+
+**P8 — Twin-structure asymmetry (extends P1)**
+
+P1 says: when hardening path A, grep for twin path B and apply the same
+treatment. This crystallizes a sharper corollary: twin modules are **not
+symmetric** — porting pattern A→B 1:1 leaves gaps wherever B has its own
+extra surfaces A doesn't, or its own timing that A's fix doesn't
+anticipate.
+
+Confirmed instances:
+- Google's IAP Management landing page has a nav-card grid Apple's
+  module has no equivalent of — porting Apple's Hub-tracking Settings
+  page without adding a matching nav card left it undiscoverable
+  (`b5265c2`).
+- Bulk Import threads `hub_run_id` via multipart FormData; submit-batch
+  (a JSON API, not multipart) has to thread the same concept via a JSON
+  body field instead — same concept, different transport, because the
+  target surface's request shape differs (§10.15/§10.16).
+- The "slow-start race" fix that was CORRECT for Apple's timing (drop the
+  late run, don't adopt) was ported to Google in the SAME shape, but
+  Google's actual timing characteristics reintroduced the CANCELLED
+  mislabel through a different path than Apple's original bug — the twin
+  port needed its own re-validation against the target's real timing, not
+  just a copy of the source's fix (`ce169a8`; see **P7** above).
+
+**When porting a pattern to a twin module: audit the target's *extra*
+surfaces, and re-validate timing/ordering against the target's actual
+flow — don't assume the source's fix transfers unchanged just because the
+API shapes look similar.**
+
+**P9 — Design-first pays off most exactly where a feature LOOKS like a proven pattern**
+
+The temptation to skip a design pass is strongest when a new feature
+resembles something already built and battle-tested — but that's
+precisely where a dangerous mismatch hides, because surface similarity
+invites assuming the proven pattern transfers wholesale.
+
+Instance: IAP submit-batch's Hub tracking looked, at a glance, just like
+Bulk Import's Hub tracking (same config, same lifecycle calls, same
+cancel-guard concept) — but submit-batch's reviewSubmissions v2 path is
+**multi-request** (a conflict or partial-fail response pauses for a
+client round-trip before the outcome is known), which breaks Bulk
+Import's core assumption that one request-scoped `try/finally` can always
+own the terminal close. This was caught on paper, in the design doc,
+before any code was written — see §10.15.
+
+---
+
+#### 10.13.L Apple — bulk-import submit-after-create twin-path fix (IAP.q.2, commit `dc53b63`, 2026-07-15)
+
+**Symptom:** Bulk Import's "Submit to Apple review after create" option
+called `submitInAppPurchase` immediately after create, gated only by a
+purely local condition (screenshot uploaded + no failed locales) with
+zero visibility into Apple's actual IAP state. Apple's screenshot-confirm
+PATCH returning 200 doesn't mean the `appStoreReviewScreenshot`
+relationship has propagated on Apple's side yet, so the immediate submit
+409'd (`ENTITY_ERROR.RELATIONSHIP.REQUIRED` / `IAP_SUBMISSION_NOT_ALLOWED`)
+and the whole row collapsed to a bare red `ERROR` — hiding the fact that
+the IAP itself had actually been created successfully (`apple_iap_id`
+existed, just buried under the error label).
+
+**Twin-path root cause:** the regular `submit-batch` endpoint already had
+a Cycle 32 / IAP.q.1 state-guard (`partitionByStateGuard`, §4.5) that
+bulk-import's create→submit path bypassed entirely — the exact "hardened
+path A, forgot to check path B" shape §10.13.K **P1** names.
+
+**Fix — converge on the existing guard rather than reinventing it:**
+1. `pollIapReadyForSubmit` (new) polls until Apple reports
+   `READY_TO_SUBMIT`, sharing a loop extracted from the existing
+   `pollIapReadyForPricing`.
+2. `lib/iap-management/apple/submit-eligibility.ts` (new) exports
+   `checkSubmitEligibility`, composing that poll with the **same**
+   `partitionByStateGuard` submit-batch already uses.
+3. Bulk-import's create step calls `checkSubmitEligibility` before
+   submitting. A not-yet-ready row gets `submit_outcome: "deferred"` (row
+   stays `SUCCESS`/create-succeeded, `apple_iap_id` preserved); a
+   guard-passed-but-still-rejected row gets `submit_outcome: "failed"`
+   (also stays `SUCCESS`, not `ERROR`) — the create half is never rolled
+   back based on the submit attempt's outcome.
+4. `BulkImportWizard.tsx`'s `OutcomeBadge` renders "Created — submit
+   deferred" (amber) / "Created — submit failed" (orange) instead of
+   collapsing to a red `ERROR`; the Notes column surfaces the reason +
+   `apple_iap_id` so the Manager can retry via `Submit Selected`.
+
+No DB migration — `submit_outcome` / `submit_deferred_state` /
+`submit_error` ride the existing `BULK_IMPORT_CREATE` actions_log JSON
+payload. Tests: +22.
+
+**Files:** `lib/iap-management/apple/poll-iap-ready.ts`,
+`lib/iap-management/apple/submit-eligibility.ts` (NEW),
+`app/(dashboard)/iap-management/apps/[appId]/bulk-import/execute/route.ts`,
+`BulkImportWizard.tsx`.
+
 ---
 
 ### 10.14 Cycle 44 — IAP Export (Google + Apple) (2026-07)
@@ -2414,6 +2629,177 @@ affordances rather than cloning the sibling module's fetch strategy.
 
 ---
 
+#### 10.14.E Territory filter — `ExportOptionsDialog` (shared Apple + Google, commit `a4208ed`, mockup `6465178`)
+
+**One day after** both exports shipped (§10.14.A-C), a shared pre-export
+filter dialog was added so the Manager can restrict which countries'
+price columns actually export, instead of always getting the full
+territory union.
+
+**`ExportOptionsDialog`** (`components/iap-management/ExportOptionsDialog.tsx`)
+— props `{ open, onCancel, onExport(selectedCodes: string[] | null) }` —
+is imported **verbatim by both** IAP list pages (Apple's
+`app/(dashboard)/iap-management/apps/[appId]/IapListClient.tsx` and
+Google's `components/google-iap-management/iap-list/IapListClient.tsx`),
+confirmed by grep — one component, no per-platform duplication. It reads
+from a new static catalog, `lib/iap-management/territory-catalog.ts`
+(~180 territories, 6 regions, country→currency), built because no
+existing catalog covered the full store-territory set (reuses the
+existing `i18n-iso-countries` dependency, no new one added). UX: search by
+country name / ISO code / currency, multi-select checkboxes grouped by
+region, Select All / Clear All, live "N of M selected" count.
+
+**Selection contract (deliberate):** default state is all-selected, and
+while nothing has been explicitly deselected, `onExport` receives `null`
+— meaning "no filter, export everything the live fetch found," identical
+to pre-feature behavior. Only once the operator explicitly deselects at
+least one territory does `onExport` receive the literal array of
+remaining codes, which the backend intersects against the real per-item
+territory union (`buildExportPlan` in both `xlsx-export.ts` files gained
+an optional `selectedTerritories` param). Both export routes switched
+GET→POST specifically so the selection travels in the JSON body — the
+same `.in()`/URL-length class of trap named in **§10.13.E**, avoided here
+by not putting a variable-length list in a query string at all.
+
+Not shared with CPP — Apple-IAP + Google-IAP only. Design mockup (`6465178`,
+same day, 28 minutes earlier) at
+`docs/google-iap-management/design/export-options-dialog-mockup.html`.
+
+**Files:** `components/iap-management/ExportOptionsDialog.tsx` +
+`.test.tsx` (NEW), `lib/iap-management/territory-catalog.ts` + `.test.ts`
+(NEW), both `IapListClient.tsx` files, both export `route.ts` files, both
+`xlsx-export.ts` files.
+
+---
+
+### 10.15 Cycle 45 — VNGGames Hub run tracking (Apple import, Google import, Apple submit) (2026-07)
+
+**Session scope:** Three integrations of the same external tracking
+mechanism, shipped as the module gained enough real usage to warrant
+operational visibility on the [VNGGames Hub](../integrate-rest-vnggames-hub.md)
+dashboard: Apple Bulk Import (first), Google Bulk Import (ported), Apple
+IAP Submit (third — reuses Apple's own config, see below). Each is a
+plain REST "runs ledger": `POST /runs/start` opens a run (returns
+`RUN_ID`), `PATCH /runs/:id` closes it with a terminal status
+(`SUCCESS` / `FAILED` / `CANCELLED` / `PARTIAL`) — 1:1 with one tool
+workflow attempt.
+
+**Shared mechanism (all three integrations):**
+- Config: `iap_mgmt.hub_tracking_config` (Apple) /
+  `google_iap_mgmt.hub_tracking_config` (Google) — separate tables per
+  platform, own `workflow_id` + AES-256-GCM-encrypted token
+  (`lib/asc-crypto.ts`) + Settings `enabled` toggle. **No in-memory
+  cache** — every read hits the DB (§10.13.K **P6**; a 5-min cache
+  caused the toggle-appears-to-revert bug, `9ed7845`).
+- HTTP layer: `hub-client.ts` — hard `3000ms` **real** `AbortController`
+  abort (not a `Promise.race` that lets the request keep running) on
+  every call; never throws — a discriminated result type lets callers
+  log-and-swallow.
+- Non-blocking by construction: disabled/unconfigured/any Hub failure →
+  full no-op, the actual tool workflow proceeds identically either way.
+- `[hub-tracking]`-prefixed Railway logging, ATTEMPT-before / OUTCOME-
+  after + duration, **token never logged** — every decrypt/read error
+  handler explicitly says so in its own log line.
+- Per-integration feature tag so Railway greps stay separable even where
+  a Hub workflow is shared: `iap-hub-tracking` (Apple import),
+  `google-iap-hub-tracking` (Google import), `iap-submit-hub-tracking`
+  (Apple submit).
+- Client-side cancel guard: a `useRef` set the instant the real mutating
+  call is invoked and **never reset**, checked by every
+  cancel/cleanup site instead of transient `loading`/`step` state. This
+  is the fix for a bug ("successful run recorded as CANCELLED") that hit
+  Apple import first (`4ba8e6f`) and Google import again through a
+  different mechanism (`ce169a8` — see §10.13.K **P7**).
+
+**Per-integration specifics:**
+
+| | Apple Bulk Import | Google Bulk Import | Apple Submit (v2 path) |
+|---|---|---|---|
+| Commits | `95d9413` (feature), `613a9c3` (status-formula fix), `4ba8e6f` (CANCELLED bug fix — `executeStartedRef`), `9ed7845` (cache removal + logging) | `1663a37` (ported already-fixed), `b5265c2` (landing nav-card gap, §10.13.K **P8**), `ce169a8` (slow-start race recurrence, §10.13.K **P7**) | `867386a` |
+| Config | Own `iap_mgmt.hub_tracking_config` | Own `google_iap_mgmt.hub_tracking_config` | **Reuses Apple's own** `iap_mgmt.hub_tracking_config` — no new table. Accepted tradeoff: submit runs and import runs share one Hub workflow stream, distinguished only by the `iap-submit-hub-tracking` log tag, not on the Hub dashboard itself. |
+| Start point | Wizard step 1→2 ("Next") transition | Upload→preview transition | The FIRST `execute:true` POST (the only commit gesture in submit-batch — no run exists while merely viewing the preflight bucket preview) |
+| Request shape | One HTTP request per execute (multipart FormData; `hub_run_id` threaded as its own form field, read before the `config` JSON parse so it survives a malformed-config 400) | Same shape as Apple | **Multi-request** — the reviewSubmissions v2 path can return `{phase:"conflict"}` or `{phase:"partial-fail"}`, pausing for a client round-trip before the run's outcome is known. `hub_run_id` threads through as a JSON body field across up to 3 hops instead of Apple import's single multipart field (§10.13.K **P8** twin-structure asymmetry — same concept, different transport, because JSON ≠ multipart) |
+| Finalize | One request-scoped `try/finally` around the whole execute route, `HubTrackingState{runId,status,errorMessage}` threaded by reference, default `FAILED` overwritten right before a legitimate exit | Same shape as Apple | **NOT one try/finally** — 4 distinct finalize sites (legacy-path single-request; v2-no-conflict single-request; v2-conflict-detected does NOT finalize; v2-partial-fail does NOT finalize) — whichever request actually reaches a terminal outcome closes the run exactly once. The load-bearing structural finding of §10.13.K **P9** (design-first paid off here specifically because this looked like a copy of Apple import's tracking but isn't request-shaped the same way) |
+| Cancel guard | Permanent `executeStartedRef`, single boundary (start → execute) | Same, plus a bounded 1s `Promise.race` on the late-start response + an explicit ref reset on "run another" (component isn't unmounted between runs, unlike Apple's wizard) | **Three-state** `executeCommittedRef` — state 1 (not started, no run) / state 2 (conflict dialog showing, zero Apple writes yet — cancel allowed, incl. a NEW `beforeunload`+`sendBeacon` handler this component didn't have before) / state 3 (partial-fail dialog showing, writes already happened — client cancel suppressed; resolution is the `proceedPartial`/`rollback` request itself) |
+| Status computation | `computeBulkImportTerminalStatus({total,succeeded,failed})` — generic despite the name, `failed===0`→SUCCESS (all-skipped included) | Same function reused | Same function reused, but fed from **review-reaching** outcome, not raw per-item `status` labels — the "all adds succeed, confirm PATCH fails" case is FAIL even though every item still says `status:"SUCCESS"` (§10.13.K **P5**, the status principle); partial-fail rollback is always FAIL, never CANCEL, because real Apple writes (item-adds) already happened by that point |
+| Known accepted limitation | — | — | Abandoning the tab while the partial-fail dialog is showing (state 3) leaves the Hub run `RUNNING` with no closer — accepted as a rare, low-volume edge case rather than building a server-side stale-run sweep |
+
+**References:** [design-iap-submit-hub-tracking.md](design-iap-submit-hub-tracking.md)
+(full submit-tracking design incl. the three-state guard rationale),
+[integrate-rest-vnggames-hub.md](../integrate-rest-vnggames-hub.md) (the
+Hub's own REST contract).
+
+**Backlog — NOT yet built:** CPP Upload tracking. CPP's asset-upload flow
+is client-orchestrated per-file (no existing batch-level server
+endpoint the way bulk-import/submit-batch have one) — adding Hub tracking
+there needs a new batch-level server endpoint first, not just another
+`startXTracking`/`finalizeXTracking` pair. Flagged for a future session,
+not started.
+
+---
+
+### 10.16 Cycle 46 — IAP submission migrated to reviewSubmissions (v2) (2026-07, commit `6bb7023`)
+
+**Context:** Apple announced (2026-07-15) the deprecation of
+`POST /v1/inAppPurchaseSubmissions` (no sunset date) in favor of the same
+`reviewSubmissions`/`reviewSubmissionItems` mechanism CPP already used.
+See **§4.10** and **§4.11** landmarks above for the Apple-behavior
+findings this migration is built on, and
+[design-iap-v2-submission-migration.md](design-iap-v2-submission-migration.md)
+for the full investigation + design record — summarized here, not
+restated.
+
+**Dual-path architecture (rollback-safe):** the old `inAppPurchaseSubmissions`
+flow is kept **fully intact**, byte-for-byte, as the default — not
+refactored, not deleted. A new reviewSubmissions-based path is added
+alongside it, selected per-app via `IAP_SUBMIT_V2_APPS`:
+
+| Value | Effect |
+|---|---|
+| unset / empty | v2 OFF for every app — 100% legacy (safe default) |
+| `"*"` | v2 ON for every app, **including apps added later** — handled as an explicit branch, never treated as a literal app id to match |
+| `"id1,id2,..."` | v2 ON only for those exact **Apple App IDs** (the same numeric id form `submit-batch`'s route already keys on via `ctx.params.appId` — NOT the internal `iap_mgmt.apps` UUID) — dogfood mode, the recommended starting posture given §4.10's confirmed CPP/IAP slot-sharing collision risk |
+
+**What the v2 path adds over the old one:**
+- **Never blind-creates** the app's `reviewSubmission` — checks for an
+  existing open one first (`lib/shared/review-submission.ts`,
+  `createOrReuseReviewSubmission`), reusing it if present. This closes
+  the latent CPP bug from **§4.10** too (backported to
+  `prepareCppSubmission`).
+- **Decision A conflict dialog**: if the shared items-only slot (§4.10)
+  already has foreign items in it (e.g. CPP pages, or another IAP
+  batch), the user sees exactly what's already there (item count +
+  types, or a degraded "N other items" if Apple returns opaque
+  relationships) and must explicitly choose "Submit all N to Apple
+  review" or "Cancel" — never a silent co-submit.
+- **200-item cap**: Apple's official per-submission limit (§4.10),
+  enforced twice — client-side hard block on selection (multi-select
+  capped at 200; "select all" over 200 refuses outright with a message)
+  and a server-side zod `max(200)` backstop.
+- **Rate-limit fix for the "52 items → 9 failures" production bug**:
+  `withRetry`/`AppleRateLimitError` on every new Apple call site, 1000ms
+  inter-item pacing between `reviewSubmissionItem` adds (reusing the
+  bulk-import `INTER_ROW_DELAY_MS` convention), and a partial-fail
+  proceed/rollback UX (mirroring CPP's existing pattern) so a failed
+  item is never silently dropped. Confirmed common-case call count is
+  close to **N+3** per batch (create-or-reuse + N item-adds + submit
+  PATCH) rather than the old flow's **2N** (one submit + one status
+  refetch per item) — though the version-id lookup is currently
+  per-item rather than batched into the existing preflight call, so the
+  practical count is closer to **~2N+3**; batching that lookup is a
+  noted, deferred optimization if rate-limit pressure persists after
+  rollout.
+- **Shared extraction — hardens CPP too, not just IAP**:
+  `lib/shared/apple-fetch.ts` (the 429/backoff primitive) is now used by
+  BOTH the new IAP v2 submit code and CPP's `ascFetch`, which had **zero**
+  rate-limit protection before this migration.
+
+**Tests:** 6 new test files added with the migration build; full suite
+green at merge time. **No new migration** — `IAP_SUBMIT_V2_APPS` is
+env-only.
+
+---
+
 ## 11. Cumulative Metrics (Post-Cycle 34)
 
 | Metric | Value |
@@ -2458,6 +2844,9 @@ affordances rather than cloning the sibling module's fetch strategy.
 | **Sub-arc / mini-cycle** | Narrow scope cycle within a larger arc (e.g. IAP.q.\*) |
 | **Strategic 5-deliverable trajectory milestone** | The five cohesive arcs closed 2026-05-19: Phase E, ForwardDedup, IAP MVP, IAP Pricing Templates, IAP View Detail |
 | **Trap class** | Recurring Apple integration gotcha pattern. Four classes documented; see [§4](#4-apple-integration-insights) |
+| **items-only reviewSubmission slot** | LANDMARK: Apple allows one items-only `reviewSubmission` per (app, platform); CPP and IAP submissions both compete for it. See [§4.10](#410-landmark--cpp-and-iap-share-one-items-only-reviewsubmission-slot-per-app-platform) |
+| **Hub run** | One `RUNNING`→terminal lifecycle on the external VNGGames Hub REST ledger, opened by `POST /runs/start`, closed by `PATCH /runs/:id`. See [§10.15](#1015-cycle-45--vnggames-hub-run-tracking-apple-import-google-import-apple-submit-2026-07) |
+| **The status principle** | Meta-rule: a terminal status must reflect the real outcome (goal state reached / genuinely failed), never the button clicked or a same-named-but-different-meaning per-item field. See §10.13.K **P5** |
 
 ---
 
@@ -2474,11 +2863,19 @@ affordances rather than cloning the sibling module's fetch strategy.
 - **`design/`** — HTML mockups (Cycle 31 view-detail mockup-first design reference).
 - **`queries/`** — Manager-runnable SQL diagnostic queries.
 - **`templates/`** — Apple Connect web UI observation samples + Manager-provided Excel templates.
+- **[design-iap-v2-submission-migration.md](design-iap-v2-submission-migration.md)** — Full investigation + design record for the reviewSubmissions v2 IAP submit migration (Cycle 46, §10.16): CPP-vs-IAP submission comparison, call-count analysis, the create-or-reuse/conflict-dialog design, rate-limit plan.
+- **[design-iap-submit-hub-tracking.md](design-iap-submit-hub-tracking.md)** — Full design record for Submit's Hub tracking integration (Cycle 45, §10.15): the multi-request finalize structure, the three-state cancel guard, and the status-computation decisions.
 
 ### External (Apple)
 
 - **App Store Connect API** — [developer.apple.com/documentation/appstoreconnectapi](https://developer.apple.com/documentation/appstoreconnectapi) (note: spec ≠ behavior; always cross-check Railway logs)
-- **OpenAPI spec** — `docs/iap-management/openapi.oas.json` (snapshot of Apple's spec; check for drift before assuming spec accuracy)
+- **OpenAPI spec** — `docs/iap-management/openapi.oas.json` (snapshot of Apple's spec; check for drift before assuming spec accuracy). A newer full-repo snapshot also lives at `docs/openapi.oas.v20260717.json` (v4.4.1, used for the §4.11 reviewSubmissions v2 verification).
+- **[Overview of submitting for review](https://developer.apple.com/help/app-store-connect/manage-submissions-to-app-review/overview-of-submitting-for-review/)** — Apple's official Help doc confirming the 2-open-submissions-per-platform / 1-items-only-slot rule (§4.10).
+- **[Submit an In-App Purchase](https://developer.apple.com/help/app-store-connect/manage-submissions-to-app-review/submit-an-in-app-purchase/)** — Apple's official Help doc stating the 200-items-per-submission cap (§4.10).
+
+### External (VNGGames Hub)
+
+- **[integrate-rest-vnggames-hub.md](../integrate-rest-vnggames-hub.md)** — The Hub's own REST API contract (runs lifecycle, status enum, auth) that §10.15's three tracking integrations implement against.
 
 ### Within repo root
 
