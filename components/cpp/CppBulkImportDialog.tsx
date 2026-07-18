@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   X,
   FolderOpen,
@@ -24,6 +24,11 @@ import { parseMetadataXlsx } from "@/lib/parseMetadataXlsx";
 import type { ExcelMetadata } from "@/lib/parseMetadataXlsx";
 import { localeNameFromCode } from "@/lib/locale-utils";
 import { validateScreenshot, validateVideo } from "@/lib/asset-validator";
+import {
+  computeBulkImportTerminalStatus,
+  deriveTerminalStatusOnUnexpectedError,
+  type HubTerminalStatus,
+} from "@/lib/cpp-hub-tracking/status-mapping";
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 const DEFAULT_IPHONE_SCREENSHOT: ScreenshotDisplayType = "APP_IPHONE_65";
@@ -152,6 +157,91 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
   const [expandedLocales, setExpandedLocales] = useState<Set<string>>(new Set()); // "cppName::locale"
   const [excelError, setExcelError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // ── Hub tracking (VNGGames Hub run-tracking integration) ───────────────────
+  // RUN_ID lives only in dialog client state — no server-side persistence.
+  // null means either tracking isn't configured/enabled, or the start call
+  // failed/hasn't resolved yet — both cases are treated identically (no-op)
+  // everywhere it's threaded. See docs/cpp-management/design-cpp-hub-tracking.md.
+  const [hubRunId, setHubRunId] = useState<string | null>(null);
+  // Ref so the beforeunload listener (registered once) always reads the
+  // LATEST hubRunId without re-binding the listener on every render.
+  const hubRunIdRef = useRef<string | null>(hubRunId);
+  useEffect(() => {
+    hubRunIdRef.current = hubRunId;
+  });
+  // True the instant the /hub-tracking/start fetch is FIRED (not when it
+  // resolves) — before this, no run exists at all, so cancel must never
+  // fire (beforeunload during "drop"/"validating" is a no-op, R2/P7).
+  const hubRunStartedRef = useRef(false);
+  // Holds the in-flight /hub-tracking/start call's promise so startUpload
+  // can race a capped await against it (a fast click into "Import All"
+  // shouldn't lose the real run_id — mirrors Google IAP's ce169a8 fix).
+  const hubStartPromiseRef = useRef<Promise<string | null> | null>(null);
+  // PERMANENT flag — set true the instant startUpload is invoked and NEVER
+  // reset. Once true, client-side CANCEL is suppressed: writes may already
+  // be reaching Apple for some CPPs even while others are still in flight.
+  // This dialog is unmounted on close (CppList renders it as
+  // `{showBulkImport && <CppBulkImportDialog .../>}`), so a fresh mount
+  // always starts with this false — no explicit reset needed between runs.
+  const uploadStartedRef = useRef(false);
+
+  useEffect(() => {
+    function handleBeforeUnload() {
+      const runId = hubRunIdRef.current;
+      // Best-effort only — doesn't catch hard crashes/force-quit. No-ops
+      // if no run has started yet, or once upload has started (from that
+      // point, the run's terminal status is either already finalized or
+      // about to be — the client must never send a stray CANCELLED after
+      // that, R2).
+      if (hubRunStartedRef.current && !uploadStartedRef.current) {
+        const blob = new Blob([JSON.stringify({ run_id: runId })], {
+          type: "application/json",
+        });
+        navigator.sendBeacon("/api/asc/hub-tracking/cancel", blob);
+      }
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, []);
+
+  // Explicit close (backdrop click / header X / footer Cancel) — cancel
+  // ONLY if a run has started and upload hasn't (same guard as the
+  // beforeunload handler above). No-ops server-side if hubRunId is null.
+  function handleClose() {
+    if (hubRunStartedRef.current && !uploadStartedRef.current) {
+      fetch("/api/asc/hub-tracking/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_id: hubRunIdRef.current }),
+        keepalive: true,
+      }).catch(() => {
+        // Swallowed — best-effort, mirrors the non-blocking discipline.
+      });
+    }
+    onClose();
+  }
+
+  // Fire-and-forget finalize POST — never throws, never blocks the "done"
+  // step from rendering. No-ops server-side if runId is null.
+  function finalizeCppHubTracking(
+    runId: string | null,
+    terminal: { status: HubTerminalStatus; errorMessage?: string },
+  ) {
+    if (!runId) return;
+    fetch("/api/asc/hub-tracking/finalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        run_id: runId,
+        status: terminal.status,
+        ...(terminal.errorMessage ? { error_message: terminal.errorMessage } : {}),
+      }),
+      keepalive: true,
+    }).catch(() => {
+      // Swallowed — tracking is purely additive instrumentation.
+    });
+  }
 
   // ── Progress helpers ────────────────────────────────────────────────────────
   function updateCppProgress(name: string, updates: Partial<CppProgress>) {
@@ -407,6 +497,38 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
 
     setPlans(importPlans);
     setStep("preview");
+
+    // Hub tracking: fires on the "validating"→"preview" transition — the
+    // moment the folder has finished loading into the tool, before any
+    // Apple write (design §1.8/§2.C). Fire-and-forget, never awaited —
+    // never delays advancing the dialog. Config unconfigured/disabled or
+    // any Hub failure both resolve server-side to `{ run_id: null }`.
+    hubRunStartedRef.current = true;
+    const startPromise: Promise<string | null> = fetch("/api/asc/hub-tracking/start", {
+      method: "POST",
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { run_id?: string } | null) =>
+        data && typeof data.run_id === "string" ? data.run_id : null,
+      )
+      .catch(() => null);
+    hubStartPromiseRef.current = startPromise;
+
+    startPromise.then((runId) => {
+      if (!runId) return;
+      if (uploadStartedRef.current) {
+        // Upload already began before this resolved — startUpload's own
+        // capped race (R2/§1.8) is the sole authority on whether THIS
+        // exact run_id got threaded through to finalize. Do nothing here:
+        // adopting it into dialog state now would be pointless (upload is
+        // already running), and any orphan-cancel for a run the race
+        // missed is handled separately, right after the race resolves in
+        // startUpload — never here, to avoid a double-handling race
+        // against that exact same decision.
+        return;
+      }
+      setHubRunId(runId);
+    });
   }
 
   // ── Per-locale upload (mirrors BulkImportDialog.uploadLocale) ───────────────
@@ -595,7 +717,12 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
   }
 
   // ── Per-CPP upload ──────────────────────────────────────────────────────────
-  async function uploadCpp(plan: CppImportPlan) {
+  // Returns its own outcome ("done" | "error") in addition to updating the
+  // cppProgress UI state — startUpload's finalize computation reads THIS
+  // return value (accumulated in plain local counters) rather than the
+  // cppProgress React state, since that state's closure can be stale by
+  // the time Promise.all resolves within the same function call.
+  async function uploadCpp(plan: CppImportPlan): Promise<"done" | "error"> {
     updateCppProgress(plan.name, { status: "running" });
 
     try {
@@ -746,9 +873,11 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
       }
 
       updateCppProgress(plan.name, { status: "done" });
+      return "done";
     } catch (err) {
       const error = err instanceof Error ? err.message : "Upload failed";
       updateCppProgress(plan.name, { status: "error", error });
+      return "error";
     }
   }
 
@@ -770,18 +899,82 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
     );
     setStep("uploading");
 
+    // PERMANENT — from this point on, client-side CANCEL is suppressed
+    // (R2). Set FIRST, before the capped race below, so the guard state
+    // is correct for the whole wait window.
+    uploadStartedRef.current = true;
+
+    // A fast click into "Import All" can reach here before /hub-tracking/
+    // start resolves — give it a bounded chance to land the real run_id
+    // anyway, so finalize gets a real SUCCESS/PARTIAL/FAILED close instead
+    // of silently no-opping. HARD-capped at 1s (well under the 3s Hub
+    // timeout): the import must never be blocked waiting on tracking. If
+    // the cap wins, hub_run_id stays null for finalize — a MISSED track,
+    // never a WRONG one (design §1.8/§2.D, mirrors Google IAP's ce169a8).
+    let runIdForFinalize = hubRunIdRef.current;
+    if (!runIdForFinalize && hubStartPromiseRef.current) {
+      const capped: Promise<null> = new Promise((resolve) => {
+        setTimeout(() => resolve(null), 1000);
+      });
+      runIdForFinalize = await Promise.race([hubStartPromiseRef.current, capped]);
+
+      if (runIdForFinalize === null) {
+        // The cap won — but the real fetch might still resolve later with
+        // a genuine run_id, after finalize has already used null. If it
+        // does, best-effort-close that orphan instead of leaving it
+        // silently RUNNING forever. This attaches strictly AFTER the race
+        // above has settled, so there's no ordering ambiguity with the
+        // "adopt into dialog state" handler in processFiles — that one
+        // only ever adopts before upload starts, and does nothing once
+        // uploadStartedRef is true, leaving this as the sole handler for
+        // a late-arriving run_id.
+        hubStartPromiseRef.current.then((lateRunId) => {
+          if (!lateRunId) return;
+          fetch("/api/asc/hub-tracking/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ run_id: lateRunId }),
+          }).catch(() => {});
+        });
+      }
+    }
+
     const queue = [...active];
+    // Local, authoritative counters — NOT derived from cppProgress React
+    // state, whose closure would be stale by the time Promise.all
+    // resolves within this same function call. uploadCpp's own return
+    // value is the source of truth for the finalize computation.
+    let succeededCount = 0;
+    let failedCount = 0;
 
     async function worker() {
       while (queue.length > 0) {
         const plan = queue.shift()!;
-        await uploadCpp(plan);
+        const outcome = await uploadCpp(plan);
+        if (outcome === "done") succeededCount++;
+        else failedCount++;
       }
     }
 
-    // Run 2 workers concurrently
-    await Promise.all([worker(), worker()]);
-    setStep("done");
+    // R1 — finalize-in-finally: even if Promise.all rejects unexpectedly
+    // (uploadCpp never throws by construction, but this guards against a
+    // bug elsewhere in the worker loop), the run still finalizes here
+    // rather than being left RUNNING. An in-tab throw orphaning the run
+    // is worse than the already-accepted tab-close edge case.
+    let terminal: { status: HubTerminalStatus; errorMessage?: string } = { status: "FAILED" };
+    try {
+      await Promise.all([worker(), worker()]);
+      terminal = computeBulkImportTerminalStatus({
+        total: active.length,
+        succeeded: succeededCount,
+        failed: failedCount,
+      });
+    } catch (err) {
+      terminal = deriveTerminalStatusOnUnexpectedError(succeededCount, err);
+    } finally {
+      setStep("done");
+      finalizeCppHubTracking(runIdForFinalize, terminal);
+    }
   }
 
   // ── Drop zone ───────────────────────────────────────────────────────────────
@@ -864,7 +1057,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
     <>
       <div
         className="fixed inset-0 bg-black/40 z-50"
-        onClick={step === "drop" || step === "preview" ? onClose : undefined}
+        onClick={step === "drop" || step === "preview" ? handleClose : undefined}
       />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-6 pointer-events-none">
         <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col pointer-events-auto">
@@ -883,7 +1076,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
             </div>
             {(step === "drop" || step === "preview" || step === "done") && (
               <button
-                onClick={step === "done" ? () => { onComplete(); onClose(); } : onClose}
+                onClick={step === "done" ? () => { onComplete(); onClose(); } : handleClose}
                 className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
               >
                 <X className="h-5 w-5" />
@@ -1305,7 +1498,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
               {step === "preview" && (
                 <>
                   <button
-                    onClick={onClose}
+                    onClick={handleClose}
                     className="px-4 py-2 text-sm font-medium text-slate-600 border border-slate-200 rounded-lg hover:bg-slate-50 transition"
                   >
                     Cancel

@@ -1,6 +1,6 @@
 # Design: VNGGames Hub Run Tracking for CPP Bulk Import
 
-**Status: NO CODE WRITTEN — investigation + design for Manager review/sign-off. Hold for green-light before implementation.**
+**Status: IMPLEMENTED — design signed off, all 6 open questions resolved (see §H), built and shipped. Gauntlet 4/4 green (typecheck/tests/lint/build).**
 
 This is the 4th Hub-tracking integration. The prior three (all shipped) are the
 reference set:
@@ -418,27 +418,103 @@ structure (P8's own instruction, applied to itself).
   finalize logic inside a server request. This is the single largest
   structural departure and the reason Option A ≠ "just copy Bulk Import."
 
-### H. Open questions / risks for Manager sign-off
+### H. Open questions — RESOLVED at implementation (Manager review)
 
-1. **Schema placement** (§2.E): approve `cpp_mgmt` as a new dedicated schema
-   for `hub_tracking_config`, vs. placing it in `public` alongside
-   `asc_accounts` for minimal footprint on the original module.
-2. **Settings page route** (§2.E): confirm `app/(dashboard)/settings/hub-tracking/page.tsx`
-   as a sibling to the existing ASC-accounts settings page, vs. folding it in
-   as a tab of the existing page.
-3. **"Preview" back-navigation** (§2.D): does the preview step allow
-   returning to `"drop"` before `startUpload` fires? If yes, the guard needs
-   an extra "cancel the abandoned run before starting a new one" branch not
-   otherwise required by the two-state design. Needs a direct check against
-   the current preview-step UI before implementation.
-4. **Accepted tab-close-mid-upload limitation** (§2.A): confirm Manager is
-   comfortable with the same accepted-orphan-run posture already shipped for
-   IAP Submit's state-3 window, here applied to what may be a
-   longer-duration (video-upload-inclusive) window.
-5. **`lib/cpp-hub-tracking/` flat placement** (§2.G): confirm this is
-   preferred over introducing a new `lib/cpp-management/` nested module
-   folder purely for hub-tracking, which would be a first for CPP's `lib/`
-   organization.
-6. **Workflow ID value** (§2.E): confirm `"appstore:cpp-bulk-import"` (or an
-   alternative) before it's registered in Hub Admin → Workflows at
-   implementation time.
+1. **Schema placement** — **RESOLVED: `public`, table `public.cpp_hub_tracking_config`.**
+   Manager chose `public` over a new dedicated `cpp_mgmt` schema, alongside
+   the existing `public.asc_accounts` — the table name itself is
+   CPP-prefixed to disambiguate, since `public` doesn't provide the isolation
+   a dedicated schema would. Same column shape as `iap_mgmt.hub_tracking_config`.
+   Migration: `supabase/migrations/20260718000000_cpp_hub_tracking_config.sql`.
+2. **Settings page route** — **RESOLVED: sibling page, not a tab.**
+   `app/(dashboard)/settings/hub-tracking/page.tsx`, admin-only (redirects
+   non-admins, matching the existing `/settings` ASC-accounts page's own
+   convention rather than IAP/Google's member-visible-read-only pattern).
+   Client component is a near-verbatim clone of `HubTrackingClient.tsx`
+   (badge/checkbox/workflow_id-input/token-input/validation-banner) with the
+   admin-only distinction simplified away, since the page itself already
+   gates. Cross-links added both ways (`/settings` ↔ `/settings/hub-tracking`)
+   per the twin-structure-asymmetry precedent (Google's landing-page nav-card
+   gap, `b5265c2`) — CPP's `/settings` page had no multi-page nav affordance
+   before this, so one was added.
+3. **"Preview" back-navigation** — **RESOLVED (code-checked): no such
+   affordance exists.** Read the full `"preview"` step render
+   (`CppBulkImportDialog.tsx:971-1233` at investigation time) and its footer
+   (`:1303-1337`): the only actions are per-row/per-CPP "Remove"/"Include"
+   toggles, a `Cancel` button (closes the dialog entirely, does not return to
+   `"drop"`), and `Import All`. `setStep("drop")` appears exactly once in the
+   whole component, inside `processFiles`'s metadata.xlsx-parse-failure early
+   return (`:197`) — which fires *before* `"preview"` is ever reached, not
+   from it. No multi-START hygiene branch is needed; the simple two-state
+   guard (§D) is sufficient as designed, unmodified.
+4. **Accepted tab-close-mid-upload limitation** — **RESOLVED: accepted**,
+   same posture as IAP Submit's state-3 window. See finding 4 below (R4) for
+   the Hub-side bound on this edge case, now documented.
+5. **`lib/cpp-hub-tracking/` flat placement** — **RESOLVED: confirmed.**
+   Built as `lib/cpp-hub-tracking/{config,hub-client,tracking,status-mapping}.ts`,
+   matching CPP's existing flat `lib/` convention. No `lib/cpp-management/`
+   folder was introduced.
+6. **Workflow ID value** — **RESOLVED: `"cpp-bulk-import"`**, dropping the
+   `"appstore:"` prefix this doc originally proposed — Manager flagged it as
+   inconsistent with the existing unprefixed `"iap-bulk-import"` /
+   `"google-iap-bulk-import"` test-fixture convention. Still admin-entered
+   via the Settings page, not hardcoded in application code — this is only
+   the value to register in Hub Admin → Workflows.
+
+### Implementation findings (R1–R4, resolved during the build)
+
+**R1 — finalize-in-finally.** The client-side terminal-status computation
+and `/finalize` POST are wrapped in a `try/finally` around the whole upload
+phase in `startUpload` (`components/cpp/CppBulkImportDialog.tsx`). Even if
+`Promise.all([worker(), worker()])` rejects unexpectedly (`uploadCpp` never
+throws by construction — every per-CPP failure is caught internally and
+converted to a normal `"error"` return — so this is a defensive backstop,
+not a reachable path in practice), the run still finalizes rather than being
+left `RUNNING`. The naive "`failed===0` → SUCCESS" mapping is deliberately
+NOT reused for this case — an unexpected mid-batch throw with 0 recorded
+successes and 0 recorded failures does not mean nothing failed, it means we
+don't know what happened to whatever hadn't settled yet. This decision was
+pulled into its own pure, unit-tested function,
+`deriveTerminalStatusOnUnexpectedError` (`lib/cpp-hub-tracking/status-mapping.ts`):
+`succeededCount > 0` → `PARTIAL`, else → `FAILED`. Never `SUCCESS`, never
+`CANCELLED` — never left undecided.
+
+**R2 — cancel-guard precision.** Two refs guard cancel eligibility, matching
+the exact shape asked for: `hubRunStartedRef` (true the instant the
+`/start` fetch is *fired*, at the `"validating"→"preview"` transition — not
+when it resolves) and `uploadStartedRef` (permanent, true the instant
+`startUpload` is invoked). Cancel — via explicit close (backdrop/header-X/
+footer Cancel), or `beforeunload`+`sendBeacon` — fires only when
+`hubRunStartedRef.current && !uploadStartedRef.current`. Before any run has
+started (`"drop"`/`"validating"`), no cancel call is sent at all, not even a
+no-op one — P7 in spirit: nothing to report, so nothing is sent.
+
+**R3 — preview back-navigation code-check.** See §H.3 above — confirmed no
+such path exists; the guard did not need the extra branch the refinement
+anticipated.
+
+**R4 — Hub run-TTL.** Read `docs/integrate-rest-vnggames-hub.md` in full: it
+documents no auto-expiry/TTL for a `RUNNING` run — the four terminal
+statuses (`SUCCESS`/`FAILED`/`CANCELLED`/`PARTIAL`) are only ever set by an
+explicit `PATCH /runs/:id` call; nothing in the contract describes the Hub
+itself ever timing out or auto-closing a run left open. **This means the
+accepted tab-close-mid-upload orphan (§2.A, §H.4) has no automatic
+self-resolution on the Hub side** — an orphaned run from this edge case
+would show `RUNNING` on the Hub dashboard indefinitely, until a human closes
+it manually or a future session adds a server-side stale-run sweep. This is
+a strictly informational bound on an already-accepted edge case, not a
+blocker — flagged here so it's documented rather than assumed away.
+
+### Build summary
+
+Shipped: migration (`public.cpp_hub_tracking_config`), `lib/cpp-hub-tracking/`
+(config/hub-client/tracking/status-mapping, each with tests), four routes
+under `app/api/asc/hub-tracking/{start,cancel,finalize,config}`, a sibling
+Settings page + client at `app/(dashboard)/settings/hub-tracking/`, and the
+client wiring in `CppBulkImportDialog.tsx` (START on validating→preview,
+race-hardened bounded 1s cap, R1 finalize-in-finally, R2 two-ref cancel
+guard). New/updated tests: `lib/cpp-hub-tracking/*.test.ts` (67 tests) and
+`components/cpp/CppBulkImportDialog.test.tsx` (9 tests) covering the
+SUCCESS/PARTIAL/FAILED mapping, the race-drop hardening, R1's unexpected-
+error backstop, and all three cancel-guard windows. Gauntlet: typecheck
+clean, 2888/2888 tests passing, lint zero errors, production build green.
