@@ -22,9 +22,31 @@
  * bulk-{activate|deactivate}` and renders the per-row response. List
  * page refreshes after the modal closes so the row statuses reflect
  * the new state.
+ *
+ * Hub tracking (5th integration, docs/google-iap-management/
+ * design-bulk-status-hub-tracking.md): START fires client-side at the
+ * Activate/Deactivate button click (before Deactivate's reconfirm
+ * dialog); the write route finalizes server-side. Two refs gate the
+ * lifecycle:
+ *   - `writeStartedRef` (permanent, set the instant `submit()` commits to
+ *     the write) — cancel-eligibility keys off THIS, never off the
+ *     transient `submitting` state, because the outer backdrop's
+ *     onClick={handleClose} is reachable even while `submitting=true`
+ *     (unlike the X/Close buttons, which are `disabled={submitting}`) —
+ *     the 4ba8e6f lesson: a transient guard reopens after settle.
+ *   - `hubStartPromiseRef` — the in-flight `/start` call, raced against a
+ *     bounded ~1000ms cap inside `submit()` so a fast click (Activate has
+ *     no reconfirm dwell) still gets the real run_id threaded through
+ *     when possible, without ever blocking the write. If the cap wins,
+ *     the write proceeds untracked (never mislabeled — ce169a8/P7), and
+ *     the late-resolving run is best-effort CANCELLED once it arrives
+ *     (R4) rather than left orphaned RUNNING forever.
+ * Declining Deactivate's reconfirm (or closing the modal before the
+ * write commits) CANCELs the run in flight; re-clicking Deactivate/
+ * Activate afterward starts a genuinely new run (multi-start hygiene).
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   CheckCircle2,
@@ -86,17 +108,130 @@ export function BulkStatusModal({
   );
   const [summaryText, setSummaryText] = useState<string | null>(null);
 
+  // Hub tracking — see the header comment for the full lifecycle.
+  const HUB_FEATURE =
+    mode === "activate" ? "google-iap-bulk-activate" : "google-iap-bulk-deactivate";
+  const hubRunIdRef = useRef<string | null>(null);
+  const hubStartPromiseRef = useRef<Promise<string | null> | null>(null);
+  // PERMANENT — set the instant submit() commits to the write, never
+  // reset. Cancel-eligibility keys off this, not `submitting` (see header
+  // comment — the outer backdrop click is reachable during `submitting`).
+  const writeStartedRef = useRef(false);
+  // Per-attempt flags, reset at the top of every fireStart().
+  const declinedRef = useRef(false);
+  const capExpiredRef = useRef(false);
+
   const eligible = useMemo(() => {
     const target: "active" | "inactive" =
       mode === "activate" ? "inactive" : "active";
     return iaps.filter((i) => i.status === target);
   }, [iaps, mode]);
 
+  function cancelRun(runId: string) {
+    fetch("/api/google-iap-management/hub-tracking/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: runId, feature: HUB_FEATURE }),
+      keepalive: true,
+    }).catch(() => {
+      // Swallowed — best-effort, mirrors the non-blocking discipline.
+    });
+  }
+
+  /**
+   * Fires on the Activate/Deactivate button click, before Deactivate's
+   * reconfirm dialog. Best-effort, never awaited here — never delays the
+   * next UI step. The stored promise lets `submit()` race a capped await
+   * against it, and the `.then()` below adopts the run into state,
+   * cancels it if the user already declined before it resolved (an
+   * extension of the same "never silently orphan a real run" principle
+   * to the pre-write decline path), or best-effort cancels it (R4: the
+   * write already proceeded untracked because the cap expired) — the run
+   * is never silently left un-terminated when this component can help it.
+   */
+  function fireStart() {
+    declinedRef.current = false;
+    capExpiredRef.current = false;
+    hubRunIdRef.current = null;
+
+    const startPromise: Promise<string | null> = fetch(
+      "/api/google-iap-management/hub-tracking/start",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feature: HUB_FEATURE }),
+      },
+    )
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { run_id?: string } | null) =>
+        data && typeof data.run_id === "string" ? data.run_id : null,
+      )
+      .catch(() => null);
+    hubStartPromiseRef.current = startPromise;
+
+    startPromise.then((runId) => {
+      if (!runId) return;
+      if (writeStartedRef.current) {
+        // Write already committed by the time /start resolved.
+        if (capExpiredRef.current) {
+          // submit()'s race never saw this run_id (the cap won) — the
+          // write proceeded untracked. This run is real but now orphaned
+          // (nobody will ever finalize it server-side) — best-effort
+          // close it rather than leave it RUNNING forever.
+          cancelRun(runId);
+        }
+        // Else: submit()'s own race already got this exact run_id and
+        // threaded it into the write call — already tracked, no-op here.
+        return;
+      }
+      if (declinedRef.current) {
+        // User backed out (reconfirm-Cancel / closed the modal) before
+        // /start resolved — nothing adopted it, so cancel it now.
+        cancelRun(runId);
+        return;
+      }
+      hubRunIdRef.current = runId;
+    });
+  }
+
+  /**
+   * R2 guard: no-ops once the write has committed (permanent
+   * `writeStartedRef`, never the transient `submitting`). Called from
+   * every pre-write close/decline path (confirm-dialog Cancel/backdrop,
+   * outer modal close, `beforeunload`). Marks `declinedRef` so a
+   * still-resolving /start is cancelled the moment it lands (see
+   * `fireStart`'s continuation) instead of silently orphaned.
+   */
+  function cancelPendingRun() {
+    if (writeStartedRef.current) return;
+    declinedRef.current = true;
+    const runId = hubRunIdRef.current;
+    hubRunIdRef.current = null;
+    if (runId) cancelRun(runId);
+  }
+
+  useEffect(() => {
+    function handleBeforeUnload() {
+      if (writeStartedRef.current) return;
+      const runId = hubRunIdRef.current;
+      if (!runId) return;
+      const blob = new Blob(
+        [JSON.stringify({ run_id: runId, feature: HUB_FEATURE })],
+        { type: "application/json" },
+      );
+      navigator.sendBeacon("/api/google-iap-management/hub-tracking/cancel", blob);
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (!open) return null;
 
   const destructive = mode === "deactivate";
 
   function handleClose() {
+    cancelPendingRun();
     setSelected(new Set());
     setConfirmOpen(false);
     setResults(null);
@@ -128,6 +263,34 @@ export function BulkStatusModal({
       toast.error("No items selected.");
       return;
     }
+
+    // R2/R7 — permanent from here: the write commits, so cancel is never
+    // sent again for this attempt (confirm-dialog decline / modal close /
+    // beforeunload all no-op past this point).
+    writeStartedRef.current = true;
+
+    // R4 — thread the real run_id if /start already resolved (deactivate's
+    // reconfirm dwell usually buffers this); otherwise race it against a
+    // hard ~1000ms cap so a fast click (activate has no dwell at all)
+    // never blocks the write. Tagging the race lets the late-resolve
+    // continuation in fireStart() tell "cap won" (orphan, best-effort
+    // cancel later) apart from "already threaded" (no-op later).
+    let runIdForWrite = hubRunIdRef.current;
+    if (!runIdForWrite && hubStartPromiseRef.current) {
+      const tagged = hubStartPromiseRef.current.then((runId) => ({
+        capExpired: false as const,
+        runId,
+      }));
+      const capped: Promise<{ capExpired: true; runId: null }> = new Promise(
+        (resolve) => {
+          setTimeout(() => resolve({ capExpired: true, runId: null }), 1000);
+        },
+      );
+      const winner = await Promise.race([tagged, capped]);
+      runIdForWrite = winner.runId;
+      capExpiredRef.current = winner.capExpired;
+    }
+
     setSubmitting(true);
     setConfirmOpen(false);
     try {
@@ -138,7 +301,7 @@ export function BulkStatusModal({
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skus }),
+        body: JSON.stringify({ skus, hub_run_id: runIdForWrite }),
       });
       const data = (await res.json()) as
         | BulkStatusResponse
@@ -173,8 +336,21 @@ export function BulkStatusModal({
   }
 
   function onPrimaryClick() {
+    fireStart();
     if (destructive) setConfirmOpen(true);
     else void submit();
+  }
+
+  /**
+   * R3 — reconfirm-Cancel returns to the selection screen inside the
+   * SAME still-open modal (not a full close); Manager can re-select and
+   * click Deactivate again, which fires a genuinely new START. The run
+   * opened for THIS attempt must be CANCELLED here so it doesn't leak
+   * into the next one (multi-start hygiene).
+   */
+  function declineConfirm() {
+    cancelPendingRun();
+    setConfirmOpen(false);
   }
 
   const allSelected =
@@ -312,7 +488,7 @@ export function BulkStatusModal({
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4"
           role="dialog"
           aria-modal="true"
-          onClick={() => setConfirmOpen(false)}
+          onClick={declineConfirm}
         >
           <div
             className="w-full max-w-[440px] rounded-xl bg-white border border-slate-200 shadow-xl"
@@ -345,7 +521,7 @@ export function BulkStatusModal({
             <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100 bg-slate-50/70 mt-3">
               <button
                 type="button"
-                onClick={() => setConfirmOpen(false)}
+                onClick={declineConfirm}
                 className="px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition"
               >
                 Cancel

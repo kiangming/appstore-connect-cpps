@@ -68,7 +68,11 @@ async function hubFetch(
 
 /** Distinguishes Railway log lines from Apple's own hub-tracking module —
  *  the [hub-tracking] message prefix stays identical, only the log()
- *  feature tag differs. */
+ *  feature tag differs. Also the default tag for Bulk Import, the
+ *  original caller of this module — callers that need their own tag
+ *  (e.g. bulk-status's "google-iap-bulk-activate"/"-deactivate") pass
+ *  `feature` in `args`; omitting it preserves Bulk Import's exact
+ *  existing log output. */
 const LOG_FEATURE = "google-iap-hub-tracking";
 
 /** Formats a failed HubFetchResult into the ATTEMPT/OUTCOME log vocabulary
@@ -85,12 +89,13 @@ function describeFailure(res: Extract<HubFetchResult, { ok: false }>): string {
  *  OUTCOME after — a hung call shows as ATTEMPT with no OUTCOME in Railway
  *  logs, distinguishing it from a fast no-op. Never logs the token. */
 export async function hubStartRun(
-  args: { workflowId: string; token: string; actor?: string },
+  args: { workflowId: string; token: string; actor?: string; feature?: string },
   timeoutMs?: number,
   fetchImpl?: typeof fetch,
 ): Promise<string | null> {
+  const feature = args.feature ?? LOG_FEATURE;
   await log(
-    LOG_FEATURE,
+    feature,
     `[hub-tracking] start: POST /runs/start workflow_id=${args.workflowId} → ATTEMPT`,
   );
   const startedAt = Date.now();
@@ -107,7 +112,7 @@ export async function hubStartRun(
   const elapsedMs = Date.now() - startedAt;
   if (!res.ok) {
     await log(
-      LOG_FEATURE,
+      feature,
       `[hub-tracking] start: POST /runs/start workflow_id=${args.workflowId} → ${describeFailure(res)} (${elapsedMs}ms)`,
       "WARN",
     );
@@ -116,14 +121,14 @@ export async function hubStartRun(
   const runId = (res.json as { id?: unknown } | null)?.id;
   if (typeof runId !== "string" || runId.length === 0) {
     await log(
-      LOG_FEATURE,
+      feature,
       `[hub-tracking] start: POST /runs/start workflow_id=${args.workflowId} → ERROR response missing id (${elapsedMs}ms)`,
       "WARN",
     );
     return null;
   }
   await log(
-    LOG_FEATURE,
+    feature,
     `[hub-tracking] start: POST /runs/start workflow_id=${args.workflowId} → SUCCESS run_id=${runId} (${elapsedMs}ms)`,
   );
   return runId;
@@ -134,12 +139,19 @@ export async function hubStartRun(
  *  `status` field in the log line distinguishes them). Logs ATTEMPT before
  *  the call and the OUTCOME after; never logs the token. */
 export async function hubCloseRun(
-  args: { token: string; runId: string; status: HubTerminalStatus; errorMessage?: string },
+  args: {
+    token: string;
+    runId: string;
+    status: HubTerminalStatus;
+    errorMessage?: string;
+    feature?: string;
+  },
   timeoutMs?: number,
   fetchImpl?: typeof fetch,
 ): Promise<void> {
+  const feature = args.feature ?? LOG_FEATURE;
   await log(
-    LOG_FEATURE,
+    feature,
     `[hub-tracking] finalize: PATCH /runs/${args.runId} status=${args.status} → ATTEMPT`,
   );
   const startedAt = Date.now();
@@ -159,14 +171,14 @@ export async function hubCloseRun(
   const elapsedMs = Date.now() - startedAt;
   if (!res.ok) {
     await log(
-      LOG_FEATURE,
+      feature,
       `[hub-tracking] finalize: PATCH /runs/${args.runId} status=${args.status} → ${describeFailure(res)} (${elapsedMs}ms)`,
       "WARN",
     );
     return;
   }
   await log(
-    LOG_FEATURE,
+    feature,
     `[hub-tracking] finalize: PATCH /runs/${args.runId} status=${args.status} → SUCCESS (${elapsedMs}ms)`,
   );
 }

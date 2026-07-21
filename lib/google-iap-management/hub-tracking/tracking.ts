@@ -27,16 +27,25 @@ const LOG_FEATURE = "google-iap-hub-tracking";
  * when the Hub call itself fails/times out — the caller treats null
  * identically in every case: bulk import proceeds exactly as it does
  * today.
+ *
+ * `feature` — optional Railway log tag override. Omitted (Bulk Import's
+ * existing caller) defaults to `LOG_FEATURE` here AND is passed through as
+ * `undefined` to `hubStartRun`, which applies the same default internally
+ * — Bulk Import's log output and call shape are unchanged. Other callers
+ * (e.g. bulk-status) pass their own tag so the combined Hub dashboard
+ * stream splits cleanly per feature in Railway logs.
  */
 export async function startBulkImportTracking(
   actorEmail?: string | null,
+  feature?: string,
 ): Promise<string | null> {
+  const tag = feature ?? LOG_FEATURE;
   let gate;
   try {
     gate = await getHubTrackingGate();
   } catch (err) {
     await log(
-      LOG_FEATURE,
+      tag,
       `[hub-tracking] start: config read failed (non-fatal): ${err instanceof Error ? err.message : err}`,
       "WARN",
     );
@@ -45,20 +54,21 @@ export async function startBulkImportTracking(
 
   if (!gate.credentials) {
     await log(
-      LOG_FEATURE,
+      tag,
       `[hub-tracking] start: enabled=${gate.enabled} configured=${gate.configured} → SKIP (no-op)`,
     );
     return null;
   }
 
   await log(
-    LOG_FEATURE,
+    tag,
     `[hub-tracking] start: enabled=${gate.enabled} configured=${gate.configured} → PROCEEDING workflow_id=${gate.credentials.workflowId}`,
   );
   return hubStartRun({
     workflowId: gate.credentials.workflowId,
     token: gate.credentials.token,
     actor: actorEmail ?? undefined,
+    feature,
   });
 }
 
@@ -68,14 +78,19 @@ export async function startBulkImportTracking(
  * become unavailable/disabled (can't authenticate the PATCH). Called from
  * the execute route's `finally` block (guarantees closure on every exit
  * path) and from the cancel route/beforeunload beacon (status CANCELLED).
+ *
+ * `feature` — same override as `startBulkImportTracking`; omitted preserves
+ * Bulk Import's exact existing behavior/call shape.
  */
 export async function finalizeHubTracking(
   runId: string | null,
   status: HubTerminalStatus,
   errorMessage?: string,
+  feature?: string,
 ): Promise<void> {
+  const tag = feature ?? LOG_FEATURE;
   if (!runId) {
-    await log(LOG_FEATURE, `[hub-tracking] finalize: status=${status} → SKIP (no run_id)`);
+    await log(tag, `[hub-tracking] finalize: status=${status} → SKIP (no run_id)`);
     return;
   }
 
@@ -84,7 +99,7 @@ export async function finalizeHubTracking(
     gate = await getHubTrackingGate();
   } catch (err) {
     await log(
-      LOG_FEATURE,
+      tag,
       `[hub-tracking] finalize: run_id=${runId} status=${status} config read failed (non-fatal): ${err instanceof Error ? err.message : err}`,
       "WARN",
     );
@@ -93,13 +108,13 @@ export async function finalizeHubTracking(
 
   if (!gate.credentials) {
     await log(
-      LOG_FEATURE,
+      tag,
       `[hub-tracking] finalize: run_id=${runId} status=${status} enabled=${gate.enabled} configured=${gate.configured} → SKIP (config unavailable/disabled)`,
     );
     return;
   }
 
-  await hubCloseRun({ token: gate.credentials.token, runId, status, errorMessage });
+  await hubCloseRun({ token: gate.credentials.token, runId, status, errorMessage, feature });
 }
 
 export type { HubTerminalStatus };

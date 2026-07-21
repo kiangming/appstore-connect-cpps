@@ -444,6 +444,61 @@ if the design had skipped straight to "same as Bulk Import."
 
 ---
 
-**HOLD for review before any implementation**, per the task's explicit
-gate. This doc is docs-only; no `lib/`, `app/`, or `components/` files are
-touched by it.
+### Implementation findings (open questions resolved during the build)
+
+Manager sign-off resolved the four §H open questions as follows — actual
+build differs from a couple of this doc's own recommendations, noted
+explicitly rather than silently:
+
+1. **Config-read log tag** — resolved as recommended: `config.ts`'s
+   gate-read logs stay under the shared `"google-iap-hub-tracking"` tag,
+   untouched. Only `hub-client.ts` and `tracking.ts` (the per-run
+   start/finalize calls) were parameterized.
+2. **Rename scope** — Manager overrode this doc's rename recommendation:
+   `computeGoogleBulkImportTerminalStatus` was reused **AS-IS, no rename**
+   (locked decision 8). `bulk-activate`/`bulk-deactivate` routes import
+   and call it directly under its existing (Bulk-Import-flavored) name,
+   fed with `{total, succeeded, failed}` from `BulkStatusOutcome` — zero
+   changes to the function or its one existing Bulk Import call site.
+3. **Orphaned-run risk** — Manager's R4 refinement went further than this
+   doc's "accepted, same as Bulk Import" framing: instead of dropping a
+   late-resolving `/start` response silently when the write already
+   proceeded untracked (the cap expired), the client now best-effort
+   **cancels** it the moment it arrives (`BulkStatusModal.tsx`'s
+   `fireStart()` continuation, gated on a per-attempt `capExpiredRef`).
+   This closes the gap this doc flagged as "not a blocker" — Bulk Import's
+   own orphan-acceptance is unchanged (out of scope here), but bulk-status
+   no longer accepts it where avoidable. Extended the same idea one step
+   further: a run declined (reconfirm-Cancel) before `/start` resolves is
+   also cancelled on arrival (`declinedRef`), not just the cap-expiry case
+   Manager's wording covered.
+4. **Multiple simultaneous bulk actions** — confirmed unchanged; no code
+   needed.
+
+Also resolved, not previously flagged: the confirm dialog's own Cancel/
+backdrop and the outer modal's backdrop/X/footer-Close both needed to
+route through cancel-eligibility, but the outer backdrop's `onClick`
+handler (`handleClose`) is reachable even while `submitting=true` (unlike
+the X/Close buttons, which are `disabled={submitting}`) — cancel-gating
+therefore keys off a permanent `writeStartedRef`, never the transient
+`submitting` state (mirrors the `4ba8e6f` lesson cited in the task).
+
+Shipped: `hub-tracking/{hub-client,tracking}.ts` feature-tag
+parameterization (backward-compatible, Bulk Import's tag/behavior
+byte-for-byte unchanged — verified via its full existing test suite,
+139/139 green); `/hub-tracking/{start,cancel}` routes accept an optional
+`feature` body field; `bulk-{activate,deactivate}/route.ts` wrapped in the
+`HubTrackingState` try/finally (R1, mutation-tested: removing the
+`finally` makes the dedicated test fail, confirming it's load-bearing);
+`BulkStatusModal.tsx` client wiring (START-on-click, race-capped
+threading, two-ref cancel guard, `beforeunload`, R3 multi-start hygiene).
+New/updated tests: 8 pure resolver-adjacent + lib tag tests, 20 route
+tests (both bulk-activate/deactivate, including the R1 target), 10 modal
+tests (including a real-time ~1s race test). Full module suite:
+583/583 passing; full repo suite: 2946/2946; typecheck/lint/build clean.
+
+---
+
+**Implemented and shipped** in the same commit as this doc's final
+revision, per Manager sign-off. This doc now serves as the as-built
+design record for the 5th Hub-tracking integration.
