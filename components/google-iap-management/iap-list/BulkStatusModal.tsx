@@ -42,6 +42,9 @@ interface RowResult {
   sku: string;
   ok: boolean;
   error?: string;
+  /** Non-blocking notice on an otherwise-successful row — e.g. the
+   *  product has 2+ active purchase options and only one was targeted. */
+  warning?: string;
 }
 
 interface BulkStatusResponse {
@@ -485,29 +488,36 @@ function ExecutingState({
 function ResultList({ results }: { results: RowResult[] }) {
   return (
     <ul className="divide-y divide-slate-100">
-      {results.map((r) => (
-        <li
-          key={r.sku}
-          className="grid grid-cols-[24px_1fr_auto] gap-3 items-center py-2 text-xs"
-        >
-          <span
-            className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
-              r.ok ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
-            }`}
+      {results.map((r) => {
+        const hasWarning = r.ok && Boolean(r.warning);
+        return (
+          <li
+            key={r.sku}
+            className="grid grid-cols-[24px_1fr_auto] gap-3 items-center py-2 text-xs"
           >
-            {r.ok ? "✓" : "!"}
-          </span>
-          <span className="font-mono text-slate-600 truncate">{r.sku}</span>
-          <span
-            className={`text-[11px] truncate max-w-[260px] text-right ${
-              r.ok ? "text-emerald-700" : "text-red-700"
-            }`}
-            title={r.error ?? undefined}
-          >
-            {r.ok ? "Updated on Google Play" : (r.error ?? "Failed")}
-          </span>
-        </li>
-      ))}
+            <span
+              className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
+                !r.ok
+                  ? "bg-red-100 text-red-700"
+                  : hasWarning
+                    ? "bg-amber-100 text-amber-700"
+                    : "bg-emerald-100 text-emerald-700"
+              }`}
+            >
+              {!r.ok || hasWarning ? "!" : "✓"}
+            </span>
+            <span className="font-mono text-slate-600 truncate">{r.sku}</span>
+            <span
+              className={`text-[11px] truncate max-w-[260px] text-right ${
+                !r.ok ? "text-red-700" : hasWarning ? "text-amber-700" : "text-emerald-700"
+              }`}
+              title={r.error ?? r.warning ?? undefined}
+            >
+              {r.ok ? (r.warning ?? "Updated on Google Play") : (r.error ?? "Failed")}
+            </span>
+          </li>
+        );
+      })}
     </ul>
   );
 }

@@ -26,6 +26,7 @@ import {
   type OneTimeProductPurchaseOption,
   type ToolInAppProduct,
 } from "./onetime-product-adapter";
+import { resolvePurchaseOptionFromLive } from "./resolve-purchase-options";
 import { withConcurrency } from "@/lib/iap-management/concurrency";
 
 export type Publisher = androidpublisher_v3.Androidpublisher;
@@ -482,6 +483,74 @@ async function refetchWithStateOverlay(
   return fresh;
 }
 
+export interface LivePurchaseOptionResolution {
+  /** Real target purchaseOptionId resolved from the live product. Null
+   *  only when the live GET itself failed — callers must NOT fall back to
+   *  DEFAULT_PURCHASE_OPTION_ID in that case (see fetchFailed). */
+  purchaseOptionId: string | null;
+  /** True when the live product has 2+ ACTIVE purchase options — see
+   *  resolve-purchase-options.ts for the scope decision on why this is
+   *  surfaced rather than fully handled. */
+  hasMultipleActiveOptions: boolean;
+  /** Full live purchaseOptions array, for callers that need to preserve
+   *  the complete set in a PATCH body (e.g. patchInAppProduct). Null when
+   *  the GET failed or the product has no purchase options. */
+  rawOptions: OneTimeProductPurchaseOption[] | null;
+  /** True when the live GET itself errored (network, 404, auth, ...). */
+  fetchFailed: boolean;
+}
+
+/**
+ * Hotfix 30 — resolve the REAL live purchase-option id for each of the
+ * given productIds. Shared by bulk-status (activate/deactivate) and
+ * patchInAppProduct (single-item edit): both previously guessed
+ * DEFAULT_PURCHASE_OPTION_ID="buy" unconditionally, which 404s on any
+ * product whose real id differs (legacy-migrated products carry
+ * "legacy-base"). Bounded concurrency mirrors the GET loop already used by
+ * batchUpsertInAppProducts's overwrite-row resolution.
+ *
+ * Per-product GET failures are isolated (fetchFailed=true for that
+ * productId only) so one bad lookup doesn't block the rest of a batch.
+ */
+export async function resolveLivePurchaseOptions(
+  jwt: JWT,
+  packageName: string,
+  productIds: readonly string[],
+  concurrency = 5,
+): Promise<Map<string, LivePurchaseOptionResolution>> {
+  const results = new Map<string, LivePurchaseOptionResolution>();
+  if (productIds.length === 0) return results;
+
+  await withConcurrency(productIds, concurrency, async (productId) => {
+    try {
+      const live = await newGetOneTimeProduct(jwt, packageName, productId);
+      const rawOptions =
+        (live.purchaseOptions as OneTimeProductPurchaseOption[] | undefined) ?? null;
+      const resolved = resolvePurchaseOptionFromLive(rawOptions ?? undefined);
+      results.set(productId, {
+        purchaseOptionId: resolved.purchaseOptionId,
+        hasMultipleActiveOptions: resolved.hasMultipleActiveOptions,
+        rawOptions: rawOptions && rawOptions.length > 0 ? rawOptions : null,
+        fetchFailed: false,
+      });
+    } catch (err) {
+      console.error(
+        `[google-iap:publisher] resolve-purchase-option GET failed pkg=${packageName} productId=${productId} err="${
+          err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
+        }"`,
+      );
+      results.set(productId, {
+        purchaseOptionId: null,
+        hasMultipleActiveOptions: false,
+        rawOptions: null,
+        fetchFailed: true,
+      });
+    }
+  });
+
+  return results;
+}
+
 /** Insert a new in-app product.
  *  Public surface unchanged; internally uses Monetization API v3
  *  patch+allowMissing (the new API's create idiom) with legacy
@@ -545,6 +614,12 @@ export async function insertInAppProduct(
 /** Patch (update) an existing in-app product.
  *  Same try-new-then-legacy pattern; state applied separately.
  *
+ *  Hotfix 30: RMW — resolves the product's REAL live purchaseOptionId
+ *  before building the write shape. Without this, the adapter falls onto
+ *  its CREATE-path default ("buy"), which 404s on products whose real id
+ *  differs (e.g. "legacy-base" for legacy-migrated products) — see
+ *  resolve-purchase-options.ts header for the full root-cause writeup.
+ *
  *  `options.regionsVersion` (Hotfix 9): see insertInAppProduct docs. */
 export async function patchInAppProduct(
   jwt: JWT,
@@ -554,11 +629,24 @@ export async function patchInAppProduct(
   options: { regionsVersion?: string } = {},
 ): Promise<InAppProduct> {
   try {
-    const writeShape = inAppProductToOneTimeProduct({
-      ...body,
-      packageName,
-      sku,
-    } as ToolInAppProduct);
+    const resolution = (
+      await resolveLivePurchaseOptions(jwt, packageName, [sku], 1)
+    ).get(sku);
+    if (!resolution || resolution.fetchFailed) {
+      throw new Error(
+        `Could not resolve live purchase options for ${sku} — refresh and retry.`,
+      );
+    }
+    if (resolution.hasMultipleActiveOptions) {
+      console.warn(
+        `[google-iap:publisher] multi-active-option product pkg=${packageName} sku=${sku} — only the resolved target option is updated`,
+      );
+    }
+
+    const writeShape = inAppProductToOneTimeProduct(
+      { ...body, packageName, sku } as ToolInAppProduct,
+      resolution.rawOptions ?? undefined,
+    );
     const updated = await newPatchOneTimeProduct(
       jwt,
       packageName,

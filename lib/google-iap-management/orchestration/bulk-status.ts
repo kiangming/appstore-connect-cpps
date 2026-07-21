@@ -41,7 +41,7 @@ import type { JWT } from "google-auth-library";
 
 import {
   batchUpdateProductStates,
-  DEFAULT_PURCHASE_OPTION_ID,
+  resolveLivePurchaseOptions,
   type BulkStateRequest,
 } from "../google/publisher-client";
 import { googleIapDb } from "../db";
@@ -54,6 +54,11 @@ export interface BulkStatusItemResult {
   sku: string;
   ok: boolean;
   error?: string;
+  /** Non-blocking notice surfaced even on success — e.g. the product has
+   *  2+ active purchase options and only the resolved target was
+   *  touched; the other active option(s) are left unchanged. Surfaced
+   *  rather than silently under-deactivated (Hotfix 30 scope decision). */
+  warning?: string;
 }
 
 export interface BulkStatusOutcome {
@@ -80,6 +85,7 @@ export interface BulkStatusArgs {
 }
 
 const DEFAULT_CHUNK_SIZE = 100;
+const RESOLVE_CONCURRENCY = 5;
 
 export async function executeBulkStatus(
   args: BulkStatusArgs,
@@ -128,7 +134,38 @@ export async function executeBulkStatus(
     );
   }
 
-  const chunks = chunkArray(actionable, chunkSize);
+  // Hotfix 30: resolve each product's REAL live purchase-option id before
+  // building requests — replaces the old unconditional
+  // DEFAULT_PURCHASE_OPTION_ID="buy" guess, which 404s on legacy-migrated
+  // products (real id "legacy-base"). Per-product GET failures are
+  // isolated: that sku surfaces as failed, siblings still proceed.
+  const resolutions = await resolveLivePurchaseOptions(
+    jwt,
+    packageName,
+    actionable,
+    RESOLVE_CONCURRENCY,
+  );
+  const resolveFailedResults: BulkStatusItemResult[] = [];
+  const resolvableSkus: string[] = [];
+  for (const sku of actionable) {
+    const r = resolutions.get(sku);
+    if (!r || r.fetchFailed || !r.purchaseOptionId) {
+      resolveFailedResults.push({
+        sku,
+        ok: false,
+        error: "Could not resolve live purchase option — refresh and retry.",
+      });
+    } else {
+      resolvableSkus.push(sku);
+    }
+  }
+  if (resolveFailedResults.length > 0) {
+    console.warn(
+      `[bulk-status] ${resolveFailedResults.length} sku(s) failed live purchase-option resolution pkg=${packageName} action=${action}`,
+    );
+  }
+
+  const chunks = chunkArray(resolvableSkus, chunkSize);
   const apiState: "ACTIVATE" | "DEACTIVATE" =
     action === "activate" ? "ACTIVATE" : "DEACTIVATE";
   const newCacheStatus: "active" | "inactive" =
@@ -138,19 +175,36 @@ export async function executeBulkStatus(
     `[bulk-status] start action=${action} pkg=${packageName} count=${skus.length} chunks=${chunks.length} actor=${actorEmail ?? "?"}`,
   );
 
-  const results: BulkStatusItemResult[] = [...blockedResults];
+  const results: BulkStatusItemResult[] = [...blockedResults, ...resolveFailedResults];
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
     const requests: BulkStateRequest[] = chunk.map((sku) => ({
       productId: sku,
-      purchaseOptionId: DEFAULT_PURCHASE_OPTION_ID,
+      purchaseOptionId: resolutions.get(sku)!.purchaseOptionId!,
       state: apiState,
     }));
+
+    // Q7 fix: previously the Google-call log only recorded sku="-" (the
+    // cross-product wildcard), so a partial-batch failure gave no clue
+    // which product/purchaseOptionId pair was involved. Log the resolved
+    // chunk contents here instead.
+    console.log(
+      `[bulk-status] chunk ${i + 1}/${chunks.length} action=${action} pkg=${packageName} targets=${requests
+        .map((r) => `${r.productId}:${r.purchaseOptionId}`)
+        .join(",")}`,
+    );
 
     try {
       await batchUpdateProductStates(jwt, packageName, requests);
       for (const sku of chunk) {
-        results.push({ sku, ok: true });
+        const r = resolutions.get(sku);
+        results.push({
+          sku,
+          ok: true,
+          warning: r?.hasMultipleActiveOptions
+            ? "Product has multiple active purchase options — only one was targeted; the other(s) remain unchanged."
+            : undefined,
+        });
       }
       await updateCachedStatus(appId, chunk, newCacheStatus);
     } catch (err) {

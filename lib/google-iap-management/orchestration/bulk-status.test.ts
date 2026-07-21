@@ -1,19 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Hoisted mocks — same pattern as regions-helper.test.ts. The
-// orchestrator imports `batchUpdateProductStates` from publisher-client
-// and the db wrapper from ../db, plus appendAction from
-// ../repository/actions-log. Mock all three so the orchestrator runs
-// in isolation.
-const { batchSpy, dbSpy, auditSpy } = vi.hoisted(() => ({
+// orchestrator imports `batchUpdateProductStates` + `resolveLivePurchaseOptions`
+// from publisher-client, the db wrapper from ../db, plus appendAction from
+// ../repository/actions-log. Mock all four so the orchestrator runs in
+// isolation.
+const { batchSpy, dbSpy, auditSpy, resolveSpy } = vi.hoisted(() => ({
   batchSpy: vi.fn(),
   dbSpy: vi.fn(),
   auditSpy: vi.fn(),
+  resolveSpy: vi.fn(),
 }));
 
 vi.mock("../google/publisher-client", () => ({
   batchUpdateProductStates: batchSpy,
-  DEFAULT_PURCHASE_OPTION_ID: "buy",
+  resolveLivePurchaseOptions: resolveSpy,
 }));
 vi.mock("../db", () => ({
   googleIapDb: dbSpy,
@@ -23,6 +24,27 @@ vi.mock("../repository/actions-log", () => ({
 }));
 
 import { chunkArray, executeBulkStatus } from "./bulk-status";
+
+/** Default resolve-live-purchase-option stub: every sku resolves to "buy"
+ *  with no multi-option / fetch-failure edge cases. Tests that need to
+ *  exercise the RMW resolution (legacy id, per-sku failure isolation,
+ *  multi-active warning) override via `resolveSpy.mockImplementation`. */
+function defaultResolveImpl(
+  _jwt: unknown,
+  _packageName: string,
+  productIds: readonly string[],
+) {
+  const map = new Map();
+  for (const id of productIds) {
+    map.set(id, {
+      purchaseOptionId: "buy",
+      hasMultipleActiveOptions: false,
+      rawOptions: null,
+      fetchFailed: false,
+    });
+  }
+  return Promise.resolve(map);
+}
 
 // Builder supports BOTH the flagged pre-check (select→eq→not→in, resolves to
 // {data:[]} = no flagged) and the cache write (update→eq→in, resolves to
@@ -61,6 +83,8 @@ beforeEach(() => {
   dbSpy.mockReset();
   auditSpy.mockReset();
   auditSpy.mockResolvedValue(undefined);
+  resolveSpy.mockReset();
+  resolveSpy.mockImplementation(defaultResolveImpl);
 });
 
 describe("chunkArray", () => {
@@ -331,5 +355,164 @@ describe("executeBulkStatus", () => {
 
     expect(out.overall).toBe("SUCCESS");
     expect(out.results[0].ok).toBe(true);
+  });
+
+  // ── Hotfix 30 gauntlet: live purchase-option resolution ──────────────
+
+  it("resolves the REAL live purchase-option id per product — legacy-migrated sku uses 'legacy-base', not the hardcoded 'buy' default", async () => {
+    const db = fakeDbWithUpdate();
+    dbSpy.mockReturnValue(db);
+    batchSpy.mockResolvedValueOnce(undefined);
+    resolveSpy.mockImplementation((_jwt: unknown, _pkg: string, productIds: readonly string[]) => {
+      const map = new Map();
+      for (const id of productIds) {
+        map.set(id, {
+          purchaseOptionId: id === "vn.vng.uprace.pro" ? "legacy-base" : "buy",
+          hasMultipleActiveOptions: false,
+          rawOptions: null,
+          fetchFailed: false,
+        });
+      }
+      return Promise.resolve(map);
+    });
+
+    const out = await executeBulkStatus({
+      jwt: {} as never,
+      appId: "app-1",
+      packageName: "vn.vng.uprace",
+      skus: ["vn.vng.uprace.pro", "vn.vng.uprace.other"],
+      action: "deactivate",
+      actorEmail: null,
+    });
+
+    expect(out.overall).toBe("SUCCESS");
+    const [, , requests] = batchSpy.mock.calls[0];
+    expect(requests).toEqual([
+      { productId: "vn.vng.uprace.pro", purchaseOptionId: "legacy-base", state: "DEACTIVATE" },
+      { productId: "vn.vng.uprace.other", purchaseOptionId: "buy", state: "DEACTIVATE" },
+    ]);
+  });
+
+  it("full-set-deferred: a product with 2+ active purchase options is explicitly surfaced via a warning, not silently under-deactivated", async () => {
+    const db = fakeDbWithUpdate();
+    dbSpy.mockReturnValue(db);
+    batchSpy.mockResolvedValueOnce(undefined);
+    resolveSpy.mockImplementation((_jwt: unknown, _pkg: string, productIds: readonly string[]) => {
+      const map = new Map();
+      for (const id of productIds) {
+        map.set(id, {
+          purchaseOptionId: "legacy-base",
+          hasMultipleActiveOptions: id === "multi.option.sku",
+          rawOptions: null,
+          fetchFailed: false,
+        });
+      }
+      return Promise.resolve(map);
+    });
+
+    const out = await executeBulkStatus({
+      jwt: {} as never,
+      appId: "app-1",
+      packageName: "com.example.app",
+      skus: ["multi.option.sku", "single.option.sku"],
+      action: "deactivate",
+      actorEmail: null,
+    });
+
+    expect(out.overall).toBe("SUCCESS"); // warning is non-blocking, not a failure
+    const multi = out.results.find((r) => r.sku === "multi.option.sku");
+    expect(multi?.ok).toBe(true);
+    expect(multi?.warning).toMatch(/multiple active purchase options/i);
+    const single = out.results.find((r) => r.sku === "single.option.sku");
+    expect(single?.ok).toBe(true);
+    expect(single?.warning).toBeUndefined();
+  });
+
+  it("per-sku failure isolation: one product's live-resolve fails, siblings still process and the batch is not aborted", async () => {
+    const db = fakeDbWithUpdate();
+    dbSpy.mockReturnValue(db);
+    batchSpy.mockResolvedValueOnce(undefined);
+    resolveSpy.mockImplementation((_jwt: unknown, _pkg: string, productIds: readonly string[]) => {
+      const map = new Map();
+      for (const id of productIds) {
+        if (id === "broken.sku") {
+          map.set(id, {
+            purchaseOptionId: null,
+            hasMultipleActiveOptions: false,
+            rawOptions: null,
+            fetchFailed: true,
+          });
+        } else {
+          map.set(id, {
+            purchaseOptionId: "buy",
+            hasMultipleActiveOptions: false,
+            rawOptions: null,
+            fetchFailed: false,
+          });
+        }
+      }
+      return Promise.resolve(map);
+    });
+
+    const out = await executeBulkStatus({
+      jwt: {} as never,
+      appId: "app-1",
+      packageName: "com.example.app",
+      skus: ["ok.a", "broken.sku", "ok.b"],
+      action: "activate",
+      actorEmail: null,
+    });
+
+    // The batch POST only ever saw the resolvable skus.
+    expect(batchSpy).toHaveBeenCalledTimes(1);
+    expect(
+      batchSpy.mock.calls[0][2].map((r: { productId: string }) => r.productId),
+    ).toEqual(["ok.a", "ok.b"]);
+
+    const broken = out.results.find((r) => r.sku === "broken.sku");
+    expect(broken?.ok).toBe(false);
+    expect(broken?.error).toMatch(/resolve live purchase option/i);
+
+    const ok = out.results.filter((r) => r.sku !== "broken.sku");
+    expect(ok.every((r) => r.ok)).toBe(true);
+    expect(out.overall).toBe("PARTIAL");
+    expect(out.succeeded).toBe(2);
+    expect(out.failed).toBe(1);
+  });
+
+  it("the hardcoded 'buy' fallback no longer fires unconditionally — request purchaseOptionId always comes from the resolver", async () => {
+    const db = fakeDbWithUpdate();
+    dbSpy.mockReturnValue(db);
+    batchSpy.mockResolvedValueOnce(undefined);
+    resolveSpy.mockImplementation((_jwt: unknown, _pkg: string, productIds: readonly string[]) => {
+      const map = new Map();
+      for (const id of productIds) {
+        map.set(id, {
+          purchaseOptionId: "custom-option-id",
+          hasMultipleActiveOptions: false,
+          rawOptions: null,
+          fetchFailed: false,
+        });
+      }
+      return Promise.resolve(map);
+    });
+
+    const out = await executeBulkStatus({
+      jwt: {} as never,
+      appId: "app-1",
+      packageName: "com.example.app",
+      skus: ["sku.z"],
+      action: "activate",
+      actorEmail: null,
+    });
+
+    expect(out.overall).toBe("SUCCESS");
+    expect(batchSpy.mock.calls[0][2][0].purchaseOptionId).toBe("custom-option-id");
+    expect(resolveSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      "com.example.app",
+      ["sku.z"],
+      expect.any(Number),
+    );
   });
 });
