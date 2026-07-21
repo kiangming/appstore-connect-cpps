@@ -32,21 +32,40 @@ describe("POST /api/iap-management/hub-tracking/cancel", () => {
     expect(finalizeHubTracking).not.toHaveBeenCalled();
   });
 
-  it("closes the run CANCELLED when run_id is present", async () => {
+  it("closes the run CANCELLED when run_id is present — no feature (Bulk Import) → default tag", async () => {
     const res = await POST(req(JSON.stringify({ run_id: "run-1" })));
     expect(res.status).toBe(200);
-    expect(finalizeHubTracking).toHaveBeenCalledWith("run-1", "CANCELLED");
+    expect(finalizeHubTracking).toHaveBeenCalledWith("run-1", "CANCELLED", undefined, undefined);
   });
 
   it("no-ops (still 200) on a malformed body — mirrors a best-effort sendBeacon payload", async () => {
     const res = await POST(req("not json"));
     expect(res.status).toBe(200);
-    expect(finalizeHubTracking).toHaveBeenCalledWith(null, "CANCELLED");
+    expect(finalizeHubTracking).toHaveBeenCalledWith(null, "CANCELLED", undefined, undefined);
   });
 
   it("no-ops when run_id is missing from an otherwise-valid JSON body", async () => {
     const res = await POST(req(JSON.stringify({})));
     expect(res.status).toBe(200);
-    expect(finalizeHubTracking).toHaveBeenCalledWith(null, "CANCELLED");
+    expect(finalizeHubTracking).toHaveBeenCalledWith(null, "CANCELLED", undefined, undefined);
+  });
+
+  it("threads an explicit feature tag from the body (Set Availabilities / Remove from Sales caller)", async () => {
+    const res = await POST(
+      req(JSON.stringify({ run_id: "run-2", feature: "iap-remove-from-sales" })),
+    );
+    expect(res.status).toBe(200);
+    expect(finalizeHubTracking).toHaveBeenCalledWith(
+      "run-2",
+      "CANCELLED",
+      undefined,
+      "iap-remove-from-sales",
+    );
+  });
+
+  it("ignores a blank/non-string feature field, falling back to the default", async () => {
+    const res = await POST(req(JSON.stringify({ run_id: "run-3", feature: "" })));
+    expect(res.status).toBe(200);
+    expect(finalizeHubTracking).toHaveBeenCalledWith("run-3", "CANCELLED", undefined, undefined);
   });
 });

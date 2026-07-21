@@ -135,6 +135,23 @@ describe("hub-client", () => {
       const result = await hubStartRun({ workflowId: "wf", token: "tok" }, 1000, fetchImpl);
       expect(result).toBeNull();
     });
+
+    it("logs under the default tag when feature is omitted (Bulk Import behavior unchanged)", async () => {
+      const fetchImpl = vi.fn(async () => jsonResponse(201, { id: "run-1" }));
+      await hubStartRun({ workflowId: "wf", token: "tok" }, 1000, fetchImpl);
+      expect(log.mock.calls.every((c) => c[0] === "iap-hub-tracking")).toBe(true);
+    });
+
+    it("logs under the given feature tag, never into the HTTP body sent to Hub", async () => {
+      const fetchImpl = vi.fn(async () => jsonResponse(201, { id: "run-1" }));
+      await hubStartRun(
+        { workflowId: "wf", token: "tok", feature: "iap-set-availabilities" },
+        1000,
+        fetchImpl,
+      );
+      expect(log.mock.calls.every((c) => c[0] === "iap-set-availabilities")).toBe(true);
+      expect(bodyOf(fetchImpl)).toEqual({ workflow_id: "wf" });
+    });
   });
 
   describe("hubCloseRun", () => {
@@ -160,6 +177,17 @@ describe("hub-client", () => {
         fetchImpl,
       );
       expect(bodyOf(fetchImpl)).toEqual({ status: "FAILED", error_message: "boom" });
+    });
+
+    it("logs under the given feature tag, never into the HTTP body sent to Hub", async () => {
+      const fetchImpl = vi.fn(async () => jsonResponse(200, {}));
+      await hubCloseRun(
+        { token: "tok", runId: "run-1", status: "SUCCESS", feature: "iap-remove-from-sales" },
+        1000,
+        fetchImpl,
+      );
+      expect(log.mock.calls.every((c) => c[0] === "iap-remove-from-sales")).toBe(true);
+      expect(bodyOf(fetchImpl)).toEqual({ status: "SUCCESS" });
     });
 
     it("never throws even when Hub returns an error", async () => {

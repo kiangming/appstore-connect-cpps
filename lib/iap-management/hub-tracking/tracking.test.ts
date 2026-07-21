@@ -74,6 +74,38 @@ describe("startBulkImportTracking", () => {
     await expect(startBulkImportTracking("a@b.com")).resolves.toBeNull();
     expect(hubStartRun).not.toHaveBeenCalled();
   });
+
+  it("threads a custom feature tag through to hubStartRun when given (Set Availabilities / Remove from Sales caller)", async () => {
+    getHubTrackingGate.mockResolvedValue(
+      gate({ configured: true, enabled: true, credentials: { workflowId: "wf", token: "tok" } }),
+    );
+    hubStartRun.mockResolvedValue("run-123");
+    await startBulkImportTracking("a@b.com", "iap-set-availabilities");
+    expect(hubStartRun).toHaveBeenCalledWith({
+      workflowId: "wf",
+      token: "tok",
+      actor: "a@b.com",
+      feature: "iap-set-availabilities",
+    });
+  });
+
+  it("omitted feature logs under the default Bulk Import tag", async () => {
+    getHubTrackingGate.mockResolvedValue(gate({ configured: false, enabled: false }));
+    await startBulkImportTracking("a@b.com");
+    expect(log).toHaveBeenCalledWith(
+      "iap-hub-tracking",
+      expect.stringContaining("SKIP"),
+    );
+  });
+
+  it("custom feature logs under that tag, not the default", async () => {
+    getHubTrackingGate.mockResolvedValue(gate({ configured: false, enabled: false }));
+    await startBulkImportTracking("a@b.com", "iap-remove-from-sales");
+    expect(log).toHaveBeenCalledWith(
+      "iap-remove-from-sales",
+      expect.stringContaining("SKIP"),
+    );
+  });
 });
 
 describe("finalizeHubTracking", () => {
@@ -106,6 +138,20 @@ describe("finalizeHubTracking", () => {
     getHubTrackingGate.mockRejectedValue(new Error("db down"));
     await expect(finalizeHubTracking("run-1", "FAILED", "boom")).resolves.toBeUndefined();
     expect(hubCloseRun).not.toHaveBeenCalled();
+  });
+
+  it("threads a custom feature tag through to hubCloseRun when given (Set Availabilities / Remove from Sales caller)", async () => {
+    getHubTrackingGate.mockResolvedValue(
+      gate({ configured: true, enabled: true, credentials: { workflowId: "wf", token: "tok" } }),
+    );
+    await finalizeHubTracking("run-1", "SUCCESS", undefined, "iap-remove-from-sales");
+    expect(hubCloseRun).toHaveBeenCalledWith({
+      token: "tok",
+      runId: "run-1",
+      status: "SUCCESS",
+      errorMessage: undefined,
+      feature: "iap-remove-from-sales",
+    });
   });
 });
 

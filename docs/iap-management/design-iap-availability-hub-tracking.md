@@ -509,3 +509,56 @@ Everything else in this design is confirmed-reusable (§E) or a direct,
 low-risk, evidence-grounded extension of the Google bulk-status (5)
 pattern, re-verified against this module's own code rather than assumed
 to transfer (P8/P9).
+
+---
+
+### Implementation findings (open questions resolved during the build)
+
+Manager sign-off resolved the three §H open questions as follows — the
+build matches this doc's own recommendation in all three cases (no
+overrides this time, unlike Google's build):
+
+1. **Route signature change** (§H.1) — resolved as recommended:
+   `start/route.ts`'s `POST()` → `POST(req: Request)`, mirroring
+   `cancel/route.ts`'s existing shape. Bulk Import's caller (`fetch(...,
+   {method:"POST"})`, no body) is unaffected — confirmed by the
+   regression proof below, not just assumed.
+2. **Server-derives-tag-from-`action`** (§H.2) — resolved as
+   recommended: `bulk-availability/route.ts` derives its own finalize
+   tag from a `FEATURE_BY_ACTION` lookup keyed on the validated `action`
+   enum, never from a client-sent field. The generic `/hub-tracking/
+   start` and `/cancel` routes still accept a client-sent `feature`
+   (used for the client-side START/CANCEL calls, which legitimately
+   don't know anything more authoritative) — the asymmetry is
+   intentional and unchanged from this doc's proposal.
+3. **KB staleness correction** (§H.5) — deferred to a separate follow-up
+   as recommended; not bundled into this commit.
+
+**Orphaned-run risk** (§H.3) and **`writeStartedRef` reset on modal
+reopen** (§H.4) — both confirmed accepted/no-gap exactly as this doc
+anticipated; no code changes needed beyond what §E already specified.
+
+Shipped: `hub-tracking/{hub-client,tracking}.ts` feature-tag
+parameterization (backward-compatible — Bulk Import's tag/behavior
+byte-for-byte unchanged, verified via its full existing test suite,
+69/69 green, and submit-batch's separate wrapper module
+`submit-tracking.ts` left completely untouched — zero diff — with its
+own distinct-tag test suite, 25/25 green); `/hub-tracking/{start,cancel}`
+routes accept an optional `feature` body field; `bulk-availability/
+route.ts` wrapped in the `HubTrackingState` try/finally (R1,
+mutation-tested: removing the `finally`'s `finalizeHubTracking` call
+made the dedicated R1 test fail — `expected "vi.fn()" to be called 1
+times, but got 0 times` — reverted and re-confirmed passing, `git diff`
+on the route empty after revert); `AvailabilitiesBulkModal.tsx` client
+wiring (START-on-click per mode, race-capped threading, two-ref cancel
+guard via `writeStartedRef`, `beforeunload`, R3 multi-start hygiene, R4
+best-effort late-cancel). New/updated tests: 6 lib feature-tag tests, 11
+route tests (including the R1 mutation-check target), 9 modal wiring
+tests (including a real-time ~1s race test). Full module + repo suite:
+2977/2977 passing; typecheck/lint/build clean.
+
+---
+
+**Implemented, docs-only commit + code committed together** per Manager
+sign-off; held for review before push. This doc now serves as the
+as-built design record for the 6th+7th Hub-tracking integrations.
