@@ -41,6 +41,7 @@ Internal tool suite. Tool chính hiện tại: **CPP Manager** (quản lý App S
 | **Settings — ASC Accounts (Supabase CRUD)** | Admin-only page. Full CRUD: list/add/edit/delete accounts lưu trong Supabase `asc_accounts` table. Private key mã hóa AES-256-GCM. | `docs/feature-settings-asc-accounts.md` |
 | **Asset Validation** (screenshot + video trước upload) | `lib/asset-validator.ts` + `lib/ffmpeg-loader.ts`. Tích hợp vào cả 3 flow upload. Deep mode dùng ffmpeg.wasm. | `docs/feature-asset-validation.md` |
 | **Home Hub + Global Sidebar** (session 16) | Hub page: `app/(dashboard)/page.tsx` + `HubPage.tsx`. Sidebar: `components/layout/AppSidebar.tsx`. Layout: `DashboardContent.tsx` (conditional TopNav/AppSubNav). | `docs/feature-home-hub.md` |
+| **VNGGames Hub run tracking — CPP Bulk Import** (4th cross-module Hub-tracking integration) | `lib/cpp-hub-tracking/*` (own `public.cpp_hub_tracking_config` table + Settings page at `app/(dashboard)/settings/hub-tracking/`), client-driven finalize in `CppBulkImportDialog.tsx`. | `docs/cpp-management/design-cpp-hub-tracking.md`; cross-module overview: `docs/iap-management/IAP-MANAGEMENT-KNOWLEDGE-BASE.md` §10.15 |
 
 ---
 

@@ -441,19 +441,33 @@ Current externalized packages: `re2-wasm`. Add new WASM-shipping dependencies to
 
 Apple IAP Management and Google IAP Management (both undocumented above in
 "Available modules" until now — they have their own dedicated knowledge
-bases) have accumulated 9+ cross-cutting meta-rules from real incidents:
-twin-path hardening (grep for every sibling path when hardening one),
-`actions_log` CHECK-constraint silent-fail, surface-divergence-don't-
-reconcile, store-write read-modify-write, **the status principle**
-(a terminal/tracking status must reflect the real outcome, never the
-button clicked or a same-named-but-different-meaning per-item field),
+bases) have accumulated 13 cross-cutting meta-rules from real incidents:
+twin-path hardening (grep for every sibling path when hardening one —
+prefer a SHARED choke point over three separate patches), `actions_log`
+CHECK-constraint silent-fail, surface-divergence-don't-reconcile,
+store-write read-modify-write, **the status principle** (a
+terminal/tracking status must reflect the real outcome, never the button
+clicked or a same-named-but-different-meaning per-item field),
 cross-process cache staleness (no cache on a cold path beats a stale
 multi-instance cache), prefer-a-missed-signal-over-a-wrong-one, twin-
 *structure* asymmetry (twin modules aren't symmetric — check the
-target's extra surfaces too), and design-first-when-surface-similar.
-Full detail + instances: `docs/iap-management/IAP-MANAGEMENT-KNOWLEDGE-BASE.md`
-§9 and §10.13.K (P1-P9). These generalize beyond IAP — read them before
-assuming a "port this fix to the sibling path" task is a 1:1 copy.
+target's extra surfaces too), design-first-when-surface-similar,
+**finalize-in-finally + mutation-check** (a tracking finalize is required
+in a try/finally, defaulted to FAILED; acceptance is proven by breaking
+the finally and watching the test fail, not just watching it pass),
+**finalize-placement-by-orchestration-locus** (server-route operations
+finalize server-side; client-orchestrated multi-request operations
+finalize client-side — pick from the operation's actual shape),
+**permanent-committed-ref cancel guard** (never gate cancel-eligibility on
+a transient flag like `submitting` — it reopens after settle), and a
+minor git-hygiene note (after a git mishap, verify committed content
+directly, don't trust a clean working tree). CPP Management's Hub
+Bulk-Import tracking (`docs/cpp-management/design-cpp-hub-tracking.md`)
+also reads and applies this same rule set — treat it as cross-module, not
+IAP-only. Full detail + instances:
+`docs/iap-management/IAP-MANAGEMENT-KNOWLEDGE-BASE.md` §9 and §10.13.K
+(P1-P13). These generalize beyond IAP — read them before assuming a "port
+this fix to the sibling path" task is a 1:1 copy.
 
 ## Pre-push checklist (both modules)
 

@@ -2195,6 +2195,54 @@ Publisher (`batchUpsertInAppProducts`):
 - `Schema$OneTimeProductPurchaseOption.purchaseOptionId` — "Required. Immutable."
 - `Schema$OneTimeProductBuyPurchaseOption.legacyCompatible` — the correct field name.
 
+**Follow-up (Hotfix 30, commit `1fb3f7e`, 2026-07-21) — LANDMARK: purchase-option ids are developer-specified, never assume `"buy"`.**
+
+The RMW fix above only covered `batchUpsertInAppProducts` (the bulk-import
+overwrite path). It was never ported to three other surfaces that build
+the exact same kind of request:
+
+- `bulk-status.ts`'s `executeBulkStatus` (serves BOTH bulk-activate AND
+  bulk-deactivate) — hardcoded `purchaseOptionId: DEFAULT_PURCHASE_OPTION_ID`
+  ("buy") for every sku, unconditionally, with no live lookup at all.
+- `patchInAppProduct` (single-item edit) — built its write shape via
+  `inAppProductToOneTimeProduct` without ever passing
+  `existingPurchaseOptions`, so it always took the CREATE-path branch and
+  defaulted to `"buy"` even though it was patching an EXISTING product.
+
+Both 404'd identically: `"Purchase option not found ... 'buy'"` — on any
+product whose real id differs from `"buy"` (i.e. anything migrated from
+the legacy `inappproducts.*` API, carrying `"legacy-base"`). This is a
+generalizable landmark, not just a bug: **Google Play purchase-option ids
+are DEVELOPER-SPECIFIED, not a fixed platform constant** — `"buy"` is
+only a convention Google's own codelab examples use, and only this tool's
+own convention for products it creates fresh. No write path may assume it
+without first reading the live product.
+
+**Fix — a shared choke point, not three separate patches:** new
+`lib/google-iap-management/google/resolve-purchase-options.ts` (pure
+`resolvePurchaseOptionFromLive`, reusing the same `pickTargetPurchaseOption`
+preference order as the 4fbcdd5 fix) plus an exported
+`resolveLivePurchaseOptions()` in `publisher-client.ts` (GET-live,
+bounded concurrency, per-product failure isolation). Both `bulk-status.ts`
+and `patchInAppProduct` now route through this ONE function instead of
+each independently guessing — see §10.13.K **P1** for why a shared choke
+point, not a third copy-pasted fix, is the correct shape here.
+
+**Deliberately deferred, not fixed:** a product can have 2+ ACTIVE
+purchase options; this fix resolves a SINGLE target id (same preference
+order as before) and only touches that one. A 2+-active-option product is
+surfaced via a non-blocking `warning` on the per-sku result (amber marker
+in `BulkStatusModal.tsx`) rather than silently under-deactivated — full
+multi-option state batching is out of scope until a real 2+-option
+product is observed in the catalogue (see the Accepted Limitations note
+in §10.15).
+
+**Also fixed in the same commit:** per-sku GET-failure isolation (that sku
+fails, siblings proceed — mirrors the batch-upsert pattern), and the
+`sku=-` logging gap (the underlying Google call is one wildcard-`productId`
+POST per chunk, so `bulk-status.ts` now separately logs the resolved
+`(sku, purchaseOptionId)` set per chunk for diagnosability).
+
 ---
 
 #### 10.13.H Apple — tier-gate source alignment
@@ -2263,7 +2311,13 @@ the old pattern.
 Confirmed instances: tier-gate source (preview vs execute), `.in()` chunking
 (write path chunked at 200; read path never was → empty list at >~200 items),
 Hotfix-4-stomp (cross-currency stamped pricing source overwritten back to
-`google_default` after resolve).
+`google_default` after resolve); Google purchase-option-id RMW (4fbcdd5
+fixed only the bulk-import overwrite path — `bulk-status.ts` and
+`patchInAppProduct` kept the hardcoded `"buy"` default until 1fb3f7e,
+§10.13.G). That last instance also crystallizes the STRONGER fix shape:
+don't just patch the twin paths individually — extract a SHARED choke
+point (`resolveLivePurchaseOptions()`) all callers route through, so the
+next new write path can't reintroduce the same divergence by construction.
 
 **P2 — `actions_log` CHECK constraint must include new action types**
 
@@ -2395,6 +2449,98 @@ client round-trip before the outcome is known), which breaks Bulk
 Import's core assumption that one request-scoped `try/finally` can always
 own the terminal close. This was caught on paper, in the design doc,
 before any code was written — see §10.15.
+
+**P10 — Finalize-in-finally is a REQUIRED discipline for any tracking integration, and "the function exists" is not the acceptance test — a MUTATION-CHECK is.**
+
+A tracking finalize (Hub run close, or any external "this operation
+finished" signal) must sit in a `try/finally` wrapped around the WHOLE
+operation, with the terminal status defaulted to `FAILED` and only
+overwritten to the real value right before a legitimate success exit. An
+unexpected mid-operation throw must NEVER leave the run `RUNNING` — this
+is worse than the already-accepted tab-close orphan (§10.15's "no
+RUNNING-run TTL" limitation): a tab-close is a user action outside the
+tool's control, but an unhandled in-tab exception is a code defect the
+`finally` is specifically there to catch.
+
+**The acceptance criterion is a mutation-check, not a passing test suite.**
+A test asserting `finalizeX` was called proves the HAPPY path is wired —
+it does NOT prove the `finally` (vs. a `catch` that swallows and never
+finalizes, or no wrapper at all) is what's making it pass. Verify by
+deliberately breaking the `finally` (delete it, or replace with a bare
+`catch {}`), confirming the SPECIFIC test that exercises the unexpected-
+throw path now fails, then reverting and confirming it passes again. A
+test that still passes with the `finally` removed is a fake test — it
+happened to pass for an unrelated reason (e.g. the mock's happy-path
+default), not because the finalize discipline actually fired.
+
+Confirmed instances (verified this way, not just asserted): CPP Bulk
+Import's client-orchestrated finalize (`7408176` — the initial
+`CppBulkImportDialog.test.tsx` FAILED/PARTIAL tests only exercised the
+NORMAL per-CPP-failure path; a dedicated unexpected-throw test was added
+and mutation-verified) and Google bulk-status's server-route finalize
+(`2e710d3` — removing `bulk-deactivate/route.ts`'s `finally` made the R1
+test fail with 0 calls instead of 1; reverted and re-confirmed passing).
+
+**P11 — Finalize-placement follows the orchestration locus, not the last integration's shape.**
+
+Where the finalize call lives is a structural decision, not a style
+preference — pick it from how the operation itself is orchestrated:
+
+- **Single server-route operation** (one client→server round-trip that
+  owns the whole write, e.g. Bulk Import's execute route, bulk-status's
+  `executeBulkStatus`) → **server-side finalize**, inside that route's
+  own `try/finally`. Robust to a client tab-close mid-write: the server
+  call already owns the terminal regardless of what the browser does
+  after the request is sent.
+- **Client-orchestrated operation** (the client itself drives multiple
+  requests — e.g. CPP Bulk Import's per-CPP `Promise.all` worker pool,
+  each CPP a separate asset-upload sequence) → **client-driven finalize**:
+  there is no single server route to host a `try/finally` around, so the
+  client computes the terminal status after its own orchestration
+  settles and POSTs the close itself, in ITS OWN `try/finally`.
+
+Don't infer placement from copying the most recent integration — verify
+which shape the NEW operation actually has (single round-trip vs.
+client-orchestrated multi-request) before choosing, per **P9**. See
+§10.15's per-integration table for both shapes side by side.
+
+**P12 — Cancel-eligibility keys off a PERMANENT committed-ref, never a transient in-flight flag.**
+
+A cancel guard (should this in-flight tracked operation be closed as
+CANCELLED right now?) must check a ref/flag that is set once, the instant
+the real mutating call is committed to, and NEVER reset — not a
+transient state variable like `submitting`/`loading`/`executing` that
+flips back to `false` once the request settles (success OR failure). A
+transient flag re-opens a window where a UI action taken AFTER the write
+already completed (but whose handler doesn't know that) can send a
+spurious CANCELLED that overwrites the real terminal status the server
+already recorded.
+
+Origin: Apple Bulk Import's `executeStartedRef` (`4ba8e6f`) — the first
+fix for exactly this class of bug. Reinforced by a NEW instance in Google
+bulk-status (`2e710d3`): `BulkStatusModal.tsx`'s outer-modal backdrop
+`onClick={handleClose}` is reachable even while `submitting=true` (the
+X/footer-Close buttons are `disabled={submitting}`, but the backdrop
+click has no such guard) — proving the transient-flag risk is not
+theoretical even in a brand-new component built with the lesson already
+in mind elsewhere in the same file. The guard (`writeStartedRef`) must be
+checked by every cancel-eligible site (confirm-dialog decline, modal
+close, `beforeunload`), not just the obvious ones.
+
+**P13 (minor) — after a git operation goes sideways, verify the COMMITTED content directly, don't trust a clean working tree.**
+
+If a git command mid-task does something unintended (e.g. a `git
+checkout -- <file>` meant to revert a deliberate mutation-check edit
+instead reset the file to pre-session `HEAD`, discarding real committed-
+this-session work because it hadn't been committed yet when the checkout
+ran), a clean `git diff`/`git status` afterward only proves the working
+tree matches SOME prior state — not that it's the CORRECT one. Verify by
+reading the actual committed content (`git show <hash>:<path>`) and by
+re-running the relevant tests from a clean `HEAD` (not just the working
+copy) before trusting the tree is right. Instance: the `2e710d3`
+push-hygiene verification session, where a backup taken immediately
+before the mutation (not `git stash`/`git checkout`) was what actually
+recovered the correct pre-mutation file.
 
 ---
 
@@ -2674,6 +2820,15 @@ same day, 28 minutes earlier) at
 
 ### 10.15 Cycle 45 — VNGGames Hub run tracking (Apple import, Google import, Apple submit) (2026-07)
 
+> **Extended (2026-07-18/21):** the mechanism documented in this section
+> grew to 5 integrations — CPP Bulk Import (4th, `docs/cpp-management/
+> design-cpp-hub-tracking.md`) and Google Bulk Activate/Deactivate (5th,
+> `docs/google-iap-management/design-bulk-status-hub-tracking.md`). This
+> stays the ONE cross-module home for the Hub-tracking concept —
+> per-integration DESIGN detail lives in the four linked design docs
+> below; this section summarizes and cross-references, it doesn't
+> restate them. See the 5-integration summary table further down.
+
 **Session scope:** Three integrations of the same external tracking
 mechanism, shipped as the module gained enough real usage to warrant
 operational visibility on the [VNGGames Hub](../integrate-rest-vnggames-hub.md)
@@ -2727,14 +2882,104 @@ workflow attempt.
 **References:** [design-iap-submit-hub-tracking.md](design-iap-submit-hub-tracking.md)
 (full submit-tracking design incl. the three-state guard rationale),
 [integrate-rest-vnggames-hub.md](../integrate-rest-vnggames-hub.md) (the
-Hub's own REST contract).
+Hub's own REST contract), [design-cpp-hub-tracking.md](../cpp-management/design-cpp-hub-tracking.md)
+(4th integration, full detail), [design-bulk-status-hub-tracking.md](../google-iap-management/design-bulk-status-hub-tracking.md)
+(5th integration, full detail).
 
-**Backlog — NOT yet built:** CPP Upload tracking. CPP's asset-upload flow
-is client-orchestrated per-file (no existing batch-level server
-endpoint the way bulk-import/submit-batch have one) — adding Hub tracking
-there needs a new batch-level server endpoint first, not just another
-`startXTracking`/`finalizeXTracking` pair. Flagged for a future session,
-not started.
+#### 4th integration — CPP Bulk Import (shipped: design `8955d4b`, impl `ccf45b2`, R1 mutation-check backstop `7408176`)
+
+First **client-orchestrated** finalize (§10.13.K **P11**) — CPP's Bulk
+Import runs a 2-worker `Promise.all` pool per-CPP inside
+`CppBulkImportDialog.tsx`, so there is no single server route to host a
+`try/finally` around the whole batch the way Bulk Import/bulk-status do.
+Full detail in [design-cpp-hub-tracking.md](../cpp-management/design-cpp-hub-tracking.md);
+summary:
+- **Config:** own `public.cpp_hub_tracking_config` (CPP's schema is
+  `public`, not a dedicated `cpp_mgmt` schema — matches CPP's existing
+  schema convention) + a dedicated Settings page
+  (`app/(dashboard)/settings/hub-tracking/`), separate from Apple/Google's
+  settings pages. `lib/cpp-hub-tracking/` is a flat sibling directory,
+  same file shapes (`config`/`hub-client`/`tracking`/`status-mapping`).
+- **Feature tag:** `cpp-hub-tracking`; **workflow_id:** `cpp-bulk-import`.
+- **Finalize:** client-driven (Option A) — the wizard itself computes the
+  terminal status after `Promise.all` settles and POSTs `/finalize`,
+  wrapped in the wizard's own `try/finally` (R1, mutation-check-verified
+  in `7408176` — the original tests only covered the per-CPP-failure
+  path, not an unexpected mid-batch throw).
+- **Success unit:** per-CPP (not per-asset) — one CPP with any failed
+  asset counts as that CPP failed.
+- **Guard:** two-state (start → upload, matching bulk-import/bulk-status,
+  not submit-batch's three-state — CPP Bulk Import has no mid-flight
+  conflict/pause dialog).
+
+#### 5th integration — Google Bulk Activate/Deactivate (shipped: design `fe81785`, impl `2e710d3`)
+
+**Reuses** `google_iap_mgmt.hub_tracking_config` (Google Bulk Import's own
+table, the 2nd integration) — no new table, no new settings page. Full
+detail in [design-bulk-status-hub-tracking.md](../google-iap-management/design-bulk-status-hub-tracking.md);
+summary:
+- **Feature tags:** `google-iap-bulk-activate` / `google-iap-bulk-deactivate`
+  — distinct from Bulk Import's `google-iap-hub-tracking`, so all three
+  Google integrations split cleanly in Railway logs while sharing one
+  combined Hub dashboard workflow stream.
+- **Finalize:** server-side, `run_id` threaded client→route (§10.13.K
+  **P11** — `executeBulkStatus` is a single round-trip, confirmed
+  structurally identical to Bulk Import's execute route before reusing
+  its exact `try/finally` shape; R1 mutation-check-verified in `2e710d3`).
+- **Cancel window is asymmetric between the two actions:** Deactivate has
+  a reconfirm dialog → real cancel window (reconfirm-Cancel/backdrop/
+  outer-close/`beforeunload`, all gated on the **P12** permanent
+  `writeStartedRef`). Activate has NO reconfirm — `submit()` fires
+  synchronously in the same click handler → effectively no cancel window;
+  accepted, not a gap (Manager decision).
+- **R3 (multi-start hygiene):** declining Deactivate's reconfirm returns
+  to the selection screen INSIDE the same still-open modal (not a full
+  navigate-away, unlike Apple submit's three-state dialogs) — re-clicking
+  Deactivate starts a genuinely NEW run, so the just-declined run must be
+  cancelled first or it leaks into the next attempt.
+- **R4 (race → orphan-cancel, not silent-drop):** deliberately stronger
+  than Google Bulk Import's `ce169a8`/**P7** precedent — if the ~1s race
+  cap wins and the write proceeds untracked, the late-resolving `/start`
+  response is now best-effort CANCELLED once it arrives, instead of
+  dropped silently. See Accepted Limitations below for the residual gap
+  this doesn't close (>1s race).
+- **Status computation:** the SAME `computeGoogleBulkImportTerminalStatus`
+  Google Bulk Import already uses, reused as-is (Manager decision:
+  explicitly no rename, despite the "Import"-flavored name) — fed
+  `{total,succeeded,failed}` from `BulkStatusOutcome`. The `1fb3f7e`
+  multi-option `warning` (§10.13.G) is deliberately NOT folded into this
+  terminal status — it's a separate, non-blocking signal.
+
+#### 5-integration summary table
+
+| Integration | Module | Config | Finalize placement | Guard | Cancel-window specifics | Feature tag(s) |
+|---|---|---|---|---|---|---|
+| Apple Bulk Import | `iap-management` | Own `iap_mgmt.hub_tracking_config` | Server (execute route `try/finally`) | Two-state, permanent `executeStartedRef` | Wizard step 1→2 through execute-click | `iap-hub-tracking` |
+| Google Bulk Import | `google-iap-management` | Own `google_iap_mgmt.hub_tracking_config` | Server (execute route `try/finally`) | Two-state, permanent ref + 1s race cap | Upload→preview through execute-click | `google-iap-hub-tracking` |
+| Apple Submit-batch | `iap-management` | **Reuses** Apple import's `iap_mgmt.hub_tracking_config` | Server, but **4 distinct finalize sites** (multi-request v2 conflict/partial-fail) | **Three-state** `executeCommittedRef` | First `execute:true` through conflict/partial-fail dialogs (state-dependent) | `iap-submit-hub-tracking` |
+| CPP Bulk Import | `cpp-management` | Own `public.cpp_hub_tracking_config` + own Settings page | **Client** (`Promise.all` settle → `/finalize` POST, wizard's own `try/finally`) | Two-state, permanent ref | Validating/preview through upload-click | `cpp-hub-tracking` |
+| Google Bulk Activate/Deactivate | `google-iap-management` | **Reuses** Google import's `google_iap_mgmt.hub_tracking_config` | Server (bulk-status route `try/finally`) | Two-state, permanent `writeStartedRef` + 1s race cap + orphan-cancel-on-late-resolve | Deactivate: reconfirm dialog dwell. Activate: none (synchronous submit, accepted) | `google-iap-bulk-activate` / `google-iap-bulk-deactivate` |
+
+**Backlog — NOT yet built:** CPP's OLDER single-CPP asset-upload flow
+(`components/cpp/BulkImportDialog.tsx` — imports assets into ONE existing
+CPP from inside `CppEditor`/`LocalizationManager`; distinct from the now-
+tracked `CppBulkImportDialog.tsx` multi-CPP creation flow above) is still
+client-orchestrated per-file with no batch-level server endpoint —
+adding Hub tracking there needs a new batch-level server endpoint first,
+not just another `startXTracking`/`finalizeXTracking` pair. Flagged for a
+future session, not started.
+
+#### Accepted limitations (deferred-with-tripwire)
+
+Consolidated here so a future reader knows what's deliberate vs. what
+should trigger revisiting — each has a stated condition that means "stop
+deferring, go build the fix":
+
+| Limitation | Why accepted | Tripwire — when to revisit |
+|---|---|---|
+| Hub has **no RUNNING-run TTL** (`docs/integrate-rest-vnggames-hub.md` — only an explicit PATCH ever sets a terminal status; nothing auto-expires) — a tab-close mid-operation leaves an orphaned `RUNNING` run until manually closed. Affects every integration above. | Rare, low-volume edge case; building a server-side stale-run sweep is real infra work for a cosmetic dashboard issue. | Orphaned `RUNNING` runs becoming dashboard noise (Manager/ops complaint) → build a stale-run sweep (server-side cron: close any `RUNNING` run older than N hours as `FAILED`/`CANCELLED`). |
+| Google multi-option **full-set deferred** (§10.13.G) — deactivate/activate/edit resolve and target a SINGLE purchase option; a genuine 2+-ACTIVE-option product is surfaced via the non-blocking `warning`, not fully handled, and Hub's terminal status reflects the Google-call outcome for that one option, not the product's full "is it actually off-sale everywhere" goal state. | No confirmed 2+-active-option product observed in the real catalogue yet; building full-set batching (resolve ALL active options, one state request per option, roll up N sub-results to one per-sku outcome) is real scope for a hypothetical case. | The `warning` firing on a real catalogue product (not just in tests) → build full-set multi-option state batching. |
+| Google bulk-**Activate** race **>1s** — if the live `/start` call takes longer than the bounded cap, the write proceeds UNTRACKED (correct, never mislabeled — **P7**) and the late-arriving run is best-effort CANCELLED (`2e710d3`'s R4) rather than adopted into the write's own result. | The write itself is never blocked or wrongly labeled; only the TRACKING coverage for that one run is lost (a real, successful/failed operation just doesn't show up on the Hub dashboard for that attempt). | UAT or dashboard review shows this firing in practice (an activate run missing from the dashboard that should be there) → thread the client-held write RESULT (not just cancel) into the late-resolving run's finalize call instead of cancelling it, so it closes with its real terminal status. |
 
 ---
 
@@ -2875,7 +3120,9 @@ env-only.
 
 ### External (VNGGames Hub)
 
-- **[integrate-rest-vnggames-hub.md](../integrate-rest-vnggames-hub.md)** — The Hub's own REST API contract (runs lifecycle, status enum, auth) that §10.15's three tracking integrations implement against.
+- **[integrate-rest-vnggames-hub.md](../integrate-rest-vnggames-hub.md)** — The Hub's own REST API contract (runs lifecycle, status enum, auth) that §10.15's five tracking integrations implement against.
+- **[design-cpp-hub-tracking.md](../cpp-management/design-cpp-hub-tracking.md)** — Full design record for CPP Bulk Import's Hub tracking (4th integration, §10.15): client-driven finalize, the two-state guard, R1-R4 implementation findings.
+- **[design-bulk-status-hub-tracking.md](../google-iap-management/design-bulk-status-hub-tracking.md)** — Full design record for Google Bulk Activate/Deactivate's Hub tracking (5th integration, §10.15): server-side finalize, the asymmetric activate/deactivate cancel windows, R1-R4 implementation findings.
 
 ### Within repo root
 
