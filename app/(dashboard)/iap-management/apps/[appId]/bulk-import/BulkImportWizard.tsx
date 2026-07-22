@@ -20,6 +20,8 @@ import {
 } from "lucide-react";
 import { parseIapItemsXlsx } from "@/lib/iap-management/parsers/iap-items";
 import type { ParsedIapItem, IapItemsParseResult } from "@/lib/iap-management/parsers/iap-items";
+import { summarizeAppleError } from "@/lib/iap-management/bulk-import/apple-error-summary";
+import { ExpandableErrorCell } from "@/components/ui/shared/ExpandableErrorCell";
 import {
   matchScreenshotToProductId,
   type ScreenshotMatchResult,
@@ -89,6 +91,11 @@ interface ExecuteResult {
     disposition: string;
     apple_iap_id?: string;
     error?: string;
+    /** Uncapped counterpart to `error` — the complete Apple response body
+     *  (or full error message), never sliced. Feeds the expandable Notes
+     *  detail view; `error` itself stays capped for backward compat. */
+    error_full?: string;
+    error_http_status?: number;
     stage?: string;
     failed_locales?: string[];
     screenshot_uploaded?: boolean;
@@ -125,6 +132,9 @@ interface ExecuteResult {
     submit_outcome?: "submitted" | "deferred" | "failed";
     submit_deferred_state?: string;
     submit_error?: string;
+    /** Uncapped counterpart to `submit_error` — never sliced. */
+    submit_error_full?: string;
+    submit_error_http_status?: number;
     /** Hotfix 26 — per-row 429 telemetry attached by the route. Absent
      *  on rows that never touched Apple (SKIP / validation ERROR). */
     rate_limit?: RateLimitCounters;
@@ -1343,22 +1353,43 @@ function Step4Result({
                   <td className="px-3 py-2">
                     <PriceBadge result={r} />
                   </td>
-                  <td className="px-3 py-2 text-[11px] text-slate-500">
-                    {r.error
-                      ? `${r.stage ?? ""}: ${r.error.slice(0, 120)}`
-                      : r.submit_outcome === "deferred"
-                        ? `Created (${r.apple_iap_id?.slice(0, 12)}…) — Apple reports "${r.submit_deferred_state ?? "unknown"}", not yet READY_TO_SUBMIT. Retry via Submit Selected.`
-                        : r.submit_outcome === "failed"
-                          ? `Created (${r.apple_iap_id?.slice(0, 12)}…) — submit failed: ${(r.submit_error ?? "").slice(0, 100)}. Retry via Submit Selected.`
-                          : r.failed_locales && r.failed_locales.length > 0
-                            ? `Failed locales: ${r.failed_locales.join(", ")}`
-                            : r.screenshot_note === "delete-locked"
-                              ? "Apple wouldn't let us swap the screenshot — IAP is in review or approved. Swap manually in App Store Connect."
-                              : r.screenshot_note === "failed"
-                                ? "Screenshot upload failed — check the file and re-run the import row."
-                                : r.apple_iap_id
-                                  ? `apple_iap_id ${r.apple_iap_id.slice(0, 12)}…`
-                                  : "—"}
+                  <td className="px-3 py-2 text-[11px] text-slate-500 align-top">
+                    {r.error ? (
+                      <ExpandableErrorCell
+                        summary={
+                          summarizeAppleError({
+                            raw: r.error_full,
+                            fallback: r.error,
+                            stage: r.stage,
+                            httpStatus: r.error_http_status,
+                          }).summary
+                        }
+                        detail={r.error_full ?? r.error}
+                      />
+                    ) : r.submit_outcome === "deferred" ? (
+                      `Created (${r.apple_iap_id?.slice(0, 12)}…) — Apple reports "${r.submit_deferred_state ?? "unknown"}", not yet READY_TO_SUBMIT. Retry via Submit Selected.`
+                    ) : r.submit_outcome === "failed" ? (
+                      <ExpandableErrorCell
+                        summary={`Created (${r.apple_iap_id?.slice(0, 12)}…) — submit failed: ${
+                          summarizeAppleError({
+                            raw: r.submit_error_full,
+                            fallback: r.submit_error ?? "",
+                            httpStatus: r.submit_error_http_status,
+                          }).summary
+                        }. Retry via Submit Selected.`}
+                        detail={r.submit_error_full ?? r.submit_error}
+                      />
+                    ) : r.failed_locales && r.failed_locales.length > 0 ? (
+                      `Failed locales: ${r.failed_locales.join(", ")}`
+                    ) : r.screenshot_note === "delete-locked" ? (
+                      "Apple wouldn't let us swap the screenshot — IAP is in review or approved. Swap manually in App Store Connect."
+                    ) : r.screenshot_note === "failed" ? (
+                      "Screenshot upload failed — check the file and re-run the import row."
+                    ) : r.apple_iap_id ? (
+                      `apple_iap_id ${r.apple_iap_id.slice(0, 12)}…`
+                    ) : (
+                      "—"
+                    )}
                   </td>
                 </tr>
               );

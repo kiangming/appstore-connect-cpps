@@ -63,10 +63,8 @@ import {
 } from "@/lib/iap-management/apple/pricing-orchestration";
 import { pollIapReadyForPricing } from "@/lib/iap-management/apple/poll-iap-ready";
 import { checkSubmitEligibility } from "@/lib/iap-management/apple/submit-eligibility";
-import {
-  withRetry,
-  AppleApiError,
-} from "@/lib/iap-management/apple/fetch";
+import { withRetry } from "@/lib/iap-management/apple/fetch";
+import { describeAppleError } from "@/lib/iap-management/bulk-import/apple-error-descriptor";
 import { iapDb } from "@/lib/iap-management/db";
 import {
   ensureAppRegistered,
@@ -214,8 +212,23 @@ interface PerIapResult {
   submit_deferred_state?: string;
   /** Present when submit_outcome === "failed". */
   submit_error?: string;
+  /** Uncapped counterpart to `submit_error` — the complete Apple response
+   *  body (or full error message for a non-Apple error), never sliced.
+   *  Feeds the result table's expandable Notes detail view. */
+  submit_error_full?: string;
+  /** Apple's HTTP status for `submit_error_full`, when it came from an
+   *  `AppleApiError`. */
+  submit_error_http_status?: number;
   stage?: string;
   error?: string;
+  /** Uncapped counterpart to `error` — the complete Apple response body (or
+   *  full error message for a non-Apple error), never sliced to 500 chars.
+   *  Feeds the result table's expandable Notes detail view; `error` itself
+   *  stays capped for backward compat. */
+  error_full?: string;
+  /** Apple's HTTP status for `error_full`, when it came from an
+   *  `AppleApiError`. */
+  error_http_status?: number;
   /** Hotfix 26 — per-row Apple 429 telemetry. Absent on rows that never
    *  touched Apple (SKIP / validation ERROR); zeroes when no 429 fired. */
   rate_limit?: RetryCounters;
@@ -689,12 +702,15 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     );
     appleIapId = created.data.id;
   } catch (err) {
+    const desc = describeAppleError(err);
     return await persistResult(args, {
       product_id: item.product_id,
       disposition: "CREATE",
       status: "ERROR",
       stage: "apple-create",
-      error: errMsg(err),
+      error: desc.message,
+      error_full: desc.full,
+      ...(desc.httpStatus !== undefined ? { error_http_status: desc.httpStatus } : {}),
     });
   }
 
@@ -856,6 +872,8 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   let submitOutcome: PerIapResult["submit_outcome"];
   let submitDeferredState: string | undefined;
   let submitError: string | undefined;
+  let submitErrorFull: string | undefined;
+  let submitErrorHttpStatus: number | undefined;
   if (submit && screenshotOk && failedLocales.length === 0) {
     console.log(
       `[bulk-execute] Stage 4→5 submit-readiness poll starting product_id=${item.product_id} apple_iap_id=${appleIapId}`,
@@ -882,7 +900,10 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
         submitOutcome = "submitted";
       } catch (err) {
         submitOutcome = "failed";
-        submitError = errMsg(err);
+        const desc = describeAppleError(err);
+        submitError = desc.message;
+        submitErrorFull = desc.full;
+        submitErrorHttpStatus = desc.httpStatus;
         await log(
           "iap-bulk-execute",
           `submit failed (post-guard) on product=${item.product_id} apple_iap_id=${appleIapId}: ${submitError}`,
@@ -903,6 +924,10 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     ...(submitOutcome ? { submit_outcome: submitOutcome } : {}),
     ...(submitDeferredState ? { submit_deferred_state: submitDeferredState } : {}),
     ...(submitError ? { submit_error: submitError } : {}),
+    ...(submitErrorFull ? { submit_error_full: submitErrorFull } : {}),
+    ...(submitErrorHttpStatus !== undefined
+      ? { submit_error_http_status: submitErrorHttpStatus }
+      : {}),
     price_schedule_set: pricing.kind === "set",
     pricing_outcome: pricing.kind,
     ...(pricing.kind === "failed-lookup" ||
@@ -936,13 +961,16 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
       }),
     );
   } catch (err) {
+    const desc = describeAppleError(err);
     return await persistResult(args, {
       product_id: item.product_id,
       disposition: "OVERWRITE",
       status: "ERROR",
       stage: "apple-patch",
       apple_iap_id: appleIapId,
-      error: errMsg(err),
+      error: desc.message,
+      error_full: desc.full,
+      ...(desc.httpStatus !== undefined ? { error_http_status: desc.httpStatus } : {}),
     });
   }
 
@@ -1277,9 +1305,6 @@ async function persistResult(
 }
 
 function errMsg(err: unknown): string {
-  if (err instanceof AppleApiError) {
-    return `${err.status}: ${err.body.slice(0, 500)}`;
-  }
-  return err instanceof Error ? err.message : String(err);
+  return describeAppleError(err).message;
 }
 
