@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bulk Import — expandable Notes cell mockup</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; }
+    .surface { background: white; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; }
+    .badge { display:inline-flex; align-items:center; padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 500; border-width: 1px; }
+    .badge-error { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+    .badge-success { background: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+    .detail-btn { font-size: 11px; font-weight: 500; color: #0071E3; }
+    .detail-btn:hover { text-decoration: underline; }
+    .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    pre.error-json { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; line-height: 1.5; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; margin-top: 6px; }
+  </style>
+</head>
+<body class="bg-slate-100">
+
+<header class="bg-white border-b border-slate-200 px-8 py-5 mb-8">
+  <p class="text-[11px] uppercase tracking-widest text-slate-400 font-semibold">iap-management · bulk import result table</p>
+  <h1 class="text-2xl font-semibold text-slate-900 mt-1">Expandable Notes cell — collapsed &amp; expanded states</h1>
+  <p class="text-sm text-slate-500 mt-1">
+    <code class="font-mono text-xs">ExpandableErrorCell</code> · wired into the Apple Bulk Import result table (Step 4) only.
+    Reusable component — Google Bulk Import can adopt later with no rewrite.
+  </p>
+  <ul class="text-xs text-slate-500 mt-2 list-disc pl-5 space-y-0.5">
+    <li>Collapsed: human-readable summary parsed from Apple's error (detail → title → code → raw fallback) + a <span class="font-medium">Detail</span> text button.</li>
+    <li>Expanded: full pretty-printed Apple error JSON, max ~10 lines then scrolls, <span class="font-medium">Close</span> collapses.</li>
+    <li>Each row toggles independently — expanding one does not collapse others.</li>
+  </ul>
+</header>
+
+<main class="max-w-6xl mx-auto px-8 pb-16 space-y-10">
+
+  <!-- ============================================================== -->
+  <section>
+    <h2 class="text-sm font-semibold text-slate-700 mb-3">Result table — mixed collapsed / expanded rows</h2>
+    <div class="surface max-h-[520px] overflow-y-auto">
+      <table class="w-full text-xs">
+        <thead class="bg-slate-50 border-b border-slate-200 sticky top-0">
+          <tr class="text-left text-[10px] uppercase text-slate-500 tracking-wide">
+            <th class="px-3 py-2">Product ID</th>
+            <th class="px-3 py-2 w-24">Status</th>
+            <th class="px-3 py-2 w-24">Disposition</th>
+            <th class="px-3 py-2 w-32">Outcome</th>
+            <th class="px-3 py-2 w-28">Price</th>
+            <th class="px-3 py-2 w-[360px]">Notes</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+
+          <!-- Row 1 — ERROR, collapsed (default state) -->
+          <tr class="hover:bg-slate-50">
+            <td class="px-3 py-2 font-mono text-[11px] text-slate-700">com.vng.game.gold_pack_99</td>
+            <td class="px-3 py-2"><span class="badge badge-error">Error</span></td>
+            <td class="px-3 py-2 text-[11px] text-slate-600">create</td>
+            <td class="px-3 py-2 text-[10px] text-slate-300">—</td>
+            <td class="px-3 py-2 text-[10px] text-slate-300">—</td>
+            <td class="px-3 py-2 text-[11px] text-slate-600 align-top">
+              <div class="line-clamp-2">apple-create 409 — This name is already being used for another In-App Purchase for this app.</div>
+              <button type="button" class="detail-btn mt-1" aria-expanded="false">Detail</button>
+            </td>
+          </tr>
+
+          <!-- Row 2 — ERROR, EXPANDED (shows full pretty-printed JSON) -->
+          <tr class="hover:bg-slate-50 bg-slate-50/60">
+            <td class="px-3 py-2 font-mono text-[11px] text-slate-700">com.vng.game.gem_bundle_20</td>
+            <td class="px-3 py-2"><span class="badge badge-error">Error</span></td>
+            <td class="px-3 py-2 text-[11px] text-slate-600">create</td>
+            <td class="px-3 py-2 text-[10px] text-slate-300">—</td>
+            <td class="px-3 py-2 text-[10px] text-slate-300">—</td>
+            <td class="px-3 py-2 text-[11px] text-slate-600 align-top">
+              <div class="line-clamp-2">apple-create 409 — This name is already being used for another In-App Purchase for this app.</div>
+              <button type="button" class="detail-btn mt-1" aria-expanded="true">Close</button>
+              <pre class="error-json">{
+  "errors": [
+    {
+      "id": "8f2c1a90-6b3d-4e21-9c7a-2d5f1b8e4a3c",
+      "status": "409",
+      "code": "ENTITY_ERROR.ATTRIBUTE.INVALID.DUPLICATE",
+      "title": "The provided entity includes an attribute with a value that has already been used",
+      "detail": "This name is already being used for another In-App Purchase for this app.",
+      "source": {
+        "pointer": "/data/attributes/name"
+      },
+      "meta": {
+        "associatedErrors": {}
+      }
+    }
+  ]
+}</pre>
+            </td>
+          </tr>
+
+          <!-- Row 3 — ERROR, multi-error, collapsed -->
+          <tr class="hover:bg-slate-50">
+            <td class="px-3 py-2 font-mono text-[11px] text-slate-700">com.vng.game.starter_pack</td>
+            <td class="px-3 py-2"><span class="badge badge-error">Error</span></td>
+            <td class="px-3 py-2 text-[11px] text-slate-600">overwrite</td>
+            <td class="px-3 py-2 text-[10px] text-slate-300">—</td>
+            <td class="px-3 py-2 text-[10px] text-slate-300">—</td>
+            <td class="px-3 py-2 text-[11px] text-slate-600 align-top">
+              <div class="line-clamp-2">apple-patch 422 — 'referenceName' can't be longer than 30 characters. (+1 more)</div>
+              <button type="button" class="detail-btn mt-1" aria-expanded="false">Detail</button>
+            </td>
+          </tr>
+
+          <!-- Row 4 — ERROR, non-JSON fallback (network/timeout), collapsed -->
+          <tr class="hover:bg-slate-50">
+            <td class="px-3 py-2 font-mono text-[11px] text-slate-700">com.vng.game.vip_month</td>
+            <td class="px-3 py-2"><span class="badge badge-error">Error</span></td>
+            <td class="px-3 py-2 text-[11px] text-slate-600">create</td>
+            <td class="px-3 py-2 text-[10px] text-slate-300">—</td>
+            <td class="px-3 py-2 text-[10px] text-slate-300">—</td>
+            <td class="px-3 py-2 text-[11px] text-slate-600 align-top">
+              <div class="line-clamp-2">apple-create: fetch failed</div>
+              <button type="button" class="detail-btn mt-1" aria-expanded="false">Detail</button>
+            </td>
+          </tr>
+
+          <!-- Row 5 — ERROR, non-JSON fallback EXPANDED (still shows raw text, not JSON) -->
+          <tr class="hover:bg-slate-50 bg-slate-50/60">
+            <td class="px-3 py-2 font-mono text-[11px] text-slate-700">com.vng.game.season_pass</td>
+            <td class="px-3 py-2"><span class="badge badge-error">Error</span></td>
+            <td class="px-3 py-2 text-[11px] text-slate-600">create</td>
+            <td class="px-3 py-2 text-[10px] text-slate-300">—</td>
+            <td class="px-3 py-2 text-[10px] text-slate-300">—</td>
+            <td class="px-3 py-2 text-[11px] text-slate-600 align-top">
+              <div class="line-clamp-2">apple-create: fetch failed</div>
+              <button type="button" class="detail-btn mt-1" aria-expanded="true">Close</button>
+              <pre class="error-json">TypeError: fetch failed
+  at Object.fetch (node:internal/deps/undici/undici:...)
+  at appleFetch (lib/shared/apple-fetch.ts:223)
+
+Not valid Apple JSON — raw error message shown as-is (no errors[] to parse).</pre>
+            </td>
+          </tr>
+
+          <!-- Row 6 — SUCCESS, no notes to expand (unchanged today) -->
+          <tr class="hover:bg-slate-50">
+            <td class="px-3 py-2 font-mono text-[11px] text-slate-700">com.vng.game.remove_ads</td>
+            <td class="px-3 py-2"><span class="badge badge-success">Success</span></td>
+            <td class="px-3 py-2 text-[11px] text-slate-600">create</td>
+            <td class="px-3 py-2 text-[10px] text-slate-500">Created</td>
+            <td class="px-3 py-2 text-[10px] text-slate-500">Set</td>
+            <td class="px-3 py-2 text-[11px] text-slate-500 align-top">apple_iap_id 6775742430…</td>
+          </tr>
+
+        </tbody>
+      </table>
+    </div>
+    <p class="text-[11px] text-slate-500 mt-2">
+      Rows 1–5 illustrate the range: single Apple JSON:API error (collapsed + expanded), multi-error suffix, and the non-Apple-JSON fallback (collapsed + expanded). Row 6 shows an unaffected success row — no Detail button, unchanged from today.
+    </p>
+  </section>
+
+</main>
+</body>
+</html>
