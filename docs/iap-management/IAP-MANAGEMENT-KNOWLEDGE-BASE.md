@@ -1,6 +1,6 @@
 # Apple IAP Management — Knowledge Base
 
-> **Purpose.** Self-contained reference for the IAP Management feature. Read this first to understand *what is built and why*. For operational specifics see `apple-api-reference.md` (endpoint contracts), `pricing-templates-guide.md` (Manager UX), and the `SESSION-ARC-*` files (chronological "what happened when").
+> **Purpose.** Self-contained reference for the IAP Management feature. Read this first to understand *what is built and why*. For operational specifics see `apple-api-reference.md` (endpoint contracts), `pricing-templates-guide.md` (pricing Manager UX), `operational-guide.md` (Bulk Import results/error detail + Hub tracking Manager UX), and the `SESSION-ARC-*` files (chronological "what happened when").
 >
 > **Authoritative as of** commit `f81032c` (2026-05-20, post-Cycle 34 / IAP.q.3). All file paths verified against the working tree.
 >
@@ -9,6 +9,12 @@
 > three Hub-tracking integrations (Cycles 45-46) — verified against the
 > working tree at the time of writing. Cycles 35-44 predate this
 > addendum and were not re-verified as part of it.
+>
+> **Addendum (2026-07-22):** §4.12 (new landmark), §10.15 extended to the
+> 6th+7th Hub-tracking integrations (Apple Set Availabilities / Remove
+> from Sales) + its Accepted Limitations table, and §10.17 (new — Cycle
+> 47, Bulk Import Notes-cell full Apple error detail) — verified against
+> the working tree at the time of writing.
 
 ---
 
@@ -461,6 +467,31 @@ saying otherwise, while unrelated old GET endpoints (`GET
 announcement as authoritative on deprecation status; treat the spec as
 authoritative on new endpoint request/response shapes.** Full migration
 design: §10.16 and [design-iap-v2-submission-migration.md](design-iap-v2-submission-migration.md).
+
+### 4.12 LANDMARK — Apple exposes IAP availability through ONE write endpoint; "Remove from Sales" is a re-POST with an empty territory list
+
+`POST /v1/inAppPurchaseAvailabilities` is the **only** write path for an
+IAP's territory availability — confirmed against `openapi.oas.json`:
+`/v1/inAppPurchaseAvailabilities` exposes `createInstance` (POST) only,
+and `/v1/inAppPurchaseAvailabilities/{id}` exposes `getInstance` (GET)
+only. **No PATCH, no DELETE anywhere on this resource.**
+
+Both "Set Availabilities" (all territories) and "Remove from Sales" (zero
+territories) are therefore the exact same call —
+`setAvailabilityToAllTerritories` / `setAvailabilityRemoveFromSales`
+(`lib/iap-management/apple/availabilities.ts`) both POST fresh, replacing
+whatever availability snapshot existed before:
+
+| | `availableInNewTerritories` | `availableTerritories.data` |
+|---|---|---|
+| Set Availabilities (ALL) | `true` | full territory list (`getAllTerritoryIds`) |
+| Remove from Sales (NONE) | `false` | `[]` — the OpenAPI schema requires the relationship's `data` array but sets no `minItems`, so empty satisfies the contract |
+
+First confirmed at the original edit-form implementation (§10.8, Cycle
+39 Phase 1); re-confirmed and reused unchanged by the Hub-tracking
+integration over the bulk-actions path (§10.15, 6th+7th integrations) —
+tracking wraps the SAME two calls, it doesn't introduce a third Apple
+operation.
 
 ---
 
@@ -2829,6 +2860,12 @@ same day, 28 minutes earlier) at
 > below; this section summarizes and cross-references, it doesn't
 > restate them. See the 5-integration summary table further down.
 
+> **Extended again (2026-07-21):** grew to 7 integrations — Apple "Set
+> Availabilities" (6th) + "Remove from Sales" (7th), both over the
+> shared bulk-availability flow (design
+> [design-iap-availability-hub-tracking.md](design-iap-availability-hub-tracking.md)).
+> See the 6th+7th subsection and the 7-integration summary table below.
+
 **Session scope:** Three integrations of the same external tracking
 mechanism, shipped as the module gained enough real usage to warrant
 operational visibility on the [VNGGames Hub](../integrate-rest-vnggames-hub.md)
@@ -2950,7 +2987,52 @@ summary:
   multi-option `warning` (§10.13.G) is deliberately NOT folded into this
   terminal status — it's a separate, non-blocking signal.
 
-#### 5-integration summary table
+#### 6th+7th integration — Apple Set Availabilities / Remove from Sales (shipped: design `7a7cc7a`, impl `bd54826`)
+
+Both operations share ONE flow — `AvailabilitiesBulkModal.tsx` →
+`POST /api/iap-management/iaps/bulk-availability` →
+`executeBulkAvailability` (`lib/iap-management/orchestrators/
+bulk-availability.ts`), discriminated only by the route body's
+`action: "set-all" | "remove"` — not two separate hub-tracking wire-ups.
+Full detail in [design-iap-availability-hub-tracking.md](design-iap-availability-hub-tracking.md);
+summary:
+
+- **Config:** reuses Apple import's own `iap_mgmt.hub_tracking_config` —
+  no new table, no new settings page (same tradeoff as Apple Submit-batch
+  above: distinguished only by feature tag, not on the Hub dashboard
+  itself).
+- **Finalize:** server-side, single round-trip — the whole
+  `bulk-availability` route handler wrapped in one `try/finally`
+  (`HubTrackingState{runId,status,errorMessage}`), `hub_run_id` threaded
+  from the request body. R1 mutation-check-verified: deleting the route's
+  `finally`-block finalize call made the dedicated test fail (0 calls
+  instead of 1); reverted, route diff empty after revert.
+- **Two feature tags, one route** — `iap-set-availabilities` /
+  `iap-remove-from-sales`, derived server-side from the validated
+  `action` (never client-sent), so Railway logs stay separable per
+  operation despite sharing one route + orchestrator.
+- **Cancel window is asymmetric between the two actions** (same shape as
+  Google Activate/Deactivate, 5th integration, above): Remove from Sales
+  has a reconfirm dialog → real cancel window (decline/backdrop/outer-
+  close/`beforeunload`, all gated on the permanent `writeStartedRef`,
+  §10.13.K **P12**). Set Availabilities commits in the same tick as the
+  click — no reconfirm, so `/start` races a bounded ~1s cap the same way
+  Google's Activate does (§10.15's Google row, R4).
+- **Tag parameterization made additive, verified against BOTH existing
+  Apple callers:** `hub-client.ts`/`tracking.ts`
+  (`hubStartRun`/`hubCloseRun`, `startBulkImportTracking`/
+  `finalizeHubTracking`) gained an optional `feature` param defaulting to
+  Bulk Import's existing `iap-hub-tracking` tag when omitted — mirrors
+  the fix already applied on Google's hub-tracking lib. The
+  `/hub-tracking/start` and `/cancel` routes accept an optional `feature`
+  body field the same way. Apple Submit-batch's tag (`iap-submit-hub-
+  tracking`) comes from its own separate server-side wrapper module
+  (`submit-tracking.ts`), which this change leaves **completely
+  untouched** — regression-proofed by running both existing suites after
+  the parameterization (Bulk Import's hub-tracking suite 69/69, submit-
+  batch's tracking suite 25/25, `submit-tracking.ts` zero diff).
+
+#### 7-integration summary table
 
 | Integration | Module | Config | Finalize placement | Guard | Cancel-window specifics | Feature tag(s) |
 |---|---|---|---|---|---|---|
@@ -2959,6 +3041,8 @@ summary:
 | Apple Submit-batch | `iap-management` | **Reuses** Apple import's `iap_mgmt.hub_tracking_config` | Server, but **4 distinct finalize sites** (multi-request v2 conflict/partial-fail) | **Three-state** `executeCommittedRef` | First `execute:true` through conflict/partial-fail dialogs (state-dependent) | `iap-submit-hub-tracking` |
 | CPP Bulk Import | `cpp-management` | Own `public.cpp_hub_tracking_config` + own Settings page | **Client** (`Promise.all` settle → `/finalize` POST, wizard's own `try/finally`) | Two-state, permanent ref | Validating/preview through upload-click | `cpp-hub-tracking` |
 | Google Bulk Activate/Deactivate | `google-iap-management` | **Reuses** Google import's `google_iap_mgmt.hub_tracking_config` | Server (bulk-status route `try/finally`) | Two-state, permanent `writeStartedRef` + 1s race cap + orphan-cancel-on-late-resolve | Deactivate: reconfirm dialog dwell. Activate: none (synchronous submit, accepted) | `google-iap-bulk-activate` / `google-iap-bulk-deactivate` |
+| Apple Set Availabilities | `iap-management` | **Reuses** Apple import's `iap_mgmt.hub_tracking_config` | Server (bulk-availability route `try/finally`) | Two-state, permanent `writeStartedRef` + 1s race cap | None (synchronous submit, accepted — same shape as Google Activate) | `iap-set-availabilities` |
+| Apple Remove from Sales | `iap-management` | **Reuses** Apple import's `iap_mgmt.hub_tracking_config` | Server (bulk-availability route `try/finally`, same route as Set Availabilities) | Two-state, permanent `writeStartedRef` + 1s race cap | Reconfirm dialog dwell (same shape as Google Deactivate) | `iap-remove-from-sales` |
 
 **Backlog — NOT yet built:** CPP's OLDER single-CPP asset-upload flow
 (`components/cpp/BulkImportDialog.tsx` — imports assets into ONE existing
@@ -2980,6 +3064,7 @@ deferring, go build the fix":
 | Hub has **no RUNNING-run TTL** (`docs/integrate-rest-vnggames-hub.md` — only an explicit PATCH ever sets a terminal status; nothing auto-expires) — a tab-close mid-operation leaves an orphaned `RUNNING` run until manually closed. Affects every integration above. | Rare, low-volume edge case; building a server-side stale-run sweep is real infra work for a cosmetic dashboard issue. | Orphaned `RUNNING` runs becoming dashboard noise (Manager/ops complaint) → build a stale-run sweep (server-side cron: close any `RUNNING` run older than N hours as `FAILED`/`CANCELLED`). |
 | Google multi-option **full-set deferred** (§10.13.G) — deactivate/activate/edit resolve and target a SINGLE purchase option; a genuine 2+-ACTIVE-option product is surfaced via the non-blocking `warning`, not fully handled, and Hub's terminal status reflects the Google-call outcome for that one option, not the product's full "is it actually off-sale everywhere" goal state. | No confirmed 2+-active-option product observed in the real catalogue yet; building full-set batching (resolve ALL active options, one state request per option, roll up N sub-results to one per-sku outcome) is real scope for a hypothetical case. | The `warning` firing on a real catalogue product (not just in tests) → build full-set multi-option state batching. |
 | Google bulk-**Activate** race **>1s** — if the live `/start` call takes longer than the bounded cap, the write proceeds UNTRACKED (correct, never mislabeled — **P7**) and the late-arriving run is best-effort CANCELLED (`2e710d3`'s R4) rather than adopted into the write's own result. | The write itself is never blocked or wrongly labeled; only the TRACKING coverage for that one run is lost (a real, successful/failed operation just doesn't show up on the Hub dashboard for that attempt). | UAT or dashboard review shows this firing in practice (an activate run missing from the dashboard that should be there) → thread the client-held write RESULT (not just cancel) into the late-resolving run's finalize call instead of cancelling it, so it closes with its real terminal status. |
+| **Two Apple Hub-tag mechanisms coexist** — Bulk Import/Set Availabilities/Remove from Sales derive their feature tag via the route-body `feature` param (`hub-client.ts`/`tracking.ts`, additive default), while Submit-batch derives its tag from its own separate server-side wrapper module (`submit-tracking.ts`), untouched by that parameterization. Two different mechanisms produce the same *kind* of value (a Railway log tag). | Each existing caller works correctly today; unifying them now would mean touching Submit-batch's already-shipped, independently-tested wrapper for no functional gain — parameterizing the route-body path was the additive, backward-compatible option that avoided that touch. | A **3rd** Apple integration needs a tag mechanism distinct from both existing ones (i.e. the two-mechanism split becomes three-plus, or a change to one mechanism must be mirrored in the other) → consolidate onto ONE mechanism (likely: fold `submit-tracking.ts` into the parameterized `feature` param) before adding a fourth. |
 
 ---
 
@@ -3045,6 +3130,53 @@ env-only.
 
 ---
 
+### 10.17 Cycle 47 — Bulk Import result Notes: full Apple error detail (2026-07, design `d709108`, impl `d5b77f4`)
+
+**Root problem:** a failed Bulk Import row's Notes cell showed a
+truncated raw error; the full Apple error was visible only in Railway
+logs. Traced to a single choke point — the execute route's `errMsg()`
+capped `AppleApiError.body` at 500 chars **before** it reached either the
+JSON response or `actions_log` (both read the already-capped string);
+the client then truncated a second time to ~120 chars for display. Full
+detail + investigation: [design-bulk-import-notes-error-detail.md](design-bulk-import-notes-error-detail.md).
+
+**Fix — additive, both fields new:**
+- `describeAppleError()` (`lib/iap-management/bulk-import/
+  apple-error-descriptor.ts`) captures the Apple response body **before**
+  any cap — populates new `error_full` / `submit_error_full` (+
+  `error_http_status` / `submit_error_http_status`) fields on
+  `PerIapResult`, alongside the existing `error`/`submit_error` fields
+  which **stay capped, unchanged** (backward compat — nothing that reads
+  them today needed to change). Lives in its own module rather than as a
+  `route.ts` export because Next.js route files only permit
+  `GET`/`POST`/etc. named exports; the route's own `errMsg()` now just
+  delegates to it.
+- Persists to `actions_log` for free — `persistResult()` already spreads
+  `...result` into the row's `jsonb` payload column, so the new fields
+  ride along with **no migration**.
+- `summarizeAppleError()` (`lib/iap-management/bulk-import/
+  apple-error-summary.ts`) — pure parser, `errors[0].detail` → `.title` →
+  `.code` → raw-truncated fallback for non-Apple-JSON text (network
+  error, timeout); multi-error case prefixes with the count.
+- `ExpandableErrorCell` (`components/ui/shared/` — a new cross-module
+  location, not nested under the IAP-specific `components/ui/iap/`,
+  specifically so Google's Bulk Import result table can adopt it later
+  with no rewrite) — collapsed 2-line summary + `Detail`/`Close` text
+  buttons, pretty-printed full JSON capped at ~10 lines then scrolls
+  inside the cell; each row's expand state is independent (local
+  `useState` per instance).
+- Wired into `BulkImportWizard.tsx`'s ERROR-row Notes branch AND the
+  submit-failed sub-note branch (same plumbing, both wired in the same
+  pass).
+
+**Tests:** 4 new suites — `apple-error-summary`, `apple-error-descriptor`
+(incl. an explicit un-truncation proof: a >500-char mock Apple body
+asserts `error_full` contains content past char 500 while `error` stays
+capped at exactly 500), `ExpandableErrorCell`. Full gauntlet green:
+typecheck, 2995/2995 tests, lint, build.
+
+---
+
 ## 11. Cumulative Metrics (Post-Cycle 34)
 
 | Metric | Value |
@@ -3103,6 +3235,7 @@ env-only.
 - **[SESSION-ARC-2026-05-15-FINAL-summary.md](SESSION-ARC-2026-05-15-FINAL-summary.md)** — Strategic 5-deliverable trajectory closure + Cycles 32-34 hardening (539 lines). Read for "what happened when".
 - **[apple-api-reference.md](apple-api-reference.md)** — Apple endpoint operational reference (461 lines): endpoint table, relationship names, pricing schedule POST shape, local-tier-to-Apple-price-point mapping, known gotchas, update-on-Apple flow, pricing template system, view detail composition.
 - **[pricing-templates-guide.md](pricing-templates-guide.md)** — Manager-facing operational guide for pricing templates (157 lines): where to upload, file format, selection during IAP work, Q-K fail-soft semantics, Apple Connect verification.
+- **[operational-guide.md](operational-guide.md)** — Manager-facing operational guide (new, Cycle 47): reading Bulk Import results + the expandable Apple error detail, and configuring VNGGames Hub tracking (both modules) + reading its terminal statuses. Intentionally scoped to these two topics for now, not a full feature tour — see the standalone documentation site for that.
 - **[UAT-MV28-30.md](UAT-MV28-30.md)** — UAT scenarios for cycles MV28-30.
 - **[UAT-MV30-deploy-checklist.md](UAT-MV30-deploy-checklist.md)** — Pre-flight Supabase deploy checklist.
 - **`design/`** — HTML mockups (Cycle 31 view-detail mockup-first design reference).
@@ -3110,6 +3243,8 @@ env-only.
 - **`templates/`** — Apple Connect web UI observation samples + Manager-provided Excel templates.
 - **[design-iap-v2-submission-migration.md](design-iap-v2-submission-migration.md)** — Full investigation + design record for the reviewSubmissions v2 IAP submit migration (Cycle 46, §10.16): CPP-vs-IAP submission comparison, call-count analysis, the create-or-reuse/conflict-dialog design, rate-limit plan.
 - **[design-iap-submit-hub-tracking.md](design-iap-submit-hub-tracking.md)** — Full design record for Submit's Hub tracking integration (Cycle 45, §10.15): the multi-request finalize structure, the three-state cancel guard, and the status-computation decisions.
+- **[design-iap-availability-hub-tracking.md](design-iap-availability-hub-tracking.md)** — Full design record for Set Availabilities/Remove from Sales' Hub tracking (6th+7th integration, §10.15): the shared-route two-tag split, the asymmetric cancel windows, the additive tag-parameterization across both existing Apple callers.
+- **[design-bulk-import-notes-error-detail.md](design-bulk-import-notes-error-detail.md)** — Full investigation + design record for Bulk Import's Notes-cell full Apple error detail (Cycle 47, §10.17): the errMsg() truncation trace, the additive `error_full` field design, the reusable `ExpandableErrorCell` component. Includes an HTML mockup at `design/bulk-import-notes-error-mockup.html`.
 
 ### External (Apple)
 
@@ -3120,7 +3255,7 @@ env-only.
 
 ### External (VNGGames Hub)
 
-- **[integrate-rest-vnggames-hub.md](../integrate-rest-vnggames-hub.md)** — The Hub's own REST API contract (runs lifecycle, status enum, auth) that §10.15's five tracking integrations implement against.
+- **[integrate-rest-vnggames-hub.md](../integrate-rest-vnggames-hub.md)** — The Hub's own REST API contract (runs lifecycle, status enum, auth) that §10.15's seven tracking integrations implement against.
 - **[design-cpp-hub-tracking.md](../cpp-management/design-cpp-hub-tracking.md)** — Full design record for CPP Bulk Import's Hub tracking (4th integration, §10.15): client-driven finalize, the two-state guard, R1-R4 implementation findings.
 - **[design-bulk-status-hub-tracking.md](../google-iap-management/design-bulk-status-hub-tracking.md)** — Full design record for Google Bulk Activate/Deactivate's Hub tracking (5th integration, §10.15): server-side finalize, the asymmetric activate/deactivate cancel windows, R1-R4 implementation findings.
 
