@@ -12,6 +12,8 @@
  */
 
 import { storeDb } from './db';
+import { requestScopedCache } from '@/lib/react-request-cache';
+import { log } from '@/lib/logger';
 
 export type StoreRole = 'MANAGER' | 'DEV' | 'VIEWER';
 
@@ -28,21 +30,34 @@ export interface StoreUser {
  * Look up Store Management whitelist by email.
  * Returns null if email not whitelisted or user disabled.
  */
-export async function getStoreUser(email: string): Promise<StoreUser | null> {
-  const normalized = email.trim().toLowerCase();
-  const { data, error } = await storeDb()
-    .from('users')
-    .select('id, email, role, display_name, avatar_url, status')
-    .ilike('email', normalized)
-    .eq('status', 'active')
-    .maybeSingle();
+export const getStoreUser = requestScopedCache(
+  async (email: string): Promise<StoreUser | null> => {
+    const normalized = email.trim().toLowerCase();
+    const perfT0 = Date.now();
+    const { data, error } = await storeDb()
+      .from('users')
+      .select('id, email, role, display_name, avatar_url, status')
+      .ilike('email', normalized)
+      .eq('status', 'active')
+      .maybeSingle();
 
-  if (error) {
-    console.error('[store-auth] Failed to query user:', error);
-    return null;
-  }
-  return data as StoreUser | null;
-}
+    // [perf-probe] TEMPORARY (remove after the Manager reads Railway logs).
+    // One trivial indexed SELECT end-to-end ≈ the Railway↔Supabase per-round-
+    // trip cost — the RTT signal the whole perf ranking hinges on. Fires once
+    // per request (requestScopedCache dedupes the layout+guard double call), so
+    // this is the real DB round-trip, not a cache hit. No PII: duration + a
+    // found flag only, never the email. Gated off under NODE_ENV=test.
+    if (process.env.NODE_ENV !== 'test') {
+      void log('perf-probe', `getStoreUser SELECT dur_ms=${Date.now() - perfT0} found=${data != null}`);
+    }
+
+    if (error) {
+      console.error('[store-auth] Failed to query user:', error);
+      return null;
+    }
+    return data as StoreUser | null;
+  },
+);
 
 /**
  * Assert session user has access to Store Management module.

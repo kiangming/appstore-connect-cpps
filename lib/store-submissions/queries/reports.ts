@@ -52,6 +52,7 @@
 import type { TicketOutcome } from '../schemas/ticket';
 
 import { storeDb } from '../db';
+import { requestScopedCache } from '@/lib/react-request-cache';
 
 // ---------------------------------------------------------------------------
 // Public types — page.tsx + components/store-submissions/reports/* consume.
@@ -817,15 +818,22 @@ function canonicalDescription(descriptions: Map<string, number>): string {
 
 const APPLE_PLATFORM_KEY = 'apple';
 
-async function getApplePlatformId(): Promise<string | null> {
-  const { data, error } = await storeDb()
-    .from('platforms')
-    .select('id')
-    .eq('key', APPLE_PLATFORM_KEY)
-    .maybeSingle();
-  if (error || !data) return null;
-  return (data as { id: string }).id;
-}
+// T1-2: request-scoped-cached so the 6 identical `platforms` lookups per
+// Reports load (page + the 5 aggregation fetchers below) collapse to ONE
+// within a single render. Exported so reports/apple/page.tsx resolves the
+// platform id through the SAME cached function (else the page's own lookup
+// would be a 6th, un-deduped, round-trip). Request-scoped ONLY (P6-safe).
+export const getApplePlatformId = requestScopedCache(
+  async (): Promise<string | null> => {
+    const { data, error } = await storeDb()
+      .from('platforms')
+      .select('id')
+      .eq('key', APPLE_PLATFORM_KEY)
+      .maybeSingle();
+    if (error || !data) return null;
+    return (data as { id: string }).id;
+  },
+);
 
 /**
  * Two-clock window model:

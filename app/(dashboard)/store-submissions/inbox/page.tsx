@@ -12,6 +12,7 @@ import { getCorruptPayloadCount } from '@/lib/store-submissions/queries/corrupt-
 import { listPlatforms } from '@/lib/store-submissions/queries/rules';
 import { listAllTypes } from '@/lib/store-submissions/queries/types';
 import { parseTicketsQueryFromSearchParams } from '@/lib/store-submissions/inbox/search-params';
+import { log } from '@/lib/logger';
 import type { TicketsQuery } from '@/lib/store-submissions/schemas/ticket';
 import { InboxClient } from '@/components/store-submissions/inbox/InboxClient';
 
@@ -85,6 +86,7 @@ export default async function InboxPage({
   // closed trong last 7 days whose latest STATE_CHANGE is system-origin
   // auto_mark_done. Same MANAGER-only gating as corrupt-payload — VIEWER
   // / DEV roles can't interpret the banner action surface.
+  const perfT0 = Date.now();
   const [
     data,
     apps,
@@ -106,6 +108,12 @@ export default async function InboxPage({
       ? getAutoCompletedCount()
       : Promise.resolve(0),
   ]);
+  // [perf-probe] TEMPORARY: wave time for the Inbox parallel fetch. For MANAGER
+  // role this includes getCorruptPayloadCount() — the unindexable full scan
+  // flagged as T1-5 — so a large gap vs the other roles isolates that cost. No PII.
+  if (process.env.NODE_ENV !== 'test') {
+    void log('perf-probe', `inbox queries(7) role=${storeUser.role} dur_ms=${Date.now() - perfT0}`);
+  }
 
   return (
     <div className="px-8 py-10">

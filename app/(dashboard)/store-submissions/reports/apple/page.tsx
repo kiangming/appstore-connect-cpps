@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { requireStoreSession } from '@/lib/store-submissions/session-guard';
 import {
+  getApplePlatformId,
   getAppleByAppTable,
   getAppleRecentRejected,
   getAppleRejectReasonBreakdown,
@@ -10,7 +11,7 @@ import {
   getAppleTrendByDay,
 } from '@/lib/store-submissions/queries/reports';
 import { listAllTypes } from '@/lib/store-submissions/queries/types';
-import { storeDb } from '@/lib/store-submissions/db';
+import { log } from '@/lib/logger';
 import { KpiCards } from '@/components/store-submissions/reports/KpiCards';
 import { TrendChart } from '@/components/store-submissions/reports/TrendChart';
 import { ByAppTable } from '@/components/store-submissions/reports/ByAppTable';
@@ -133,17 +134,14 @@ export default async function AppleReportsPage({
   const { windowStart, windowEnd, fromStr, toStr, windowDays, isDefault } =
     resolveWindow(rawFrom, rawTo);
 
-  // Resolve Apple platform id once for the types-list filter. The
-  // 4 aggregation queries each resolve it again internally — that
-  // mirrors PR-19's existing pattern and keeps each fetcher
-  // self-contained (premature optimization avoided per PR-22 lock).
-  const applePlatformIdRow = await storeDb()
-    .from('platforms')
-    .select('id')
-    .eq('key', 'apple')
-    .maybeSingle();
-  const applePlatformId = (applePlatformIdRow.data as { id: string } | null)?.id ?? null;
+  // T1-2: resolve the Apple platform id via the request-scoped-cached helper
+  // that the 5 aggregation fetchers below ALSO call. React cache() collapses
+  // what used to be 6 identical `platforms` lookups per load (this one + one
+  // inside each fetcher) into a single round-trip. (Supersedes the PR-22
+  // "premature optimization avoided" note — this is a named slow surface now.)
+  const applePlatformId = await getApplePlatformId();
 
+  const perfT0 = Date.now();
   const [kpis, trend, byApp, recentRejected, guidelines, allTypes] =
     await Promise.all([
       getAppleReportsKpis(windowStart, windowEnd, typeId),
@@ -153,6 +151,11 @@ export default async function AppleReportsPage({
       getAppleRejectReasonBreakdown(windowStart, windowEnd, typeId),
       listAllTypes(),
     ]);
+  // [perf-probe] TEMPORARY: wave time for the 6 parallel Reports aggregations
+  // (each shares the cached platform-id above). No PII.
+  if (process.env.NODE_ENV !== 'test') {
+    void log('perf-probe', `reports.apple aggregations(6) dur_ms=${Date.now() - perfT0}`);
+  }
 
   const appleTypes = applePlatformId
     ? allTypes.filter((t) => t.platform_id === applePlatformId)

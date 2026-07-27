@@ -16,6 +16,7 @@
 import { getServerSession, type Session } from 'next-auth';
 import { redirect } from 'next/navigation';
 import { authOptions } from '@/lib/auth';
+import { log } from '@/lib/logger';
 import {
   getStoreUser,
   syncStoreProfile,
@@ -39,6 +40,7 @@ export interface StoreSession {
  * that invoke this guard outside the layout (e.g. deep server actions).
  */
 export async function requireStoreSession(): Promise<StoreSession> {
+  const perfT0 = Date.now();
   const session = await getServerSession(authOptions);
   if (!session?.user?.email) {
     redirect('/login');
@@ -49,12 +51,26 @@ export async function requireStoreSession(): Promise<StoreSession> {
     redirect('/');
   }
 
-  await syncStoreProfile({
+  // T1-1(b): telemetry write is fire-and-forget — it must never delay the page
+  // render (its own comment already promises it "must never break login").
+  // MANDATORY `.catch`: dropping the `await` without one would surface an
+  // unhandled promise rejection if the write ever throws. A failed write is
+  // logged and swallowed; it never reaches the user or crashes the request.
+  void syncStoreProfile({
     userId: storeUser.id,
     googleSub: session.user.id ?? null,
     displayName: session.user.name ?? null,
     avatarUrl: session.user.image ?? null,
+  }).catch((err) => {
+    console.error('[store-auth] syncStoreProfile (non-blocking) failed:', err);
   });
+
+  // [perf-probe] TEMPORARY: wave time for the per-navigation guard chain
+  // (getServerSession + the now-deduped getStoreUser). Compare against the
+  // single-query getStoreUser probe to see how much is auth overhead. No PII.
+  if (process.env.NODE_ENV !== 'test') {
+    void log('perf-probe', `requireStoreSession chain dur_ms=${Date.now() - perfT0}`);
+  }
 
   return { session, storeUser };
 }
