@@ -170,29 +170,40 @@ co-located <2 ms RTT this is ~2 s of extra DB time on a 50-row template import; 
 
 ---
 
-## T1-4 — CPP chrome fires the SAME live Apple `getApp` twice on every app entry
+## T1-4 — CPP sub-nav fires an uncached live Apple `getApp` on every app entry (minor)
 
-**Classification: ACTUAL.** **Surface:** CPP Manager — entering or switching an app under `/apps/[appId]/*`.
+**Classification: ACTUAL.** **Surface:** CPP Manager — entering or switching an app under
+`/apps/[appId]/*`. **Severity: minor** (see the correction note — this is smaller than a first pass
+suggested).
 
-Two chrome components each independently fetch the same endpoint on mount, keyed on `[appId]`:
+> **Correction (cross-checked against the dead-code import-graph resolution).** An initial
+> naive-grep sweep reported this cost as firing **twice** — from both
+> `components/layout/SidebarNav.tsx:22` *and* `components/layout/AppSubNav.tsx:23`. That was a
+> **false positive**: `SidebarNav.tsx` has **zero importers** — it is a pre-session-16 leftover,
+> superseded by the live `components/layout/AppSidebar.tsx` (which does **not** fetch `getApp`), so
+> its fetch code never executes. `SidebarNav.tsx` is therefore **dead code** (moved to Tier-2 bucket
+> (a)), not a live cost. The real cost fires **once**.
 
-- [SidebarNav.tsx:22](components/layout/SidebarNav.tsx#L22) `fetch(/api/asc/apps/${appId})`
-- [AppSubNav.tsx:23](components/layout/AppSubNav.tsx#L23) `fetch(/api/asc/apps/${appId})`
-
-and that route does a **live Apple** call every time:
-[api/asc/apps/[appId]/route.ts:11-12](app/api/asc/apps/[appId]/route.ts#L11-L12)
+The one live chrome fetch: [AppSubNav.tsx:23](components/layout/AppSubNav.tsx#L23)
+`fetch(/api/asc/apps/${appId})` on mount (keyed on `[appId]`), rendered on every non-hub CPP route by
+[DashboardContent.tsx:14](app/(dashboard)/DashboardContent.tsx#L14). That route does a **live Apple**
+call every time: [api/asc/apps/[appId]/route.ts:11-12](app/api/asc/apps/[appId]/route.ts#L11-L12)
 `getActiveAccount()` + `getApp(creds, appId)`.
 
-**Counted cost:** **2 identical, uncached live Apple round-trips** per app entry/switch, purely to
-render the app name/icon in the chrome — on top of the page's own live Apple fetch (T1-7).
-(It fires on `appId` *change*, not on every sub-navigation within an app — the effect dep is
-`[appId]` and the components stay mounted across soft nav.)
+**Counted cost:** **1 uncached live Apple round-trip** per CPP app entry/switch, purely to render the
+app name/icon in the sub-nav — redundant with the app data the destination page already fetches
+(T1-7). It fires on `appId` *change*, not on every sub-navigation within an app (the effect dep is
+`[appId]` and the component stays mounted across soft nav), so it is **not** an "every click" cost —
+hence *minor*.
 
-**Fix shape:** dedupe to a single client fetch shared by both chrome components (a shared hook /
-React context, or TanStack Query which is already a dependency — its request dedupe would collapse
-the two to one). **Effort:** S–M. **Risk:** low. **Meta-rule:** a *client-side* shared fetch is
-request-scoped, not a cross-request config cache — **SAFE per P6**. Do **not** "fix" this with a
+**Fix shape:** have the sub-nav reuse the app name the page already loaded (pass it down / shared
+context) instead of a second client fetch. **Effort:** S. **Risk:** low. **Meta-rule:** a
+*client-side* shared value is request-scoped — **SAFE per P6**. Do **not** "fix" this with a
 module-level server cache of Apple app metadata (that would be the P6 trap).
+
+**Lesson (methodology):** this is why the dead-code pass used full import-graph resolution rather
+than symbol grep — a grep that matches a `fetch(...)` line proves the code *exists*, not that it
+*runs*. Treat any "component X does Y" finding as unconfirmed until X is proven to be rendered.
 
 ---
 
@@ -354,9 +365,12 @@ per-territory Apple price-point fetch (Cycle-44 catalog) and the lazy per-row av
 
 # TIER 2 — Dead / redundant code (three buckets)
 
-> A mechanical whole-repo unreferenced-export sweep (e.g. `knip` / `ts-prune`) is the right tool to
-> make bucket (a) exhaustive; the items below are what a targeted trace confirmed. Where I could not
-> prove zero references I say "UNCERTAIN" rather than call it dead.
+> Bucket (a) was produced by **full import-graph resolution** (resolving `@/` absolute, relative,
+> and `index.ts` barrel imports), not symbol grep — a naive path-grep falsely flags ~90 live core
+> files (they're imported relatively) and, conversely, misses that a file containing live-looking
+> code is never rendered (this is exactly what happened with `SidebarNav.tsx` — see T1-4's
+> correction). Each dead *symbol* below was confirmed by repo-wide `\bname\b` grep returning only its
+> definition line. Where I could not prove zero references I say "UNCERTAIN."
 
 ### (b) DELIBERATELY RETAINED — do NOT recommend deleting
 
@@ -369,29 +383,58 @@ per-territory Apple price-point fetch (Cycle-44 catalog) and the lazy per-row av
 
 ### (a) GENUINELY DEAD / stale — safe to *consider* removing
 
-| Item | Evidence | Size |
-|---|---|---|
-| `CLAUDE.old.md` | tracked in git (`git ls-files` confirms); superseded by `CLAUDE.md` | 12 KB, 1 file |
-| `lib/ffmpeg-loader.ts` (`@ffmpeg/*`) | breadth scan found only `import type` references, zero runtime importers | ~1 file — **UNCERTAIN**, confirm with a grep for `ffmpeg` runtime use before removing |
+**Orphan files (zero importers, proven via full import-graph resolution + confirmed first-hand by grep):**
 
-*(The dead-code sweep sub-agent's fuller orphan list should be folded here; treat any symbol it flags
-as "prove zero references first" before removal.)*
+| Path | Lines | Why dead |
+|---|---|---|
+| [components/layout/SidebarNav.tsx](components/layout/SidebarNav.tsx) | 107 | Pre-session-16 sidebar, superseded by the live `AppSidebar.tsx`; **zero references** (verified). This is the file whose phantom `getApp` fetch produced T1-4's original "twice" false positive. |
+| [components/layout/UserFooter.tsx](components/layout/UserFooter.tsx) | 50 | Pre-session-16 user footer, superseded by the TopNav AccountSwitcher; zero references (verified). |
+| [components/upload/AssetUploader.tsx](components/upload/AssetUploader.tsx) | 206 | CPP Phase-1 "Asset Uploader" scaffold — never wired into any route (roadmap item still unchecked); uploads go through the bulk-import dialogs. Zero references. |
+| [lib/utils.ts](lib/utils.ts) | 7 | shadcn `cn()` scaffolding; **zero** `@/lib/utils` imports repo-wide (verified). |
+| [components/ui/shared/index.ts](components/ui/shared/index.ts) | 7 | Unused barrel re-exporting `ExpandableErrorCell` (the component is imported directly; nobody imports the barrel). |
+| `CLAUDE.old.md` | ~ | Tracked in git; superseded by `CLAUDE.md`. Stale doc. |
+
+**Dead exported functions inside otherwise-live files** (definition-only; repo-wide grep returns only
+the defining line). Some resemble API-client completeness or reserved-for-wiring scaffolding — confirm
+none is earmarked for an imminent feature before deleting:
+
+- [lib/asc-client.ts](lib/asc-client.ts) — `createCppVersion`, `createCppLocalization`, `getAppStoreVersions`
+- [lib/asc-accounts.ts](lib/asc-accounts.ts) — `getDefaultAscAccount`, `getAscAccountsPublic`
+- [lib/store-submissions/auth.ts](lib/store-submissions/auth.ts) — `mapAuthErrorToResponse`, `touchLastLogin` (only `syncStoreProfile` is used by the guard — cross-ref T1-1)
+- [lib/iap-management/queries/iaps.ts](lib/iap-management/queries/iaps.ts) — `logSubmitAttempt`
+- [lib/iap-management/queries/price-tiers.ts](lib/iap-management/queries/price-tiers.ts) — `getImportSummary`, `listTiersWithTerritories`
+- Google-IAP: `clearActiveAccountId` (active-account.ts), `deleteInAppProduct` (publisher-client.ts), `findTemplateTierByUsdMicros` (queries/templates.ts), `upsertAppFromSync` (repository/apps.ts), `getDecryptedCredentials` (repository/google-accounts.ts)
+
+> NOT dead, just over-exported (do NOT remove): `invalidateAccountCache`
+> ([asc-account-repository.ts:34](lib/asc-account-repository.ts#L34)) is called internally 4×; and
+> ~40 symbols used only within their own file (`GmailSyncError`, `SCREENSHOT_LIMITS`, `AVATAR_COLORS`,
+> `GMAIL_SCOPE`, `REGIONS_VERSION`, composed zod sub-schemas, component `*Props` types). These are
+> over-export hygiene, not dead code.
 
 ### (c) TEST-ONLY — referenced only by `*.test.ts`
 
-Numerous exported pure helpers in the query/aggregation layers exist specifically for unit testing
-(e.g. the `reports.ts` aggregators `aggregateKpis` / `bucketTrendByDay` / `groupByApp` /
-`dedupBurstByTicket` are exported separately *"so unit tests can exercise them"* per
-[reports.ts:44-49](lib/store-submissions/queries/reports.ts#L44-L49)). These are **intended** test
-seams, not dead code — do not remove.
+- **Test-only file:** [lib/store-submissions/apps/alias-conflicts.ts](lib/store-submissions/apps/alias-conflicts.ts)
+  (87 lines) — `detectAliasConflicts` / `AliasConflict` imported only by its own `.test.ts`.
+  Production alias handling lives in `alias-logic.ts`. **UNCERTAIN** — confirm whether it was
+  superseded (drop candidate) or is a helper that lost its caller.
+- **Genuinely test-only convenience wrappers in a live file:** `parseAllowlist` and
+  `isV2SubmitEnabled` in [lib/iap-management/submit-v2-toggle.ts](lib/iap-management/submit-v2-toggle.ts)
+  — production only calls `v2ToggleDecision`; these two are exercised solely by unit tests.
+- **Intentional testability seams (KEEP, not dead):** the `reports.ts` aggregators (`aggregateKpis`
+  / `bucketTrendByDay` / `groupByApp` / `dedupBurstByTicket`, exported *"so unit tests can exercise
+  them"* per [reports.ts:44-49](lib/store-submissions/queries/reports.ts#L44-L49)), the `__…ForTests`
+  reset/inspect helpers (queue, jwt-cache, re2-cache, territory-cache), pure encoders
+  (`encodePricePointId`/`decodePricePointId`, `chunkArray`), and the `gmail/__fixtures__/` set.
 
 ### Non-source repo clutter (not "dead code", noted for hygiene)
 
-- `dist/` — **221 MB**, untracked, and *not* in `.gitignore`. A stale local build artifact sitting
-  in the working tree. Not committed (0 files tracked), so it does not bloat history — but it should
-  be `.gitignore`d to prevent accidental commits and to de-noise the tree.
-- `coverage/` — 200 KB, untracked, not gitignored (add to `.gitignore`).
-- `mockups/` (144 KB), `templates/` (4 KB), `.store-mgmt-patches/` (16 KB) — small; leave.
+- `dist/` — **221 MB** of local release packages. **Already gitignored** (`.gitignore` has `/dist`;
+  0 tracked files) — so it does not bloat the repo/history, it just inflates the working tree. Safe
+  to clear locally; no `.gitignore` change needed. *(An earlier note in this report claimed it was
+  not gitignored — corrected: my first `grep -E "^dist"` missed the leading `/dist` form.)*
+- `coverage/` — 200 KB, **already gitignored** (`/coverage`), 0 tracked. No action needed.
+- Tracked small reference material (leave): `mockups/` (144 KB, 1 file), `templates/` (4 KB, 1 CSV),
+  `.store-mgmt-patches/` (16 KB, 4 `.md`).
 
 ---
 
@@ -499,8 +542,9 @@ Hotfix-26 429 cascade); add any cross-request/module cache of config or the stor
 
 **High confidence (verified first-hand, structural):** no middleware; JWT sessions do no DB; the
 5-min ASC-account cache; T1-1 duplicate `getStoreUser` + blocking `syncStoreProfile`; T1-2 6×
-platform-id; T1-3 per-row template DB N+1 (read the call site + paginated fetch); T1-4 double chrome
-`getApp`; T1-5 unindexable corrupt-payload probe + its wrong self-comment; T1-6 index inventory vs
+platform-id; T1-3 per-row template DB N+1 (read the call site + paginated fetch); T1-4 corrected to a **single**
+live `getApp` (AppSubNav only; SidebarNav proven dead via import-graph — the initial "twice" was a
+naive-grep false positive); T1-5 unindexable corrupt-payload probe + its wrong self-comment; T1-6 index inventory vs
 predicates; the bulk-import concurrency=2 / 1 s-delay throttle; the two bulk-import dialogs both live;
 xlsx dynamic-imported; recharts static; no `cache()`/`unstable_cache` anywhere in the codebase.
 
