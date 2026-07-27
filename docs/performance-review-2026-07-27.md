@@ -49,7 +49,9 @@ The fixed per-click cost decomposes into three multiplicative parts:
 decodes the signed cookie in-process — zero DB hits, even though it is called 119× across the
 codebase. Good. Likewise the ASC-account read is served from a 5-minute in-memory cache
 ([asc-account-repository.ts:21-32](lib/asc-account-repository.ts#L21-L32)), so `getActiveAccount()`
-is usually free after the first request. The per-click DB cost is therefore **not** auth-session or
+is usually free after the first request — a latency *positive* whose perf verdict stands, though the
+same cache carries a separate, non-latency correctness caveat (see **T3-P6** in Tier 3). The
+per-click DB cost is therefore **not** auth-session or
 account resolution — it is the *module whitelist / platform-id / data queries* enumerated below.
 
 ---
@@ -394,6 +396,29 @@ per-territory Apple price-point fetch (Cycle-44 catalog) and the lazy per-row av
 | [components/ui/shared/index.ts](components/ui/shared/index.ts) | 7 | Unused barrel re-exporting `ExpandableErrorCell` (the component is imported directly; nobody imports the barrel). |
 | `CLAUDE.old.md` | ~ | Tracked in git; superseded by `CLAUDE.md`. Stale doc. |
 
+> **Cross-reference — `AssetUploader.tsx` is genuinely dead, but HOLD the deletion.** Zero importers
+> verified (grep of `app`/`components`/`lib`). Two things hinge on this file's status:
+> 1. **A still-open backlog item ("CPP Upload per-file tracking") is MIS-TARGETED, not moot.** Its
+>    premise is that the client-orchestrated per-file CPP upload lives in `AssetUploader.tsx` — but
+>    that file is dead. The **real** live per-file `/api/asc/upload` surfaces are
+>    [LocalizationManager.tsx:630](components/cpp/LocalizationManager.tsx#L630) (single-CPP asset
+>    upload) and [BulkImportDialog.tsx:457-495](components/cpp/BulkImportDialog.tsx#L457-L495) (bulk
+>    asset upload into one CPP — a per-file `for`-loop of `await fetch("/api/asc/upload")` over each
+>    screenshot/preview file), and **neither is Hub-tracked** (no hub-tracking wiring in
+>    `BulkImportDialog.tsx`; it was explicitly held out of the ccf45b2 CPP-bulk-import tracking scope).
+>    `CppBulkImportDialog.tsx` uses the same [/api/asc/upload](components/cpp/CppBulkImportDialog.tsx#L687)
+>    path and **is** already tracked ([start](components/cpp/CppBulkImportDialog.tsx#L507) /
+>    [finalize](components/cpp/CppBulkImportDialog.tsx#L232)). → The correct target for "CPP Upload
+>    per-file tracking" is **`BulkImportDialog.tsx`** (and/or `LocalizationManager.tsx`), **not**
+>    `AssetUploader.tsx` — the backlog is pointed at the wrong file, not obsolete. (The CPP
+>    hub-tracking finalize route's own comment confirms the client-orchestrated per-file model:
+>    [finalize/route.ts:7-13](app/api/asc/hub-tracking/finalize/route.ts#L7-L13).)
+> 2. **The IAP KB advertises this file as reused.** `IAP-MANAGEMENT-KNOWLEDGE-BASE.md` §6.4 lists
+>    `AssetUploader.tsx` under "Cross-cutting reuse", contradicting the zero-reference finding. Since
+>    finding (a) is conclusive, that KB row is corrected in **this same commit**. **Do not delete
+>    `AssetUploader.tsx` until the backlog item is re-scoped** — removing a file the KB advertises as
+>    reusable would strand that plan.
+
 **Dead exported functions inside otherwise-live files** (definition-only; repo-wide grep returns only
 the defining line). Some resemble API-client completeness or reserved-for-wiring scaffolding — confirm
 none is earmarked for an imminent feature before deleting:
@@ -443,6 +468,32 @@ none is earmarked for an imminent feature before deleting:
 These are correctness/maintainability observations, **not** performance issues. Listed so they're
 not confused with Tier 1. None should jump the queue ahead of a Tier-1 fix.
 
+> ### T3-P6 — CORRECTNESS / P6 RISK (distinct from the maintainability items below; NOT latency)
+> The 5-min in-memory ASC-account cache ([asc-account-repository.ts:21-32](lib/asc-account-repository.ts#L21-L32))
+> is a latency **positive** and its perf verdict stands — do **not** rip it out here (removing it
+> re-adds a DB round-trip to a hot path). But structurally it is the **same class as bug 9ed7845**
+> that meta-rule **P6** exists to prevent: a module-scope cache of **mutable state** on a
+> multi-instance deploy. Verified specifics:
+> - **TTL** = `CACHE_TTL_MS = 5 * 60 * 1000` (5 min) — [asc-account-repository.ts:21](lib/asc-account-repository.ts#L21).
+> - **What is cached:** the whole active-account list **including decrypted private keys** —
+>   `rowToAccount` runs `decryptPrivateKey(...)` into the module `_cache`
+>   ([:49-57](lib/asc-account-repository.ts#L49-L57); `_cache` declared at [:23](lib/asc-account-repository.ts#L23)).
+> - **Invalidation IS wired on every local mutation path** — `createAccount` ([:161](lib/asc-account-repository.ts#L161)),
+>   `updateAccount` ([:185](lib/asc-account-repository.ts#L185)), `deleteAccount` soft-delete ([:198](lib/asc-account-repository.ts#L198)),
+>   called from the admin routes [asc-accounts/route.ts:48](app/api/admin/asc-accounts/route.ts#L48)
+>   and [asc-accounts/[id]/route.ts:30,53](app/api/admin/asc-accounts/[id]/route.ts#L30). So on a
+>   **single** instance it is correct.
+> - **The gap:** `invalidateAccountCache` clears only the **local** module `_cache` — there is no
+>   cross-instance signal. On a multi-instance Railway deploy, a credential rotation / account-disable
+>   handled by instance A leaves instance B serving the **stale** account (old key, or an
+>   `is_active=false` account still treated as live) until B's own TTL lapses. **Worst-case staleness
+>   ≈ 5 min** per non-handling instance.
+> - **Severity dial:** the Railway instance count (Manager-Verify #3) — 1 instance ⇒ no risk; >1 ⇒ a
+>   latent rotation/disable staleness window.
+> - **Remedy is a SEPARATE investigation, not part of the perf work** (options: shorten the TTL, add a
+>   cross-instance invalidation / cache-version check, or accept + document the window). Weigh
+>   correctness vs the hot-path cost — do **not** fold it into the latency fixes above.
+
 - **`getApp()` (apps.ts) fetches ALL apps then filters in JS for a single-app lookup**
   ([queries/apps.ts:274](lib/store-submissions/queries/apps.ts#L274) — `listApps({}).then(all =>
   all.filter(r => r.id === id))`). It re-runs the full multi-join list query to return one row.
@@ -483,10 +534,11 @@ diagnosis.
 2. **Supabase plan + whether the connection uses the pooler vs direct.** Free/small plans and a
    cold/undersized pooler add latency to every query. Confirm the plan tier and that the app uses the
    pooled connection string.
-3. **Railway plan + instance count.** If >1 web instance is running, note that the in-memory ASC
-   account cache ([asc-account-repository.ts](lib/asc-account-repository.ts#L21-L32)) is per-instance
-   (relevant to correctness/P6, not latency) — but more importantly confirm the plan isn't
-   CPU-throttling the SSR renders.
+3. **Railway plan + instance count.** If >1 web instance is running, the in-memory ASC account cache
+   ([asc-account-repository.ts](lib/asc-account-repository.ts#L21-L32)) is per-instance — **this
+   instance count is the severity dial for the T3-P6 correctness risk** in Tier 3 (a rotated or
+   disabled credential stays live on the other instances for up to the 5-min TTL). Separately, confirm
+   the plan isn't CPU-throttling the SSR renders.
 4. **Row counts on the unbounded tables:** `store_mgmt.email_messages`, `store_mgmt.ticket_entries`,
    `iap_mgmt.actions_log`. These decide the *current* severity of T1-5 (corrupt-payload full scan)
    and T1-6 (missing `ticket_entries` index). If `email_messages` is already tens of thousands of
@@ -528,8 +580,9 @@ magnitude-blind. Two cheap moves settle it:
 5. **T1-3 — hoist the bulk-import template load once per batch.** The one real bulk-import ACTUAL
    fix; medium effort, guarded by existing tests. Do this after Step 0 confirms template-source
    imports are common and RTT makes it material.
-6. **T1-4 — dedupe the CPP chrome double `getApp`;  T1-8 — `dynamic()` the recharts import.** Small,
-   independent polish.
+6. **T1-4 — have the CPP sub-nav reuse the app name the page already loaded** instead of a second
+   `getApp` client fetch (a *single* fetch to remove, **not** a "dedupe" — `SidebarNav` is dead, only
+   `AppSubNav` fires it); **T1-8 — `dynamic()` the recharts import.** Small, independent polish.
 
 **Explicitly do NOT do:** raise bulk-import concurrency / drop the inter-row delay (reintroduces the
 Hotfix-26 429 cascade); add any cross-request/module cache of config or the store-user whitelist

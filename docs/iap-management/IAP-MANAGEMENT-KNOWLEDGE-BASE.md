@@ -687,7 +687,7 @@ iaps/[iapId]/route.ts                                GET/PATCH/DELETE single IAP
 | Schema isolation pattern | `lib/store-submissions/db.ts` | `iapDb()` mirrors `storeDb()` |
 | RBAC | Global `admin` / `member` roles | Q-IAP.8 — no module whitelist |
 | `withConcurrency<T,R>` | `lib/iap-management/concurrency.ts` | Bounded semaphore, replaces `p-limit` dep; mirrored pattern from `lib/store-submissions/` |
-| Dropzone + upload UI | `components/upload/AssetUploader.tsx` | Bulk screenshot reuse |
+| Dropzone + upload UI | ~~`components/upload/AssetUploader.tsx`~~ | ⚠️ **Planned reuse never shipped** — this file has ZERO importers (verified 2026-07-27, see `docs/performance-review-2026-07-27.md` Tier-2). The live Dropzone/upload UI is in `components/cpp/BulkImportDialog.tsx` + `components/cpp/LocalizationManager.tsx`; re-target any reuse (and the "CPP Upload per-file tracking" backlog) there. |
 
 ---
 
