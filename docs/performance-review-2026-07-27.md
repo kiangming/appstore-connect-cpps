@@ -591,6 +591,41 @@ Hotfix-26 429 cascade); add any cross-request/module cache of config or the stor
 
 ---
 
+# TEMPORARY INSTRUMENTATION — `[perf-probe]` removal tripwire
+
+Shipped in the Step-0 perf batch (commits `2a85ccf` + `ccceef4`) alongside T1-1/T1-2/T1-7. The
+`[perf-probe]` timing logs are **measurement scaffolding, not a feature** — they exist only to get
+the one runtime number this whole ranking hinges on (Railway↔Supabase RTT, Manager-Verify #1). They
+must be removed once they've done their job.
+
+**What to remove (all four sites — the log lines + their `perfT0` timers only, keep the surrounding
+logic):**
+- [lib/store-submissions/auth.ts](lib/store-submissions/auth.ts) — `[perf-probe] getStoreUser SELECT …` inside `getStoreUser`.
+- [lib/store-submissions/session-guard.ts](lib/store-submissions/session-guard.ts) — `[perf-probe] requireStoreSession chain …`.
+- [app/(dashboard)/store-submissions/reports/apple/page.tsx](app/(dashboard)/store-submissions/reports/apple/page.tsx) — `[perf-probe] reports.apple aggregations(6) …`.
+- [app/(dashboard)/store-submissions/inbox/page.tsx](app/(dashboard)/store-submissions/inbox/page.tsx) — `[perf-probe] inbox queries(7) …` (+ the now-unused `log` import if nothing else uses it).
+
+Grep before removing: `grep -rn "perf-probe" app lib` — expect exactly these 4 files.
+
+**KEEP — NOT instrumentation:** [lib/react-request-cache.ts](lib/react-request-cache.ts) is
+**production code** (the request-scoped dedupe powering T1-1/T1-2) and its loud-fallback WARN is a
+permanent guard, not a probe. Its tests ([lib/react-request-cache.test.ts](lib/react-request-cache.test.ts),
+[lib/store-submissions/perf-request-dedupe.test.ts](lib/store-submissions/perf-request-dedupe.test.ts))
+stay too. Remove ONLY the four probe log lines above.
+
+**Removal condition (reverse tripwire) — remove once BOTH hold:**
+1. The Manager has read the `[perf-probe]` numbers in Railway logs and RTT is settled (Manager-Verify
+   #1 answered — the "measure first" step is complete).
+2. The dedupe is confirmed live in production: `[perf-probe] getStoreUser SELECT dur_ms=…` appears
+   **once per navigation, not twice** — proof React's real `cache()` deduped the layout+guard double
+   lookup (the thing the unit tests could only prove against a request-scoped stand-in, not the real
+   RSC cache).
+
+Until both hold, the probes stay. When they do, pull the four log lines in one small follow-up commit,
+leaving the dedupe + loud-fallback guard untouched.
+
+---
+
 # CONFIDENCE + GAPS
 
 **High confidence (verified first-hand, structural):** no middleware; JWT sessions do no DB; the
