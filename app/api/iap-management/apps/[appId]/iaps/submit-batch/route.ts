@@ -332,6 +332,15 @@ async function runPreflight(
     if (row.apple_iap_id) appleIdsToFetch.add(row.apple_iap_id);
   }
 
+  // PERF — DO NOT "optimize" this back to a single `?limit=200` page. This
+  // guard makes N Apple calls (N = page count; ~2 for this app's 355 IAPs,
+  // 3 past 400) and adds ~400ms×(N−1) to the submit path. That cost is
+  // REQUIRED: one page sees only 200 of 355 IAPs and silently reinstates the
+  // false-NOT_FOUND bug (re-break of IAP.o.7a; commit 028091a). It is
+  // explicitly OUT OF BOUNDS for the perf review's Tier-1 "live Apple calls
+  // in the render path" work — see docs/performance-review-2026-07-27.md
+  // ("Explicitly do NOT do").
+  //
   // Fresh Apple state — enumerate the FULL catalog (follows `links.next`).
   // `listAllInAppPurchases` retries each page internally, so no outer
   // `withRetry` here (double-wrapping would restart enumeration from page 1
@@ -413,9 +422,13 @@ async function runStateGuard(
   const db = iapDb();
   let stateByAppleId: Map<string, string>;
   try {
-    // Full-catalog enumeration (parity with preflight) — see preflight note:
-    // no outer `withRetry`, all-or-nothing so a truncated set can't slip
-    // through as a false SKIPPED_BY_STATE_GUARD.
+    // PERF — multi-page enumeration is deliberate (see preflight note +
+    // docs/performance-review-2026-07-27.md "Explicitly do NOT do"). Collapsing
+    // to a single page reinstates the false NOT_FOUND / false
+    // SKIPPED_BY_STATE_GUARD bug on >200-IAP apps.
+    //
+    // Full-catalog enumeration (parity with preflight) — no outer `withRetry`,
+    // all-or-nothing so a truncated set can't slip through.
     const res = await listAllInAppPurchases(creds, appleAppId);
     stateByAppleId = new Map(
       (res.data ?? []).map((iap) => [iap.id, iap.attributes.state]),

@@ -587,7 +587,12 @@ magnitude-blind. Two cheap moves settle it:
 **Explicitly do NOT do:** raise bulk-import concurrency / drop the inter-row delay (reintroduces the
 Hotfix-26 429 cascade); add any cross-request/module cache of config or the store-user whitelist
 (P6 / 9ed7845 staleness); add indexes to `email_messages.received_at` or the tiny config tables
-(already covered / cosmetic).
+(already covered / cosmetic); **collapse the submit-batch state guard's multi-page Apple enumeration
+back to a single `?limit=200` call** — it deliberately makes N `listAllInAppPurchases` calls (N = page
+count; ~2 for CookieRun's 355 IAPs, 3 past 400, ~400ms×(N−1) added to the submit path), but one page
+sees only 200 of 355 IAPs and silently reinstates the false-NOT_FOUND bug (re-break of IAP.o.7a;
+commit `028091a`, guard comments in [submit-batch/route.ts](app/api/iap-management/apps/[appId]/iaps/submit-batch/route.ts)).
+N Apple calls here is CORRECT — out of bounds for the Tier-1 "live Apple calls in the render path" work.
 
 ---
 
