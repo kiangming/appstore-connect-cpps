@@ -25,11 +25,11 @@ vi.mock("@/lib/iap-management/auth", async () => {
 const getActiveAccount = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/get-active-account", () => ({ getActiveAccount }));
 
-const listInAppPurchases = vi.hoisted(() => vi.fn());
+const listAllInAppPurchases = vi.hoisted(() => vi.fn());
 const submitInAppPurchase = vi.hoisted(() => vi.fn());
 const getInAppPurchase = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/iap-management/apple/client", () => ({
-  listInAppPurchases,
+  listAllInAppPurchases,
   submitInAppPurchase,
   getInAppPurchase,
 }));
@@ -104,7 +104,7 @@ function localRow(id: string, appleIapId: string) {
 beforeEach(() => {
   requireIapSession.mockReset().mockResolvedValue(session);
   getActiveAccount.mockReset().mockResolvedValue({});
-  listInAppPurchases.mockReset();
+  listAllInAppPurchases.mockReset();
   submitInAppPurchase.mockReset();
   getInAppPurchase.mockReset();
   v2ToggleDecision.mockReset();
@@ -129,7 +129,7 @@ function readyAppleState(ids: string[]) {
 describe("submit-batch — start timing", () => {
   it("does NOT call startSubmitHubTracking on preflight (execute:false) — no run exists while viewing preflight", async () => {
     localRowsResult = { data: [localRow("11111111-1111-4111-8111-111111111111", "apple-1")], error: null };
-    listInAppPurchases.mockResolvedValue(readyAppleState(["apple-1"]));
+    listAllInAppPurchases.mockResolvedValue(readyAppleState(["apple-1"]));
 
     await POST(buildRequest({ iap_ids: ["11111111-1111-4111-8111-111111111111"], execute: false }), ctx);
 
@@ -139,7 +139,7 @@ describe("submit-batch — start timing", () => {
 
   it("starts a run on the first execute:true POST (before confirmConflict exists)", async () => {
     localRowsResult = { data: [localRow("11111111-1111-4111-8111-111111111111", "apple-1")], error: null };
-    listInAppPurchases.mockResolvedValue(readyAppleState(["apple-1"]));
+    listAllInAppPurchases.mockResolvedValue(readyAppleState(["apple-1"]));
     v2ToggleDecision.mockReturnValue({ enabled: false, reason: "allowlist empty" });
     submitInAppPurchase.mockResolvedValue(undefined);
     getInAppPurchase.mockResolvedValue({ data: { attributes: { state: "WAITING_FOR_REVIEW" } } });
@@ -152,7 +152,7 @@ describe("submit-batch — start timing", () => {
 
   it("confirmConflict:true resumes the client-provided hub_run_id — does NOT start a new run", async () => {
     localRowsResult = { data: [localRow("11111111-1111-4111-8111-111111111111", "apple-1")], error: null };
-    listInAppPurchases.mockResolvedValue(readyAppleState(["apple-1"]));
+    listAllInAppPurchases.mockResolvedValue(readyAppleState(["apple-1"]));
     v2ToggleDecision.mockReturnValue({ enabled: true, reason: "allowlisted" });
     executeSubmitV2.mockResolvedValue({
       reviewSubmissionId: "sub-1",
@@ -186,7 +186,7 @@ describe("submit-batch — legacy path status computation", () => {
       data: [localRow("11111111-1111-4111-8111-111111111111", "apple-1"), localRow("22222222-2222-4222-8222-222222222222", "apple-2")],
       error: null,
     };
-    listInAppPurchases.mockResolvedValue(readyAppleState(["apple-1", "apple-2"]));
+    listAllInAppPurchases.mockResolvedValue(readyAppleState(["apple-1", "apple-2"]));
     submitInAppPurchase.mockResolvedValue(undefined);
     getInAppPurchase.mockResolvedValue({ data: { attributes: { state: "WAITING_FOR_REVIEW" } } });
 
@@ -200,7 +200,7 @@ describe("submit-batch — legacy path status computation", () => {
       data: [localRow("11111111-1111-4111-8111-111111111111", "apple-1"), localRow("22222222-2222-4222-8222-222222222222", "apple-2")],
       error: null,
     };
-    listInAppPurchases.mockResolvedValue(readyAppleState(["apple-1", "apple-2"]));
+    listAllInAppPurchases.mockResolvedValue(readyAppleState(["apple-1", "apple-2"]));
     submitInAppPurchase.mockImplementation((_creds: unknown, appleId: string) =>
       appleId === "apple-1" ? Promise.resolve(undefined) : Promise.reject(new Error("boom")),
     );
@@ -213,7 +213,7 @@ describe("submit-batch — legacy path status computation", () => {
 
   it("all fail → FAIL", async () => {
     localRowsResult = { data: [localRow("11111111-1111-4111-8111-111111111111", "apple-1")], error: null };
-    listInAppPurchases.mockResolvedValue(readyAppleState(["apple-1"]));
+    listAllInAppPurchases.mockResolvedValue(readyAppleState(["apple-1"]));
     submitInAppPurchase.mockRejectedValue(new Error("boom"));
 
     await POST(buildRequest({ iap_ids: ["11111111-1111-4111-8111-111111111111"], execute: true }), ctx);
@@ -231,7 +231,7 @@ describe("submit-batch — legacy path status computation", () => {
       error: null,
     };
     // apple-1 not READY_TO_SUBMIT (skipped by state guard), apple-2 is.
-    listInAppPurchases.mockResolvedValue({
+    listAllInAppPurchases.mockResolvedValue({
       data: [
         { id: "apple-1", attributes: { state: "IN_REVIEW" } },
         { id: "apple-2", attributes: { state: "READY_TO_SUBMIT" } },
@@ -247,7 +247,7 @@ describe("submit-batch — legacy path status computation", () => {
 
   it("entirely-skipped batch → SUCCESS/no-op, not FAIL", async () => {
     localRowsResult = { data: [localRow("11111111-1111-4111-8111-111111111111", "apple-1")], error: null };
-    listInAppPurchases.mockResolvedValue({
+    listAllInAppPurchases.mockResolvedValue({
       data: [{ id: "apple-1", attributes: { state: "IN_REVIEW" } }],
     });
 
@@ -262,7 +262,7 @@ describe("submit-batch — v2 path: multi-request finalize", () => {
   beforeEach(() => {
     v2ToggleDecision.mockReturnValue({ enabled: true, reason: "allowlisted" });
     localRowsResult = { data: [localRow("11111111-1111-4111-8111-111111111111", "apple-1")], error: null };
-    listInAppPurchases.mockResolvedValue(readyAppleState(["apple-1"]));
+    listAllInAppPurchases.mockResolvedValue(readyAppleState(["apple-1"]));
   });
 
   it("no conflict, all adds + confirm succeed → finalize SUCCESS, response.hub_run_id is null (terminal)", async () => {
@@ -342,7 +342,7 @@ describe("submit-batch — v2 path: multi-request finalize", () => {
   });
 
   it("entirely-skipped v2 batch → finalize SUCCESS without ever calling checkForConflict/executeSubmitV2", async () => {
-    listInAppPurchases.mockResolvedValue({
+    listAllInAppPurchases.mockResolvedValue({
       data: [{ id: "apple-1", attributes: { state: "IN_REVIEW" } }],
     });
 

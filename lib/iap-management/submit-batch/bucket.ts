@@ -66,6 +66,11 @@ export function bucketSelection(
     }
     const apple = appleByAppleId.get(row.apple_iap_id);
     if (!apple) {
+      // Reached ONLY when the Apple set was fully enumerated (the caller's
+      // fetch is all-or-nothing — a truncated/errored list throws before we
+      // get here). So absence is trustworthy, but state only what's known and
+      // give a next step — no "removed or restricted" speculation, which sent
+      // Managers on a wasted trip to App Store Connect to verify a fine IAP.
       buckets.other.push({
         iap_id: row.id,
         apple_iap_id: row.apple_iap_id,
@@ -73,7 +78,7 @@ export function bucketSelection(
         reference_name: row.reference_name,
         state: "NOT_FOUND",
         hint:
-          "Apple no longer returns this IAP for the app — may have been removed or restricted.",
+          "Not present in Apple's current IAP list for this app. Refresh the list; if it reappears, re-select and submit again.",
       });
       continue;
     }
@@ -110,8 +115,8 @@ export function bucketSelection(
  * filtered, but a race or direct API call could land non-ready rows).
  *
  * Pure function — easily testable, no Apple HTTP side effects. The route
- * resolves `stateByAppleId` via a single `listInAppPurchases` call (parity
- * with preflight) and passes it in.
+ * resolves `stateByAppleId` via a single `listAllInAppPurchases` call (fully
+ * paginated, parity with preflight) and passes it in.
  */
 
 export interface EligibleRow {
@@ -134,7 +139,7 @@ export interface GuardPartition {
 
 /**
  * Partition the "on-Apple" rows by fresh state. Caller resolves
- * `stateByAppleId` from a single `listInAppPurchases` call.
+ * `stateByAppleId` from a single fully-paginated `listAllInAppPurchases` call.
  */
 export function partitionByStateGuard(
   rows: ReadonlyArray<{ id: string; apple_iap_id: string }>,

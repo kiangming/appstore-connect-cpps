@@ -107,7 +107,7 @@ Each capability ties to an Apple endpoint (or composite) and a tool entry point.
 | Pricing templates (Per-app) | `Settings → Pricing Tiers → Per-App` | Bulk-applied via orchestrator | 30 (IAP.p1.c) |
 | Apply template at IAP create | `PricingSourceSelector` on form | Resolved server-side at orchestration | 30 (IAP.p1.f) |
 | View detail (Apple parity) | `/iap-management/apps/[appId]/iaps/[iapId]/view` | `GET /v2/inAppPurchases/{id}` + 2-stage `/v1/inAppPurchasePriceSchedules/{id}/manualPrices` | 31 |
-| Submit state guard (defence-in-depth) | Server-side recheck in submit-batch route | `GET /v2/inAppPurchases?filter[apps]={id}` | 32 (IAP.q.1) |
+| Submit state guard (defence-in-depth) | Server-side recheck in submit-batch route (preflight + execute) | `listAllInAppPurchases` → `GET /v1/apps/{id}/inAppPurchasesV2?limit=200` **paginated (follow `links.next`)** | 32 (IAP.q.1); paginated fix (submit-guard false-NOT_FOUND, IAP.o.7a-class re-break) |
 | Export IAP catalog (xlsx) | `Export list` button on IAP list page | Live per-IAP fetch reusing View Detail's price-schedule read (§4.1) | 44 (commit `fbea49a`) |
 | Submit batch — reviewSubmissions v2 (per-app toggle) | Same `Submit Selected` modal | `POST/PATCH /v1/reviewSubmissions`, `POST /v1/reviewSubmissionItems` → `inAppPurchaseVersion` | 46 (§4.10/§4.11/§10.16, commit `6bb7023`) |
 | Hub run tracking — Bulk Import | Automatic (no UI toggle; Settings page controls config) | N/A (external VNGGames Hub REST API) | 45 (§10.15, commits `95d9413`/`613a9c3`/`4ba8e6f`/`9ed7845`) |

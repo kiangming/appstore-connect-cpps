@@ -81,12 +81,14 @@ describe("bucketSelection — preflight categorization", () => {
     expect(byId.get("u3")!.hint).toContain("Removed");
   });
 
-  it("buckets an apple_iap_id missing from Apple's response into other with NOT_FOUND state", () => {
+  it("buckets an apple_iap_id missing from Apple's (fully enumerated) response into other with NOT_FOUND state + factual, non-speculative hint", () => {
     const sel = [localRow({ apple_iap_id: "apple-vanished" })];
     const out = bucketSelection(sel, new Map());
     expect(out.other).toHaveLength(1);
     expect(out.other[0].state).toBe("NOT_FOUND");
-    expect(out.other[0].hint).toContain("no longer returns");
+    // 2d — no "removed/restricted" speculation; state what's known + next step.
+    expect(out.other[0].hint).toContain("Not present in Apple's current IAP list");
+    expect(out.other[0].hint).not.toContain("removed or restricted");
   });
 
   it("mixed selection: separates ready / missing / other / not_on_apple correctly", () => {

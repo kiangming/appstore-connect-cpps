@@ -34,12 +34,15 @@ vi.mock("./fetch", () => ({
   },
 }));
 
+// `listAllInAppPurchases` logs a per-enumeration summary; stub it out.
+vi.mock("@/lib/logger", () => ({ log: vi.fn() }));
+
 import {
   createInAppPurchase,
   updateInAppPurchase,
   deleteInAppPurchase,
   getInAppPurchase,
-  listInAppPurchases,
+  listAllInAppPurchases,
   createInAppPurchaseLocalization,
   updateInAppPurchaseLocalization,
   reserveInAppPurchaseScreenshot,
@@ -75,8 +78,11 @@ function callArgs() {
 // ─── IAP CRUD ────────────────────────────────────────────────────────────────
 
 describe("API schema: IAP CRUD endpoints", () => {
-  it("list IAPs → GET /v1/apps/{id}/inAppPurchasesV2?limit=200", async () => {
-    await listInAppPurchases(creds, "app-1");
+  it("list IAPs → GET /v1/apps/{id}/inAppPurchasesV2?limit=200 (first page of the paginating enumerator)", async () => {
+    await listAllInAppPurchases(creds, "app-1");
+    // callArgs() reads the FIRST iapFetch call — the initial page. With no
+    // `links.next` on the stub response the enumerator stops after one page,
+    // pinning the same list endpoint the retired single-page helper used.
     expect(callArgs()).toMatchObject({
       method: "GET",
       endpoint: "/v1/apps/app-1/inAppPurchasesV2?limit=200",

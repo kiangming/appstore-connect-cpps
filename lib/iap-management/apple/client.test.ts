@@ -16,10 +16,14 @@ import {
   confirmInAppPurchaseScreenshot,
   deleteInAppPurchaseScreenshot,
   submitInAppPurchase,
-  listInAppPurchases,
   listAllInAppPurchases,
   getInAppPurchase,
 } from "./client";
+// The single-page `listInAppPurchases` was RETIRED (submit-guard false-NOT_FOUND
+// fix) — every list caller must fully paginate via `listAllInAppPurchases`. Its
+// former URL-shape assertion is preserved by the "returns single-page data when
+// links.next absent" test below, which pins the identical first-page endpoint.
+import { AppleRateLimitError } from "./fetch";
 import type { AscCredentials } from "@/lib/asc-jwt";
 
 vi.mock("./fetch", async () => {
@@ -257,14 +261,7 @@ describe("submitInAppPurchase", () => {
   });
 });
 
-describe("listInAppPurchases / getInAppPurchase URL shape", () => {
-  it("listInAppPurchases hits the v1 apps/<id>/inAppPurchasesV2 path", async () => {
-    await listInAppPurchases(creds, "app-id-1");
-    const [, method, endpoint] = iapFetch.mock.calls[0];
-    expect(method).toBe("GET");
-    expect(endpoint).toBe("/v1/apps/app-id-1/inAppPurchasesV2?limit=200");
-  });
-
+describe("getInAppPurchase URL shape", () => {
   it("getInAppPurchase includes localizations + appStoreReviewScreenshot", async () => {
     await getInAppPurchase(creds, "iap-1");
     const [, , endpoint] = iapFetch.mock.calls[0];
@@ -377,7 +374,11 @@ describe("listAllInAppPurchases (paginated)", () => {
     expect(res.data).toEqual([]);
   });
 
-  it("terminates when `links.next` is malformed (not a parseable URL)", async () => {
+  it("THROWS when `links.next` is present but unparseable — no silent truncation", async () => {
+    // Completeness detection: a present-but-unfollowable `next` means Apple is
+    // pointing at more pages we can't reach. Returning the partial set here is
+    // exactly the silent truncation that produced false NOT_FOUND verdicts —
+    // so enumeration must fail loud instead.
     iapFetch.mockResolvedValueOnce({
       data: [makeIap("1", "p.a")],
       links: {
@@ -386,10 +387,38 @@ describe("listAllInAppPurchases (paginated)", () => {
       },
     });
 
-    const res = await listAllInAppPurchases(creds, "app");
-    expect(res.data).toHaveLength(1);
-    // No infinite loop: only the first call fires.
+    await expect(listAllInAppPurchases(creds, "app")).rejects.toThrow(
+      /unparseable links\.next/,
+    );
+    // Still no infinite loop — it throws after the first page, never re-fetches.
     expect(iapFetch).toHaveBeenCalledOnce();
+  });
+
+  it("retries a 429 on page 2 via the helper's OWN withRetry — never re-fetches page 1 (no double-wrap)", async () => {
+    // Proves (a) per-page retry survives the guard dropping its outer withRetry,
+    // and (b) the retry is scoped to the failing page — a tail-page 429 does NOT
+    // restart enumeration from page 1 (which double-wrapping would cause).
+    iapFetch
+      .mockResolvedValueOnce({
+        data: [makeIap("1", "p.a")],
+        links: {
+          self: "https://api.appstoreconnect.apple.com/v1/apps/app/inAppPurchasesV2?limit=200",
+          next: "https://api.appstoreconnect.apple.com/v1/apps/app/inAppPurchasesV2?cursor=P2",
+        },
+      })
+      // Page 2 rate-limited once (retry-after 0 → immediate), then succeeds.
+      .mockRejectedValueOnce(
+        new AppleRateLimitError("GET", "/v1/apps/app/inAppPurchasesV2?cursor=P2", "rate limited", 0),
+      )
+      .mockResolvedValueOnce({ data: [makeIap("2", "p.b")] });
+
+    const res = await listAllInAppPurchases(creds, "app");
+    expect(res.data.map((d) => d.id)).toEqual(["1", "2"]);
+    expect(iapFetch).toHaveBeenCalledTimes(3);
+    // call[0] = page 1 (fetched exactly once), call[1]+call[2] = page 2 (fail→retry).
+    expect(iapFetch.mock.calls[0][2]).toBe("/v1/apps/app/inAppPurchasesV2?limit=200");
+    expect(iapFetch.mock.calls[1][2]).toBe("/v1/apps/app/inAppPurchasesV2?cursor=P2");
+    expect(iapFetch.mock.calls[2][2]).toBe("/v1/apps/app/inAppPurchasesV2?cursor=P2");
   });
 
   it("aggregate response drops per-page `links` and `meta`", async () => {

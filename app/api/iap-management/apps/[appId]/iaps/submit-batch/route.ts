@@ -5,8 +5,11 @@
  *
  * Two phases controlled by body.execute:
  *
- *   • Phase 1 (preflight, default): one Apple `listInAppPurchases` call,
- *     fresh state bucketed per selected IAP. Returns ready / missing_metadata
+ *   • Phase 1 (preflight, default): one Apple `listAllInAppPurchases` call
+ *     (follows Apple's `links.next` to the end — apps can have >200 IAPs; a
+ *     single 200-item page silently truncated the live set and produced false
+ *     NOT_FOUND verdicts, IAP.o.7a class re-break), fresh state bucketed per
+ *     selected IAP. Returns ready / missing_metadata
  *     / other / not_on_apple lists for the Manager preview modal. Identical
  *     regardless of submit mechanism (v1 or v2) — Apple state bucketing
  *     doesn't depend on how submission is triggered.
@@ -44,7 +47,7 @@ import {
 import { iapDb } from "@/lib/iap-management/db";
 import { getActiveAccount } from "@/lib/get-active-account";
 import {
-  listInAppPurchases,
+  listAllInAppPurchases,
   submitInAppPurchase,
   getInAppPurchase,
 } from "@/lib/iap-management/apple/client";
@@ -329,13 +332,16 @@ async function runPreflight(
     if (row.apple_iap_id) appleIdsToFetch.add(row.apple_iap_id);
   }
 
-  // Fresh Apple state — single batch call.
+  // Fresh Apple state — enumerate the FULL catalog (follows `links.next`).
+  // `listAllInAppPurchases` retries each page internally, so no outer
+  // `withRetry` here (double-wrapping would restart enumeration from page 1
+  // on a tail-page 429 — its docstring forbids it). It is all-or-nothing:
+  // a page failure or an unfollowable `links.next` THROWS, so an incomplete
+  // set can never reach the bucketer and masquerade as false NOT_FOUND.
   let appleByAppleId: Map<string, AppleStateRow>;
   try {
     const creds = await getActiveAccount();
-    const res = await withRetry(() =>
-      listInAppPurchases(creds, appleAppId),
-    );
+    const res = await listAllInAppPurchases(creds, appleAppId);
     appleByAppleId = new Map(
       (res.data ?? [])
         .filter((iap) => appleIdsToFetch.has(iap.id))
@@ -345,8 +351,12 @@ async function runPreflight(
         ]),
     );
   } catch (err) {
+    // Fail LOUD, never silent-NOT_FOUND: an unverifiable live set surfaces as
+    // a retryable error, NOT as "Apple removed this IAP" (surface-divergence
+    // rule). The modal renders this as its own error state, visually distinct
+    // from the "Cannot be submitted" bucket.
     return NextResponse.json(
-      { error: errMsg(err) },
+      { error: `Couldn't verify the app's current IAPs on Apple — please try again. ${errMsg(err)}` },
       { status: err instanceof AppleApiError && err.status < 500 ? err.status : 502 },
     );
   }
@@ -403,7 +413,10 @@ async function runStateGuard(
   const db = iapDb();
   let stateByAppleId: Map<string, string>;
   try {
-    const res = await withRetry(() => listInAppPurchases(creds, appleAppId));
+    // Full-catalog enumeration (parity with preflight) — see preflight note:
+    // no outer `withRetry`, all-or-nothing so a truncated set can't slip
+    // through as a false SKIPPED_BY_STATE_GUARD.
+    const res = await listAllInAppPurchases(creds, appleAppId);
     stateByAppleId = new Map(
       (res.data ?? []).map((iap) => [iap.id, iap.attributes.state]),
     );
@@ -411,7 +424,7 @@ async function runStateGuard(
     return {
       ok: false,
       response: NextResponse.json(
-        { error: `State recheck failed: ${errMsg(err)}` },
+        { error: `Couldn't verify the app's current IAPs on Apple — please try again. ${errMsg(err)}` },
         { status: err instanceof AppleApiError && err.status < 500 ? err.status : 502 },
       ),
     };

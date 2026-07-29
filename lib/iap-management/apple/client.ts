@@ -32,22 +32,16 @@ import type {
 
 // ─── IAP CRUD ────────────────────────────────────────────────────────────────
 
-/**
- * Single-page fetch (cap 200). Preserved as-is for callers that explicitly
- * want one page — most callers should use `listAllInAppPurchases` instead,
- * which follows Apple's `links.next` until exhausted. Hard-coded 200 was the
- * source of IAP.o.7 Issues 2+3 when apps exceeded that count.
- */
-export async function listInAppPurchases(
-  creds: AscCredentials,
-  appAppleId: string,
-): Promise<AscApiResponse<InAppPurchase[]>> {
-  return iapFetch<AscApiResponse<InAppPurchase[]>>(
-    creds,
-    "GET",
-    `/v1/apps/${appAppleId}/inAppPurchasesV2?limit=200`,
-  );
-}
+// NOTE — there is deliberately NO single-page `listInAppPurchases` helper.
+// It existed once and was a footgun: apps with >200 IAPs got a silently
+// truncated view. IAP.o.7a introduced `listAllInAppPurchases` to fix the IAP
+// list page, but the Cycle-32 submit guard kept calling the single-page
+// version and re-broke the exact same bug (false NOT_FOUND on CookieRun,
+// >200 IAPs). Rather than leave a third chance to mis-call it, the single-page
+// helper was RETIRED — every caller must enumerate the full catalog via
+// `listAllInAppPurchases`. If you genuinely need one page, inline the
+// `iapFetch(... ?limit=200)` call at the call site and document why one page
+// is correct there.
 
 /**
  * Fetch the FULL list of IAPs for an app, following Apple's `links.next`
@@ -95,8 +89,19 @@ export async function listAllInAppPurchases(
  * Extract the path-and-query portion of an Apple `links.next` URL so it can
  * be fed back to `iapFetch` (which prepends ASC_BASE_URL). Apple returns a
  * fully-qualified URL; we strip the origin defensively in case Apple ever
- * changes the host. Returns `undefined` for missing or malformed inputs so
- * the pagination loop terminates cleanly.
+ * changes the host.
+ *
+ * COMPLETENESS DETECTION (submit-guard false-NOT_FOUND fix): distinguish two
+ * cases that used to be conflated into a silent `undefined`:
+ *   • `links.next` ABSENT/empty  → genuine end of pagination, return undefined
+ *     so the loop terminates cleanly.
+ *   • `links.next` PRESENT but unparseable → Apple is pointing at more pages
+ *     we cannot follow. Returning undefined here would hand the caller a
+ *     partial set that LOOKS complete — exactly the silent truncation that
+ *     produces false "Apple removed this IAP" verdicts. Throw instead, so a
+ *     truncated live set surfaces as a loud error, never as false absence.
+ *     Enumeration is thereby all-or-nothing: callers can trust a returned set
+ *     to be the FULL catalog.
  */
 function extractNextPagePath(nextUrl: string | undefined): string | undefined {
   if (!nextUrl) return undefined;
@@ -104,7 +109,10 @@ function extractNextPagePath(nextUrl: string | undefined): string | undefined {
     const url = new URL(nextUrl);
     return `${url.pathname}${url.search}`;
   } catch {
-    return undefined;
+    throw new Error(
+      `listAllInAppPurchases: unparseable links.next from Apple ("${nextUrl}") — ` +
+        `cannot guarantee a complete IAP list; refusing to return a truncated set`,
+    );
   }
 }
 
