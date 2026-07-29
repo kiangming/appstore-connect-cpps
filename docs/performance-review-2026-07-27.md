@@ -599,18 +599,47 @@ N Apple calls here is CORRECT — out of bounds for the Tier-1 "live Apple calls
 # TEMPORARY INSTRUMENTATION — `[perf-probe]` removal tripwire
 
 Shipped in the Step-0 perf batch (commits `2a85ccf` + `ccceef4`) alongside T1-1/T1-2/T1-7. The
-`[perf-probe]` timing logs are **measurement scaffolding, not a feature** — they exist only to get
-the one runtime number this whole ranking hinges on (Railway↔Supabase RTT, Manager-Verify #1). They
-must be removed once they've done their job.
+`[perf-probe]` timing logs are **measurement scaffolding, not a feature**.
 
-**What to remove (all four sites — the log lines + their `perfT0` timers only, keep the surrounding
-logic):**
+**⚠ Removal bar RAISED (connection-layer investigation).** The original four probes have now been
+read and they *revealed the problem*, not just measured baseline: a trivial ~5-row indexed SELECT
+(`getStoreUser`) runs 284–1159 ms — pure overhead — with ~4x variance, and `Promise.all` waves do
+NOT scale like true parallelism (6 queries ≈ 2x one, 7 queries ≈ 3–5x one). That points at the
+CONNECTION/TRANSPORT or CPU layer. These probes are now **the only DB-layer measurement that exists**
+and are needed both to *diagnose* the connection issue and to *verify any fix*. So the removal
+condition below is no longer "Manager read the numbers" — it is **"the connection-layer issue is
+RESOLVED."**
+
+**What to remove once resolved (the four always-on log lines + their `perfT0` timers, keep the
+surrounding logic; PLUS the dedicated probe route):**
 - [lib/store-submissions/auth.ts](lib/store-submissions/auth.ts) — `[perf-probe] getStoreUser SELECT …` inside `getStoreUser`.
 - [lib/store-submissions/session-guard.ts](lib/store-submissions/session-guard.ts) — `[perf-probe] requireStoreSession chain …`.
 - [app/(dashboard)/store-submissions/reports/apple/page.tsx](app/(dashboard)/store-submissions/reports/apple/page.tsx) — `[perf-probe] reports.apple aggregations(6) …`.
 - [app/(dashboard)/store-submissions/inbox/page.tsx](app/(dashboard)/store-submissions/inbox/page.tsx) — `[perf-probe] inbox queries(7) …` (+ the now-unused `log` import if nothing else uses it).
+- **[app/api/store-submissions/perf-probe/route.ts](app/api/store-submissions/perf-probe/route.ts)** — NEW connection-layer probe (delete the whole file). Emits `[perf-probe] socket-test q1_ms=… q2_ms=…` (Probe A: warm-vs-cold socket), `[perf-probe] warm-wave6_ms=…` (Probe D: 6 parallel SELECTs on a warm socket), and `[perf-probe] cpu-bench ms=…` (Probe B: CPU-throttle sanity). Gated by `x-cron-secret` == `CRON_SECRET` and does **no DB work in the gate**, so `q1` is the request's first (cold) round-trip; every probe query carries a unique `.neq('email',…)` value so distinct URLs defeat any fetch-cache masking (each call is a real network round-trip). Runs only when curled, zero tax on normal navigation. Probe C (undici `diagnostics_channel` socket-connect counting) was intentionally SKIPPED — non-trivial to wire and Probe A already answers cold-vs-warm.
 
-Grep before removing: `grep -rn "perf-probe" app lib` — expect exactly these 4 files.
+Grep before removing: `grep -rn "perf-probe" app lib` — expect the 4 always-on sites above **plus** the dedicated route file.
+
+**How to drive + read the connection-layer probe (Manager).** Curl it with the app idle (see the invalid-test warning):
+
+```
+curl -s -H "x-cron-secret: $CRON_SECRET" https://<app>/api/store-submissions/perf-probe
+grep '[perf-probe] socket-test'  →  q1_ms (cold) vs q2_ms (warm)
+grep '[perf-probe] warm-wave6'   →  6 parallel SELECTs on a WARM socket
+grep '[perf-probe] cpu-bench'    →  CPU stability across calls
+```
+
+Read the numbers as TWO INDEPENDENT signals (not an either/or — both costs can coexist and need different fixes):
+
+- **GAP = q1 − q2** → connection-establishment cost (DNS + TCP + TLS). `gap > ~200ms` ⇒ handshake dominates ⇒ fix: transport keep-alive/reuse. `gap < ~50ms` ⇒ handshake cheap **or** socket already warm — read q2 + the invalid-test below.
+- **LEVEL = q2** (warm socket) ≈ 1 RTT + PostgREST + Postgres → the true per-round-trip floor. `q2 ~10–30ms` ⇒ transport fine warm ⇒ keep-alive alone likely sufficient. `q2 > ~80ms` ⇒ a real floor (geography / PostgREST / server-side) ⇒ **also** needs co-location and/or fewer round-trips; keep-alive alone won't be enough.
+- **⚠ BOTH q1 AND q2 LOW ⇒ the measurement is INVALID**, not a clean result — the socket was already warm when q1 ran. This is the likely first mistake (the instinct is to curl twice quickly). q1 is only cold if **nothing** touched Supabase in the preceding ~4s — **including the Manager browsing the app in another tab**. Requirement: **idle ≥10s, no app clicks during the run, take 3–4 samples.**
+- **WHY read gap and level separately:** a cold socket costs **4–5 round-trips** (DNS + TCP 1 + TLS 1–2 + request 1), not one — so at an ~80ms base RTT a cold navigation is ~320–400ms, which matches the observed floor. gap is the handshake tax; level is the irreducible per-trip floor.
+- **Probe D (warm-wave6):** `≈ q2` ⇒ concurrency is fine on a warm socket — confirms the handshake + CPU-contention story and predicts a keep-alive fix collapses the page waves too (not just single queries). `≫ q2 (2x+)` ⇒ something else bottlenecks concurrency even warm (server-side limit, or CPU throttle independent of handshakes) ⇒ investigate before choosing a fix. *(Theory this tests: keep-alive expiring between clicks means a 6–7-query page opens 6–7 NEW connections at once; TLS handshakes are CPU-bound crypto that queue on CPU instead of overlapping — one mechanism that would explain the ~400ms floor, the 4x variance, AND the waves not scaling. Under it, "CPU throttle" is largely a CONSEQUENCE of "cold socket", not a competing cause.)*
+- **Probe B (cpu-bench):** several-fold swing across calls ⇒ CPU-throttled container.
+- **Blind spot + free cross-check:** a curl has no render load and does not reproduce a page's concurrent query burst, so it cannot fully exercise the CPU-contention path. Cross-check `q1` against the `[perf-probe] getStoreUser SELECT dur_ms=` lines already flowing from real navigations (284–1159ms): `q1 ≈ navigation` ⇒ the cost is independent of render load; `q1 ≪ navigation` ⇒ the render path adds cost beyond the bare round-trip ⇒ investigate the render path next.
+
+**P6 / 9ed7845 distinction (so a future reviewer can't reject the likely fix as "a cache"):** transport-layer connection reuse (undici keep-alive / a process-global dispatcher) keeps a **TCP/TLS socket** warm — it carries **no response data** and is **not** a cross-request/module data cache. P6 forbids caching *data* (config, the store-user whitelist) across requests; a warm socket caches nothing queryable. Keep-alive does **not** violate P6. Incidental upside worth noting: a process-global dispatcher would also warm the Apple `iapFetch` path — including the submit guard's now-deliberate N page fetches (see the guard's PERF note) — so it helps the ASC surfaces too, not just Supabase.
 
 **KEEP — NOT instrumentation:** [lib/react-request-cache.ts](lib/react-request-cache.ts) is
 **production code** (the request-scoped dedupe powering T1-1/T1-2) and its loud-fallback WARN is a
@@ -618,16 +647,20 @@ permanent guard, not a probe. Its tests ([lib/react-request-cache.test.ts](lib/r
 [lib/store-submissions/perf-request-dedupe.test.ts](lib/store-submissions/perf-request-dedupe.test.ts))
 stay too. Remove ONLY the four probe log lines above.
 
-**Removal condition (reverse tripwire) — remove once BOTH hold:**
-1. The Manager has read the `[perf-probe]` numbers in Railway logs and RTT is settled (Manager-Verify
-   #1 answered — the "measure first" step is complete).
+**Removal condition (reverse tripwire) — remove once ALL hold:**
+1. The connection-layer issue is **RESOLVED, not merely measured** — a fix has shipped (e.g. transport
+   keep-alive/connection reuse, or fewer round-trips + co-location, depending on what Probe A settles)
+   AND the probes confirm it worked: `getStoreUser SELECT dur_ms` and `socket-test q1_ms` have dropped
+   to the warm range. The probes are the acceptance instrument for that fix, so they outlive it by
+   design — do not pull them before the fix lands and is verified in production.
 2. The dedupe is confirmed live in production: `[perf-probe] getStoreUser SELECT dur_ms=…` appears
    **once per navigation, not twice** — proof React's real `cache()` deduped the layout+guard double
    lookup (the thing the unit tests could only prove against a request-scoped stand-in, not the real
    RSC cache).
 
-Until both hold, the probes stay. When they do, pull the four log lines in one small follow-up commit,
-leaving the dedupe + loud-fallback guard untouched.
+Until all hold, the probes stay. When they do, pull the four always-on log lines **and delete the
+dedicated probe route** in one small follow-up commit, leaving the dedupe + loud-fallback guard
+untouched.
 
 ---
 
