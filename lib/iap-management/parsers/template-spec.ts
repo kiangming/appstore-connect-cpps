@@ -34,10 +34,14 @@ import {
  *  first sheet. */
 export const APPLE_DATA_SHEET_NAME = "IAP Items";
 export const APPLE_NOTES_SHEET_NAME = "Notes";
-/** Kept identical to the legacy Manager artifact name — the wizard copy
- *  and docs already reference it; the content is regenerated fresh on
- *  every click so the name needs no version/date. */
-export const APPLE_TEMPLATE_FILENAME = "item-iap-template.xlsx";
+/** Symmetric, platform-identifying download name (Manager directive,
+ *  August 2026): both modules' templates land in the same Downloads
+ *  folder, so the name must say which platform it belongs to. Pattern
+ *  `<platform>-iap-bulk-import-template.xlsx`, mirrored by the Google
+ *  module. Regenerated fresh on every click — no version/date needed.
+ *  (The legacy on-disk artifact keeps its old name
+ *  docs/iap-management/templates/item-iap-template.xlsx.) */
+export const APPLE_TEMPLATE_FILENAME = "apple-iap-bulk-import-template.xlsx";
 
 /** Canonical lead headers keyed by their parser role. `as const` keeps
  *  the exhaustive coupling: adding a key forces the notes metadata below

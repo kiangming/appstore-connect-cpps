@@ -382,7 +382,16 @@ Per-module (differs, by evidence):
 | Price header | Fixed `Price (USD)` (tier inference downstream) | `Price (<appDefaultCurrency>)` — prop available (F7) |
 | Pair emission | MUST be adjacent (`iap-items.ts:264-271`) | Order-free, emit adjacent anyway for readability |
 | Wizard placement | Step 1 "Excel" card (`BulkImportWizard.tsx:601-676`) | Step 2 "upload" card (`BulkImportWizard.tsx:599-609`) |
-| Filename | `item-iap-template.xlsx` (kept — referenced at `:644`) | `template-item-iap-google.xlsx` (kept — referenced at `:607`) |
+| Filename | `apple-iap-bulk-import-template.xlsx` | `google-iap-bulk-import-template.xlsx` |
+
+> Filename note (August 2026, supersedes the original "keep the artifact
+> names" decision above): renamed to the symmetric, platform-identifying
+> pattern `<platform>-iap-bulk-import-template.xlsx` — both downloads land
+> in one folder, so the name must say which platform it is. The Google
+> name intentionally diverges from the Manager's original artifact
+> (`template-item-iap-google.xlsx`): the generated file's content differs
+> from that artifact (auto-skipped sample rows, Notes sheet, no duplicate
+> locale columns). The on-disk legacy artifacts keep their old names.
 | Auth context | Apple module session (`requireIapSession`) | Google module session (`getServerSession` + whitelist) |
 | Generator module | `lib/iap-management/parsers/…` | `lib/google-iap-management/parsers/…` |
 

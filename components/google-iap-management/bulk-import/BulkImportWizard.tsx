@@ -615,7 +615,7 @@ export function BulkImportWizard({
           <p className="text-xs text-slate-500 mb-4">
             Get{" "}
             <code className="bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded font-mono text-[11px]">
-              template-item-iap-google.xlsx
+              google-iap-bulk-import-template.xlsx
             </code>{" "}
             via <strong>Download template</strong> (top right, also on the
             Apps page) and fill in the &quot;IAP Items&quot; sheet — prices in

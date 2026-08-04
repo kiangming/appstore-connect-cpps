@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 import { AppsListClient } from "./AppsListClient";
 import type { GoogleConsoleAccountPublic } from "@/lib/google-iap-management/repository/google-accounts";
@@ -18,6 +18,15 @@ vi.mock("next/navigation", () => ({
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() },
 }));
+
+// Partial mock: keep the real consts (the template-spec modules import
+// TEMPLATE_SAMPLE_PRODUCT_IDS at load), intercept only the download.
+const downloadXlsxTemplate = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/xlsx-template", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/xlsx-template")>();
+  return { ...actual, downloadXlsxTemplate };
+});
 
 const ACCOUNT = {
   display_name: "Test Console Account",
@@ -37,5 +46,22 @@ describe("AppsListClient (Google) — template download call site", () => {
     expect(
       screen.getByRole("button", { name: /download bulk import template/i }),
     ).toBeInTheDocument();
+  });
+
+  it("is wired to the GOOGLE spec (getSpec is a factory prop — a cross-wired spec would pass render tests)", async () => {
+    render(
+      <AppsListClient
+        activeAccount={ACCOUNT}
+        initialApps={[]}
+        initialLastRefreshedAt={new Date().toISOString()}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /download bulk import template/i }),
+    );
+    await waitFor(() => expect(downloadXlsxTemplate).toHaveBeenCalled());
+    const spec = downloadXlsxTemplate.mock.calls[0][0];
+    expect(spec.filename).toBe("google-iap-bulk-import-template.xlsx");
+    expect(spec.headers.length).toBe(168); // 4 lead + 82 locale pairs
   });
 });

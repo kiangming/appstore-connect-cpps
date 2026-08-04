@@ -41,10 +41,16 @@ import {
  *  first sheet. */
 export const GOOGLE_DATA_SHEET_NAME = "IAP Items";
 export const GOOGLE_NOTES_SHEET_NAME = "Notes";
-/** Kept identical to the legacy Manager artifact name — the wizard copy
- *  and docs already reference it; the content is regenerated fresh on
- *  every click so the name needs no version/date. */
-export const GOOGLE_TEMPLATE_FILENAME = "template-item-iap-google.xlsx";
+/** Symmetric, platform-identifying download name (Manager directive,
+ *  August 2026): both modules' templates land in the same Downloads
+ *  folder, so the name must say which platform it belongs to. Pattern
+ *  `<platform>-iap-bulk-import-template.xlsx`, mirrored by the Apple
+ *  module. INTENTIONALLY diverges from the Manager's original artifact
+ *  name (template-item-iap-google.xlsx): the generated file's content
+ *  differs from that artifact (auto-skipped sample rows, Notes sheet,
+ *  no duplicate locale columns). The legacy artifact keeps its name at
+ *  docs/google-iap-management/templates/. */
+export const GOOGLE_TEMPLATE_FILENAME = "google-iap-bulk-import-template.xlsx";
 
 export const GOOGLE_PRODUCT_ID_HEADER = "Product ID";
 /** FIXED USD — Manager-locked decision (see module doc above for why

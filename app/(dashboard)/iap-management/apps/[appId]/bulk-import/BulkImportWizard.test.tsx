@@ -43,6 +43,15 @@ vi.mock("sonner", () => ({
 const parseIapItemsXlsx = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/iap-management/parsers/iap-items", () => ({ parseIapItemsXlsx }));
 
+// Partial mock: keep the real consts (template-spec imports
+// TEMPLATE_SAMPLE_PRODUCT_IDS at load), intercept only the download.
+const downloadXlsxTemplate = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/xlsx-template", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/xlsx-template")>();
+  return { ...actual, downloadXlsxTemplate };
+});
+
 import { BulkImportWizard } from "./BulkImportWizard";
 
 const START_URL = "/api/iap-management/hub-tracking/start";
@@ -202,6 +211,18 @@ describe("BulkImportWizard — template download call site", () => {
     expect(
       screen.getByRole("button", { name: /download template/i }),
     ).toBeInTheDocument();
+  });
+
+  it("is wired to the APPLE spec (getSpec is a factory prop — a cross-wired spec would pass render tests)", async () => {
+    downloadXlsxTemplate.mockClear();
+    renderWizard();
+    fireEvent.click(
+      screen.getByRole("button", { name: /download template/i }),
+    );
+    await waitFor(() => expect(downloadXlsxTemplate).toHaveBeenCalled());
+    const spec = downloadXlsxTemplate.mock.calls[0][0];
+    expect(spec.filename).toBe("apple-iap-bulk-import-template.xlsx");
+    expect(spec.headers.length).toBe(84); // 6 lead + 39 locale pairs
   });
 });
 

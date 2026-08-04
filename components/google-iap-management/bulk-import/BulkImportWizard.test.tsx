@@ -18,6 +18,15 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: routerPush, refresh: routerRefresh }),
 }));
 
+// Partial mock: keep the real consts (template-spec imports
+// TEMPLATE_SAMPLE_PRODUCT_IDS at load), intercept only the download.
+const downloadXlsxTemplate = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/xlsx-template", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/xlsx-template")>();
+  return { ...actual, downloadXlsxTemplate };
+});
+
 import { BulkImportWizard } from "./BulkImportWizard";
 
 const START_URL = "/api/google-iap-management/hub-tracking/start";
@@ -177,6 +186,18 @@ describe("BulkImportWizard (Google) — template download call site", () => {
     expect(
       screen.getByRole("button", { name: /download template/i }),
     ).toBeInTheDocument();
+  });
+
+  it("is wired to the GOOGLE spec (getSpec is a factory prop — a cross-wired spec would pass render tests)", async () => {
+    downloadXlsxTemplate.mockClear();
+    renderWizard();
+    fireEvent.click(
+      screen.getByRole("button", { name: /download template/i }),
+    );
+    await waitFor(() => expect(downloadXlsxTemplate).toHaveBeenCalled());
+    const spec = downloadXlsxTemplate.mock.calls[0][0];
+    expect(spec.filename).toBe("google-iap-bulk-import-template.xlsx");
+    expect(spec.headers.length).toBe(168); // 4 lead + 82 locale pairs
   });
 });
 
