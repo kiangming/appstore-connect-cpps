@@ -144,10 +144,10 @@ USD + GT Price.
 
 ### Step 2 — Upload
 
-Get the template via **Download bulk import template** on the Apps
-list page (no need to enter the wizard), or **Download template** in
-the wizard header — visible at EVERY step, no longer parked on this
-Upload step. Both buttons are the same shared component
+Get the template (`google-iap-bulk-import-template.xlsx`) via
+**Download bulk import template** on the Apps list page (no need to
+enter the wizard), or **Download template** in the wizard header —
+visible at every step. Both buttons are the same shared component
 (`components/ui/shared/DownloadTemplateButton.tsx`) and produce the
 identical file: it is generated from the parser's own column spec
 (`lib/google-iap-management/parsers/template-spec.ts`), so it cannot
@@ -159,10 +159,12 @@ drift from what the import accepts. Two sheets:
   Replace the samples with your products or delete them: rows keeping
   the sample Product IDs are SKIPPED automatically on import and
   surfaced as an explicit "example row(s) skipped" warning (not an
-  error, never imported). Any OTHER Product ID in this sheet imports as
-  a real store IAP.
-- `Notes` — column guide + the same example rows for reading; ignored
-  by the import.
+  error, never imported). A file uploaded with ONLY the samples yields
+  zero importable rows — an empty Preview, the most common first-run
+  confusion. Any OTHER Product ID in this sheet imports as a real
+  store IAP.
+- `Notes` — column guide (in English) + the same example rows for
+  reading; ignored by the import, safe to leave in the file.
 
 Drop or browse the filled `.xlsx`. Max 5 MB. Columns (matched by
 header NAME, not position):
@@ -173,8 +175,10 @@ header NAME, not position):
   explicitly, so USD stays USD even for non-USD apps; cross-currency
   resolution (Cycle 43) derives the app-currency price from the
   pricing template
-- **GT Price** + **GT Currency** (optional override derived from
-  currency → primary region; must be filled together)
+- **GT Price** + **GT Currency** — a REAL per-region store price (e.g.
+  `26000` + `VND` = the actual 26,000₫ price for the VN region), NOT an
+  exchange rate. Optional; must be filled together (the region is
+  derived from the currency)
 - paired `Title (LangName)` / `Description (LangName)` per locale (82
   supported)
 

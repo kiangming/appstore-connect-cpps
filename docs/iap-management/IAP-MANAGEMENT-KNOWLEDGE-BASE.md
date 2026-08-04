@@ -718,21 +718,21 @@ stale vs the shipped stepper; corrected during the template-download
 work, which found the drift.)
 
 1. **Step 1 — Excel**: upload/parse of the 84-column template
-   client-side. The **Download template** button sits in the WIZARD
-   HEADER (visible at every step) and ALSO on the apps-list page as
-   **Download bulk import template** (`AppsListClient.tsx`) — one
-   shared component, `components/ui/shared/DownloadTemplateButton.tsx`,
-   for all four call sites across both modules (Google mirrors this:
-   apps-list + wizard header, moved off its old Step-2 spot after
-   Manager UAT). Template generated from `parsers/template-spec.ts` —
-   same spec consts the parser reads, so template and parser cannot
-   drift; data sheet "IAP Items" pre-filled with 3 sample rows + Notes
-   sheet. Sample rows (shared
-   `TEMPLATE_SAMPLE_PRODUCT_IDS` in `lib/xlsx-template.ts`, same list in
-   both modules' parsers) are SKIPPED on import as an explicit
-   `sample_rows_skipped` outcome — an unedited template can't create
-   junk IAPs (the generic IDs don't exist on the store, so nothing
-   would 409).
+   client-side. Template download (`apple-iap-bulk-import-template.xlsx`)
+   is offered in the wizard HEADER (every step) and on the apps-list
+   page — one shared component
+   (`components/ui/shared/DownloadTemplateButton.tsx`) across all four
+   call sites in both modules; generated from
+   `parsers/template-spec.ts`, the same spec consts the parser reads,
+   so template and parser cannot drift. Data sheet "IAP Items"
+   (selected BY NAME, Sheet1 fallback for legacy files) ships 3 sample
+   rows that the parser SKIPS by ID (shared
+   `TEMPLATE_SAMPLE_PRODUCT_IDS` in `lib/xlsx-template.ts`) as an
+   explicit `sample_rows_skipped` outcome; an all-samples file parses
+   to 0 items and the wizard's Next stays disabled. Operator-facing
+   detail lives in the docs site (apple-bulk-import section) and, for
+   Google, operational-guide §6 — this KB entry deliberately stays a
+   summary.
 2. **Step 2 — Screenshots** (screenshot folder matching)
 3. **Step 3 — Preview + validate** (two-pass conflict resolution:
    resolve + enrich; batch-level pricing source Q-E and submit-on-create
