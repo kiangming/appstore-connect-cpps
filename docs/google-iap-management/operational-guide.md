@@ -144,8 +144,12 @@ USD + GT Price.
 
 ### Step 2 — Upload
 
-Click **Download template** to generate the template from the tool —
-it is built from the parser's own column spec
+Get the template via **Download bulk import template** on the Apps
+list page (no need to enter the wizard), or **Download template** in
+the wizard header — visible at EVERY step, no longer parked on this
+Upload step. Both buttons are the same shared component
+(`components/ui/shared/DownloadTemplateButton.tsx`) and produce the
+identical file: it is generated from the parser's own column spec
 (`lib/google-iap-management/parsers/template-spec.ts`), so it cannot
 drift from what the import accepts. Two sheets:
 

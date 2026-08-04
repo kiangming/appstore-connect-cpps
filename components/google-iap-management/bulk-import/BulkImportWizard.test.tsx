@@ -169,6 +169,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("BulkImportWizard (Google) — template download call site", () => {
+  it("renders the shared Download template button in the wizard header at step 1 (moved out of step 2 per Manager UAT)", () => {
+    renderWizard();
+    // Step 1 is "Pricing source" — the button previously only appeared
+    // at step 2 (Upload). Header placement makes it visible immediately.
+    expect(
+      screen.getByRole("button", { name: /download template/i }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("BulkImportWizard (Google) — Hub tracking cancel-on-exit guard", () => {
   it("genuine abandonment BEFORE executing (exit at upload/preview step) still sends CANCELLED", async () => {
     const fetchMock = installFetchMock({ runId: "run-abandon", executeResponse: successExecuteResponse });

@@ -15,6 +15,8 @@ import {
 
 import type { AppRow } from "@/lib/google-iap-management/repository/apps";
 import type { GoogleConsoleAccountPublic } from "@/lib/google-iap-management/repository/google-accounts";
+import { DownloadTemplateButton } from "@/components/ui/shared/DownloadTemplateButton";
+import { googleIapTemplateSpec } from "@/lib/google-iap-management/parsers/template-spec";
 import { computePageMeta } from "@/lib/iap-management/pagination/page-slice";
 import { isStale } from "@/lib/google-iap-management/staleness";
 
@@ -151,16 +153,26 @@ export function AppsListClient({
             )}
           </p>
         </div>
-        <button
-          onClick={() => void handleRefresh({ silent: false })}
-          className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition"
-          title="Refresh apps list from Google Play"
-        >
-          <RefreshCw
-            className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
+        <div className="flex items-center gap-2">
+          {/* Bulk-import template is app-independent (static spec) —
+              offered here so nobody has to enter the wizard just to get
+              the file. */}
+          <DownloadTemplateButton
+            getSpec={googleIapTemplateSpec}
+            label="Download bulk import template"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-300 px-3 py-2 text-sm font-medium text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-60"
           />
-          {refreshing ? "Refreshing…" : "Refresh from Google"}
-        </button>
+          <button
+            onClick={() => void handleRefresh({ silent: false })}
+            className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition"
+            title="Refresh apps list from Google Play"
+          >
+            <RefreshCw
+              className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`}
+            />
+            {refreshing ? "Refreshing…" : "Refresh from Google"}
+          </button>
+        </div>
       </div>
 
       {refreshError && (

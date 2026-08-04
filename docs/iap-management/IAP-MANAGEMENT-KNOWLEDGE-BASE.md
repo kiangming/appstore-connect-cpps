@@ -717,11 +717,17 @@ list previously said "Step 1 — Pricing source / Step 2 — Upload Excel" —
 stale vs the shipped stepper; corrected during the template-download
 work, which found the drift.)
 
-1. **Step 1 — Excel**: **Download template** button (generated from
-   `parsers/template-spec.ts` — same spec consts the parser reads, so
-   template and parser cannot drift; data sheet "IAP Items" pre-filled
-   with 3 sample rows + Notes sheet) + upload/parse of the 84-column
-   template client-side. Sample rows (shared
+1. **Step 1 — Excel**: upload/parse of the 84-column template
+   client-side. The **Download template** button sits in the WIZARD
+   HEADER (visible at every step) and ALSO on the apps-list page as
+   **Download bulk import template** (`AppsListClient.tsx`) — one
+   shared component, `components/ui/shared/DownloadTemplateButton.tsx`,
+   for all four call sites across both modules (Google mirrors this:
+   apps-list + wizard header, moved off its old Step-2 spot after
+   Manager UAT). Template generated from `parsers/template-spec.ts` —
+   same spec consts the parser reads, so template and parser cannot
+   drift; data sheet "IAP Items" pre-filled with 3 sample rows + Notes
+   sheet. Sample rows (shared
    `TEMPLATE_SAMPLE_PRODUCT_IDS` in `lib/xlsx-template.ts`, same list in
    both modules' parsers) are SKIPPED on import as an explicit
    `sample_rows_skipped` outcome — an unedited template can't create

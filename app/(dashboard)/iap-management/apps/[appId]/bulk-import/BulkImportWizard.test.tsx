@@ -196,6 +196,15 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("BulkImportWizard — template download call site", () => {
+  it("renders the shared Download template button in the wizard header (visible at every step)", () => {
+    renderWizard();
+    expect(
+      screen.getByRole("button", { name: /download template/i }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe("BulkImportWizard — Hub tracking cancel-on-exit guard", () => {
   it("genuine abandonment BEFORE executing (exit at step 2) still sends CANCELLED", async () => {
     const fetchMock = installFetchMock({ runId: "run-abandon", executeResponse: successExecuteResponse });

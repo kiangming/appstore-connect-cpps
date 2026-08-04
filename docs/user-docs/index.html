@@ -1298,7 +1298,7 @@
           <p>
             <strong>1.</strong> ASC account đã được setup ở <a class="inline-link" data-goto="apple-overview">Settings</a> (Key ID, Issuer ID, Private key .p8).<br>
             <strong>2.</strong> Pricing template đã cấu hình (Default hoặc Per-App) — xem <a class="inline-link" data-goto="apple-pricing-templates">Pricing templates</a>.<br>
-            <strong>3.</strong> File Excel theo template chuẩn (tải template ở bước 1 của wizard).
+            <strong>3.</strong> File Excel theo template chuẩn (nút <strong>Download bulk import template</strong> ngay trên trang Apps list, hoặc nút <strong>Download template</strong> ở header wizard — hiện ở mọi bước).
           </p>
         </div>
 
@@ -1314,7 +1314,7 @@
           <li class="step">
             <div class="step-title">Tải Excel template và điền dữ liệu</div>
             <div class="step-body">
-              <p>Ở Step 1, click <strong>Download template</strong>. File template được tool sinh trực tiếp từ parser (cột không thể lệch với import) và gồm 2 sheet: <strong>IAP Items</strong> — sheet dữ liệu, có sẵn <strong>3 dòng sample</strong> (Product ID dạng <code class="inline">com.vngg.tool.product.sample01–03</code>) để thay bằng dữ liệu thật, <em>không đổi tên sheet</em> — và <strong>Notes</strong> — hướng dẫn + ví dụ minh họa, import bỏ qua sheet này. Tổng 84 cột = 6 cột đầu + 39 cặp cột locale:</p>
+              <p>Click <strong>Download bulk import template</strong> ngay trên trang <strong>Apps list</strong> (không cần vào wizard), hoặc <strong>Download template</strong> ở header wizard (hiện ở mọi bước). File template được tool sinh trực tiếp từ parser (cột không thể lệch với import) và gồm 2 sheet: <strong>IAP Items</strong> — sheet dữ liệu, có sẵn <strong>3 dòng sample</strong> (Product ID dạng <code class="inline">com.vngg.tool.product.sample01–03</code>) để thay bằng dữ liệu thật, <em>không đổi tên sheet</em> — và <strong>Notes</strong> — hướng dẫn + ví dụ minh họa, import bỏ qua sheet này. Tổng 84 cột = 6 cột đầu + 39 cặp cột locale:</p>
               <table class="docs-table" style="margin-top:8px;">
                 <thead><tr><th>Cột</th><th>Mô tả</th><th>Bắt buộc</th></tr></thead>
                 <tbody>
@@ -3559,7 +3559,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         <table class="docs-table">
           <thead><tr><th>Bước</th><th>Mục đích</th><th>Tính năng đặc biệt</th></tr></thead>
           <tbody>
-            <tr><td>1. Upload</td><td>Drag &amp; drop file .xlsx theo template</td><td>Nút Download template · 2 sheet (IAP Items + Notes)</td></tr>
+            <tr><td>1. Upload</td><td>Drag &amp; drop file .xlsx theo template</td><td>Nút Download template ở header wizard + trang Apps list · 2 sheet (IAP Items + Notes)</td></tr>
             <tr><td>2. Disambiguation</td><td>User chọn tier khi có nhiều candidates</td><td>Cycle 35-36 institutional · select per-row</td></tr>
             <tr><td>3. Preview</td><td>Per-row validation + currency check (Hotfix 28)</td><td>Currency vs region match</td></tr>
             <tr><td>4. Execute</td><td>Batch create items lên Google Play API</td><td>Sequential per item · auto-retry rate-limit</td></tr>
@@ -3575,7 +3575,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <li class="step">
             <div class="step-title">Tải template + điền dữ liệu</div>
             <div class="step-body">
-              <p>Ở bước <strong>Upload</strong>, click <strong>Download template</strong> — file được tool sinh trực tiếp từ parser (cột không thể lệch với import), gồm 2 sheet: <strong>IAP Items</strong> (sheet dữ liệu, có sẵn <strong>3 dòng sample</strong> để thay bằng dữ liệu thật — <em>không đổi tên sheet</em>) và <strong>Notes</strong> (hướng dẫn + ví dụ, import bỏ qua). 168 cột = 4 cột đầu + 82 cặp cột locale:</p>
+              <p>Click <strong>Download bulk import template</strong> ngay trên trang <strong>Apps list</strong> (không cần vào wizard), hoặc <strong>Download template</strong> ở header wizard (hiện ở mọi bước, không còn phải qua bước Upload). File được tool sinh trực tiếp từ parser (cột không thể lệch với import), gồm 2 sheet: <strong>IAP Items</strong> (sheet dữ liệu, có sẵn <strong>3 dòng sample</strong> để thay bằng dữ liệu thật — <em>không đổi tên sheet</em>) và <strong>Notes</strong> (hướng dẫn + ví dụ, import bỏ qua). 168 cột = 4 cột đầu + 82 cặp cột locale:</p>
               <ul>
                 <li><code class="inline">Product ID</code> — SKU, unique per app (bắt buộc)</li>
                 <li><code class="inline">Price (USD)</code> — <strong>giá USD</strong> (bắt buộc). ⚠️ LUÔN là USD, kể cả khi app dùng VND — tool tự resolve giá app-currency từ pricing template (Cycle 43). Vd: <code class="inline">0.99</code> nghĩa là 0.99 USD, KHÔNG phải 0.99 VND.</li>

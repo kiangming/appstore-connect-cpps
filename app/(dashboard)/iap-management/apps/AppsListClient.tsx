@@ -5,6 +5,8 @@ import Link from "next/link";
 import { Search } from "lucide-react";
 import type { App } from "@/types/asc";
 import { useAppIcon, getAvatarColor, getInitials } from "@/lib/use-app-icon";
+import { DownloadTemplateButton } from "@/components/ui/shared/DownloadTemplateButton";
+import { appleIapTemplateSpec } from "@/lib/iap-management/parsers/template-spec";
 
 function AppIcon({ name, bundleId }: { name: string; bundleId: string }) {
   const iconUrl = useAppIcon(bundleId);
@@ -71,11 +73,20 @@ export function AppsListClient({ apps }: { apps: App[] }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2.5">
-        <h1 className="text-2xl font-bold text-slate-900">IAP — Apps</h1>
-        <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">
-          {apps.length}
-        </span>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <h1 className="text-2xl font-bold text-slate-900">IAP — Apps</h1>
+          <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-500">
+            {apps.length}
+          </span>
+        </div>
+        {/* Bulk-import template is app-independent (static spec) — offered
+            here so nobody has to enter the wizard just to get the file. */}
+        <DownloadTemplateButton
+          getSpec={appleIapTemplateSpec}
+          label="Download bulk import template"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[#0071E3]/30 px-3 py-2 text-sm font-medium text-[#0071E3] transition hover:bg-blue-50 disabled:opacity-60"
+        />
       </div>
 
       <div className="relative">
