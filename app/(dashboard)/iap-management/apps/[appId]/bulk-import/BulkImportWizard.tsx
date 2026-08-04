@@ -531,7 +531,12 @@ export function BulkImportWizard({
           <button
             type="button"
             onClick={handleNext}
-            disabled={(step === 1 && !parsed) || executing}
+            disabled={
+              // items.length === 0 covers the unedited-template case: all
+              // rows were skipped as samples — nothing to import.
+              (step === 1 && (!parsed || parsed.items.length === 0)) ||
+              executing
+            }
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-40"
           >
             Next
@@ -723,6 +728,12 @@ function Step1Excel({
               <p className="text-[11px] text-emerald-700">
                 {parsed.items.length} IAPs · {parsed.locale_pair_count} locale pairs detected
               </p>
+              {parsed.sample_rows_skipped.length > 0 && (
+                <p className="text-[11px] text-amber-700 font-medium">
+                  {parsed.sample_rows_skipped.length} example row(s) skipped —
+                  delete the sample rows or replace them with your data.
+                </p>
+              )}
             </div>
             <button
               type="button"

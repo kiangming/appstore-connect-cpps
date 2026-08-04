@@ -24,7 +24,10 @@ import {
   googleTemplateHeaders,
   googleIapTemplateSpec,
 } from "./template-spec";
-import { buildTemplateWorkbook } from "@/lib/xlsx-template";
+import {
+  buildTemplateWorkbook,
+  TEMPLATE_SAMPLE_PRODUCT_IDS,
+} from "@/lib/xlsx-template";
 
 function wbToBuffer(wb: XLSX.WorkBook): Buffer {
   const out = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
@@ -61,17 +64,52 @@ describe("anti-drift — generated headers equal the parser contract", () => {
     expect(new Set(headers).size).toBe(headers.length);
   });
 
-  it("generated data sheet contains ONLY the header row — no example rows", () => {
+  it("generated data sheet = header + 3 sample rows + in-sheet warning note", () => {
     const wb = buildTemplateWorkbook(XLSX, googleIapTemplateSpec());
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[GOOGLE_DATA_SHEET_NAME], {
       header: 1,
       defval: "",
       blankrows: false,
     }) as unknown[][];
-    expect(rows.length).toBe(1);
+    // header + 3 samples + note row (blank spacer dropped by blankrows:false)
+    expect(rows.length).toBe(5);
+    const noteRow = rows[4];
+    expect(noteRow[0]).toBe(""); // empty Product ID cell → parser ignores it
+    expect(String(noteRow[1])).toMatch(/SAMPLES — delete them or replace/);
     expect(wb.SheetNames).toEqual([
       GOOGLE_DATA_SHEET_NAME,
       GOOGLE_NOTES_SHEET_NAME,
+    ]);
+  });
+
+  it("sample-row Product IDs are EXACTLY the shared parser skip list", () => {
+    // The structural guard for the skip guard itself: an edit that adds/
+    // renames a sample row without updating TEMPLATE_SAMPLE_PRODUCT_IDS
+    // (or vice versa) fails here.
+    const spec = googleIapTemplateSpec();
+    const idCol = spec.headers.indexOf("Product ID");
+    const idsInSheet = spec.dataRows
+      .map((row) => String(row[idCol] ?? ""))
+      .filter((v) => v !== "");
+    expect(idsInSheet).toEqual([...TEMPLATE_SAMPLE_PRODUCT_IDS]);
+  });
+});
+
+describe("round-trip — unedited template", () => {
+  it("3 example rows come back SKIPPED, zero rows, zero errors", () => {
+    const wb = buildTemplateWorkbook(XLSX, googleIapTemplateSpec());
+
+    const result = parseIapTemplate(wbToBuffer(wb), {
+      appDefaultCurrency: "VND",
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.rows).toEqual([]); // zero created
+    expect(result.skippedSampleRows.map((s) => s.sku)).toEqual([
+      ...TEMPLATE_SAMPLE_PRODUCT_IDS,
+    ]);
+    expect(result.warnings).toEqual([
+      expect.stringMatching(/3 example row\(s\) skipped .* delete the sample rows or replace them/),
     ]);
   });
 });
@@ -98,9 +136,10 @@ describe("round-trip — generated template parses cleanly through the real pars
     });
 
     expect(result.errors).toEqual([]);
-    expect(result.warnings).toEqual([]);
-    // Exact row count — notes-sheet contamination would change it.
+    // Exact counts — notes-sheet contamination would change them. The 3
+    // pre-filled sample rows surface as the explicit skip outcome.
     expect(result.rows.length).toBe(2);
+    expect(result.skippedSampleRows.length).toBe(3);
 
     const row = result.rows[0];
     expect(row.sku).toBe("com.test.roundtrip1");
@@ -113,6 +152,36 @@ describe("round-trip — generated template parses cleanly through the real pars
     expect(
       row.listings.map((l) => l.locale).sort(),
     ).toEqual(["en-US", "vi"]);
+  });
+
+  it("replace-then-import: samples OVERWRITTEN by real rows are NOT skipped (ID-scoped, not position-scoped)", () => {
+    const spec = googleIapTemplateSpec();
+    const wb = buildTemplateWorkbook(XLSX, spec);
+    const headers = googleTemplateHeaders();
+    // Overwrite the 3 sample rows in place (rows 2–4) — the note row
+    // below them stays, as a real user would leave it.
+    XLSX.utils.sheet_add_aoa(
+      wb.Sheets[GOOGLE_DATA_SHEET_NAME],
+      [
+        makeDataRow(headers, "com.real.product1"),
+        makeDataRow(headers, "com.real.product2"),
+        makeDataRow(headers, "com.real.product3"),
+      ],
+      { origin: "A2" },
+    );
+
+    const result = parseIapTemplate(wbToBuffer(wb), {
+      appDefaultCurrency: "VND",
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.rows.map((r) => r.sku)).toEqual([
+      "com.real.product1",
+      "com.real.product2",
+      "com.real.product3",
+    ]);
+    expect(result.skippedSampleRows).toEqual([]);
+    expect(result.warnings).toEqual([]);
   });
 
   it("parses the named data sheet even when the Notes sheet is FIRST (by-name selection)", () => {

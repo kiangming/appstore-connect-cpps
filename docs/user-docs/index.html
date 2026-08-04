@@ -1314,7 +1314,7 @@
           <li class="step">
             <div class="step-title">Tải Excel template và điền dữ liệu</div>
             <div class="step-body">
-              <p>Ở Step 1, click <strong>Download template</strong>. File template được tool sinh trực tiếp từ parser (cột không thể lệch với import) và gồm 2 sheet: <strong>IAP Items</strong> — sheet dữ liệu, chỉ có dòng header, điền mỗi IAP 1 dòng, <em>không đổi tên sheet</em> — và <strong>Notes</strong> — hướng dẫn + ví dụ minh họa, import bỏ qua sheet này. Tổng 84 cột = 6 cột đầu + 39 cặp cột locale:</p>
+              <p>Ở Step 1, click <strong>Download template</strong>. File template được tool sinh trực tiếp từ parser (cột không thể lệch với import) và gồm 2 sheet: <strong>IAP Items</strong> — sheet dữ liệu, có sẵn <strong>3 dòng sample</strong> (Product ID dạng <code class="inline">com.vngg.tool.product.sample01–03</code>) để thay bằng dữ liệu thật, <em>không đổi tên sheet</em> — và <strong>Notes</strong> — hướng dẫn + ví dụ minh họa, import bỏ qua sheet này. Tổng 84 cột = 6 cột đầu + 39 cặp cột locale:</p>
               <table class="docs-table" style="margin-top:8px;">
                 <thead><tr><th>Cột</th><th>Mô tả</th><th>Bắt buộc</th></tr></thead>
                 <tbody>
@@ -1328,8 +1328,8 @@
               </table>
               <p style="margin-top:8px;">Cột <code class="inline">Type</code> optional từ Hotfix 27 — để trống (hoặc xóa cả cột) → mặc định <code class="inline">CONSUMABLE</code>. Header match theo <strong>tên cột</strong> (không theo vị trí); 6 cột đầu không phân biệt hoa thường. File upload: <code class="inline">.xlsx</code> (không phải CSV).</p>
               <div class="callout callout-warning" style="margin-top:8px;">
-                <div class="callout-title">⚠️ Không để dòng ví dụ trong sheet IAP Items</div>
-                <p>Mọi dòng dữ liệu trong sheet <strong>IAP Items</strong> sẽ được import thành IAP <strong>thật</strong> trên App Store Connect — không có cảnh báo nào chặn lại. Ví dụ minh họa nằm ở sheet <strong>Notes</strong>, chỉ để đọc.</p>
+                <div class="callout-title">⚠️ 3 dòng sample — thay hoặc xóa trước khi import</div>
+                <p>Sheet <strong>IAP Items</strong> có sẵn 3 dòng sample. Dòng giữ nguyên Product ID dạng sample (<code class="inline">com.vngg.tool.product.sample01–03</code>) được tool <strong>tự động bỏ qua</strong> khi import — kết quả hiển thị rõ "example row(s) skipped", không tính là lỗi. Mọi Product ID <em>khác</em> trong sheet này sẽ được import thành IAP <strong>thật</strong> trên App Store Connect.</p>
               </div>
             </div>
           </li>
@@ -1491,12 +1491,13 @@
               Copy
             </button>
           </div>
-<pre><span class="tok-c">// 84 cột — 6 cột đầu + 39 cặp Display Name/Description (Locale). Template tải về chỉ có dòng header.</span>
-<span class="tok-c">// Hotfix 27: Type optional — trống → CONSUMABLE. Dấu | chỉ minh họa ranh giới cột Excel.</span>
-<span class="tok-n">Product ID | Reference Name | Type | Price (USD) | GT Price | GT Currency | Display Name (English (U.S.)) | Description (English (U.S.)) | …</span>
-com.app.coin100 | Coin Pack 100  | CONSUMABLE     | 0.99 | 23000  | VND | 100 Coins      | Get 100 coins
-com.app.gem10   | Gem Pack 10    |                | 0.99 | 23000  | VND | 10 Gems        | Get 10 gems
-com.app.bundle  | Bundle Starter | NON_CONSUMABLE | 4.99 | 115000 | VND | Starter Bundle | One-time starter bundle</pre>
+<pre><span class="tok-c">// 84 cột — 6 cột đầu + 39 cặp Display Name/Description (Locale). Đây là 3 dòng sample có sẵn trong template.</span>
+<span class="tok-c">// Hotfix 27: Type optional — trống → CONSUMABLE. GT Price là GIÁ theo GT Currency (không phải tỷ giá).</span>
+<span class="tok-c">// Dòng giữ Product ID sample bị tool bỏ qua khi import — thay bằng Product ID thật của bạn.</span>
+<span class="tok-n">Product ID | Reference Name | Type | Price (USD) | GT Price | GT Currency | Display Name (Vietnamese) | Description (Vietnamese) | …</span>
+com.vngg.tool.product.sample01 | Sample product 01 |  | 0.49  | 13000  | VND | Sample product 01 | Sample product 01 - import, default price template
+com.vngg.tool.product.sample02 | Sample product 02 |  | 4.09  | 106000 | VND | Sample product 02 | Sample product 02 - import, default price template
+com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 | 325000 | VND | Sample product 03 | Sample product 03 - import, default price template</pre>
         </div>
 
         <h2 class="section-title">Tips và pitfalls</h2>
@@ -3574,14 +3575,14 @@ com.app.bundle  | Bundle Starter | NON_CONSUMABLE | 4.99 | 115000 | VND | Starte
           <li class="step">
             <div class="step-title">Tải template + điền dữ liệu</div>
             <div class="step-body">
-              <p>Ở bước <strong>Upload</strong>, click <strong>Download template</strong> — file được tool sinh trực tiếp từ parser (cột không thể lệch với import), gồm 2 sheet: <strong>IAP Items</strong> (sheet dữ liệu, chỉ có header — <em>không đổi tên sheet</em>) và <strong>Notes</strong> (hướng dẫn + ví dụ, import bỏ qua). 168 cột = 4 cột đầu + 82 cặp cột locale:</p>
+              <p>Ở bước <strong>Upload</strong>, click <strong>Download template</strong> — file được tool sinh trực tiếp từ parser (cột không thể lệch với import), gồm 2 sheet: <strong>IAP Items</strong> (sheet dữ liệu, có sẵn <strong>3 dòng sample</strong> để thay bằng dữ liệu thật — <em>không đổi tên sheet</em>) và <strong>Notes</strong> (hướng dẫn + ví dụ, import bỏ qua). 168 cột = 4 cột đầu + 82 cặp cột locale:</p>
               <ul>
                 <li><code class="inline">Product ID</code> — SKU, unique per app (bắt buộc)</li>
                 <li><code class="inline">Price (USD)</code> — <strong>giá USD</strong> (bắt buộc). ⚠️ LUÔN là USD, kể cả khi app dùng VND — tool tự resolve giá app-currency từ pricing template (Cycle 43). Vd: <code class="inline">0.99</code> nghĩa là 0.99 USD, KHÔNG phải 0.99 VND.</li>
                 <li><code class="inline">GT Price</code> + <code class="inline">GT Currency</code> — cặp override theo currency (không bắt buộc, điền cùng nhau)</li>
                 <li><code class="inline">Title (Locale)</code> + <code class="inline">Description (Locale)</code> — 82 cặp cột locale (không bắt buộc)</li>
               </ul>
-              <p>File upload: <code class="inline">.xlsx</code> · max 5 MB (không phải CSV). Không để dòng ví dụ trong sheet <strong>IAP Items</strong> — mọi dòng dữ liệu sẽ được import thành IAP thật trên Google Play.</p>
+              <p>File upload: <code class="inline">.xlsx</code> · max 5 MB (không phải CSV). Dòng giữ nguyên Product ID dạng sample (<code class="inline">com.vngg.tool.product.sample01–03</code>) được tool <strong>tự động bỏ qua</strong> khi import (hiển thị "example row(s) skipped" trong panel warnings — không tính là lỗi); mọi Product ID <em>khác</em> sẽ được import thành IAP thật trên Google Play.</p>
             </div>
           </li>
           <li class="step">

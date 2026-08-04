@@ -55,6 +55,14 @@ import {
   APPLE_REQUIRED_LEAD_HEADERS,
   APPLE_TYPE_VALUES,
 } from "./template-spec";
+import { TEMPLATE_SAMPLE_PRODUCT_IDS } from "@/lib/xlsx-template";
+
+/** Sample Product IDs shipped in the generated template's data sheet.
+ *  Rows keeping them are SKIPPED (explicit outcome, not an error) so an
+ *  unedited template can never create junk IAPs on the live store —
+ *  the IDs don't exist there, so nothing would 409. Shared const with
+ *  the generator: the skip list cannot drift from the template. */
+const SAMPLE_PRODUCT_ID_SET = new Set<string>(TEMPLATE_SAMPLE_PRODUCT_IDS);
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
@@ -97,6 +105,9 @@ export interface IapItemsParseResult {
   /** Detected locale pair count in the header (informational; spec ≈ 39). */
   locale_pair_count: number;
   warnings: string[];
+  /** Template example rows skipped by Product ID (TEMPLATE_SAMPLE_PRODUCT_IDS).
+   *  Explicit outcome — not errors, not silently dropped. */
+  sample_rows_skipped: { row_index: number; product_id: string }[];
 }
 
 interface LocalePairSpec {
@@ -310,11 +321,18 @@ export async function parseIapItemsXlsx(
 
   // ── Parse data rows (1+) ─────────────────────────────────────────────────
   const items: ParsedIapItem[] = [];
+  const sampleRowsSkipped: IapItemsParseResult["sample_rows_skipped"] = [];
 
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
     const productId = readCol(row, leadIdx.productId);
     if (!productId) continue; // blank product ID → skip silently (likely empty row)
+
+    // Template example rows: skip by Product ID (explicit outcome below).
+    if (SAMPLE_PRODUCT_ID_SET.has(productId)) {
+      sampleRowsSkipped.push({ row_index: r + 1, product_id: productId });
+      continue;
+    }
 
     const referenceName = readCol(row, leadIdx.referenceName);
     if (!referenceName) {
@@ -401,9 +419,18 @@ export async function parseIapItemsXlsx(
     });
   }
 
-  if (items.length === 0) {
+  // A file that is ONLY the unedited template (all rows skipped as
+  // samples) is not an error — the skip outcome below tells the user
+  // what to do. The no-data throw stays for genuinely empty files.
+  if (items.length === 0 && sampleRowsSkipped.length === 0) {
     throw new Error(
       "IAP-item template contained no data rows with Product ID. Verify the template.",
+    );
+  }
+
+  if (sampleRowsSkipped.length > 0) {
+    warnings.push(
+      `${sampleRowsSkipped.length} example row(s) skipped (sample Product IDs from the template) — delete the sample rows or replace them with your data.`,
     );
   }
 
@@ -412,5 +439,6 @@ export async function parseIapItemsXlsx(
     skipped_locales: skippedLocales,
     locale_pair_count: pairs.length,
     warnings,
+    sample_rows_skipped: sampleRowsSkipped,
   };
 }

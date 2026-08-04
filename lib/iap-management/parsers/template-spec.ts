@@ -24,6 +24,10 @@
 import localeMapJson from "@/lib/locale-map.json";
 import type { InAppPurchaseType } from "@/types/iap-management/apple";
 import type { XlsxTemplateSpec } from "@/lib/xlsx-template";
+import {
+  TEMPLATE_SAMPLE_PRODUCT_IDS,
+  TEMPLATE_SAMPLE_ROWS_NOTE,
+} from "@/lib/xlsx-template";
 
 /** Data-sheet name the parser selects BY NAME (sheet-selection
  *  hardening, design §C). Legacy files without it fall back to the
@@ -82,6 +86,53 @@ export function appleLocalePairHeaders(): string[] {
 /** Full canonical header row — 6 lead + 39×2 locale = 84 columns. */
 export function appleTemplateHeaders(): string[] {
   return [...APPLE_LEAD_HEADER_ROW, ...appleLocalePairHeaders()];
+}
+
+/** Example-row values, genericized from the Manager's source file
+ *  (apple-item-iap-test.xlsx, August 2026). Product IDs come from the
+ *  shared TEMPLATE_SAMPLE_PRODUCT_IDS skip list. USD prices are the
+ *  Manager's (0.49 / 4.09 / 12.49). GT Price deviates from the source's
+ *  constant 23000: GT Price is a base-territory PRICE, not an exchange
+ *  rate (verified — the Google sibling posts it as a literal per-region
+ *  store price; Apple currently parses it into base_price/base_currency
+ *  without downstream consumption), so a constant 23000 across three
+ *  different USD prices would teach users a stale-rate pattern. The
+ *  samples carry per-row illustrative VND prices (~26,000 VND/USD,
+ *  rounded to thousands) instead. Each row fills one locale pair
+ *  (Vietnamese, like the Google source rows) so an imported copy would
+ *  be metadata-complete. */
+const SAMPLE_ROW_VALUES = TEMPLATE_SAMPLE_PRODUCT_IDS.map((id, i) => ({
+  productId: id,
+  referenceName: `Sample product 0${i + 1}`,
+  priceUsd: [0.49, 4.09, 12.49][i],
+  gtPrice: [13000, 106000, 325000][i],
+  gtCurrency: "VND",
+  viDisplayName: `Sample product 0${i + 1}`,
+  viDescription: `Sample product 0${i + 1} - import, default price template`,
+}));
+
+/** The pre-filled data-sheet rows: 3 samples, a spacer, and the visible
+ *  delete-me warning in a row whose Product ID cell is EMPTY (both
+ *  parsers skip ID-less rows, so the note never parses as data). */
+export function appleTemplateDataRows(): (string | number)[][] {
+  const headers = appleTemplateHeaders();
+  const col = (name: string) => headers.indexOf(name);
+  const rows = SAMPLE_ROW_VALUES.map((v) => {
+    const row: (string | number)[] = headers.map(() => "");
+    row[col(APPLE_LEAD_HEADERS.productId)] = v.productId;
+    row[col(APPLE_LEAD_HEADERS.referenceName)] = v.referenceName;
+    // Type left empty on purpose — demonstrates the Hotfix 27 default
+    // (empty → CONSUMABLE), matching the Manager's source rows.
+    row[col(APPLE_LEAD_HEADERS.priceUsd)] = v.priceUsd;
+    row[col(APPLE_LEAD_HEADERS.gtPrice)] = v.gtPrice;
+    row[col(APPLE_LEAD_HEADERS.gtCurrency)] = v.gtCurrency;
+    row[col("Display Name (Vietnamese)")] = v.viDisplayName;
+    row[col("Description (Vietnamese)")] = v.viDescription;
+    return row;
+  });
+  // Truly empty spacer ([] → no cells written), then the note with an
+  // EMPTY Product ID cell so the parser ignores the row.
+  return [...rows, [], ["", TEMPLATE_SAMPLE_ROWS_NOTE]];
 }
 
 /** Per-lead-column notes metadata. Keyed over APPLE_LEAD_HEADERS so a
@@ -147,37 +198,27 @@ function appleNotesRows(): (string | number)[][] {
     ],
     [],
     [
-      `UNIT REMINDER: "${APPLE_LEAD_HEADERS.priceUsd}" is US dollars. GT Price is in the GT Currency you specify on the same row.`,
+      `UNIT REMINDER: "${APPLE_LEAD_HEADERS.priceUsd}" is US dollars. GT Price is a PRICE in the GT Currency you specify on the same row — it is NOT an exchange rate.`,
     ],
     [],
     [
-      `Example — ILLUSTRATION ONLY. Do NOT paste these rows into the "${APPLE_DATA_SHEET_NAME}" sheet: rows in the data sheet are imported as REAL store products.`,
+      `SAMPLE ROWS: the "${APPLE_DATA_SHEET_NAME}" sheet comes PRE-FILLED with the 3 sample rows below. Delete them or replace them with your real products. Rows keeping the sample Product IDs (${TEMPLATE_SAMPLE_PRODUCT_IDS.join(", ")}) are skipped automatically on import — any other Product ID in the data sheet is imported as a REAL store product.`,
     ],
     [
       ...APPLE_LEAD_HEADER_ROW,
-      "Display Name (English (U.S.))",
-      "Description (English (U.S.))",
+      "Display Name (Vietnamese)",
+      "Description (Vietnamese)",
     ],
-    [
-      "com.vng.example.product1",
-      "Example 1",
+    ...SAMPLE_ROW_VALUES.map((v) => [
+      v.productId,
+      v.referenceName,
       "",
-      0.99,
-      23000,
-      "VND",
-      "100 Gems",
-      "A pack of 100 gems",
-    ],
-    [
-      "com.vng.example.product2",
-      "Example 2",
-      "NON_CONSUMABLE",
-      4.99,
-      115000,
-      "VND",
-      "Starter Bundle",
-      "One-time starter bundle",
-    ],
+      v.priceUsd,
+      v.gtPrice,
+      v.gtCurrency,
+      v.viDisplayName,
+      v.viDescription,
+    ]),
   ];
 }
 
@@ -187,6 +228,7 @@ export function appleIapTemplateSpec(): XlsxTemplateSpec {
   return {
     dataSheetName: APPLE_DATA_SHEET_NAME,
     headers: appleTemplateHeaders(),
+    dataRows: appleTemplateDataRows(),
     notesSheetName: APPLE_NOTES_SHEET_NAME,
     notesRows: appleNotesRows(),
     filename: APPLE_TEMPLATE_FILENAME,

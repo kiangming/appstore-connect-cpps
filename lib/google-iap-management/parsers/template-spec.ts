@@ -31,6 +31,10 @@
  */
 
 import type { XlsxTemplateSpec } from "@/lib/xlsx-template";
+import {
+  TEMPLATE_SAMPLE_PRODUCT_IDS,
+  TEMPLATE_SAMPLE_ROWS_NOTE,
+} from "@/lib/xlsx-template";
 
 /** Data-sheet name the parser selects BY NAME (sheet-selection
  *  hardening, design §C). Legacy files without it fall back to the
@@ -162,6 +166,46 @@ export function googleTemplateHeaders(): string[] {
   return [...GOOGLE_LEAD_HEADER_ROW, ...googleLocalePairHeaders()];
 }
 
+/** Example-row values, genericized from the Manager's source file
+ *  (template-item-iap-google.xlsx, August 2026; its junk 4th row —
+ *  backtick-only GT Price — excluded; its Product-ID/Title numbering
+ *  mismatch reconciled to a consistent sampleNN ↔ "Sample product NN").
+ *  Product IDs come from the shared TEMPLATE_SAMPLE_PRODUCT_IDS skip
+ *  list. USD prices are the Manager's (0.99 / 1.99 / 22.99). GT Price
+ *  deviates from the source's constant 23000: it is posted as a literal
+ *  VN-region store PRICE (orchestration/bulk-import.ts prices map), not
+ *  an exchange rate, so the samples carry per-row illustrative VND
+ *  prices (~26,000 VND/USD, rounded to thousands) instead. */
+const SAMPLE_ROW_VALUES = TEMPLATE_SAMPLE_PRODUCT_IDS.map((id, i) => ({
+  productId: id,
+  priceUsd: [0.99, 1.99, 22.99][i],
+  gtPrice: [26000, 52000, 598000][i],
+  gtCurrency: "VND",
+  viTitle: `Sample product 0${i + 1}`,
+  viDescription: `Sample product 0${i + 1} - import, default price template`,
+}));
+
+/** The pre-filled data-sheet rows: 3 samples, a spacer, and the visible
+ *  delete-me warning in a row whose Product ID cell is EMPTY (the
+ *  parser skips SKU-less rows, so the note never parses as data). */
+export function googleTemplateDataRows(): (string | number)[][] {
+  const headers = googleTemplateHeaders();
+  const col = (name: string) => headers.indexOf(name);
+  const rows = SAMPLE_ROW_VALUES.map((v) => {
+    const row: (string | number)[] = headers.map(() => "");
+    row[col(GOOGLE_PRODUCT_ID_HEADER)] = v.productId;
+    row[col(GOOGLE_PRICE_HEADER)] = v.priceUsd;
+    row[col(GOOGLE_GT_PRICE_HEADER)] = v.gtPrice;
+    row[col(GOOGLE_GT_CURRENCY_HEADER)] = v.gtCurrency;
+    row[col("Title (Vietnamese)")] = v.viTitle;
+    row[col("Description (Vietnamese)")] = v.viDescription;
+    return row;
+  });
+  // Truly empty spacer ([] → no cells written), then the note with an
+  // EMPTY Product ID cell so the parser ignores the row.
+  return [...rows, [], ["", TEMPLATE_SAMPLE_ROWS_NOTE]];
+}
+
 function googleNotesRows(): (string | number)[][] {
   return [
     ["Google IAP bulk-import template — how to fill"],
@@ -201,33 +245,25 @@ function googleNotesRows(): (string | number)[][] {
     ],
     [],
     [
-      `UNIT REMINDER: "${GOOGLE_PRICE_HEADER}" is US dollars — NOT the app's default currency. GT Price is in the GT Currency you specify on the same row.`,
+      `UNIT REMINDER: "${GOOGLE_PRICE_HEADER}" is US dollars — NOT the app's default currency. GT Price is a PRICE in the GT Currency you specify on the same row (posted to Google Play as that currency's region price) — it is NOT an exchange rate.`,
     ],
     [],
     [
-      `Example — ILLUSTRATION ONLY. Do NOT paste these rows into the "${GOOGLE_DATA_SHEET_NAME}" sheet: rows in the data sheet are imported as REAL store products.`,
+      `SAMPLE ROWS: the "${GOOGLE_DATA_SHEET_NAME}" sheet comes PRE-FILLED with the 3 sample rows below. Delete them or replace them with your real products. Rows keeping the sample Product IDs (${TEMPLATE_SAMPLE_PRODUCT_IDS.join(", ")}) are skipped automatically on import — any other Product ID in the data sheet is imported as a REAL store product.`,
     ],
     [
       ...GOOGLE_LEAD_HEADER_ROW,
-      "Title (English (United States))",
-      "Description (English (United States))",
+      "Title (Vietnamese)",
+      "Description (Vietnamese)",
     ],
-    [
-      "com.vng.example.product1",
-      0.99,
-      23000,
-      "VND",
-      "100 Gems",
-      "A pack of 100 gems",
-    ],
-    [
-      "com.vng.example.product2",
-      4.99,
-      "",
-      "",
-      "Starter Bundle",
-      "One-time starter bundle",
-    ],
+    ...SAMPLE_ROW_VALUES.map((v) => [
+      v.productId,
+      v.priceUsd,
+      v.gtPrice,
+      v.gtCurrency,
+      v.viTitle,
+      v.viDescription,
+    ]),
   ];
 }
 
@@ -237,6 +273,7 @@ export function googleIapTemplateSpec(): XlsxTemplateSpec {
   return {
     dataSheetName: GOOGLE_DATA_SHEET_NAME,
     headers: googleTemplateHeaders(),
+    dataRows: googleTemplateDataRows(),
     notesSheetName: GOOGLE_NOTES_SHEET_NAME,
     notesRows: googleNotesRows(),
     filename: GOOGLE_TEMPLATE_FILENAME,

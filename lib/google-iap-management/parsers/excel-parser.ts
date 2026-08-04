@@ -34,6 +34,14 @@ import {
   GOOGLE_GT_CURRENCY_HEADER,
   LOCALE_NAME_TO_BCP47,
 } from "./template-spec";
+import { TEMPLATE_SAMPLE_PRODUCT_IDS } from "@/lib/xlsx-template";
+
+/** Sample Product IDs shipped in the generated template's data sheet.
+ *  Rows keeping them are SKIPPED (explicit outcome, not an error) so an
+ *  unedited template can never create junk IAPs on the live store —
+ *  the IDs don't exist there, so nothing would 409. Shared const with
+ *  the generator: the skip list cannot drift from the template. */
+const SAMPLE_PRODUCT_ID_SET = new Set<string>(TEMPLATE_SAMPLE_PRODUCT_IDS);
 
 /** Manager-display locale name → Google Play BCP-47 locale code.
  *  Moved to template-spec.ts (single source of truth shared with the
@@ -119,6 +127,9 @@ export interface ParseResult {
   rows: ParsedIapRow[];
   warnings: string[];
   errors: string[];
+  /** Template example rows skipped by Product ID (TEMPLATE_SAMPLE_PRODUCT_IDS).
+   *  Explicit outcome — not errors, not silently dropped. */
+  skippedSampleRows: { rowNumber: number; sku: string }[];
 }
 
 /** Column headers we recognise as non-locale at the start of the sheet.
@@ -330,6 +341,7 @@ export function parseIapTemplate(
   const warnings: string[] = [];
   const errors: string[] = [];
   const rows: ParsedIapRow[] = [];
+  const skippedSampleRows: ParseResult["skippedSampleRows"] = [];
 
   let wb: XLSX.WorkBook;
   try {
@@ -338,12 +350,12 @@ export function parseIapTemplate(
     errors.push(
       `Failed to read workbook: ${err instanceof Error ? err.message : String(err)}`,
     );
-    return { rows, warnings, errors };
+    return { rows, warnings, errors, skippedSampleRows };
   }
 
   if (wb.SheetNames.length === 0) {
     errors.push("Workbook has no sheets.");
-    return { rows, warnings, errors };
+    return { rows, warnings, errors, skippedSampleRows };
   }
   // Sheet-selection hardening (design-bulk-import-template-download.md §C):
   // prefer the canonical data sheet BY NAME so a Notes/instructions sheet
@@ -365,7 +377,7 @@ export function parseIapTemplate(
     : "";
   if (!ws["!ref"]) {
     errors.push(`Sheet "${sheetName}" is empty.` + sheetHint);
-    return { rows, warnings, errors };
+    return { rows, warnings, errors, skippedSampleRows };
   }
 
   const range = XLSX.utils.decode_range(ws["!ref"]);
@@ -382,7 +394,7 @@ export function parseIapTemplate(
     errors.push(
       'Required column "Product ID" not found in header row.' + sheetHint,
     );
-    return { rows, warnings, errors };
+    return { rows, warnings, errors, skippedSampleRows };
   }
   if (!priceResolution) {
     const defaultCurrencyForMsg =
@@ -391,7 +403,7 @@ export function parseIapTemplate(
       `No price column found. Expected one of: "Price (XXX)" where XXX is a 3-letter currency code (e.g. "Price (USD)", "Price (VND)"), or generic "Price" / "Default Price" / "Base Price" (which is interpreted as the app's default currency "${defaultCurrencyForMsg}").` +
         sheetHint,
     );
-    return { rows, warnings, errors };
+    return { rows, warnings, errors, skippedSampleRows };
   }
   const priceCol = priceResolution.columnIndex;
   const resolvedCurrency = priceResolution.currencyCode;
@@ -412,6 +424,12 @@ export function parseIapTemplate(
   for (let r = range.s.r + 1; r <= range.e.r; r += 1) {
     const sku = cellString(ws, r, skuCol);
     if (sku === "") continue;
+
+    // Template example rows: skip by Product ID (explicit outcome below).
+    if (SAMPLE_PRODUCT_ID_SET.has(sku)) {
+      skippedSampleRows.push({ rowNumber: r + 1, sku });
+      continue;
+    }
 
     const basePriceDecimal = cellDecimal(ws, r, priceCol);
     if (basePriceDecimal === "") {
@@ -475,9 +493,15 @@ export function parseIapTemplate(
     });
   }
 
-  if (rows.length === 0 && errors.length === 0) {
+  if (skippedSampleRows.length > 0) {
+    warnings.push(
+      `${skippedSampleRows.length} example row(s) skipped (sample Product IDs from the template) — delete the sample rows or replace them with your data.`,
+    );
+  } else if (rows.length === 0 && errors.length === 0) {
+    // Suppressed when sample rows were skipped — the skip message above
+    // already explains why nothing is importable.
     warnings.push("No data rows found after the header.");
   }
 
-  return { rows, warnings, errors };
+  return { rows, warnings, errors, skippedSampleRows };
 }

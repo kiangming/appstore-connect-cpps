@@ -149,11 +149,16 @@ it is built from the parser's own column spec
 (`lib/google-iap-management/parsers/template-spec.ts`), so it cannot
 drift from what the import accepts. Two sheets:
 
-- `IAP Items` — the data sheet (headers only; the parser selects it BY
-  NAME, so don't rename it). One product per row. Never leave example
-  rows here — data-sheet rows import as real store IAPs.
-- `Notes` — column guide + an illustrative example table; ignored by
-  the import.
+- `IAP Items` — the data sheet (the parser selects it BY NAME, so don't
+  rename it). It comes PRE-FILLED with 3 sample rows (Product IDs
+  `com.vngg.tool.product.sample01–03`) plus a delete-me note row.
+  Replace the samples with your products or delete them: rows keeping
+  the sample Product IDs are SKIPPED automatically on import and
+  surfaced as an explicit "example row(s) skipped" warning (not an
+  error, never imported). Any OTHER Product ID in this sheet imports as
+  a real store IAP.
+- `Notes` — column guide + the same example rows for reading; ignored
+  by the import.
 
 Drop or browse the filled `.xlsx`. Max 5 MB. Columns (matched by
 header NAME, not position):

@@ -22,7 +22,10 @@ import {
   appleTemplateHeaders,
   appleIapTemplateSpec,
 } from "./template-spec";
-import { buildTemplateWorkbook } from "@/lib/xlsx-template";
+import {
+  buildTemplateWorkbook,
+  TEMPLATE_SAMPLE_PRODUCT_IDS,
+} from "@/lib/xlsx-template";
 
 function wbToFile(wb: XLSX.WorkBook): File {
   const buf = XLSX.write(wb, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
@@ -64,23 +67,72 @@ describe("anti-drift — generated headers equal the parser contract", () => {
     }
   });
 
-  it("generated data sheet contains ONLY the header row — no example rows", () => {
+  it("generated data sheet = header + 3 sample rows + in-sheet warning note", () => {
     const wb = buildTemplateWorkbook(XLSX, appleIapTemplateSpec());
     const rows = XLSX.utils.sheet_to_json(wb.Sheets[APPLE_DATA_SHEET_NAME], {
       header: 1,
       defval: "",
       blankrows: false,
     }) as unknown[][];
-    expect(rows.length).toBe(1);
+    // header + 3 samples + note row (blank spacer dropped by blankrows:false)
+    expect(rows.length).toBe(5);
+    const noteRow = rows[4];
+    expect(noteRow[0]).toBe(""); // empty Product ID cell → parser ignores it
+    expect(String(noteRow[1])).toMatch(/SAMPLES — delete them or replace/);
     expect(wb.SheetNames).toEqual([
       APPLE_DATA_SHEET_NAME,
       APPLE_NOTES_SHEET_NAME,
     ]);
   });
+
+  it("sample-row Product IDs are EXACTLY the shared parser skip list", () => {
+    // The structural guard for the skip guard itself: an edit that adds/
+    // renames a sample row without updating TEMPLATE_SAMPLE_PRODUCT_IDS
+    // (or vice versa) fails here.
+    const spec = appleIapTemplateSpec();
+    const idCol = spec.headers.indexOf("Product ID");
+    const idsInSheet = spec.dataRows
+      .map((row) => String(row[idCol] ?? ""))
+      .filter((v) => v !== "");
+    expect(idsInSheet).toEqual([...TEMPLATE_SAMPLE_PRODUCT_IDS]);
+  });
+
+  it("every sample row fills one full locale pair (metadata-complete example)", () => {
+    // KB §7.1: an IAP needs ≥1 localization to be submittable. The
+    // Manager's source rows had none — the generated examples must not
+    // teach that shape.
+    const spec = appleIapTemplateSpec();
+    const dn = spec.headers.indexOf("Display Name (Vietnamese)");
+    const ds = spec.headers.indexOf("Description (Vietnamese)");
+    const sampleRows = spec.dataRows.filter(
+      (row) => String(row[spec.headers.indexOf("Product ID")] ?? "") !== "",
+    );
+    expect(sampleRows.length).toBe(3);
+    for (const row of sampleRows) {
+      expect(String(row[dn])).toMatch(/^Sample product 0\d$/);
+      expect(String(row[ds])).toMatch(/^Sample product 0\d - import/);
+    }
+  });
 });
 
 describe("round-trip — generated template parses cleanly through the real parser", () => {
-  it("filled rows parse: 39 pairs resolved, 0 skipped, 0 warnings, notes sheet harmless", async () => {
+  it("unedited template: 3 example rows come back SKIPPED, zero items, zero errors", async () => {
+    const wb = buildTemplateWorkbook(XLSX, appleIapTemplateSpec());
+
+    const result = await parseIapItemsXlsx(wbToFile(wb));
+
+    expect(result.items).toEqual([]); // zero created
+    expect(result.sample_rows_skipped.map((s) => s.product_id)).toEqual([
+      ...TEMPLATE_SAMPLE_PRODUCT_IDS,
+    ]);
+    expect(result.locale_pair_count).toBe(39);
+    expect(result.skipped_locales).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringMatching(/3 example row\(s\) skipped .* delete the sample rows or replace them/),
+    ]);
+  });
+
+  it("user rows added after the samples parse normally; samples still skipped", async () => {
     const spec = appleIapTemplateSpec();
     const wb = buildTemplateWorkbook(XLSX, spec);
     const headers = appleTemplateHeaders();
@@ -95,12 +147,12 @@ describe("round-trip — generated template parses cleanly through the real pars
 
     const result = await parseIapItemsXlsx(wbToFile(wb));
 
-    // Exact row count — notes-sheet contamination would change it (or
+    // Exact counts — notes-sheet contamination would change them (or
     // fail parsing outright).
     expect(result.items.length).toBe(2);
+    expect(result.sample_rows_skipped.length).toBe(3);
     expect(result.locale_pair_count).toBe(39);
     expect(result.skipped_locales).toEqual([]);
-    expect(result.warnings).toEqual([]);
 
     const item = result.items[0];
     expect(item.product_id).toBe("com.test.roundtrip1");
@@ -115,6 +167,36 @@ describe("round-trip — generated template parses cleanly through the real pars
       "en-US",
       "vi",
     ]);
+  });
+
+  it("replace-then-import: samples OVERWRITTEN by real rows are NOT skipped (ID-scoped, not position-scoped)", async () => {
+    const spec = appleIapTemplateSpec();
+    const wb = buildTemplateWorkbook(XLSX, spec);
+    const headers = appleTemplateHeaders();
+    // Overwrite the 3 sample rows in place (rows 2–4) — the note row
+    // below them stays, as a real user would leave it.
+    XLSX.utils.sheet_add_aoa(
+      wb.Sheets[APPLE_DATA_SHEET_NAME],
+      [
+        makeDataRow(headers, "com.real.product1"),
+        makeDataRow(headers, "com.real.product2"),
+        makeDataRow(headers, "com.real.product3"),
+      ],
+      { origin: "A2" },
+    );
+
+    const result = await parseIapItemsXlsx(wbToFile(wb));
+
+    expect(result.items.map((i) => i.product_id)).toEqual([
+      "com.real.product1",
+      "com.real.product2",
+      "com.real.product3",
+    ]);
+    expect(result.sample_rows_skipped).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    // The example shape carries a localization (verify item d) — real
+    // rows built the same way parse it.
+    expect(result.items[0].localizations.length).toBeGreaterThanOrEqual(1);
   });
 
   it("parses the named data sheet even when the Notes sheet is FIRST (by-name selection)", async () => {

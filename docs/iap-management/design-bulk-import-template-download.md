@@ -14,6 +14,29 @@ tables + KB §7.2 corrected in the same commit. Spec modules:
 parsers with a name-miss-aware error message, proven by a
 mutation check (by-name selection neutered → notes-first round-trip
 tests fail → restored → pass).
+
+**Addendum (August 2026) — example rows + sample-ID skip guard.**
+Manager decision REVERSED §B's headers-only data sheet: the data sheet
+now ships PRE-FILLED with 3 example rows, genericized from the Manager's
+source files (`apple-item-iap-test.xlsx`, updated
+`template-item-iap-google.xlsx`) to Product IDs
+`com.vngg.tool.product.sample01–03`. Because those IDs don't exist on
+any store, an accidental import would have silently created them — so a
+row-level skip guard landed in BOTH parsers: rows whose Product ID is in
+`TEMPLATE_SAMPLE_PRODUCT_IDS` (single shared const in
+`lib/xlsx-template.ts`, imported by the generators AND both parsers —
+same anti-drift discipline as the header specs, pinned by a
+shared-skip-list test) are skipped and surfaced as an explicit
+`sample_rows_skipped` / `skippedSampleRows` outcome, never an error. A
+delete-me note row (empty Product ID cell → invisible to the parsers)
+sits under the samples in-sheet. GT Price/GT Currency in the examples
+carry per-row illustrative VND PRICES, not the source files' constant
+23000: verified that the pair is a base-territory/region PRICE (Google
+posts it as the literal VN-region price; Apple parses it into
+`base_price`/`base_currency`, currently unconsumed downstream), so a
+constant that only makes sense as a stale exchange rate was not shipped.
+The §B "headers-only" rationale is superseded by the skip guard, which
+closes the same risk more directly.
 **Scope: BOTH modules** (Apple IAP Management + Google IAP Management). The
 Google module has a pointer stub at
 `docs/google-iap-management/design-bulk-import-template-download.md`.

@@ -719,8 +719,14 @@ work, which found the drift.)
 
 1. **Step 1 — Excel**: **Download template** button (generated from
    `parsers/template-spec.ts` — same spec consts the parser reads, so
-   template and parser cannot drift; data sheet "IAP Items" headers-only
-   + Notes sheet) + upload/parse of the 84-column template client-side.
+   template and parser cannot drift; data sheet "IAP Items" pre-filled
+   with 3 sample rows + Notes sheet) + upload/parse of the 84-column
+   template client-side. Sample rows (shared
+   `TEMPLATE_SAMPLE_PRODUCT_IDS` in `lib/xlsx-template.ts`, same list in
+   both modules' parsers) are SKIPPED on import as an explicit
+   `sample_rows_skipped` outcome — an unedited template can't create
+   junk IAPs (the generic IDs don't exist on the store, so nothing
+   would 409).
 2. **Step 2 — Screenshots** (screenshot folder matching)
 3. **Step 3 — Preview + validate** (two-pass conflict resolution:
    resolve + enrich; batch-level pricing source Q-E and submit-on-create

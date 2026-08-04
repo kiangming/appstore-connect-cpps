@@ -67,6 +67,7 @@ const MINIMAL_PARSE_RESULT: IapItemsParseResult = {
   skipped_locales: [],
   locale_pair_count: 0,
   warnings: [],
+  sample_rows_skipped: [],
 };
 
 const EMPTY_TIERS: Record<PricingSourceKind, UsdTierEntry[]> = {

@@ -8,11 +8,14 @@
  * xlsx-export.ts) dump live store data and are a separate feature —
  * untouched by this module.
  *
- * The data sheet carries NO example rows by design: example rows left in
- * a data sheet import as real store IAPs with no error (both legacy
- * Manager artifacts shipped 3 such rows — the failure this layout
- * removes). Illustrative examples belong in the Notes sheet, which the
- * parsers never read.
+ * The data sheet ships with 3 PRE-FILLED example rows (Manager decision,
+ * August 2026 — reverses the earlier headers-only layout) using the
+ * genericized sample Product IDs below. Because those IDs don't exist on
+ * any store, an accidental import would silently CREATE them — so both
+ * modules' parsers SKIP rows whose Product ID is in
+ * TEMPLATE_SAMPLE_PRODUCT_IDS and surface the skip as an explicit
+ * outcome. The const lives here so the generator and BOTH parsers read
+ * the same list — the skip guard cannot drift from the template.
  *
  * Client-safe: `downloadXlsxTemplate` lazy-loads xlsx (same pattern as
  * the Apple client-side parser, lib/iap-management/parsers/iap-items.ts),
@@ -31,27 +34,51 @@
 
 type XlsxModule = typeof import("xlsx");
 
+/** Sample Product IDs used by BOTH modules' example rows. Single source
+ *  of truth shared by the template generators (which write these rows)
+ *  and the parsers (which skip them on import) — see the module doc
+ *  above for why the skip guard exists. Genericized from the Manager's
+ *  source files (real test IDs replaced). */
+export const TEMPLATE_SAMPLE_PRODUCT_IDS: readonly string[] = [
+  "com.vngg.tool.product.sample01",
+  "com.vngg.tool.product.sample02",
+  "com.vngg.tool.product.sample03",
+];
+
+/** Warning placed in the data sheet directly under the example rows, in
+ *  a row with an EMPTY Product ID cell — both parsers skip ID-less rows,
+ *  so the note is visible in Excel but invisible to the import. */
+export const TEMPLATE_SAMPLE_ROWS_NOTE =
+  "⚠ The 3 rows above are SAMPLES — delete them or replace them with your real products. Rows keeping the sample Product IDs are skipped automatically on import.";
+
 export interface XlsxTemplateSpec {
   /** Name of the data sheet — the sheet the module's parser selects BY
    *  NAME (sheet-selection hardening, design §C). */
   dataSheetName: string;
-  /** Canonical header row — the ONLY content of the data sheet. */
+  /** Canonical header row of the data sheet. */
   headers: readonly string[];
+  /** Pre-filled rows under the headers: the 3 sample rows, a spacer and
+   *  the in-sheet warning note row (empty Product ID cell → parsers
+   *  ignore it). */
+  dataRows: ReadonlyArray<ReadonlyArray<string | number>>;
   notesSheetName: string;
   notesRows: ReadonlyArray<ReadonlyArray<string | number>>;
   filename: string;
 }
 
-/** Pure workbook assembly: data sheet (headers only) first, Notes sheet
- *  second. Order is cosmetic — the parsers select the data sheet by
- *  name, never by position. */
+/** Pure workbook assembly: data sheet (headers + sample rows) first,
+ *  Notes sheet second. Order is cosmetic — the parsers select the data
+ *  sheet by name, never by position. */
 export function buildTemplateWorkbook(
   XLSX: XlsxModule,
   spec: XlsxTemplateSpec,
 ) {
   const wb = XLSX.utils.book_new();
 
-  const dataWs = XLSX.utils.aoa_to_sheet([[...spec.headers]]);
+  const dataWs = XLSX.utils.aoa_to_sheet([
+    [...spec.headers],
+    ...spec.dataRows.map((row) => [...row]),
+  ]);
   dataWs["!cols"] = spec.headers.map((h) => ({
     wch: Math.min(40, Math.max(14, h.length + 2)),
   }));
