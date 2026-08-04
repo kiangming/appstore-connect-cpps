@@ -3609,7 +3609,8 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </li>
           <li class="step">
             <div class="step-title">Execute (Step 4)</div>
-            <div class="step-body"><p>Click <strong>Commit</strong>. Tool gửi <strong>MỘT</strong> lệnh <code class="inline">batchUpdate</code> (allowMissing — tạo mới + ghi đè trong cùng 1 call) lên Google Play API. Cap <strong>100 rows</strong>/lần — file lớn hơn phải chia nhỏ. Kết quả hiển thị Created / Overwritten / Skipped / Failed.</p></div>
+            <div class="step-body"><p>Click <strong>Commit</strong>. Tool gửi <strong>MỘT</strong> lệnh <code class="inline">batchUpdate</code> (allowMissing — tạo mới + ghi đè trong cùng 1 call) lên Google Play API. Kết quả hiển thị Created / Overwritten / Skipped / Failed.</p>
+            <p style="margin-top:8px;"><strong>Giới hạn: tối đa 100 dòng import được mỗi lần</strong> (đếm sau khi trừ dòng Skip, dòng sample và dòng bị refuse — không phải tổng dòng trong file). Nếu vượt, tool <strong>báo lỗi rõ ràng khi Commit và KHÔNG gửi gì lên Google</strong> (không cắt bớt, không import một phần) — chia file nhỏ rồi chạy lại. Lưu ý: bước Preview <em>không</em> chặn trước giới hạn này; lỗi chỉ xuất hiện khi bấm Commit.</p></div>
           </li>
         </ol>
 

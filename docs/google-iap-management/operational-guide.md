@@ -206,8 +206,12 @@ existing ones). When the response returns, the cache is synced row by
 row and the result panel shows Created / Overwritten / Skipped /
 Failed counts.
 
-**Cap:** 100 actionable rows per call. The wizard surfaces an error if
-exceeded; split the file.
+**Cap:** 100 actionable rows per call (`BATCH_MAX`,
+`orchestration/bulk-import.ts` — counted AFTER skips, sample rows and
+cross-currency refusals, not raw file rows). If exceeded, the tool
+throws before anything is sent to Google — no partial import, no
+silent truncation — and the wizard surfaces the error at Commit.
+Preview does NOT pre-check this cap; split the file and re-run.
 
 ---
 
