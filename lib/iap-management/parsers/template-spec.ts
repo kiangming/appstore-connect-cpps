@@ -91,22 +91,20 @@ export function appleTemplateHeaders(): string[] {
 /** Example-row values, genericized from the Manager's source file
  *  (apple-item-iap-test.xlsx, August 2026). Product IDs come from the
  *  shared TEMPLATE_SAMPLE_PRODUCT_IDS skip list. USD prices are the
- *  Manager's (0.49 / 4.09 / 12.49). GT Price deviates from the source's
- *  constant 23000: GT Price is a base-territory PRICE, not an exchange
- *  rate (verified — the Google sibling posts it as a literal per-region
- *  store price; Apple currently parses it into base_price/base_currency
- *  without downstream consumption), so a constant 23000 across three
- *  different USD prices would teach users a stale-rate pattern. The
- *  samples carry per-row illustrative VND prices (~26,000 VND/USD,
- *  rounded to thousands) instead. Each row fills one locale pair
- *  (Vietnamese, like the Google source rows) so an imported copy would
- *  be metadata-complete. */
+ *  Manager's (0.49 / 4.09 / 12.49). GT Price / GT Currency are left
+ *  BLANK, deviating from the source's constant 23000/VND: those columns
+ *  are currently NOT applied for Apple (parsed into base_price/
+ *  base_currency, consumed nowhere downstream — Apple pricing comes
+ *  from Price (USD) → tier inference → price schedule), and filling an
+ *  inert column would teach a wrong pattern. Each row fills one locale
+ *  pair (Vietnamese, like the Google source rows) so an imported copy
+ *  would be metadata-complete. */
 const SAMPLE_ROW_VALUES = TEMPLATE_SAMPLE_PRODUCT_IDS.map((id, i) => ({
   productId: id,
   referenceName: `Sample product 0${i + 1}`,
   priceUsd: [0.49, 4.09, 12.49][i],
-  gtPrice: [13000, 106000, 325000][i],
-  gtCurrency: "VND",
+  gtPrice: "",
+  gtCurrency: "",
   viDisplayName: `Sample product 0${i + 1}`,
   viDescription: `Sample product 0${i + 1} - import, default price template`,
 }));
@@ -163,11 +161,12 @@ const LEAD_NOTES: Record<
   gtPrice: {
     required: "Optional",
     meaning:
-      "Base-territory price (numeric), in the currency given in GT Currency.",
+      "⚠ Currently NOT applied for Apple: the import parses this column (with GT Currency) but nothing downstream consumes it — Apple pricing comes from Price (USD) → tier inference → price schedule. Safe to leave blank (the sample rows do).",
   },
   gtCurrency: {
     required: "Optional",
-    meaning: 'Base-territory currency code for GT Price, e.g. "VND".',
+    meaning:
+      '⚠ Currently NOT applied for Apple — see GT Price. Currency code for GT Price, e.g. "VND", if you fill the pair anyway.',
   },
 };
 
@@ -198,7 +197,7 @@ function appleNotesRows(): (string | number)[][] {
     ],
     [],
     [
-      `UNIT REMINDER: "${APPLE_LEAD_HEADERS.priceUsd}" is US dollars. GT Price is a PRICE in the GT Currency you specify on the same row — it is NOT an exchange rate.`,
+      `UNIT REMINDER: "${APPLE_LEAD_HEADERS.priceUsd}" is US dollars — it is what actually drives Apple pricing (tier inference → price schedule). GT Price / GT Currency are parsed but currently NOT applied for Apple; if filled, GT Price is a PRICE in GT Currency, NOT an exchange rate.`,
     ],
     [],
     [

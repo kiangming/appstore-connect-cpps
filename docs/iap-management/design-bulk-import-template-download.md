@@ -29,12 +29,15 @@ same anti-drift discipline as the header specs, pinned by a
 shared-skip-list test) are skipped and surfaced as an explicit
 `sample_rows_skipped` / `skippedSampleRows` outcome, never an error. A
 delete-me note row (empty Product ID cell → invisible to the parsers)
-sits under the samples in-sheet. GT Price/GT Currency in the examples
-carry per-row illustrative VND PRICES, not the source files' constant
-23000: verified that the pair is a base-territory/region PRICE (Google
-posts it as the literal VN-region price; Apple parses it into
-`base_price`/`base_currency`, currently unconsumed downstream), so a
-constant that only makes sense as a stale exchange rate was not shipped.
+sits under the samples in-sheet. GT Price/GT Currency deviate from the
+source files' constant 23000 (verified: the pair is a base-territory/
+region PRICE, not an exchange rate): the GOOGLE examples carry per-row
+illustrative VND prices (Google posts the pair as the literal VN-region
+price), while the APPLE examples leave the pair BLANK — Apple parses it
+into `base_price`/`base_currency` but consumes it nowhere downstream
+(pricing comes from Price (USD) → tier → price schedule), and the Apple
+Notes sheet now states this "currently NOT applied" status explicitly;
+filling an inert column would teach a wrong pattern.
 The §B "headers-only" rationale is superseded by the skip guard, which
 closes the same risk more directly.
 **Scope: BOTH modules** (Apple IAP Management + Google IAP Management). The

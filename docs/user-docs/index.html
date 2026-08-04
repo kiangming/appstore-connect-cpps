@@ -1322,7 +1322,7 @@
                   <tr><td><code class="inline">Reference Name</code></td><td>Tên nội bộ (≤ 64 ký tự)</td><td>Có</td></tr>
                   <tr><td><code class="inline">Type</code></td><td><code class="inline">CONSUMABLE</code> / <code class="inline">NON_CONSUMABLE</code> / <code class="inline">NON_RENEWING_SUBSCRIPTION</code></td><td>Không · Hotfix 27</td></tr>
                   <tr><td><code class="inline">Price (USD)</code></td><td>Giá USD — tool dùng để suy price tier từ pricing template. Trống → bỏ qua pricing cho dòng đó</td><td>Không</td></tr>
-                  <tr><td><code class="inline">GT Price</code> + <code class="inline">GT Currency</code></td><td>Cặp giá base-territory (vd: <code class="inline">23000</code> + <code class="inline">VND</code>) — điền cùng nhau</td><td>Không</td></tr>
+                  <tr><td><code class="inline">GT Price</code> + <code class="inline">GT Currency</code></td><td>⚠️ Hiện <strong>KHÔNG áp dụng cho Apple</strong> — tool parse nhưng không dùng ở đâu; giá Apple đến từ <code class="inline">Price (USD)</code> → tier → price schedule. Để trống (sample rows để trống)</td><td>Không</td></tr>
                   <tr><td><code class="inline">Display Name (Locale)</code> + <code class="inline">Description (Locale)</code></td><td>39 cặp cột locale — điền cả 2 ô của 1 cặp, hoặc bỏ trống cả 2 (locale đó được bỏ qua)</td><td>Không</td></tr>
                 </tbody>
               </table>
@@ -1492,12 +1492,12 @@
             </button>
           </div>
 <pre><span class="tok-c">// 84 cột — 6 cột đầu + 39 cặp Display Name/Description (Locale). Đây là 3 dòng sample có sẵn trong template.</span>
-<span class="tok-c">// Hotfix 27: Type optional — trống → CONSUMABLE. GT Price là GIÁ theo GT Currency (không phải tỷ giá).</span>
+<span class="tok-c">// Hotfix 27: Type optional — trống → CONSUMABLE. GT Price/GT Currency hiện KHÔNG áp dụng cho Apple → để trống.</span>
 <span class="tok-c">// Dòng giữ Product ID sample bị tool bỏ qua khi import — thay bằng Product ID thật của bạn.</span>
 <span class="tok-n">Product ID | Reference Name | Type | Price (USD) | GT Price | GT Currency | Display Name (Vietnamese) | Description (Vietnamese) | …</span>
-com.vngg.tool.product.sample01 | Sample product 01 |  | 0.49  | 13000  | VND | Sample product 01 | Sample product 01 - import, default price template
-com.vngg.tool.product.sample02 | Sample product 02 |  | 4.09  | 106000 | VND | Sample product 02 | Sample product 02 - import, default price template
-com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 | 325000 | VND | Sample product 03 | Sample product 03 - import, default price template</pre>
+com.vngg.tool.product.sample01 | Sample product 01 |  | 0.49  |  |  | Sample product 01 | Sample product 01 - import, default price template
+com.vngg.tool.product.sample02 | Sample product 02 |  | 4.09  |  |  | Sample product 02 | Sample product 02 - import, default price template
+com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample product 03 | Sample product 03 - import, default price template</pre>
         </div>
 
         <h2 class="section-title">Tips và pitfalls</h2>
