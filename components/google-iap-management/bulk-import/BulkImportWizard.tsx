@@ -11,11 +11,15 @@ import {
   ChevronLeft,
   ArrowLeft,
   X,
+  Download,
+  Loader2,
 } from "lucide-react";
 
 import { PreviewTable } from "./PreviewTable";
 import { PricingSourceSelector } from "@/components/google-iap-management/iap-form/PricingSourceSelector";
 import { validateDecimalForCurrency } from "@/lib/google-iap-management/google/currency-precision";
+import { googleIapTemplateSpec } from "@/lib/google-iap-management/parsers/template-spec";
+import { downloadXlsxTemplate } from "@/lib/xlsx-template";
 
 export type PricingSource = "google_default" | "default_template" | "app_template";
 export type RowDecision = "overwrite" | "skip" | "create";
@@ -144,6 +148,27 @@ export function BulkImportWizard({
   const [file, setFile] = useState<File | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+
+  async function handleDownloadTemplate() {
+    setDownloadingTemplate(true);
+    setUploadError(null);
+    try {
+      // Generated from the parser's own spec (template-spec.ts) — data
+      // sheet "IAP Items" with headers only + a Notes sheet the parser
+      // ignores. Price column is FIXED "Price (USD)" (Manager decision);
+      // the parser reads the currency from the header explicitly, so USD
+      // prices stay USD even for non-USD apps. Lazy xlsx import, blob
+      // download — same delivery pattern as the export button.
+      await downloadXlsxTemplate(googleIapTemplateSpec());
+    } catch (err) {
+      setUploadError(
+        err instanceof Error ? err.message : "Template download failed",
+      );
+    } finally {
+      setDownloadingTemplate(false);
+    }
+  }
   // Drag-drop visual feedback + the actual fix: the label previously had
   // no drag/drop handlers at all, so the browser's default action
   // (navigate to / download the dropped file) fired instead of importing.
@@ -598,14 +623,32 @@ export function BulkImportWizard({
       {/* Step 2: Upload */}
       {step === "upload" && (
         <section className="bg-white border border-slate-200 rounded-xl p-6">
-          <h2 className="text-base font-semibold text-slate-900 mb-1">
-            Upload Excel file
-          </h2>
+          <div className="flex items-start justify-between gap-3 mb-1">
+            <h2 className="text-base font-semibold text-slate-900">
+              Upload Excel file
+            </h2>
+            <button
+              type="button"
+              onClick={handleDownloadTemplate}
+              disabled={downloadingTemplate}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-emerald-300 px-2.5 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-60"
+            >
+              {downloadingTemplate ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Download className="h-3.5 w-3.5" />
+              )}
+              Download template
+            </button>
+          </div>
           <p className="text-xs text-slate-500 mb-4">
-            Use the Manager template:{" "}
+            Download{" "}
             <code className="bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded font-mono text-[11px]">
               template-item-iap-google.xlsx
-            </code>
+            </code>{" "}
+            and fill in the &quot;IAP Items&quot; sheet — prices in the{" "}
+            <strong>Price (USD)</strong> column are US dollars (see the Notes
+            sheet).
           </p>
 
           <label

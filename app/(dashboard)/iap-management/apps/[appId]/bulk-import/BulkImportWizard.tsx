@@ -17,8 +17,11 @@ import {
   Play,
   Info,
   RefreshCw,
+  Download,
 } from "lucide-react";
 import { parseIapItemsXlsx } from "@/lib/iap-management/parsers/iap-items";
+import { appleIapTemplateSpec } from "@/lib/iap-management/parsers/template-spec";
+import { downloadXlsxTemplate } from "@/lib/xlsx-template";
 import type { ParsedIapItem, IapItemsParseResult } from "@/lib/iap-management/parsers/iap-items";
 import { summarizeAppleError } from "@/lib/iap-management/bulk-import/apple-error-summary";
 import { ExpandableErrorCell } from "@/components/ui/shared/ExpandableErrorCell";
@@ -613,6 +616,25 @@ function Step1Excel({
 }) {
   const [parsing, setParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
+
+  async function handleDownloadTemplate() {
+    setDownloadingTemplate(true);
+    setError(null);
+    try {
+      // Generated from the parser's own spec (template-spec.ts) — data
+      // sheet "IAP Items" with headers only + a Notes sheet the parser
+      // ignores. Lazy xlsx import, blob download — same delivery pattern
+      // as the export button.
+      await downloadXlsxTemplate(appleIapTemplateSpec());
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Template download failed",
+      );
+    } finally {
+      setDownloadingTemplate(false);
+    }
+  }
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     accept: {
@@ -637,12 +659,27 @@ function Step1Excel({
 
   return (
     <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
-      <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-        Step 1 — Upload Excel template
-      </h2>
+      <div className="flex items-start justify-between gap-3 mb-1">
+        <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+          Step 1 — Upload Excel template
+        </h2>
+        <button
+          type="button"
+          onClick={handleDownloadTemplate}
+          disabled={downloadingTemplate}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[#0071E3]/30 px-2.5 py-1.5 text-xs font-medium text-[#0071E3] transition hover:bg-blue-50 disabled:opacity-60 dark:hover:bg-slate-800"
+        >
+          {downloadingTemplate ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Download className="h-3.5 w-3.5" />
+          )}
+          Download template
+        </button>
+      </div>
       <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
-        Drop the Manager-provided item-iap-template.xlsx. Headers validated
-        strictly (Q-IAP.5).
+        Download the template, fill in the &quot;IAP Items&quot; sheet (one
+        product per row — see the Notes sheet), and drop the .xlsx here.
       </p>
 
       {!parsed && (

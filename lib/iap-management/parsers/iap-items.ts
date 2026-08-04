@@ -1,7 +1,11 @@
 /**
  * Parse Manager-provided Apple IAP-item Excel template.
  *
- * Expected file: docs/iap-management/templates/item-iap-template.xlsx
+ * Expected file: the generated "Download template" (wizard Step 1) or the
+ * legacy Manager artifact docs/iap-management/templates/item-iap-template.xlsx.
+ * The data sheet is looked up BY NAME ("IAP Items", APPLE_DATA_SHEET_NAME in
+ * template-spec.ts) with a first-sheet fallback for legacy files; a Notes
+ * sheet in the generated template is ignored here.
  *
  * Header schema (Hotfix 27 — restored §3.3 Cycle 29 IAP.h2 institutional
  * lock: name-based column lookup, NOT positional). Only two headers are
@@ -45,20 +49,24 @@
 
 import { localeCodeFromName } from "@/lib/locale-utils";
 import type { InAppPurchaseType } from "@/types/iap-management/apple";
+import {
+  APPLE_DATA_SHEET_NAME,
+  APPLE_LEAD_HEADERS,
+  APPLE_REQUIRED_LEAD_HEADERS,
+  APPLE_TYPE_VALUES,
+} from "./template-spec";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 /** Only these two columns are REQUIRED. Everything else has a safe default
  *  per the §3.3 institutional lock (Hotfix 27 restoration). The other lead
  *  headers the parser recognises are "Type" / "Price (USD)" / "GT Price" /
- *  "GT Currency" — all optional. */
-const REQUIRED_LEAD_HEADERS = ["Product ID", "Reference Name"] as const;
+ *  "GT Currency" — all optional. Canonical names live in template-spec.ts,
+ *  shared with the "Download template" generator so parser and template
+ *  cannot drift apart. */
+const REQUIRED_LEAD_HEADERS = APPLE_REQUIRED_LEAD_HEADERS;
 
-const TYPE_VALUES: readonly InAppPurchaseType[] = [
-  "CONSUMABLE",
-  "NON_CONSUMABLE",
-  "NON_RENEWING_SUBSCRIPTION",
-] as const;
+const TYPE_VALUES = APPLE_TYPE_VALUES;
 
 const LOCALE_HEADER_RE = /^(Display Name|Description) \((.+)\)$/;
 
@@ -180,12 +188,19 @@ export async function parseIapItemsXlsx(
     );
   }
 
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) {
+  // Sheet-selection hardening (design-bulk-import-template-download.md §C):
+  // prefer the canonical data sheet BY NAME so a Notes/instructions sheet
+  // can never shadow the data — sheet ORDER is not load-bearing (a user
+  // reorder or an Excel re-save must not break the import). Files without
+  // the named sheet (legacy Manager templates, plain Sheet1 workbooks)
+  // fall back to the first sheet, preserving pre-hardening behavior.
+  const firstSheetName = workbook.SheetNames[0];
+  const dataSheetByName = workbook.Sheets[APPLE_DATA_SHEET_NAME];
+  if (!dataSheetByName && !firstSheetName) {
     throw new Error("IAP-item template contains no sheets.");
   }
-
-  const sheet = workbook.Sheets[sheetName];
+  const usedSheetFallback = !dataSheetByName;
+  const sheet = dataSheetByName ?? workbook.Sheets[firstSheetName];
   const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, {
     header: 1,
     defval: "",
@@ -209,6 +224,16 @@ export async function parseIapItemsXlsx(
 
   for (const required of REQUIRED_LEAD_HEADERS) {
     if (findHeaderIndex(header, required) < 0) {
+      // When the sheet was found only via the first-sheet fallback, the
+      // real problem is usually the SHEET, not the column (e.g. a notes/
+      // instructions sheet sitting where the data was expected). Name the
+      // sheet problem instead of a misleading missing-column message.
+      if (usedSheetFallback) {
+        throw new Error(
+          `Couldn't find the data sheet "${APPLE_DATA_SHEET_NAME}" — parsed the first sheet "${firstSheetName}" instead, and it has no "${required}" column. ` +
+            `If your workbook keeps the data in another sheet, rename that sheet to "${APPLE_DATA_SHEET_NAME}".`,
+        );
+      }
       throw new Error(
         `IAP-item template is missing the required "${required}" column. ` +
           `Required columns: ${REQUIRED_LEAD_HEADERS.join(", ")}.`,
@@ -217,12 +242,12 @@ export async function parseIapItemsXlsx(
   }
 
   const leadIdx: LeadColumnIndex = {
-    productId: findHeaderIndex(header, "Product ID"),
-    referenceName: findHeaderIndex(header, "Reference Name"),
-    type: findHeaderIndex(header, "Type"),
-    priceUsd: findHeaderIndex(header, "Price (USD)"),
-    gtPrice: findHeaderIndex(header, "GT Price"),
-    gtCurrency: findHeaderIndex(header, "GT Currency"),
+    productId: findHeaderIndex(header, APPLE_LEAD_HEADERS.productId),
+    referenceName: findHeaderIndex(header, APPLE_LEAD_HEADERS.referenceName),
+    type: findHeaderIndex(header, APPLE_LEAD_HEADERS.type),
+    priceUsd: findHeaderIndex(header, APPLE_LEAD_HEADERS.priceUsd),
+    gtPrice: findHeaderIndex(header, APPLE_LEAD_HEADERS.gtPrice),
+    gtCurrency: findHeaderIndex(header, APPLE_LEAD_HEADERS.gtCurrency),
   };
 
   /** The set of column indices already claimed by lead headers. Used below

@@ -1314,18 +1314,23 @@
           <li class="step">
             <div class="step-title">Tải Excel template và điền dữ liệu</div>
             <div class="step-body">
-              <p>Ở Step 1, click <strong>Tải template Excel</strong>. Template có 5 cột bắt buộc:</p>
+              <p>Ở Step 1, click <strong>Download template</strong>. File template được tool sinh trực tiếp từ parser (cột không thể lệch với import) và gồm 2 sheet: <strong>IAP Items</strong> — sheet dữ liệu, chỉ có dòng header, điền mỗi IAP 1 dòng, <em>không đổi tên sheet</em> — và <strong>Notes</strong> — hướng dẫn + ví dụ minh họa, import bỏ qua sheet này. Tổng 84 cột = 6 cột đầu + 39 cặp cột locale:</p>
               <table class="docs-table" style="margin-top:8px;">
                 <thead><tr><th>Cột</th><th>Mô tả</th><th>Bắt buộc</th></tr></thead>
                 <tbody>
-                  <tr><td><code class="inline">productId</code></td><td>SKU duy nhất (vd: <code class="inline">com.app.coin100</code>)</td><td>Có</td></tr>
-                  <tr><td><code class="inline">referenceName</code></td><td>Tên nội bộ (≤ 64 ký tự)</td><td>Có</td></tr>
-                  <tr><td><code class="inline">type</code></td><td>Loại IAP: <code class="inline">CONSUMABLE</code>, <code class="inline">NON_CONSUMABLE</code>...</td><td>Không · Hotfix 27</td></tr>
-                  <tr><td><code class="inline">priceTier</code></td><td>Tier giá (vd: <code class="inline">USD_0_99</code>)</td><td>Có</td></tr>
-                  <tr><td><code class="inline">familySharable</code></td><td><code class="inline">true</code> / <code class="inline">false</code></td><td>Có</td></tr>
+                  <tr><td><code class="inline">Product ID</code></td><td>SKU duy nhất (vd: <code class="inline">com.app.coin100</code>) — không sửa được sau khi tạo</td><td>Có</td></tr>
+                  <tr><td><code class="inline">Reference Name</code></td><td>Tên nội bộ (≤ 64 ký tự)</td><td>Có</td></tr>
+                  <tr><td><code class="inline">Type</code></td><td><code class="inline">CONSUMABLE</code> / <code class="inline">NON_CONSUMABLE</code> / <code class="inline">NON_RENEWING_SUBSCRIPTION</code></td><td>Không · Hotfix 27</td></tr>
+                  <tr><td><code class="inline">Price (USD)</code></td><td>Giá USD — tool dùng để suy price tier từ pricing template. Trống → bỏ qua pricing cho dòng đó</td><td>Không</td></tr>
+                  <tr><td><code class="inline">GT Price</code> + <code class="inline">GT Currency</code></td><td>Cặp giá base-territory (vd: <code class="inline">23000</code> + <code class="inline">VND</code>) — điền cùng nhau</td><td>Không</td></tr>
+                  <tr><td><code class="inline">Display Name (Locale)</code> + <code class="inline">Description (Locale)</code></td><td>39 cặp cột locale — điền cả 2 ô của 1 cặp, hoặc bỏ trống cả 2 (locale đó được bỏ qua)</td><td>Không</td></tr>
                 </tbody>
               </table>
-              <p style="margin-top:8px;">Cột <code class="inline">type</code> đã được chuyển sang <strong>optional</strong> từ Hotfix 27 — nếu để trống, mặc định <code class="inline">CONSUMABLE</code>.</p>
+              <p style="margin-top:8px;">Cột <code class="inline">Type</code> optional từ Hotfix 27 — để trống (hoặc xóa cả cột) → mặc định <code class="inline">CONSUMABLE</code>. Header match theo <strong>tên cột</strong> (không theo vị trí); 6 cột đầu không phân biệt hoa thường. File upload: <code class="inline">.xlsx</code> (không phải CSV).</p>
+              <div class="callout callout-warning" style="margin-top:8px;">
+                <div class="callout-title">⚠️ Không để dòng ví dụ trong sheet IAP Items</div>
+                <p>Mọi dòng dữ liệu trong sheet <strong>IAP Items</strong> sẽ được import thành IAP <strong>thật</strong> trên App Store Connect — không có cảnh báo nào chặn lại. Ví dụ minh họa nằm ở sheet <strong>Notes</strong>, chỉ để đọc.</p>
+              </div>
             </div>
           </li>
           <li class="step">
@@ -1480,18 +1485,18 @@
 
         <div class="code-block">
           <div class="code-header">
-            <span>bulk-import-template.csv</span>
+            <span>item-iap-template.xlsx · sheet "IAP Items"</span>
             <button class="copy-btn">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
               Copy
             </button>
           </div>
-<pre><span class="tok-c">// 5 cột bắt buộc — Hotfix 27: type optional, default CONSUMABLE</span>
-<span class="tok-n">productId,referenceName,type,priceTier,familySharable</span>
-com.app.coin100,Coin Pack 100,CONSUMABLE,USD_0_99,false
-com.app.coin500,Coin Pack 500,CONSUMABLE,USD_4_99,false
-com.app.gem10,Gem Pack 10,,USD_0_99,false
-com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
+<pre><span class="tok-c">// 84 cột — 6 cột đầu + 39 cặp Display Name/Description (Locale). Template tải về chỉ có dòng header.</span>
+<span class="tok-c">// Hotfix 27: Type optional — trống → CONSUMABLE. Dấu | chỉ minh họa ranh giới cột Excel.</span>
+<span class="tok-n">Product ID | Reference Name | Type | Price (USD) | GT Price | GT Currency | Display Name (English (U.S.)) | Description (English (U.S.)) | …</span>
+com.app.coin100 | Coin Pack 100  | CONSUMABLE     | 0.99 | 23000  | VND | 100 Coins      | Get 100 coins
+com.app.gem10   | Gem Pack 10    |                | 0.99 | 23000  | VND | 10 Gems        | Get 10 gems
+com.app.bundle  | Bundle Starter | NON_CONSUMABLE | 4.99 | 115000 | VND | Starter Bundle | One-time starter bundle</pre>
         </div>
 
         <h2 class="section-title">Tips và pitfalls</h2>
@@ -3553,7 +3558,7 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
         <table class="docs-table">
           <thead><tr><th>Bước</th><th>Mục đích</th><th>Tính năng đặc biệt</th></tr></thead>
           <tbody>
-            <tr><td>1. Upload</td><td>Drag &amp; drop CSV/Excel template</td><td>Tải template với 5 cột</td></tr>
+            <tr><td>1. Upload</td><td>Drag &amp; drop file .xlsx theo template</td><td>Nút Download template · 2 sheet (IAP Items + Notes)</td></tr>
             <tr><td>2. Disambiguation</td><td>User chọn tier khi có nhiều candidates</td><td>Cycle 35-36 institutional · select per-row</td></tr>
             <tr><td>3. Preview</td><td>Per-row validation + currency check (Hotfix 28)</td><td>Currency vs region match</td></tr>
             <tr><td>4. Execute</td><td>Batch create items lên Google Play API</td><td>Sequential per item · auto-retry rate-limit</td></tr>
@@ -3569,14 +3574,14 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
           <li class="step">
             <div class="step-title">Tải template + điền dữ liệu</div>
             <div class="step-body">
-              <p>Template CSV 5 cột:</p>
+              <p>Ở bước <strong>Upload</strong>, click <strong>Download template</strong> — file được tool sinh trực tiếp từ parser (cột không thể lệch với import), gồm 2 sheet: <strong>IAP Items</strong> (sheet dữ liệu, chỉ có header — <em>không đổi tên sheet</em>) và <strong>Notes</strong> (hướng dẫn + ví dụ, import bỏ qua). 168 cột = 4 cột đầu + 82 cặp cột locale:</p>
               <ul>
-                <li><code class="inline">sku</code> — unique per app</li>
-                <li><code class="inline">title</code> — display name default locale</li>
-                <li><code class="inline">description</code> — default locale</li>
-                <li><code class="inline">default_price</code> — số (vd: 0.99)</li>
-                <li><code class="inline">default_currency</code> — ISO 4217 (USD, VND, ...)</li>
+                <li><code class="inline">Product ID</code> — SKU, unique per app (bắt buộc)</li>
+                <li><code class="inline">Price (USD)</code> — <strong>giá USD</strong> (bắt buộc). ⚠️ LUÔN là USD, kể cả khi app dùng VND — tool tự resolve giá app-currency từ pricing template (Cycle 43). Vd: <code class="inline">0.99</code> nghĩa là 0.99 USD, KHÔNG phải 0.99 VND.</li>
+                <li><code class="inline">GT Price</code> + <code class="inline">GT Currency</code> — cặp override theo currency (không bắt buộc, điền cùng nhau)</li>
+                <li><code class="inline">Title (Locale)</code> + <code class="inline">Description (Locale)</code> — 82 cặp cột locale (không bắt buộc)</li>
               </ul>
+              <p>File upload: <code class="inline">.xlsx</code> · max 5 MB (không phải CSV). Không để dòng ví dụ trong sheet <strong>IAP Items</strong> — mọi dòng dữ liệu sẽ được import thành IAP thật trên Google Play.</p>
             </div>
           </li>
           <li class="step">
@@ -3588,7 +3593,7 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
           <li class="step">
             <div class="step-title">Preview với currency validation (Hotfix 28)</div>
             <div class="step-body">
-              <p>Hotfix 28 (tháng 5/2026): validate currency vs region match per-row. Vd: row default_currency=<code class="inline">USD</code> mà app default region = <code class="inline">JP</code> → warning. User có thể fix CSV và re-upload, hoặc bỏ qua warning.</p>
+              <p>Hotfix 28 (tháng 5/2026): validate currency vs region match per-row. Vd: row default_currency=<code class="inline">USD</code> mà app default region = <code class="inline">JP</code> → warning. User có thể fix file Excel và re-upload, hoặc bỏ qua warning.</p>
             </div>
           </li>
           <li class="step">
@@ -3666,7 +3671,7 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
         </div>
 
         <h2 class="section-title">Nhập giá USD vào app VND (Cross-currency — Cycle 43)</h2>
-        <p>Từ Cycle 43, file CSV không cần phải dùng đúng currency của app. Tool tự resolve giá app-currency từ pricing template:</p>
+        <p>Từ Cycle 43, file Excel không cần phải dùng đúng currency của app. Tool tự resolve giá app-currency từ pricing template:</p>
         <table class="docs-table">
           <thead><tr><th>Trường hợp</th><th>Tool xử lý thế nào</th></tr></thead>
           <tbody>
@@ -3686,7 +3691,7 @@ com.app.bundle,Bundle Starter,NON_CONSUMABLE,USD_4_99,true</pre>
         </table>
         <div class="callout callout-tip">
           <div class="callout-title">💡 Cách bật cross-currency</div>
-          <p>Không cần cài đặt gì. Nếu file CSV có cột <code class="inline">Price (USD)</code> (header ghi rõ currency) hoặc giá USD không vừa VND precision → tool tự detect cross-currency mode. Điều kiện cần: đã upload <a class="inline-link" data-goto="google-pricing-matrix">Pricing template</a> cho app này.</p>
+          <p>Không cần cài đặt gì. Nếu file Excel có cột <code class="inline">Price (USD)</code> (header ghi rõ currency — template tải từ tool luôn dùng header này) hoặc giá USD không vừa VND precision → tool tự detect cross-currency mode. Điều kiện cần: đã upload <a class="inline-link" data-goto="google-pricing-matrix">Pricing template</a> cho app này.</p>
         </div>
 
         <h2 class="section-title">Tips và pitfalls</h2>

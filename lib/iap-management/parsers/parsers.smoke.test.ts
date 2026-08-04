@@ -5,8 +5,10 @@
  *
  *   price-tiers-template.xlsx: 88 standard tiers + 7 alternate tiers,
  *                              175 territories, sheet name "price_tiers".
- *   item-iap-template.xlsx:    83 columns (5 lead + 39 locale pairs),
- *                              3 sample data rows.
+ *   item-iap-template.xlsx:    84 columns (6 lead incl. Type + 39 locale
+ *                              pairs), 3 sample data rows. Data sheet is
+ *                              named "Sheet1" → exercises the first-sheet
+ *                              FALLBACK of the by-name sheet selection.
  *
  * Exhaustive unit tests with synthetic fixtures will land in IAP.l.
  */

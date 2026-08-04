@@ -711,12 +711,21 @@ iaps/[iapId]/route.ts                                GET/PATCH/DELETE single IAP
 
 ### 7.2 Bulk import workflow (4-step wizard)
 
-`/iap-management/apps/[appId]/bulk-import` →
+`/iap-management/apps/[appId]/bulk-import` → stepper labels
+`Excel → Screenshots → Preview → Result` (BulkImportWizard.tsx). (This
+list previously said "Step 1 — Pricing source / Step 2 — Upload Excel" —
+stale vs the shipped stepper; corrected during the template-download
+work, which found the drift.)
 
-1. **Step 1 — Pricing source** (batch-level, Q-E)
-2. **Step 2 — Upload Excel** (84-column template + screenshot folder)
-3. **Step 3 — Preview + validate** (two-pass conflict resolution: resolve + enrich)
-4. **Step 4 — Execute** with `withConcurrency<T,R>` of 5; per-row result hints
+1. **Step 1 — Excel**: **Download template** button (generated from
+   `parsers/template-spec.ts` — same spec consts the parser reads, so
+   template and parser cannot drift; data sheet "IAP Items" headers-only
+   + Notes sheet) + upload/parse of the 84-column template client-side.
+2. **Step 2 — Screenshots** (screenshot folder matching)
+3. **Step 3 — Preview + validate** (two-pass conflict resolution:
+   resolve + enrich; batch-level pricing source Q-E and submit-on-create
+   live HERE, not in a separate step)
+4. **Step 4 — Execute/Result** with `withConcurrency<T,R>` of 5; per-row result hints
 
 Execute orchestrator at `app/api/iap-management/apps/[appId]/bulk-import/execute/route.ts`. Each row is independently audited; failures don't abort the batch.
 

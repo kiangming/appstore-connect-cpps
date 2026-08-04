@@ -2,7 +2,12 @@
  * Excel parser for the Manager-delivered IAP bulk-import template
  * (docs/google-iap-management/templates/template-item-iap-google.xlsx).
  *
- * Template shape (Sheet1, single sheet):
+ * Sheet selection: the data sheet is looked up BY NAME ("IAP Items",
+ * GOOGLE_DATA_SHEET_NAME in template-spec.ts) with a first-sheet fallback
+ * for legacy files (the v1 Manager artifact used "Sheet1"). The generated
+ * "Download template" ships a Notes sheet alongside — ignored here.
+ *
+ * Template shape (data sheet):
  *   Col A:  Product ID (SKU)
  *   Col B:  Price (USD)              — base price, decimal
  *   Col C:  GT Price                  — optional "Game Tier" override decimal
@@ -22,92 +27,20 @@
 import * as XLSX from "xlsx";
 
 import { COMMON_REGIONS } from "../regions";
+import {
+  GOOGLE_DATA_SHEET_NAME,
+  GOOGLE_PRODUCT_ID_HEADER,
+  GOOGLE_GT_PRICE_HEADER,
+  GOOGLE_GT_CURRENCY_HEADER,
+  LOCALE_NAME_TO_BCP47,
+} from "./template-spec";
 
-/** Manager-display locale name → Google Play BCP-47 locale code. */
-export const LOCALE_NAME_TO_BCP47: Record<string, string> = {
-  Afrikaans: "af",
-  Albanian: "sq",
-  Amharic: "am",
-  Arabic: "ar",
-  Armenian: "hy-AM",
-  Azerbaijani: "az-AZ",
-  Bangla: "bn-BD",
-  Basque: "eu-ES",
-  Belarusian: "be",
-  Bulgarian: "bg",
-  Burmese: "my-MM",
-  Catalan: "ca",
-  "Chinese (Hong Kong)": "zh-HK",
-  "Chinese (Simplified)": "zh-CN",
-  "Chinese (Traditional)": "zh-TW",
-  Croatian: "hr",
-  Czech: "cs-CZ",
-  Danish: "da-DK",
-  Dutch: "nl-NL",
-  English: "en",
-  "English (Australia)": "en-AU",
-  "English (Canada)": "en-CA",
-  "English (United Kingdom)": "en-GB",
-  "English (United States)": "en-US",
-  Estonian: "et",
-  Filipino: "fil",
-  Finnish: "fi-FI",
-  "French (Canada)": "fr-CA",
-  "French (France)": "fr-FR",
-  Galician: "gl-ES",
-  Georgian: "ka-GE",
-  German: "de-DE",
-  Greek: "el-GR",
-  Gujarati: "gu",
-  Hebrew: "iw-IL",
-  Hindi: "hi-IN",
-  Hungarian: "hu-HU",
-  Icelandic: "is-IS",
-  Indonesian: "id",
-  Italian: "it-IT",
-  Japanese: "ja-JP",
-  Kannada: "kn-IN",
-  Kazakh: "kk",
-  Khmer: "km-KH",
-  Korean: "ko-KR",
-  Kyrgyz: "ky-KG",
-  Lao: "lo-LA",
-  Latvian: "lv",
-  Lithuanian: "lt",
-  Macedonian: "mk-MK",
-  Malay: "ms",
-  "Malay (Malaysia)": "ms-MY",
-  Malayalam: "ml-IN",
-  Marathi: "mr-IN",
-  Mongolian: "mn-MN",
-  Nepali: "ne-NP",
-  Norwegian: "no-NO",
-  Persian: "fa",
-  Polish: "pl-PL",
-  "Portuguese (Brazil)": "pt-BR",
-  "Portuguese (Portugal)": "pt-PT",
-  Punjabi: "pa",
-  Romanian: "ro",
-  Romansh: "rm",
-  Russian: "ru-RU",
-  Serbian: "sr",
-  Sinhala: "si-LK",
-  Slovak: "sk",
-  Slovenian: "sl",
-  "Spanish (Latin America)": "es-419",
-  "Spanish (Spain)": "es-ES",
-  "Spanish (United States)": "es-US",
-  Swahili: "sw",
-  Swedish: "sv-SE",
-  Tamil: "ta-IN",
-  Telugu: "te-IN",
-  Thai: "th",
-  Turkish: "tr-TR",
-  Ukrainian: "uk",
-  Urdu: "ur",
-  Vietnamese: "vi",
-  Zulu: "zu",
-};
+/** Manager-display locale name → Google Play BCP-47 locale code.
+ *  Moved to template-spec.ts (single source of truth shared with the
+ *  "Download template" generator — this file statically imports xlsx,
+ *  so the client wizard imports the spec module, not this one).
+ *  Re-exported for back-compat. */
+export { LOCALE_NAME_TO_BCP47 };
 
 /** Reverse: currency → primary region for GT Price/Currency override.
  *  Covers the regions in our COMMON_REGIONS list plus a few extra commonly
@@ -197,9 +130,9 @@ export interface ParseResult {
  *  resolver (price headers are matched by regex / case-insensitive
  *  string comparison, see resolvePriceColumn). */
 const FIXED_HEADERS = new Set([
-  "Product ID",
-  "GT Price",
-  "GT Currency",
+  GOOGLE_PRODUCT_ID_HEADER,
+  GOOGLE_GT_PRICE_HEADER,
+  GOOGLE_GT_CURRENCY_HEADER,
 ]);
 
 /** Price column resolution result (Hotfix 16). Carries both the column
@@ -300,9 +233,9 @@ function indexColumns(
     const header = String(raw).trim();
     if (header === "") continue;
 
-    if (header === "Product ID") idx.sku = c;
-    else if (header === "GT Price") idx.gtPrice = c;
-    else if (header === "GT Currency") idx.gtCurrency = c;
+    if (header === GOOGLE_PRODUCT_ID_HEADER) idx.sku = c;
+    else if (header === GOOGLE_GT_PRICE_HEADER) idx.gtPrice = c;
+    else if (header === GOOGLE_GT_CURRENCY_HEADER) idx.gtCurrency = c;
     else if (FIXED_HEADERS.has(header)) {
       /* already handled */
     } else if (idx.price && idx.price.columnIndex === c) {
@@ -412,10 +345,26 @@ export function parseIapTemplate(
     errors.push("Workbook has no sheets.");
     return { rows, warnings, errors };
   }
-  const sheetName = wb.SheetNames[0];
+  // Sheet-selection hardening (design-bulk-import-template-download.md §C):
+  // prefer the canonical data sheet BY NAME so a Notes/instructions sheet
+  // can never shadow the data — sheet ORDER is not load-bearing (a user
+  // reorder or an Excel re-save must not break the import). Files without
+  // the named sheet (legacy Manager templates, plain Sheet1 workbooks)
+  // fall back to the first sheet, preserving pre-hardening behavior.
+  const usedSheetFallback = !wb.Sheets[GOOGLE_DATA_SHEET_NAME];
+  const sheetName = usedSheetFallback
+    ? wb.SheetNames[0]
+    : GOOGLE_DATA_SHEET_NAME;
   const ws = wb.Sheets[sheetName];
+  // When the sheet was found only via the first-sheet fallback and then
+  // turns out unusable, the real problem is usually the SHEET (e.g. a
+  // notes/instructions sheet sitting where the data was expected) — name
+  // that instead of a misleading missing-column message.
+  const sheetHint = usedSheetFallback
+    ? ` Couldn't find the data sheet "${GOOGLE_DATA_SHEET_NAME}" — parsed the first sheet "${sheetName}" instead; if your workbook keeps the data in another sheet, rename that sheet to "${GOOGLE_DATA_SHEET_NAME}".`
+    : "";
   if (!ws["!ref"]) {
-    errors.push(`Sheet "${sheetName}" is empty.`);
+    errors.push(`Sheet "${sheetName}" is empty.` + sheetHint);
     return { rows, warnings, errors };
   }
 
@@ -430,14 +379,17 @@ export function parseIapTemplate(
   const skuCol = idx.sku;
   const priceResolution = idx.price;
   if (skuCol === undefined) {
-    errors.push('Required column "Product ID" not found in header row.');
+    errors.push(
+      'Required column "Product ID" not found in header row.' + sheetHint,
+    );
     return { rows, warnings, errors };
   }
   if (!priceResolution) {
     const defaultCurrencyForMsg =
       options.appDefaultCurrency.trim().toUpperCase() || "USD";
     errors.push(
-      `No price column found. Expected one of: "Price (XXX)" where XXX is a 3-letter currency code (e.g. "Price (USD)", "Price (VND)"), or generic "Price" / "Default Price" / "Base Price" (which is interpreted as the app's default currency "${defaultCurrencyForMsg}").`,
+      `No price column found. Expected one of: "Price (XXX)" where XXX is a 3-letter currency code (e.g. "Price (USD)", "Price (VND)"), or generic "Price" / "Default Price" / "Base Price" (which is interpreted as the app's default currency "${defaultCurrencyForMsg}").` +
+        sheetHint,
     );
     return { rows, warnings, errors };
   }

@@ -1,6 +1,19 @@
 # Bulk Import "Download template" — Investigation & Design (Apple + Google)
 
-**Status: DESIGN — awaiting Manager review. No implementation yet.**
+**Status: IMPLEMENTED (August 2026).** Manager sign-off resolved the open
+questions as: G.1 → FIXED `Price (USD)` header (verified safe: the parser
+reads the header currency explicitly — `resolvePriceColumn` Pass 1 — so a
+USD template against a non-USD app stays USD; the Notes sheet states the
+unit unmissably); G.2 → Notes sheet ENGLISH only (matches tool UI); G.3 →
+legacy artifacts kept as fallback-path fixtures (a Google real-file smoke
+test was added — the asymmetry in F4 is closed); G.4/G.5 → user-docs
+tables + KB §7.2 corrected in the same commit. Spec modules:
+`lib/iap-management/parsers/template-spec.ts`,
+`lib/google-iap-management/parsers/template-spec.ts`; shared generator:
+`lib/xlsx-template.ts`. Sheet-selection hardening (§C) landed in both
+parsers with a name-miss-aware error message, proven by a
+mutation check (by-name selection neutered → notes-first round-trip
+tests fail → restored → pass).
 **Scope: BOTH modules** (Apple IAP Management + Google IAP Management). The
 Google module has a pointer stub at
 `docs/google-iap-management/design-bulk-import-template-download.md`.

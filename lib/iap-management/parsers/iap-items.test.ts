@@ -228,8 +228,11 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
     const file = new File([buf], "no-product-id.xlsx", {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
+    // Sheet-selection hardening (template-download design §C): a Sheet1
+    // workbook resolves via the first-sheet fallback, so the required-
+    // column error now leads with the sheet situation.
     await expect(parseIapItemsXlsx(file)).rejects.toThrow(
-      /missing the required "Product ID" column/,
+      /no "Product ID" column/,
     );
   });
 
@@ -244,8 +247,10 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
     const file = new File([buf], "no-reference-name.xlsx", {
       type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
+    // Sheet-selection hardening (template-download design §C): same
+    // fallback-path message shape as the Product ID case above.
     await expect(parseIapItemsXlsx(file)).rejects.toThrow(
-      /missing the required "Reference Name" column/,
+      /no "Reference Name" column/,
     );
   });
 

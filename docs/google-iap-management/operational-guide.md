@@ -144,16 +144,34 @@ USD + GT Price.
 
 ### Step 2 — Upload
 
-Drop or browse a `.xlsx` matching the template format
-(`docs/google-iap-management/templates/template-item-iap-google.xlsx`).
-Max 5 MB. The Manager's template currently has:
+Click **Download template** to generate the template from the tool —
+it is built from the parser's own column spec
+(`lib/google-iap-management/parsers/template-spec.ts`), so it cannot
+drift from what the import accepts. Two sheets:
 
-- Column A: **Product ID** (SKU)
-- Column B: **Price (USD)** decimal
-- Columns C–D: **GT Price** + **GT Currency** (optional override
-  derived from currency → primary region)
-- Columns E+: paired `Title (LangName)` / `Description (LangName)` per
-  locale (82 supported)
+- `IAP Items` — the data sheet (headers only; the parser selects it BY
+  NAME, so don't rename it). One product per row. Never leave example
+  rows here — data-sheet rows import as real store IAPs.
+- `Notes` — column guide + an illustrative example table; ignored by
+  the import.
+
+Drop or browse the filled `.xlsx`. Max 5 MB. Columns (matched by
+header NAME, not position):
+
+- **Product ID** (SKU) — required
+- **Price (USD)** decimal — required. ALWAYS US dollars (fixed header —
+  Manager decision): the parser reads the currency from the header
+  explicitly, so USD stays USD even for non-USD apps; cross-currency
+  resolution (Cycle 43) derives the app-currency price from the
+  pricing template
+- **GT Price** + **GT Currency** (optional override derived from
+  currency → primary region; must be filled together)
+- paired `Title (LangName)` / `Description (LangName)` per locale (82
+  supported)
+
+Legacy files that keep data in the first sheet (e.g. `Sheet1`, like the
+old `docs/google-iap-management/templates/template-item-iap-google.xlsx`
+artifact) still parse via the first-sheet fallback.
 
 ### Step 3 — Preview
 
