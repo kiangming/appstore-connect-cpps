@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bulk Import — Locale picker (design mockup, Apple + Google)</title>
+<style>
+  :root { --primary:#0071E3; --emerald:#059669; --border:#e2e8f0; --text:#0f172a; --muted:#64748b; --bg:#f8fafc; --danger:#b45309; --amber-bg:#fffbeb; --amber-bd:#fcd34d; }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:-apple-system,'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--text); padding:32px; }
+  h1 { font-size:20px; margin-bottom:4px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:20px; }
+  .toggle { display:inline-flex; gap:0; border:1px solid var(--border); border-radius:8px; overflow:hidden; margin-bottom:20px; }
+  .toggle button { border:0; background:#fff; padding:8px 18px; font-size:13px; font-weight:600; cursor:pointer; color:var(--muted); }
+  .toggle button.active-apple { background:var(--primary); color:#fff; }
+  .toggle button.active-google { background:var(--emerald); color:#fff; }
+  /* modal */
+  .scrim { background:rgba(15,23,42,.35); border-radius:16px; padding:40px; max-width:760px; }
+  .modal { background:#fff; border-radius:12px; box-shadow:0 20px 50px rgba(0,0,0,.25); max-width:640px; margin:0 auto; display:flex; flex-direction:column; max-height:78vh; }
+  .m-head { padding:16px 20px 12px; border-bottom:1px solid var(--border); }
+  .m-title { font-size:15px; font-weight:700; }
+  .m-sub { font-size:12px; color:var(--muted); margin-top:2px; }
+  .m-tools { display:flex; gap:8px; padding:12px 20px; border-bottom:1px solid var(--border); align-items:center; }
+  .m-tools input { flex:1; border:1px solid var(--border); border-radius:8px; padding:8px 12px; font-size:13px; }
+  .m-tools button { border:1px solid var(--border); background:#fff; border-radius:8px; padding:7px 12px; font-size:12px; font-weight:600; cursor:pointer; color:var(--text); white-space:nowrap; }
+  .m-count { font-size:12px; color:var(--muted); padding:8px 20px 0; }
+  .m-count strong { color:var(--text); }
+  .m-list { overflow-y:auto; padding:8px 12px 12px; flex:1; }
+  .row { display:grid; grid-template-columns:28px 1fr 1fr 90px; gap:8px; align-items:center; padding:7px 10px; border-radius:8px; font-size:13px; cursor:pointer; }
+  .row:hover { background:var(--bg); }
+  .row .co { color:var(--muted); }
+  .row .code { font-family:ui-monospace,Menlo,monospace; font-size:11px; color:var(--muted); text-align:right; }
+  .row input { width:15px; height:15px; }
+  .hdr { display:grid; grid-template-columns:28px 1fr 1fr 90px; gap:8px; padding:4px 22px 6px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  .zero-note { margin:10px 20px 0; padding:10px 12px; background:var(--amber-bg); border:1px solid var(--amber-bd); border-radius:8px; font-size:12px; color:var(--danger); display:none; }
+  .m-foot { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:14px 20px; border-top:1px solid var(--border); }
+  .m-foot .cancel { border:0; background:none; color:var(--muted); font-size:13px; cursor:pointer; }
+  .cta { border:0; border-radius:8px; padding:10px 18px; font-size:13px; font-weight:700; color:#fff; cursor:pointer; background:var(--primary); }
+  body[data-module="google"] .cta { background:var(--emerald); }
+  .notes { max-width:760px; margin:26px auto 0; font-size:12.5px; color:var(--muted); line-height:1.6; }
+  .notes h2 { font-size:13px; color:var(--text); margin:14px 0 4px; }
+  mark { background:#fef08a; }
+</style>
+</head>
+<body data-module="apple">
+  <h1>Bulk Import — chọn locale trước khi tải template</h1>
+  <p class="sub">Design mockup (Manager review). Mở từ nút <strong>Download bulk import template</strong> (trang Apps list) hoặc <strong>Download template</strong> (header wizard) — cả 2 module, mỗi module hiển thị danh sách locale của store mình.</p>
+  <div class="toggle">
+    <button id="tab-apple" class="active-apple" onclick="setModule('apple')">Apple · 39 locales</button>
+    <button id="tab-google" onclick="setModule('google')">Google · 82 locales</button>
+  </div>
+
+  <div class="scrim">
+    <div class="modal">
+      <div class="m-head">
+        <div class="m-title">Download bulk import template</div>
+        <div class="m-sub">Chọn các locale cần nhập nội dung — cột core (Product ID, giá, …) luôn có sẵn, không cần chọn. Không chọn gì = template chỉ có cột core.</div>
+      </div>
+      <div class="m-tools">
+        <input id="q" type="text" placeholder="Tìm theo ngôn ngữ, quốc gia hoặc mã (vd: Việt, Vietnam, vi)…" oninput="renderList()">
+        <button onclick="selectAll(true)">Chọn tất cả (hiện)</button>
+        <button onclick="selectAll(false)">Bỏ chọn tất cả</button>
+      </div>
+      <div class="m-count">Đã chọn <strong id="count">0</strong> / <span id="total"></span> locale</div>
+      <div id="zero" class="zero-note">⚠ Chưa chọn locale nào — template sẽ chỉ có các cột core (không có cột Display Name/Description hay Title/Description). Vẫn tải được: đây là lựa chọn hợp lệ.</div>
+      <div class="hdr"><span></span><span>Ngôn ngữ</span><span>Quốc gia / biến thể</span><span style="text-align:right">Mã</span></div>
+      <div class="m-list" id="list"></div>
+      <div class="m-foot">
+        <button class="cancel">Hủy</button>
+        <button class="cta" id="cta">Tải template (chỉ cột core)</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <h2>Ghi chú design (đọc cùng design-bulk-import-locale-picker.md)</h2>
+    <p>· <mark>Không pre-tick gì</mark> (Manager lock #1) — vì vậy CTA mặc định là "chỉ cột core" và banner vàng hiện sẵn: zero-locale là đường đi mặc định, không phải edge case.</p>
+    <p>· Cột "Quốc gia / biến thể": tên quốc gia khi xác định được (từ tên hoặc region subtag của mã); biến thể script/nhóm (Simplified, Traditional, Latin America) hiển thị nguyên văn; "—" khi locale không gắn vùng.</p>
+    <p>· Search match cả 3 cột. "Chọn tất cả (hiện)" chỉ áp cho danh sách đang lọc — chọn nhanh "English" → 5 biến thể.</p>
+    <p>· CTA đổi label theo số lượng: "Tải template (chỉ cột core)" / "Tải template (N locale)".</p>
+    <p>· Cùng 1 modal component cho cả 4 chỗ đặt nút (2 trang Apps list + 2 header wizard); màu accent theo module.</p>
+  </div>
+
+<script>
+const DATA = {
+  apple: [{"l":"Arabic","co":"Saudi Arabia","code":"ar-SA","name":"Arabic"},{"l":"Catalan","co":"—","code":"ca","name":"Catalan"},{"l":"Chinese","co":"Simplified","code":"zh-Hans","name":"Chinese (Simplified)"},{"l":"Chinese","co":"Traditional","code":"zh-Hant","name":"Chinese (Traditional)"},{"l":"Croatian","co":"—","code":"hr","name":"Croatian"},{"l":"Czech","co":"—","code":"cs","name":"Czech"},{"l":"Danish","co":"—","code":"da","name":"Danish"},{"l":"Dutch","co":"Netherlands","code":"nl-NL","name":"Dutch"},{"l":"English","co":"Australia","code":"en-AU","name":"English (Australia)"},{"l":"English","co":"Canada","code":"en-CA","name":"English (Canada)"},{"l":"English","co":"U.K.","code":"en-GB","name":"English (U.K.)"},{"l":"English","co":"U.S.","code":"en-US","name":"English (U.S.)"},{"l":"Finnish","co":"—","code":"fi","name":"Finnish"},{"l":"French","co":"France","code":"fr-FR","name":"French"},{"l":"French","co":"Canada","code":"fr-CA","name":"French (Canada)"},{"l":"German","co":"Germany","code":"de-DE","name":"German"},{"l":"Greek","co":"—","code":"el","name":"Greek"},{"l":"Hebrew","co":"—","code":"he","name":"Hebrew"},{"l":"Hindi","co":"—","code":"hi","name":"Hindi"},{"l":"Hungarian","co":"—","code":"hu","name":"Hungarian"},{"l":"Indonesian","co":"—","code":"id","name":"Indonesian"},{"l":"Italian","co":"—","code":"it","name":"Italian"},{"l":"Japanese","co":"—","code":"ja","name":"Japanese"},{"l":"Korean","co":"—","code":"ko","name":"Korean"},{"l":"Malay","co":"—","code":"ms","name":"Malay"},{"l":"Norwegian","co":"—","code":"no","name":"Norwegian"},{"l":"Polish","co":"—","code":"pl","name":"Polish"},{"l":"Portuguese","co":"Brazil","code":"pt-BR","name":"Portuguese (Brazil)"},{"l":"Portuguese","co":"Portugal","code":"pt-PT","name":"Portuguese (Portugal)"},{"l":"Romanian","co":"—","code":"ro","name":"Romanian"},{"l":"Russian","co":"—","code":"ru","name":"Russian"},{"l":"Slovak","co":"—","code":"sk","name":"Slovak"},{"l":"Spanish","co":"Mexico","code":"es-MX","name":"Spanish (Mexico)"},{"l":"Spanish","co":"Spain","code":"es-ES","name":"Spanish (Spain)"},{"l":"Swedish","co":"—","code":"sv","name":"Swedish"},{"l":"Thai","co":"—","code":"th","name":"Thai"},{"l":"Turkish","co":"—","code":"tr","name":"Turkish"},{"l":"Ukrainian","co":"—","code":"uk","name":"Ukrainian"},{"l":"Vietnamese","co":"—","code":"vi","name":"Vietnamese"}],
+  google: [{"l":"Afrikaans","co":"—","code":"af","name":"Afrikaans"},{"l":"Albanian","co":"—","code":"sq","name":"Albanian"},{"l":"Amharic","co":"—","code":"am","name":"Amharic"},{"l":"Arabic","co":"—","code":"ar","name":"Arabic"},{"l":"Armenian","co":"Armenia","code":"hy-AM","name":"Armenian"},{"l":"Azerbaijani","co":"Azerbaijan","code":"az-AZ","name":"Azerbaijani"},{"l":"Bangla","co":"Bangladesh","code":"bn-BD","name":"Bangla"},{"l":"Basque","co":"Spain","code":"eu-ES","name":"Basque"},{"l":"Belarusian","co":"—","code":"be","name":"Belarusian"},{"l":"Bulgarian","co":"—","code":"bg","name":"Bulgarian"},{"l":"Burmese","co":"Myanmar (Burma)","code":"my-MM","name":"Burmese"},{"l":"Catalan","co":"—","code":"ca","name":"Catalan"},{"l":"Chinese","co":"Hong Kong","code":"zh-HK","name":"Chinese (Hong Kong)"},{"l":"Chinese","co":"Simplified","code":"zh-CN","name":"Chinese (Simplified)"},{"l":"Chinese","co":"Traditional","code":"zh-TW","name":"Chinese (Traditional)"},{"l":"Croatian","co":"—","code":"hr","name":"Croatian"},{"l":"Czech","co":"Czechia","code":"cs-CZ","name":"Czech"},{"l":"Danish","co":"Denmark","code":"da-DK","name":"Danish"},{"l":"Dutch","co":"Netherlands","code":"nl-NL","name":"Dutch"},{"l":"English","co":"—","code":"en","name":"English"},{"l":"English","co":"Australia","code":"en-AU","name":"English (Australia)"},{"l":"English","co":"Canada","code":"en-CA","name":"English (Canada)"},{"l":"English","co":"United Kingdom","code":"en-GB","name":"English (United Kingdom)"},{"l":"English","co":"United States","code":"en-US","name":"English (United States)"},{"l":"Estonian","co":"—","code":"et","name":"Estonian"},{"l":"Filipino","co":"—","code":"fil","name":"Filipino"},{"l":"Finnish","co":"Finland","code":"fi-FI","name":"Finnish"},{"l":"French","co":"Canada","code":"fr-CA","name":"French (Canada)"},{"l":"French","co":"France","code":"fr-FR","name":"French (France)"},{"l":"Galician","co":"Spain","code":"gl-ES","name":"Galician"},{"l":"Georgian","co":"Georgia","code":"ka-GE","name":"Georgian"},{"l":"German","co":"Germany","code":"de-DE","name":"German"},{"l":"Greek","co":"Greece","code":"el-GR","name":"Greek"},{"l":"Gujarati","co":"—","code":"gu","name":"Gujarati"},{"l":"Hebrew","co":"Israel","code":"iw-IL","name":"Hebrew"},{"l":"Hindi","co":"India","code":"hi-IN","name":"Hindi"},{"l":"Hungarian","co":"Hungary","code":"hu-HU","name":"Hungarian"},{"l":"Icelandic","co":"Iceland","code":"is-IS","name":"Icelandic"},{"l":"Indonesian","co":"—","code":"id","name":"Indonesian"},{"l":"Italian","co":"Italy","code":"it-IT","name":"Italian"},{"l":"Japanese","co":"Japan","code":"ja-JP","name":"Japanese"},{"l":"Kannada","co":"India","code":"kn-IN","name":"Kannada"},{"l":"Kazakh","co":"—","code":"kk","name":"Kazakh"},{"l":"Khmer","co":"Cambodia","code":"km-KH","name":"Khmer"},{"l":"Korean","co":"South Korea","code":"ko-KR","name":"Korean"},{"l":"Kyrgyz","co":"Kyrgyzstan","code":"ky-KG","name":"Kyrgyz"},{"l":"Lao","co":"Laos","code":"lo-LA","name":"Lao"},{"l":"Latvian","co":"—","code":"lv","name":"Latvian"},{"l":"Lithuanian","co":"—","code":"lt","name":"Lithuanian"},{"l":"Macedonian","co":"North Macedonia","code":"mk-MK","name":"Macedonian"},{"l":"Malay","co":"—","code":"ms","name":"Malay"},{"l":"Malay","co":"Malaysia","code":"ms-MY","name":"Malay (Malaysia)"},{"l":"Malayalam","co":"India","code":"ml-IN","name":"Malayalam"},{"l":"Marathi","co":"India","code":"mr-IN","name":"Marathi"},{"l":"Mongolian","co":"Mongolia","code":"mn-MN","name":"Mongolian"},{"l":"Nepali","co":"Nepal","code":"ne-NP","name":"Nepali"},{"l":"Norwegian","co":"Norway","code":"no-NO","name":"Norwegian"},{"l":"Persian","co":"—","code":"fa","name":"Persian"},{"l":"Polish","co":"Poland","code":"pl-PL","name":"Polish"},{"l":"Portuguese","co":"Brazil","code":"pt-BR","name":"Portuguese (Brazil)"},{"l":"Portuguese","co":"Portugal","code":"pt-PT","name":"Portuguese (Portugal)"},{"l":"Punjabi","co":"—","code":"pa","name":"Punjabi"},{"l":"Romanian","co":"—","code":"ro","name":"Romanian"},{"l":"Romansh","co":"—","code":"rm","name":"Romansh"},{"l":"Russian","co":"Russia","code":"ru-RU","name":"Russian"},{"l":"Serbian","co":"—","code":"sr","name":"Serbian"},{"l":"Sinhala","co":"Sri Lanka","code":"si-LK","name":"Sinhala"},{"l":"Slovak","co":"—","code":"sk","name":"Slovak"},{"l":"Slovenian","co":"—","code":"sl","name":"Slovenian"},{"l":"Spanish","co":"Latin America","code":"es-419","name":"Spanish (Latin America)"},{"l":"Spanish","co":"Spain","code":"es-ES","name":"Spanish (Spain)"},{"l":"Spanish","co":"United States","code":"es-US","name":"Spanish (United States)"},{"l":"Swahili","co":"—","code":"sw","name":"Swahili"},{"l":"Swedish","co":"Sweden","code":"sv-SE","name":"Swedish"},{"l":"Tamil","co":"India","code":"ta-IN","name":"Tamil"},{"l":"Telugu","co":"India","code":"te-IN","name":"Telugu"},{"l":"Thai","co":"—","code":"th","name":"Thai"},{"l":"Turkish","co":"Türkiye","code":"tr-TR","name":"Turkish"},{"l":"Ukrainian","co":"—","code":"uk","name":"Ukrainian"},{"l":"Urdu","co":"—","code":"ur","name":"Urdu"},{"l":"Vietnamese","co":"—","code":"vi","name":"Vietnamese"},{"l":"Zulu","co":"—","code":"zu","name":"Zulu"}]
+};
+let mod = 'apple';
+const sel = { apple: new Set(), google: new Set() };
+function setModule(m) {
+  mod = m; document.body.dataset.module = m;
+  document.getElementById('tab-apple').className = m==='apple' ? 'active-apple' : '';
+  document.getElementById('tab-google').className = m==='google' ? 'active-google' : '';
+  document.getElementById('q').value = '';
+  renderList();
+}
+function visible() {
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  return DATA[mod].filter(r => !q || r.l.toLowerCase().includes(q) || r.co.toLowerCase().includes(q) || r.code.toLowerCase().includes(q) || r.name.toLowerCase().includes(q));
+}
+function renderList() {
+  const list = document.getElementById('list');
+  list.innerHTML = visible().map(r =>
+    '<label class="row"><input type="checkbox" data-name="' + r.name + '"' + (sel[mod].has(r.name) ? ' checked' : '') + ' onchange="toggle(this)"><span>' + r.l + '</span><span class="co">' + r.co + '</span><span class="code">' + r.code + '</span></label>'
+  ).join('');
+  sync();
+}
+function toggle(cb) { cb.checked ? sel[mod].add(cb.dataset.name) : sel[mod].delete(cb.dataset.name); sync(); }
+function selectAll(on) { visible().forEach(r => on ? sel[mod].add(r.name) : sel[mod].delete(r.name)); if (!on) sel[mod].clear(); renderList(); }
+function sync() {
+  const n = sel[mod].size, total = DATA[mod].length;
+  document.getElementById('count').textContent = n;
+  document.getElementById('total').textContent = total;
+  document.getElementById('zero').style.display = n === 0 ? 'block' : 'none';
+  document.getElementById('cta').textContent = n === 0 ? 'Tải template (chỉ cột core)' : 'Tải template (' + n + ' locale)';
+}
+renderList();
+</script>
+</body>
+</html>
