@@ -1,6 +1,19 @@
 # Bulk Import Template — Locale Selection Before Download — Investigation & Design
 
-**Status: DESIGN — awaiting Manager review. No implementation.**
+**Status: IMPLEMENTED (August 2026).** Shipped as designed, with these
+resolutions to §I: risk I.1 → a Preview-time WARNING in the Google wizard
+(names the affected SKUs, derived live from per-row Overwrite decisions)
+PLUS the Notes-sheet caution — the underlying replace-semantics defect is
+recorded as an OPEN BACKLOG item in
+`IAP-MANAGEMENT-KNOWLEDGE-BASE.md` §10.13.K (P4 RMW violation) and was
+deliberately NOT fixed in that pass; I.2 → selections are NEVER
+remembered (Manager lock); I.5 → the Apple wizard's "N locale pairs"
+copy was left as-is (informational). One deviation from §C worth noting:
+sample rows fill Vietnamese when it is in the selection, otherwise the
+first selected locale — that keeps the FULL template byte-identical to
+the pre-picker file, which matters because the full selection also keeps
+the original filename.
+
 **Scope: BOTH modules.** Google pointer stub:
 `docs/google-iap-management/design-bulk-import-locale-picker.md`.
 **Mockup:** `docs/iap-management/design/bulk-import-locale-picker-mockup.html`

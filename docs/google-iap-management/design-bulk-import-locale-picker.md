@@ -20,4 +20,7 @@ Google-specific content in that doc — do not duplicate here:
   region-less), §E filename pattern, §F parameterized
   `googleIapTemplateSpec(selected?)`.
 
-Status: DESIGN — awaiting Manager review. No implementation.
+Status: IMPLEMENTED (August 2026) — see the canonical doc for the shipped
+resolutions, including the Google-only Preview listing-loss warning and the
+P4 backlog entry (KB §10.13.K) for the underlying overwrite-replaces-listings
+defect.

@@ -17,6 +17,7 @@ import * as XLSX from "xlsx";
 import { parseIapTemplate } from "./excel-parser";
 import {
   GOOGLE_DATA_SHEET_NAME,
+  GOOGLE_LOCALE_OPTIONS,
   GOOGLE_NOTES_SHEET_NAME,
   GOOGLE_LEAD_HEADER_ROW,
   GOOGLE_PRICE_HEADER,
@@ -253,5 +254,146 @@ describe("legacy Manager artifact (v1, Sheet1) — fallback path smoke test", ()
     expect(result.rows[0].sku).toBe("com.vng.example.product1");
     expect(result.rows[0].baseCurrency).toBe("USD");
     expect(result.rows[0].priceHeaderSource).toBe("explicit");
+  });
+});
+
+
+// ─── Locale picker: subset + zero-locale templates (design
+//     design-bulk-import-locale-picker.md §G). Permanent versions of the
+//     feasibility-gate harness.
+
+describe("locale selection — anti-drift stays EXACT per selection", () => {
+  it("core headers are ALWAYS present and locale columns are exactly the selection", () => {
+    for (const sel of [[], ["Vietnamese"], ["Japanese", "Vietnamese", "English"]]) {
+      const canonical = GOOGLE_LOCALE_NAMES.filter((n) => sel.includes(n));
+      expect(googleTemplateHeaders(sel)).toEqual([
+        ...GOOGLE_LEAD_HEADER_ROW,
+        ...canonical.flatMap((n) => [`Title (${n})`, `Description (${n})`]),
+      ]);
+      for (const core of GOOGLE_LEAD_HEADER_ROW) {
+        expect(canonical).not.toContain(core);
+      }
+    }
+  });
+
+  it("the FULL set is still pinned to 168 columns (catches a new core column or locale-map growth)", () => {
+    expect(googleTemplateHeaders().length).toBe(4 + 82 * 2);
+    expect(googleTemplateHeaders(GOOGLE_LOCALE_NAMES)).toEqual(
+      googleTemplateHeaders(),
+    );
+  });
+
+  it("unknown selected names are ignored rather than emitting unparseable headers", () => {
+    expect(googleTemplateHeaders(["Klingon"])).toEqual([
+      ...GOOGLE_LEAD_HEADER_ROW,
+    ]);
+  });
+
+  it("filename differentiates content: base / -core / -N-locales", () => {
+    expect(googleIapTemplateSpec().filename).toBe(
+      "google-iap-bulk-import-template.xlsx",
+    );
+    expect(googleIapTemplateSpec([]).filename).toBe(
+      "google-iap-bulk-import-template-core.xlsx",
+    );
+    expect(googleIapTemplateSpec(["Vietnamese"]).filename).toBe(
+      "google-iap-bulk-import-template-1-locale.xlsx",
+    );
+    expect(googleIapTemplateSpec(["Vietnamese", "Japanese"]).filename).toBe(
+      "google-iap-bulk-import-template-2-locales.xlsx",
+    );
+  });
+
+  it("locale options are exhaustive over the locale map, both directions", () => {
+    expect(GOOGLE_LOCALE_OPTIONS.length).toBe(GOOGLE_LOCALE_NAMES.length);
+    expect(GOOGLE_LOCALE_OPTIONS.map((o) => o.name)).toEqual([
+      ...GOOGLE_LOCALE_NAMES,
+    ]);
+    for (const o of GOOGLE_LOCALE_OPTIONS) {
+      expect(o.language.length).toBeGreaterThan(0);
+      expect(o.country.length).toBeGreaterThan(0); // "—" when region-less
+      expect(o.code.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("locale selection — sample rows + notes adapt", () => {
+  it("a single-locale selection fills THAT locale's pair", () => {
+    const spec = googleIapTemplateSpec(["Japanese"]);
+    const t = spec.headers.indexOf("Title (Japanese)");
+    const d = spec.headers.indexOf("Description (Japanese)");
+    const sampleRows = spec.dataRows.filter(
+      (r) => String(r[0] ?? "").startsWith("com."),
+    );
+    expect(sampleRows.length).toBe(3);
+    for (const row of sampleRows) {
+      expect(String(row[t])).toMatch(/^Sample product 0\d$/);
+      expect(String(row[d])).toMatch(/^Sample product 0\d - import/);
+    }
+  });
+
+  it("ZERO locales: no locale cells, and the Notes sheet carries the OVERWRITE caution", () => {
+    const spec = googleIapTemplateSpec([]);
+    expect(spec.headers).toEqual([...GOOGLE_LEAD_HEADER_ROW]);
+    const sampleRows = spec.dataRows.filter(
+      (r) => String(r[0] ?? "").startsWith("com."),
+    );
+    for (const row of sampleRows) {
+      expect(row.length).toBeLessThanOrEqual(GOOGLE_LEAD_HEADER_ROW.length);
+    }
+    const notesText = spec.notesRows.map((r) => r.join(" | ")).join("\n");
+    expect(notesText).toContain("(no locale columns)");
+    expect(notesText).toContain("OVERWRITE CAUTION");
+    expect(notesText).toContain("SKU-titled en-US listing");
+    expect(notesText).toContain("title is the SKU itself");
+    expect(notesText).not.toContain("Title (");
+    // GT statement survives in every variant.
+    expect(notesText).toContain("NOT an exchange rate");
+  });
+});
+
+describe("locale selection — ROUND-TRIP through the real parser", () => {
+  it("SUBSET (1 of 82) fills + parses cleanly, USD semantics intact against a VND app", () => {
+    const spec = googleIapTemplateSpec(["Vietnamese"]);
+    const wb = buildTemplateWorkbook(XLSX, spec);
+    const headers = [...spec.headers];
+    const row: unknown[] = headers.map(() => "");
+    row[headers.indexOf("Product ID")] = "sku.subset";
+    row[headers.indexOf(GOOGLE_PRICE_HEADER)] = 0.99;
+    row[headers.indexOf("Title (Vietnamese)")] = "vi title";
+    row[headers.indexOf("Description (Vietnamese)")] = "vi desc";
+    XLSX.utils.sheet_add_aoa(wb.Sheets[GOOGLE_DATA_SHEET_NAME], [row], {
+      origin: -1,
+    });
+
+    const result = parseIapTemplate(wbToBuffer(wb), {
+      appDefaultCurrency: "VND",
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.rows.length).toBe(1);
+    expect(result.skippedSampleRows.length).toBe(3);
+    expect(result.rows[0].baseCurrency).toBe("USD");
+    expect(result.rows[0].priceHeaderSource).toBe("explicit");
+    expect(result.rows[0].listings.map((l) => l.locale)).toEqual(["vi"]);
+  });
+
+  it("ZERO locales (the DEFAULT path) fills + parses cleanly", () => {
+    const spec = googleIapTemplateSpec([]);
+    const wb = buildTemplateWorkbook(XLSX, spec);
+    XLSX.utils.sheet_add_aoa(
+      wb.Sheets[GOOGLE_DATA_SHEET_NAME],
+      [["sku.core", 1.99, "", ""]],
+      { origin: -1 },
+    );
+
+    const result = parseIapTemplate(wbToBuffer(wb), {
+      appDefaultCurrency: "VND",
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.rows.length).toBe(1);
+    expect(result.rows[0].sku).toBe("sku.core");
+    expect(result.rows[0].baseCurrency).toBe("USD");
+    expect(result.rows[0].listings).toEqual([]);
+    expect(result.skippedSampleRows.length).toBe(3);
   });
 });

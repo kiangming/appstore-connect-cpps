@@ -1308,13 +1308,27 @@
           <li class="step">
             <div class="step-title">Tải template và điền dữ liệu</div>
             <div class="step-body">
-              <p>Template tải được ở <strong>2 chỗ</strong> (cùng 1 file): nút <strong>Download bulk import template</strong> ở header trang <a class="inline-link" data-goto="apple-apps">Apps list</a> (không cần vào wizard), hoặc nút <strong>Download template</strong> ở header wizard — hiện ở <em>mọi</em> bước. File: <code class="inline">apple-iap-bulk-import-template.xlsx</code>, sinh trực tiếp từ parser của tool nên cột không thể lệch với import. Wizard chỉ nhận <code class="inline">.xlsx</code> — <strong>không nhận CSV</strong>.</p>
+              <p>Template tải được ở <strong>2 chỗ</strong>: nút <strong>Download bulk import template</strong> ở header trang <a class="inline-link" data-goto="apple-apps">Apps list</a> (không cần vào wizard), hoặc nút <strong>Download template</strong> ở header wizard — hiện ở <em>mọi</em> bước. Cả 2 nút mở cùng một <strong>form chọn locale</strong>; file chỉ được tạo sau khi bạn bấm nút tải trong form. Tool sinh file trực tiếp từ parser nên cột không thể lệch với import. Chỉ nhận <code class="inline">.xlsx</code> — <strong>không nhận CSV</strong>.</p>
+              <p style="margin-top:8px;"><strong>Form chọn locale:</strong> danh sách 39 locale của App Store, mỗi dòng hiển thị <em>ngôn ngữ · quốc gia/biến thể · mã</em> (locale không gắn vùng hiển thị <code class="inline">—</code> ở cột quốc gia, xem mã để phân biệt). Có ô search (khớp cả ngôn ngữ, quốc gia và mã), <strong>Select all shown</strong> (chỉ áp cho danh sách đang lọc — search "English" rồi Select all shown = chọn nhanh các biến thể English), <strong>Clear all</strong>, và bộ đếm số locale đã chọn.</p>
+              <div class="callout callout-info" style="margin-top:8px;">
+                <div class="callout-title">ℹ️ Mặc định KHÔNG tick sẵn locale nào — và không chọn gì vẫn tải được</div>
+                <p>Form luôn mở ở trạng thái trống (không ghi nhớ lựa chọn lần trước). Nếu bấm tải luôn mà không tick gì, bạn nhận template <strong>chỉ có cột core</strong> — hợp lệ, dùng khi chỉ cần tạo IAP + giá và bổ sung localization sau. Tên file thay đổi theo lựa chọn:</p>
+                <table class="docs-table" style="margin-top:8px;">
+                  <thead><tr><th>Chọn</th><th>Tên file</th></tr></thead>
+                  <tbody>
+                    <tr><td>Không chọn locale nào</td><td><code class="inline">apple-iap-bulk-import-template-core.xlsx</code></td></tr>
+                    <tr><td>Chọn N locale (chưa đủ 39)</td><td><code class="inline">apple-iap-bulk-import-template-N-locales.xlsx</code></td></tr>
+                    <tr><td>Chọn đủ 39 locale</td><td><code class="inline">apple-iap-bulk-import-template.xlsx</code></td></tr>
+                  </tbody>
+                </table>
+                <p style="margin-top:6px;">Hai lần tải cùng số N (nhưng khác locale) sẽ trùng tên — browser tự thêm "(1)". Mở sheet Notes trong file để biết chính xác file đó có locale nào.</p>
+              </div>
               <p style="margin-top:8px;">File gồm 2 sheet:</p>
               <ul>
                 <li><strong>IAP Items</strong> — sheet dữ liệu, gồm dòng header + <strong>3 dòng sample</strong> (Product ID <code class="inline">com.vngg.tool.product.sample01–03</code>). Điền mỗi IAP 1 dòng. <em>Không đổi tên sheet</em> — tool tìm sheet theo đúng tên này (file cũ để dữ liệu ở "Sheet1" vẫn đọc được qua fallback sheet đầu tiên).</li>
                 <li><strong>Notes</strong> — giải thích từng cột + bảng ví dụ, viết bằng <strong>tiếng Anh</strong> (quy ước của tool). Import bỏ qua sheet này — giữ hay xóa đều được.</li>
               </ul>
-              <p style="margin-top:8px;">Tổng 84 cột = 6 cột đầu + 39 cặp cột locale:</p>
+              <p style="margin-top:8px;">Số cột tuỳ lựa chọn: <strong>6 cột core luôn có</strong> + 2 cột cho mỗi locale đã chọn (chọn đủ 39 locale = 84 cột). Cột core không nằm trong form chọn — không bao giờ bị bỏ:</p>
               <table class="docs-table" style="margin-top:8px;">
                 <thead><tr><th>Cột</th><th>Mô tả</th><th>Bắt buộc</th></tr></thead>
                 <tbody>
@@ -1323,13 +1337,13 @@
                   <tr><td><code class="inline">Type</code></td><td><code class="inline">CONSUMABLE</code> / <code class="inline">NON_CONSUMABLE</code> / <code class="inline">NON_RENEWING_SUBSCRIPTION</code> — trống (hoặc xóa cả cột) → mặc định <code class="inline">CONSUMABLE</code></td><td>Không · Hotfix 27</td></tr>
                   <tr><td><code class="inline">Price (USD)</code></td><td>Giá USD — tool dùng để suy price tier từ pricing template. Trống → bỏ qua pricing cho dòng đó</td><td>Không</td></tr>
                   <tr><td><code class="inline">GT Price</code> + <code class="inline">GT Currency</code></td><td>⚠️ Hiện <strong>KHÔNG áp dụng cho Apple</strong> — tool parse nhưng không dùng ở đâu; giá Apple đến từ <code class="inline">Price (USD)</code> → tier → price schedule. Để trống (sample rows để trống)</td><td>Không</td></tr>
-                  <tr><td><code class="inline">Display Name (Locale)</code> + <code class="inline">Description (Locale)</code></td><td>39 cặp cột locale — điền cả 2 ô của 1 cặp, hoặc bỏ trống cả 2 (locale đó được bỏ qua)</td><td>Không</td></tr>
+                  <tr><td><code class="inline">Display Name (Locale)</code> + <code class="inline">Description (Locale)</code></td><td>Một cặp cột cho mỗi locale bạn chọn ở form (0–39 cặp) — điền cả 2 ô của 1 cặp, hoặc bỏ trống cả 2 (locale đó được bỏ qua)</td><td>Không</td></tr>
                 </tbody>
               </table>
               <p style="margin-top:8px;">Header match theo <strong>tên cột</strong> (không theo vị trí); 6 cột đầu không phân biệt hoa thường.</p>
               <div class="callout callout-warning" style="margin-top:8px;">
                 <div class="callout-title">⚠️ 3 dòng sample — THAY bằng dữ liệu thật, hoặc xóa rồi thêm dòng của bạn</div>
-                <p>Dòng giữ nguyên Product ID dạng sample được tool <strong>tự động bỏ qua</strong> khi import — hiển thị rõ warning <em>"3 example row(s) skipped… delete the sample rows or replace them with your data"</em>, không tính là lỗi. Nếu upload file mà <strong>chưa</strong> thay/xóa sample: import tìm thấy <strong>0 IAP</strong> và nút <strong>Next</strong> ở Step 1 bị disable — đây là nhầm lẫn thường gặp nhất lần đầu dùng. Mọi Product ID <em>khác</em> trong sheet IAP Items sẽ được import thành IAP <strong>thật</strong> trên App Store Connect.</p>
+                <p>Dòng giữ nguyên Product ID dạng sample được tool <strong>tự động bỏ qua</strong> khi import — hiển thị rõ warning <em>"3 example row(s) skipped… delete the sample rows or replace them with your data"</em>, không tính là lỗi. Nếu upload file mà <strong>chưa</strong> thay/xóa sample: import tìm thấy <strong>0 IAP</strong> và nút <strong>Next</strong> ở Step 1 bị disable — đây là nhầm lẫn thường gặp nhất lần đầu dùng. Mọi Product ID <em>khác</em> trong sheet IAP Items sẽ được import thành IAP <strong>thật</strong> trên App Store Connect. Sample rows điền sẵn cặp cột của locale đầu tiên trong lựa chọn (Vietnamese nếu có); template không chọn locale nào thì sample chỉ có cột core.</p>
               </div>
             </div>
           </li>
@@ -1399,12 +1413,78 @@
               <rect class="wf-card" x="60" y="130" width="520" height="180" rx="8" stroke-dasharray="4 4"/>
               <text class="wf-text" x="320" y="215" text-anchor="middle" font-size="14" font-weight="600">📥 Kéo thả file .xlsx vào đây</text>
               <text class="wf-text" x="320" y="238" text-anchor="middle">hoặc click để chọn file</text>
-              <text class="wf-text" x="320" y="262" text-anchor="middle" font-size="9">apple-iap-bulk-import-template.xlsx · sheet "IAP Items"</text>
+              <text class="wf-text" x="320" y="262" text-anchor="middle" font-size="9">Download template (góc phải) → form chọn locale → sheet "IAP Items"</text>
             </svg>
           </div>
           <div class="screenshot-caption">
             <span class="screenshot-caption-label">TODO</span>
-            <span>Step 1 (Excel) · Download template ở header wizard · upload .xlsx</span>
+            <span>Step 1 (Excel) · Download template ở header (mở form chọn locale) · upload .xlsx</span>
+          </div>
+          <div class="screenshot-zoom-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+          </div>
+        </div>
+
+        <div class="screenshot" data-lightbox data-caption="Form chọn locale — mở khi bấm Download template (Apple 39 locale · Google 82 locale)">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <!-- modal shell -->
+              <rect class="wf-card" x="90" y="18" width="460" height="324" rx="10"/>
+              <text class="wf-text" x="110" y="42" font-weight="600" fill="var(--text)" font-size="12">Download bulk import template</text>
+              <text class="wf-text" x="110" y="58" font-size="9">Chọn locale cần cột. Cột core luôn được thêm sẵn.</text>
+              <text class="wf-text" x="528" y="44" text-anchor="end" font-size="11">✕</text>
+              <!-- tools -->
+              <rect class="wf-card" x="110" y="70" width="228" height="24" rx="4"/>
+              <text class="wf-text" x="120" y="86" font-size="9">🔍 Tìm ngôn ngữ, quốc gia hoặc mã…</text>
+              <rect class="wf-card" x="344" y="70" width="94" height="24" rx="4"/>
+              <text class="wf-text" x="391" y="86" text-anchor="middle" font-size="9">Select all shown</text>
+              <rect class="wf-card" x="444" y="70" width="86" height="24" rx="4"/>
+              <text class="wf-text" x="487" y="86" text-anchor="middle" font-size="9">Clear all</text>
+              <!-- count + zero-state banner -->
+              <text class="wf-text" x="110" y="112" font-size="9">Đã chọn <tspan font-weight="700" fill="var(--text)">0</tspan> / 39 locale</text>
+              <rect fill="var(--warning-bg)" stroke="var(--warning)" x="110" y="120" width="420" height="34" rx="5"/>
+              <text fill="var(--warning)" x="120" y="134" font-size="8.5">Chưa chọn locale nào — template sẽ chỉ có cột core (không có cột</text>
+              <text fill="var(--warning)" x="120" y="146" font-size="8.5">Display Name/Description). Vẫn tải được: đây là lựa chọn hợp lệ.</text>
+              <!-- column header -->
+              <text class="wf-text" x="136" y="172" font-size="8" font-weight="700">NGÔN NGỮ</text>
+              <text class="wf-text" x="270" y="172" font-size="8" font-weight="700">QUỐC GIA / BIẾN THỂ</text>
+              <text class="wf-text" x="520" y="172" font-size="8" font-weight="700" text-anchor="end">MÃ</text>
+              <!-- rows -->
+              <g font-size="9.5">
+                <rect class="wf-soft" x="110" y="178" width="420" height="1"/>
+                <rect fill="none" stroke="var(--border)" x="118" y="186" width="10" height="10" rx="2"/>
+                <text class="wf-text" x="136" y="195">English</text>
+                <text class="wf-text" x="270" y="195">U.S.</text>
+                <text class="wf-text" x="520" y="195" text-anchor="end" font-family="monospace" font-size="8">en-US</text>
+                <rect fill="none" stroke="var(--border)" x="118" y="208" width="10" height="10" rx="2"/>
+                <text class="wf-text" x="136" y="217">English</text>
+                <text class="wf-text" x="270" y="217">U.K.</text>
+                <text class="wf-text" x="520" y="217" text-anchor="end" font-family="monospace" font-size="8">en-GB</text>
+                <rect class="wf-primary" x="118" y="230" width="10" height="10" rx="2"/>
+                <text x="123" y="238.5" fill="#fff" text-anchor="middle" font-size="7.5" font-weight="700">✓</text>
+                <text class="wf-text" x="136" y="239" font-weight="600" fill="var(--text)">Vietnamese</text>
+                <text class="wf-text" x="270" y="239">—</text>
+                <text class="wf-text" x="520" y="239" text-anchor="end" font-family="monospace" font-size="8">vi</text>
+                <rect fill="none" stroke="var(--border)" x="118" y="252" width="10" height="10" rx="2"/>
+                <text class="wf-text" x="136" y="261">Japanese</text>
+                <text class="wf-text" x="270" y="261">—</text>
+                <text class="wf-text" x="520" y="261" text-anchor="end" font-family="monospace" font-size="8">ja</text>
+                <rect fill="none" stroke="var(--border)" x="118" y="274" width="10" height="10" rx="2"/>
+                <text class="wf-text" x="136" y="283">Chinese</text>
+                <text class="wf-text" x="270" y="283">Simplified</text>
+                <text class="wf-text" x="520" y="283" text-anchor="end" font-family="monospace" font-size="8">zh-Hans</text>
+              </g>
+              <!-- footer -->
+              <rect class="wf-soft" x="110" y="300" width="420" height="1"/>
+              <text class="wf-text" x="110" y="322" font-size="9">Hủy</text>
+              <rect class="wf-primary" x="336" y="308" width="194" height="24" rx="4"/>
+              <text x="433" y="324" fill="#fff" text-anchor="middle" font-size="9" font-weight="600">Tải template (1 locale)</text>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">TODO</span>
+            <span>Form chọn locale · không tick sẵn · search + Select all shown theo filter · zero-state banner</span>
           </div>
           <div class="screenshot-zoom-icon">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
@@ -1481,13 +1561,13 @@
 
         <div class="code-block">
           <div class="code-header">
-            <span>apple-iap-bulk-import-template.xlsx · sheet "IAP Items"</span>
+            <span>apple-iap-bulk-import-template.xlsx (chọn đủ 39 locale) · sheet "IAP Items"</span>
             <button class="copy-btn">
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
               Copy
             </button>
           </div>
-<pre><span class="tok-c">// 84 cột — 6 cột đầu + 39 cặp Display Name/Description (Locale). Đây là 3 dòng sample có sẵn trong template.</span>
+<pre><span class="tok-c">// 6 cột core + 1 cặp Display Name/Description cho mỗi locale đã chọn (ví dụ này: chọn đủ 39 → 84 cột). 3 dòng sample có sẵn.</span>
 <span class="tok-c">// Hotfix 27: Type optional — trống → CONSUMABLE. GT Price/GT Currency hiện KHÔNG áp dụng cho Apple → để trống.</span>
 <span class="tok-c">// Dòng giữ Product ID sample bị tool bỏ qua khi import — thay bằng Product ID thật của bạn.</span>
 <span class="tok-n">Product ID | Reference Name | Type | Price (USD) | GT Price | GT Currency | Display Name (Vietnamese) | Description (Vietnamese) | …</span>
@@ -2063,6 +2143,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <rect class="wf-strong" x="40" y="35" width="140" height="10" rx="2"/>
               <rect fill="none" stroke="var(--primary)" x="230" y="29" width="200" height="22" rx="4"/>
               <text fill="var(--primary)" x="330" y="44" text-anchor="middle" font-size="9" font-weight="600">⬇ Download bulk import template</text>
+              <text class="wf-text" x="330" y="62" text-anchor="middle" font-size="8">→ mở form chọn locale</text>
               <rect class="wf-soft" x="450" y="30" width="150" height="20" rx="10"/>
               <text class="wf-text" x="525" y="44" text-anchor="middle">minhgv@vng.com.vn ▼</text>
               <rect class="wf-card" x="20" y="74" width="600" height="30" rx="4"/>
@@ -2095,7 +2176,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </div>
           <div class="screenshot-caption">
             <span class="screenshot-caption-label">TODO</span>
-            <span>Grid apps · search bar · Download template + AccountSwitcher góc phải</span>
+            <span>Grid apps · search bar · Download template (mở form chọn locale) + AccountSwitcher</span>
           </div>
         </div>
 
@@ -3072,6 +3153,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <rect class="wf-strong" x="40" y="35" width="140" height="10" rx="2"/>
               <rect fill="none" stroke="var(--success)" x="196" y="29" width="200" height="22" rx="4"/>
               <text fill="var(--success)" x="296" y="44" text-anchor="middle" font-size="9" font-weight="600">⬇ Download bulk import template</text>
+              <text class="wf-text" x="296" y="62" text-anchor="middle" font-size="8">→ mở form chọn locale</text>
               <rect fill="var(--teal-bg)" x="430" y="30" width="190" height="20" rx="10"/>
               <text fill="var(--teal)" x="525" y="44" text-anchor="middle" font-size="10">vng-publishing@iam.gserviceaccount</text>
               <rect class="wf-card" x="20" y="74" width="540" height="30" rx="4"/>
@@ -3099,7 +3181,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </div>
           <div class="screenshot-caption">
             <span class="screenshot-caption-label">TODO</span>
-            <span>Google Apps grid · service account chip · Download template + Refresh</span>
+            <span>Google Apps grid · service account chip · Download template (mở form chọn locale) + Refresh</span>
           </div>
         </div>
 
@@ -3579,17 +3661,22 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <li class="step">
             <div class="step-title">Tải template và điền dữ liệu</div>
             <div class="step-body">
-              <p>Template tải được ở <strong>2 chỗ</strong> (cùng 1 file): nút <strong>Download bulk import template</strong> ở header trang <a class="inline-link" data-goto="google-apps">Apps list</a> (không cần vào wizard), hoặc nút <strong>Download template</strong> ở header wizard — hiện ở <em>mọi</em> bước. File: <code class="inline">google-iap-bulk-import-template.xlsx</code>, sinh trực tiếp từ parser của tool nên cột không thể lệch với import. Chỉ nhận <code class="inline">.xlsx</code> · max 5 MB — <strong>không nhận CSV</strong>.</p>
-              <p style="margin-top:8px;">File gồm 2 sheet: <strong>IAP Items</strong> — sheet dữ liệu, gồm header + <strong>3 dòng sample</strong> (Product ID <code class="inline">com.vngg.tool.product.sample01–03</code>); <em>không đổi tên sheet</em> (tool tìm theo đúng tên; file cũ để dữ liệu ở "Sheet1" vẫn đọc được qua fallback) — và <strong>Notes</strong>: giải thích cột + ví dụ, viết bằng <strong>tiếng Anh</strong> (quy ước của tool), import bỏ qua nên giữ hay xóa đều được. 168 cột = 4 cột đầu + 82 cặp cột locale:</p>
+              <p>Template tải được ở <strong>2 chỗ</strong>: nút <strong>Download bulk import template</strong> ở header trang <a class="inline-link" data-goto="google-apps">Apps list</a> (không cần vào wizard), hoặc nút <strong>Download template</strong> ở header wizard — hiện ở <em>mọi</em> bước. Cả 2 nút mở cùng một <strong>form chọn locale</strong> (82 locale của Google Play, mỗi dòng: ngôn ngữ · quốc gia/biến thể · mã; có search, <strong>Select all shown</strong> theo danh sách đang lọc, <strong>Clear all</strong>, bộ đếm). Form <strong>không tick sẵn</strong> locale nào và không ghi nhớ lựa chọn lần trước; file chỉ tạo sau khi bấm nút tải trong form. Tool sinh file trực tiếp từ parser nên cột không thể lệch với import. Chỉ nhận <code class="inline">.xlsx</code> · max 5 MB — <strong>không nhận CSV</strong>.</p>
+              <p style="margin-top:8px;">File gồm 2 sheet: <strong>IAP Items</strong> — sheet dữ liệu, gồm header + <strong>3 dòng sample</strong> (Product ID <code class="inline">com.vngg.tool.product.sample01–03</code>); <em>không đổi tên sheet</em> (tool tìm theo đúng tên; file cũ để dữ liệu ở "Sheet1" vẫn đọc được qua fallback) — và <strong>Notes</strong>: giải thích cột + ví dụ, viết bằng <strong>tiếng Anh</strong> (quy ước của tool), import bỏ qua nên giữ hay xóa đều được.</p>
+              <p style="margin-top:8px;">Số cột tuỳ lựa chọn: <strong>4 cột core luôn có</strong> + 2 cột cho mỗi locale đã chọn (chọn đủ 82 = 168 cột). Tên file: <code class="inline">…-template-core.xlsx</code> (không chọn locale), <code class="inline">…-template-N-locales.xlsx</code> (chọn N), <code class="inline">google-iap-bulk-import-template.xlsx</code> (đủ 82). Hai lần tải cùng số N nhưng khác locale sẽ trùng tên — browser tự thêm "(1)"; mở sheet Notes để biết file đó có locale nào. Cột core:</p>
               <ul>
                 <li><code class="inline">Product ID</code> — SKU, unique per app (bắt buộc)</li>
                 <li><code class="inline">Price (USD)</code> — <strong>giá USD</strong> (bắt buộc). ⚠️ LUÔN là USD, kể cả khi app dùng VND — tool tự resolve giá app-currency từ pricing template (Cycle 43). Vd: <code class="inline">0.99</code> nghĩa là 0.99 USD, KHÔNG phải 0.99 VND.</li>
                 <li><code class="inline">GT Price</code> + <code class="inline">GT Currency</code> — <strong>GIÁ bán thật</strong> cho region của currency đó (vd: <code class="inline">26000</code> + <code class="inline">VND</code> = giá 26.000₫ áp cho region VN). Đây <strong>KHÔNG phải tỷ giá quy đổi</strong>. Không bắt buộc; nếu điền thì phải điền cả cặp.</li>
-                <li><code class="inline">Title (Locale)</code> + <code class="inline">Description (Locale)</code> — 82 cặp cột locale (không bắt buộc)</li>
+                <li><code class="inline">Title (Locale)</code> + <code class="inline">Description (Locale)</code> — một cặp cột cho mỗi locale bạn chọn ở form (0–82 cặp, không bắt buộc)</li>
               </ul>
               <div class="callout callout-warning" style="margin-top:8px;">
                 <div class="callout-title">⚠️ 3 dòng sample — THAY bằng dữ liệu thật, hoặc xóa rồi thêm dòng của bạn</div>
-                <p>Dòng giữ nguyên Product ID dạng sample được tool <strong>tự động bỏ qua</strong> khi import — hiển thị warning <em>"3 example row(s) skipped…"</em> trong panel warnings ở Preview, không tính là lỗi. Nếu upload file mà <strong>chưa</strong> thay/xóa sample: Preview trống (0 rows import được) — đây là nhầm lẫn thường gặp nhất lần đầu dùng. Mọi Product ID <em>khác</em> sẽ được import thành IAP <strong>thật</strong> trên Google Play.</p>
+                <p>Dòng giữ nguyên Product ID dạng sample được tool <strong>tự động bỏ qua</strong> khi import — hiển thị warning <em>"3 example row(s) skipped…"</em> trong panel warnings ở Preview, không tính là lỗi. Nếu upload file mà <strong>chưa</strong> thay/xóa sample: Preview trống (0 rows import được) — đây là nhầm lẫn thường gặp nhất lần đầu dùng. Mọi Product ID <em>khác</em> sẽ được import thành IAP <strong>thật</strong> trên Google Play. Sample rows điền sẵn cặp cột của locale đầu tiên trong lựa chọn (Vietnamese nếu có); template không chọn locale nào thì sample chỉ có cột core.</p>
+              </div>
+              <div class="callout callout-danger" style="margin-top:8px;">
+                <div class="callout-title">🚫 Template không có cột locale + Overwrite = MẤT listing hiện tại trên Google Play</div>
+                <p>Google <strong>thay thế</strong> listing của item bằng đúng những gì file mang theo. Dòng không có cột Title/Description (vd: template chọn 0 locale) sẽ khiến item chỉ còn <strong>một</strong> listing <code class="inline">en-US</code> với title là <em>chính SKU</em> — tên tiếng Việt đang hiển thị trên store bị mất. Chỉ ảnh hưởng dòng đặt <strong>Overwrite</strong> (tạo mới thì không có gì để mất). Wizard sẽ cảnh báo ở bước <strong>Preview</strong> và liệt kê đúng các SKU bị ảnh hưởng — nếu không cố ý, hãy tải template <em>có</em> locale cần thiết, điền vào rồi upload lại, hoặc đặt các dòng đó thành <strong>Skip</strong>. (Apple <em>không</em> có rủi ro này: Apple giữ nguyên localization cũ khi dòng import không mang localization nào.)</p>
               </div>
             </div>
           </li>
@@ -3615,6 +3702,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         </ol>
 
         <h2 class="section-title">Hình ảnh minh họa</h2>
+        <p>Form chọn locale dùng chung layout với Apple (danh sách 82 locale của Google Play, accent xanh emerald) — xem minh họa ở <a class="inline-link" data-goto="apple-bulk-import">Apple Bulk Import</a>.</p>
         <div class="screenshot" data-lightbox data-caption="Google Bulk Import · Step 3 Preview · tier disambiguation dropdown">
           <div class="screenshot-frame">
             <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">

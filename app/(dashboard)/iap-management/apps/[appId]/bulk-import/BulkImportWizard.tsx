@@ -19,7 +19,10 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { parseIapItemsXlsx } from "@/lib/iap-management/parsers/iap-items";
-import { appleIapTemplateSpec } from "@/lib/iap-management/parsers/template-spec";
+import {
+  appleIapTemplateSpec,
+  APPLE_LOCALE_OPTIONS,
+} from "@/lib/iap-management/parsers/template-spec";
 import { DownloadTemplateButton } from "@/components/ui/shared/DownloadTemplateButton";
 import type { ParsedIapItem, IapItemsParseResult } from "@/lib/iap-management/parsers/iap-items";
 import { summarizeAppleError } from "@/lib/iap-management/bulk-import/apple-error-summary";
@@ -402,7 +405,9 @@ export function BulkImportWizard({
           IAPs · {appName || appId}
         </button>
         <DownloadTemplateButton
+          localeOptions={APPLE_LOCALE_OPTIONS}
           getSpec={appleIapTemplateSpec}
+          confirmClassName="inline-flex items-center gap-1.5 rounded-md bg-[#0071E3] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#0062c4] disabled:opacity-60"
           className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[#0071E3]/30 px-2.5 py-1.5 text-xs font-medium text-[#0071E3] transition hover:bg-blue-50 disabled:opacity-60 dark:hover:bg-slate-800"
         />
       </div>

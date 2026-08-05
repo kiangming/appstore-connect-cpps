@@ -27,6 +27,9 @@ import type { XlsxTemplateSpec } from "@/lib/xlsx-template";
 import {
   TEMPLATE_SAMPLE_PRODUCT_IDS,
   TEMPLATE_SAMPLE_ROWS_NOTE,
+  resolveSelectedLocales,
+  templateFilenameFor,
+  type LocaleOption,
 } from "@/lib/xlsx-template";
 
 /** Data-sheet name the parser selects BY NAME (sheet-selection
@@ -80,16 +83,79 @@ export const APPLE_TYPE_VALUES: readonly InAppPurchaseType[] = [
 export const APPLE_LOCALE_NAMES: readonly string[] =
   Object.keys(localeMapJson);
 
-export function appleLocalePairHeaders(): string[] {
-  return APPLE_LOCALE_NAMES.flatMap((name) => [
-    `Display Name (${name})`,
-    `Description (${name})`,
-  ]);
+/** Locale-picker rows (display-only strings precomputed at authoring
+ *  time — see LocaleOption). `name` is the parser-matched key, so a
+ *  selection is a list of these names. `country` is "—" for the 24
+ *  language-only Apple locales; script/grouping variants (Simplified,
+ *  Traditional) show verbatim, which is why the code column stays
+ *  visible in the modal as the real disambiguator. Exhaustiveness
+ *  against locale-map.json is pinned by template-spec.test.ts. */
+export const APPLE_LOCALE_OPTIONS: readonly LocaleOption[] = [
+  { name: "Arabic", language: "Arabic", country: "Saudi Arabia", code: "ar-SA" },
+  { name: "Catalan", language: "Catalan", country: "—", code: "ca" },
+  { name: "Chinese (Simplified)", language: "Chinese", country: "Simplified", code: "zh-Hans" },
+  { name: "Chinese (Traditional)", language: "Chinese", country: "Traditional", code: "zh-Hant" },
+  { name: "Croatian", language: "Croatian", country: "—", code: "hr" },
+  { name: "Czech", language: "Czech", country: "—", code: "cs" },
+  { name: "Danish", language: "Danish", country: "—", code: "da" },
+  { name: "Dutch", language: "Dutch", country: "Netherlands", code: "nl-NL" },
+  { name: "English (Australia)", language: "English", country: "Australia", code: "en-AU" },
+  { name: "English (Canada)", language: "English", country: "Canada", code: "en-CA" },
+  { name: "English (U.K.)", language: "English", country: "U.K.", code: "en-GB" },
+  { name: "English (U.S.)", language: "English", country: "U.S.", code: "en-US" },
+  { name: "Finnish", language: "Finnish", country: "—", code: "fi" },
+  { name: "French", language: "French", country: "France", code: "fr-FR" },
+  { name: "French (Canada)", language: "French", country: "Canada", code: "fr-CA" },
+  { name: "German", language: "German", country: "Germany", code: "de-DE" },
+  { name: "Greek", language: "Greek", country: "—", code: "el" },
+  { name: "Hebrew", language: "Hebrew", country: "—", code: "he" },
+  { name: "Hindi", language: "Hindi", country: "—", code: "hi" },
+  { name: "Hungarian", language: "Hungarian", country: "—", code: "hu" },
+  { name: "Indonesian", language: "Indonesian", country: "—", code: "id" },
+  { name: "Italian", language: "Italian", country: "—", code: "it" },
+  { name: "Japanese", language: "Japanese", country: "—", code: "ja" },
+  { name: "Korean", language: "Korean", country: "—", code: "ko" },
+  { name: "Malay", language: "Malay", country: "—", code: "ms" },
+  { name: "Norwegian", language: "Norwegian", country: "—", code: "no" },
+  { name: "Polish", language: "Polish", country: "—", code: "pl" },
+  { name: "Portuguese (Brazil)", language: "Portuguese", country: "Brazil", code: "pt-BR" },
+  { name: "Portuguese (Portugal)", language: "Portuguese", country: "Portugal", code: "pt-PT" },
+  { name: "Romanian", language: "Romanian", country: "—", code: "ro" },
+  { name: "Russian", language: "Russian", country: "—", code: "ru" },
+  { name: "Slovak", language: "Slovak", country: "—", code: "sk" },
+  { name: "Spanish (Mexico)", language: "Spanish", country: "Mexico", code: "es-MX" },
+  { name: "Spanish (Spain)", language: "Spanish", country: "Spain", code: "es-ES" },
+  { name: "Swedish", language: "Swedish", country: "—", code: "sv" },
+  { name: "Thai", language: "Thai", country: "—", code: "th" },
+  { name: "Turkish", language: "Turkish", country: "—", code: "tr" },
+  { name: "Ukrainian", language: "Ukrainian", country: "—", code: "uk" },
+  { name: "Vietnamese", language: "Vietnamese", country: "—", code: "vi" },
+];
+
+/** Locale whose pair the SAMPLE rows fill. "First selected in canonical
+ *  order" with one deliberate exception: Vietnamese wins when it is in
+ *  the selection. That keeps the FULL template byte-identical to the
+ *  pre-picker file (whose samples came from the Manager's own
+ *  Vietnamese source rows) — the full selection also keeps the original
+ *  filename, so its content must not silently change either. */
+function preferredSampleLocale(chosen: readonly string[]): string | undefined {
+  return chosen.includes("Vietnamese") ? "Vietnamese" : chosen[0];
 }
 
-/** Full canonical header row — 6 lead + 39×2 locale = 84 columns. */
-export function appleTemplateHeaders(): string[] {
-  return [...APPLE_LEAD_HEADER_ROW, ...appleLocalePairHeaders()];
+export function appleLocalePairHeaders(
+  selected?: readonly string[],
+): string[] {
+  return resolveSelectedLocales(APPLE_LOCALE_NAMES, selected).flatMap(
+    (name) => [`Display Name (${name})`, `Description (${name})`],
+  );
+}
+
+/** Canonical header row for a selection: 6 lead columns ALWAYS, plus a
+ *  pair per selected locale in canonical order. `undefined` = full set
+ *  (6 + 39×2 = 84 columns); `[]` = core-only (6 columns), the picker's
+ *  default path. */
+export function appleTemplateHeaders(selected?: readonly string[]): string[] {
+  return [...APPLE_LEAD_HEADER_ROW, ...appleLocalePairHeaders(selected)];
 }
 
 /** Example-row values, genericized from the Manager's source file
@@ -100,25 +166,32 @@ export function appleTemplateHeaders(): string[] {
  *  are currently NOT applied for Apple (parsed into base_price/
  *  base_currency, consumed nowhere downstream — Apple pricing comes
  *  from Price (USD) → tier inference → price schedule), and filling an
- *  inert column would teach a wrong pattern. Each row fills one locale
- *  pair (Vietnamese, like the Google source rows) so an imported copy
- *  would be metadata-complete. */
+ *  inert column would teach a wrong pattern. The locale pair is filled
+ *  for the FIRST SELECTED locale (canonical order) so an imported copy
+ *  is metadata-complete; with zero locales selected the rows carry no
+ *  locale cells at all. */
 const SAMPLE_ROW_VALUES = TEMPLATE_SAMPLE_PRODUCT_IDS.map((id, i) => ({
   productId: id,
   referenceName: `Sample product 0${i + 1}`,
   priceUsd: [0.49, 4.09, 12.49][i],
   gtPrice: "",
   gtCurrency: "",
-  viDisplayName: `Sample product 0${i + 1}`,
-  viDescription: `Sample product 0${i + 1} - import, default price template`,
+  displayName: `Sample product 0${i + 1}`,
+  description: `Sample product 0${i + 1} - import, default price template`,
 }));
 
 /** The pre-filled data-sheet rows: 3 samples, a spacer, and the visible
  *  delete-me warning in a row whose Product ID cell is EMPTY (both
- *  parsers skip ID-less rows, so the note never parses as data). */
-export function appleTemplateDataRows(): (string | number)[][] {
-  const headers = appleTemplateHeaders();
+ *  parsers skip ID-less rows, so the note never parses as data).
+ *  A sample row NEVER references a column absent from the selection. */
+export function appleTemplateDataRows(
+  selected?: readonly string[],
+): (string | number)[][] {
+  const headers = appleTemplateHeaders(selected);
   const col = (name: string) => headers.indexOf(name);
+  const sampleLocale = preferredSampleLocale(
+    resolveSelectedLocales(APPLE_LOCALE_NAMES, selected),
+  );
   const rows = SAMPLE_ROW_VALUES.map((v) => {
     const row: (string | number)[] = headers.map(() => "");
     row[col(APPLE_LEAD_HEADERS.productId)] = v.productId;
@@ -128,8 +201,10 @@ export function appleTemplateDataRows(): (string | number)[][] {
     row[col(APPLE_LEAD_HEADERS.priceUsd)] = v.priceUsd;
     row[col(APPLE_LEAD_HEADERS.gtPrice)] = v.gtPrice;
     row[col(APPLE_LEAD_HEADERS.gtCurrency)] = v.gtCurrency;
-    row[col("Display Name (Vietnamese)")] = v.viDisplayName;
-    row[col("Description (Vietnamese)")] = v.viDescription;
+    if (sampleLocale !== undefined) {
+      row[col(`Display Name (${sampleLocale})`)] = v.displayName;
+      row[col(`Description (${sampleLocale})`)] = v.description;
+    }
     return row;
   });
   // Truly empty spacer ([] → no cells written), then the note with an
@@ -174,10 +249,12 @@ const LEAD_NOTES: Record<
   },
 };
 
-function appleNotesRows(): (string | number)[][] {
+function appleNotesRows(selected?: readonly string[]): (string | number)[][] {
   const leadKeys = Object.keys(
     APPLE_LEAD_HEADERS,
   ) as (keyof typeof APPLE_LEAD_HEADERS)[];
+  const chosen = resolveSelectedLocales(APPLE_LOCALE_NAMES, selected);
+  const sampleLocale = preferredSampleLocale(chosen);
   return [
     ["Apple IAP bulk-import template — how to fill"],
     [],
@@ -194,11 +271,21 @@ function appleNotesRows(): (string | number)[][] {
       LEAD_NOTES[key].required,
       LEAD_NOTES[key].meaning,
     ]),
-    [
-      "Display Name (<Locale>) + Description (<Locale>)",
-      "Optional",
-      `${APPLE_LOCALE_NAMES.length} locale pairs. Fill BOTH cells of a pair, or leave BOTH empty (that locale is skipped). Filling only one of the two produces a warning and the locale is skipped.`,
-    ],
+    ...(chosen.length > 0
+      ? [
+          [
+            "Display Name (<Locale>) + Description (<Locale>)",
+            "Optional",
+            `${chosen.length} locale pair(s) included in THIS file (${chosen.join(", ")}) — chosen at download; the full Apple set is ${APPLE_LOCALE_NAMES.length}. Fill BOTH cells of a pair, or leave BOTH empty (that locale is skipped). Filling only one of the two produces a warning and the locale is skipped.`,
+          ],
+        ]
+      : [
+          [
+            "(no locale columns)",
+            "—",
+            `This file was downloaded with NO locales selected, so it has only the core columns above (the full Apple set is ${APPLE_LOCALE_NAMES.length} locale pairs — download again and pick locales if you need them). Importing these rows CREATES products with no localizations: they stay metadata-incomplete on App Store Connect until you add localizations there or import a file that includes locale columns. Existing localizations on products you overwrite are PRESERVED — Apple never drops an IAP to zero localizations.`,
+          ],
+        ]),
     [],
     [
       `UNIT REMINDER: "${APPLE_LEAD_HEADERS.priceUsd}" is US dollars — it is what actually drives Apple pricing (tier inference → price schedule). GT Price / GT Currency are parsed but currently NOT applied for Apple; if filled, GT Price is a PRICE in GT Currency, NOT an exchange rate.`,
@@ -207,10 +294,13 @@ function appleNotesRows(): (string | number)[][] {
     [
       `SAMPLE ROWS: the "${APPLE_DATA_SHEET_NAME}" sheet comes PRE-FILLED with the 3 sample rows below. Delete them or replace them with your real products. Rows keeping the sample Product IDs (${TEMPLATE_SAMPLE_PRODUCT_IDS.join(", ")}) are skipped automatically on import — any other Product ID in the data sheet is imported as a REAL store product.`,
     ],
+    // The illustrative table mirrors THIS file's columns — never a
+    // column the selection excluded.
     [
       ...APPLE_LEAD_HEADER_ROW,
-      "Display Name (Vietnamese)",
-      "Description (Vietnamese)",
+      ...(sampleLocale !== undefined
+        ? [`Display Name (${sampleLocale})`, `Description (${sampleLocale})`]
+        : []),
     ],
     ...SAMPLE_ROW_VALUES.map((v) => [
       v.productId,
@@ -219,21 +309,37 @@ function appleNotesRows(): (string | number)[][] {
       v.priceUsd,
       v.gtPrice,
       v.gtCurrency,
-      v.viDisplayName,
-      v.viDescription,
+      ...(sampleLocale !== undefined ? [v.displayName, v.description] : []),
     ]),
   ];
 }
 
 /** Complete spec for lib/xlsx-template.buildTemplateWorkbook /
- *  downloadXlsxTemplate. */
-export function appleIapTemplateSpec(): XlsxTemplateSpec {
+ *  downloadXlsxTemplate.
+ *
+ *  `selectedLocaleNames` comes from the download modal's locale picker:
+ *  `undefined` = FULL set (pre-picker behaviour, byte-identical output
+ *  and filename), `[]` = core columns only (the picker's default path,
+ *  nothing pre-ticked). Names are keys of APPLE_LOCALE_OPTIONS /
+ *  locale-map.json; unknown names are ignored by resolveSelectedLocales
+ *  rather than emitting a header no parser would match. */
+export function appleIapTemplateSpec(
+  selectedLocaleNames?: readonly string[],
+): XlsxTemplateSpec {
+  const chosen = resolveSelectedLocales(
+    APPLE_LOCALE_NAMES,
+    selectedLocaleNames,
+  );
   return {
     dataSheetName: APPLE_DATA_SHEET_NAME,
-    headers: appleTemplateHeaders(),
-    dataRows: appleTemplateDataRows(),
+    headers: appleTemplateHeaders(selectedLocaleNames),
+    dataRows: appleTemplateDataRows(selectedLocaleNames),
     notesSheetName: APPLE_NOTES_SHEET_NAME,
-    notesRows: appleNotesRows(),
-    filename: APPLE_TEMPLATE_FILENAME,
+    notesRows: appleNotesRows(selectedLocaleNames),
+    filename: templateFilenameFor(
+      APPLE_TEMPLATE_FILENAME,
+      chosen.length,
+      APPLE_LOCALE_NAMES.length,
+    ),
   };
 }

@@ -718,13 +718,21 @@ stale vs the shipped stepper; corrected during the template-download
 work, which found the drift.)
 
 1. **Step 1 — Excel**: upload/parse of the 84-column template
-   client-side. Template download (`apple-iap-bulk-import-template.xlsx`)
-   is offered in the wizard HEADER (every step) and on the apps-list
-   page — one shared component
+   client-side. Template download is offered in the wizard HEADER (every
+   step) and on the apps-list page — one shared component
    (`components/ui/shared/DownloadTemplateButton.tsx`) across all four
    call sites in both modules; generated from
    `parsers/template-spec.ts`, the same spec consts the parser reads,
-   so template and parser cannot drift. Data sheet "IAP Items"
+   so template and parser cannot drift. Both buttons open a **locale
+   picker** first: `<module>IapTemplateSpec(selectedNames?)` emits core
+   columns ALWAYS + one pair per selected locale (`undefined` = full
+   set, `[]` = core-only). Nothing is pre-ticked and the selection is
+   not remembered, so core-only is the default one-click output;
+   filenames differentiate (`-core`, `-<N>-locales`, base name for the
+   full set). Subset/zero-locale files need NO parser change — both
+   parsers discover locale pairs from the file's header row rather than
+   iterating the expected set (gate verdict,
+   design-bulk-import-locale-picker.md Part 1). Data sheet "IAP Items"
    (selected BY NAME, Sheet1 fallback for legacy files) ships 3 sample
    rows that the parser SKIPS by ID (shared
    `TEMPLATE_SAMPLE_PRODUCT_IDS` in `lib/xlsx-template.ts`) as an
@@ -2593,6 +2601,73 @@ copy) before trusting the tree is right. Instance: the `2e710d3`
 push-hygiene verification session, where a backup taken immediately
 before the mutation (not `git stash`/`git checkout`) was what actually
 recovered the correct pre-mutation file.
+
+---
+
+#### 10.13.K — OPEN BACKLOG: Google bulk-import OVERWRITE replaces listings (P4 replace-semantics RMW violation)
+
+**Status: NOT FIXED — investigation required before touching it (live
+store import path). Recorded 2026-08-05 during the locale-picker work;
+the shipped mitigation is a Preview-time WARNING + Notes-sheet caution,
+not a fix.**
+
+**The defect.** Google's bulk-import OVERWRITE path sends whatever
+listings the row carries, replacing the product's listings wholesale. A
+row with no Title/Description columns falls back to a synthesized single
+listing — `listings["en-US"] = { title: row.sku, description: "" }`
+(`lib/google-iap-management/orchestration/bulk-import.ts:179-180`) — so
+overwriting an existing product from such a row silently destroys its
+real store metadata (a product titled in Vietnamese ends up titled with
+its raw SKU). No error, no per-row failure: the import reports success.
+
+**Why it is a P4 (store-write read-modify-write) violation.** The
+overwrite path DOES do an RMW GET — but only for purchase options:
+`batchUpsertInAppProducts` fetches the live product to include ALL
+existing purchase options in the PATCH body
+(`google/publisher-client.ts:864-872`), because Google rejects a partial
+option set ("must list all existing purchase options. Missing: …").
+Listings are the OTHER replace-semantics field on the same resource and
+were never given the same treatment. Google doesn't reject a partial
+listing set — it just accepts the destruction silently, which is exactly
+why this went unnoticed while the purchase-option case was found
+immediately.
+
+**Twin-path framing (P1/P8).** Commit `4fbcdd5` fixed one
+replace-semantics field (purchase options) on this resource and did not
+sweep the sibling field. The grep that would have caught it: every field
+on `InAppProduct` whose PATCH semantics are REPLACE, not merge —
+`listings`, `prices`, `purchaseOptions` — checked against whether the
+overwrite body reconstructs the full set. (`prices` IS bootstrapped
+comprehensively via `regions-helper`, so listings is the lone gap.)
+
+**Why the picker raised its priority.** Pre-picker, producing a
+no-locale file required deleting 82 column pairs by hand. The locale
+picker's default output (nothing pre-ticked, zero locales allowed) is a
+core-only file — one click away — so the destructive combination went
+from "implausible" to "the default path plus an Overwrite decision".
+
+**Shipped mitigation (August 2026, NOT the fix).** A prominent amber
+Preview banner naming the affected SKUs whenever rows set to Overwrite
+carry no locale data (client-side, derived from live per-row decisions;
+uses only data the preview already has — the preview's existence read
+`listIapsForApp` carries no listing data, so the warning states what WILL
+happen rather than enumerating current titles). Plus a Notes-sheet
+caution in core-only templates. Deliberately Google-only: Apple's
+`planLocalizationSync` suppresses deletions when the desired set is empty
+(`localization-sync.ts:47-49`), so the risk genuinely doesn't exist there
+— an Apple test pins that asymmetry so a future "unify for symmetry"
+change must justify itself.
+
+**When fixing (scope sketch).** Extend the overwrite RMW to merge
+listings: GET the live product, then union/merge row listings over
+existing ones instead of replacing (decide explicitly whether a row
+listing for locale X overwrites just X or the whole map, and what a
+row-with-no-listings should mean — probably "leave listings untouched",
+matching Apple). Blast radius: the live-store write path for every
+overwrite row; needs its own investigation pass, round-trip tests
+against the real adapter shapes, and a decision on the
+`onetime-product-adapter` mapping (`listings[i].languageCode`). Do not
+bundle it with UI work.
 
 ---
 

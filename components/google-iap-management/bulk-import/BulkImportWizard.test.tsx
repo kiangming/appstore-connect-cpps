@@ -10,7 +10,7 @@
  * app, never fall through to the browser's default navigation/download.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 
 const routerPush = vi.hoisted(() => vi.fn());
 const routerRefresh = vi.hoisted(() => vi.fn());
@@ -191,13 +191,131 @@ describe("BulkImportWizard (Google) — template download call site", () => {
   it("is wired to the GOOGLE spec (getSpec is a factory prop — a cross-wired spec would pass render tests)", async () => {
     downloadXlsxTemplate.mockClear();
     renderWizard();
+    // Header trigger opens the locale picker; confirm with nothing ticked
+    // (default zero-locale path) → CORE-ONLY Google template.
     fireEvent.click(
-      screen.getByRole("button", { name: /download template/i }),
+      screen.getByRole("button", { name: /^Download template$/i }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Download template \(/i }),
     );
     await waitFor(() => expect(downloadXlsxTemplate).toHaveBeenCalled());
     const spec = downloadXlsxTemplate.mock.calls[0][0];
-    expect(spec.filename).toBe("google-iap-bulk-import-template.xlsx");
-    expect(spec.headers.length).toBe(168); // 4 lead + 82 locale pairs
+    expect(spec.filename).toBe("google-iap-bulk-import-template-core.xlsx");
+    expect(spec.headers.length).toBe(4);
+    expect(spec.headers).toContain("Price (USD)");
+    expect(spec.headers).not.toContain("Reference Name"); // Apple-only
+  });
+});
+
+/** Preview response whose row already EXISTS on Google, with per-row
+ *  listings controllable — drives the listing-loss warning. */
+function existingRowPreviewResponse(listings: unknown[]) {
+  return {
+    ok: true,
+    json: async () => ({
+      rows: [
+        {
+          rowNumber: 1,
+          sku: "sku.exists",
+          baseCurrency: "USD",
+          basePriceDecimal: "0.99",
+          regionOverrides: [],
+          listings,
+          exists: true,
+          tierCandidates: [],
+          defaultTierSelection: null,
+          tierMatchedBy: "none",
+        },
+      ],
+      warnings: [],
+    }),
+  };
+}
+
+function installPreviewFetchMock(listings: unknown[]) {
+  const fetchMock = vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes(AVAILABILITY_URL_FRAGMENT)) {
+      return Promise.resolve({ ok: false, json: async () => ({}) });
+    }
+    if (url.includes(START_URL)) {
+      return Promise.resolve({ ok: true, json: async () => ({ run_id: null }) });
+    }
+    if (url.includes(CANCEL_URL)) {
+      return Promise.resolve({ ok: true, json: async () => ({ ok: true }) });
+    }
+    if (url.includes(PREVIEW_URL_FRAGMENT)) {
+      return Promise.resolve(existingRowPreviewResponse(listings));
+    }
+    return Promise.reject(new Error(`unexpected fetch: ${url}`));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+const LISTING_LOSS_RE = /existing store listings will be REPLACED/i;
+
+describe("BulkImportWizard (Google) — listing-loss warning (risk I.1)", () => {
+  /** Reach Preview with a single row that already exists on Google. */
+  async function reachPreview(listings: unknown[]) {
+    const fetchMock = installPreviewFetchMock(listings);
+    const { container } = renderWizard();
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Preview/ })).not.toBeDisabled(),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Preview/ }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(screen.getByText(/Set all to Overwrite/)).toBeInTheDocument(),
+    );
+    return fetchMock;
+  }
+
+  it("does NOT fire while the existing row is still pending a decision", async () => {
+    await reachPreview([]);
+    expect(screen.queryByText(LISTING_LOSS_RE)).not.toBeInTheDocument();
+  });
+
+  it("FIRES once the row is set to Overwrite and carries no locale data — and names the SKU", async () => {
+    await reachPreview([]);
+    fireEvent.click(screen.getByRole("button", { name: /Set all to Overwrite/ }));
+    await waitFor(() =>
+      expect(screen.getByText(LISTING_LOSS_RE)).toBeInTheDocument(),
+    );
+    // The SKU is named INSIDE the warning banner (it also appears in the
+    // preview table, hence the scoped assertion).
+    expect(
+      within(screen.getByRole("alert")).getByText("sku.exists"),
+    ).toBeInTheDocument();
+    // Warning, not a block: execute stays available.
+    expect(
+      screen.getByRole("button", { name: /Push to Google Play/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("does NOT fire for Overwrite rows that DO carry locale data", async () => {
+    await reachPreview([{ locale: "vi", title: "Kim cương", description: "d" }]);
+    fireEvent.click(screen.getByRole("button", { name: /Set all to Overwrite/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Push to Google Play/ })).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(LISTING_LOSS_RE)).not.toBeInTheDocument();
+  });
+
+  it("does NOT fire when the row is set to Skip (nothing is written)", async () => {
+    await reachPreview([]);
+    fireEvent.click(screen.getByRole("button", { name: /Set all to Skip/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Push to Google Play/ })).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(LISTING_LOSS_RE)).not.toBeInTheDocument();
   });
 });
 

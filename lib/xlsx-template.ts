@@ -51,6 +51,53 @@ export const TEMPLATE_SAMPLE_PRODUCT_IDS: readonly string[] = [
 export const TEMPLATE_SAMPLE_ROWS_NOTE =
   "⚠ The 3 rows above are SAMPLES — delete them or replace them with your real products. Rows keeping the sample Product IDs are skipped automatically on import.";
 
+/** One selectable locale in the download modal. `name` is the KEY the
+ *  parser matches in the header (`Display Name (<name>)` / `Title
+ *  (<name>)`), so it is also what a selection is expressed in.
+ *  `language` / `country` / `code` are DISPLAY-only strings precomputed
+ *  into each module's spec — deriving them at runtime would drag a
+ *  country library into the client bundle for no functional gain.
+ *  `country` is "—" for language-only locales (no region subtag, no
+ *  parenthetical): do NOT invent one. */
+export interface LocaleOption {
+  name: string;
+  language: string;
+  country: string;
+  code: string;
+}
+
+/** Resolve a caller's selection against a module's canonical locale
+ *  order. `undefined` = FULL set (so pre-picker callers and the
+ *  spec-identity tests keep their exact previous output); an empty
+ *  array = core-columns-only, a first-class supported output. Selection
+ *  order never matters — emission follows the canonical order so a
+ *  template's columns are reproducible. */
+export function resolveSelectedLocales(
+  canonicalNames: readonly string[],
+  selected: readonly string[] | undefined,
+): string[] {
+  if (selected === undefined) return [...canonicalNames];
+  const wanted = new Set(selected);
+  return canonicalNames.filter((n) => wanted.has(n));
+}
+
+/** Download filename for a selection: the full set keeps the module's
+ *  base name (byte-for-byte the pre-picker download, so existing docs
+ *  and habits stay valid), zero locales gets `-core`, and a partial
+ *  selection is tagged with its COUNT. Two different N-locale sets do
+ *  share a name — the browser de-dupes with "(1)"; a full locale
+ *  manifest in the filename gets unwieldy past ~3. */
+export function templateFilenameFor(
+  baseFilename: string,
+  selectedCount: number,
+  totalCount: number,
+): string {
+  if (selectedCount >= totalCount) return baseFilename;
+  const stem = baseFilename.replace(/\.xlsx$/i, "");
+  if (selectedCount === 0) return `${stem}-core.xlsx`;
+  return `${stem}-${selectedCount}-locale${selectedCount === 1 ? "" : "s"}.xlsx`;
+}
+
 export interface XlsxTemplateSpec {
   /** Name of the data sheet — the sheet the module's parser selects BY
    *  NAME (sheet-selection hardening, design §C). */

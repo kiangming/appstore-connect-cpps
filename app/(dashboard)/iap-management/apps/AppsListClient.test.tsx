@@ -30,12 +30,29 @@ describe("AppsListClient (Apple) — template download call site", () => {
 
   it("is wired to the APPLE spec (getSpec is a factory prop — a cross-wired spec would pass render tests)", async () => {
     render(<AppsListClient apps={[]} />);
+    // Trigger opens the locale picker; confirming with nothing ticked is
+    // the default zero-locale path, so the spec is the CORE-ONLY Apple
+    // template: 6 lead columns, `-core` filename.
     fireEvent.click(
       screen.getByRole("button", { name: /download bulk import template/i }),
     );
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Download template \(/i }),
+    );
     await waitFor(() => expect(downloadXlsxTemplate).toHaveBeenCalled());
     const spec = downloadXlsxTemplate.mock.calls[0][0];
-    expect(spec.filename).toBe("apple-iap-bulk-import-template.xlsx");
-    expect(spec.headers.length).toBe(84); // 6 lead + 39 locale pairs
+    expect(spec.filename).toBe("apple-iap-bulk-import-template-core.xlsx");
+    expect(spec.headers.length).toBe(6);
+    expect(spec.headers).toContain("Reference Name"); // Apple-only core column
+  });
+
+  it("offers the APPLE locale list in the picker (39, not Google's 82)", async () => {
+    render(<AppsListClient apps={[]} />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /download bulk import template/i }),
+    );
+    expect(screen.getByText(/Selected/)).toHaveTextContent(
+      "Selected 0 of 39",
+    );
   });
 });

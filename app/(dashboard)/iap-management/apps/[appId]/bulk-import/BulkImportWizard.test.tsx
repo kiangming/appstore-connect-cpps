@@ -216,13 +216,46 @@ describe("BulkImportWizard — template download call site", () => {
   it("is wired to the APPLE spec (getSpec is a factory prop — a cross-wired spec would pass render tests)", async () => {
     downloadXlsxTemplate.mockClear();
     renderWizard();
+    // Header trigger opens the locale picker; confirm with nothing ticked
+    // (default zero-locale path) → CORE-ONLY Apple template.
     fireEvent.click(
-      screen.getByRole("button", { name: /download template/i }),
+      screen.getByRole("button", { name: /^Download template$/i }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Download template \(/i }),
     );
     await waitFor(() => expect(downloadXlsxTemplate).toHaveBeenCalled());
     const spec = downloadXlsxTemplate.mock.calls[0][0];
-    expect(spec.filename).toBe("apple-iap-bulk-import-template.xlsx");
-    expect(spec.headers.length).toBe(84); // 6 lead + 39 locale pairs
+    expect(spec.filename).toBe("apple-iap-bulk-import-template-core.xlsx");
+    expect(spec.headers.length).toBe(6);
+    expect(spec.headers).toContain("Reference Name"); // Apple-only core column
+  });
+});
+
+describe("BulkImportWizard — NO listing-loss warning (Apple asymmetry is deliberate)", () => {
+  it("an overwrite row with zero localizations shows no listing-replacement warning", async () => {
+    // Apple's overwrite path SUPPRESSES localization deletions when the
+    // desired set is empty (localization-sync.ts), so existing
+    // localizations survive and the Google-only risk genuinely does not
+    // exist here. This test exists so a future "unify for symmetry"
+    // change has to justify itself.
+    const fetchMock = installFetchMock({
+      runId: "run-x",
+      executeResponse: successExecuteResponse,
+    });
+    const { container } = render(
+      <BulkImportWizard
+        appId="999"
+        appName="Test App"
+        existingProductIds={["com.vng.test.item"]}
+        usdTiersBySource={EMPTY_TIERS}
+      />,
+    );
+    await goToStep2AndAdoptRun(container, fetchMock, "run-x");
+    await goToStep3();
+    expect(
+      screen.queryByText(/existing store listings will be REPLACED/i),
+    ).not.toBeInTheDocument();
   });
 });
 

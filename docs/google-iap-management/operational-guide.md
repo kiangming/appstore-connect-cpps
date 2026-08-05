@@ -144,14 +144,37 @@ USD + GT Price.
 
 ### Step 2 — Upload
 
-Get the template (`google-iap-bulk-import-template.xlsx`) via
-**Download bulk import template** on the Apps list page (no need to
-enter the wizard), or **Download template** in the wizard header —
-visible at every step. Both buttons are the same shared component
-(`components/ui/shared/DownloadTemplateButton.tsx`) and produce the
-identical file: it is generated from the parser's own column spec
+Get the template via **Download bulk import template** on the Apps list
+page (no need to enter the wizard), or **Download template** in the
+wizard header — visible at every step. Both buttons are the same shared
+component (`components/ui/shared/DownloadTemplateButton.tsx`) and both
+open the **locale picker** first; the file is generated on confirm from
+the parser's own column spec
 (`lib/google-iap-management/parsers/template-spec.ts`), so it cannot
-drift from what the import accepts. Two sheets:
+drift from what the import accepts.
+
+**Locale picker.** Lists all 82 Google Play locales (language ·
+country/variant · BCP-47 code; region-less locales show `—` for country,
+so the code is the disambiguator). Search matches all three fields;
+**Select all shown** applies to the current filter; **Clear all** resets.
+NOTHING is pre-ticked and the selection is not remembered between opens.
+
+Selecting nothing is valid and — because nothing is pre-ticked — is the
+default one-click output: a **core-columns-only** template. The file name
+reflects the selection: `…-template-core.xlsx` (no locales),
+`…-template-<N>-locales.xlsx` (partial), and the base
+`google-iap-bulk-import-template.xlsx` for the full 82. Two partial
+downloads with the same N share a name (the browser de-dupes); the Notes
+sheet lists which locales that file actually contains.
+
+⚠ **Core-only + Overwrite destroys listing metadata.** Google replaces a
+product's listings with whatever the row carries, so an OVERWRITE row
+with no Title/Description leaves the product with a single `en-US`
+listing titled with its SKU. The wizard warns in Preview and names the
+affected SKUs (see Step 3). Apple has no equivalent risk — it preserves
+existing localizations when a row carries none.
+
+Two sheets:
 
 - `IAP Items` — the data sheet (the parser selects it BY NAME, so don't
   rename it). It comes PRE-FILLED with 3 sample rows (Product IDs
@@ -197,6 +220,18 @@ only.
 Parse warnings (unrecognised locale columns, unmapped GT currencies,
 mismatched GT Price/Currency pairs) appear in a collapsible amber
 panel — they're informational; the rest of the import proceeds.
+
+**Listing-loss warning (Google only).** A prominent amber banner appears
+whenever rows currently set to **Overwrite** carry no locale data, and it
+names the affected SKUs: those products' existing store listings will be
+replaced by a single SKU-titled `en-US` listing. It is derived live from
+the per-row decisions (flip a row to Skip and it disappears) and is a
+WARNING, not a block — overwriting with an SKU-titled listing can be
+deliberate. Fix by downloading a template WITH the needed locales,
+filling them, and re-uploading — or by setting those rows to Skip.
+The underlying cause (the overwrite read-modify-write GET merges purchase
+options but NOT listings) is tracked as a backlog item in the Apple KB
+§10.13.K P4 follow-ups — not fixed by the warning.
 
 ### Step 4 — Execute
 

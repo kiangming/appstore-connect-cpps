@@ -56,12 +56,35 @@ describe("AppsListClient (Google) — template download call site", () => {
         initialLastRefreshedAt={new Date().toISOString()}
       />,
     );
+    // Trigger opens the locale picker; confirming with nothing ticked is
+    // the default zero-locale path → CORE-ONLY Google template.
     fireEvent.click(
       screen.getByRole("button", { name: /download bulk import template/i }),
     );
+    fireEvent.click(
+      screen.getByRole("button", { name: /^Download template \(/i }),
+    );
     await waitFor(() => expect(downloadXlsxTemplate).toHaveBeenCalled());
     const spec = downloadXlsxTemplate.mock.calls[0][0];
-    expect(spec.filename).toBe("google-iap-bulk-import-template.xlsx");
-    expect(spec.headers.length).toBe(168); // 4 lead + 82 locale pairs
+    expect(spec.filename).toBe("google-iap-bulk-import-template-core.xlsx");
+    expect(spec.headers.length).toBe(4);
+    expect(spec.headers).toContain("Price (USD)");
+    expect(spec.headers).not.toContain("Reference Name"); // Apple-only
+  });
+
+  it("offers the GOOGLE locale list in the picker (82, not Apple's 39)", async () => {
+    render(
+      <AppsListClient
+        activeAccount={ACCOUNT}
+        initialApps={[]}
+        initialLastRefreshedAt={new Date().toISOString()}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /download bulk import template/i }),
+    );
+    expect(screen.getByText(/Selected/)).toHaveTextContent(
+      "Selected 0 of 82",
+    );
   });
 });

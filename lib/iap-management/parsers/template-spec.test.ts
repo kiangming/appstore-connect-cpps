@@ -15,6 +15,7 @@ import * as XLSX from "xlsx";
 import { parseIapItemsXlsx } from "./iap-items";
 import {
   APPLE_DATA_SHEET_NAME,
+  APPLE_LOCALE_OPTIONS,
   APPLE_NOTES_SHEET_NAME,
   APPLE_LEAD_HEADER_ROW,
   APPLE_REQUIRED_LEAD_HEADERS,
@@ -97,7 +98,7 @@ describe("anti-drift — generated headers equal the parser contract", () => {
     expect(idsInSheet).toEqual([...TEMPLATE_SAMPLE_PRODUCT_IDS]);
   });
 
-  it("every sample row fills one full locale pair (metadata-complete example)", () => {
+  it("full-set sample rows still fill Vietnamese (byte-compat with the pre-picker file)", () => {
     // KB §7.1: an IAP needs ≥1 localization to be submittable. The
     // Manager's source rows had none — the generated examples must not
     // teach that shape.
@@ -261,5 +262,188 @@ describe("sheet-name error message", () => {
     await expect(parseIapItemsXlsx(wbToFile(wb))).rejects.toThrow(
       /Couldn't find the data sheet "IAP Items".*no "Product ID" column/,
     );
+  });
+});
+
+
+// ─── Locale picker: subset + zero-locale templates (design
+//     design-bulk-import-locale-picker.md §G). These are the permanent
+//     versions of the feasibility-gate harness: subset/zero-locale
+//     workbooks pushed through the REAL parser.
+
+describe("locale selection — anti-drift stays EXACT per selection", () => {
+  it("core headers are ALWAYS present and locale columns are exactly the selection", () => {
+    for (const sel of [
+      [],
+      ["Vietnamese"],
+      ["Japanese", "Vietnamese", "English (U.S.)"],
+    ]) {
+      const headers = appleTemplateHeaders(sel);
+      // Exact equality, order included — core first, then one adjacent
+      // pair per selected locale in CANONICAL order (not click order).
+      const canonical = APPLE_LOCALE_NAMES.filter((n) => sel.includes(n));
+      expect(headers).toEqual([
+        ...APPLE_LEAD_HEADER_ROW,
+        ...canonical.flatMap((n) => [
+          `Display Name (${n})`,
+          `Description (${n})`,
+        ]),
+      ]);
+      // Core columns are never selectable, so they can never appear as
+      // a locale pair.
+      for (const core of APPLE_LEAD_HEADER_ROW) {
+        expect(canonical).not.toContain(core);
+      }
+    }
+  });
+
+  it("the FULL set is still pinned to 84 columns (catches a new core column or locale-map growth)", () => {
+    expect(appleTemplateHeaders().length).toBe(6 + 39 * 2);
+    expect(appleTemplateHeaders(APPLE_LOCALE_NAMES)).toEqual(
+      appleTemplateHeaders(),
+    );
+  });
+
+  it("unknown selected names are ignored rather than emitting unparseable headers", () => {
+    expect(appleTemplateHeaders(["Klingon"])).toEqual([
+      ...APPLE_LEAD_HEADER_ROW,
+    ]);
+  });
+
+  it("filename differentiates content: base / -core / -N-locales", () => {
+    expect(appleIapTemplateSpec().filename).toBe(
+      "apple-iap-bulk-import-template.xlsx",
+    );
+    expect(appleIapTemplateSpec([]).filename).toBe(
+      "apple-iap-bulk-import-template-core.xlsx",
+    );
+    expect(appleIapTemplateSpec(["Vietnamese"]).filename).toBe(
+      "apple-iap-bulk-import-template-1-locale.xlsx",
+    );
+    expect(
+      appleIapTemplateSpec(["Vietnamese", "Japanese"]).filename,
+    ).toBe("apple-iap-bulk-import-template-2-locales.xlsx");
+  });
+
+  it("locale options are exhaustive over the locale map, both directions", () => {
+    expect(APPLE_LOCALE_OPTIONS.length).toBe(APPLE_LOCALE_NAMES.length);
+    expect(APPLE_LOCALE_OPTIONS.map((o) => o.name)).toEqual([
+      ...APPLE_LOCALE_NAMES,
+    ]);
+    for (const o of APPLE_LOCALE_OPTIONS) {
+      expect(o.language.length).toBeGreaterThan(0);
+      expect(o.country.length).toBeGreaterThan(0); // "—" when region-less
+      expect(o.code.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("locale selection — sample rows adapt", () => {
+  it("a single-locale selection fills THAT locale's pair", () => {
+    const spec = appleIapTemplateSpec(["Japanese"]);
+    const dn = spec.headers.indexOf("Display Name (Japanese)");
+    const ds = spec.headers.indexOf("Description (Japanese)");
+    const sampleRows = spec.dataRows.filter(
+      (r) => String(r[spec.headers.indexOf("Product ID")] ?? "") !== "",
+    );
+    expect(sampleRows.length).toBe(3);
+    for (const row of sampleRows) {
+      expect(String(row[dn])).toMatch(/^Sample product 0\d$/);
+      expect(String(row[ds])).toMatch(/^Sample product 0\d - import/);
+    }
+  });
+
+  it("ZERO locales: sample rows carry NO locale cells and reference no locale column", () => {
+    const spec = appleIapTemplateSpec([]);
+    expect(spec.headers).toEqual([...APPLE_LEAD_HEADER_ROW]);
+    const sampleRows = spec.dataRows.filter(
+      (r) => String(r[0] ?? "") !== "" && String(r[0]).startsWith("com."),
+    );
+    expect(sampleRows.length).toBe(3);
+    for (const row of sampleRows) {
+      // Core cells only — nothing beyond the 6 core columns.
+      expect(row.length).toBeLessThanOrEqual(APPLE_LEAD_HEADER_ROW.length);
+    }
+    // Notes sheet documents the absence instead of a locale column.
+    const notesText = spec.notesRows.map((r) => r.join(" | ")).join("\n");
+    expect(notesText).toContain("(no locale columns)");
+    expect(notesText).not.toContain("Display Name (");
+    // The two GT statements survive in every variant.
+    expect(notesText).toContain("Currently NOT applied for Apple");
+  });
+});
+
+describe("locale selection — ROUND-TRIP through the real parser", () => {
+  it("SUBSET (2 of 39) fills + parses cleanly", async () => {
+    const spec = appleIapTemplateSpec(["Vietnamese", "Japanese"]);
+    const wb = buildTemplateWorkbook(XLSX, spec);
+    const headers = [...spec.headers];
+    const row: unknown[] = headers.map(() => "");
+    row[headers.indexOf("Product ID")] = "com.test.subset";
+    row[headers.indexOf("Reference Name")] = "Subset row";
+    row[headers.indexOf("Price (USD)")] = 0.99;
+    row[headers.indexOf("Display Name (Vietnamese)")] = "vi name";
+    row[headers.indexOf("Description (Vietnamese)")] = "vi desc";
+    row[headers.indexOf("Display Name (Japanese)")] = "ja name";
+    row[headers.indexOf("Description (Japanese)")] = "ja desc";
+    XLSX.utils.sheet_add_aoa(wb.Sheets[APPLE_DATA_SHEET_NAME], [row], {
+      origin: -1,
+    });
+
+    const result = await parseIapItemsXlsx(wbToFile(wb));
+    expect(result.items.length).toBe(1);
+    expect(result.locale_pair_count).toBe(2);
+    expect(result.skipped_locales).toEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringMatching(/3 example row\(s\) skipped/),
+    ]);
+    expect(result.sample_rows_skipped.length).toBe(3);
+    expect(
+      result.items[0].localizations.map((l) => l.locale).sort(),
+    ).toEqual(["ja", "vi"]);
+  });
+
+  it("ZERO locales (the DEFAULT path) fills + parses cleanly", async () => {
+    const spec = appleIapTemplateSpec([]);
+    const wb = buildTemplateWorkbook(XLSX, spec);
+    XLSX.utils.sheet_add_aoa(
+      wb.Sheets[APPLE_DATA_SHEET_NAME],
+      [["com.test.core", "Core row", "", 1.99, "", ""]],
+      { origin: -1 },
+    );
+
+    const result = await parseIapItemsXlsx(wbToFile(wb));
+    expect(result.items.length).toBe(1);
+    expect(result.items[0].product_id).toBe("com.test.core");
+    expect(result.items[0].localizations).toEqual([]);
+    expect(result.locale_pair_count).toBe(0);
+    expect(result.skipped_locales).toEqual([]);
+    expect(result.sample_rows_skipped.length).toBe(3);
+  });
+
+  it("a locale pair placed BEFORE core columns still parses (name-based, not positional)", async () => {
+    // Gate case 1a: nothing indexes by position; only Display→Description
+    // adjacency matters, which the generator guarantees.
+    const headers = [
+      "Product ID",
+      "Reference Name",
+      "Display Name (Korean)",
+      "Description (Korean)",
+      "Type",
+      "Price (USD)",
+      "GT Price",
+      "GT Currency",
+    ];
+    const ws = XLSX.utils.aoa_to_sheet([
+      headers,
+      ["com.test.ko", "Ref K", "ko name", "ko desc", "", 0.49, "", ""],
+    ]);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, APPLE_DATA_SHEET_NAME);
+
+    const result = await parseIapItemsXlsx(wbToFile(wb));
+    expect(result.items.length).toBe(1);
+    expect(result.items[0].localizations.map((l) => l.locale)).toEqual(["ko"]);
+    expect(result.warnings).toEqual([]);
   });
 });

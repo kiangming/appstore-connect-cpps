@@ -16,7 +16,10 @@ import {
 import { PreviewTable } from "./PreviewTable";
 import { PricingSourceSelector } from "@/components/google-iap-management/iap-form/PricingSourceSelector";
 import { validateDecimalForCurrency } from "@/lib/google-iap-management/google/currency-precision";
-import { googleIapTemplateSpec } from "@/lib/google-iap-management/parsers/template-spec";
+import {
+  googleIapTemplateSpec,
+  GOOGLE_LOCALE_OPTIONS,
+} from "@/lib/google-iap-management/parsers/template-spec";
 import { DownloadTemplateButton } from "@/components/ui/shared/DownloadTemplateButton";
 
 export type PricingSource = "google_default" | "default_template" | "app_template";
@@ -239,6 +242,38 @@ export function BulkImportWizard({
     const willCreate = previewRows.filter((r) => !r.exists && r.decision === "create").length;
     return { total, existing, pending, willOverwrite, willSkip, willCreate };
   }, [previewRows]);
+
+  /**
+   * Listing-loss warning (GOOGLE ONLY — Apple genuinely doesn't have
+   * this risk: its overwrite path suppresses localization deletions when
+   * a row carries none, so existing localizations survive).
+   *
+   * Google replaces a product's listings with whatever the row carries,
+   * and a row with NO Title/Description columns (the locale-picker's
+   * core-only template — its default output) falls back to a single
+   * en-US listing titled with the SKU. The overwrite read-modify-write
+   * GET merges purchase options only, NOT listings, so overwriting an
+   * existing product from such a row wipes its real store metadata.
+   *
+   * Derived client-side from the user's per-row decisions so it tracks
+   * Overwrite/Skip flips live — the preview API can't know decisions,
+   * they're made here. Uses only data already on hand (row.listings +
+   * row.exists + row.decision): no extra fetch. It names the affected
+   * SKUs; it deliberately does NOT claim what their current titles are,
+   * because the preview's existence read
+   * (bulk-import/preview/route.ts → listIapsForApp) selects IAP columns
+   * only and carries no listing data.
+   *
+   * WARNING, not a block: overwriting with an SKU-titled listing can be
+   * a legitimate intent.
+   */
+  const listingLossRows = useMemo(
+    () =>
+      previewRows.filter(
+        (r) => r.decision === "overwrite" && r.listings.length === 0,
+      ),
+    [previewRows],
+  );
 
   // Hotfix 28 — pre-flight precision validation per-row currency.
   //
@@ -527,7 +562,10 @@ export function BulkImportWizard({
           Back to {appDisplayName ?? packageName}
         </button>
         <DownloadTemplateButton
+          localeOptions={GOOGLE_LOCALE_OPTIONS}
           getSpec={googleIapTemplateSpec}
+          confirmClassName="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-60"
+          zeroLocaleCaution="If you then OVERWRITE products that already exist on Google Play, their current store listings are replaced by a single en-US listing titled with the SKU."
           className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-emerald-300 px-2.5 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-50 disabled:opacity-60"
         />
       </div>
@@ -780,6 +818,30 @@ export function BulkImportWizard({
               )}
             </div>
           </div>
+
+          {listingLossRows.length > 0 && (
+            <div
+              role="alert"
+              className="bg-amber-100 border border-amber-400 rounded-lg p-3"
+            >
+              <p className="text-xs font-semibold text-amber-900 mb-1">
+                ⚠ {listingLossRows.length} row(s) set to Overwrite carry no
+                Title/Description — existing store listings will be REPLACED
+              </p>
+              <p className="text-[11px] text-amber-900 leading-relaxed">
+                These SKUs already exist on Google Play. Because their rows
+                have no locale columns filled, each product&apos;s listings
+                will be replaced with a single <strong>en-US</strong> listing
+                titled with the SKU itself — any current titles/descriptions
+                on Google Play are lost. If you meant to keep them, download a
+                template <em>with</em> the locales you need, fill them, and
+                re-upload; or set these rows to <strong>Skip</strong>.
+              </p>
+              <p className="mt-1 text-[11px] font-mono text-amber-800 max-h-20 overflow-y-auto">
+                {listingLossRows.map((r) => r.sku).join(", ")}
+              </p>
+            </div>
+          )}
 
           {previewWarnings.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">

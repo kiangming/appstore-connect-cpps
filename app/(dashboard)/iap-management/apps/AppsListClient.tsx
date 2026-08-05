@@ -6,7 +6,10 @@ import { Search } from "lucide-react";
 import type { App } from "@/types/asc";
 import { useAppIcon, getAvatarColor, getInitials } from "@/lib/use-app-icon";
 import { DownloadTemplateButton } from "@/components/ui/shared/DownloadTemplateButton";
-import { appleIapTemplateSpec } from "@/lib/iap-management/parsers/template-spec";
+import {
+  appleIapTemplateSpec,
+  APPLE_LOCALE_OPTIONS,
+} from "@/lib/iap-management/parsers/template-spec";
 
 function AppIcon({ name, bundleId }: { name: string; bundleId: string }) {
   const iconUrl = useAppIcon(bundleId);
@@ -83,7 +86,9 @@ export function AppsListClient({ apps }: { apps: App[] }) {
         {/* Bulk-import template is app-independent (static spec) — offered
             here so nobody has to enter the wizard just to get the file. */}
         <DownloadTemplateButton
+          localeOptions={APPLE_LOCALE_OPTIONS}
           getSpec={appleIapTemplateSpec}
+          confirmClassName="inline-flex items-center gap-1.5 rounded-md bg-[#0071E3] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#0062c4] disabled:opacity-60"
           label="Download bulk import template"
           className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[#0071E3]/30 px-3 py-2 text-sm font-medium text-[#0071E3] transition hover:bg-blue-50 disabled:opacity-60"
         />

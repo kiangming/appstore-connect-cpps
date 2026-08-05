@@ -30,10 +30,12 @@
  * (English) ×3, (Persian) ×4 — silently last-win in the parser).
  */
 
-import type { XlsxTemplateSpec } from "@/lib/xlsx-template";
+import type { XlsxTemplateSpec, LocaleOption } from "@/lib/xlsx-template";
 import {
   TEMPLATE_SAMPLE_PRODUCT_IDS,
   TEMPLATE_SAMPLE_ROWS_NOTE,
+  resolveSelectedLocales,
+  templateFilenameFor,
 } from "@/lib/xlsx-template";
 
 /** Data-sheet name the parser selects BY NAME (sheet-selection
@@ -160,16 +162,122 @@ export const GOOGLE_LOCALE_NAMES: readonly string[] = Object.keys(
   LOCALE_NAME_TO_BCP47,
 );
 
-export function googleLocalePairHeaders(): string[] {
-  return GOOGLE_LOCALE_NAMES.flatMap((name) => [
-    `Title (${name})`,
-    `Description (${name})`,
-  ]);
+/** Locale-picker rows (display-only strings precomputed at authoring
+ *  time — see LocaleOption). `name` is the parser-matched key, so a
+ *  selection is a list of these names. `country` is "—" for the ~30
+ *  language-only Google locales; the code column stays visible in the
+ *  modal because Google's generic "English" (en) sits alongside four
+ *  regional English variants. Exhaustiveness against
+ *  LOCALE_NAME_TO_BCP47 is pinned by template-spec.test.ts. */
+export const GOOGLE_LOCALE_OPTIONS: readonly LocaleOption[] = [
+  { name: "Afrikaans", language: "Afrikaans", country: "—", code: "af" },
+  { name: "Albanian", language: "Albanian", country: "—", code: "sq" },
+  { name: "Amharic", language: "Amharic", country: "—", code: "am" },
+  { name: "Arabic", language: "Arabic", country: "—", code: "ar" },
+  { name: "Armenian", language: "Armenian", country: "Armenia", code: "hy-AM" },
+  { name: "Azerbaijani", language: "Azerbaijani", country: "Azerbaijan", code: "az-AZ" },
+  { name: "Bangla", language: "Bangla", country: "Bangladesh", code: "bn-BD" },
+  { name: "Basque", language: "Basque", country: "Spain", code: "eu-ES" },
+  { name: "Belarusian", language: "Belarusian", country: "—", code: "be" },
+  { name: "Bulgarian", language: "Bulgarian", country: "—", code: "bg" },
+  { name: "Burmese", language: "Burmese", country: "Myanmar (Burma)", code: "my-MM" },
+  { name: "Catalan", language: "Catalan", country: "—", code: "ca" },
+  { name: "Chinese (Hong Kong)", language: "Chinese", country: "Hong Kong", code: "zh-HK" },
+  { name: "Chinese (Simplified)", language: "Chinese", country: "Simplified", code: "zh-CN" },
+  { name: "Chinese (Traditional)", language: "Chinese", country: "Traditional", code: "zh-TW" },
+  { name: "Croatian", language: "Croatian", country: "—", code: "hr" },
+  { name: "Czech", language: "Czech", country: "Czechia", code: "cs-CZ" },
+  { name: "Danish", language: "Danish", country: "Denmark", code: "da-DK" },
+  { name: "Dutch", language: "Dutch", country: "Netherlands", code: "nl-NL" },
+  { name: "English", language: "English", country: "—", code: "en" },
+  { name: "English (Australia)", language: "English", country: "Australia", code: "en-AU" },
+  { name: "English (Canada)", language: "English", country: "Canada", code: "en-CA" },
+  { name: "English (United Kingdom)", language: "English", country: "United Kingdom", code: "en-GB" },
+  { name: "English (United States)", language: "English", country: "United States", code: "en-US" },
+  { name: "Estonian", language: "Estonian", country: "—", code: "et" },
+  { name: "Filipino", language: "Filipino", country: "—", code: "fil" },
+  { name: "Finnish", language: "Finnish", country: "Finland", code: "fi-FI" },
+  { name: "French (Canada)", language: "French", country: "Canada", code: "fr-CA" },
+  { name: "French (France)", language: "French", country: "France", code: "fr-FR" },
+  { name: "Galician", language: "Galician", country: "Spain", code: "gl-ES" },
+  { name: "Georgian", language: "Georgian", country: "Georgia", code: "ka-GE" },
+  { name: "German", language: "German", country: "Germany", code: "de-DE" },
+  { name: "Greek", language: "Greek", country: "Greece", code: "el-GR" },
+  { name: "Gujarati", language: "Gujarati", country: "—", code: "gu" },
+  { name: "Hebrew", language: "Hebrew", country: "Israel", code: "iw-IL" },
+  { name: "Hindi", language: "Hindi", country: "India", code: "hi-IN" },
+  { name: "Hungarian", language: "Hungarian", country: "Hungary", code: "hu-HU" },
+  { name: "Icelandic", language: "Icelandic", country: "Iceland", code: "is-IS" },
+  { name: "Indonesian", language: "Indonesian", country: "—", code: "id" },
+  { name: "Italian", language: "Italian", country: "Italy", code: "it-IT" },
+  { name: "Japanese", language: "Japanese", country: "Japan", code: "ja-JP" },
+  { name: "Kannada", language: "Kannada", country: "India", code: "kn-IN" },
+  { name: "Kazakh", language: "Kazakh", country: "—", code: "kk" },
+  { name: "Khmer", language: "Khmer", country: "Cambodia", code: "km-KH" },
+  { name: "Korean", language: "Korean", country: "South Korea", code: "ko-KR" },
+  { name: "Kyrgyz", language: "Kyrgyz", country: "Kyrgyzstan", code: "ky-KG" },
+  { name: "Lao", language: "Lao", country: "Laos", code: "lo-LA" },
+  { name: "Latvian", language: "Latvian", country: "—", code: "lv" },
+  { name: "Lithuanian", language: "Lithuanian", country: "—", code: "lt" },
+  { name: "Macedonian", language: "Macedonian", country: "North Macedonia", code: "mk-MK" },
+  { name: "Malay", language: "Malay", country: "—", code: "ms" },
+  { name: "Malay (Malaysia)", language: "Malay", country: "Malaysia", code: "ms-MY" },
+  { name: "Malayalam", language: "Malayalam", country: "India", code: "ml-IN" },
+  { name: "Marathi", language: "Marathi", country: "India", code: "mr-IN" },
+  { name: "Mongolian", language: "Mongolian", country: "Mongolia", code: "mn-MN" },
+  { name: "Nepali", language: "Nepali", country: "Nepal", code: "ne-NP" },
+  { name: "Norwegian", language: "Norwegian", country: "Norway", code: "no-NO" },
+  { name: "Persian", language: "Persian", country: "—", code: "fa" },
+  { name: "Polish", language: "Polish", country: "Poland", code: "pl-PL" },
+  { name: "Portuguese (Brazil)", language: "Portuguese", country: "Brazil", code: "pt-BR" },
+  { name: "Portuguese (Portugal)", language: "Portuguese", country: "Portugal", code: "pt-PT" },
+  { name: "Punjabi", language: "Punjabi", country: "—", code: "pa" },
+  { name: "Romanian", language: "Romanian", country: "—", code: "ro" },
+  { name: "Romansh", language: "Romansh", country: "—", code: "rm" },
+  { name: "Russian", language: "Russian", country: "Russia", code: "ru-RU" },
+  { name: "Serbian", language: "Serbian", country: "—", code: "sr" },
+  { name: "Sinhala", language: "Sinhala", country: "Sri Lanka", code: "si-LK" },
+  { name: "Slovak", language: "Slovak", country: "—", code: "sk" },
+  { name: "Slovenian", language: "Slovenian", country: "—", code: "sl" },
+  { name: "Spanish (Latin America)", language: "Spanish", country: "Latin America", code: "es-419" },
+  { name: "Spanish (Spain)", language: "Spanish", country: "Spain", code: "es-ES" },
+  { name: "Spanish (United States)", language: "Spanish", country: "United States", code: "es-US" },
+  { name: "Swahili", language: "Swahili", country: "—", code: "sw" },
+  { name: "Swedish", language: "Swedish", country: "Sweden", code: "sv-SE" },
+  { name: "Tamil", language: "Tamil", country: "India", code: "ta-IN" },
+  { name: "Telugu", language: "Telugu", country: "India", code: "te-IN" },
+  { name: "Thai", language: "Thai", country: "—", code: "th" },
+  { name: "Turkish", language: "Turkish", country: "Türkiye", code: "tr-TR" },
+  { name: "Ukrainian", language: "Ukrainian", country: "—", code: "uk" },
+  { name: "Urdu", language: "Urdu", country: "—", code: "ur" },
+  { name: "Vietnamese", language: "Vietnamese", country: "—", code: "vi" },
+  { name: "Zulu", language: "Zulu", country: "—", code: "zu" },
+];
+
+/** Locale whose pair the SAMPLE rows fill. "First selected in canonical
+ *  order" with one deliberate exception: Vietnamese wins when it is in
+ *  the selection. That keeps the FULL template byte-identical to the
+ *  pre-picker file (whose samples came from the Manager's own
+ *  Vietnamese source rows) — the full selection also keeps the original
+ *  filename, so its content must not silently change either. */
+function preferredSampleLocale(chosen: readonly string[]): string | undefined {
+  return chosen.includes("Vietnamese") ? "Vietnamese" : chosen[0];
 }
 
-/** Full canonical header row — 4 lead + 82×2 locale = 168 columns. */
-export function googleTemplateHeaders(): string[] {
-  return [...GOOGLE_LEAD_HEADER_ROW, ...googleLocalePairHeaders()];
+export function googleLocalePairHeaders(
+  selected?: readonly string[],
+): string[] {
+  return resolveSelectedLocales(GOOGLE_LOCALE_NAMES, selected).flatMap(
+    (name) => [`Title (${name})`, `Description (${name})`],
+  );
+}
+
+/** Canonical header row for a selection: 4 lead columns ALWAYS, plus a
+ *  pair per selected locale in canonical order. `undefined` = full set
+ *  (4 + 82×2 = 168 columns); `[]` = core-only (4 columns), the picker's
+ *  default path. */
+export function googleTemplateHeaders(selected?: readonly string[]): string[] {
+  return [...GOOGLE_LEAD_HEADER_ROW, ...googleLocalePairHeaders(selected)];
 }
 
 /** Example-row values, genericized from the Manager's source file
@@ -187,24 +295,32 @@ const SAMPLE_ROW_VALUES = TEMPLATE_SAMPLE_PRODUCT_IDS.map((id, i) => ({
   priceUsd: [0.99, 1.99, 22.99][i],
   gtPrice: [26000, 52000, 598000][i],
   gtCurrency: "VND",
-  viTitle: `Sample product 0${i + 1}`,
-  viDescription: `Sample product 0${i + 1} - import, default price template`,
+  title: `Sample product 0${i + 1}`,
+  description: `Sample product 0${i + 1} - import, default price template`,
 }));
 
 /** The pre-filled data-sheet rows: 3 samples, a spacer, and the visible
  *  delete-me warning in a row whose Product ID cell is EMPTY (the
- *  parser skips SKU-less rows, so the note never parses as data). */
-export function googleTemplateDataRows(): (string | number)[][] {
-  const headers = googleTemplateHeaders();
+ *  parser skips SKU-less rows, so the note never parses as data).
+ *  A sample row NEVER references a column absent from the selection. */
+export function googleTemplateDataRows(
+  selected?: readonly string[],
+): (string | number)[][] {
+  const headers = googleTemplateHeaders(selected);
   const col = (name: string) => headers.indexOf(name);
+  const sampleLocale = preferredSampleLocale(
+    resolveSelectedLocales(GOOGLE_LOCALE_NAMES, selected),
+  );
   const rows = SAMPLE_ROW_VALUES.map((v) => {
     const row: (string | number)[] = headers.map(() => "");
     row[col(GOOGLE_PRODUCT_ID_HEADER)] = v.productId;
     row[col(GOOGLE_PRICE_HEADER)] = v.priceUsd;
     row[col(GOOGLE_GT_PRICE_HEADER)] = v.gtPrice;
     row[col(GOOGLE_GT_CURRENCY_HEADER)] = v.gtCurrency;
-    row[col("Title (Vietnamese)")] = v.viTitle;
-    row[col("Description (Vietnamese)")] = v.viDescription;
+    if (sampleLocale !== undefined) {
+      row[col(`Title (${sampleLocale})`)] = v.title;
+      row[col(`Description (${sampleLocale})`)] = v.description;
+    }
     return row;
   });
   // Truly empty spacer ([] → no cells written), then the note with an
@@ -212,7 +328,9 @@ export function googleTemplateDataRows(): (string | number)[][] {
   return [...rows, [], ["", TEMPLATE_SAMPLE_ROWS_NOTE]];
 }
 
-function googleNotesRows(): (string | number)[][] {
+function googleNotesRows(selected?: readonly string[]): (string | number)[][] {
+  const chosen = resolveSelectedLocales(GOOGLE_LOCALE_NAMES, selected);
+  const sampleLocale = preferredSampleLocale(chosen);
   return [
     ["Google IAP bulk-import template — how to fill"],
     [],
@@ -244,11 +362,26 @@ function googleNotesRows(): (string | number)[][] {
       "Optional",
       'Currency code for GT Price, e.g. "VND" — mapped to that currency\'s primary region.',
     ],
-    [
-      "Title (<Locale>) + Description (<Locale>)",
-      "Optional",
-      `${GOOGLE_LOCALE_NAMES.length} locale pairs. Pairs left fully empty are skipped for that row.`,
-    ],
+    ...(chosen.length > 0
+      ? [
+          [
+            "Title (<Locale>) + Description (<Locale>)",
+            "Optional",
+            `${chosen.length} locale pair(s) included in THIS file (${chosen.join(", ")}) — chosen at download; the full Google set is ${GOOGLE_LOCALE_NAMES.length}. Pairs left fully empty are skipped for that row.`,
+          ],
+        ]
+      : [
+          [
+            "(no locale columns)",
+            "—",
+            `This file was downloaded with NO locales selected, so it has only the core columns above (the full Google set is ${GOOGLE_LOCALE_NAMES.length} locale pairs — download again and pick locales if you need them). NEW products import with a single fallback en-US listing whose title is the SKU itself.`,
+          ],
+          [
+            "⚠ OVERWRITE CAUTION",
+            "—",
+            "If you use this core-only file to OVERWRITE products that already exist on Google Play, their CURRENT store listings are REPLACED by that SKU-titled en-US listing — a product titled in Vietnamese would end up titled with its raw SKU. Download a template WITH the locales you need (and fill them) before overwriting existing products. The wizard also warns about this in the Preview step.",
+          ],
+        ]),
     [],
     [
       `UNIT REMINDER: "${GOOGLE_PRICE_HEADER}" is US dollars — NOT the app's default currency. GT Price is a PRICE in the GT Currency you specify on the same row (posted to Google Play as that currency's region price) — it is NOT an exchange rate.`,
@@ -257,31 +390,51 @@ function googleNotesRows(): (string | number)[][] {
     [
       `SAMPLE ROWS: the "${GOOGLE_DATA_SHEET_NAME}" sheet comes PRE-FILLED with the 3 sample rows below. Delete them or replace them with your real products. Rows keeping the sample Product IDs (${TEMPLATE_SAMPLE_PRODUCT_IDS.join(", ")}) are skipped automatically on import — any other Product ID in the data sheet is imported as a REAL store product.`,
     ],
+    // The illustrative table mirrors THIS file's columns — never a
+    // column the selection excluded.
     [
       ...GOOGLE_LEAD_HEADER_ROW,
-      "Title (Vietnamese)",
-      "Description (Vietnamese)",
+      ...(sampleLocale !== undefined
+        ? [`Title (${sampleLocale})`, `Description (${sampleLocale})`]
+        : []),
     ],
     ...SAMPLE_ROW_VALUES.map((v) => [
       v.productId,
       v.priceUsd,
       v.gtPrice,
       v.gtCurrency,
-      v.viTitle,
-      v.viDescription,
+      ...(sampleLocale !== undefined ? [v.title, v.description] : []),
     ]),
   ];
 }
 
 /** Complete spec for lib/xlsx-template.buildTemplateWorkbook /
- *  downloadXlsxTemplate. */
-export function googleIapTemplateSpec(): XlsxTemplateSpec {
+ *  downloadXlsxTemplate.
+ *
+ *  `selectedLocaleNames` comes from the download modal's locale picker:
+ *  `undefined` = FULL set (pre-picker behaviour, byte-identical output
+ *  and filename), `[]` = core columns only (the picker's default path,
+ *  nothing pre-ticked). Names are keys of GOOGLE_LOCALE_OPTIONS /
+ *  LOCALE_NAME_TO_BCP47; unknown names are ignored by
+ *  resolveSelectedLocales rather than emitting a header no parser would
+ *  match. */
+export function googleIapTemplateSpec(
+  selectedLocaleNames?: readonly string[],
+): XlsxTemplateSpec {
+  const chosen = resolveSelectedLocales(
+    GOOGLE_LOCALE_NAMES,
+    selectedLocaleNames,
+  );
   return {
     dataSheetName: GOOGLE_DATA_SHEET_NAME,
-    headers: googleTemplateHeaders(),
-    dataRows: googleTemplateDataRows(),
+    headers: googleTemplateHeaders(selectedLocaleNames),
+    dataRows: googleTemplateDataRows(selectedLocaleNames),
     notesSheetName: GOOGLE_NOTES_SHEET_NAME,
-    notesRows: googleNotesRows(),
-    filename: GOOGLE_TEMPLATE_FILENAME,
+    notesRows: googleNotesRows(selectedLocaleNames),
+    filename: templateFilenameFor(
+      GOOGLE_TEMPLATE_FILENAME,
+      chosen.length,
+      GOOGLE_LOCALE_NAMES.length,
+    ),
   };
 }
