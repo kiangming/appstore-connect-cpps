@@ -83,6 +83,25 @@ describe("anti-drift — generated headers equal the parser contract", () => {
     ]);
   });
 
+  it("full-set sample rows still fill Vietnamese (byte-compat with the pre-picker file)", () => {
+    // The FULL selection keeps the original filename, so its CONTENT must
+    // not drift either. Headers are identical under any sample-locale
+    // rule, so the header assertions above cannot catch this: a change to
+    // preferredSampleLocale() (e.g. to plain "first canonical") would
+    // silently switch these samples to Afrikaans. Mirrors the Apple pin.
+    const spec = googleIapTemplateSpec();
+    const t = spec.headers.indexOf("Title (Vietnamese)");
+    const d = spec.headers.indexOf("Description (Vietnamese)");
+    const sampleRows = spec.dataRows.filter(
+      (r) => String(r[0] ?? "").startsWith("com."),
+    );
+    expect(sampleRows.length).toBe(3);
+    for (const row of sampleRows) {
+      expect(String(row[t])).toMatch(/^Sample product 0\d$/);
+      expect(String(row[d])).toMatch(/^Sample product 0\d - import/);
+    }
+  });
+
   it("sample-row Product IDs are EXACTLY the shared parser skip list", () => {
     // The structural guard for the skip guard itself: an edit that adds/
     // renames a sample row without updating TEMPLATE_SAMPLE_PRODUCT_IDS

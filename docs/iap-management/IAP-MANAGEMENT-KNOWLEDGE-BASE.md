@@ -2379,6 +2379,16 @@ don't just patch the twin paths individually — extract a SHARED choke
 point (`resolveLivePurchaseOptions()`) all callers route through, so the
 next new write path can't reintroduce the same divergence by construction.
 
+When the twins are REPLACE-semantics fields on the same resource, sweep
+them in order of how LOUDLY they fail — the silent one is the one that
+survives. `4fbcdd5` fixed `purchaseOptions` (Google REJECTS a partial
+set: "must list all existing purchase options. Missing: …") and left
+`listings` on the identical PATCH body untouched, because Google accepts
+a partial listing set silently and destroys the rest (the still-open
+§10.13.K backlog item). A sibling that errors gets fixed by its own bug
+report; a sibling that quietly eats data never announces itself, so it
+needs the deliberate sweep.
+
 **P2 — `actions_log` CHECK constraint must include new action types**
 
 New `action_type` values are silently ignored when the DB CHECK constraint
