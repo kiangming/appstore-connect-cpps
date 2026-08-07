@@ -13,8 +13,15 @@ import {
   X,
 } from "lucide-react";
 
+import { toast } from "sonner";
+
 import { PreviewTable } from "./PreviewTable";
+import {
+  CustomPricesDialog,
+  type CustomPriceSet,
+} from "./CustomPricesDialog";
 import { PricingSourceSelector } from "@/components/google-iap-management/iap-form/PricingSourceSelector";
+import { PRICING_SOURCE_LABELS } from "@/lib/google-iap-management/pricing-source-labels";
 import { validateDecimalForCurrency } from "@/lib/google-iap-management/google/currency-precision";
 import {
   googleIapTemplateSpec,
@@ -164,6 +171,29 @@ export function BulkImportWizard({
     {},
   );
 
+  // Per-item custom prices — a SIBLING of previewRows/tierSelections,
+  // deliberately NOT reset by handleUploadAndPreview.
+  //
+  // KEYED BY SKU, NOT rowNumber. This is load-bearing, not a style choice:
+  // `tierSelections` is rowNumber-keyed and fully reseeded on every preview
+  // response (see the seedSelections block below), and changing the
+  // template FORCES a re-preview because pricingSource travels with the
+  // file upload. So the Manager-locked requirement "custom survives a
+  // template change" is unachievable inside that map — rowNumber is a
+  // file position, SKU is the row's identity. Proven by the survival test
+  // in BulkImportWizard.custom-prices.test.tsx.
+  const [customPrices, setCustomPrices] = useState<Record<string, CustomPriceSet>>({});
+  // SKU whose dialog is open, or null.
+  const [customDialogSku, setCustomDialogSku] = useState<string | null>(null);
+  // Tier identifier each custom set was saved against, compared on
+  // re-preview so the dialog can say "no longer tied to a template".
+  const [customBaselineDrift, setCustomBaselineDrift] = useState<Record<string, boolean>>({});
+  // Q3: named on a re-upload so a dropped custom set is never silent.
+  const [customCarryNotice, setCustomCarryNotice] = useState<{
+    kept: string[];
+    dropped: string[];
+  } | null>(null);
+
   // Step 4: execute
   const [executing, setExecuting] = useState(false);
   const [executeError, setExecuteError] = useState<string | null>(null);
@@ -196,8 +226,17 @@ export function BulkImportWizard({
   // the server owns the run's terminal status, full stop.
   const executeStartedRef = useRef(false);
 
+  // Wizard state is entirely client-side, so a refresh loses custom prices
+  // (and everything else). Accepted — but it must not be SILENT: ~170
+  // hand-typed prices per row is real work. Ref so the listener registered
+  // once always sees the current count without re-binding.
+  const hasUnsavedCustomsRef = useRef(false);
   useEffect(() => {
-    function handleBeforeUnload() {
+    hasUnsavedCustomsRef.current = Object.keys(customPrices).length > 0;
+  });
+
+  useEffect(() => {
+    function handleBeforeUnload(e: BeforeUnloadEvent) {
       const runId = hubRunIdRef.current;
       // Best-effort only — doesn't catch hard crashes/force-quit. Skipped
       // once execute has ever been invoked: the execute route's own
@@ -207,6 +246,15 @@ export function BulkImportWizard({
           type: "application/json",
         });
         navigator.sendBeacon("/api/google-iap-management/hub-tracking/cancel", blob);
+      }
+      // Prompt only while customs exist and nothing has been pushed yet —
+      // after execute the work is on Google, not in this tab.
+      if (hasUnsavedCustomsRef.current && !executeStartedRef.current) {
+        e.preventDefault();
+        // Legacy browsers key off a non-empty returnValue; modern ones
+        // show their own wording.
+        e.returnValue = "";
+        return "";
       }
     }
     window.addEventListener("beforeunload", handleBeforeUnload);
@@ -230,6 +278,32 @@ export function BulkImportWizard({
     }
     router.push(`/google-iap-management/apps/${encodeURIComponent(packageName)}`);
   }
+
+  /** Q4: custom prices only apply under a template source. Under Google
+   *  Conversion they are KEPT but INACTIVE — greyed, not sent, and
+   *  reactivated on switching back. Clearing on a radio toggle would
+   *  destroy work the Manager can't recover. */
+  const customActive = pricingSource !== "google_default";
+
+  /** The SKUs whose customs will actually ship: active source, a saved
+   *  set, and the row not set to Skip. Everything else is inert. */
+  const activeCustomSkus = useMemo(() => {
+    if (!customActive) return new Set<string>();
+    return new Set(
+      previewRows
+        .filter((r) => customPrices[r.sku] && r.decision !== "skip")
+        .map((r) => r.sku),
+    );
+  }, [customActive, previewRows, customPrices]);
+
+  /** Entry count per SKU, for the row chip. */
+  const customPriceCounts = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const [sku, set] of Object.entries(customPrices)) {
+      out[sku] = set.entries.length;
+    }
+    return out;
+  }, [customPrices]);
 
   const counts = useMemo(() => {
     const total = previewRows.length;
@@ -372,6 +446,49 @@ export function BulkImportWizard({
       setPreviewRows(rows);
       setPreviewWarnings(body.warnings ?? []);
       setTierSelections(seedSelections);
+
+      // Custom prices deliberately SURVIVE this reset (Manager-locked:
+      // "custom survives back-navigation to Step 1 and a template
+      // change"). Two adjustments, both of which must be visible:
+      //  - Q3: a DIFFERENT file may not contain every SKU that has a
+      //    custom set. Keep the ones whose SKU is still present, drop the
+      //    rest, and name BOTH lists — counts alone aren't verifiable
+      //    before a live-store write.
+      //  - Baseline drift: a set saved against tier X while the row now
+      //    resolves to tier Y (or to nothing) is no longer tied to the
+      //    template. The dialog header says so and the Template column
+      //    shows the NEW values for comparison.
+      setCustomPrices((prev) => {
+        const skusInFile = new Set(rows.map((r) => r.sku));
+        const kept: string[] = [];
+        const dropped: string[] = [];
+        const next: Record<string, CustomPriceSet> = {};
+        for (const [sku, set] of Object.entries(prev)) {
+          if (skusInFile.has(sku)) {
+            next[sku] = set;
+            kept.push(sku);
+          } else {
+            dropped.push(sku);
+          }
+        }
+        if (dropped.length > 0) {
+          setCustomCarryNotice({ kept, dropped });
+        } else {
+          setCustomCarryNotice(null);
+        }
+        const drift: Record<string, boolean> = {};
+        for (const sku of kept) {
+          const set = next[sku];
+          const row = rows.find((r) => r.sku === sku);
+          const nowTier = row ? (seedSelections[row.rowNumber] ?? null) : null;
+          drift[sku] =
+            set.baseline.kind === "template"
+              ? set.baseline.identifier !== nowTier
+              : nowTier !== null;
+        }
+        setCustomBaselineDrift(drift);
+        return next;
+      });
       setStep("preview");
 
       // Fires on the upload→preview transition — the moment the user has
@@ -423,6 +540,45 @@ export function BulkImportWizard({
       }
       return next;
     });
+    // Revertibility exit #3: picking a REAL tier drops Custom for that row.
+    // (The dropdown's "Custom…" entry is handled by openCustomDialog and
+    // never reaches here — it is a trigger, not a selectable tier value.)
+    if (identifier) {
+      const row = previewRows.find((r) => r.rowNumber === rowNumber);
+      if (row && customPrices[row.sku]) clearCustomForSku(row.sku, { toast: true });
+    }
+  }
+
+  function clearCustomForSku(sku: string, opts: { toast?: boolean } = {}) {
+    const removed = customPrices[sku];
+    setCustomPrices((prev) => {
+      const next = { ...prev };
+      delete next[sku];
+      return next;
+    });
+    setCustomBaselineDrift((prev) => {
+      const next = { ...prev };
+      delete next[sku];
+      return next;
+    });
+    if (opts.toast && removed) {
+      // Undo restores the exact set — reverting must never cost the
+      // Manager ~170 typed prices to a misclick.
+      toast(`Custom prices cleared for ${sku}`, {
+        action: {
+          label: "Undo",
+          onClick: () => setCustomPrices((prev) => ({ ...prev, [sku]: removed })),
+        },
+      });
+    }
+  }
+
+  function saveCustomForSku(sku: string, set: CustomPriceSet) {
+    setCustomPrices((prev) => ({ ...prev, [sku]: set }));
+    // A freshly saved set is by definition aligned with whatever baseline
+    // it was just built from.
+    setCustomBaselineDrift((prev) => ({ ...prev, [sku]: false }));
+    setCustomDialogSku(null);
   }
 
   function setAllExisting(decision: "overwrite" | "skip") {
@@ -845,6 +1001,47 @@ export function BulkImportWizard({
             </div>
           )}
 
+          {/* Q3 — a re-upload never silently drops a custom set. Both
+              lists are named: counts alone aren't verifiable before a
+              live-store write. */}
+          {customCarryNotice && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <p className="text-xs font-semibold text-blue-900 mb-1">
+                {customCarryNotice.kept.length} custom price set
+                {customCarryNotice.kept.length === 1 ? "" : "s"} kept ·{" "}
+                {customCarryNotice.dropped.length} dropped
+              </p>
+              <p className="text-[11px] text-blue-900 leading-relaxed">
+                Kept where the SKU still appears in the new file
+                {customCarryNotice.kept.length > 0 && (
+                  <>
+                    {" "}
+                    (<span className="font-mono">{customCarryNotice.kept.join(", ")}</span>)
+                  </>
+                )}
+                ; dropped where it does not (
+                <span className="font-mono">{customCarryNotice.dropped.join(", ")}</span>
+                ).
+              </p>
+            </div>
+          )}
+
+          {/* Q4 — kept-but-inactive must be stated, not just greyed. */}
+          {!customActive && Object.keys(customPrices).length > 0 && (
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+              <p className="text-[11px] text-slate-600 leading-relaxed">
+                <strong>{Object.keys(customPrices).length}</strong> custom price
+                set{Object.keys(customPrices).length === 1 ? " is" : "s are"}{" "}
+                kept but <strong>inactive</strong> — per-item custom prices only
+                apply under {PRICING_SOURCE_LABELS.default_template} or{" "}
+                {PRICING_SOURCE_LABELS.app_template}, not{" "}
+                {PRICING_SOURCE_LABELS.google_default}. They are not sent with
+                this import. Go back to Step 1 and pick a template source to
+                reactivate them.
+              </p>
+            </div>
+          )}
+
           {previewWarnings.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
               <p className="text-xs font-medium text-amber-900 mb-1">
@@ -892,6 +1089,11 @@ export function BulkImportWizard({
             onRowDecisionChange={setRowDecision}
             tierSelections={tierSelections}
             onTierSelectionChange={setRowTierSelection}
+            customPriceCounts={customPriceCounts}
+            activeCustomSkus={activeCustomSkus}
+            onOpenCustomDialog={setCustomDialogSku}
+            onResetCustom={(sku) => clearCustomForSku(sku, { toast: true })}
+            customEnabled={customActive}
           />
 
           <div className="flex justify-between pt-2">
@@ -924,6 +1126,38 @@ export function BulkImportWizard({
           </div>
         </section>
       )}
+
+      {/* Per-item custom prices dialog. Mounted only while open so each
+          open re-fetches the baseline — the country catalog must not be
+          cached across opens (P6: Google's catalog moves, Hotfix 9). */}
+      {customDialogSku &&
+        (() => {
+          const row = previewRows.find((r) => r.sku === customDialogSku);
+          const tier = row ? (tierSelections[row.rowNumber] ?? null) : null;
+          return (
+            <CustomPricesDialog
+              sku={customDialogSku}
+              sourceLabel={
+                pricingSource === "app_template"
+                  ? PRICING_SOURCE_LABELS.app_template
+                  : PRICING_SOURCE_LABELS.default_template
+              }
+              tierIdentifier={tier}
+              scope={pricingSource === "app_template" ? "APP" : "GLOBAL"}
+              appId={appId}
+              packageName={packageName}
+              appDefaultCurrency={appDefaultCurrency}
+              existing={customPrices[customDialogSku] ?? null}
+              baselineChanged={customBaselineDrift[customDialogSku] ?? false}
+              onSave={(set) => saveCustomForSku(customDialogSku, set)}
+              onResetToTemplate={() => {
+                clearCustomForSku(customDialogSku);
+                setCustomDialogSku(null);
+              }}
+              onClose={() => setCustomDialogSku(null)}
+            />
+          );
+        })()}
 
       {/* Step 4: Execute (transient) */}
       {step === "execute" && (
@@ -1039,6 +1273,13 @@ export function BulkImportWizard({
                     setHubRunId(null);
                     executeStartedRef.current = false;
                     hubStartPromiseRef.current = null;
+                    // "Import another" IS a fresh batch — unlike a
+                    // re-preview of the same batch, customs must not carry
+                    // over into unrelated work.
+                    setCustomPrices({});
+                    setCustomBaselineDrift({});
+                    setCustomCarryNotice(null);
+                    setCustomDialogSku(null);
                   }}
                   className="px-3 py-2 text-sm font-medium text-slate-700 border border-slate-200 hover:bg-slate-50 rounded-lg transition"
                 >

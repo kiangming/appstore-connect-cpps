@@ -1,8 +1,16 @@
 "use client";
 
-import { Check, AlertTriangle, ArrowRight, XCircle } from "lucide-react";
+import { Check, AlertTriangle, ArrowRight, XCircle, Pencil } from "lucide-react";
 
 import type { PreviewRow, PreviewTierCandidate } from "./BulkImportWizard";
+
+/** Sentinel for the dropdown's Custom entry. It is a TRIGGER ONLY and is
+ *  intercepted in the change handler — it must never be stored as the
+ *  row's tier selection. A sentinel that leaked into
+ *  `chosenTierIdentifier` would reach
+ *  `lookupTemplateEntriesForIdentifier`, which THROWS for a tier with no
+ *  entries (bulk-import.ts:579-585), failing the whole batch. */
+const CUSTOM_OPTION = "__custom__";
 
 interface Props {
   rows: PreviewRow[];
@@ -10,6 +18,16 @@ interface Props {
   // Hotfix 19 — tier-selection plumbing.
   tierSelections: Record<number, string>;
   onTierSelectionChange: (rowNumber: number, identifier: string) => void;
+  /** Per-item custom prices, keyed by SKU. Presence = the row has a set. */
+  customPriceCounts?: Record<string, number>;
+  /** SKUs whose customs will actually ship (source is a template AND the
+   *  row isn't skipped). Others render greyed as inactive. */
+  activeCustomSkus?: ReadonlySet<string>;
+  onOpenCustomDialog?: (sku: string) => void;
+  onResetCustom?: (sku: string) => void;
+  /** False under Google Conversion — the trigger is hidden and existing
+   *  sets render as inactive (Q4: keep-but-inactive). */
+  customEnabled?: boolean;
 }
 
 /** Hotfix 19: tier-dropdown option format Q2.C —
@@ -31,6 +49,11 @@ export function PreviewTable({
   onRowDecisionChange,
   tierSelections,
   onTierSelectionChange,
+  customPriceCounts = {},
+  activeCustomSkus,
+  onOpenCustomDialog,
+  onResetCustom,
+  customEnabled = false,
 }: Props) {
   // overflow-x-auto (not overflow-hidden) so the 8-column table stays
   // horizontally scrollable inside the max-w-5xl wizard — the rightmost
@@ -69,11 +92,21 @@ export function PreviewTable({
             // Bolder amber tint when Manager cleared the selection (defensive
             // edge-case, see BulkImportWizard tierStatus.pending).
             const selectionMissing = isAmbiguous && !selection;
-            const rowClass = selectionMissing
-              ? "bg-amber-100 hover:bg-amber-200 transition"
-              : isAmbiguous
-                ? "bg-amber-50 hover:bg-amber-100 transition"
-                : "hover:bg-slate-50 transition";
+            // undefined = no custom set for this SKU; a number = its entry count.
+            const customCount = customPriceCounts[row.sku];
+            const customIsActive =
+              customCount !== undefined && (activeCustomSkus?.has(row.sku) ?? false);
+            // Trigger hidden once a set exists (the chip owns re-open) and
+            // under Google Conversion (Q4 — custom doesn't apply there).
+            const customTriggerVisible =
+              customEnabled && customCount === undefined && Boolean(onOpenCustomDialog);
+            const rowClass = customIsActive
+              ? "bg-violet-50 hover:bg-violet-100 transition"
+              : selectionMissing
+                ? "bg-amber-100 hover:bg-amber-200 transition"
+                : isAmbiguous
+                  ? "bg-amber-50 hover:bg-amber-100 transition"
+                  : "hover:bg-slate-50 transition";
             return (
               <tr key={row.rowNumber} className={rowClass}>
                 <td className="px-3 py-2.5 text-xs text-slate-400 font-mono">
@@ -131,23 +164,71 @@ export function PreviewTable({
                       </span>
                     </div>
                   )}
+                  {/* Mirrors the cross_currency_resolved arrow above: the
+                      file value stays visible, the marker says what will
+                      actually be sent. */}
+                  {customIsActive && (
+                    <div className="flex items-center justify-end gap-1 text-[10px] text-violet-700 mt-0.5">
+                      <ArrowRight className="h-3 w-3" />
+                      <span className="font-semibold">custom</span>
+                    </div>
+                  )}
                 </td>
                 <td className="px-3 py-2.5 text-xs">
-                  {row.tierCandidates.length === 0 ? (
-                    <span className="text-slate-500 italic">
-                      Auto-converted from USD
-                    </span>
+                  {customCount !== undefined ? (
+                    /* Custom is a SEPARATE ROW ATTRIBUTE — it replaces the
+                       tier display but is never the <select>'s value. */
+                    <CustomChip
+                      sku={row.sku}
+                      count={customCount}
+                      active={customIsActive}
+                      onOpen={onOpenCustomDialog}
+                      onReset={onResetCustom}
+                    />
+                  ) : row.tierCandidates.length === 0 ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-500 italic">
+                        Auto-converted from USD
+                      </span>
+                      {customTriggerVisible && (
+                        <>
+                          <span className="text-slate-300">·</span>
+                          <CustomTriggerButton
+                            sku={row.sku}
+                            onOpen={onOpenCustomDialog}
+                          />
+                        </>
+                      )}
+                    </div>
                   ) : row.tierCandidates.length === 1 ? (
-                    <span className="font-mono text-slate-600 italic">
-                      {row.tierCandidates[0].identifier}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-slate-600 italic">
+                        {row.tierCandidates[0].identifier}
+                      </span>
+                      {customTriggerVisible && (
+                        <>
+                          <span className="text-slate-300">·</span>
+                          <CustomTriggerButton
+                            sku={row.sku}
+                            onOpen={onOpenCustomDialog}
+                          />
+                        </>
+                      )}
+                    </div>
                   ) : (
                     <div>
                       <select
                         value={selection ?? ""}
-                        onChange={(e) =>
-                          onTierSelectionChange(row.rowNumber, e.target.value)
-                        }
+                        onChange={(e) => {
+                          // Intercept the sentinel: open the dialog and
+                          // leave the tier selection untouched. It must
+                          // never become chosenTierIdentifier.
+                          if (e.target.value === CUSTOM_OPTION) {
+                            onOpenCustomDialog?.(row.sku);
+                            return;
+                          }
+                          onTierSelectionChange(row.rowNumber, e.target.value);
+                        }}
                         className={
                           "text-xs border rounded px-1.5 py-1 font-mono w-full max-w-[280px] " +
                           (selectionMissing
@@ -163,6 +244,14 @@ export function PreviewTable({
                             {formatTierLabel(c)}
                           </option>
                         ))}
+                        {customTriggerVisible && (
+                          <>
+                            <option disabled>──────────</option>
+                            <option value={CUSTOM_OPTION}>
+                              Custom… — set prices per country
+                            </option>
+                          </>
+                        )}
                       </select>
                       {selectionMissing && (
                         <p className="text-[10px] text-amber-700 mt-0.5 font-semibold">
@@ -231,6 +320,85 @@ export function PreviewTable({
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** Opens the dialog for a row that has no custom set yet. */
+function CustomTriggerButton({
+  sku,
+  onOpen,
+}: {
+  sku: string;
+  onOpen?: (sku: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen?.(sku)}
+      className="text-violet-700 font-medium hover:underline"
+    >
+      Custom…
+    </button>
+  );
+}
+
+/**
+ * Custom row indicator. Custom must NEVER be an opaque state: the chip
+ * names the country count, "View / edit" re-opens the dialog with the
+ * saved values, and "Reset" returns the row to its template.
+ *
+ * Inactive rendering (Q4) covers two cases — the source was switched to
+ * Google Conversion, or the row was set to Skip. In both the set is kept
+ * and simply not sent, so the Manager can switch back without retyping.
+ */
+function CustomChip({
+  sku,
+  count,
+  active,
+  onOpen,
+  onReset,
+}: {
+  sku: string;
+  count: number;
+  active: boolean;
+  onOpen?: (sku: string) => void;
+  onReset?: (sku: string) => void;
+}) {
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={
+            active
+              ? "inline-flex items-center gap-1 rounded-full border border-violet-300 bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-800"
+              : "inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-500"
+          }
+        >
+          <Pencil className="h-3 w-3" />
+          Custom · {count} {count === 1 ? "country" : "countries"}
+        </span>
+        <button
+          type="button"
+          onClick={() => onOpen?.(sku)}
+          className="text-[11px] font-medium text-violet-700 hover:underline"
+        >
+          View / edit
+        </button>
+        <span className="text-slate-300">·</span>
+        <button
+          type="button"
+          onClick={() => onReset?.(sku)}
+          className="text-[11px] text-slate-500 hover:text-slate-700 hover:underline"
+        >
+          Reset to template
+        </button>
+      </div>
+      {!active && (
+        <p className="text-[10px] text-slate-500 mt-0.5">
+          inactive — not applied under this pricing source / decision
+        </p>
+      )}
     </div>
   );
 }
