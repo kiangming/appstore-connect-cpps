@@ -2389,6 +2389,19 @@ a partial listing set silently and destroys the rest (the still-open
 report; a sibling that quietly eats data never announces itself, so it
 needs the deliberate sweep.
 
+Clean PREVENTIVE instance (Google Bulk Import per-item custom prices,
+Aug 2026): the module already had two per-country price editors that had
+drifted (the detail view's `UnifiedPricingTable` treats currency as
+display-only; the older create-mode block lets you type it). Rather than
+add a third for the custom-prices dialog, the editable cell was extracted
+to a shared `components/google-iap-management/pricing/RegionPriceCell.tsx`
+that BOTH surfaces render — the choke-point shape above, applied before
+the divergence rather than after. Same cycle also crystallized the
+companion rule: the shared component owns PRESENTATION only. It performs
+no validation, deliberately; the rules live in `currency-precision.ts`
+and every caller invokes them. A component that validated would let a
+caller that forgot to render it skip the check silently.
+
 **P2 — `actions_log` CHECK constraint must include new action types**
 
 New `action_type` values are silently ignored when the DB CHECK constraint

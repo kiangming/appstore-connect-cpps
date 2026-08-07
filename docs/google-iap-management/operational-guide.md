@@ -148,6 +148,9 @@ rows without a match fall back to `Google Conversion` — inline base price
 > `import_batches.pricing_source` and in every historical audit-log entry,
 > so old batches and SQL queries are unaffected.
 
+Under either template source, individual items can override the template
+with **per-item Custom prices** in Step 3 — see below.
+
 ### Step 2 — Upload
 
 Get the template via **Download bulk import template** on the Apps list
@@ -239,13 +242,70 @@ The underlying cause (the overwrite read-modify-write GET merges purchase
 options but NOT listings) is tracked as a backlog item in the Apple KB
 §10.13.K P4 follow-ups — not fixed by the warning.
 
+#### Custom prices for one item
+
+Any row can override the template for itself. In the **Tier** column,
+click `Custom…` (rows with several matching tiers get it as the last
+entry in the tier dropdown). The dialog lists every country Google sells
+in, pre-filled from that row's template tier.
+
+- **Currency is fixed per country** and shown as a chip — it is Google's
+  billing currency for that market, not something you pick.
+- **A blank price is not "no price".** It reads
+  `inherits — Google conversion`: at push, Google converts the item's
+  default price into that country. The footer counts these separately.
+- **Save is blocked** on a currency-precision error (VND/JPY take whole
+  numbers, KWD takes 3 decimals — the same rules as the item Edit form),
+  and when no priced country uses the app's own currency. Google needs
+  that entry to derive the product's default price; without it the row
+  would be refused at push, so the dialog stops you here instead.
+- Prices far below the template baseline get a **non-blocking warning**.
+  The tool has no per-country minimum table — Google enforces floors at
+  push and reports no per-row reason, so one below-floor price can fail
+  the whole batch. The warning is a heuristic, not a guarantee.
+
+Once saved the row shows `Custom · N countries` with **View / edit** and
+**Reset to template**. Custom prices are **absolute**: they are no longer
+tied to the template and will not change if you switch templates.
+
+**Reverting** — any of: `Reset all to template` in the dialog, `Reset to
+template` on the row (with an Undo toast), or picking a real tier again
+from the row's dropdown.
+
+**What survives what**
+
+| You do this | Custom prices |
+|---|---|
+| Back to Step 1, change template, re-preview | **Kept** — the dialog then says "no longer tied to a template" and shows the new template's values for comparison |
+| Upload a **different file** at Step 2 | Kept for SKUs still in the file, dropped for the rest — the banner names both lists |
+| Switch to `Google Conversion` | Kept but **inactive** — not sent; switching back to a template source reactivates them |
+| Set the row to **Skip** | Kept, not sent |
+| **Refresh the page** | **Lost** — all wizard state is in the browser. You get a browser warning first |
+| **Import another** | Cleared — that is a new batch |
+
 ### Step 4 — Execute
 
 The server fires a single `inappproducts.batchUpdate` call with
 `allowMissing: true` (so the same call inserts new SKUs and updates
 existing ones). When the response returns, the cache is synced row by
 row and the result panel shows Created / Overwritten / Skipped /
-Failed counts.
+Failed / Refused / **Custom** counts. **Custom** is how many items were
+priced from a per-item custom set rather than the batch template.
+
+**Refused rows are listed with their reason.** A custom row that cannot
+be applied is excluded from the batch and named here — it is NEVER
+quietly shipped with the template price instead. Custom refusal reasons:
+
+| Reason | Meaning |
+|---|---|
+| `custom_invalid_price` | A price broke its currency's precision rules. Fix it in the dialog and re-push. |
+| `custom_no_app_currency_entry` | No priced country used the app's own currency, so Google had no default price to use. Normally the dialog blocks this at Save. |
+| `custom_source_mismatch` | Custom prices arrived on a `Google Conversion` batch. Should be unreachable from the wizard. |
+
+A refused custom row also makes the run's Hub status **FAILED** rather
+than SUCCESS — the Manager asked for a price and it did not get applied,
+so reporting success would be wrong. (Cross-currency refusals still count
+as a soft skip, unchanged.)
 
 **Cap:** 100 actionable rows per call (`BATCH_MAX`,
 `orchestration/bulk-import.ts` — counted AFTER skips, sample rows and
@@ -265,8 +325,9 @@ Three tabs:
 ### Google Default Reference
 
 Informational. Explains Google's auto-equalisation behaviour and the
-resolution order at IAP create / import (App Template > Default
-Template > Google Conversion). The **tab** keeps the name "Google
+resolution order at IAP create / import (per-item Custom > App Template
+> Default Template > Google Conversion). A Bulk Import item marked
+**Custom** ignores the template entirely — its prices are absolute. The **tab** keeps the name "Google
 Default Reference" — it is a read-only benchmark matrix, a different
 thing from the `Google Conversion` pricing-source mode.
 

@@ -1,7 +1,12 @@
 # Google Bulk Import — Pricing-source relabel + per-item Custom prices
 
-**INVESTIGATION + DESIGN + MOCKUP ONLY. No implementation in this pass.**
-Hold for Manager review — §2.H lists the sign-off gates.
+**STATUS: IMPLEMENTED (August 2026).** Phase 1 (relabel/reorder) shipped
+in `af75202`; Phase 2+3 (per-item custom prices) in `12e1100` (SC1
+RegionPriceCell) → `f19391a` (SC2 model + routes) → `a122968` (SC3 dialog
++ wizard state) → `ecfd7b8` (SC4 execute contract + orchestrator).
+All six §2.H questions answered — see §3 for the recorded answers and §4
+for the as-built notes, **including two places where this document turned
+out to be wrong.**
 
 Scope: **Google IAP Management bulk import only**
 (`components/google-iap-management/bulk-import/*`,
@@ -863,3 +868,74 @@ ceiling is ~1 GB. Note `per_row_diagnostic` is only populated for template
 sources (`bulk-import.ts:521`), which is precisely where custom rows live,
 so the added fields land where they're needed and cost nothing on
 Google-Conversion batches.
+
+
+---
+
+## 4. As-built notes (August 2026)
+
+Everything in §2 shipped as designed except the two items below. Both are
+recorded because the doc, as written, would mislead the next reader.
+
+### 4.1 ⚠ CORRECTION — "the one line that is the whole feature" was wrong
+
+§2.E and §2.H R2 stated that the guard at `bulk-import.ts:555` is the
+single point of protection, and mandated a mutation-check on it.
+
+Running that mutation-check is what disproved it. **Deleting
+`|| row.customPrices` left the anchor test green.** The reason: the
+custom pre-pass stamps `row.resolvedDefaultPrice` (as §2.E itself
+instructs), and *that* clause — already in the guard for the
+cross-currency path — is what skips an applied custom row. Had the
+mutation-check been skipped because the test was green, the cycle would
+have shipped believing a clause was load-bearing when it wasn't, and the
+real protection would have been untested.
+
+Two protections exist and both are now pinned separately:
+
+| Protection | Covers | Pinned by | Mutation that breaks it |
+|---|---|---|---|
+| `row.resolvedDefaultPrice` stamp in the custom pre-pass | the SUCCESS path | the anchor test (custom prices reach the payload unchanged) | remove the stamp → anchor fails with template prices in the body |
+| `\|\| row.customPrices` in the template-loop guard | the REFUSED path | the provenance test | remove the clause → a refused custom row acquires a second diagnostic claiming provenance `"template"` |
+
+The clause still earns its place: a refused row has no
+`resolvedDefaultPrice`, so without it the row gets `regionOverrides`
+overwritten with template entries and is audit-logged as template-priced
+— and a future refactor that stops excluding refused rows would start
+shipping those prices. Keying off the INTENT as well as the outcome is
+the durable form. The guard's comment now says this rather than
+repeating the claim above.
+
+**Generalisable lesson (P10, sharpened):** a mutation-check is not
+ceremony to confirm a test you already believe. It is the only thing that
+tells you *which* line your test is actually pinning — and here the
+answer was "not the one the design named".
+
+### 4.2 Defects found during implementation, not present in the design
+
+- **The dialog's advertised pre-fill was absent.** The header promised
+  "Pre-filled from tier X" while every country rendered as
+  `inherits — Google conversion`, because nothing seeded the editable
+  values. Now: first open seeds from the template; RE-open seeds from the
+  saved set (a country the Manager deliberately cleared must stay clear —
+  consulting the template on re-open would silently resurrect it).
+- **A dead Save button.** The app-currency reason (§2.B) was gated behind
+  clicking Save, but Save is *disabled* when that check fails — so the
+  button did nothing and said nothing. Both blocking reasons now render
+  as soon as they apply. This is the same opaque-state failure the
+  feature exists to prevent, reintroduced in its own UI.
+- **`per_row_diagnostic` was missing from the nothing-to-push audit
+  payload** — the branch a fully-refused batch takes, i.e. exactly where
+  per-item provenance is most needed. Added.
+- **`rowsFailed + customRefusedRows` is `NaN`** for a result object
+  lacking the new field, and `NaN === 0` is false, so every clean batch
+  would have closed FAILED. Caught by two pre-existing tests; guarded
+  with `?? 0`.
+
+### 4.3 Confirmed as designed
+
+R3 (payload size) played out as §3 predicted: no sub-cap was needed. The
+regions bootstrap is untouched, with a comment at the call site recording
+why skipping it for a fully-covered custom row must not be "optimised"
+away (it is the only source of `regionsVersion` — Hotfix 9, BG → EUR).
+The `use server` posture test from `af75202` remains green.

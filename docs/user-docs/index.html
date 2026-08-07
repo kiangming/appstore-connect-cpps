@@ -3651,7 +3651,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <tbody>
             <tr><td>1. Pricing source</td><td>Chọn nguồn giá cho cả batch</td><td>Default Template · App-specific Template · Google Conversion</td></tr>
             <tr><td>2. Upload</td><td>Drag &amp; drop file .xlsx theo template</td><td>Nút Download template ở header wizard (mọi bước) + trang Apps list</td></tr>
-            <tr><td>3. Preview</td><td>Per-row validation + tier disambiguation + currency check (Hotfix 28)</td><td>New/Exists · Overwrite/Skip · dropdown chọn tier (Cycle 35-36)</td></tr>
+            <tr><td>3. Preview</td><td>Per-row validation + tier disambiguation + currency check (Hotfix 28)</td><td>New/Exists · Overwrite/Skip · dropdown chọn tier (Cycle 35-36) · <strong>Custom prices per item</strong></td></tr>
             <tr><td>4. Execute</td><td>Tạo/ghi đè items lên Google Play API</td><td>MỘT lệnh batchUpdate (allowMissing) · cap 100 rows/lần</td></tr>
           </tbody>
         </table>
@@ -3696,6 +3696,26 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <div class="step-title">Preview: validation + tier disambiguation + currency check (Step 3)</div>
             <div class="step-body">
               <p>Mỗi row hiển thị trạng thái <strong>New / Exists</strong> — với SKU đã tồn tại phải chọn <strong>Overwrite</strong> hoặc <strong>Skip</strong> (Continue bị khóa tới khi đủ quyết định). Tool match từng row với tier candidates: khi có nhiều candidates (vd: <code class="inline">0.99 USD</code> match Tier 1 và Alternate Tier A), chọn qua dropdown per-row (Cycle 35-36); rows không ambiguity → Tier read-only. Hotfix 28: validate currency vs region per-row — vd row mang giá <code class="inline">USD</code> nhưng app cấu hình region <code class="inline">JP</code> → warning; fix file rồi re-upload, hoặc bỏ qua warning. Panel warnings (amber) cũng hiển thị message "example row(s) skipped" nếu file còn dòng sample.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Custom prices cho từng item (Step 3, tùy chọn)</div>
+            <div class="step-body">
+              <p>Khi nguồn giá là <code class="inline">Default Template</code> hoặc <code class="inline">App-specific Template</code>, mỗi row có thể <strong>tự đặt giá riêng</strong>, không theo template. Ở cột <strong>Tier</strong> bấm <code class="inline">Custom…</code> (row có nhiều tier trùng giá thì <code class="inline">Custom…</code> nằm cuối dropdown). Dialog liệt kê <strong>toàn bộ quốc gia Google hỗ trợ</strong> (~170), điền sẵn theo tier của row đó, có ô search + lọc theo châu lục.</p>
+              <ul>
+                <li><strong>Currency cố định theo quốc gia</strong> — hiển thị dạng chip, KHÔNG chọn được. Đây là đồng tiền thanh toán Google quy định cho thị trường đó.</li>
+                <li><strong>Ô giá để trống KHÔNG phải là "không có giá"</strong> — hiển thị <code class="inline">inherits — Google conversion</code>: khi push, Google tự quy đổi giá mặc định sang quốc gia đó.</li>
+                <li><strong>Save bị khóa</strong> khi sai precision (VND/JPY chỉ nhận số nguyên, KWD 3 số lẻ — cùng bộ rule với form Edit item), hoặc khi <strong>không có quốc gia nào dùng đúng currency của app</strong>. Google cần entry đó để lấy defaultPrice; nếu thiếu, row sẽ bị từ chối lúc push nên dialog chặn ngay tại đây.</li>
+                <li>Giá thấp hơn template <strong>≥90%</strong> sẽ có <strong>cảnh báo (không chặn)</strong> — tool không có bảng giá sàn từng nước, Google chỉ báo lỗi lúc push và không nói row nào, nên một giá dưới sàn có thể làm hỏng cả batch.</li>
+              </ul>
+              <p>Sau khi lưu, row hiện chip <code class="inline">Custom · N countries</code> kèm <strong>View / edit</strong> và <strong>Reset to template</strong>. Giá custom là <strong>tuyệt đối</strong> — không còn gắn với template và không đổi khi bạn đổi template.</p>
+              <div class="callout callout-warning">
+                <div class="callout-title">⚠️ Custom prices sống ở đâu, mất khi nào</div>
+                <p>
+                  <strong>Giữ nguyên</strong> khi: quay lại Step 1 đổi template rồi preview lại (dialog sẽ ghi "no longer tied to a template"); upload file khác nhưng SKU vẫn còn (banner nêu rõ SKU nào giữ, SKU nào bị bỏ); chuyển sang <code class="inline">Google Conversion</code> (giữ nhưng <strong>inactive</strong>, không gửi đi — quay lại template thì tự kích hoạt lại); set row = Skip.<br>
+                  <strong>Mất</strong> khi: <strong>refresh trang</strong> (toàn bộ state wizard nằm ở trình duyệt — sẽ có cảnh báo của browser trước), hoặc bấm <strong>Import another</strong> (đó là batch mới).
+                </p>
+              </div>
             </div>
           </li>
           <li class="step">

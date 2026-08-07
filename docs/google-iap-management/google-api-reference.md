@@ -205,6 +205,17 @@ There is **no draft state** for IAPs (unlike Apple CPPs). Going
 When a Manager picks a pricing source on the Create / Edit / Bulk
 Import form, the server resolves prices in this order:
 
+0. **Bulk Import only — if the row carries per-item Custom prices, they
+   win and the template is not consulted at all.** The custom set is
+   absolute: `regionOverrides` is replaced by its entries and
+   `defaultPrice` is derived from the entry matching the app's default
+   currency. A custom set that cannot be applied REFUSES the row
+   (per-row fail-soft, `refusedRows`) — it never falls back to the
+   template price. Countries the set omits are still filled by Google's
+   conversion via the regions bootstrap.
+   Implementation: the custom pre-pass in
+   `orchestration/bulk-import.ts`, plus the `row.customPrices` clause in
+   the template loop's skip guard.
 1. If `app_template` is selected and an App template exists for this
    app: use its tier entries.
 2. Else if `default_template` is selected and a Default template
