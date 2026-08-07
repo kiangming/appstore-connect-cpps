@@ -109,8 +109,9 @@ export async function createIapOnGoogle(
   // legacy convenience of "specify defaultPrice + sparse overrides and
   // let Google auto-equalise the rest" is gone. We bootstrap the
   // missing regions via `monetization.convertRegionPrices` (Google's
-  // own catalog conversion) so Manager's "Google default pricing
-  // source" UX keeps working without forcing per-region input.
+  // own catalog conversion) so the "Google Conversion" pricing source
+  // (stored value `google_default`) keeps working without forcing
+  // per-region input.
   //
   // Manager-supplied region overrides always win over the converted
   // result — explicit intent beats catalog defaults.

@@ -209,8 +209,14 @@ Import form, the server resolves prices in this order:
    app: use its tier entries.
 2. Else if `default_template` is selected and a Default template
    exists: use its tier entries.
-3. Else (`google_default`): use the row's inline base price + region
-   overrides + Google's auto-equalisation for unset regions.
+3. Else (`google_default`, labelled **Google Conversion** in the UI):
+   use the row's inline base price + region overrides + Google's
+   auto-equalisation for unset regions.
+
+> The stored/wire value is `google_default` and always will be — the
+> August 2026 relabel changed the UI text only (the value is under a
+> CHECK constraint on `import_batches.pricing_source` and appears in
+> every historical `actions_log` payload).
 
 For the single-IAP forms, the tier identifier is chosen via dropdown.
 For Bulk Import, **each row's SKU is matched against the template's

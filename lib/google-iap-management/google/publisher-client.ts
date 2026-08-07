@@ -256,8 +256,9 @@ export type { ToolInAppProduct };
  *
  *  Regions expansion: the orchestrator is responsible for providing a
  *  comprehensive regions map (e.g. via the regions-helper that wraps
- *  `convertRegionPrices`). Manager's "Google default pricing source"
- *  uses that helper to bootstrap from a single base price. The
+ *  `convertRegionPrices`). The "Google Conversion" pricing source
+ *  (stored value `google_default`) uses that helper to bootstrap from a
+ *  single base price. The
  *  publisher-client itself just forwards what the orchestrator built.
  * ──────────────────────────────────────────────────────────────────── */
 

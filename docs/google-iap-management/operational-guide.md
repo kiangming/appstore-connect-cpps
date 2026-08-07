@@ -96,8 +96,8 @@ Reporting access or hasn't been granted any apps in Play Console.
      a title.
    - Title cap 55 chars, Description cap 200.
 3. **Pricing**
-   - Pick a source — `Google default`, `Default Template`, or
-     `App-specific Template` (see § 7 for what each does).
+   - Pick a source — `Default Template`, `App-specific Template`, or
+     `Google Conversion` (see § 7 for what each does).
    - Set base price decimal + currency.
    - Optionally open Region overrides and add per-region price rows.
 4. Click **Create on Google Play.** The server signs the JWT, posts
@@ -137,10 +137,16 @@ The wizard has four steps:
 
 ### Step 1 — Pricing source
 
-Pick `Google default`, `Default Template`, or `App-specific Template`
-for the **entire batch.** Template-mode rows are matched to a tier by
-**SKU = tier identifier**; rows without a match fall back to inline
-USD + GT Price.
+Pick `Default Template`, `App-specific Template`, or `Google Conversion`
+for the **entire batch** (that is the order the cards appear in).
+Template-mode rows are matched to a tier by **SKU = tier identifier**;
+rows without a match fall back to `Google Conversion` — inline base price
++ GT Price, converted by Google into every other country.
+
+> `Google Conversion` was labelled `Google default` before August 2026.
+> Only the label changed: the stored value is still `google_default` in
+> `import_batches.pricing_source` and in every historical audit-log entry,
+> so old batches and SQL queries are unaffected.
 
 ### Step 2 — Upload
 
@@ -260,7 +266,9 @@ Three tabs:
 
 Informational. Explains Google's auto-equalisation behaviour and the
 resolution order at IAP create / import (App Template > Default
-Template > Google default).
+Template > Google Conversion). The **tab** keeps the name "Google
+Default Reference" — it is a read-only benchmark matrix, a different
+thing from the `Google Conversion` pricing-source mode.
 
 ### Default Template
 

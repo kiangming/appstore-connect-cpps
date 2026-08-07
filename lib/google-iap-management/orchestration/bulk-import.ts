@@ -50,6 +50,7 @@ import { syncIapFromGoogle } from "../repository/iaps";
 import { appendAction } from "../repository/actions-log";
 import { googleIapDb } from "../db";
 import { withConcurrency } from "@/lib/iap-management/concurrency";
+import { PRICING_SOURCE_LABELS } from "../pricing-source-labels";
 import type {
   ParsedIapRow,
   ParsedRegionOverride,
@@ -528,13 +529,21 @@ export async function executeBulkImport(
     // when the selected template scope has no rows.
     const exists = await templateExists({ scope, appId: appIdForScope });
     if (!exists) {
+      // Every name in this message must be one the operator can actually
+      // SEE. It previously interpolated the raw enum (`"app_template"`,
+      // `change the pricing source to "google_default"`) — strings that
+      // appear nowhere in the UI — pointed at the APPLE module's nav label
+      // ("Settings → Pricing Tiers"; Google's is "Pricing Templates"), and
+      // identified the app by its internal UUID. Same accurate-error
+      // discipline as the false NOT_FOUND wording that sent the Manager to
+      // App Store Connect for nothing.
       const which =
         input.pricingSource === "app_template"
-          ? `Per-App Template for app ${input.appId}`
-          : `Default Template`;
+          ? `${PRICING_SOURCE_LABELS.app_template} for ${input.packageName}`
+          : PRICING_SOURCE_LABELS.default_template;
       throw new Error(
-        `Bulk import was set to "${input.pricingSource}" but no ${which} has been uploaded. ` +
-          `Upload one in Settings → Pricing Tiers, or change the pricing source to "google_default".`,
+        `Bulk import was set to "${PRICING_SOURCE_LABELS[input.pricingSource]}" but no ${which} has been uploaded. ` +
+          `Upload one in Settings → Pricing Templates, or go back to Step 1 and pick "${PRICING_SOURCE_LABELS.google_default}".`,
       );
     }
 

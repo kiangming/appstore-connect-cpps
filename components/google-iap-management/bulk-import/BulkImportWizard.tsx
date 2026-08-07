@@ -621,8 +621,10 @@ export function BulkImportWizard({
           <p className="text-xs text-slate-500 mb-4">
             Q-GIAP.E batch-level. Applied to every row in this import. For
             template modes, each row&apos;s SKU is matched to a template tier
-            identifier; rows without a matching tier fall back to the
-            row&apos;s inline USD + GT Price.
+            identifier; rows without a matching tier fall back to{" "}
+            <strong>Google Conversion</strong> — the row&apos;s inline base
+            price + GT Price override, converted by Google into every other
+            country.
           </p>
           <PricingSourceSelector
             value={pricingSource}

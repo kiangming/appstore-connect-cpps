@@ -3,7 +3,15 @@
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 
-export type PricingSource = "google_default" | "default_template" | "app_template";
+import {
+  PRICING_SOURCE_LABELS,
+  type PricingSourceValue,
+} from "@/lib/google-iap-management/pricing-source-labels";
+
+/** Persisted value union — see pricing-source-labels.ts. The stored strings
+ *  are a DB + audit + wire contract; only the display labels changed in
+ *  Phase 1. */
+export type PricingSource = PricingSourceValue;
 
 interface Props {
   /** Currently active source. */
@@ -91,18 +99,15 @@ export function PricingSourceSelector({
         <p className="text-xs text-slate-500">Pricing source (Q-GIAP.D)</p>
         {loading && <Loader2 className="h-3 w-3 text-slate-400 animate-spin" />}
       </div>
+      {/* Phase 1 render order: templates first, Google Conversion last.
+          RENDER ORDER ONLY — the TS union, the routes' VALID_PRICING_SOURCES
+          arrays and the DB CHECK constraint are all membership checks and
+          are deliberately left in their original order. */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-        <SourceCard
-          checked={value === "google_default"}
-          onChange={() => onChange("google_default")}
-          title="Google default"
-          description="Base price + sparse manual region overrides + Google's auto-equalisation."
-          enabled
-        />
         <SourceCard
           checked={value === "default_template"}
           onChange={() => onChange("default_template")}
-          title="Default Template"
+          title={PRICING_SOURCE_LABELS.default_template}
           description={
             availability.defaultExists
               ? "Apply the global pricing template's regions."
@@ -113,13 +118,20 @@ export function PricingSourceSelector({
         <SourceCard
           checked={value === "app_template"}
           onChange={() => onChange("app_template")}
-          title="App-specific Template"
+          title={PRICING_SOURCE_LABELS.app_template}
           description={
             availability.appExists
               ? "Apply this app's pricing template's regions."
               : "No per-app pricing template for this app."
           }
           enabled={availability.appExists}
+        />
+        <SourceCard
+          checked={value === "google_default"}
+          onChange={() => onChange("google_default")}
+          title={PRICING_SOURCE_LABELS.google_default}
+          description="Google's automatic price conversion of the base price into every country, plus any manual region override."
+          enabled
         />
       </div>
 

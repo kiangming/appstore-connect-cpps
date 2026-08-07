@@ -3649,7 +3649,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         <table class="docs-table">
           <thead><tr><th>Bước</th><th>Mục đích</th><th>Tính năng đặc biệt</th></tr></thead>
           <tbody>
-            <tr><td>1. Pricing source</td><td>Chọn nguồn giá cho cả batch</td><td>Google default · Default Template · App-specific Template</td></tr>
+            <tr><td>1. Pricing source</td><td>Chọn nguồn giá cho cả batch</td><td>Default Template · App-specific Template · Google Conversion</td></tr>
             <tr><td>2. Upload</td><td>Drag &amp; drop file .xlsx theo template</td><td>Nút Download template ở header wizard (mọi bước) + trang Apps list</td></tr>
             <tr><td>3. Preview</td><td>Per-row validation + tier disambiguation + currency check (Hotfix 28)</td><td>New/Exists · Overwrite/Skip · dropdown chọn tier (Cycle 35-36)</td></tr>
             <tr><td>4. Execute</td><td>Tạo/ghi đè items lên Google Play API</td><td>MỘT lệnh batchUpdate (allowMissing) · cap 100 rows/lần</td></tr>
@@ -3682,7 +3682,11 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </li>
           <li class="step">
             <div class="step-title">Mở wizard và chọn pricing source (Step 1)</div>
-            <div class="step-body"><p>Từ <a class="inline-link" data-goto="google-iaps">Danh sách IAPs</a> → nút <strong>Bulk Import</strong>. URL: <code class="inline">/google-iap-management/apps/[packageName]/bulk-import</code>. Step 1 chọn nguồn giá cho <strong>cả batch</strong>: <code class="inline">Google default</code>, <code class="inline">Default Template</code> hoặc <code class="inline">App-specific Template</code>.</p></div>
+            <div class="step-body"><p>Từ <a class="inline-link" data-goto="google-iaps">Danh sách IAPs</a> → nút <strong>Bulk Import</strong>. URL: <code class="inline">/google-iap-management/apps/[packageName]/bulk-import</code>. Step 1 chọn nguồn giá cho <strong>cả batch</strong> — thứ tự 3 thẻ: <code class="inline">Default Template</code>, <code class="inline">App-specific Template</code>, <code class="inline">Google Conversion</code>. Rows không match tier nào sẽ rơi về <code class="inline">Google Conversion</code>: giá gốc của row + GT Price, để Google tự quy đổi sang mọi quốc gia khác.</p>
+            <div class="callout callout-info">
+              <div class="callout-title">ℹ️ Đổi tên nhãn (8/2026): "Google default" → "Google Conversion"</div>
+              <p>Chỉ <strong>nhãn hiển thị</strong> đổi. Giá trị lưu trong DB vẫn là <code class="inline">google_default</code> (cột <code class="inline">import_batches.pricing_source</code> + mọi bản ghi <code class="inline">actions_log</code> cũ), nên batch cũ và các câu SQL đối soát không bị ảnh hưởng.</p>
+            </div></div>
           </li>
           <li class="step">
             <div class="step-title">Upload file (Step 2)</div>
