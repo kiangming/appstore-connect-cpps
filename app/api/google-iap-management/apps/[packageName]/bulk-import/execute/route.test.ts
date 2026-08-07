@@ -238,6 +238,157 @@ describe("Google bulk-import execute — Hub tracking closes on every exit exact
   });
 });
 
+describe("Google bulk-import execute — per-item custom prices (SC4)", () => {
+  const templateRow = {
+    ...validRow,
+    customPrices: {
+      entries: [{ region: "VN", currency: "VND", priceDecimal: "199000" }],
+      baselineTier: "tier_999",
+      editedAt: "2026-08-07T10:00:00.000Z",
+    },
+  };
+  const okResult = {
+    batchId: "b1",
+    rowsTotal: 1,
+    rowsCreated: 1,
+    rowsOverwritten: 0,
+    rowsSkipped: 0,
+    rowsFailed: 0,
+    rowsRefused: 0,
+    refusedRows: [],
+    customPricedRows: 1,
+    customRefusedRows: 0,
+    durationMs: 10,
+  };
+
+  it("forwards a valid custom set to the orchestrator", async () => {
+    executeBulkImport.mockResolvedValue(okResult);
+    const res = await POST(
+      jsonReq({ hub_run_id: "run-c1", pricingSource: "default_template", rows: [templateRow] }),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    const arg = executeBulkImport.mock.calls.at(-1)![1];
+    expect(arg.rows[0].customPrices).toEqual({
+      entries: [{ region: "VN", currency: "VND", priceDecimal: "199000" }],
+      baselineTier: "tier_999",
+      editedAt: "2026-08-07T10:00:00.000Z",
+    });
+  });
+
+  it("400s a custom set under Google Conversion — a silent ignore would misreport what shipped", async () => {
+    const res = await POST(
+      jsonReq({ hub_run_id: "run-c2", pricingSource: "google_default", rows: [templateRow] }),
+      ctx,
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      error: expect.stringContaining("Google Conversion"),
+    });
+    expect(executeBulkImport).not.toHaveBeenCalled();
+  });
+
+  it("SERVER-SIDE RE-VALIDATION rejects what the dialog would have caught (client state is untrusted)", async () => {
+    executeBulkImport.mockResolvedValue({ ...okResult, customPricedRows: 0, customRefusedRows: 1 });
+    // VND takes no decimals — the dialog blocks this, a stale tab wouldn't.
+    const res = await POST(
+      jsonReq({
+        hub_run_id: "run-c3",
+        pricingSource: "default_template",
+        rows: [
+          {
+            ...validRow,
+            customPrices: {
+              entries: [{ region: "VN", currency: "VND", priceDecimal: "199000.55" }],
+            },
+          },
+        ],
+      }),
+      ctx,
+    );
+    // Not a 400 — the ROW is refused, the batch still runs.
+    expect(res.status).toBe(200);
+    const arg = executeBulkImport.mock.calls.at(-1)![1];
+    expect(arg.rows[0].customPriceRefusal).toMatchObject({ kind: "custom_invalid_price" });
+    expect(arg.rows[0].customPriceRefusal.reason).toContain("199000.55");
+    expect(arg.rows[0].customPrices.entries).toEqual([]);
+  });
+
+  it("one malformed custom row does NOT 400 the batch — 99 good rows still proceed", async () => {
+    executeBulkImport.mockResolvedValue({ ...okResult, rowsTotal: 2, customRefusedRows: 1 });
+    const good = { ...templateRow, rowNumber: 2, sku: "good" };
+    const bad = {
+      ...validRow,
+      rowNumber: 3,
+      sku: "bad",
+      customPrices: { entries: [{ region: "", currency: "VND", priceDecimal: "199000" }] },
+    };
+    const res = await POST(
+      jsonReq({ hub_run_id: "run-c4", pricingSource: "default_template", rows: [good, bad] }),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    const arg = executeBulkImport.mock.calls.at(-1)![1];
+    expect(arg.rows[0].customPriceRefusal ?? null).toBeNull();
+    expect(arg.rows[1].customPriceRefusal).toMatchObject({ kind: "custom_invalid_price" });
+  });
+
+  it("400s an empty entries array", async () => {
+    const res = await POST(
+      jsonReq({
+        hub_run_id: "run-c5",
+        pricingSource: "default_template",
+        rows: [{ ...validRow, customPrices: { entries: [] } }],
+      }),
+      ctx,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("P5/Q5: a refused CUSTOM row closes the Hub run FAILED, not SUCCESS", async () => {
+    // Zero Google-side failures, one custom refusal. Pre-Q5 this closed
+    // SUCCESS because refusals folded into "skipped" — reporting an
+    // outcome that plainly did not happen.
+    executeBulkImport.mockResolvedValue({
+      ...okResult,
+      rowsCreated: 0,
+      rowsFailed: 0,
+      rowsRefused: 1,
+      customPricedRows: 0,
+      customRefusedRows: 1,
+      refusedRows: [
+        { sku: "sku1", rowNumber: 1, reason: "no VND entry", kind: "custom_no_app_currency_entry" },
+      ],
+    });
+    const res = await POST(
+      jsonReq({ hub_run_id: "run-c6", pricingSource: "default_template", rows: [templateRow] }),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    expect(finalizeHubTracking).toHaveBeenCalledWith("run-c6", "FAILED", expect.any(String));
+  });
+
+  it("cross-currency refusal semantics are UNCHANGED — still a soft skip closing SUCCESS", async () => {
+    executeBulkImport.mockResolvedValue({
+      ...okResult,
+      rowsCreated: 1,
+      rowsFailed: 0,
+      rowsRefused: 1,
+      customPricedRows: 0,
+      customRefusedRows: 0,
+      refusedRows: [
+        { sku: "x", rowNumber: 9, reason: "cross-currency", kind: "template_miss" },
+      ],
+    });
+    const res = await POST(
+      jsonReq({ hub_run_id: "run-c7", pricingSource: "default_template", rows: [validRow] }),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    expect(finalizeHubTracking).toHaveBeenCalledWith("run-c7", "SUCCESS", undefined);
+  });
+});
+
 /**
  * Static posture guard (same genre as lib/iap-management/rbac-posture.test.ts).
  *

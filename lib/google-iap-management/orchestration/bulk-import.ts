@@ -122,6 +122,31 @@ export interface BulkImportRow extends ParsedIapRow {
       | "no_app_currency_entry";
     usdAnchorMicros: string | null;
   } | null;
+  /** Per-item custom prices (Phase 3). ABSOLUTE per-country amounts the
+   *  Manager typed in the Preview step's dialog — independent of the batch
+   *  template. The client only sends this for template sources on
+   *  non-skipped rows; the execute route re-validates before it gets here.
+   *
+   *  Presence of this field makes the row skip BOTH the cross-currency
+   *  pre-pass and the template-resolution loop (see the guard below) —
+   *  that is what stops the template from overwriting these values. */
+  customPrices?: {
+    entries: ParsedRegionOverride[];
+    baselineTier: string | null;
+    /** ISO timestamp stamped when the dialog saved — audit provenance. */
+    editedAt?: string | null;
+  } | null;
+  /** Custom-price refusal — the row carried a custom set that could not be
+   *  applied. Per-row fail-soft, same channel as crossCurrencyRefusal: the
+   *  row is excluded from the batch, audit-logged and returned in
+   *  `refusedRows`. It NEVER falls through to the template price. */
+  customPriceRefusal?: {
+    reason: string;
+    kind:
+      | "custom_invalid_price"
+      | "custom_no_app_currency_entry"
+      | "custom_source_mismatch";
+  } | null;
 }
 
 export interface BulkImportInput {
@@ -147,8 +172,16 @@ export interface BulkImportResult {
   rowsOverwritten: number;
   rowsSkipped: number;
   rowsFailed: number;
-  /** Per-row fail-soft refusal count (cross-currency unresolvable). */
+  /** Per-row fail-soft refusal count (cross-currency unresolvable, or a
+   *  custom-price set that could not be applied). */
   rowsRefused: number;
+  /** Rows whose prices came from a per-item custom set (Phase 3). */
+  customPricedRows: number;
+  /** Custom rows REFUSED. Surfaced separately from `rowsRefused` because
+   *  the Hub terminal status treats them differently: a cross-currency
+   *  refusal is a soft skip, but a custom refusal is a Manager
+   *  instruction that did not happen (Q5 / P5). */
+  customRefusedRows: number;
   /** Refused rows surfaced for caller display — each carries its SKU
    *  and the human-readable reason. Order matches input order for
    *  affected rows. */
@@ -328,6 +361,118 @@ export async function executeBulkImport(
   //
   // Refused rows are excluded from the Google batch (per-row fail-soft,
   // Q-K) and surfaced in BulkImportResult.refusedRows + the audit log.
+  // ── Custom-price pre-pass (Phase 3) ────────────────────────────────
+  //
+  // Runs BEFORE the cross-currency pre-pass and before the template loop.
+  // Ordering is deliberate: custom prices are ABSOLUTE and already
+  // denominated per country, so there is nothing to convert and nothing
+  // to look up. Custom WINS over both.
+  //
+  // On success the row is stamped exactly the way the cross-currency path
+  // stamps a resolved row — `regionOverrides` + `resolvedDefaultPrice` —
+  // so `buildProduct` needs no change at all.
+  //
+  // On failure the row is REFUSED (per-row fail-soft) and excluded from
+  // the batch. It must never fall through to the template price: shipping
+  // a price the Manager did not choose, and reporting success for it,
+  // is the exact failure this feature exists to prevent.
+  const appCurrencyForCustom = (input.appDefaultCurrency ?? "").trim().toUpperCase();
+  let customPricedRows = 0;
+  let customRefusedRows = 0;
+
+  for (const row of actionableRows) {
+    if (!row.customPrices) continue;
+    const entries = row.customPrices.entries ?? [];
+
+    if (input.pricingSource === "google_default") {
+      // The client must never send this; the route rejects it with a 400.
+      // Defence in depth for a direct API caller — silently ignoring the
+      // custom set would be a quiet lie about what got pushed.
+      row.customPriceRefusal = {
+        kind: "custom_source_mismatch",
+        reason: `Row ${row.rowNumber} (${row.sku}): custom prices were supplied but the batch pricing source is "${PRICING_SOURCE_LABELS.google_default}", which does not support them. Row not sent.`,
+      };
+      customRefusedRows += 1;
+      continue;
+    }
+
+    if (entries.length === 0) {
+      row.customPriceRefusal = {
+        kind: "custom_invalid_price",
+        reason: `Row ${row.rowNumber} (${row.sku}): custom prices were marked but no country prices were supplied. Row not sent.`,
+      };
+      customRefusedRows += 1;
+      continue;
+    }
+
+    // Validate every entry against ITS OWN currency. decimalToMicros is
+    // the throwing backstop (the same guard the single-item write path
+    // relies on); the route has already run the non-throwing check.
+    const priced: Array<{ region: string; currency: string; priceMicros: string }> = [];
+    let invalid: string | null = null;
+    for (const e of entries) {
+      const region = e.region.trim().toUpperCase();
+      const currency = e.currency.trim().toUpperCase();
+      if (!region || !currency) {
+        invalid = `Row ${row.rowNumber} (${row.sku}): a custom price is missing its country or currency. Row not sent.`;
+        break;
+      }
+      try {
+        priced.push({
+          region,
+          currency,
+          priceMicros: decimalToMicros(e.priceDecimal, currency),
+        });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        invalid = `Row ${row.rowNumber} (${row.sku}): custom price "${e.priceDecimal}" is invalid for ${currency} — ${detail} Row not sent.`;
+        break;
+      }
+    }
+    if (invalid) {
+      row.customPriceRefusal = { kind: "custom_invalid_price", reason: invalid };
+      customRefusedRows += 1;
+      continue;
+    }
+
+    // Q6 — defaultPrice ALWAYS derives from the app-currency entry. No
+    // exception: Google needs a defaultPrice, and picking any other
+    // currency would make the store default disagree with the app's
+    // configured currency. The dialog blocks Save when this is missing,
+    // so reaching here means a direct API caller or stale client state.
+    if (!appCurrencyForCustom) {
+      row.customPriceRefusal = {
+        kind: "custom_no_app_currency_entry",
+        reason: `Row ${row.rowNumber} (${row.sku}): this app has no cached default currency, so no defaultPrice can be derived from the custom prices. Refresh the app from Google and retry. Row not sent.`,
+      };
+      customRefusedRows += 1;
+      continue;
+    }
+    const appCurrencyEntry = priced.find((p) => p.currency === appCurrencyForCustom);
+    if (!appCurrencyEntry) {
+      row.customPriceRefusal = {
+        kind: "custom_no_app_currency_entry",
+        reason: `Row ${row.rowNumber} (${row.sku}): custom prices carry no ${appCurrencyForCustom} entry, which Google requires for defaultPrice. Row not sent.`,
+      };
+      customRefusedRows += 1;
+      continue;
+    }
+
+    row.regionOverrides = priced.map((p) => ({
+      region: p.region,
+      currency: p.currency,
+      priceDecimal: microsToDecimal(p.priceMicros, 6),
+    }));
+    row.resolvedDefaultPrice = {
+      currency: appCurrencyEntry.currency,
+      priceMicros: appCurrencyEntry.priceMicros,
+    };
+    customPricedRows += 1;
+    console.info(
+      `[google-iap:bulk-import:custom-prices] applied sku=${row.sku} entries=${priced.length} default=${appCurrencyEntry.currency}/${appCurrencyEntry.priceMicros} baseline_tier=${row.customPrices.baselineTier ?? "-"}`,
+    );
+  }
+
   const appCurrencyNorm = (input.appDefaultCurrency ?? "").trim().toUpperCase();
   const crossCurrencyScope: "GLOBAL" | "APP" =
     input.pricingSource === "app_template" ? "APP" : "GLOBAL";
@@ -339,6 +484,13 @@ export async function executeBulkImport(
   let crossCurrencyByValueFallback = 0;
 
   for (const row of actionableRows) {
+    // CUSTOM WINS. A custom row is already denominated per country in
+    // absolute amounts — there is no anchor to re-interpret and no tier to
+    // resolve against. Applies to refused custom rows too: they are
+    // already excluded, and re-refusing them here would overwrite the
+    // accurate reason with a cross-currency one.
+    if (row.customPrices) continue;
+
     const trigger = detectCrossCurrencyTrigger({
       basePriceDecimal: row.basePriceDecimal,
       baseCurrency: row.baseCurrency,
@@ -457,15 +609,26 @@ export async function executeBulkImport(
 
   // Split actionable into pushable (will hit Google) and refused
   // (cross-currency fail-soft). Order is preserved for both groups.
-  const pushableRows = actionableRows.filter((r) => !r.crossCurrencyRefusal);
+  const pushableRows = actionableRows.filter(
+    (r) => !r.crossCurrencyRefusal && !r.customPriceRefusal,
+  );
   const refusedRowsDetail = actionableRows
-    .filter((r) => r.crossCurrencyRefusal)
-    .map((r) => ({
-      sku: r.sku,
-      rowNumber: r.rowNumber,
-      reason: r.crossCurrencyRefusal!.reason,
-      kind: r.crossCurrencyRefusal!.kind,
-    }));
+    .filter((r) => r.crossCurrencyRefusal || r.customPriceRefusal)
+    .map((r) =>
+      r.customPriceRefusal
+        ? {
+            sku: r.sku,
+            rowNumber: r.rowNumber,
+            reason: r.customPriceRefusal.reason,
+            kind: r.customPriceRefusal.kind as string,
+          }
+        : {
+            sku: r.sku,
+            rowNumber: r.rowNumber,
+            reason: r.crossCurrencyRefusal!.reason,
+            kind: r.crossCurrencyRefusal!.kind as string,
+          },
+    );
 
   // Q-GIAP.D + Hotfix 15 → Hotfix 19: template-driven price resolution.
   //
@@ -498,6 +661,12 @@ export async function executeBulkImport(
   let templateIdResolved: string | null = null;
   let templateScopeUsed: "GLOBAL" | "APP" | null = null;
   let templateAppIdUsed: string | null = null;
+  type PriceProvenance =
+    | "custom"
+    | "custom_refused"
+    | "template"
+    | "cross_currency_resolved"
+    | "auto_bootstrap";
   type SelectionPath =
     | "manager_explicit"
     | "default_accepted"
@@ -517,7 +686,48 @@ export async function executeBulkImport(
     entries_count: number;
     vn_currency: string | null;
     vn_price_decimal: string | null;
+    // Phase 3 — per-item price provenance. Without this nobody can
+    // reconstruct WHY an item got its price: the batch-level
+    // `pricing_source` is no longer the whole truth once individual rows
+    // can opt out of the template.
+    price_provenance?: PriceProvenance;
+    custom_entry_count?: number | null;
+    custom_baseline_tier?: string | null;
+    custom_blank_regions?: number | null;
+    custom_edited_at?: string | null;
   }> = [];
+
+  // Emitted for every actionable row with a custom set — including refused
+  // ones, so the audit shows the attempt and its reason, not just silence.
+  for (let i = 0; i < actionableRows.length; i += 1) {
+    const row = actionableRows[i];
+    if (!row.customPrices) continue;
+    perRowDiagnostic.push({
+      row_index: i,
+      sku: row.sku,
+      base_currency: row.baseCurrency,
+      base_price_decimal: row.basePriceDecimal,
+      candidate_count: row.tierCandidateCount ?? 0,
+      default_tier_offered: row.defaultTierIdentifier ?? null,
+      // A custom row has no selected tier — that is the point of it.
+      selected_tier: null,
+      selection_path: "no_candidates_auto_bootstrap",
+      match_strategy: "none",
+      entries_count: row.customPrices.entries.length,
+      vn_currency:
+        row.regionOverrides.find((r) => r.region === "VN")?.currency ?? null,
+      vn_price_decimal:
+        row.regionOverrides.find((r) => r.region === "VN")?.priceDecimal ?? null,
+      price_provenance: row.customPriceRefusal ? "custom_refused" : "custom",
+      custom_entry_count: row.customPrices.entries.length,
+      custom_baseline_tier: row.customPrices.baselineTier,
+      // Countries the custom set does NOT cover are filled by Google's
+      // conversion at push — worth recording, it explains prices the
+      // Manager never typed.
+      custom_blank_regions: null,
+      custom_edited_at: row.customPrices.editedAt ?? null,
+    });
+  }
 
   if (input.pricingSource !== "google_default") {
     const scope = input.pricingSource === "app_template" ? "APP" : "GLOBAL";
@@ -555,13 +765,48 @@ export async function executeBulkImport(
     for (let rowIndex = 0; rowIndex < actionableRows.length; rowIndex += 1) {
       const row = actionableRows[rowIndex];
 
+      // ⚠ TWO THINGS PROTECT CUSTOM PRICES HERE — BOTH ARE LOAD-BEARING.
+      //
+      // The design called this guard "the one line that is the whole
+      // feature". Measured against the implementation that is not quite
+      // right, and the difference matters to anyone editing this:
+      //
+      //   1. SUCCESS path — protected by `row.resolvedDefaultPrice`,
+      //      stamped by the custom pre-pass above. That clause is what
+      //      actually skips an applied custom row. Mutation-checked:
+      //      deleting the stamp makes the anchor test fail with TEMPLATE
+      //      prices in the payload.
+      //   2. REFUSED path — protected by `row.customPrices`. A refused
+      //      row has no resolvedDefaultPrice, so without this clause it
+      //      falls through, has `row.regionOverrides` overwritten with
+      //      template entries, and emits a diagnostic claiming
+      //      provenance "template" for a row the Manager marked Custom.
+      //      Mutation-checked by the provenance test.
+      //
+      // Keying off the INTENT (customPrices) as well as the outcome also
+      // means a future refactor that stops excluding refused rows can't
+      // silently start shipping template prices under a Custom label.
+      //
       // Cross-currency pre-pass already handled this row — either
       // resolved (regionOverrides + resolvedDefaultPrice stamped) or
       // refused (excluded from pushable). In both cases the existing
       // same-currency template lookup below would call
       // decimalToMicros(row.basePriceDecimal, row.baseCurrency) which
       // throws for cross-currency. Skip.
-      if (row.crossCurrencyRefusal || row.resolvedDefaultPrice) continue;
+      //
+      // `row.customPrices` is the Phase-3 addition and it is NOT
+      // redundant with `resolvedDefaultPrice`: a REFUSED custom row has
+      // no resolvedDefaultPrice, and without this clause it would fall
+      // into the template lookup below, get `row.regionOverrides`
+      // overwritten with template entries (see the assignment ~100 lines
+      // down), and then be excluded anyway — but a future refactor that
+      // stops excluding refused rows would silently ship template prices
+      // under a "custom" label. Key off the INTENT (customPrices), not
+      // the outcome.
+      //
+      if (row.crossCurrencyRefusal || row.resolvedDefaultPrice || row.customPrices) {
+        continue;
+      }
 
       const baseMicros = decimalToMicros(
         row.basePriceDecimal,
@@ -702,6 +947,7 @@ export async function executeBulkImport(
           entries_count: entries.length,
           vn_currency: vnEntry?.currency ?? null,
           vn_price_decimal: vnEntry?.priceDecimal ?? null,
+          price_provenance: "template",
         });
         console.info(
           `[google-iap:bulk-import] template_match sku=${row.sku} path=${selectionPath} tier=${selectedTier ?? "?"} entries=${entries.length} vn=${vnEntry ? `${vnEntry.currency}/${vnEntry.priceDecimal}` : "missing"}`,
@@ -721,6 +967,9 @@ export async function executeBulkImport(
           entries_count: 0,
           vn_currency: null,
           vn_price_decimal: null,
+          price_provenance: row.resolvedDefaultPrice
+            ? "cross_currency_resolved"
+            : "auto_bootstrap",
         });
       }
     }
@@ -771,6 +1020,13 @@ export async function executeBulkImport(
         cross_currency_refused: crossCurrencyRefused,
         cross_currency_by_explicit_header: crossCurrencyByExplicitHeader,
         cross_currency_by_value_fallback: crossCurrencyByValueFallback,
+        custom_priced_rows: customPricedRows,
+        custom_refused_rows: customRefusedRows,
+        // Included on the nothing-to-push path too. This is the branch a
+        // fully-refused batch takes, and it is precisely where per-item
+        // provenance matters most: without it the audit would record that
+        // nothing shipped but not WHY each row was rejected.
+        per_row_diagnostic: perRowDiagnostic,
         duration_ms: Date.now() - t0,
       },
     });
@@ -784,6 +1040,8 @@ export async function executeBulkImport(
       rowsFailed: 0,
       rowsRefused: refusedRowsDetail.length,
       refusedRows: refusedRowsDetail,
+      customPricedRows,
+      customRefusedRows,
       durationMs: Date.now() - t0,
     };
   }
@@ -798,7 +1056,15 @@ export async function executeBulkImport(
   // Cross-currency rows that resolved via template use the
   // resolvedDefaultPrice (app-currency micros) as the bootstrap anchor;
   // their raw basePriceDecimal is a USD anchor that would throw under
-  // VND precision.
+  // VND precision. Custom rows use it too (their app-currency entry).
+  //
+  // ⚠ DO NOT "OPTIMISE" THIS AWAY FOR CUSTOM ROWS.
+  // A custom row that covers all ~170 countries makes the merge below a
+  // no-op, so skipping convertRegionPrices for it looks like free
+  // latency. It is not: this call is the ONLY source of `regionsVersion`
+  // (Hotfix 9 — Google moved BG from BGN to EUR in Jan 2026, and a patch
+  // whose pinned catalog version disagrees with the prices is rejected).
+  // Skipping it reintroduces a bug that has already been paid for once.
   type RowBootstrap = {
     regions: Array<{ region: string; currency: string; priceMicros: string }>;
     regionsVersion?: string;
@@ -950,6 +1216,8 @@ export async function executeBulkImport(
         cross_currency_refused: crossCurrencyRefused,
         cross_currency_by_explicit_header: crossCurrencyByExplicitHeader,
         cross_currency_by_value_fallback: crossCurrencyByValueFallback,
+        custom_priced_rows: customPricedRows,
+        custom_refused_rows: customRefusedRows,
         error: err instanceof Error ? err.message : String(err),
         duration_ms: Date.now() - t0,
       },
@@ -1007,6 +1275,9 @@ export async function executeBulkImport(
       refused_rows: refusedRowsDetail,
       cross_currency_resolved: crossCurrencyResolved,
       cross_currency_refused: crossCurrencyRefused,
+      // Phase 3 — per-item custom pricing.
+      custom_priced_rows: customPricedRows,
+      custom_refused_rows: customRefusedRows,
       rows_total: input.rows.length,
       rows_created: created,
       rows_overwritten: overwritten,
@@ -1025,6 +1296,8 @@ export async function executeBulkImport(
     rowsFailed: failed,
     rowsRefused: refusedRowsDetail.length,
     refusedRows: refusedRowsDetail,
+    customPricedRows,
+    customRefusedRows,
     durationMs: Date.now() - t0,
   };
 }

@@ -117,6 +117,9 @@ interface ExecuteResult {
   rowsFailed: number;
   /** Cycle 43 — per-row cross-currency fail-soft refusals. */
   rowsRefused?: number;
+  /** Phase 3 — rows priced from a per-item custom set. */
+  customPricedRows?: number;
+  customRefusedRows?: number;
   refusedRows?: Array<{
     sku: string;
     rowNumber: number;
@@ -671,6 +674,24 @@ export function BulkImportWizard({
                 tierSelections[r.rowNumber] ?? null,
               defaultTierIdentifier: r.defaultTierSelection,
               tierCandidateCount: r.tierCandidates.length,
+              // Phase 3 — per-item custom prices. Sent ONLY when the row
+              // has a saved set, the batch source is a template, and the
+              // row isn't skipped (activeCustomSkus encodes all three).
+              // Under Google Conversion the sets are kept in state but
+              // deliberately not sent (Q4: keep-but-inactive).
+              customPrices: activeCustomSkus.has(r.sku)
+                ? (() => {
+                    const set = customPrices[r.sku];
+                    return {
+                      entries: set.entries,
+                      baselineTier:
+                        set.baseline.kind === "template"
+                          ? set.baseline.identifier
+                          : null,
+                      editedAt: set.editedAt,
+                    };
+                  })()
+                : null,
             })),
           }),
         },
@@ -1206,7 +1227,7 @@ export function BulkImportWizard({
               <p className="text-xs text-slate-500 mb-3">
                 {appDisplayName ?? packageName} · {executeResult.durationMs}ms
               </p>
-              <div className="grid grid-cols-5 gap-2">
+              <div className="grid grid-cols-6 gap-2">
                 <Stat label="Created" value={executeResult.rowsCreated} tone="emerald" />
                 <Stat
                   label="Overwritten"
@@ -1223,6 +1244,14 @@ export function BulkImportWizard({
                   label="Refused"
                   value={executeResult.rowsRefused ?? 0}
                   tone="red"
+                />
+                {/* Phase 3 — per-item provenance at a glance: how many
+                    items got prices the Manager typed rather than the
+                    batch template. */}
+                <Stat
+                  label="Custom"
+                  value={executeResult.customPricedRows ?? 0}
+                  tone="violet"
                 />
               </div>
               {executeResult.refusedRows && executeResult.refusedRows.length > 0 && (
@@ -1430,7 +1459,7 @@ function Stat({
 }: {
   label: string;
   value: number;
-  tone: "emerald" | "amber" | "slate" | "red";
+  tone: "emerald" | "amber" | "slate" | "red" | "violet";
 }) {
   const cls =
     tone === "emerald"
@@ -1439,7 +1468,9 @@ function Stat({
         ? "bg-amber-50 text-amber-800 border-amber-200"
         : tone === "red"
           ? "bg-red-50 text-red-800 border-red-200"
-          : "bg-slate-50 text-slate-700 border-slate-200";
+          : tone === "violet"
+            ? "bg-violet-50 text-violet-800 border-violet-200"
+            : "bg-slate-50 text-slate-700 border-slate-200";
   return (
     <div className={`rounded-lg border p-2 ${cls}`}>
       <p className="text-2xl font-semibold tabular-nums">{value}</p>

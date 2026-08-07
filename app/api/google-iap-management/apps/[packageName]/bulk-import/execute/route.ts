@@ -53,6 +53,8 @@ import {
   type HubTerminalStatus,
 } from "@/lib/google-iap-management/hub-tracking/tracking";
 import { computeGoogleBulkImportTerminalStatus } from "@/lib/google-iap-management/hub-tracking/status-mapping";
+import { validateDecimalForCurrency } from "@/lib/google-iap-management/google/currency-precision";
+import { PRICING_SOURCE_LABELS } from "@/lib/google-iap-management/pricing-source-labels";
 
 export const dynamic = "force-dynamic";
 
@@ -80,6 +82,13 @@ interface ExecuteBody {
      *  "Base Price" (value-based fallback). Legacy clients that don't
      *  send this default to "inferred" (preserves pre-Cycle-43 behavior). */
     priceHeaderSource?: "explicit" | "inferred";
+    /** Phase 3 — per-item custom prices. Only ever sent for template
+     *  sources on non-skipped rows; see the validation below. */
+    customPrices?: {
+      entries?: Array<{ region?: string; currency?: string; priceDecimal?: string }>;
+      baselineTier?: string | null;
+      editedAt?: string | null;
+    } | null;
   }>;
 }
 
@@ -200,7 +209,70 @@ export async function POST(
         // wizard) so detection falls back to the value-based path.
         priceHeaderSource:
           r.priceHeaderSource === "explicit" ? "explicit" : "inferred",
+        // Phase 3 — parsed + re-validated below.
+        customPrices: null,
       });
+
+      // ── Custom prices: server-side re-validation ──────────────────────
+      // Client state is UNTRUSTED. The dialog gates Save on exactly these
+      // rules, but nothing stops a stale tab or a direct API call, and
+      // these values go to a live store. Same module the dialog uses, so
+      // the rules cannot diverge.
+      if (r.customPrices) {
+        // A silent ignore here would be a quiet lie about what got
+        // pushed. The client never sends this under Google Conversion, so
+        // reaching it means a bug or a hand-rolled call: fail loudly.
+        if (pricingSource === "google_default") {
+          tracking.errorMessage = `Row ${r.rowNumber ?? r.sku}: custom prices cannot be used with the "${PRICING_SOURCE_LABELS.google_default}" pricing source.`;
+          return NextResponse.json({ error: tracking.errorMessage }, { status: 400 });
+        }
+        const entries = r.customPrices.entries;
+        if (!Array.isArray(entries) || entries.length === 0) {
+          tracking.errorMessage = `Row ${r.rowNumber ?? r.sku}: customPrices.entries must be a non-empty array.`;
+          return NextResponse.json({ error: tracking.errorMessage }, { status: 400 });
+        }
+        // A MALFORMED ENTRY REFUSES THIS ROW ONLY — it must never 400 the
+        // whole batch. One bad row cannot be allowed to block 99 good
+        // ones; the orchestrator's per-row fail-soft channel reports it.
+        const parsed: Array<{ region: string; currency: string; priceDecimal: string }> = [];
+        let rowError: string | null = null;
+        for (const e of entries) {
+          const region = (e.region ?? "").trim().toUpperCase();
+          const currency = (e.currency ?? "").trim().toUpperCase();
+          const priceDecimal = (e.priceDecimal ?? "").trim();
+          if (!region || !currency || !priceDecimal) {
+            rowError = `custom price entry is missing country, currency, or amount`;
+            break;
+          }
+          const precisionErr = validateDecimalForCurrency(priceDecimal, currency);
+          if (precisionErr) {
+            rowError = `custom price "${priceDecimal}" is invalid for ${currency} — ${precisionErr}`;
+            break;
+          }
+          parsed.push({ region, currency, priceDecimal });
+        }
+        const target = rows[rows.length - 1];
+        if (rowError) {
+          // Hand the orchestrator an empty-entry set carrying the reason;
+          // it refuses the row through the same channel as its own checks
+          // so there is exactly one refusal path, not two.
+          target.customPrices = { entries: [], baselineTier: null, editedAt: null };
+          target.customPriceRefusal = {
+            kind: "custom_invalid_price",
+            reason: `Row ${target.rowNumber} (${target.sku}): ${rowError}. Row not sent.`,
+          };
+        } else {
+          target.customPrices = {
+            entries: parsed,
+            baselineTier:
+              typeof r.customPrices.baselineTier === "string" && r.customPrices.baselineTier
+                ? r.customPrices.baselineTier
+                : null,
+            editedAt:
+              typeof r.customPrices.editedAt === "string" ? r.customPrices.editedAt : null,
+          };
+        }
+      }
     }
 
     try {
@@ -222,13 +294,26 @@ export async function POST(
       });
 
       // ── Hub-tracking terminal status (SUCCESS/FAILED/PARTIAL) ──────────
-      // rowsRefused (cross-currency fail-soft) folds into "skipped" —
-      // neither a success nor a Google-side failure.
+      // Cross-currency refusals fold into "skipped" — neither a success
+      // nor a Google-side failure (status-mapping.ts:18-21).
+      //
+      // CUSTOM refusals do NOT (Q5 / P5, the status principle). A
+      // cross-currency refusal is the tool declining to guess; a custom
+      // refusal is a price the Manager explicitly set that did not get
+      // applied. Closing the Hub run SUCCESS for that would report
+      // something that plainly did not happen. Counted as failed for the
+      // TERMINAL STATUS ONLY — the returned counters keep custom
+      // refusals in `rowsRefused`, so the result screen and audit log
+      // are unchanged and cross-currency semantics are untouched.
       const succeeded = result.rowsCreated + result.rowsOverwritten;
       const terminal = computeGoogleBulkImportTerminalStatus({
         total: result.rowsTotal,
         succeeded,
-        failed: result.rowsFailed,
+        // `?? 0` is not defensive noise: an orchestrator result missing
+        // this field would make the sum NaN, and `NaN === 0` is false, so
+        // every clean batch would close FAILED. Cheap guard against a
+        // partial/legacy result object.
+        failed: result.rowsFailed + (result.customRefusedRows ?? 0),
       });
       tracking.status = terminal.status;
       tracking.errorMessage = terminal.errorMessage;
