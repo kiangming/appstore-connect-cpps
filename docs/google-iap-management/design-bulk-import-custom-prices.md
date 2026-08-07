@@ -720,5 +720,146 @@ per SKU (`BulkImportWizard.tsx:992-1011`).
   §1.1/§1.5, differing on whether currency is editable). Extracting
   `RegionPriceCell` for the dialog is the moment to converge them; if the
   extraction is skipped for speed, the module ends up with three.
-</content>
-</invoke>
+
+---
+
+## 3. Addendum — R3 payload-size de-risk (investigation, August 2026)
+
+Run before Phase 3 UI work, on the principle that if the full-entry-set
+payload didn't fit, the design had to change *before* the dialog was
+built. **Verdict up front: it fits, with ~3× headroom, and the
+Google-side body does not grow at all.** No sub-cap is warranted.
+
+Sign-off status recorded here for the record: all six §2.H questions
+answered — **Q1** both surfaces · **Q2** gloss updated, tab name kept ·
+**Q3** keep SKU-matched customs, drop the rest, name both counts *and*
+the SKUs · **Q4** keep-but-inactive · **Q5** custom refusals count as
+`failed` for Hub terminal status · **Q6** no exception — `defaultPrice`
+always derives from the app-currency entry.
+
+### 3.1 Measured sizes (B1)
+
+Method: model the execute body exactly as `BulkImportWizard.tsx:481-518`
+serializes it, add the proposed `customPrices` block, measure
+`Buffer.byteLength(JSON.stringify(…), "utf8")`. Entries are realistic
+Google shapes (mixed 0/2/3-decimal currencies, titles ~31 chars,
+descriptions ~86 chars against the 55/200 caps).
+
+**Per-row cost**
+
+| Row shape | Bytes |
+|---|---|
+| 1 locale, no custom | 501 B |
+| 8 locales, no custom | 1,642 B |
+| 1 locale + 170 custom entries | 10,044 B |
+| 8 locales + 170 custom entries | 11,185 B |
+| **`customPrices` block alone** | **~9,543 B/row** (~56 B/entry) |
+
+**Full execute body at the 100-row cap**
+
+| Custom rows | 1 locale/row | 8 locales/row |
+|---|---|---|
+| 0 | 49 KB | 160 KB |
+| 10 | 142 KB | 254 KB |
+| 25 | 282 KB | 393 KB |
+| 50 | 515 KB | 626 KB |
+| **100** | **981 KB (0.96 MB)** | **1,092 KB (1.07 MB)** |
+
+Absolute worst realistic case — 100 rows, all custom, all 82 locales
+filled: **2.22 MB**. (Unrealistic in practice: it needs a 100-row file
+with every locale column populated *and* every row hand-customised.)
+
+Growth is linear at ~9.5 KB per custom row, so the body crosses 1 MB at
+roughly **95–100 custom rows** with 1 locale, and ~90 with 8 locales.
+
+### 3.2 The actual limits in this stack (B2)
+
+| Layer | Limit | Citation |
+|---|---|---|
+| **Next.js App Router Route Handler** | **None.** No body-size check exists in the app-route module — `grep -rn "sizeLimit\|bodySizeLimit\|contentLength" node_modules/next/dist/server/future/route-modules/app-route/*.js` returns nothing. `await req.json()` streams the whole body. | installed `next@14.2.x` |
+| Next.js **Server Actions** | `"1 MB"` default | `node_modules/next/dist/server/app-render/action-handler.js:422` and `:493` — `(serverActions?.bodySizeLimit) ?? "1 MB"`. **Does not apply**: execute is a Route Handler with no `'use server'` directive. |
+| Next.js **Pages Router** `/pages/api` | `"1mb"` default | `node_modules/next/dist/server/api-utils/node/api-resolver.js:264`. Does not apply — no Pages Router API routes involved. |
+| **This repo's config** | None set | `next.config.mjs` has no `serverActions.bodySizeLimit` and no body config of any kind; **there is no `middleware.ts`** in the repo, so no proxy/body-parser layer either. The only size cap in the module is `MAX_BYTES = 5 MB` on the *preview* multipart upload (`preview/route.ts:51`, `:94`) — a different endpoint, unaffected. |
+| **Railway inbound** | **No request-body-size limit documented.** Documented instead: **32 KB combined header size**, request bodies must finish uploading within **5 minutes**, requests closed after 5 min inactivity / **15 min** max. | [Railway — Specs & Limits](https://docs.railway.com/networking/public-networking/specs-and-limits) (public docs, not dashboard-only) |
+| **Google `monetization.onetimeproducts.batchUpdate`** | **100 elements** ("A list of update requests of up to 100 elements. All requests must update different one-time products."). **No byte-size limit documented.** | [Google Play Developer API — onetimeproducts.batchUpdate](https://developers.google.com/android-publisher/api-ref/rest/v3/monetization.onetimeproducts/batchUpdate) |
+
+### 3.3 The decisive finding: the Google-side body already ships full size (B3)
+
+`bulk-import.ts:797-827` runs `convertRegionPrices` for **every pushable
+row unconditionally** — not only template rows — and `:839-846` merges
+the result into each product's `prices` map for any region the row
+doesn't already carry. Every row therefore already leaves for Google
+with the full ~170-region set **today, in production, with zero custom
+rows**.
+
+Measured, modelling the `batchUpdate` request with 100 products ×
+~170 `regionalPricingAndAvailabilityConfigs` (the shape
+`onetime-product-adapter.ts:227-259` builds):
+
+| Google-side request | Size |
+|---|---|
+| 100 products, 1 locale | **1.80 MB** |
+| 100 products, 8 locales | **1.91 MB** |
+
+**Per-item custom prices change which numbers are in that body, not how
+big it is.** The Google-side payload delta for Phase 3 is *zero*. And
+1.8–1.9 MB is not a hypothesis — it is what the production path has been
+sending on every 100-row batch since Hotfix 14 Phase 3, successfully.
+
+**Verdict (B3): the full-set approach fits at the 100-row cap.**
+Client→server peaks at ~1.07 MB realistic / 2.22 MB pathological against
+no enforced limit at any layer; Google-side does not grow. Nothing breaks
+at 100 custom rows, and there is no count at which it breaks on size
+grounds before the 100-row cap stops it first.
+
+### 3.4 Recommendation (B4): no sub-cap — but two guardrails
+
+A sub-cap would be inventing a restriction the stack doesn't impose, so
+**do not add one.** Keep the full-set semantics and the existing 100-row
+cap. Two things do deserve attention, neither of which is byte size:
+
+1. **The Server-Action landmine (the one real size risk).** At 100 custom
+   rows the body is 0.96–1.07 MB — sitting *exactly* on the 1 MB default
+   that Next.js applies to **Server Actions**. Today that limit doesn't
+   apply because execute is a Route Handler. If anyone later converts it
+   (the module's user-initiated mutations elsewhere *are* Server Actions,
+   per the workspace convention), custom-heavy batches would start
+   failing at ~95 rows with an opaque error. **Phase 3 should leave a
+   comment at the execute route saying the endpoint must stay a Route
+   Handler, and why.** Cheap insurance against a plausible refactor.
+2. **The scaling ceiling is time, not bytes.** Railway closes a request
+   after 5 minutes of inactivity (15 min hard max), and execute does
+   100 ÷ `REGIONS_BOOTSTRAP_CONCURRENCY` (5) = **20 sequential waves** of
+   `convertRegionPrices` before the batch call
+   (`bulk-import.ts:77`, `:797-827`). That is the property worth
+   smoke-testing at the cap — and it is a **pre-existing** characteristic,
+   not something Phase 3 introduces.
+
+   *Related optimisation, flagged as a trap rather than a suggestion:* a
+   custom row that covers all ~170 countries makes its bootstrap merge a
+   no-op, so skipping the `convertRegionPrices` call for fully-covered
+   custom rows looks like free latency. **Do not do it naively** — that
+   call is also the only source of `regionsVersion`, which the patch must
+   pin (Hotfix 9, `regions-helper.ts:43-62`; the BG → EUR incident).
+   Skipping it would reintroduce exactly that bug.
+
+Explicitly rejected, per the brief and on its own merits: switching to a
+diff-against-template payload. It would re-couple custom prices to the
+template and reopen the clobber risk (`bulk-import.ts:672-676`) this
+design exists to close. Full-set is semantically correct and, per §3.3,
+costs nothing on the wire that isn't already being paid.
+
+### 3.5 Response / result payload (B5): no symmetric problem
+
+| Payload | Size at 100 rows |
+|---|---|
+| HTTP response to the wizard (`BulkImportResult` + a few refused rows) | **717 B** — it is aggregate counters plus refusals only (`bulk-import.ts:1010-1020`), no per-row echo |
+| `per_row_diagnostic` entry, with the §2.F custom fields added | 480 B |
+| `actions_log` payload for 100 rows | **~47 KB** |
+
+47 KB into a `JSONB` column (`20260520010000_google_iap_mgmt_init.sql:260`,
+`payload JSONB NOT NULL DEFAULT '{}'`) is unremarkable — Postgres's field
+ceiling is ~1 GB. Note `per_row_diagnostic` is only populated for template
+sources (`bulk-import.ts:521`), which is precisely where custom rows live,
+so the added fields land where they're needed and cost nothing on
+Google-Conversion batches.
