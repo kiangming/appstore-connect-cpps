@@ -26,7 +26,6 @@ import {
   AlertTriangle,
   Loader2,
   Check,
-  Trash2,
   ChevronDown,
   ChevronRight,
 } from "lucide-react";
@@ -42,6 +41,7 @@ import type { RegionPrice } from "@/lib/google-iap-management/price-comparison";
 import type { RegionOverrideRow } from "@/lib/google-iap-management/form-state";
 import { regionNameFromCode } from "@/lib/google-iap-management/region-name";
 import { microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
+import { RegionPriceCell } from "@/components/google-iap-management/pricing/RegionPriceCell";
 
 interface Props {
   packageName: string;
@@ -358,51 +358,37 @@ function PricingRow({
       </td>
       <td className="px-5 py-2.5 align-top">
         {row.override ? (
-          <div className="flex items-center gap-1.5">
-            <span
-              className={`inline-flex items-center gap-1 rounded-lg border bg-white px-2 py-1 ${
-                fieldError ? "border-red-400" : "border-slate-300"
-              }`}
-            >
-              <span className="text-[11px] font-semibold text-slate-500">
-                {row.override.currency.toUpperCase()}
-              </span>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={row.override.priceDecimal}
-                placeholder="add override"
-                onChange={(e) =>
-                  onUpdateOverride(row.override!.index, { priceDecimal: e.target.value })
-                }
-                className="w-20 border-0 bg-transparent p-0 text-xs font-mono text-slate-900 placeholder:text-slate-300 focus:outline-none"
-                aria-label={`Tool price for ${row.region_code}`}
-              />
-            </span>
-            <button
-              type="button"
-              onClick={() => onRemoveOverride(row.override!.index)}
-              className="text-slate-300 hover:text-red-500 transition"
-              aria-label={`Remove override for ${row.region_code}`}
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          </div>
+          /* Shared cell — the Bulk Import custom-prices dialog renders the
+             same component, so a change here lands on both surfaces by
+             construction. Default aria-label/placeholder preserve this
+             view's existing strings exactly. */
+          <RegionPriceCell
+            regionCode={row.region_code}
+            currency={row.override.currency}
+            priceDecimal={row.override.priceDecimal}
+            error={fieldError}
+            onChange={(priceDecimal) =>
+              onUpdateOverride(row.override!.index, { priceDecimal })
+            }
+            onClear={() => onRemoveOverride(row.override!.index)}
+          />
         ) : (
-          <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 italic px-2 py-1 rounded-md border border-dashed border-slate-300">
-            inherits base ·{" "}
-            <button
-              type="button"
-              onClick={() =>
-                onAddOverrideForRegion(row.region_code, row.live?.currency ?? "USD")
-              }
-              className="not-italic font-medium text-emerald-700 hover:underline"
-            >
-              override
-            </button>
-          </span>
+          <>
+            <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 italic px-2 py-1 rounded-md border border-dashed border-slate-300">
+              inherits base ·{" "}
+              <button
+                type="button"
+                onClick={() =>
+                  onAddOverrideForRegion(row.region_code, row.live?.currency ?? "USD")
+                }
+                className="not-italic font-medium text-emerald-700 hover:underline"
+              >
+                override
+              </button>
+            </span>
+            {fieldError && <p className="mt-1 text-[11px] text-red-500">{fieldError}</p>}
+          </>
         )}
-        {fieldError && <p className="mt-1 text-[11px] text-red-500">{fieldError}</p>}
       </td>
       <td className="px-5 py-2.5 align-top font-mono text-slate-600">
         {fmtLive(row.live)}
