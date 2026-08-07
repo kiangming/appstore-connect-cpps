@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<!--
+  ================================================================================
+  GOOGLE BULK IMPORT — PRICING-SOURCE RELABEL + PER-ITEM CUSTOM PRICES
+  ================================================================================
+
+  Module        : Google IAP Management (lib/google-iap-management/, schema
+                  google_iap_mgmt) — NOT Apple IAP.
+  Design doc    : docs/google-iap-management/design-bulk-import-custom-prices.md
+  Status        : DESIGN ONLY — hold for Manager review. No implementation.
+
+  PART 1 — relabel + reorder (label-only; the stored enum value stays
+  `google_default`, see design doc §1.8):
+     "Google default"  →  "Google Conversion"
+     order: Default template → App-specific Template → Google Conversion
+
+  PART 2 — per-item Custom prices (Manager-locked decisions):
+     · dialog lists ALL Google-supported countries (~170) with search/filter
+     · Custom survives back-nav to Step 1 and a template change
+       (custom prices are ABSOLUTE, independent of the template)
+     · Custom applies only to Default / App-specific template sources —
+       NOT to Google Conversion
+
+  Requirements this mockup makes visible:
+     · Custom is never opaque — the row shows the count and re-opens the
+       dialog with the actual values
+     · Revertible — "Reset to template" in the dialog AND on the row
+     · Currency is DERIVED from country, display-only (code evidence:
+       UnifiedPricingTable.tsx:367-369)
+     · Blank price = "inherits · Google conversion", stated explicitly,
+       never silent (orchestration/bulk-import.ts:839-846)
+     · Validation is the SAME module as the detail view
+       (google/currency-precision.ts:92-114) — a custom row that fails
+       validation is REFUSED, never quietly shipped with the template price
+
+  6 states rendered (static HTML, Tailwind CDN, no JS deps):
+     1  Step 1 — pricing source BEFORE / AFTER (Part 1)
+     2  Step 3 — Preview table with the Custom affordance + Custom row
+     3  Dialog — default, pre-filled from a template tier
+     4  Dialog — search + filter active, edited rows, Δ column
+     5  Dialog — validation error (JPY fractional) blocking Save
+     6  Custom inactive under Google Conversion + edge-case notices
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Google Bulk Import — Custom prices (design mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .state-frame { box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.05); }
+    .row-ambig  { background: #fffbeb; }
+    .row-custom { background: #f5f3ff; }
+    .row-normal:hover { background: #f8fafc; }
+    .gate-disabled { background: #cbd5e1 !important; cursor: not-allowed !important; opacity: .6; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .scrollbox { max-height: 340px; overflow-y: auto; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen p-6">
+
+<!-- ================================================================ -->
+<!-- Header                                                            -->
+<!-- ================================================================ -->
+<header class="max-w-6xl mx-auto mb-8">
+  <div class="bg-white border border-slate-200 rounded-2xl p-6">
+    <div class="flex items-start gap-4">
+      <div class="flex-shrink-0 w-12 h-12 rounded-xl bg-violet-100 flex items-center justify-center">
+        <svg class="w-6 h-6 text-violet-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 6l3 1m0 0l-3 9a5 5 0 006 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5 5 0 006 0m-6-9l6-2m-6 2v13m-3 0h6"/>
+        </svg>
+      </div>
+      <div class="flex-1">
+        <p class="text-xs font-semibold text-violet-700 uppercase tracking-wider">Design mockup · hold for review</p>
+        <h1 class="text-2xl font-semibold text-slate-900 mt-1">Google Bulk Import — pricing-source relabel + per-item Custom prices</h1>
+        <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+          Google IAP Management only. Part 1 renames <span class="mono">Google default</span> → <strong>Google Conversion</strong>
+          and reorders the three cards — <strong>label only</strong>, the stored value stays
+          <span class="mono">google_default</span> (DB CHECK constraint + every historical
+          <span class="mono">actions_log</span> payload). Part 2 lets one item in the Step-3 preview override its prices
+          per country, independently of the batch template.
+        </p>
+        <div class="mt-4 grid md:grid-cols-3 gap-3 text-[11px]">
+          <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+            <p class="font-semibold text-emerald-800 mb-1">Manager-locked</p>
+            <ul class="space-y-0.5 text-emerald-900">
+              <li>· all ~170 Google countries, searchable</li>
+              <li>· Custom survives a template change</li>
+              <li>· template sources only, not Google Conversion</li>
+            </ul>
+          </div>
+          <div class="rounded-lg border border-violet-200 bg-violet-50 p-3">
+            <p class="font-semibold text-violet-800 mb-1">Non-negotiable</p>
+            <ul class="space-y-0.5 text-violet-900">
+              <li>· Custom is never opaque — always re-openable</li>
+              <li>· always revertible to the template</li>
+              <li>· a custom row that can't apply FAILS VISIBLY</li>
+            </ul>
+          </div>
+          <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+            <p class="font-semibold text-slate-700 mb-1">Reuse, not a second editor</p>
+            <ul class="space-y-0.5 text-slate-600">
+              <li>· shared <span class="mono">RegionPriceCell</span> with the detail view</li>
+              <li>· shared <span class="mono">currency-precision.ts</span> validation</li>
+              <li>· currency derived from country, display-only</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ================================================================ -->
+<!-- STATE 1 — Part 1: pricing source BEFORE / AFTER                   -->
+<!-- ================================================================ -->
+<section class="max-w-6xl mx-auto mb-10">
+  <div class="flex items-center gap-2 mb-3">
+    <span class="px-2 py-0.5 rounded bg-slate-900 text-white text-[11px] font-semibold">STATE 1</span>
+    <h2 class="text-base font-semibold text-slate-900">Part 1 — Step 1 “Pricing source”: relabel + reorder</h2>
+  </div>
+
+  <div class="grid lg:grid-cols-2 gap-4">
+    <!-- BEFORE -->
+    <div class="bg-white border border-slate-200 rounded-xl p-5 state-frame">
+      <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-3">Before (today)</p>
+      <p class="text-xs text-slate-500 mb-3">Pricing source (Q-GIAP.D)</p>
+      <div class="grid grid-cols-1 gap-2">
+        <label class="flex items-start gap-2 p-3 rounded-lg border border-emerald-300 bg-emerald-50">
+          <input type="radio" checked class="mt-0.5 accent-emerald-600" />
+          <div><p class="text-sm font-medium text-slate-900">Google default</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">Base price + sparse manual region overrides + Google’s auto-equalisation.</p></div>
+        </label>
+        <label class="flex items-start gap-2 p-3 rounded-lg border border-slate-200 bg-white">
+          <input type="radio" class="mt-0.5 accent-emerald-600" />
+          <div><p class="text-sm font-medium text-slate-900">Default Template</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">Apply the global pricing template’s regions.</p></div>
+        </label>
+        <label class="flex items-start gap-2 p-3 rounded-lg border border-slate-200 bg-white">
+          <input type="radio" class="mt-0.5 accent-emerald-600" />
+          <div><p class="text-sm font-medium text-slate-900">App-specific Template</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">Apply this app’s pricing template’s regions.</p></div>
+        </label>
+      </div>
+      <p class="mt-3 text-[11px] text-slate-400">
+        <span class="mono">PricingSourceSelector.tsx:95-123</span> — render order = JSX order.
+      </p>
+    </div>
+
+    <!-- AFTER -->
+    <div class="bg-white border-2 border-violet-300 rounded-xl p-5 state-frame">
+      <p class="text-[11px] font-semibold uppercase tracking-wide text-violet-500 mb-3">After (proposed)</p>
+      <p class="text-xs text-slate-500 mb-3">Pricing source (Q-GIAP.D)</p>
+      <div class="grid grid-cols-1 gap-2">
+        <label class="flex items-start gap-2 p-3 rounded-lg border border-emerald-300 bg-emerald-50">
+          <input type="radio" checked class="mt-0.5 accent-emerald-600" />
+          <div><p class="text-sm font-medium text-slate-900">Default template</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">Apply the global pricing template’s regions. Individual items can be given Custom prices in Step 3.</p></div>
+        </label>
+        <label class="flex items-start gap-2 p-3 rounded-lg border border-slate-200 bg-white">
+          <input type="radio" class="mt-0.5 accent-emerald-600" />
+          <div><p class="text-sm font-medium text-slate-900">App-specific Template</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">Apply this app’s pricing template’s regions. Individual items can be given Custom prices in Step 3.</p></div>
+        </label>
+        <label class="flex items-start gap-2 p-3 rounded-lg border border-slate-200 bg-white">
+          <input type="radio" class="mt-0.5 accent-emerald-600" />
+          <div><p class="text-sm font-medium text-slate-900">Google Conversion</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">Base price converted to every country by Google’s automatic price conversion, plus any GT-Price override in the file. Per-item Custom prices do not apply here.</p></div>
+        </label>
+      </div>
+      <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-2.5">
+        <p class="text-[11px] text-amber-900 leading-relaxed">
+          <strong>Label only.</strong> The persisted value stays <span class="mono">google_default</span> —
+          it is written to <span class="mono">import_batches.pricing_source</span> under a CHECK constraint
+          (<span class="mono">20260520010000_google_iap_mgmt_init.sql:213-215</span>), into every
+          <span class="mono">actions_log</span> payload (<span class="mono">bulk-import.ts:752/934/958</span>),
+          and onto the wire (<span class="mono">execute/route.ts:72-76</span>). Renaming it would invalidate history.
+          Reorder = JSX order change only; the validator arrays are <span class="mono">.includes()</span> lookups.
+        </p>
+      </div>
+      <p class="mt-2 text-[11px] text-slate-500">
+        ⚠ Shared component — the same selector renders on the single-IAP Create/Edit form
+        (<span class="mono">IapForm.tsx:18-21</span>). The rename lands on both. See design doc §2.H Q1.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<!-- STATE 2 — Preview table with Custom affordance                    -->
+<!-- ================================================================ -->
+<section class="max-w-6xl mx-auto mb-10">
+  <div class="flex items-center gap-2 mb-3">
+    <span class="px-2 py-0.5 rounded bg-slate-900 text-white text-[11px] font-semibold">STATE 2</span>
+    <h2 class="text-base font-semibold text-slate-900">Step 3 — Preview: the Custom affordance and the Custom row indicator</h2>
+  </div>
+
+  <div class="bg-white border border-slate-200 rounded-xl p-4 mb-3 flex items-center justify-between gap-3 state-frame">
+    <div class="flex items-center gap-4 text-xs text-slate-600">
+      <span>Total: <strong class="text-slate-900">5</strong></span>
+      <span>New: <strong class="text-emerald-700">3</strong></span>
+      <span>Existing: <strong class="text-amber-700">2</strong></span>
+      <span class="text-violet-700">Custom: <strong>1</strong></span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button class="px-2 py-1 text-[11px] font-medium text-amber-700 border border-amber-200 rounded">Set all to Overwrite</button>
+      <button class="px-2 py-1 text-[11px] font-medium text-slate-700 border border-slate-200 rounded">Set all to Skip</button>
+    </div>
+  </div>
+
+  <div class="bg-white border border-slate-200 rounded-xl overflow-x-auto state-frame">
+    <table class="w-full min-w-[1040px]">
+      <thead class="bg-slate-50 border-b border-slate-200">
+        <tr class="text-left text-[11px] font-medium uppercase tracking-wide text-slate-500">
+          <th class="px-3 py-2.5">#</th>
+          <th class="px-3 py-2.5">SKU</th>
+          <th class="px-3 py-2.5">Default title</th>
+          <th class="px-3 py-2.5 text-right">Base price</th>
+          <th class="px-3 py-2.5 w-[340px]">Tier / pricing</th>
+          <th class="px-3 py-2.5">Status</th>
+          <th class="px-3 py-2.5">Action</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+
+        <!-- Row 1 — single candidate: read-only tier + Custom… button -->
+        <tr class="row-normal">
+          <td class="px-3 py-3 text-xs text-slate-400 mono">2</td>
+          <td class="px-3 py-3 text-xs mono text-slate-900">pack_starter_099</td>
+          <td class="px-3 py-3 text-xs text-slate-700">Starter Pack</td>
+          <td class="px-3 py-3 text-xs text-right mono text-slate-700">0.99 <span class="text-[10px] text-slate-500">USD</span></td>
+          <td class="px-3 py-3 text-xs">
+            <div class="flex items-center gap-2">
+              <span class="mono text-slate-600 italic">tier_099</span>
+              <span class="text-slate-300">·</span>
+              <button class="text-violet-700 font-medium hover:underline">Custom…</button>
+            </div>
+            <p class="text-[10px] text-slate-400 mt-0.5">Single tier match — no choice needed.</p>
+          </td>
+          <td class="px-3 py-3"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td>
+          <td class="px-3 py-3 text-[11px] text-emerald-700">Create</td>
+        </tr>
+
+        <!-- Row 2 — ambiguous: dropdown gains a Custom… entry -->
+        <tr class="row-ambig">
+          <td class="px-3 py-3 text-xs text-slate-400 mono">3</td>
+          <td class="px-3 py-3 text-xs mono text-slate-900">
+            <span class="inline-flex items-center gap-1.5">
+              <svg class="h-3.5 w-3.5 text-amber-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg>
+              gem_pack_medium
+            </span>
+          </td>
+          <td class="px-3 py-3 text-xs text-slate-700">Gem Pack — Medium</td>
+          <td class="px-3 py-3 text-xs text-right mono text-slate-700">4.99 <span class="text-[10px] text-slate-500">USD</span></td>
+          <td class="px-3 py-3 text-xs">
+            <select class="text-xs border border-amber-400 bg-white rounded px-1.5 py-1 mono w-full max-w-[300px]">
+              <option>tier_499 — 120,000 VND · 168 regions</option>
+              <option>tier_499_alt — 125,000 VND · 168 regions</option>
+              <option disabled>──────────</option>
+              <option>Custom… — set prices per country</option>
+            </select>
+            <p class="text-[10px] text-amber-700 mt-0.5">2 tiers match this price — pick one, or set Custom.</p>
+          </td>
+          <td class="px-3 py-3"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td>
+          <td class="px-3 py-3 text-[11px] text-emerald-700">Create</td>
+        </tr>
+
+        <!-- Row 3 — CUSTOM applied -->
+        <tr class="row-custom">
+          <td class="px-3 py-3 text-xs text-slate-400 mono">4</td>
+          <td class="px-3 py-3 text-xs mono text-slate-900">gem_pack_large</td>
+          <td class="px-3 py-3 text-xs text-slate-700">Gem Pack — Large</td>
+          <td class="px-3 py-3 text-xs text-right mono text-slate-700">
+            9.99 <span class="text-[10px] text-slate-500">USD</span>
+            <div class="flex items-center justify-end gap-1 text-[10px] text-violet-700 mt-0.5">
+              <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+              <span class="font-semibold">custom</span>
+            </div>
+          </td>
+          <td class="px-3 py-3 text-xs">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="inline-flex items-center gap-1 rounded-full border border-violet-300 bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-800">
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                Custom · 168 countries
+              </span>
+              <button class="text-violet-700 font-medium hover:underline text-[11px]">View / edit</button>
+              <span class="text-slate-300">·</span>
+              <button class="text-slate-500 hover:text-slate-700 hover:underline text-[11px]">Reset to template</button>
+            </div>
+            <p class="text-[10px] text-slate-500 mt-0.5">
+              Absolute prices — not tied to <span class="mono">tier_999</span> any more. 2 countries left blank → Google conversion.
+            </p>
+          </td>
+          <td class="px-3 py-3"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">Exists</span></td>
+          <td class="px-3 py-3">
+            <div class="flex items-center gap-2 text-xs">
+              <label class="flex items-center gap-1"><input type="radio" checked class="accent-amber-600" /><span class="text-amber-700">Overwrite</span></label>
+              <label class="flex items-center gap-1"><input type="radio" class="accent-slate-600" /><span class="text-slate-600">Skip</span></label>
+            </div>
+          </td>
+        </tr>
+
+        <!-- Row 4 — no template match -->
+        <tr class="row-normal">
+          <td class="px-3 py-3 text-xs text-slate-400 mono">5</td>
+          <td class="px-3 py-3 text-xs mono text-slate-900">bundle_seasonal</td>
+          <td class="px-3 py-3 text-xs text-slate-700">Seasonal Bundle</td>
+          <td class="px-3 py-3 text-xs text-right mono text-slate-700">19.99 <span class="text-[10px] text-slate-500">USD</span></td>
+          <td class="px-3 py-3 text-xs">
+            <div class="flex items-center gap-2">
+              <span class="text-slate-500 italic">No tier match — Google conversion</span>
+              <span class="text-slate-300">·</span>
+              <button class="text-violet-700 font-medium hover:underline">Custom…</button>
+            </div>
+            <p class="text-[10px] text-slate-400 mt-0.5">Custom opens with an empty baseline (nothing to pre-fill from).</p>
+          </td>
+          <td class="px-3 py-3"><span class="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">New</span></td>
+          <td class="px-3 py-3 text-[11px] text-emerald-700">Create</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="mt-3 rounded-lg border border-slate-200 bg-white p-3 text-[11px] text-slate-600 leading-relaxed">
+    <strong class="text-slate-800">Why the trigger is not only a dropdown entry.</strong>
+    Rows with 0 or 1 candidate have no <span class="mono">&lt;select&gt;</span> today
+    (<span class="mono">PreviewTable.tsx:136-143</span>), so they get a plain <em>Custom…</em> button.
+    And <em>Custom</em> is never stored as the row’s selected tier — a
+    <span class="mono">__custom__</span> sentinel would flow into
+    <span class="mono">chosenTierIdentifier</span> and hit
+    <span class="mono">lookupTemplateEntriesForIdentifier</span>, which throws for a tier with no entries
+    (<span class="mono">bulk-import.ts:579-585</span>). It is a separate row attribute; the dropdown entry is only the trigger.
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<!-- STATE 3 — Dialog, default (pre-filled from template)              -->
+<!-- ================================================================ -->
+<section class="max-w-6xl mx-auto mb-10">
+  <div class="flex items-center gap-2 mb-3">
+    <span class="px-2 py-0.5 rounded bg-slate-900 text-white text-[11px] font-semibold">STATE 3</span>
+    <h2 class="text-base font-semibold text-slate-900">Custom prices dialog — opened, pre-filled from the row’s template tier</h2>
+  </div>
+
+  <div class="bg-slate-900/5 rounded-2xl p-6">
+    <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden state-frame max-w-4xl mx-auto">
+
+      <!-- Dialog header -->
+      <div class="px-5 py-4 border-b border-slate-100 flex items-start justify-between gap-4">
+        <div>
+          <h3 class="text-base font-semibold text-slate-900">Custom prices — <span class="mono">gem_pack_large</span></h3>
+          <p class="text-[11px] text-slate-500 mt-1">
+            Pre-filled from <strong>Default template</strong> tier <span class="mono">tier_999</span> · 168 countries.
+            Saving makes these prices <strong>absolute</strong> — they stay even if you change the template.
+          </p>
+        </div>
+        <button class="text-slate-400 hover:text-slate-600">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- Toolbar -->
+      <div class="px-5 py-3 border-b border-slate-100 flex flex-wrap items-center gap-2">
+        <div class="relative flex-1 min-w-[220px]">
+          <svg class="absolute left-2.5 top-2 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/></svg>
+          <input type="text" placeholder="Search country, ISO code, or currency…" class="w-full rounded-lg border border-slate-300 pl-8 pr-3 py-1.5 text-xs" />
+        </div>
+        <div class="flex items-center gap-1">
+          <button class="px-2 py-1 rounded-full border border-slate-800 bg-slate-800 text-white text-[11px] font-medium">All</button>
+          <button class="px-2 py-1 rounded-full border border-slate-200 text-slate-600 text-[11px]">Asia</button>
+          <button class="px-2 py-1 rounded-full border border-slate-200 text-slate-600 text-[11px]">Europe</button>
+          <button class="px-2 py-1 rounded-full border border-slate-200 text-slate-600 text-[11px]">Americas</button>
+          <button class="px-2 py-1 rounded-full border border-slate-200 text-slate-600 text-[11px]">Africa</button>
+          <button class="px-2 py-1 rounded-full border border-slate-200 text-slate-600 text-[11px]">Oceania</button>
+        </div>
+        <button class="px-2 py-1 rounded-lg border border-slate-200 text-slate-600 text-[11px]">Changed only (0)</button>
+      </div>
+
+      <!-- Table -->
+      <div class="scrollbox">
+        <table class="w-full text-sm">
+          <thead class="sticky top-0 bg-white">
+            <tr class="text-left text-[10px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
+              <th class="px-5 py-2 font-medium">Country</th>
+              <th class="px-5 py-2 font-medium">Currency</th>
+              <th class="px-5 py-2 font-medium">Price · editable</th>
+              <th class="px-5 py-2 font-medium">Template · reference</th>
+              <th class="px-5 py-2 font-medium">Δ</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            <tr>
+              <td class="px-5 py-2.5 text-slate-700">Argentina <span class="text-slate-400 mono text-xs">(AR)</span></td>
+              <td class="px-5 py-2.5"><span class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">ARS</span></td>
+              <td class="px-5 py-2.5">
+                <span class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1">
+                  <span class="text-[11px] font-semibold text-slate-500">ARS</span>
+                  <input type="text" value="10999" class="w-24 border-0 p-0 text-xs mono text-slate-900 focus:outline-none" />
+                </span>
+              </td>
+              <td class="px-5 py-2.5 mono text-xs text-slate-500">ARS 10999</td>
+              <td class="px-5 py-2.5 text-xs text-slate-400">—</td>
+            </tr>
+            <tr>
+              <td class="px-5 py-2.5 text-slate-700">Brazil <span class="text-slate-400 mono text-xs">(BR)</span></td>
+              <td class="px-5 py-2.5"><span class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">BRL</span></td>
+              <td class="px-5 py-2.5">
+                <span class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1">
+                  <span class="text-[11px] font-semibold text-slate-500">BRL</span>
+                  <input type="text" value="49.90" class="w-24 border-0 p-0 text-xs mono text-slate-900 focus:outline-none" />
+                </span>
+              </td>
+              <td class="px-5 py-2.5 mono text-xs text-slate-500">BRL 49.90</td>
+              <td class="px-5 py-2.5 text-xs text-slate-400">—</td>
+            </tr>
+            <tr>
+              <td class="px-5 py-2.5 text-slate-700">Japan <span class="text-slate-400 mono text-xs">(JP)</span></td>
+              <td class="px-5 py-2.5"><span class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">JPY</span></td>
+              <td class="px-5 py-2.5">
+                <span class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1">
+                  <span class="text-[11px] font-semibold text-slate-500">JPY</span>
+                  <input type="text" value="1500" class="w-24 border-0 p-0 text-xs mono text-slate-900 focus:outline-none" />
+                </span>
+                <span class="ml-1 text-[10px] text-slate-400">whole numbers only</span>
+              </td>
+              <td class="px-5 py-2.5 mono text-xs text-slate-500">JPY 1500</td>
+              <td class="px-5 py-2.5 text-xs text-slate-400">—</td>
+            </tr>
+            <tr>
+              <td class="px-5 py-2.5 text-slate-700">Vietnam <span class="text-slate-400 mono text-xs">(VN)</span></td>
+              <td class="px-5 py-2.5"><span class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">VND</span></td>
+              <td class="px-5 py-2.5">
+                <span class="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2 py-1">
+                  <span class="text-[11px] font-semibold text-slate-500">VND</span>
+                  <input type="text" value="249000" class="w-24 border-0 p-0 text-xs mono text-slate-900 focus:outline-none" />
+                </span>
+              </td>
+              <td class="px-5 py-2.5 mono text-xs text-slate-500">VND 249000</td>
+              <td class="px-5 py-2.5 text-xs text-slate-400">—</td>
+            </tr>
+            <tr class="bg-slate-50/70">
+              <td class="px-5 py-2.5 text-slate-700">Kazakhstan <span class="text-slate-400 mono text-xs">(KZ)</span></td>
+              <td class="px-5 py-2.5"><span class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">KZT</span></td>
+              <td class="px-5 py-2.5">
+                <span class="inline-flex items-center gap-1.5 text-xs text-slate-400 italic px-2 py-1 rounded-md border border-dashed border-slate-300">
+                  inherits · Google conversion ·
+                  <button class="not-italic font-medium text-violet-700 hover:underline">set price</button>
+                </span>
+              </td>
+              <td class="px-5 py-2.5 mono text-xs text-slate-400">not in template</td>
+              <td class="px-5 py-2.5 text-xs text-slate-400">—</td>
+            </tr>
+            <tr>
+              <td class="px-5 py-3 text-center text-xs text-slate-400" colspan="5">…163 more countries…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Footer -->
+      <div class="px-5 py-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+        <p class="text-[11px] text-slate-500">
+          <strong class="text-slate-700">0</strong> customised ·
+          <strong class="text-slate-700">168</strong> at template ·
+          <strong class="text-slate-700">2</strong> blank → Google conversion
+        </p>
+        <div class="flex items-center gap-2">
+          <button class="px-3 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-700">Reset all to template</button>
+          <button class="px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg">Cancel</button>
+          <button class="px-4 py-1.5 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-700 rounded-lg">Save custom prices</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-3 rounded-lg border border-slate-200 bg-white p-3 text-[11px] text-slate-600 leading-relaxed">
+    <strong class="text-slate-800">Currency is derived, not chosen.</strong>
+    Each Google country has one fixed billing currency, so the currency renders as a chip, never an input — the same
+    decision the detail-view editor already makes (<span class="mono">UnifiedPricingTable.tsx:367-369</span>).
+    Derivation order: the template entry’s own currency for that country
+    (<span class="mono">queries/templates.ts:340-350</span>), else Google’s catalog from
+    <span class="mono">convertRegionPrices</span> (<span class="mono">regions-helper.ts:76-101</span>) — never
+    <span class="mono">getAllRegions()</span> alone, which is ~250 ISO codes with no currency.
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<!-- STATE 4 — Dialog with search + edits                              -->
+<!-- ================================================================ -->
+<section class="max-w-6xl mx-auto mb-10">
+  <div class="flex items-center gap-2 mb-3">
+    <span class="px-2 py-0.5 rounded bg-slate-900 text-white text-[11px] font-semibold">STATE 4</span>
+    <h2 class="text-base font-semibold text-slate-900">Dialog — filtered to Asia, three prices edited (Δ column active)</h2>
+  </div>
+
+  <div class="bg-slate-900/5 rounded-2xl p-6">
+    <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden state-frame max-w-4xl mx-auto">
+      <div class="px-5 py-3 border-b border-slate-100 flex flex-wrap items-center gap-2">
+        <div class="relative flex-1 min-w-[220px]">
+          <input type="text" value="" placeholder="Search country, ISO code, or currency…" class="w-full rounded-lg border border-slate-300 px-3 py-1.5 text-xs" />
+        </div>
+        <div class="flex items-center gap-1">
+          <button class="px-2 py-1 rounded-full border border-slate-200 text-slate-600 text-[11px]">All</button>
+          <button class="px-2 py-1 rounded-full border border-slate-800 bg-slate-800 text-white text-[11px] font-medium">Asia</button>
+          <button class="px-2 py-1 rounded-full border border-slate-200 text-slate-600 text-[11px]">Europe</button>
+          <button class="px-2 py-1 rounded-full border border-slate-200 text-slate-600 text-[11px]">Americas</button>
+        </div>
+        <button class="px-2 py-1 rounded-lg border border-violet-300 bg-violet-50 text-violet-700 text-[11px] font-medium">Changed only (3)</button>
+      </div>
+
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-[10px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
+            <th class="px-5 py-2 font-medium">Country</th>
+            <th class="px-5 py-2 font-medium">Currency</th>
+            <th class="px-5 py-2 font-medium">Price · editable</th>
+            <th class="px-5 py-2 font-medium">Template · reference</th>
+            <th class="px-5 py-2 font-medium">Δ</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          <tr class="bg-violet-50/60">
+            <td class="px-5 py-2.5 text-slate-700">Vietnam <span class="text-slate-400 mono text-xs">(VN)</span></td>
+            <td class="px-5 py-2.5"><span class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">VND</span></td>
+            <td class="px-5 py-2.5">
+              <span class="inline-flex items-center gap-1 rounded-lg border border-violet-400 bg-white px-2 py-1">
+                <span class="text-[11px] font-semibold text-slate-500">VND</span>
+                <input type="text" value="199000" class="w-24 border-0 p-0 text-xs mono text-slate-900 focus:outline-none" />
+              </span>
+              <button class="ml-1.5 text-[10px] text-slate-400 hover:text-slate-600 underline">revert</button>
+            </td>
+            <td class="px-5 py-2.5 mono text-xs text-slate-500">VND 249000</td>
+            <td class="px-5 py-2.5 text-xs font-semibold text-rose-600">−20%</td>
+          </tr>
+          <tr class="bg-violet-50/60">
+            <td class="px-5 py-2.5 text-slate-700">Thailand <span class="text-slate-400 mono text-xs">(TH)</span></td>
+            <td class="px-5 py-2.5"><span class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">THB</span></td>
+            <td class="px-5 py-2.5">
+              <span class="inline-flex items-center gap-1 rounded-lg border border-violet-400 bg-white px-2 py-1">
+                <span class="text-[11px] font-semibold text-slate-500">THB</span>
+                <input type="text" value="349.00" class="w-24 border-0 p-0 text-xs mono text-slate-900 focus:outline-none" />
+              </span>
+              <button class="ml-1.5 text-[10px] text-slate-400 hover:text-slate-600 underline">revert</button>
+            </td>
+            <td class="px-5 py-2.5 mono text-xs text-slate-500">THB 399.00</td>
+            <td class="px-5 py-2.5 text-xs font-semibold text-rose-600">−12.5%</td>
+          </tr>
+          <tr class="bg-violet-50/60">
+            <td class="px-5 py-2.5 text-slate-700">South Korea <span class="text-slate-400 mono text-xs">(KR)</span></td>
+            <td class="px-5 py-2.5"><span class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">KRW</span></td>
+            <td class="px-5 py-2.5">
+              <span class="inline-flex items-center gap-1 rounded-lg border border-violet-400 bg-white px-2 py-1">
+                <span class="text-[11px] font-semibold text-slate-500">KRW</span>
+                <input type="text" value="15000" class="w-24 border-0 p-0 text-xs mono text-slate-900 focus:outline-none" />
+              </span>
+              <button class="ml-1.5 text-[10px] text-slate-400 hover:text-slate-600 underline">revert</button>
+            </td>
+            <td class="px-5 py-2.5 mono text-xs text-slate-500">KRW 13000</td>
+            <td class="px-5 py-2.5 text-xs font-semibold text-emerald-600">+15.4%</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="px-5 py-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+        <p class="text-[11px] text-slate-500">
+          <strong class="text-violet-700">3</strong> customised ·
+          <strong class="text-slate-700">165</strong> at template ·
+          <strong class="text-slate-700">2</strong> blank → Google conversion
+        </p>
+        <div class="flex items-center gap-2">
+          <button class="px-3 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-700">Reset all to template</button>
+          <button class="px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg">Cancel</button>
+          <button class="px-4 py-1.5 text-xs font-semibold text-white bg-violet-600 hover:bg-violet-700 rounded-lg">Save custom prices</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<!-- STATE 5 — validation error blocks Save                            -->
+<!-- ================================================================ -->
+<section class="max-w-6xl mx-auto mb-10">
+  <div class="flex items-center gap-2 mb-3">
+    <span class="px-2 py-0.5 rounded bg-slate-900 text-white text-[11px] font-semibold">STATE 5</span>
+    <h2 class="text-base font-semibold text-slate-900">Dialog — validation error (same rules as the item detail form)</h2>
+  </div>
+
+  <div class="bg-slate-900/5 rounded-2xl p-6">
+    <div class="bg-white border border-slate-200 rounded-2xl overflow-hidden state-frame max-w-4xl mx-auto">
+      <div class="px-5 py-3 bg-red-50 border-b border-red-200">
+        <p class="text-xs font-semibold text-red-900">2 countries have an invalid price — fix them before saving.</p>
+      </div>
+
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-[10px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
+            <th class="px-5 py-2 font-medium">Country</th>
+            <th class="px-5 py-2 font-medium">Currency</th>
+            <th class="px-5 py-2 font-medium">Price · editable</th>
+            <th class="px-5 py-2 font-medium">Template · reference</th>
+            <th class="px-5 py-2 font-medium">Δ</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          <tr class="bg-red-50/60">
+            <td class="px-5 py-2.5 text-slate-700 align-top">Japan <span class="text-slate-400 mono text-xs">(JP)</span></td>
+            <td class="px-5 py-2.5 align-top"><span class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">JPY</span></td>
+            <td class="px-5 py-2.5 align-top">
+              <span class="inline-flex items-center gap-1 rounded-lg border-2 border-red-400 bg-white px-2 py-1">
+                <span class="text-[11px] font-semibold text-slate-500">JPY</span>
+                <input type="text" value="1499.50" class="w-24 border-0 p-0 text-xs mono text-slate-900 focus:outline-none" />
+              </span>
+              <p class="mt-1 text-[11px] text-red-600">JPY only accepts whole numbers (got “1499.50”). Google rejects fractional values for this currency.</p>
+            </td>
+            <td class="px-5 py-2.5 align-top mono text-xs text-slate-500">JPY 1500</td>
+            <td class="px-5 py-2.5 align-top text-xs text-slate-400">—</td>
+          </tr>
+          <tr class="bg-red-50/60">
+            <td class="px-5 py-2.5 text-slate-700 align-top">Kuwait <span class="text-slate-400 mono text-xs">(KW)</span></td>
+            <td class="px-5 py-2.5 align-top"><span class="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">KWD</span></td>
+            <td class="px-5 py-2.5 align-top">
+              <span class="inline-flex items-center gap-1 rounded-lg border-2 border-red-400 bg-white px-2 py-1">
+                <span class="text-[11px] font-semibold text-slate-500">KWD</span>
+                <input type="text" value="3.14159" class="w-24 border-0 p-0 text-xs mono text-slate-900 focus:outline-none" />
+              </span>
+              <p class="mt-1 text-[11px] text-red-600">KWD supports at most 3 decimal places (got “3.14159” with 5).</p>
+            </td>
+            <td class="px-5 py-2.5 align-top mono text-xs text-slate-500">KWD 3.000</td>
+            <td class="px-5 py-2.5 align-top text-xs text-slate-400">—</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="px-5 py-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+        <p class="text-[11px] text-red-700 font-medium">2 invalid · Save is blocked</p>
+        <div class="flex items-center gap-2">
+          <button class="px-3 py-1.5 text-xs font-medium text-slate-500">Reset all to template</button>
+          <button class="px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-200 rounded-lg">Cancel</button>
+          <button class="gate-disabled px-4 py-1.5 text-xs font-semibold text-white rounded-lg">Save custom prices</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-[11px] text-emerald-900 leading-relaxed">
+    <strong>Identical rules, one module.</strong> These messages come verbatim from
+    <span class="mono">validateDecimalForCurrency</span> (<span class="mono">google/currency-precision.ts:92-114</span>) —
+    the same function the item detail form calls (<span class="mono">IapForm.tsx:56-71, :298-304</span>).
+    The server re-runs it plus the throwing <span class="mono">decimalToMicros(dec, currency)</span>
+    (<span class="mono">price-conversion.ts:53-78</span>) because client state is untrusted.
+    <strong>Note:</strong> per-country minimum/maximum prices are <em>not</em> validated anywhere in the tool
+    (<span class="mono">currency-precision.ts:16-18</span>) — Google enforces those at push, and the row is refused with
+    Google’s reason. Design doc risk R4.
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<!-- STATE 6 — Custom inactive + edge notices                          -->
+<!-- ================================================================ -->
+<section class="max-w-6xl mx-auto mb-10">
+  <div class="flex items-center gap-2 mb-3">
+    <span class="px-2 py-0.5 rounded bg-slate-900 text-white text-[11px] font-semibold">STATE 6</span>
+    <h2 class="text-base font-semibold text-slate-900">Edge states — inactive Custom, file swap, and the failure path</h2>
+  </div>
+
+  <div class="grid lg:grid-cols-2 gap-4">
+    <!-- Inactive under Google Conversion -->
+    <div class="bg-white border border-slate-200 rounded-xl p-4 state-frame">
+      <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-2">Source switched to Google Conversion</p>
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-500 line-through">Custom · 168 countries</span>
+          <span class="text-[11px] text-slate-500">inactive — not applied under Google Conversion</span>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-2 leading-relaxed">
+          Kept, not cleared: switching a radio must not destroy work the Manager cannot get back.
+          Switching to a template source reactivates it unchanged. Not sent in the execute payload while inactive.
+          <span class="text-slate-400">(Recommendation — design doc §2.H Q4.)</span>
+        </p>
+      </div>
+      <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mt-4 mb-2">Row set to Skip</p>
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <p class="text-[11px] text-slate-500">Same treatment — chip greys out, nothing is sent (skip rows never reach Google).</p>
+      </div>
+    </div>
+
+    <!-- Different file uploaded -->
+    <div class="bg-white border border-slate-200 rounded-xl p-4 state-frame">
+      <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-2">A different file is uploaded at Step 2</p>
+      <div class="rounded-lg border border-blue-200 bg-blue-50 p-3">
+        <p class="text-xs font-semibold text-blue-900 mb-1">3 custom price sets kept · 2 dropped</p>
+        <p class="text-[11px] text-blue-900 leading-relaxed">
+          Kept where the SKU still appears in the new file
+          (<span class="mono">gem_pack_large</span>, <span class="mono">pack_starter_099</span>,
+          <span class="mono">bundle_seasonal</span>); dropped where it does not
+          (<span class="mono">gem_pack_small</span>, <span class="mono">vip_month</span>).
+        </p>
+        <p class="text-[11px] text-blue-800 mt-1.5">
+          Both counts are named — a silent drop-all loses real work, a silent keep-all is invisible.
+          <span class="text-blue-600">(Recommendation — design doc §2.H Q3.)</span>
+        </p>
+      </div>
+      <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mt-4 mb-2">Page refresh</p>
+      <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
+        <p class="text-[11px] text-amber-900 leading-relaxed">
+          All wizard state is client-side, so a refresh loses customs — same as the preview rows themselves.
+          A <span class="mono">beforeunload</span> prompt fires while unsaved customs exist, reusing the listener already
+          registered for hub-tracking (<span class="mono">BulkImportWizard.tsx:199-214</span>).
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Result screen -->
+  <div class="mt-4 bg-white border border-emerald-200 rounded-xl p-5 state-frame">
+    <p class="text-[11px] font-semibold uppercase tracking-wide text-slate-400 mb-3">Step 4 — result screen gains a Custom tile, and custom failures are visible</p>
+    <div class="grid grid-cols-6 gap-2 max-w-3xl">
+      <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-2"><p class="text-2xl font-semibold text-emerald-800">3</p><p class="text-[10px] font-medium uppercase tracking-wide text-emerald-800 mt-0.5">Created</p></div>
+      <div class="rounded-lg border border-amber-200 bg-amber-50 p-2"><p class="text-2xl font-semibold text-amber-800">1</p><p class="text-[10px] font-medium uppercase tracking-wide text-amber-800 mt-0.5">Overwritten</p></div>
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-2"><p class="text-2xl font-semibold text-slate-700">0</p><p class="text-[10px] font-medium uppercase tracking-wide text-slate-700 mt-0.5">Skipped</p></div>
+      <div class="rounded-lg border border-red-200 bg-red-50 p-2"><p class="text-2xl font-semibold text-red-800">0</p><p class="text-[10px] font-medium uppercase tracking-wide text-red-800 mt-0.5">Failed</p></div>
+      <div class="rounded-lg border border-red-200 bg-red-50 p-2"><p class="text-2xl font-semibold text-red-800">1</p><p class="text-[10px] font-medium uppercase tracking-wide text-red-800 mt-0.5">Refused</p></div>
+      <div class="rounded-lg border border-violet-200 bg-violet-50 p-2"><p class="text-2xl font-semibold text-violet-800">2</p><p class="text-[10px] font-medium uppercase tracking-wide text-violet-800 mt-0.5">Custom</p></div>
+    </div>
+    <div class="mt-3 bg-red-50 border border-red-200 rounded-lg p-3 max-w-3xl">
+      <p class="text-xs font-medium text-red-900 mb-1">1 row refused — not sent to Google:</p>
+      <p class="text-[11px] text-red-800">· Row 6 (<span class="mono">vip_month</span>): custom prices carry no VND entry, which Google requires for defaultPrice. Row not sent.</p>
+    </div>
+    <p class="mt-3 text-[11px] text-slate-500 leading-relaxed max-w-3xl">
+      <strong class="text-slate-700">The hard rule.</strong> A custom row that cannot be applied is excluded from the batch and
+      named here. It <em>never</em> falls back to the template price — that would ship a price the Manager did not choose
+      and report success for it. Reuses the existing per-row fail-soft channel
+      (<span class="mono">bulk-import.ts:459-467</span>, <span class="mono">BulkImportWizard.tsx:992-1011</span>).
+      Open question §2.H Q5: custom refusals should also count toward the Hub run’s terminal status, which today treats every
+      refusal as a soft skip (<span class="mono">hub-tracking/status-mapping.ts:33-45</span>).
+    </p>
+  </div>
+</section>
+
+<!-- ================================================================ -->
+<!-- Contract summary                                                  -->
+<!-- ================================================================ -->
+<section class="max-w-6xl mx-auto mb-12">
+  <div class="bg-slate-900 text-slate-100 rounded-2xl p-6">
+    <h2 class="text-base font-semibold mb-3">Execute contract — what actually changes</h2>
+    <div class="grid lg:grid-cols-2 gap-4 text-[12px] leading-relaxed">
+      <div>
+        <p class="font-semibold text-violet-300 mb-1">Per-row payload (additive)</p>
+<pre class="bg-slate-800 rounded-lg p-3 overflow-x-auto text-[11px]">rows: [{
+  rowNumber, sku, baseCurrency, basePriceDecimal,
+  regionOverrides, listings, decision,
+  chosenTierIdentifier, defaultTierIdentifier,
+  tierCandidateCount, priceHeaderSource,
++ customPrices: {
++   entries: [{ region, currency, priceDecimal }],
++   baselineTier: "tier_999" | null
++ } | null            // null unless source is a template
+}]</pre>
+      </div>
+      <div>
+        <p class="font-semibold text-violet-300 mb-1">Orchestrator — the one line that matters</p>
+<pre class="bg-slate-800 rounded-lg p-3 overflow-x-auto text-[11px]">// bulk-import.ts:555 — template loop skip guard
+- if (row.crossCurrencyRefusal || row.resolvedDefaultPrice) continue;
++ if (row.crossCurrencyRefusal || row.resolvedDefaultPrice
++     || row.customPrices) continue;</pre>
+        <p class="mt-2 text-slate-300">
+          Without it, <span class="mono">bulk-import.ts:672-676</span> overwrites
+          <span class="mono">row.regionOverrides</span> with the template entries and the custom prices vanish —
+          silently, into a live store. Acceptance must <em>break</em> this guard and watch the test fail (P10 mutation-check),
+          not merely watch a green test pass.
+        </p>
+      </div>
+    </div>
+    <div class="mt-4 grid md:grid-cols-3 gap-3 text-[11px]">
+      <div class="rounded-lg bg-slate-800 p-3">
+        <p class="font-semibold text-slate-200 mb-1">No migration</p>
+        <p class="text-slate-400"><span class="mono">BULK_IMPORT_BATCH</span> is already in the <span class="mono">actions_log</span> CHECK constraint; <span class="mono">payload</span> is JSONB. P2 verified.</p>
+      </div>
+      <div class="rounded-lg bg-slate-800 p-3">
+        <p class="font-semibold text-slate-200 mb-1">Provenance per item</p>
+        <p class="text-slate-400"><span class="mono">per_row_diagnostic[]</span> gains <span class="mono">price_provenance</span>, <span class="mono">custom_entry_count</span>, <span class="mono">custom_baseline_tier</span>, <span class="mono">custom_blank_regions</span>.</p>
+      </div>
+      <div class="rounded-lg bg-slate-800 p-3">
+        <p class="font-semibold text-slate-200 mb-1">defaultPrice</p>
+        <p class="text-slate-400">Taken from the custom entry matching the app’s default currency, stamped into the existing <span class="mono">resolvedDefaultPrice</span> field — so <span class="mono">buildProduct</span> needs no change.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="max-w-6xl mx-auto text-center text-[11px] text-slate-400 pb-8">
+  Design mockup · Google IAP Management · hold for Manager review ·
+  see <span class="mono">docs/google-iap-management/design-bulk-import-custom-prices.md</span>
+</footer>
+
+</body>
+</html>
