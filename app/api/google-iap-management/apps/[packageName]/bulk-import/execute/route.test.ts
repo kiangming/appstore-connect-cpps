@@ -8,6 +8,8 @@
  * correct run id + terminal status + reason.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 const getServerSession = vi.hoisted(() => vi.fn());
 vi.mock("next-auth", () => ({ getServerSession }));
@@ -233,5 +235,26 @@ describe("Google bulk-import execute — Hub tracking closes on every exit exact
     );
     expect(res.status).toBe(500);
     expect(finalizeHubTracking).toHaveBeenCalledWith("run-6", "FAILED", "boom");
+  });
+});
+
+/**
+ * Static posture guard (same genre as lib/iap-management/rbac-posture.test.ts).
+ *
+ * Phase 3 sends per-item custom prices as a full ~170-entry set per row,
+ * which puts a 100-row batch at 0.96-1.07 MB — right on the 1 MB body
+ * limit Next.js applies to SERVER ACTIONS (route handlers have none).
+ * Converting this endpoint to a Server Action would silently start
+ * rejecting custom-heavy batches at ~95 rows.
+ *
+ * The route's own docstring says so, but a docstring is not a guard: this
+ * codebase has already had a documented-then-reintroduced bug (the
+ * listInAppPurchases warning), which is why that function was deleted
+ * rather than re-annotated. This makes the conversion go red instead.
+ */
+describe("bulk-import execute route — posture", () => {
+  it("is a Route Handler, never a Server Action (1 MB body-limit boundary)", () => {
+    const src = readFileSync(join(__dirname, "route.ts"), "utf8");
+    expect(src).not.toMatch(/^\s*["']use server["']/m);
   });
 });

@@ -13,6 +13,20 @@
  * the real terminal value right before the success return; every early
  * return sets `tracking.errorMessage` to its specific reason. Mirrors the
  * Apple IAP Management execute route's fix (commits 95d9413/4ba8e6f).
+ *
+ * ⚠ THIS MUST STAY A ROUTE HANDLER — DO NOT CONVERT IT TO A SERVER ACTION.
+ * Next.js applies a 1 MB default body limit to Server Actions
+ * (`next/dist/server/app-render/action-handler.js` —
+ * `serverActions?.bodySizeLimit ?? "1 MB"`); App Router route handlers have
+ * no body limit at all. The workspace convention of "user-initiated
+ * mutations are Server Actions" therefore does NOT apply here. Measured
+ * (design-bulk-import-custom-prices.md §3): a 100-row batch with per-item
+ * custom prices serializes to 0.96–1.07 MB — right ON that boundary — so
+ * the conversion would start failing custom-heavy batches at ~95 rows with
+ * an opaque error. Enforced by a static test in route.test.ts, because a
+ * comment alone has already failed this codebase once (the
+ * listInAppPurchases docstring warned about the exact bug that was later
+ * re-introduced).
  */
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
