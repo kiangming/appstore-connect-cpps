@@ -2389,6 +2389,22 @@ a partial listing set silently and destroys the rest (the still-open
 report; a sibling that quietly eats data never announces itself, so it
 needs the deliberate sweep.
 
+Companion instance, same feature, one cycle later — **a rule enforced
+outside the scope it was correct in.** The custom-prices `defaultPrice`
+rule ("must include an app-currency entry") was locked while custom was
+template-only, where the custom set REPLACES the whole price set and is
+therefore the only possible source of `defaultPrice`. When custom was
+later allowed under Google Conversion — a SPARSE OVERLAY, where
+`defaultPrice` comes from the file's base price — the unqualified rule
+would have refused legitimate partial overrides. Branching the server was
+not sufficient: the dialog's Save gate carried the same unscoped rule, so
+the UI blocked exactly what the server had just been taught to accept.
+**Both layers must be swept, and a comment asserting "no exception" is a
+scope claim that needs re-checking whenever the scope moves** — the
+original wording invited a future reader to "restore" the rule. Full
+detail: `docs/google-iap-management/design-bulk-import-custom-prices.md`
+§4.4.
+
 Clean PREVENTIVE instance (Google Bulk Import per-item custom prices,
 Aug 2026): the module already had two per-country price editors that had
 drifted (the detail view's `UnifiedPricingTable` treats currency as

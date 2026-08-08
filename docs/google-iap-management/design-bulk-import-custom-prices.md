@@ -610,6 +610,18 @@ with new kinds:
 | `custom_no_app_currency_entry` | no entry matches the app's default currency | `Row N (SKU): custom prices carry no <CUR> entry, which Google requires for defaultPrice. Row not sent.` |
 | `custom_source_mismatch` | `customPrices` present with `google_default` | rejected at the route (400) — should be unreachable from the wizard |
 
+> ⚠ **`custom_source_mismatch` was RETIRED in August 2026 — see §4.4.**
+> The row above is the design as signed off, preserved verbatim. It rested
+> on the assumption that custom prices could not be carried under
+> `google_default`. They can: the clobber that motivated the restriction
+> lives inside the template-resolution loop, which is gated on a template
+> source, so under Google Conversion `regionOverrides` flows straight
+> through to `buildProduct`. Per-country overrides had in fact always
+> worked there via the file's GT-Price column — the restriction capped
+> that at one country instead of ~170. Custom prices are now valid under
+> all three sources, and the `defaultPrice` rule branches (§3's Q6 scope
+> note).
+
 A custom row that cannot be applied is **excluded from the batch** and
 listed on the result screen. It **never** falls through to the template
 price. `crossCurrencyRefusal`'s existing plumbing gives this for free:

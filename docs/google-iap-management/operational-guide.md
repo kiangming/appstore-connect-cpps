@@ -97,7 +97,10 @@ Reporting access or hasn't been granted any apps in Play Console.
    - Title cap 55 chars, Description cap 200.
 3. **Pricing**
    - Pick a source — `Default Template`, `App-specific Template`, or
-     `Google Conversion` (see § 7 for what each does).
+     `Google Conversion` (see § 7 for what each does). The three cards
+     load, grey-with-reason and auto-select by priority exactly as in Bulk
+     Import Step 1 (§ 6) — the same component drives both, so Create /
+     Edit cannot be submitted until the availability check resolves.
    - Set base price decimal + currency.
    - Optionally open Region overrides and add per-region price rows.
 4. Click **Create on Google Play.** The server signs the JWT, posts
@@ -148,8 +151,24 @@ rows without a match fall back to `Google Conversion` — inline base price
 > `import_batches.pricing_source` and in every historical audit-log entry,
 > so old batches and SQL queries are unaffected.
 
-Under either template source, individual items can override the template
-with **per-item Custom prices** in Step 3 — see below.
+**The step has three states**, because the tool has to ask which pricing
+templates exist before it can offer them:
+
+| State | What the operator sees |
+|---|---|
+| Checking | All three cards **disabled**, nothing selected, "Checking which pricing templates are available…". **Continue is disabled** — the tool does not pick a source on your behalf. |
+| Resolved | Available sources become selectable; unavailable ones are greyed **with a reason** ("No default template uploaded — add one in Settings → Pricing Templates"). The tool then auto-selects by priority — **App-specific Template → Default Template → Google Conversion** — and that choice is visibly ticked, never applied silently. |
+| Check failed | Error banner + **Retry**. Both template cards stay disabled (their existence is genuinely unknown); `Google Conversion` is enabled and selected, since it needs no template. |
+
+Before August 2026 the step pre-selected `Google Conversion` on load,
+because the other two need an async check. That read as "the templates are
+broken", and let operators import under a source they never chose.
+
+The same behaviour applies to the single-IAP Create / Edit form (§4) — one
+shared component, so the two surfaces cannot drift.
+
+Individual items can override the batch source with **per-item Custom
+prices** in Step 3 — under **any** of the three sources. See below.
 
 ### Step 2 — Upload
 
@@ -244,29 +263,43 @@ options but NOT listings) is tracked as a backlog item in the Apple KB
 
 #### Custom prices for one item
 
-Any row can override the template for itself. In the **Tier** column,
-click `Custom…` (rows with several matching tiers get it as the last
-entry in the tier dropdown). The dialog lists every country Google sells
-in, pre-filled from that row's template tier.
+Any row can override the batch source for itself, under **all three**
+pricing sources. In the **Tier** column click `Custom…` (rows with several
+matching tiers get it as the last entry in the tier dropdown). The dialog
+lists every country Google sells in, with search (name / ISO code /
+currency) and continent filters.
+
+**What "custom" means depends on the source — this is the rule that bites.**
+
+| Source | Semantics | App-currency entry required? |
+|---|---|---|
+| `Default Template` · `App-specific Template` | **REPLACES** the tier's whole price set. The dialog pre-fills from the tier. | **Yes.** Because the custom set replaces everything, it is the only possible source of `defaultPrice`. Missing ⇒ the row is refused with `custom_no_app_currency_entry`; the dialog blocks Save so you find out before pushing. |
+| `Google Conversion` | **SPARSE OVERLAY.** Set only the countries you want; every blank country still gets Google's automatic conversion. The dialog opens **empty** — nothing is pre-filled. | **No.** `defaultPrice` comes from the file's base price. Overriding three countries, none of them in the app's currency, is legitimate. If you *do* set an app-currency price, it wins over the base price. |
+
+Rules that hold under every source:
 
 - **Currency is fixed per country** and shown as a chip — it is Google's
   billing currency for that market, not something you pick.
 - **A blank price is not "no price".** It reads
   `inherits — Google conversion`: at push, Google converts the item's
-  default price into that country. The footer counts these separately.
-- **Save is blocked** on a currency-precision error (VND/JPY take whole
-  numbers, KWD takes 3 decimals — the same rules as the item Edit form),
-  and when no priced country uses the app's own currency. Google needs
-  that entry to derive the product's default price; without it the row
-  would be refused at push, so the dialog stops you here instead.
-- Prices far below the template baseline get a **non-blocking warning**.
-  The tool has no per-country minimum table — Google enforces floors at
-  push and reports no per-row reason, so one below-floor price can fail
-  the whole batch. The warning is a heuristic, not a guarantee.
+  default price into that country. **set price** opens the field.
+- **Save is blocked on a currency-precision error** — VND/JPY take whole
+  numbers, KWD takes 3 decimals. Same rules as the item Edit form.
+- **Prices ≥90% below the reference get a non-blocking warning.** The
+  reference is the *tier's price* under a template source, or *Google's
+  converted price* under Google Conversion. The tool has no per-country
+  minimum table — Google enforces floors at push and reports no per-row
+  reason, so one below-floor price can fail the whole batch. It is a
+  heuristic, not a guarantee.
 
 Once saved the row shows `Custom · N countries` with **View / edit** and
 **Reset to template**. Custom prices are **absolute**: they are no longer
 tied to the template and will not change if you switch templates.
+
+> The **Reset to template** label reads that way under Google Conversion
+> too, where there is no template — it means "drop the custom set and go
+> back to the batch source". Cosmetic wording gap, no behavioural
+> difference.
 
 **Reverting** — any of: `Reset all to template` in the dialog, `Reset to
 template` on the row (with an Undo toast), or picking a real tier again
@@ -276,10 +309,9 @@ from the row's dropdown.
 
 | You do this | Custom prices |
 |---|---|
-| Back to Step 1, change template, re-preview | **Kept** — the dialog then says "no longer tied to a template" and shows the new template's values for comparison |
+| Back to Step 1, change the source (including to `Google Conversion`), re-preview | **Kept and still sent.** The dialog then says "no longer tied to a template" and shows the current source's values for comparison |
 | Upload a **different file** at Step 2 | Kept for SKUs still in the file, dropped for the rest — the banner names both lists |
-| Switch to `Google Conversion` | Kept but **inactive** — not sent; switching back to a template source reactivates them |
-| Set the row to **Skip** | Kept, not sent |
+| Set the row to **Skip** | **Kept but not sent** — the chip greys out with a note. Un-skipping reactivates it. This is now the *only* thing that deactivates a custom set |
 | **Refresh the page** | **Lost** — all wizard state is in the browser. You get a browser warning first |
 | **Import another** | Cleared — that is a new batch |
 
@@ -299,8 +331,11 @@ quietly shipped with the template price instead. Custom refusal reasons:
 | Reason | Meaning |
 |---|---|
 | `custom_invalid_price` | A price broke its currency's precision rules. Fix it in the dialog and re-push. |
-| `custom_no_app_currency_entry` | No priced country used the app's own currency, so Google had no default price to use. Normally the dialog blocks this at Save. |
-| `custom_source_mismatch` | Custom prices arrived on a `Google Conversion` batch. Should be unreachable from the wizard. |
+| `custom_no_app_currency_entry` | **Template sources only.** No priced country used the app's own currency, so Google had no default price to use. Normally the dialog blocks this at Save. Cannot occur under `Google Conversion`, where the base price supplies the default. |
+
+> `custom_source_mismatch` was retired in August 2026. It refused custom
+> prices on a `Google Conversion` batch, which is now a supported
+> combination.
 
 A refused custom row also makes the run's Hub status **FAILED** rather
 than SUCCESS — the Manager asked for a price and it did not get applied,

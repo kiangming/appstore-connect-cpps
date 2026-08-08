@@ -206,16 +206,25 @@ When a Manager picks a pricing source on the Create / Edit / Bulk
 Import form, the server resolves prices in this order:
 
 0. **Bulk Import only — if the row carries per-item Custom prices, they
-   win and the template is not consulted at all.** The custom set is
-   absolute: `regionOverrides` is replaced by its entries and
-   `defaultPrice` is derived from the entry matching the app's default
-   currency. A custom set that cannot be applied REFUSES the row
-   (per-row fail-soft, `refusedRows`) — it never falls back to the
-   template price. Countries the set omits are still filled by Google's
-   conversion via the regions bootstrap.
-   Implementation: the custom pre-pass in
-   `orchestration/bulk-import.ts`, plus the `row.customPrices` clause in
-   the template loop's skip guard.
+   win and no template is consulted for that row.** Valid under **all
+   three** pricing sources. `regionOverrides` is replaced by the custom
+   entries; countries the set omits are still filled by Google's
+   conversion via the regions bootstrap. A custom set that cannot be
+   applied REFUSES the row (per-row fail-soft, `refusedRows`) — it never
+   falls back to the template price.
+
+   **`defaultPrice` resolution is source-dependent.** This is the one
+   place where the two sources genuinely differ:
+
+   | Source | `defaultPrice` | App-currency entry |
+   |---|---|---|
+   | `default_template` · `app_template` | The custom entry whose currency equals the app's default currency. | **Required.** The custom set replaces the whole ~170-country set, so nothing else can supply `defaultPrice`. Missing ⇒ `custom_no_app_currency_entry`. |
+   | `google_default` | The row's base price (`baseCurrency` / `basePriceDecimal`) via `buildProduct`'s fallback — **unless** the custom set contains an app-currency entry, in which case that is stamped into `resolvedDefaultPrice` and wins. | **Not required.** The custom set is a sparse overlay; requiring it would refuse legitimate partial overrides. |
+
+   Implementation: the custom pre-pass in `orchestration/bulk-import.ts`
+   (`isTemplateSource` branch), plus the `row.customPrices` clause in the
+   template loop's skip guard. `custom_source_mismatch` — which refused
+   custom prices under `google_default` — was retired in August 2026.
 1. If `app_template` is selected and an App template exists for this
    app: use its tier entries.
 2. Else if `default_template` is selected and a Default template

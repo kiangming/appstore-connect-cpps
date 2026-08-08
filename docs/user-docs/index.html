@@ -3683,6 +3683,20 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <li class="step">
             <div class="step-title">Mở wizard và chọn pricing source (Step 1)</div>
             <div class="step-body"><p>Từ <a class="inline-link" data-goto="google-iaps">Danh sách IAPs</a> → nút <strong>Bulk Import</strong>. URL: <code class="inline">/google-iap-management/apps/[packageName]/bulk-import</code>. Step 1 chọn nguồn giá cho <strong>cả batch</strong> — thứ tự 3 thẻ: <code class="inline">Default Template</code>, <code class="inline">App-specific Template</code>, <code class="inline">Google Conversion</code>. Rows không match tier nào sẽ rơi về <code class="inline">Google Conversion</code>: giá gốc của row + GT Price, để Google tự quy đổi sang mọi quốc gia khác.</p>
+              <p style="margin-top:8px;">Khi mở, tool phải <strong>kiểm tra xem app này có pricing template nào</strong> — nên bước 1 có 3 trạng thái:</p>
+              <table class="docs-table" style="margin-top:8px;">
+                <thead><tr><th>Trạng thái</th><th>Bạn thấy gì</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>Đang kiểm tra</strong></td><td><strong>Cả 3 thẻ đều bị khóa</strong>, chưa chọn thẻ nào, có dòng “Checking which pricing templates are available…”. Nút <strong>Continue</strong> cũng bị khóa — tool không đoán nguồn giá thay bạn.</td></tr>
+                  <tr><td><strong>Kiểm tra xong</strong></td><td>Thẻ nào có template thì bật; thẻ nào không có thì <strong>xám kèm lý do</strong> (vd “No default template uploaded — add one in Settings → Pricing Templates”). Tool <strong>tự chọn</strong> theo thứ tự ưu tiên: <code class="inline">App-specific Template</code> → <code class="inline">Default Template</code> → <code class="inline">Google Conversion</code>, và lựa chọn đó <strong>hiện rõ trên UI</strong> (radio được tick) — không áp dụng âm thầm. Bạn đổi lại tuỳ ý.</td></tr>
+                  <tr><td><strong>Kiểm tra lỗi</strong></td><td>Banner lỗi + nút <strong>Retry</strong>. Hai thẻ template vẫn khóa (tool <em>thật sự không biết</em> chúng có tồn tại hay không), còn <code class="inline">Google Conversion</code> vẫn dùng được vì nó không cần template — bạn không bị kẹt.</td></tr>
+                </tbody>
+              </table>
+              <div class="callout callout-info">
+                <div class="callout-title">ℹ️ Trước đây mở lên là chọn sẵn Google Conversion</div>
+                <p>Cách cũ pre-select <code class="inline">Google Conversion</code> ngay khi mở, vì 2 nguồn còn lại cần kiểm tra async. Điều đó dễ bị đọc thành “template không hoạt động”, hoặc khiến bạn import bằng một nguồn mình chưa từng chọn. Giờ “chưa biết” được hiển thị đúng là chưa biết.</p>
+              </div>
+              <p style="margin-top:8px;">Cùng cơ chế này áp dụng cho cả <a class="inline-link" data-goto="google-create-iap">form tạo / sửa 1 item</a> — cùng một component, nên hành vi không lệch giữa 2 chỗ.</p>
             <div class="callout callout-info">
               <div class="callout-title">ℹ️ Đổi tên nhãn (8/2026): "Google default" → "Google Conversion"</div>
               <p>Chỉ <strong>nhãn hiển thị</strong> đổi. Giá trị lưu trong DB vẫn là <code class="inline">google_default</code> (cột <code class="inline">import_batches.pricing_source</code> + mọi bản ghi <code class="inline">actions_log</code> cũ), nên batch cũ và các câu SQL đối soát không bị ảnh hưởng.</p>
@@ -3701,18 +3715,40 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <li class="step">
             <div class="step-title">Custom prices cho từng item (Step 3, tùy chọn)</div>
             <div class="step-body">
-              <p>Khi nguồn giá là <code class="inline">Default Template</code> hoặc <code class="inline">App-specific Template</code>, mỗi row có thể <strong>tự đặt giá riêng</strong>, không theo template. Ở cột <strong>Tier</strong> bấm <code class="inline">Custom…</code> (row có nhiều tier trùng giá thì <code class="inline">Custom…</code> nằm cuối dropdown). Dialog liệt kê <strong>toàn bộ quốc gia Google hỗ trợ</strong> (~170), điền sẵn theo tier của row đó, có ô search + lọc theo châu lục.</p>
+              <p><strong>Áp dụng cho cả 3 nguồn giá.</strong> Bất kỳ row nào cũng có thể tự đặt giá riêng theo từng quốc gia. Ở cột <strong>Tier</strong> bấm <code class="inline">Custom…</code> (row match nhiều tier cùng giá thì <code class="inline">Custom…</code> nằm cuối dropdown). Dialog liệt kê <strong>toàn bộ quốc gia Google hỗ trợ</strong> (~170), có ô search (tên nước / mã ISO / currency) và filter theo châu lục.</p>
+
+              <p style="margin-top:8px;"><strong>Ý nghĩa của “custom” khác nhau theo nguồn giá — đây là điểm dễ sai nhất:</strong></p>
+              <table class="docs-table" style="margin-top:8px;">
+                <thead><tr><th>Nguồn giá</th><th>Custom nghĩa là gì</th><th>Bắt buộc có giá theo currency của app?</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><code class="inline">Default Template</code><br><code class="inline">App-specific Template</code></td>
+                    <td><strong>THAY THẾ toàn bộ</strong> bảng giá của tier. Dialog điền sẵn giá của tier để bạn sửa.</td>
+                    <td><strong>CÓ.</strong> Vì custom thay thế cả bộ, Google không còn chỗ nào khác để lấy <code class="inline">defaultPrice</code>. Thiếu → row bị từ chối với <code class="inline">custom_no_app_currency_entry</code>. Dialog chặn Save ngay để bạn không phát hiện lúc push.</td>
+                  </tr>
+                  <tr>
+                    <td><code class="inline">Google Conversion</code></td>
+                    <td><strong>PHỦ LÊN một phần</strong> (sparse overlay). Chỉ đặt những nước bạn muốn; mọi nước để trống vẫn nhận giá Google tự quy đổi. Dialog mở ra <strong>trống hoàn toàn</strong>, không điền sẵn gì.</td>
+                    <td><strong>KHÔNG.</strong> <code class="inline">defaultPrice</code> lấy từ giá gốc trong file Excel. Bạn có thể override 3 nước không nước nào dùng currency của app — hoàn toàn hợp lệ. Nếu bạn <em>có</em> đặt giá cho nước dùng currency của app thì giá đó <strong>thắng</strong> giá gốc.</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <p style="margin-top:8px;">Các quy tắc chung cho cả 3 nguồn:</p>
               <ul>
                 <li><strong>Currency cố định theo quốc gia</strong> — hiển thị dạng chip, KHÔNG chọn được. Đây là đồng tiền thanh toán Google quy định cho thị trường đó.</li>
-                <li><strong>Ô giá để trống KHÔNG phải là "không có giá"</strong> — hiển thị <code class="inline">inherits — Google conversion</code>: khi push, Google tự quy đổi giá mặc định sang quốc gia đó.</li>
-                <li><strong>Save bị khóa</strong> khi sai precision (VND/JPY chỉ nhận số nguyên, KWD 3 số lẻ — cùng bộ rule với form Edit item), hoặc khi <strong>không có quốc gia nào dùng đúng currency của app</strong>. Google cần entry đó để lấy defaultPrice; nếu thiếu, row sẽ bị từ chối lúc push nên dialog chặn ngay tại đây.</li>
-                <li>Giá thấp hơn template <strong>≥90%</strong> sẽ có <strong>cảnh báo (không chặn)</strong> — tool không có bảng giá sàn từng nước, Google chỉ báo lỗi lúc push và không nói row nào, nên một giá dưới sàn có thể làm hỏng cả batch.</li>
+                <li><strong>Ô để trống KHÔNG phải là “không có giá”</strong> — hiển thị <code class="inline">inherits — Google conversion</code>, nghĩa là khi push Google sẽ tự quy đổi cho nước đó. Bấm <strong>set price</strong> để mở ô nhập.</li>
+                <li><strong>Save bị khóa khi sai precision</strong> — VND/JPY chỉ nhận số nguyên, KWD 3 số lẻ. Cùng bộ rule với form Edit item, không phải rule riêng.</li>
+                <li><strong>Cảnh báo (không chặn) khi giá thấp hơn mốc tham chiếu ≥90%</strong> — mốc tham chiếu là <em>giá của tier</em> khi dùng template, hoặc <em>giá Google tự quy đổi</em> khi dùng Google Conversion. Tool không có bảng giá sàn từng nước; Google chỉ báo lỗi lúc push và <strong>không nói row nào</strong>, nên một giá dưới sàn có thể làm hỏng cả batch.</li>
               </ul>
-              <p>Sau khi lưu, row hiện chip <code class="inline">Custom · N countries</code> kèm <strong>View / edit</strong> và <strong>Reset to template</strong>. Giá custom là <strong>tuyệt đối</strong> — không còn gắn với template và không đổi khi bạn đổi template.</p>
+
+              <p style="margin-top:8px;">Sau khi lưu, row hiện chip <code class="inline">Custom · N countries</code> kèm <strong>View / edit</strong> (mở lại đúng giá đã lưu) và <strong>Reset to template</strong> (bỏ custom, trả row về nguồn giá của batch). Giá custom là <strong>tuyệt đối</strong> — không còn gắn với template và không đổi khi bạn đổi template.</p>
+
               <div class="callout callout-warning">
                 <div class="callout-title">⚠️ Custom prices sống ở đâu, mất khi nào</div>
                 <p>
-                  <strong>Giữ nguyên</strong> khi: quay lại Step 1 đổi template rồi preview lại (dialog sẽ ghi "no longer tied to a template"); upload file khác nhưng SKU vẫn còn (banner nêu rõ SKU nào giữ, SKU nào bị bỏ); chuyển sang <code class="inline">Google Conversion</code> (giữ nhưng <strong>inactive</strong>, không gửi đi — quay lại template thì tự kích hoạt lại); set row = Skip.<br>
+                  <strong>Giữ nguyên và vẫn được gửi</strong> khi: quay lại Step 1 <strong>đổi nguồn giá</strong> (kể cả sang <code class="inline">Google Conversion</code>) rồi preview lại — dialog sẽ ghi “no longer tied to a template”; upload file khác nhưng SKU vẫn còn trong file (banner nêu rõ SKU nào giữ, SKU nào bị bỏ).<br>
+                  <strong>Giữ nhưng KHÔNG gửi</strong> khi: row được set <code class="inline">Skip</code> — chip xám kèm ghi chú, bỏ Skip là dùng lại được.<br>
                   <strong>Mất</strong> khi: <strong>refresh trang</strong> (toàn bộ state wizard nằm ở trình duyệt — sẽ có cảnh báo của browser trước), hoặc bấm <strong>Import another</strong> (đó là batch mới).
                 </p>
               </div>
