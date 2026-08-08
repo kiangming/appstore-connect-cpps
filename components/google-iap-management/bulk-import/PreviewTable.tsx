@@ -20,13 +20,25 @@ interface Props {
   onTierSelectionChange: (rowNumber: number, identifier: string) => void;
   /** Per-item custom prices, keyed by SKU. Presence = the row has a set. */
   customPriceCounts?: Record<string, number>;
-  /** SKUs whose customs will actually ship (source is a template AND the
-   *  row isn't skipped). Others render greyed as inactive. */
+  /** SKUs whose customs will actually ship: a saved set on a row that is
+   *  NOT set to Skip. Others render greyed as inactive.
+   *
+   *  ⚠ SCOPE — the pricing source is NOT part of this condition, and must
+   *  not be re-added. Custom prices apply under ALL THREE sources; under
+   *  Google Conversion they are a sparse overlay on the base price, which
+   *  is the whole point of that path. This once read "source is a template
+   *  AND the row isn't skipped", and restoring that clause would silently
+   *  stop sending customs under Google Conversion again — the defect that
+   *  the sparse-overlay work exists to fix. Skip is the ONLY deactivator. */
   activeCustomSkus?: ReadonlySet<string>;
   onOpenCustomDialog?: (sku: string) => void;
-  onResetCustom?: (sku: string) => void;
-  /** False under Google Conversion — the trigger is hidden and existing
-   *  sets render as inactive (Q4: keep-but-inactive). */
+  /** Drops the row's custom set so it falls back to the batch pricing
+   *  source. Named "clear", not "reset to template" — there is no template
+   *  under Google Conversion. */
+  onClearCustom?: (sku: string) => void;
+  /** Reserved: currently always true, since custom applies under every
+   *  source. Kept as a prop so a future surface can hide the trigger
+   *  without another condition leaking into activeCustomSkus. */
   customEnabled?: boolean;
 }
 
@@ -52,7 +64,7 @@ export function PreviewTable({
   customPriceCounts = {},
   activeCustomSkus,
   onOpenCustomDialog,
-  onResetCustom,
+  onClearCustom,
   customEnabled = false,
 }: Props) {
   // overflow-x-auto (not overflow-hidden) so the 8-column table stays
@@ -183,7 +195,7 @@ export function PreviewTable({
                       count={customCount}
                       active={customIsActive}
                       onOpen={onOpenCustomDialog}
-                      onReset={onResetCustom}
+                      onClear={onClearCustom}
                     />
                   ) : row.tierCandidates.length === 0 ? (
                     <div className="flex items-center gap-2">
@@ -348,22 +360,23 @@ function CustomTriggerButton({
  * names the country count, "View / edit" re-opens the dialog with the
  * saved values, and "Reset" returns the row to its template.
  *
- * Inactive rendering (Q4) covers two cases — the source was switched to
- * Google Conversion, or the row was set to Skip. In both the set is kept
- * and simply not sent, so the Manager can switch back without retyping.
+ * Inactive rendering covers exactly ONE case now: the row is set to Skip,
+ * so nothing is sent for it. The set is kept, not discarded, so un-skipping
+ * restores it without retyping. Switching the pricing source does NOT
+ * deactivate a set any more — custom applies under all three sources.
  */
 function CustomChip({
   sku,
   count,
   active,
   onOpen,
-  onReset,
+  onClear,
 }: {
   sku: string;
   count: number;
   active: boolean;
   onOpen?: (sku: string) => void;
-  onReset?: (sku: string) => void;
+  onClear?: (sku: string) => void;
 }) {
   return (
     <div>
@@ -388,15 +401,15 @@ function CustomChip({
         <span className="text-slate-300">·</span>
         <button
           type="button"
-          onClick={() => onReset?.(sku)}
+          onClick={() => onClear?.(sku)}
           className="text-[11px] text-slate-500 hover:text-slate-700 hover:underline"
         >
-          Reset to template
+          Clear
         </button>
       </div>
       {!active && (
         <p className="text-[10px] text-slate-500 mt-0.5">
-          inactive — not applied under this pricing source / decision
+          inactive — this row is set to Skip, so nothing is sent
         </p>
       )}
     </div>

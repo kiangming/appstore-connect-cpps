@@ -293,17 +293,13 @@ Rules that hold under every source:
   heuristic, not a guarantee.
 
 Once saved the row shows `Custom · N countries` with **View / edit** and
-**Reset to template**. Custom prices are **absolute**: they are no longer
-tied to the template and will not change if you switch templates.
+**Clear**. Custom prices are **absolute**: they are no longer tied to the
+template and will not change if you switch templates.
 
-> The **Reset to template** label reads that way under Google Conversion
-> too, where there is no template — it means "drop the custom set and go
-> back to the batch source". Cosmetic wording gap, no behavioural
-> difference.
-
-**Reverting** — any of: `Reset all to template` in the dialog, `Reset to
-template` on the row (with an Undo toast), or picking a real tier again
-from the row's dropdown.
+**Reverting** — any of: `Clear custom prices` in the dialog, `Clear` on the
+row (with an Undo toast), or picking a real tier again from the row's
+dropdown. All three drop the custom set so the row falls back to the batch
+pricing source.
 
 **What survives what**
 
@@ -311,7 +307,7 @@ from the row's dropdown.
 |---|---|
 | Back to Step 1, change the source (including to `Google Conversion`), re-preview | **Kept and still sent.** The dialog then says "no longer tied to a template" and shows the current source's values for comparison |
 | Upload a **different file** at Step 2 | Kept for SKUs still in the file, dropped for the rest — the banner names both lists |
-| Set the row to **Skip** | **Kept but not sent** — the chip greys out with a note. Un-skipping reactivates it. This is now the *only* thing that deactivates a custom set |
+| Set the row to **Skip** | **Kept but not sent** — the chip greys out with "inactive — this row is set to Skip, so nothing is sent". Un-skipping reactivates it. This is the *only* thing that deactivates a custom set |
 | **Refresh the page** | **Lost** — all wizard state is in the browser. You get a browser warning first |
 | **Import another** | Cleared — that is a new batch |
 

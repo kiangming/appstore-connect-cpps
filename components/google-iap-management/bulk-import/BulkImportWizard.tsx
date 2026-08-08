@@ -688,11 +688,19 @@ export function BulkImportWizard({
                 tierSelections[r.rowNumber] ?? null,
               defaultTierIdentifier: r.defaultTierSelection,
               tierCandidateCount: r.tierCandidates.length,
-              // Phase 3 — per-item custom prices. Sent ONLY when the row
-              // has a saved set, the batch source is a template, and the
-              // row isn't skipped (activeCustomSkus encodes all three).
-              // Under Google Conversion the sets are kept in state but
-              // deliberately not sent (Q4: keep-but-inactive).
+              // Phase 3 — per-item custom prices. Sent when the row has a
+              // saved set and is not set to Skip (activeCustomSkus encodes
+              // both).
+              //
+              // ⚠ SCOPE — the pricing source is deliberately NOT a
+              // condition here. This once read "…and the batch source is a
+              // template", because custom was template-only; custom now
+              // applies under ALL THREE sources, and under Google
+              // Conversion it is a sparse overlay on the base price. Adding
+              // a source condition back would silently stop sending
+              // customs on that path — the same shape of bug as the
+              // unqualified "no exception" defaultPrice comment, which
+              // cost two defects last cycle. Skip is the only deactivator.
               customPrices: activeCustomSkus.has(r.sku)
                 ? (() => {
                     const set = customPrices[r.sku];
@@ -1117,7 +1125,7 @@ export function BulkImportWizard({
             customPriceCounts={customPriceCounts}
             activeCustomSkus={activeCustomSkus}
             onOpenCustomDialog={setCustomDialogSku}
-            onResetCustom={(sku) => clearCustomForSku(sku, { toast: true })}
+            onClearCustom={(sku) => clearCustomForSku(sku, { toast: true })}
             customEnabled={customActive}
           />
 
@@ -1183,7 +1191,7 @@ export function BulkImportWizard({
               existing={customPrices[customDialogSku] ?? null}
               baselineChanged={customBaselineDrift[customDialogSku] ?? false}
               onSave={(set) => saveCustomForSku(customDialogSku, set)}
-              onResetToTemplate={() => {
+              onClearAll={() => {
                 clearCustomForSku(customDialogSku);
                 setCustomDialogSku(null);
               }}

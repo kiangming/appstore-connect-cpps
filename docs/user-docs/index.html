@@ -3742,13 +3742,13 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
                 <li><strong>Cảnh báo (không chặn) khi giá thấp hơn mốc tham chiếu ≥90%</strong> — mốc tham chiếu là <em>giá của tier</em> khi dùng template, hoặc <em>giá Google tự quy đổi</em> khi dùng Google Conversion. Tool không có bảng giá sàn từng nước; Google chỉ báo lỗi lúc push và <strong>không nói row nào</strong>, nên một giá dưới sàn có thể làm hỏng cả batch.</li>
               </ul>
 
-              <p style="margin-top:8px;">Sau khi lưu, row hiện chip <code class="inline">Custom · N countries</code> kèm <strong>View / edit</strong> (mở lại đúng giá đã lưu) và <strong>Reset to template</strong> (bỏ custom, trả row về nguồn giá của batch). Giá custom là <strong>tuyệt đối</strong> — không còn gắn với template và không đổi khi bạn đổi template.</p>
+              <p style="margin-top:8px;">Sau khi lưu, row hiện chip <code class="inline">Custom · N countries</code> kèm <strong>View / edit</strong> (mở lại đúng giá đã lưu) và <strong>Clear</strong> (bỏ custom, trả row về nguồn giá của batch). Trong dialog nút tương ứng là <strong>Clear custom prices</strong>. Giá custom là <strong>tuyệt đối</strong> — không còn gắn với template và không đổi khi bạn đổi template.</p>
 
               <div class="callout callout-warning">
                 <div class="callout-title">⚠️ Custom prices sống ở đâu, mất khi nào</div>
                 <p>
                   <strong>Giữ nguyên và vẫn được gửi</strong> khi: quay lại Step 1 <strong>đổi nguồn giá</strong> (kể cả sang <code class="inline">Google Conversion</code>) rồi preview lại — dialog sẽ ghi “no longer tied to a template”; upload file khác nhưng SKU vẫn còn trong file (banner nêu rõ SKU nào giữ, SKU nào bị bỏ).<br>
-                  <strong>Giữ nhưng KHÔNG gửi</strong> khi: row được set <code class="inline">Skip</code> — chip xám kèm ghi chú, bỏ Skip là dùng lại được.<br>
+                  <strong>Giữ nhưng KHÔNG gửi</strong> khi: row được set <code class="inline">Skip</code> — chip xám kèm ghi chú “inactive — this row is set to Skip, so nothing is sent”; bỏ Skip là dùng lại được. Đây là <strong>trường hợp duy nhất</strong> làm custom bị vô hiệu.<br>
                   <strong>Mất</strong> khi: <strong>refresh trang</strong> (toàn bộ state wizard nằm ở trình duyệt — sẽ có cảnh báo của browser trước), hoặc bấm <strong>Import another</strong> (đó là batch mới).
                 </p>
               </div>

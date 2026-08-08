@@ -85,7 +85,10 @@ interface Props {
    *  NEW template's values for comparison. */
   baselineChanged: boolean;
   onSave: (set: CustomPriceSet) => void;
-  onResetToTemplate: () => void;
+  /** Drops the whole custom set for this row. Named "clear" rather than
+   *  "reset to template" — under Google Conversion there is no template to
+   *  reset to; the row simply falls back to the batch pricing source. */
+  onClearAll: () => void;
   onClose: () => void;
 }
 
@@ -108,7 +111,7 @@ export function CustomPricesDialog({
   existing,
   baselineChanged,
   onSave,
-  onResetToTemplate,
+  onClearAll,
   onClose,
 }: Props) {
   const [load, setLoad] = useState<LoadState>({ kind: "loading" });
@@ -520,10 +523,10 @@ export function CustomPricesDialog({
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={onResetToTemplate}
+                  onClick={onClearAll}
                   className="px-3 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 transition"
                 >
-                  Reset all to template
+                  Clear custom prices
                 </button>
                 <button
                   type="button"

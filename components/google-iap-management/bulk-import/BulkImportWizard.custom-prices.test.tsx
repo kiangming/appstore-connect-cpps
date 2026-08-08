@@ -197,7 +197,9 @@ describe("BulkImportWizard — per-item custom prices", () => {
     // Count is named, and both re-open and revert affordances exist.
     expect(screen.getByText(/Custom · 2 countries/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "View / edit" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reset to template" })).toBeInTheDocument();
+    // Label is "Clear", not "Reset to template" — the latter was
+    // nonsensical under Google Conversion, where there is no template.
+    expect(screen.getByRole("button", { name: "Clear" })).toBeInTheDocument();
   });
 
   it("SURVIVAL: customs persist across a re-preview at a DIFFERENT rowNumber (Manager-locked)", async () => {
@@ -240,13 +242,13 @@ describe("BulkImportWizard — per-item custom prices", () => {
     expect((vn as HTMLInputElement).value).toBe("199000");
   });
 
-  it("Reset returns the row to its template", async () => {
+  it("Clear drops the custom set and returns the row to the batch source", async () => {
     render(<BulkImportWizard {...PROPS} />);
     fireEvent.click(await screen.findByRole("radio", { name: /Default Template/ }));
     await goToPreview();
     await setCustomPrice("199000");
 
-    fireEvent.click(screen.getByRole("button", { name: "Reset to template" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
     await waitFor(() =>
       expect(screen.queryByText(/Custom · 2 countries/)).not.toBeInTheDocument(),
     );
@@ -271,7 +273,7 @@ describe("BulkImportWizard — per-item custom prices", () => {
     // keep-but-inactive state is gone: no grey chip, no banner.
     expect(screen.getByText(/Custom · 2 countries/)).toBeInTheDocument();
     expect(screen.queryByText(/kept but/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/inactive — not applied/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/this row is set to Skip/)).not.toBeInTheDocument();
   });
 
   it("Part B: the dialog opens with every country inheriting under Google Conversion (no pre-fill)", async () => {
@@ -312,6 +314,40 @@ describe("BulkImportWizard — per-item custom prices", () => {
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
     expect(screen.getByText(/Custom · 1 country/)).toBeInTheDocument();
+  });
+
+  it("Skip is the ONLY thing that deactivates a custom set — chip greys with the real reason", async () => {
+    // Counterpart to the source-switch test above. Together they pin both
+    // halves of the rule: the source never deactivates, Skip always does.
+    // Nothing pinned this before, so the caption could drift unnoticed —
+    // which is exactly how it came to say "this pricing source / decision"
+    // after the source half stopped being true.
+    vi.stubGlobal(
+      "fetch",
+      installFetch({ previewSequence: [[previewRow({ exists: true })]] }),
+    );
+    render(<BulkImportWizard {...PROPS} />);
+    fireEvent.click(await screen.findByRole("radio", { name: /Default Template/ }));
+    await goToPreview();
+    await setCustomPrice("199000");
+
+    // Active to begin with: no inactive note.
+    expect(screen.queryByText(/this row is set to Skip/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: /Skip/ }));
+
+    // Kept (not discarded) but inactive, and the note names Skip — not the
+    // pricing source, which no longer has anything to do with it.
+    expect(screen.getByText(/Custom · 2 countries/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/this row is set to Skip, so nothing is sent/),
+    ).toBeInTheDocument();
+
+    // Un-skipping restores it without retyping.
+    fireEvent.click(screen.getByRole("radio", { name: /Overwrite/ }));
+    await waitFor(() =>
+      expect(screen.queryByText(/this row is set to Skip/)).not.toBeInTheDocument(),
+    );
   });
 
   it("dialog blocks Save when no entry carries the app currency — TEMPLATE SOURCE ONLY (Q6, at save not push)", async () => {
