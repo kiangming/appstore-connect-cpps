@@ -288,7 +288,33 @@ describe("BulkImportWizard — per-item custom prices", () => {
     expect(screen.getByText(/every country starts blank/)).toBeInTheDocument();
   });
 
-  it("dialog blocks Save when no entry carries the app's default currency (Q6, at save not push)", async () => {
+  it("Part B: a SPARSE non-app-currency overlay SAVES under Google Conversion (S0.2, at the UI layer)", async () => {
+    // The orchestrator accepts this (S0.2 regression test), but the dialog
+    // gated Save on the app-currency entry unconditionally — so the UI
+    // blocked exactly what the server would accept. App currency is VND;
+    // only US is priced here.
+    render(<BulkImportWizard {...PROPS} />);
+    fireEvent.click(await screen.findByRole("radio", { name: /Google Conversion/ }));
+    await goToPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Custom…" }));
+
+    const usSet = await screen.findAllByRole("button", { name: "set price" });
+    fireEvent.click(usSet[0]);
+    const anyInput = await screen.findByLabelText(/Custom price for /);
+    fireEvent.change(anyInput, { target: { value: "12.34" } });
+
+    // No blocking banner, and Save is live.
+    expect(screen.queryByText(/Google needs a VND price/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save custom prices/ })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Save custom prices/ }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Custom · 1 country/)).toBeInTheDocument();
+  });
+
+  it("dialog blocks Save when no entry carries the app currency — TEMPLATE SOURCE ONLY (Q6, at save not push)", async () => {
     // App currency VND; type only into US, leaving VN blank.
     render(<BulkImportWizard {...PROPS} />);
     fireEvent.click(await screen.findByRole("radio", { name: /Default Template/ }));

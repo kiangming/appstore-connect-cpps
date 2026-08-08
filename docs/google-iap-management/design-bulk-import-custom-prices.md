@@ -742,6 +742,21 @@ the SKUs · **Q4** keep-but-inactive · **Q5** custom refusals count as
 `failed` for Hub terminal status · **Q6** no exception — `defaultPrice`
 always derives from the app-currency entry.
 
+> ⚠ **Q6's scope widened after sign-off (August 2026).** The answer was
+> locked while custom prices were template-only, where the custom set
+> REPLACES the full ~170-country set and is therefore the only possible
+> source of `defaultPrice` — so "no exception" was right *in that scope*.
+> Custom prices are now allowed under Google Conversion too, where the set
+> is a SPARSE OVERLAY and `defaultPrice` legitimately comes from the
+> file's base price. The rule now branches:
+> **template → required** (missing ⇒ `custom_no_app_currency_entry`);
+> **Google Conversion → not required**, with `resolvedDefaultPrice`
+> stamped only when the user explicitly set an app-currency price.
+> Read unqualified, "no exception" makes the branch look like a violation
+> of a locked decision and invites someone to "restore" the old rule —
+> which would silently reintroduce refusals for legitimate sparse
+> overlays.
+
 ### 3.1 Measured sizes (B1)
 
 Method: model the execute body exactly as `BulkImportWizard.tsx:481-518`
@@ -939,3 +954,55 @@ regions bootstrap is untouched, with a comment at the call site recording
 why skipping it for a fully-covered custom row must not be "optimised"
 away (it is the only source of `regionsVersion` — Hotfix 9, BG → EUR).
 The `use server` posture test from `af75202` remains green.
+
+### 4.4 Follow-up cycle (August 2026) — loading state + custom under Google Conversion
+
+Two changes after Manager review, shipped as `2b64a7c` (Part A) and
+`31a0f15` + the scope fix (Part B).
+
+**Part A — the selector stated an answer before it had one.** It
+pre-selected Google Conversion on mount because the other two need an
+async availability check; Managers read that as "the templates don't
+work", or proceeded on a source they never chose. Now: all three disabled
+with a skeleton until the check resolves, disabled cards carry a reason,
+auto-select by priority (app → default → Google Conversion) applied
+visibly, and a failed check is its own state (alert + retry + Google
+Conversion usable) rather than being indistinguishable from "no templates
+exist". The old snap-back effect merged into the single post-resolution
+writer — two effects writing the same state is how a selection jumps.
+
+**Part B — custom prices allowed under Google Conversion.** The clobber
+that justified the restriction lives inside the template-resolution loop,
+which is gated on a template source; under Google Conversion
+`regionOverrides` flows straight through. The Q4 keep-but-inactive state
+is gone entirely. `custom_source_mismatch` retired. See the Q6 scope note
+in §3 for the `defaultPrice` branch, which is the correctness crux.
+
+**Two defects the review's "check the comment scope" question flushed
+out** — both were the *same class as the comment*, i.e. a rule applied
+outside the scope it was correct in:
+
+- `findAppCurrencyEntry` gated the dialog's Save unconditionally, so the
+  UI blocked exactly the sparse overlay the orchestrator had just been
+  taught to accept. The server-side branch alone was not enough; both
+  layers must agree or the feature is unreachable.
+- `set price` was a DEAD BUTTON wherever there was no template value to
+  seed from — it wrote `""`, the row model read that back as blank, and
+  the cell re-rendered as "inherits". That is every country under Google
+  Conversion. Fixed with a presentation-only `editing` set, deliberately
+  not folded into the data model (an empty price must keep meaning "let
+  Google convert").
+
+### 4.5 Backlog — not fixed, recorded deliberately
+
+**`preview/route.ts` silently falls back to `google_default` when the
+pricing source is missing from the request.** Not reachable today: Part A
+made the wizard hold `PricingSource | null` and guard both send paths, so
+the field is always present. But a server quietly choosing a pricing
+source on the user's behalf is the same "silent wrong" class this module
+keeps closing (the false NOT_FOUND wording, the disabled-Save-with-no-
+reason, the dead `set price` button above). Defence in depth would have
+the route REJECT a missing source rather than guess one — the client
+guard is the only thing standing between a malformed request and an
+import priced from a source nobody chose. Deliberately deferred, not
+overlooked.

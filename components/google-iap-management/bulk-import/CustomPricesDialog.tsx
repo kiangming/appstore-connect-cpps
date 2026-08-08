@@ -118,6 +118,18 @@ export function CustomPricesDialog({
   const [query, setQuery] = useState("");
   const [continent, setContinent] = useState<Continent | "All">("All");
   const [changedOnly, setChangedOnly] = useState(false);
+  /**
+   * Regions the user opened for editing but hasn't given a value to yet.
+   *
+   * PRESENTATION ONLY — deliberately not folded into `typed`, because the
+   * data model treats an empty price as "no price" (blank = let Google
+   * convert), which is correct and must stay that way. Without this,
+   * "set price" was a DEAD BUTTON wherever there was no template value to
+   * seed from: it wrote "", the row model read that back as blank, and
+   * the cell re-rendered as "inherits" — i.e. nothing happened. That is
+   * every country under Google Conversion.
+   */
+  const [editing, setEditing] = useState<Set<string>>(new Set());
 
   /** Micros for the catalog probe. Null when the row's base price is
    *  unusable — the dialog still works, it just loses the reference
@@ -241,9 +253,22 @@ export function CustomPricesDialog({
     [warnings],
   );
   const summary = useMemo(() => summarizeCustomPrices(rows), [rows]);
+  /**
+   * The app-currency entry is required ONLY under a template source,
+   * where the custom set replaces the whole price set and is therefore
+   * the only possible source of defaultPrice. Under Google Conversion the
+   * set is a sparse overlay and defaultPrice comes from the file's base
+   * price — gating Save there would block someone overriding three
+   * countries, none of them the app's own, which is exactly what this
+   * source is for. Mirrors the orchestrator's branch; the two must agree,
+   * or the UI blocks what the server would happily accept.
+   */
   const appCurrencyCheck = useMemo(
-    () => findAppCurrencyEntry(rows, appDefaultCurrency),
-    [rows, appDefaultCurrency],
+    () =>
+      isGoogleConversion
+        ? ({ ok: true, regionCode: "" } as const)
+        : findAppCurrencyEntry(rows, appDefaultCurrency),
+    [rows, appDefaultCurrency, isGoogleConversion],
   );
 
   const nothingTyped = summary.customised === 0 && rows.every((r) => r.customDecimal === null);
@@ -445,16 +470,25 @@ export function CustomPricesDialog({
                       row={r}
                       error={errorByRegion[r.regionCode]}
                       warning={warningByRegion[r.regionCode]}
+                      editing={editing.has(r.regionCode)}
+                      onBeginEdit={() =>
+                        setEditing((prev) => new Set(prev).add(r.regionCode))
+                      }
                       onChange={(v) =>
                         setTyped((prev) => ({ ...prev, [r.regionCode]: v }))
                       }
-                      onClear={() =>
+                      onClear={() => {
                         setTyped((prev) => {
                           const next = { ...prev };
                           delete next[r.regionCode];
                           return next;
-                        })
-                      }
+                        });
+                        setEditing((prev) => {
+                          const next = new Set(prev);
+                          next.delete(r.regionCode);
+                          return next;
+                        });
+                      }}
                     />
                   ))}
                   {visibleRows.length === 0 && (
@@ -519,12 +553,16 @@ function DialogRow({
   row,
   error,
   warning,
+  editing,
+  onBeginEdit,
   onChange,
   onClear,
 }: {
   row: CustomPriceRow;
   error?: string;
   warning?: string;
+  editing: boolean;
+  onBeginEdit: () => void;
   onChange: (v: string) => void;
   onClear: () => void;
 }) {
@@ -550,14 +588,19 @@ function DialogRow({
         </span>
       </td>
       <td className="px-5 py-2.5 align-top">
-        {row.customDecimal === null ? (
+        {row.customDecimal === null && !editing ? (
           /* Blank is NOT "unpriced" — the orchestrator's bootstrap fills it
              from Google's conversion (bulk-import.ts:839-846). Say so. */
           <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 italic px-2 py-1 rounded-md border border-dashed border-slate-300">
             inherits — Google conversion ·{" "}
             <button
               type="button"
-              onClick={() => onChange(row.templateDecimal ?? "")}
+              onClick={() => {
+                onBeginEdit();
+                // Seed from the reference when there is one; otherwise the
+                // cell simply opens empty and ready to type.
+                if (row.templateDecimal) onChange(row.templateDecimal);
+              }}
               className="not-italic font-medium text-violet-700 hover:underline"
             >
               set price
@@ -568,7 +611,7 @@ function DialogRow({
             <RegionPriceCell
               regionCode={row.regionCode}
               currency={row.currency}
-              priceDecimal={row.customDecimal}
+              priceDecimal={row.customDecimal ?? ""}
               error={error}
               onChange={onChange}
               onClear={onClear}

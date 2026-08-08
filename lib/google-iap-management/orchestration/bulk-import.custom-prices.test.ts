@@ -130,7 +130,10 @@ describe("executeBulkImport — per-item custom prices", () => {
       US: { currency: "USD", priceMicros: "12340000" },
       VN: { currency: "VND", priceMicros: "199000000000" },
     });
-    // Q6: defaultPrice ALWAYS derives from the app-currency (VND) entry.
+    // Q6 UNDER A TEMPLATE SOURCE: the custom set replaces the whole
+    // price set, so defaultPrice must come from its app-currency (VND)
+    // entry. Under Google Conversion the rule does NOT apply — see the
+    // sparse-overlay tests below.
     expect(body.defaultPrice).toEqual({
       currency: "VND",
       priceMicros: "199000000000",

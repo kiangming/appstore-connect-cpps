@@ -256,13 +256,24 @@ export function summarizeCustomPrices(
 /**
  * The app-currency guard, evaluated at SAVE rather than at push.
  *
- * Google requires a `defaultPrice`, and the orchestrator derives it from
- * the custom entry whose currency matches the app's default currency
- * (Q6 — no exception). A custom set with no such entry is refused
- * server-side (`custom_no_app_currency_entry`), which is correct but far
- * too late: by then the Manager has typed ~170 prices and pushed. The
- * dialog runs this at Save so they learn it while they can still fix it.
- * The server-side refusal remains the backstop, not the first notice.
+ * ⚠ SCOPE — this is REQUIRED ONLY UNDER A TEMPLATE SOURCE. The caller
+ * decides; this function just reports whether an app-currency entry
+ * exists. Do not re-generalise it to "always required" (the Q6 answer was
+ * locked when custom prices were template-only, and that scope has since
+ * widened):
+ *
+ *   - TEMPLATE source: the custom set REPLACES the full ~170-country set,
+ *     so it is the only possible source of `defaultPrice`. Google requires
+ *     one, in the app's configured currency. Missing → the orchestrator
+ *     refuses (`custom_no_app_currency_entry`), which is correct but far
+ *     too late — by then the Manager has typed ~170 prices and pushed. The
+ *     dialog runs this at Save so they learn it while they can still fix
+ *     it; the server refusal stays the backstop, not the first notice.
+ *   - GOOGLE CONVERSION: the custom set is a SPARSE OVERLAY and
+ *     `defaultPrice` comes from the file's base price. Enforcing this
+ *     there would block someone overriding three countries, none of them
+ *     the app's own — entirely legitimate. Callers must NOT gate Save on
+ *     it under that source.
  */
 export function findAppCurrencyEntry(
   rows: ReadonlyArray<CustomPriceRow>,
