@@ -152,8 +152,11 @@ export function BulkImportWizard({
   const router = useRouter();
   const [step, setStep] = useState<Step>("pricing");
 
-  // Step 1: pricing source
-  const [pricingSource, setPricingSource] = useState<PricingSource>("google_default");
+  // Step 1: pricing source. `null` until the availability check resolves —
+  // the selector auto-selects by priority (app template → default template
+  // → Google Conversion) and we must not pre-state an answer we don't have.
+  // Continue is gated on this being non-null.
+  const [pricingSource, setPricingSource] = useState<PricingSource | null>(null);
 
   // Step 2: file upload
   const [file, setFile] = useState<File | null>(null);
@@ -403,6 +406,11 @@ export function BulkImportWizard({
 
   async function handleUploadAndPreview() {
     if (!file) return;
+    // Unreachable via the UI (Continue is gated on this), but guarded
+    // explicitly rather than asserted: uploading with an unknown source
+    // would have the API silently fall back to google_default
+    // (preview/route.ts), i.e. import under a source nobody chose.
+    if (pricingSource === null) return;
     setUploadError(null);
     setUploading(true);
     try {
@@ -597,6 +605,7 @@ export function BulkImportWizard({
   }
 
   async function handleExecute() {
+    if (pricingSource === null) return;
     // Permanent — from this point on the server owns the run's terminal
     // status; the client must never send cancel for it again (see
     // executeStartedRef's definition above for why transient state isn't
@@ -814,7 +823,13 @@ export function BulkImportWizard({
           <div className="mt-6 flex justify-end">
             <button
               onClick={() => setStep("upload")}
-              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition"
+              disabled={pricingSource === null}
+              title={
+                pricingSource === null
+                  ? "Checking which pricing templates are available…"
+                  : ""
+              }
+              className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition disabled:bg-slate-300 disabled:cursor-not-allowed"
             >
               Continue
               <ChevronRight className="h-4 w-4" />

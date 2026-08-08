@@ -147,6 +147,45 @@ describe("BulkImportWizard — per-item custom prices", () => {
     vi.restoreAllMocks();
   });
 
+  it("Part A: Continue is gated until the availability check resolves (no import on an unchosen source)", async () => {
+    let releaseAvailability: (v: unknown) => void = () => {};
+    const gate = new Promise((r) => {
+      releaseAvailability = r;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url.includes(AVAILABILITY)) {
+          await gate;
+          return {
+            ok: true,
+            json: async () => ({
+              defaultExists: true,
+              appExists: false,
+              defaultTiers: ["tier_999"],
+              appTiers: [],
+            }),
+          } as unknown as Response;
+        }
+        return { ok: true, json: async () => ({}) } as unknown as Response;
+      }),
+    );
+    render(<BulkImportWizard {...PROPS} />);
+
+    // Nothing selected, nothing advanceable.
+    expect(screen.getByRole("button", { name: /Continue/ })).toBeDisabled();
+    screen.getAllByRole("radio").forEach((r) => expect(r).toBeDisabled());
+
+    releaseAvailability(null);
+
+    // Priority default lands on the one template that exists, visibly.
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: /Default Template/ })).toBeChecked(),
+    );
+    expect(screen.getByRole("button", { name: /Continue/ })).toBeEnabled();
+  });
+
   it("saves a custom set and shows a non-opaque row indicator", async () => {
     render(<BulkImportWizard {...PROPS} />);
     // Pick a template source so custom applies at all.

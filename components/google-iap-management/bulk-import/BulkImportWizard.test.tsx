@@ -120,6 +120,14 @@ function renderWizard() {
 }
 
 async function goToUploadStep() {
+  // Part A: Continue is gated until the pricing-template availability check
+  // resolves — the wizard must not advance on a source nobody chose. These
+  // scenarios mock availability as a failed response, which lands in the
+  // error state and enables Google Conversion (A4), so Continue becomes
+  // usable; it just isn't usable SYNCHRONOUSLY any more.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /Continue/ })).toBeEnabled(),
+  );
   fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
   await waitFor(() => expect(screen.getByText(/Upload Excel file/)).toBeInTheDocument());
 }

@@ -201,7 +201,10 @@ export function IapForm({
   const [basePriceDecimal, setBasePriceDecimal] = useState(
     initial?.basePriceDecimal ?? "",
   );
-  const [pricingSource, setPricingSource] = useState<PricingSource>("google_default");
+  // `null` until the availability check resolves — see PricingSourceSelector.
+  // Submit is gated on this being non-null so nothing is created under a
+  // source the user never chose.
+  const [pricingSource, setPricingSource] = useState<PricingSource | null>(null);
   const [tierIdentifier, setTierIdentifier] = useState<string>("");
   const [regionsOpen, setRegionsOpen] = useState(
     (initial?.regionOverrides.length ?? 0) > 0,
@@ -303,7 +306,12 @@ export function IapForm({
       }
     }
 
-    if (pricingSource !== "google_default" && !tierIdentifier.trim()) {
+    if (pricingSource === null) {
+      // Availability hasn't resolved (or the check failed and no retry has
+      // succeeded). Submitting now would write under a source nobody
+      // picked — the exact failure the loading state exists to prevent.
+      errors.tier = "Still checking which pricing templates are available…";
+    } else if (pricingSource !== "google_default" && !tierIdentifier.trim()) {
       errors.tier = "Pick a tier from the pricing template above.";
     }
 
@@ -355,6 +363,12 @@ export function IapForm({
   // Save payload is built by the shared pure builder (lib/iap-save-body) so the
   // unified-table UI reorganization cannot change what's written to Google/DB.
   function buildBody() {
+    if (pricingSource === null) {
+      // Unreachable: every caller runs validate() first, which fails on a
+      // null source. Throwing beats a non-null assertion — if the ordering
+      // ever changes, this is loud instead of writing a wrong source.
+      throw new Error("Pricing source is not resolved yet.");
+    }
     return buildIapSaveBody({
       sku,
       purchaseType,
