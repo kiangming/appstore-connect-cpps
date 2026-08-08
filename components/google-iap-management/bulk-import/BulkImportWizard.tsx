@@ -285,22 +285,27 @@ export function BulkImportWizard({
     router.push(`/google-iap-management/apps/${encodeURIComponent(packageName)}`);
   }
 
-  /** Q4: custom prices only apply under a template source. Under Google
-   *  Conversion they are KEPT but INACTIVE — greyed, not sent, and
-   *  reactivated on switching back. Clearing on a radio toggle would
-   *  destroy work the Manager can't recover. */
-  const customActive = pricingSource !== "google_default";
+  /** Custom prices apply under EVERY pricing source.
+   *
+   *  They were once template-only, on the assumption that Google
+   *  Conversion couldn't carry them. It can: the clobber that motivated
+   *  the restriction lives inside the template-resolution loop, which is
+   *  gated on a template source, so under Google Conversion
+   *  regionOverrides flows straight through. The old keep-but-inactive
+   *  state is gone entirely — a net simplification. */
+  const customActive = true;
 
-  /** The SKUs whose customs will actually ship: active source, a saved
-   *  set, and the row not set to Skip. Everything else is inert. */
-  const activeCustomSkus = useMemo(() => {
-    if (!customActive) return new Set<string>();
-    return new Set(
-      previewRows
-        .filter((r) => customPrices[r.sku] && r.decision !== "skip")
-        .map((r) => r.sku),
-    );
-  }, [customActive, previewRows, customPrices]);
+  /** The SKUs whose customs will actually ship: a saved set on a row that
+   *  isn't set to Skip. */
+  const activeCustomSkus = useMemo(
+    () =>
+      new Set(
+        previewRows
+          .filter((r) => customPrices[r.sku] && r.decision !== "skip")
+          .map((r) => r.sku),
+      ),
+    [previewRows, customPrices],
+  );
 
   /** Entry count per SKU, for the row chip. */
   const customPriceCounts = useMemo(() => {
@@ -1062,22 +1067,6 @@ export function BulkImportWizard({
             </div>
           )}
 
-          {/* Q4 — kept-but-inactive must be stated, not just greyed. */}
-          {!customActive && Object.keys(customPrices).length > 0 && (
-            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-              <p className="text-[11px] text-slate-600 leading-relaxed">
-                <strong>{Object.keys(customPrices).length}</strong> custom price
-                set{Object.keys(customPrices).length === 1 ? " is" : "s are"}{" "}
-                kept but <strong>inactive</strong> — per-item custom prices only
-                apply under {PRICING_SOURCE_LABELS.default_template} or{" "}
-                {PRICING_SOURCE_LABELS.app_template}, not{" "}
-                {PRICING_SOURCE_LABELS.google_default}. They are not sent with
-                this import. Go back to Step 1 and pick a template source to
-                reactivate them.
-              </p>
-            </div>
-          )}
-
           {previewWarnings.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
               <p className="text-xs font-medium text-amber-900 mb-1">
@@ -1176,13 +1165,21 @@ export function BulkImportWizard({
               sourceLabel={
                 pricingSource === "app_template"
                   ? PRICING_SOURCE_LABELS.app_template
-                  : PRICING_SOURCE_LABELS.default_template
+                  : pricingSource === "default_template"
+                    ? PRICING_SOURCE_LABELS.default_template
+                    : PRICING_SOURCE_LABELS.google_default
               }
-              tierIdentifier={tier}
+              // No tier under Google Conversion — the dialog then opens
+              // with every country in the "inherit" state and nothing
+              // pre-filled, which is the correct baseline there.
+              tierIdentifier={pricingSource === "google_default" ? null : tier}
+              isGoogleConversion={pricingSource === "google_default"}
               scope={pricingSource === "app_template" ? "APP" : "GLOBAL"}
               appId={appId}
               packageName={packageName}
               appDefaultCurrency={appDefaultCurrency}
+              baseCurrency={row?.baseCurrency ?? ""}
+              basePriceDecimal={row?.basePriceDecimal ?? ""}
               existing={customPrices[customDialogSku] ?? null}
               baselineChanged={customBaselineDrift[customDialogSku] ?? false}
               onSave={(set) => saveCustomForSku(customDialogSku, set)}

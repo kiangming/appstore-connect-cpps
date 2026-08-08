@@ -39,13 +39,14 @@ import {
   resolveActiveAccountId,
 } from "@/lib/google-iap-management/active-account";
 import { buildRegionMapFromBasePrice } from "@/lib/google-iap-management/google/regions-helper";
+import { microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
 
 export const dynamic = "force-dynamic";
 
-/** Nominal probe price — 1.00 in the app's own currency. Only the region
- *  and currency of each converted entry is used; the amounts are thrown
- *  away. Using the app's currency (not a hardcoded USD) keeps the call on
- *  the same footing as the real write path. */
+/** Fallback probe price — 1.00 in the app's own currency, used when the
+ *  caller doesn't supply one. Only the region and currency of each
+ *  converted entry matter for the country list; the amounts are ignored
+ *  unless the caller asked for them (see `basePriceMicros` below). */
 const PROBE_MICROS = "1000000";
 
 export async function GET(req: Request) {
@@ -56,6 +57,13 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const packageName = url.searchParams.get("packageName");
+  // Optional: convert THIS row's base price instead of the nominal probe.
+  // Costs nothing extra — the route already makes exactly this
+  // convertRegionPrices call and discards the amounts. Supplying them
+  // gives the custom-prices dialog a real per-country reference under
+  // Google Conversion, where there is no template to compare against.
+  const basePriceMicros = url.searchParams.get("basePriceMicros");
+  const baseCurrency = url.searchParams.get("baseCurrency");
   if (!packageName) {
     return NextResponse.json(
       { error: "packageName is required." },
@@ -89,13 +97,20 @@ export async function GET(req: Request) {
     const result = await buildRegionMapFromBasePrice(
       jwt,
       packageName,
-      PROBE_MICROS,
-      app.default_currency ?? "USD",
+      basePriceMicros && /^\d+$/.test(basePriceMicros) ? basePriceMicros : PROBE_MICROS,
+      (baseCurrency || app.default_currency || "USD").trim().toUpperCase(),
     );
+    const converted = Boolean(basePriceMicros && /^\d+$/.test(basePriceMicros));
     return NextResponse.json({
       regions: result.regions.map((r) => ({
         regionCode: r.region,
         currency: r.currency,
+        // Present only when the caller supplied a real base price. Absent
+        // means "this is the country list, the amounts are meaningless" —
+        // callers must not treat the probe conversion as a price.
+        ...(converted
+          ? { convertedDecimal: microsToDecimal(r.priceMicros, 6) }
+          : {}),
       })),
       // Echoed for diagnostics only — the dialog does not pin it. The push
       // path takes its own regionsVersion from its own convertRegionPrices

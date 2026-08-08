@@ -254,7 +254,7 @@ describe("BulkImportWizard — per-item custom prices", () => {
     expect(screen.getByRole("button", { name: "Custom…" })).toBeInTheDocument();
   });
 
-  it("Q4: switching to Google Conversion keeps the set but marks it inactive", async () => {
+  it("INVERTED: switching to Google Conversion keeps the set ACTIVE (was: kept-but-inactive)", async () => {
     render(<BulkImportWizard {...PROPS} />);
     fireEvent.click(await screen.findByRole("radio", { name: /Default Template/ }));
     await goToPreview();
@@ -267,10 +267,25 @@ describe("BulkImportWizard — per-item custom prices", () => {
     fireEvent.click(screen.getByRole("button", { name: /Preview/ }));
     await screen.findByText(/Push to Google Play/);
 
-    // Kept, not cleared — and the inactivity is stated, not merely greyed.
+    // Custom prices now apply under EVERY source, so the whole
+    // keep-but-inactive state is gone: no grey chip, no banner.
     expect(screen.getByText(/Custom · 2 countries/)).toBeInTheDocument();
-    expect(screen.getByText(/kept but/)).toBeInTheDocument();
-    expect(screen.getByText(/inactive — not applied/)).toBeInTheDocument();
+    expect(screen.queryByText(/kept but/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/inactive — not applied/)).not.toBeInTheDocument();
+  });
+
+  it("Part B: the dialog opens with every country inheriting under Google Conversion (no pre-fill)", async () => {
+    render(<BulkImportWizard {...PROPS} />);
+    fireEvent.click(await screen.findByRole("radio", { name: /Google Conversion/ }));
+    await goToPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Custom…" }));
+
+    // S0.1's exact string, reused verbatim — one per country, no values.
+    const inherits = await screen.findAllByText(/inherits — Google conversion/);
+    expect(inherits.length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText("Custom price for VN")).not.toBeInTheDocument();
+    // And the header says why nothing is pre-filled here.
+    expect(screen.getByText(/every country starts blank/)).toBeInTheDocument();
   });
 
   it("dialog blocks Save when no entry carries the app's default currency (Q6, at save not push)", async () => {

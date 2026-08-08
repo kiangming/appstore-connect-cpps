@@ -25,6 +25,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { X, Search, AlertTriangle, Loader2, Info } from "lucide-react";
 
+import { decimalToMicros } from "@/lib/google-iap-management/google/price-conversion";
+
 import { RegionPriceCell } from "@/components/google-iap-management/pricing/RegionPriceCell";
 import {
   buildCustomPriceRows,
@@ -60,12 +62,22 @@ interface Props {
   sku: string;
   /** Label for the batch's template scope, e.g. "Default Template". */
   sourceLabel: string;
-  /** Tier this row resolved to, or null when nothing matched. */
+  /** Tier this row resolved to, or null when nothing matched — and always
+   *  null under Google Conversion, where no template is involved. */
   tierIdentifier: string | null;
+  /** True when the batch source is Google Conversion. Only affects copy:
+   *  "no template match" would be misleading there, since not having a
+   *  template is the point of the source, not a miss. */
+  isGoogleConversion?: boolean;
   scope: "GLOBAL" | "APP";
   appId: string;
   packageName: string;
   appDefaultCurrency: string | null;
+  /** The row's base price, forwarded to the catalog route so Google's own
+   *  conversion of THIS price can act as the reference column under Google
+   *  Conversion, where there is no template to compare against. */
+  baseCurrency: string;
+  basePriceDecimal: string;
   /** Already-saved set when re-opening; null on first open. */
   existing: CustomPriceSet | null;
   /** True once the row's customs were saved against a template that has
@@ -86,10 +98,13 @@ export function CustomPricesDialog({
   sku,
   sourceLabel,
   tierIdentifier,
+  isGoogleConversion = false,
   scope,
   appId,
   packageName,
   appDefaultCurrency,
+  baseCurrency,
+  basePriceDecimal,
   existing,
   baselineChanged,
   onSave,
@@ -104,14 +119,31 @@ export function CustomPricesDialog({
   const [continent, setContinent] = useState<Continent | "All">("All");
   const [changedOnly, setChangedOnly] = useState(false);
 
+  /** Micros for the catalog probe. Null when the row's base price is
+   *  unusable — the dialog still works, it just loses the reference
+   *  column rather than failing to open. */
+  const baseMicros = useMemo(() => {
+    try {
+      return decimalToMicros(basePriceDecimal, baseCurrency);
+    } catch {
+      return null;
+    }
+  }, [basePriceDecimal, baseCurrency]);
+
   useEffect(() => {
     let cancelled = false;
     async function loadAll() {
       setLoad({ kind: "loading" });
       try {
-        const catalogReq = fetch(
-          `/api/google-iap-management/regions/catalog?packageName=${encodeURIComponent(packageName)}`,
-        );
+        // Base price threaded through so the response carries Google's
+        // converted amount per country — free, the route already makes
+        // this exact call (see its `basePriceMicros` note).
+        const catalogUrl =
+          `/api/google-iap-management/regions/catalog?packageName=${encodeURIComponent(packageName)}` +
+          (baseMicros
+            ? `&basePriceMicros=${encodeURIComponent(baseMicros)}&baseCurrency=${encodeURIComponent(baseCurrency)}`
+            : "");
+        const catalogReq = fetch(catalogUrl);
         const tierReq = tierIdentifier
           ? fetch(
               `/api/google-iap-management/pricing-templates/tier-entries?scope=${scope}` +
@@ -170,16 +202,30 @@ export function CustomPricesDialog({
     };
     // `existing` is intentionally in the dep list: re-opening after a
     // save must re-seed from the saved set, not the stale template.
-  }, [packageName, scope, appId, tierIdentifier, existing]);
+  }, [packageName, scope, appId, tierIdentifier, existing, baseMicros, baseCurrency]);
 
   const rows: CustomPriceRow[] = useMemo(() => {
     if (load.kind !== "ready") return [];
     const custom: CustomEntry[] = Object.entries(typed)
       .filter(([, v]) => v.trim() !== "")
       .map(([region, priceDecimal]) => ({ region, currency: "", priceDecimal }));
+    // Reference column: the template when there is one, otherwise Google's
+    // conversion of this row's base price. Both are "what this country
+    // would get if you changed nothing", which is what the Δ and the
+    // below-floor heuristic need.
+    const reference: TemplateEntry[] =
+      load.template.length > 0
+        ? load.template
+        : load.countries
+            .filter((c) => c.convertedDecimal)
+            .map((c) => ({
+              regionCode: c.regionCode,
+              currency: c.currency,
+              priceDecimal: c.convertedDecimal as string,
+            }));
     return buildCustomPriceRows({
       countries: load.countries,
-      templateEntries: load.template,
+      templateEntries: reference,
       custom,
     });
   }, [load, typed]);
@@ -260,6 +306,12 @@ export function CustomPricesDialog({
                   {load.kind === "ready" && ` (${load.template.length} countries)`}.
                   Saving makes these prices <strong>absolute</strong> — they stay
                   even if you change the template.
+                </>
+              ) : isGoogleConversion ? (
+                <>
+                  <strong>{sourceLabel}</strong> — every country starts blank and
+                  takes Google&apos;s converted price. Anything you set here
+                  overrides it for that country only; the rest are unaffected.
                 </>
               ) : (
                 <>

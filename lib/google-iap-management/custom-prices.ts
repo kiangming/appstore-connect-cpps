@@ -32,6 +32,12 @@ import { regionNameFromCode } from "./region-name";
 export interface CatalogCountry {
   regionCode: string;
   currency: string;
+  /** Google's conversion of the caller-supplied base price for this
+   *  country, when the catalog route was asked for one. Used as the
+   *  reference column under Google Conversion, where no template exists.
+   *  Absent when the route ran its nominal probe — those amounts are
+   *  meaningless and must never be shown as prices. */
+  convertedDecimal?: string;
 }
 
 /** A template tier's entry for one country (from pricing_template_entries

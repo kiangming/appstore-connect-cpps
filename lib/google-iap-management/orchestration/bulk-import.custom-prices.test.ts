@@ -243,14 +243,125 @@ describe("executeBulkImport — per-item custom prices", () => {
     expect(lastUpsertInputs()[0].body).toMatchObject({ sku: "good_row" });
   });
 
-  it("refuses a custom set under Google Conversion rather than silently ignoring it", async () => {
+  it("INVERTED: custom prices APPLY under Google Conversion (was: refused as custom_source_mismatch)", async () => {
+    // The old restriction assumed the template clobber could reach this
+    // path. It cannot: the template-resolution loop is gated on
+    // `pricingSource !== "google_default"`, so regionOverrides flows
+    // straight through to buildProduct. Per-country overrides have always
+    // worked here via the file's GT-Price column; this raises the ceiling
+    // from one country to ~170.
     const res = await executeBulkImport({} as never, {
       ...INPUT_BASE,
       pricingSource: "google_default",
       rows: [customRow()],
     });
-    expect(res.refusedRows[0].kind).toBe("custom_source_mismatch");
-    expect(batchUpsertInAppProducts).not.toHaveBeenCalled();
+    expect(res.customRefusedRows).toBe(0);
+    expect(res.customPricedRows).toBe(1);
+    const prices = lastUpsertInputs()[0].body.prices!;
+    expect(prices.VN.priceMicros).toBe("199000000000");
+    expect(prices.US.priceMicros).toBe("12340000");
+  });
+
+  /**
+   * THE S0.2 REGRESSION, in test form — the single most important new case.
+   *
+   * The app-currency requirement is correct under a TEMPLATE source, where
+   * the custom set replaces the whole ~170-country set and is therefore the
+   * only possible source of defaultPrice. Under Google Conversion the set
+   * is a SPARSE OVERLAY and defaultPrice legitimately comes from the file's
+   * base price. Applying the template rule here would refuse a user who
+   * overrode three countries, none of them the app's own — something
+   * entirely legitimate.
+   */
+  it("S0.2: sparse custom under Google Conversion with NO app-currency entry is applied, not refused", async () => {
+    buildRegionMapFromBasePrice.mockResolvedValue({
+      regions: [
+        { region: "TH", currency: "THB", priceMicros: "350000000" },
+        { region: "VN", currency: "VND", priceMicros: "249000000000" },
+      ],
+      regionsVersion: "2024/02",
+    });
+    const row = customRow({
+      // App currency is VND; none of these three are VND.
+      customPrices: {
+        entries: [
+          { region: "US", currency: "USD", priceDecimal: "12.34" },
+          { region: "JP", currency: "JPY", priceDecimal: "1500" },
+          { region: "KR", currency: "KRW", priceDecimal: "15000" },
+        ],
+        baselineTier: null,
+        editedAt: null,
+      },
+    });
+    const res = await executeBulkImport({} as never, {
+      ...INPUT_BASE,
+      pricingSource: "google_default",
+      rows: [row],
+    });
+
+    expect(res.customRefusedRows).toBe(0);
+    expect(res.rowsCreated).toBe(1);
+
+    const body = lastUpsertInputs()[0].body;
+    // The three overrides reach the payload...
+    expect(body.prices!.US.priceMicros).toBe("12340000");
+    expect(body.prices!.JP.priceMicros).toBe("1500000000");
+    expect(body.prices!.KR.priceMicros).toBe("15000000000");
+    // ...every other country still comes from Google's bootstrap...
+    expect(body.prices!.TH).toEqual({ currency: "THB", priceMicros: "350000000" });
+    // ...and defaultPrice comes from the FILE'S BASE PRICE, untouched.
+    expect(body.defaultPrice).toEqual({ currency: "USD", priceMicros: "9990000" });
+  });
+
+  it("an app-currency entry set under Google Conversion WINS as defaultPrice (explicit beats base price)", async () => {
+    const res = await executeBulkImport({} as never, {
+      ...INPUT_BASE,
+      pricingSource: "google_default",
+      rows: [customRow()], // carries a VND entry; app currency is VND
+    });
+    expect(res.customRefusedRows).toBe(0);
+    expect(lastUpsertInputs()[0].body.defaultPrice).toEqual({
+      currency: "VND",
+      priceMicros: "199000000000",
+    });
+  });
+
+  it("UNCHANGED under a TEMPLATE source: a missing app-currency entry still refuses", async () => {
+    const res = await executeBulkImport({} as never, {
+      ...INPUT_BASE,
+      pricingSource: "default_template",
+      rows: [
+        customRow({
+          customPrices: {
+            entries: [{ region: "US", currency: "USD", priceDecimal: "12.34" }],
+            baselineTier: "tier_999",
+            editedAt: null,
+          },
+        }),
+      ],
+    });
+    expect(res.customRefusedRows).toBe(1);
+    expect(res.refusedRows[0].kind).toBe("custom_no_app_currency_entry");
+  });
+
+  it("B6: perRowDiagnostic records provenance for a custom row under Google Conversion", async () => {
+    // The custom diagnostic loop sits ABOVE the `pricingSource !==
+    // "google_default"` branch, so it runs here too. Pinned, because this
+    // is exactly the path where an audit trail would go missing.
+    await executeBulkImport({} as never, {
+      ...INPUT_BASE,
+      pricingSource: "google_default",
+      rows: [customRow()],
+    });
+    const payload = appendAction.mock.calls.at(-1)![0].payload;
+    expect(payload.custom_priced_rows).toBe(1);
+    const diag = payload.per_row_diagnostic.find(
+      (d: { sku: string }) => d.sku === "gem_pack_large",
+    );
+    expect(diag).toMatchObject({
+      price_provenance: "custom",
+      custom_entry_count: 2,
+    });
   });
 
   it("a skipped row's custom prices are never sent", async () => {

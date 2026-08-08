@@ -54,7 +54,6 @@ import {
 } from "@/lib/google-iap-management/hub-tracking/tracking";
 import { computeGoogleBulkImportTerminalStatus } from "@/lib/google-iap-management/hub-tracking/status-mapping";
 import { validateDecimalForCurrency } from "@/lib/google-iap-management/google/currency-precision";
-import { PRICING_SOURCE_LABELS } from "@/lib/google-iap-management/pricing-source-labels";
 
 export const dynamic = "force-dynamic";
 
@@ -219,13 +218,14 @@ export async function POST(
       // these values go to a live store. Same module the dialog uses, so
       // the rules cannot diverge.
       if (r.customPrices) {
-        // A silent ignore here would be a quiet lie about what got
-        // pushed. The client never sends this under Google Conversion, so
-        // reaching it means a bug or a hand-rolled call: fail loudly.
-        if (pricingSource === "google_default") {
-          tracking.errorMessage = `Row ${r.rowNumber ?? r.sku}: custom prices cannot be used with the "${PRICING_SOURCE_LABELS.google_default}" pricing source.`;
-          return NextResponse.json({ error: tracking.errorMessage }, { status: 400 });
-        }
+        // Custom prices are valid under EVERY source, including Google
+        // Conversion. There the clobber that motivated the original
+        // restriction cannot occur — the template-resolution loop is
+        // gated on `pricingSource !== "google_default"`, so
+        // regionOverrides flows straight through to buildProduct. Under
+        // Google Conversion the set is a sparse overlay on the base
+        // price, which is what the file's GT-Price column has always
+        // done; this just raises the ceiling from one country to ~170.
         const entries = r.customPrices.entries;
         if (!Array.isArray(entries) || entries.length === 0) {
           tracking.errorMessage = `Row ${r.rowNumber ?? r.sku}: customPrices.entries must be a non-empty array.`;

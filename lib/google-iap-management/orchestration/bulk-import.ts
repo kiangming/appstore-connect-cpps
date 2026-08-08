@@ -144,8 +144,9 @@ export interface BulkImportRow extends ParsedIapRow {
     reason: string;
     kind:
       | "custom_invalid_price"
-      | "custom_no_app_currency_entry"
-      | "custom_source_mismatch";
+      /** Template sources only — under Google Conversion the base price
+       *  supplies defaultPrice, so no app-currency entry is required. */
+      | "custom_no_app_currency_entry";
   } | null;
 }
 
@@ -384,18 +385,6 @@ export async function executeBulkImport(
     if (!row.customPrices) continue;
     const entries = row.customPrices.entries ?? [];
 
-    if (input.pricingSource === "google_default") {
-      // The client must never send this; the route rejects it with a 400.
-      // Defence in depth for a direct API caller — silently ignoring the
-      // custom set would be a quiet lie about what got pushed.
-      row.customPriceRefusal = {
-        kind: "custom_source_mismatch",
-        reason: `Row ${row.rowNumber} (${row.sku}): custom prices were supplied but the batch pricing source is "${PRICING_SOURCE_LABELS.google_default}", which does not support them. Row not sent.`,
-      };
-      customRefusedRows += 1;
-      continue;
-    }
-
     if (entries.length === 0) {
       row.customPriceRefusal = {
         kind: "custom_invalid_price",
@@ -435,27 +424,45 @@ export async function executeBulkImport(
       continue;
     }
 
-    // Q6 — defaultPrice ALWAYS derives from the app-currency entry. No
-    // exception: Google needs a defaultPrice, and picking any other
-    // currency would make the store default disagree with the app's
-    // configured currency. The dialog blocks Save when this is missing,
-    // so reaching here means a direct API caller or stale client state.
-    if (!appCurrencyForCustom) {
-      row.customPriceRefusal = {
-        kind: "custom_no_app_currency_entry",
-        reason: `Row ${row.rowNumber} (${row.sku}): this app has no cached default currency, so no defaultPrice can be derived from the custom prices. Refresh the app from Google and retry. Row not sent.`,
-      };
-      customRefusedRows += 1;
-      continue;
-    }
-    const appCurrencyEntry = priced.find((p) => p.currency === appCurrencyForCustom);
-    if (!appCurrencyEntry) {
-      row.customPriceRefusal = {
-        kind: "custom_no_app_currency_entry",
-        reason: `Row ${row.rowNumber} (${row.sku}): custom prices carry no ${appCurrencyForCustom} entry, which Google requires for defaultPrice. Row not sent.`,
-      };
-      customRefusedRows += 1;
-      continue;
+    // ── defaultPrice: the semantics differ by source, and conflating them
+    // was a real bug ────────────────────────────────────────────────────
+    //
+    // TEMPLATE source: the custom set REPLACES the full ~170-country set,
+    //   so it is the only thing that can supply defaultPrice. Google
+    //   requires one, and it must be in the app's configured currency
+    //   (Q6). A set with no such entry is genuinely unusable → refuse.
+    //
+    // GOOGLE CONVERSION: the custom set is a SPARSE OVERLAY on top of the
+    //   file's base price, which already supplies defaultPrice via
+    //   buildProduct's fallback branch. Requiring an app-currency entry
+    //   here would refuse a user who overrode three countries, none of
+    //   them the app's own — something entirely legitimate, and the
+    //   long-standing behaviour of the file's GT-Price column. We stamp
+    //   resolvedDefaultPrice ONLY when the user actually set an
+    //   app-currency price, because an explicit instruction should beat
+    //   the file's base price.
+    const isTemplateSource = input.pricingSource !== "google_default";
+    const appCurrencyEntry = appCurrencyForCustom
+      ? priced.find((p) => p.currency === appCurrencyForCustom)
+      : undefined;
+
+    if (isTemplateSource) {
+      if (!appCurrencyForCustom) {
+        row.customPriceRefusal = {
+          kind: "custom_no_app_currency_entry",
+          reason: `Row ${row.rowNumber} (${row.sku}): this app has no cached default currency, so no defaultPrice can be derived from the custom prices. Refresh the app from Google and retry. Row not sent.`,
+        };
+        customRefusedRows += 1;
+        continue;
+      }
+      if (!appCurrencyEntry) {
+        row.customPriceRefusal = {
+          kind: "custom_no_app_currency_entry",
+          reason: `Row ${row.rowNumber} (${row.sku}): custom prices carry no ${appCurrencyForCustom} entry, which Google requires for defaultPrice. Row not sent.`,
+        };
+        customRefusedRows += 1;
+        continue;
+      }
     }
 
     row.regionOverrides = priced.map((p) => ({
@@ -463,13 +470,19 @@ export async function executeBulkImport(
       currency: p.currency,
       priceDecimal: microsToDecimal(p.priceMicros, 6),
     }));
-    row.resolvedDefaultPrice = {
-      currency: appCurrencyEntry.currency,
-      priceMicros: appCurrencyEntry.priceMicros,
-    };
+    if (appCurrencyEntry) {
+      row.resolvedDefaultPrice = {
+        currency: appCurrencyEntry.currency,
+        priceMicros: appCurrencyEntry.priceMicros,
+      };
+    }
+    // Under Google Conversion with no app-currency entry, resolvedDefaultPrice
+    // stays unset on purpose: buildProduct then uses the row's base price
+    // (bulk-import.ts buildProduct defaultPrice fallback), which is exactly
+    // what a sparse overlay should do.
     customPricedRows += 1;
     console.info(
-      `[google-iap:bulk-import:custom-prices] applied sku=${row.sku} entries=${priced.length} default=${appCurrencyEntry.currency}/${appCurrencyEntry.priceMicros} baseline_tier=${row.customPrices.baselineTier ?? "-"}`,
+      `[google-iap:bulk-import:custom-prices] applied sku=${row.sku} source=${input.pricingSource} entries=${priced.length} default=${appCurrencyEntry ? `${appCurrencyEntry.currency}/${appCurrencyEntry.priceMicros}` : "base-price"} baseline_tier=${row.customPrices.baselineTier ?? "-"}`,
     );
   }
 

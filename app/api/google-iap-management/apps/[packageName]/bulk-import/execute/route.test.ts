@@ -276,16 +276,43 @@ describe("Google bulk-import execute — per-item custom prices (SC4)", () => {
     });
   });
 
-  it("400s a custom set under Google Conversion — a silent ignore would misreport what shipped", async () => {
+  it("INVERTED: a custom set under Google Conversion is FORWARDED, not 400d", async () => {
+    // The 400 assumed the template clobber could reach that path. It
+    // cannot — the template-resolution loop is gated on a template
+    // source, so under Google Conversion the set is a sparse overlay on
+    // the base price, exactly like the file's GT-Price column.
+    executeBulkImport.mockResolvedValue(okResult);
     const res = await POST(
       jsonReq({ hub_run_id: "run-c2", pricingSource: "google_default", rows: [templateRow] }),
       ctx,
     );
-    expect(res.status).toBe(400);
-    expect(await res.json()).toMatchObject({
-      error: expect.stringContaining("Google Conversion"),
-    });
-    expect(executeBulkImport).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    const arg = executeBulkImport.mock.calls.at(-1)![1];
+    expect(arg.rows[0].customPrices.entries).toEqual([
+      { region: "VN", currency: "VND", priceDecimal: "199000" },
+    ]);
+  });
+
+  it("server-side re-validation still applies under Google Conversion", async () => {
+    executeBulkImport.mockResolvedValue(okResult);
+    const res = await POST(
+      jsonReq({
+        hub_run_id: "run-c2b",
+        pricingSource: "google_default",
+        rows: [
+          {
+            ...validRow,
+            customPrices: {
+              entries: [{ region: "JP", currency: "JPY", priceDecimal: "1500.5" }],
+            },
+          },
+        ],
+      }),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    const arg = executeBulkImport.mock.calls.at(-1)![1];
+    expect(arg.rows[0].customPriceRefusal).toMatchObject({ kind: "custom_invalid_price" });
   });
 
   it("SERVER-SIDE RE-VALIDATION rejects what the dialog would have caught (client state is untrusted)", async () => {
