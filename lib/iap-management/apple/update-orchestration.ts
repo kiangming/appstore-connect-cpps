@@ -44,6 +44,7 @@ import {
 } from "./availabilities";
 import type { IapDiff } from "./diff-detector";
 import { iapDb } from "@/lib/iap-management/db";
+import type { IapActionType } from "@/lib/iap-management/action-types";
 
 export interface UpdateAuditContext {
   iapId: string;
@@ -708,7 +709,12 @@ function errToString(err: unknown): string {
  */
 async function writeAuditRow(
   audit: UpdateAuditContext,
-  actionType: string,
+  // P2 guard: typed, not `string`, so the compiler catches an action type
+  // that isn't declared in action-types.ts — which is the same list the
+  // parity test holds against the DB CHECK constraint. This helper is one of
+  // the two indirect (non-literal) emission sites, and the availability
+  // ternary below is exactly where the P2 recurrence hid.
+  actionType: IapActionType,
   payload: Record<string, unknown>,
 ): Promise<void> {
   try {

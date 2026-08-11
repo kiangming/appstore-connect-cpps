@@ -38,6 +38,7 @@ import {
   setAvailabilityRemoveFromSales,
 } from "@/lib/iap-management/apple/availabilities";
 import { withRetry } from "@/lib/iap-management/apple/fetch";
+import type { IapActionType } from "@/lib/iap-management/action-types";
 
 export type BulkAvailabilityAction = "set-all" | "remove";
 
@@ -290,7 +291,9 @@ async function resolveAppleIapIds(
 async function writeAuditRow(
   actor: string,
   iapId: string,
-  action_type: string,
+  // P2 guard: typed, not `string` — see action-types.ts. The caller derives
+  // this from a ternary, the exact shape the P2 recurrence hid in.
+  action_type: IapActionType,
   payload: Record<string, unknown>,
 ): Promise<void> {
   try {
