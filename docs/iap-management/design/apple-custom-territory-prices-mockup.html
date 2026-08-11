@@ -1,0 +1,1100 @@
+<!DOCTYPE html>
+<!--
+  ================================================================================
+  APPLE IAP — PER-TERRITORY CUSTOM PRICES (Create + Edit)
+  ================================================================================
+
+  Module      : Apple IAP Management (lib/iap-management/, schema iap_mgmt)
+                — NOT Google IAP.
+  Design doc  : docs/iap-management/design-apple-custom-territory-prices.md
+  Status      : DESIGN ONLY — hold for Manager review. No implementation.
+
+  MANAGER-LOCKED
+    1  Scope = BOTH the Edit IAP form and the Create IAP form.
+    2  Custom overrides template entries for the territories it covers;
+       territories without a custom keep template/auto behaviour, unchanged.
+    3  Base-price change → STALE, NOT RESET. Customs are never auto-destroyed;
+       they are marked stale and SUBMIT IS BLOCKED until resolved.
+
+  WHY THIS IS NOT THE GOOGLE FEATURE (gates G1/G2 in the design doc)
+    · Apple price points are OPAQUE IDS picked from a per-territory list —
+      never free-typed decimals. Every editor cell below is a <select>.
+    · additionalPricePointIds is a TERRITORY-ANONYMOUS flat array
+      (pricing-orchestration.ts:260, price-schedules.ts:40). Appending customs
+      naively yields TWO manualPrices for one territory. The merge must be
+      keyed by territory — that Map IS the feature (design §3 mutation-check).
+    · Price-point IDs cannot be read before the IAP exists (no non-IAP-scoped
+      list endpoint in the OAS). Fix: customs are stored as
+      (territory, customer_price), IDs resolved server-side at submit — the
+      same shape as a template entry.
+
+  NON-NEGOTIABLE, made visible below
+    · Custom is NEVER opaque — count + actual values, always re-openable.
+    · Always revertible — per row, and all-at-once, from two places.
+    · Stale is a COMPARISON, not a boolean: change the base back and the
+      banner clears itself with no click.
+    · Submit is BLOCKED while stale — structural, not advisory.
+    · The base-territory row is READ-ONLY (design §E).
+
+  7 states rendered (static HTML, Tailwind CDN, no JS deps):
+     1  Pricing section — BEFORE (today) vs AFTER (zero-state affordance)
+     2  Pricing section — AFTER save: count + values + Edit / Clear all
+     3  Dialog — default, no customs yet, provenance column populated
+     4  Dialog — search + continent filter, 3 rows edited, picker open
+     5  Dialog — base-territory row read-only + revertibility surfaces
+     6  STALE — form banner, amber summary, BLOCKED submit, 2 resolutions
+     7  Dialog — stale rows + "no longer offered by Apple" + currency changed
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Apple IAP — per-territory Custom Prices (design mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .state-frame { box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.05); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .row-custom { background: #fffbeb; box-shadow: inset 3px 0 0 #fbbf24; }
+    .row-base   { background: #f8fafc; }
+    .row-stale  { background: #fef3c7; box-shadow: inset 3px 0 0 #d97706; }
+    .row-normal:hover { background: #f8fafc; }
+    .scrollbox { max-height: 360px; overflow-y: auto; }
+    .gate-disabled { background: #cbd5e1 !important; cursor: not-allowed !important; opacity: .6; }
+    table { border-collapse: separate; border-spacing: 0; }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen p-6">
+
+<!-- ================================================================= -->
+<!-- HEADER                                                            -->
+<!-- ================================================================= -->
+<header class="max-w-6xl mx-auto mb-8">
+  <div class="bg-white border border-slate-200 rounded-2xl p-6">
+    <div class="flex items-start gap-4">
+      <div class="flex-shrink-0 w-12 h-12 rounded-xl bg-blue-100 flex items-center justify-center">
+        <svg class="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+      </div>
+      <div class="flex-1">
+        <p class="text-xs font-semibold text-blue-700 uppercase tracking-wider">Design mockup · hold for review</p>
+        <h1 class="text-2xl font-semibold text-slate-900 mt-1">Apple IAP — per-territory Custom Prices</h1>
+        <p class="text-sm text-slate-600 mt-2 leading-relaxed">
+          Apple IAP Management only (<span class="mono">iap_mgmt</span>). Override the price for ANY territory —
+          including territories a pricing template already covers — by picking from the price points Apple
+          actually supports there. Applies to the <strong>Edit</strong> form and the <strong>Create</strong> form.
+          On submit the existing mechanism runs unchanged, with custom values winning per territory.
+        </p>
+        <div class="mt-4 grid md:grid-cols-3 gap-3 text-[11px]">
+          <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+            <p class="font-semibold text-emerald-800 mb-1">Manager-locked</p>
+            <ul class="space-y-0.5 text-emerald-900">
+              <li>· Create form AND Edit form</li>
+              <li>· custom beats template, per territory</li>
+              <li>· base change → STALE, never reset</li>
+            </ul>
+          </div>
+          <div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p class="font-semibold text-amber-800 mb-1">Non-negotiable</p>
+            <ul class="space-y-0.5 text-amber-900">
+              <li>· custom is never opaque — values always visible</li>
+              <li>· always revertible: one row, and all</li>
+              <li>· submit BLOCKED while stale (structural)</li>
+            </ul>
+          </div>
+          <div class="rounded-lg border border-blue-200 bg-blue-50 p-3">
+            <p class="font-semibold text-blue-800 mb-1">Apple-specific</p>
+            <ul class="space-y-0.5 text-blue-900">
+              <li>· price points are OPAQUE IDs → always a select</li>
+              <li>· ~175 territories, auto-equalised from a base</li>
+              <li>· schedule POST is REPLACE-ALL, no PATCH</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-[11px] text-red-900">
+          <p class="font-semibold text-red-800 mb-1">⚠ The clobber gate (G1) — the merge point is the whole feature</p>
+          <span class="mono">additionalPricePointIds</span> is a flat, <strong>territory-anonymous</strong> array
+          (<span class="mono">pricing-orchestration.ts:260</span>). Appending customs to it would send Apple
+          <strong>two manualPrices for one territory</strong>. The resolution must be a
+          <span class="mono">Map&lt;territory, …&gt;</span> where the custom loop's <span class="mono">set()</span>
+          runs after the template loop's — that unconditional <span class="mono">set</span> is where custom wins,
+          and it is the one behaviour the implementation must prove by breaking it.
+        </div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ================================================================= -->
+<!-- STATE 1 — Pricing section BEFORE / AFTER (zero-state)             -->
+<!-- ================================================================= -->
+<section class="max-w-6xl mx-auto mb-8">
+  <div class="flex items-center gap-3 mb-3">
+    <span class="flex-shrink-0 w-7 h-7 rounded-full bg-slate-900 text-white text-xs font-bold flex items-center justify-center">1</span>
+    <h2 class="text-lg font-semibold">Pricing section — before / after (zero-state)</h2>
+  </div>
+  <p class="text-sm text-slate-600 mb-4">
+    The new block sits <strong>below</strong> Base Territory / Price Tier, so the base price is read above the thing
+    that overrides it. Identical on the Create form and the Edit form.
+  </p>
+
+  <div class="grid lg:grid-cols-2 gap-5">
+    <!-- BEFORE -->
+    <div class="bg-white border border-slate-200 rounded-xl p-5 state-frame">
+      <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">Before — today</p>
+      <h3 class="text-sm font-semibold text-slate-900 mb-4 pb-2 border-b border-slate-100">Pricing</h3>
+      <div class="space-y-2 mb-4">
+        <p class="text-xs font-medium text-slate-700">Pricing source *</p>
+        <div class="rounded-lg border border-blue-500 bg-blue-50/40 p-2.5 text-xs"><span class="font-medium">App-specific template</span> · 8,214 entries</div>
+        <div class="rounded-lg border border-slate-200 p-2.5 text-xs text-slate-500">Default Template · 16,800 entries</div>
+        <div class="rounded-lg border border-slate-200 p-2.5 text-xs text-slate-500">Apple base data</div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-[11px] font-medium text-slate-700 mb-1">Base Territory *</label>
+          <div class="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-500">United States (USD)</div>
+        </div>
+        <div>
+          <label class="block text-[11px] font-medium text-slate-700 mb-1">Price Tier *</label>
+          <div class="rounded-md border border-slate-300 px-2.5 py-2 text-xs">Tier 10 — $9.99</div>
+        </div>
+      </div>
+      <p class="text-[10px] text-slate-400 mt-2">Apple auto-calculates territory prices from the base tier.</p>
+      <div class="mt-4 rounded-lg bg-slate-50 border border-dashed border-slate-300 p-3 text-[11px] text-slate-500">
+        No way to override a single territory. Everything comes from the template, or from Apple's equalisation.
+      </div>
+    </div>
+
+    <!-- AFTER -->
+    <div class="bg-white border-2 border-blue-500 rounded-xl p-5 state-frame">
+      <p class="text-[10px] font-bold uppercase tracking-wider text-blue-600 mb-3">After — new block, zero-state</p>
+      <h3 class="text-sm font-semibold text-slate-900 mb-4 pb-2 border-b border-slate-100">Pricing</h3>
+      <div class="space-y-2 mb-4">
+        <p class="text-xs font-medium text-slate-700">Pricing source *</p>
+        <div class="rounded-lg border border-blue-500 bg-blue-50/40 p-2.5 text-xs"><span class="font-medium">App-specific template</span> · 8,214 entries</div>
+        <div class="rounded-lg border border-slate-200 p-2.5 text-xs text-slate-500">Default Template · 16,800 entries</div>
+        <div class="rounded-lg border border-slate-200 p-2.5 text-xs text-slate-500">Apple base data</div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-[11px] font-medium text-slate-700 mb-1">Base Territory *</label>
+          <div class="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-500">United States (USD)</div>
+        </div>
+        <div>
+          <label class="block text-[11px] font-medium text-slate-700 mb-1">Price Tier *</label>
+          <div class="rounded-md border border-slate-300 px-2.5 py-2 text-xs">Tier 10 — $9.99</div>
+        </div>
+      </div>
+
+      <div class="mt-4 rounded-lg border border-slate-200 p-3">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="text-xs font-semibold text-slate-900">Custom territory prices</p>
+            <p class="text-[11px] text-slate-500 mt-0.5">
+              No custom prices — Apple's template/auto pricing applies to every territory.
+            </p>
+          </div>
+          <button class="flex-shrink-0 px-3 py-1.5 rounded-md bg-[#0071E3] text-white text-[11px] font-medium">Set custom prices</button>
+        </div>
+      </div>
+
+      <div class="mt-3 grid gap-2 text-[10px]">
+        <div class="rounded-md border border-amber-200 bg-amber-50 p-2 text-amber-900">
+          <strong>CP-3</strong> · with <span class="mono">Price Tier</span> unset the button is <em>disabled</em> and says so:
+          <em>"Pick a price tier first — customs override the base, they don't replace it."</em>
+          The server already bails silently (<span class="mono">skipped-no-tier</span>,
+          <span class="mono">pricing-orchestration.ts:180</span>); the client rule exists so 40 territories of work
+          can't vanish without a message.
+        </div>
+        <div class="rounded-md border border-slate-200 bg-slate-50 p-2 text-slate-600">
+          <strong>G2</strong> · on the Create form with <em>no synced IAP anywhere on the account</em>, the button is
+          disabled: <em>"Custom prices need Apple's price list, which this tool reads through an existing IAP.
+          Create this IAP first, then edit it."</em> An honest dead-end, not a picker filled from a Manager CSV
+          Apple may reject. <span class="text-amber-700 font-medium">(Open question J-1.)</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================= -->
+<!-- STATE 2 — Summary after save                                      -->
+<!-- ================================================================= -->
+<section class="max-w-6xl mx-auto mb-8">
+  <div class="flex items-center gap-3 mb-3">
+    <span class="flex-shrink-0 w-7 h-7 rounded-full bg-slate-900 text-white text-xs font-bold flex items-center justify-center">2</span>
+    <h2 class="text-lg font-semibold">Pricing section — after save (count + values, never opaque)</h2>
+  </div>
+  <div class="bg-white border border-slate-200 rounded-xl p-5 state-frame max-w-3xl">
+    <div class="rounded-lg border border-amber-300 bg-amber-50/60 p-3">
+      <div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <p class="text-xs font-semibold text-slate-900">Custom territory prices</p>
+            <span class="px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 text-[10px] font-semibold">6 custom</span>
+          </div>
+          <p class="text-[11px] text-slate-600 mt-1">6 territories carry a custom price, overriding the template for those territories.</p>
+          <p class="text-[11px] text-slate-800 mt-1.5 leading-relaxed">
+            <span class="mono">Vietnam ₫25,000</span> · <span class="mono">Japan ¥1,200</span> ·
+            <span class="mono">Brazil R$24,90</span> · <span class="mono">India ₹899</span>
+            <span class="text-slate-500">+ 2 more</span>
+          </p>
+        </div>
+        <div class="flex-shrink-0 flex flex-col gap-1.5 items-end">
+          <button class="px-3 py-1.5 rounded-md bg-[#0071E3] text-white text-[11px] font-medium whitespace-nowrap">Edit custom prices</button>
+          <button class="px-2 py-1 rounded text-[11px] text-red-600 hover:bg-red-50 whitespace-nowrap">Clear all custom prices</button>
+        </div>
+      </div>
+    </div>
+    <div class="mt-3 grid md:grid-cols-2 gap-2 text-[10px]">
+      <div class="rounded-md border border-blue-200 bg-blue-50 p-2 text-blue-900">
+        <strong>Never opaque</strong> — the first 4 values are inline, the rest one click away.
+        <em>Edit</em> re-opens the dialog pre-filled with the real values, not a fresh baseline.
+      </div>
+      <div class="rounded-md border border-blue-200 bg-blue-50 p-2 text-blue-900">
+        <strong>Revertibility exit #2</strong> — <em>Clear all</em> is reachable here too, so the Manager can
+        leave the custom state without opening the dialog (design §C).
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================= -->
+<!-- STATE 3 — Dialog, default                                         -->
+<!-- ================================================================= -->
+<section class="max-w-6xl mx-auto mb-8">
+  <div class="flex items-center gap-3 mb-3">
+    <span class="flex-shrink-0 w-7 h-7 rounded-full bg-slate-900 text-white text-xs font-bold flex items-center justify-center">3</span>
+    <h2 class="text-lg font-semibold">Dialog — default (no customs yet). The provenance column is the point.</h2>
+  </div>
+  <p class="text-sm text-slate-600 mb-4">
+    Every row shows <strong>where its current price comes from</strong> (gate G5), because a bare number would
+    let a Manager assume it persists — Apple's schedule POST is replace-all, so a live manual price that isn't
+    re-sent silently reverts to auto.
+  </p>
+
+  <div class="bg-white border border-slate-200 rounded-xl state-frame overflow-hidden">
+    <!-- dialog header -->
+    <div class="px-5 py-4 border-b border-slate-200">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <h3 class="text-base font-semibold text-slate-900">Custom territory prices</h3>
+          <p class="text-[11px] text-slate-500 mt-1">
+            <span class="mono">com.vng.game.diamond.medium</span> · Base
+            <strong>United States (USD) · Tier 10 $9.99</strong> · Source <strong>App-specific template</strong>
+          </p>
+        </div>
+        <button class="text-slate-400 hover:text-slate-600 text-lg leading-none">&times;</button>
+      </div>
+      <div class="mt-3 rounded-lg bg-slate-50 border border-slate-200 p-2.5 text-[11px] text-slate-600">
+        Pick from the price points <strong>Apple supports in that territory</strong>. Territories you don't touch
+        keep the template value, or Apple's auto-equalisation — exactly as today.
+      </div>
+    </div>
+
+    <!-- toolbar -->
+    <div class="px-5 py-3 border-b border-slate-200 bg-slate-50/60 flex flex-wrap items-center gap-2">
+      <div class="relative flex-1 min-w-[220px]">
+        <input type="text" placeholder="Search territory, code, or currency…"
+               class="w-full rounded-md border border-slate-300 pl-8 pr-3 py-1.5 text-xs" />
+        <svg class="absolute left-2.5 top-2 w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+      </div>
+      <div class="flex gap-1">
+        <button class="px-2.5 py-1 rounded-full bg-slate-900 text-white text-[11px] font-medium">All</button>
+        <button class="px-2.5 py-1 rounded-full bg-white border border-slate-300 text-[11px] text-slate-600">Asia</button>
+        <button class="px-2.5 py-1 rounded-full bg-white border border-slate-300 text-[11px] text-slate-600">Europe</button>
+        <button class="px-2.5 py-1 rounded-full bg-white border border-slate-300 text-[11px] text-slate-600">Americas</button>
+        <button class="px-2.5 py-1 rounded-full bg-white border border-slate-300 text-[11px] text-slate-600">Africa</button>
+        <button class="px-2.5 py-1 rounded-full bg-white border border-slate-300 text-[11px] text-slate-600">Oceania</button>
+      </div>
+      <label class="flex items-center gap-1.5 text-[11px] text-slate-600 ml-auto">
+        <input type="checkbox" class="h-3.5 w-3.5 rounded border-slate-300" />
+        Only customised (0)
+      </label>
+    </div>
+
+    <!-- table -->
+    <div class="scrollbox">
+      <table class="w-full text-xs">
+        <thead class="sticky top-0 bg-white shadow-[0_1px_0_#e2e8f0]">
+          <tr class="text-left text-[10px] uppercase tracking-wider text-slate-500">
+            <th class="px-5 py-2.5 font-semibold">Territory</th>
+            <th class="px-3 py-2.5 font-semibold">Currency</th>
+            <th class="px-3 py-2.5 font-semibold">Current price · provenance</th>
+            <th class="px-3 py-2.5 font-semibold w-64">Custom price</th>
+            <th class="px-3 py-2.5 font-semibold text-right">New price</th>
+            <th class="px-3 py-2.5"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100">
+          <!-- base row, read-only -->
+          <tr class="row-base">
+            <td class="px-5 py-2.5">
+              <span class="font-medium text-slate-700">United States</span>
+              <span class="mono text-[10px] text-slate-400 ml-1.5">USA</span>
+              <span class="ml-1.5 px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[9px] font-semibold uppercase">Base</span>
+            </td>
+            <td class="px-3 py-2.5 mono text-slate-500">USD</td>
+            <td class="px-3 py-2.5">
+              <span class="mono font-medium text-slate-700">$9.99</span>
+              <span class="ml-2 px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 text-[9px] font-medium">base tier</span>
+            </td>
+            <td class="px-3 py-2.5" colspan="3">
+              <span class="text-[11px] text-slate-500 italic">
+                This is the base price — set it in <span class="font-medium not-italic">Price Tier</span> above.
+              </span>
+            </td>
+          </tr>
+          <!-- template rows -->
+          <tr class="row-normal">
+            <td class="px-5 py-2.5"><span class="font-medium">Vietnam</span> <span class="mono text-[10px] text-slate-400 ml-1.5">VNM</span></td>
+            <td class="px-3 py-2.5 mono text-slate-500">VND</td>
+            <td class="px-3 py-2.5">
+              <span class="mono">₫24,000</span>
+              <span class="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[9px] font-medium">template</span>
+            </td>
+            <td class="px-3 py-2.5">
+              <select class="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-500">
+                <option>— use template ₫24,000 —</option>
+                <option>₫19,000</option><option>₫22,000</option><option>₫25,000</option><option>₫29,000</option>
+              </select>
+            </td>
+            <td class="px-3 py-2.5 text-right text-slate-300">—</td>
+            <td class="px-3 py-2.5"></td>
+          </tr>
+          <tr class="row-normal">
+            <td class="px-5 py-2.5"><span class="font-medium">Japan</span> <span class="mono text-[10px] text-slate-400 ml-1.5">JPN</span></td>
+            <td class="px-3 py-2.5 mono text-slate-500">JPY</td>
+            <td class="px-3 py-2.5">
+              <span class="mono">¥1,500</span>
+              <span class="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[9px] font-medium">template</span>
+            </td>
+            <td class="px-3 py-2.5">
+              <select class="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-500">
+                <option>— use template ¥1,500 —</option>
+                <option>¥1,000</option><option>¥1,200</option><option>¥1,600</option>
+              </select>
+            </td>
+            <td class="px-3 py-2.5 text-right text-slate-300">—</td>
+            <td class="px-3 py-2.5"></td>
+          </tr>
+          <!-- template unverified -->
+          <tr class="row-normal">
+            <td class="px-5 py-2.5"><span class="font-medium">Türkiye</span> <span class="mono text-[10px] text-slate-400 ml-1.5">TUR</span></td>
+            <td class="px-3 py-2.5 mono text-slate-500">TRY</td>
+            <td class="px-3 py-2.5">
+              <span class="mono">₺199.99</span>
+              <span class="ml-2 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[9px] font-medium">template · unverified</span>
+            </td>
+            <td class="px-3 py-2.5">
+              <select class="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-500">
+                <option>— use template ₺199.99 —</option>
+                <option>₺149.99</option><option>₺189.99</option><option>₺249.99</option>
+              </select>
+            </td>
+            <td class="px-3 py-2.5 text-right text-slate-300">—</td>
+            <td class="px-3 py-2.5"></td>
+          </tr>
+          <!-- existing manual (edit mode only) -->
+          <tr class="row-normal">
+            <td class="px-5 py-2.5"><span class="font-medium">Brazil</span> <span class="mono text-[10px] text-slate-400 ml-1.5">BRA</span></td>
+            <td class="px-3 py-2.5 mono text-slate-500">BRL</td>
+            <td class="px-3 py-2.5">
+              <span class="mono">R$29,90</span>
+              <span class="ml-2 px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 text-[9px] font-medium">on Apple now</span>
+            </td>
+            <td class="px-3 py-2.5">
+              <select class="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-500">
+                <option>— use template R$27,90 —</option>
+                <option>R$19,90</option><option>R$24,90</option><option>R$34,90</option>
+              </select>
+            </td>
+            <td class="px-3 py-2.5 text-right text-slate-300">—</td>
+            <td class="px-3 py-2.5"></td>
+          </tr>
+          <!-- auto rows -->
+          <tr class="row-normal">
+            <td class="px-5 py-2.5"><span class="font-medium">Kazakhstan</span> <span class="mono text-[10px] text-slate-400 ml-1.5">KAZ</span></td>
+            <td class="px-3 py-2.5 mono text-slate-500">KZT</td>
+            <td class="px-3 py-2.5">
+              <span class="text-slate-400 italic">— auto —</span>
+              <span class="ml-2 px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[9px] font-medium">Apple equalises</span>
+            </td>
+            <td class="px-3 py-2.5">
+              <select class="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-500">
+                <option>— use auto —</option>
+                <option>₸3,990</option><option>₸4,490</option><option>₸4,990</option>
+              </select>
+            </td>
+            <td class="px-3 py-2.5 text-right text-slate-300">—</td>
+            <td class="px-3 py-2.5"></td>
+          </tr>
+          <tr class="row-normal">
+            <td class="px-5 py-2.5"><span class="font-medium">Nigeria</span> <span class="mono text-[10px] text-slate-400 ml-1.5">NGA</span></td>
+            <td class="px-3 py-2.5 mono text-slate-500">NGN</td>
+            <td class="px-3 py-2.5">
+              <span class="text-slate-400 italic">— auto —</span>
+              <span class="ml-2 px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[9px] font-medium">Apple equalises</span>
+            </td>
+            <td class="px-3 py-2.5">
+              <select class="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-500">
+                <option>— use auto —</option><option>₦11,000</option><option>₦14,500</option>
+              </select>
+            </td>
+            <td class="px-3 py-2.5 text-right text-slate-300">—</td>
+            <td class="px-3 py-2.5"></td>
+          </tr>
+          <tr><td class="px-5 py-2.5 text-[11px] text-slate-400 italic" colspan="6">… 168 more territories</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- footer -->
+    <div class="px-5 py-3 border-t border-slate-200 bg-slate-50/60 flex items-center justify-between gap-3">
+      <div class="text-[11px] text-slate-600">
+        <span class="font-semibold">0</span> of ~175 territories customised
+        <button class="ml-3 text-red-600 hover:underline gate-disabled rounded px-1">Clear all custom prices</button>
+      </div>
+      <div class="flex gap-2">
+        <button class="px-3 py-1.5 rounded-md bg-slate-100 text-slate-700 text-xs font-medium">Cancel</button>
+        <button class="px-3 py-1.5 rounded-md text-white text-xs font-medium gate-disabled">Save custom prices</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-3 grid md:grid-cols-3 gap-2 text-[10px]">
+    <div class="rounded-md border border-blue-200 bg-blue-50 p-2 text-blue-900">
+      <strong>G5 · three provenances, two with a qualifier.</strong>
+      <span class="mono">template</span> is a <em>claim</em> — if the price has no Apple point it falls back to auto
+      (<span class="mono">missing_price_points</span>), hence <span class="mono">template · unverified</span>.
+      <span class="mono">on Apple now</span> <strong>will revert to auto</strong> unless re-sent — the POST is replace-all.
+    </div>
+    <div class="rounded-md border border-blue-200 bg-blue-50 p-2 text-blue-900">
+      <strong>G3 · lazy fetch.</strong> Options load per row on picker open (~600 points, 1 request).
+      Eager across 175 territories would be ~105,000 objects for data the Manager uses 5 rows of.
+      Cached in the dialog's own state — <strong>no server cache</strong> (KB P6).
+    </div>
+    <div class="rounded-md border border-blue-200 bg-blue-50 p-2 text-blue-900">
+      <strong>Dead-affordance guard.</strong> The placeholder <em>names its fallback</em>
+      (<span class="mono">— use template ₫24,000 —</span>), never a blank option. A row on its placeholder is
+      <em>presentation</em>; the data model has no empty value at all.
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================= -->
+<!-- STATE 4 — Dialog with edits + picker open                         -->
+<!-- ================================================================= -->
+<section class="max-w-6xl mx-auto mb-8">
+  <div class="flex items-center gap-3 mb-3">
+    <span class="flex-shrink-0 w-7 h-7 rounded-full bg-slate-900 text-white text-xs font-bold flex items-center justify-center">4</span>
+    <h2 class="text-lg font-semibold">Dialog — filter active, 3 rows edited, picker open</h2>
+  </div>
+  <p class="text-sm text-slate-600 mb-4">
+    Edited rows are amber with a left accent, the new value sits in the <strong>adjacent column</strong>, and the
+    changed-count is live. A custom on a template-covered territory is the normal case, not an exception —
+    that is what "custom overrides template" means.
+  </p>
+
+  <div class="bg-white border border-slate-200 rounded-xl state-frame overflow-hidden">
+    <div class="px-5 py-3 border-b border-slate-200 bg-slate-50/60 flex flex-wrap items-center gap-2">
+      <div class="relative flex-1 min-w-[220px]">
+        <input type="text" value="a" class="w-full rounded-md border border-blue-400 ring-2 ring-blue-100 pl-8 pr-3 py-1.5 text-xs" />
+        <svg class="absolute left-2.5 top-2 w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+        </svg>
+      </div>
+      <div class="flex gap-1">
+        <button class="px-2.5 py-1 rounded-full bg-white border border-slate-300 text-[11px] text-slate-600">All</button>
+        <button class="px-2.5 py-1 rounded-full bg-slate-900 text-white text-[11px] font-medium">Asia</button>
+        <button class="px-2.5 py-1 rounded-full bg-white border border-slate-300 text-[11px] text-slate-600">Europe</button>
+        <button class="px-2.5 py-1 rounded-full bg-white border border-slate-300 text-[11px] text-slate-600">Americas</button>
+      </div>
+      <label class="flex items-center gap-1.5 text-[11px] text-slate-600 ml-auto">
+        <input type="checkbox" class="h-3.5 w-3.5 rounded border-slate-300" />
+        Only customised (3)
+      </label>
+      <span class="px-2 py-1 rounded bg-amber-100 text-amber-900 text-[11px] font-semibold">3 changed</span>
+    </div>
+
+    <table class="w-full text-xs">
+      <thead class="bg-white shadow-[0_1px_0_#e2e8f0]">
+        <tr class="text-left text-[10px] uppercase tracking-wider text-slate-500">
+          <th class="px-5 py-2.5 font-semibold">Territory</th>
+          <th class="px-3 py-2.5 font-semibold">Currency</th>
+          <th class="px-3 py-2.5 font-semibold">Current price · provenance</th>
+          <th class="px-3 py-2.5 font-semibold w-64">Custom price</th>
+          <th class="px-3 py-2.5 font-semibold text-right">New price</th>
+          <th class="px-3 py-2.5"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        <tr class="row-custom">
+          <td class="px-5 py-2.5"><span class="font-medium">Japan</span> <span class="mono text-[10px] text-slate-400 ml-1.5">JPN</span></td>
+          <td class="px-3 py-2.5 mono text-slate-500">JPY</td>
+          <td class="px-3 py-2.5">
+            <span class="mono text-slate-400 line-through">¥1,500</span>
+            <span class="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[9px] font-medium">template</span>
+          </td>
+          <td class="px-3 py-2.5">
+            <select class="w-full rounded-md border border-amber-400 bg-white px-2 py-1 text-xs font-medium">
+              <option>— use template ¥1,500 —</option><option>¥1,000</option>
+              <option selected>¥1,200</option><option>¥1,600</option>
+            </select>
+          </td>
+          <td class="px-3 py-2.5 text-right mono font-semibold text-amber-900">¥1,200</td>
+          <td class="px-3 py-2.5 text-right">
+            <button class="px-1.5 py-0.5 rounded text-[10px] text-slate-500 hover:bg-white hover:text-red-600" title="Revert to template ¥1,500">Revert ×</button>
+          </td>
+        </tr>
+        <tr class="row-custom">
+          <td class="px-5 py-2.5"><span class="font-medium">Kazakhstan</span> <span class="mono text-[10px] text-slate-400 ml-1.5">KAZ</span></td>
+          <td class="px-3 py-2.5 mono text-slate-500">KZT</td>
+          <td class="px-3 py-2.5">
+            <span class="text-slate-400 italic">— auto —</span>
+            <span class="ml-2 px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[9px] font-medium">Apple equalises</span>
+          </td>
+          <td class="px-3 py-2.5">
+            <select class="w-full rounded-md border border-amber-400 bg-white px-2 py-1 text-xs font-medium">
+              <option>— use auto —</option><option>₸3,990</option>
+              <option selected>₸4,490</option><option>₸4,990</option>
+            </select>
+          </td>
+          <td class="px-3 py-2.5 text-right mono font-semibold text-amber-900">₸4,490</td>
+          <td class="px-3 py-2.5 text-right">
+            <button class="px-1.5 py-0.5 rounded text-[10px] text-slate-500 hover:bg-white hover:text-red-600" title="Revert to auto">Revert ×</button>
+          </td>
+        </tr>
+
+        <!-- picker OPEN -->
+        <tr class="row-custom">
+          <td class="px-5 py-2.5 align-top"><span class="font-medium">Malaysia</span> <span class="mono text-[10px] text-slate-400 ml-1.5">MYS</span></td>
+          <td class="px-3 py-2.5 mono text-slate-500 align-top">MYR</td>
+          <td class="px-3 py-2.5 align-top">
+            <span class="mono text-slate-400 line-through">RM39.90</span>
+            <span class="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[9px] font-medium">template</span>
+          </td>
+          <td class="px-3 py-2.5 align-top">
+            <div class="rounded-md border-2 border-blue-500 bg-white overflow-hidden">
+              <div class="px-2 py-1 text-xs font-medium bg-blue-50 border-b border-blue-200">RM34.90</div>
+              <div class="max-h-32 overflow-y-auto text-xs">
+                <div class="px-2 py-1 text-slate-500 italic border-b border-slate-100">— use template RM39.90 —</div>
+                <div class="px-2 py-1 hover:bg-slate-50 mono">RM24.90</div>
+                <div class="px-2 py-1 hover:bg-slate-50 mono">RM29.90</div>
+                <div class="px-2 py-1 bg-blue-100 mono font-semibold">RM34.90</div>
+                <div class="px-2 py-1 hover:bg-slate-50 mono">RM39.90</div>
+                <div class="px-2 py-1 hover:bg-slate-50 mono">RM44.90</div>
+                <div class="px-2 py-1 hover:bg-slate-50 mono">RM49.90</div>
+              </div>
+              <div class="px-2 py-1 bg-slate-50 border-t border-slate-200 text-[9px] text-slate-500">
+                612 price points Apple supports in MYS · loaded on open
+              </div>
+            </div>
+          </td>
+          <td class="px-3 py-2.5 text-right mono font-semibold text-amber-900 align-top">RM34.90</td>
+          <td class="px-3 py-2.5 text-right align-top">
+            <button class="px-1.5 py-0.5 rounded text-[10px] text-slate-500 hover:bg-white hover:text-red-600">Revert ×</button>
+          </td>
+        </tr>
+
+        <tr class="row-normal">
+          <td class="px-5 py-2.5"><span class="font-medium">Thailand</span> <span class="mono text-[10px] text-slate-400 ml-1.5">THA</span></td>
+          <td class="px-3 py-2.5 mono text-slate-500">THB</td>
+          <td class="px-3 py-2.5">
+            <span class="mono">฿349</span>
+            <span class="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[9px] font-medium">template</span>
+          </td>
+          <td class="px-3 py-2.5">
+            <select class="w-full rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-500"><option>— use template ฿349 —</option></select>
+          </td>
+          <td class="px-3 py-2.5 text-right text-slate-300">—</td>
+          <td class="px-3 py-2.5"></td>
+        </tr>
+        <tr><td class="px-5 py-2.5 text-[11px] text-slate-400 italic" colspan="6">… 30 more Asian territories matching "a"</td></tr>
+      </tbody>
+    </table>
+
+    <div class="px-5 py-3 border-t border-slate-200 bg-slate-50/60 flex items-center justify-between gap-3">
+      <div class="text-[11px] text-slate-600">
+        <span class="font-semibold text-amber-900">3</span> of ~175 territories customised
+        <button class="ml-3 text-red-600 hover:underline">Clear all custom prices</button>
+      </div>
+      <div class="flex gap-2">
+        <button class="px-3 py-1.5 rounded-md bg-slate-100 text-slate-700 text-xs font-medium">Cancel</button>
+        <button class="px-3 py-1.5 rounded-md bg-[#0071E3] text-white text-xs font-medium">Save custom prices</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-3 grid md:grid-cols-3 gap-2 text-[10px]">
+    <div class="rounded-md border border-red-200 bg-red-50 p-2 text-red-900">
+      <strong>Japan is the G1 case.</strong> A template entry AND a custom for the same territory.
+      The merge <span class="mono">Map</span> must send Apple <strong>one</strong> price point for JPN — the custom's
+      ¥1,200. Two entries is the failure the mutation-check breaks the code to prove.
+    </div>
+    <div class="rounded-md border border-blue-200 bg-blue-50 p-2 text-blue-900">
+      <strong>Never a text field.</strong> Every editor is a select over Apple's own list, so per-territory
+      validity is inherent at pick time — which is why §I enumerates the four things that can <em>still</em> go wrong.
+    </div>
+    <div class="rounded-md border border-blue-200 bg-blue-50 p-2 text-blue-900">
+      <strong>Revert per row</strong> deletes the map key — it never writes null, 0, or "". The tooltip names the
+      value it reverts to, so the affordance can't read as "clear the price".
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================= -->
+<!-- STATE 5 — Base row read-only + revertibility                      -->
+<!-- ================================================================= -->
+<section class="max-w-6xl mx-auto mb-8">
+  <div class="flex items-center gap-3 mb-3">
+    <span class="flex-shrink-0 w-7 h-7 rounded-full bg-slate-900 text-white text-xs font-bold flex items-center justify-center">5</span>
+    <h2 class="text-lg font-semibold">Base-territory row (read-only) + the two revert exits</h2>
+  </div>
+  <div class="grid lg:grid-cols-2 gap-5">
+    <div class="bg-white border border-slate-200 rounded-xl p-5 state-frame">
+      <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">§E — recommended: read-only</p>
+      <table class="w-full text-xs mb-3">
+        <tbody>
+          <tr class="row-base">
+            <td class="px-3 py-3 rounded-l-lg">
+              <span class="font-medium text-slate-700">United States</span>
+              <span class="mono text-[10px] text-slate-400 ml-1.5">USA</span>
+              <span class="ml-1.5 px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[9px] font-semibold uppercase">Base</span>
+              <div class="mt-1.5 text-[11px] text-slate-500 italic">
+                This is the base price — set it in
+                <a href="#" class="text-[#0071E3] not-italic font-medium hover:underline">Price Tier</a> above.
+              </div>
+            </td>
+            <td class="px-3 py-3 text-right rounded-r-lg">
+              <span class="mono font-medium text-slate-700">$9.99</span>
+              <div class="text-[10px] text-slate-400 mt-0.5">Tier 10</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-600 space-y-2">
+        <p><strong>Why read-only, not "editing it edits the base":</strong></p>
+        <p>1 · The write path has <em>one</em> base slot (<span class="mono">applePricePointId</span>) and the
+           template loop already excludes the base territory. There is nowhere for a second base to go.</p>
+        <p>2 · The base must stay a <strong>tier</strong>, not a price — <span class="mono">tier_id</span> is what
+           the DB stores, what <span class="mono">getTierUsdPrice</span> resolves, and what the submit checklist
+           validates. A free-picked USA point has no tier, so it would need a price→tier reverse lookup that can
+           legitimately fail (~600 Apple points vs ~96 uploaded tiers).</p>
+        <p>3 · It would loop: editing the base re-fingerprints, marking every <em>other</em> row in the open dialog
+           stale. The dialog would invalidate its own contents mid-session.</p>
+      </div>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-xl p-5 state-frame">
+      <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">§C — three exits, no trap state</p>
+      <div class="space-y-3">
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="text-xs font-semibold mb-1">1 · One territory</p>
+          <p class="text-[11px] text-slate-600">The row's <span class="mono">Revert ×</span>, or picking the
+            <span class="mono">— use template … —</span> placeholder. Both <strong>delete the map key</strong>.</p>
+        </div>
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="text-xs font-semibold mb-1">2 · All territories</p>
+          <p class="text-[11px] text-slate-600 mb-2">Footer <em>and</em> the form summary — so the Manager can escape
+            without opening the dialog.</p>
+          <div class="rounded-md border border-red-200 bg-red-50 p-2 text-[11px] text-red-900">
+            <p class="font-medium mb-0.5">Clear 6 custom prices?</p>
+            <p class="text-[10px]">Those territories revert to template/auto. The values are written to the audit
+              log (<span class="mono">CUSTOM_PRICES_CLEARED</span>) — that is the only recovery path.</p>
+          </div>
+        </div>
+        <div class="rounded-lg border border-slate-200 p-3">
+          <p class="text-xs font-semibold mb-1">3 · The whole session</p>
+          <p class="text-[11px] text-slate-600"><span class="mono">Cancel</span> discards the draft map. Presentation
+            state is a separate object from <span class="mono">custom_prices</span>, which is only written on Save.</p>
+        </div>
+      </div>
+      <div class="mt-3 rounded-md border border-emerald-200 bg-emerald-50 p-2 text-[10px] text-emerald-900">
+        <strong>The empty array has exactly one meaning.</strong> <span class="mono">custom_prices: []</span> = the
+        Manager cleared them. <span class="mono">undefined</span> = the payload didn't carry the field, so the DB is
+        left untouched. Never <span class="mono">.default([])</span> in the zod schemas — that turns a threading miss
+        into silent data loss.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================= -->
+<!-- STATE 6 — STALE                                                   -->
+<!-- ================================================================= -->
+<section class="max-w-6xl mx-auto mb-8">
+  <div class="flex items-center gap-3 mb-3">
+    <span class="flex-shrink-0 w-7 h-7 rounded-full bg-amber-500 text-white text-xs font-bold flex items-center justify-center">6</span>
+    <h2 class="text-lg font-semibold">STALE — banner, amber summary, BLOCKED submit, two one-click resolutions</h2>
+  </div>
+  <p class="text-sm text-slate-600 mb-4">
+    Locked decision 3. Customs are <strong>never auto-destroyed</strong>. Stale is
+    <span class="mono">fingerprint(form) ≠ storedBaseline</span> over
+    <span class="mono">{tier_id, pricing_source, base_territory}</span> — a <strong>comparison, not a boolean</strong>,
+    so changing the base and changing it back clears staleness with nothing to click.
+  </p>
+
+  <div class="grid lg:grid-cols-[1fr_300px] gap-5">
+    <div class="bg-white border border-slate-200 rounded-xl p-5 state-frame">
+      <h3 class="text-sm font-semibold text-slate-900 mb-4 pb-2 border-b border-slate-100">Pricing</h3>
+
+      <div class="rounded-lg border-2 border-amber-400 bg-amber-50 p-3 mb-4">
+        <div class="flex gap-3">
+          <svg class="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+          <div class="flex-1">
+            <p class="text-xs font-semibold text-amber-900">6 custom prices were set against a different base</p>
+            <p class="text-[11px] text-amber-800 mt-1 leading-relaxed">
+              Set against <span class="mono font-medium">Tier 10 ($9.99)</span> ·
+              <span class="mono font-medium">App-specific template</span>.
+              The base is now <span class="mono font-medium">Tier 15 ($14.99)</span>.
+              Nothing has been deleted — review them before pushing to Apple.
+            </p>
+            <div class="flex flex-wrap gap-2 mt-2.5">
+              <button class="px-3 py-1.5 rounded-md bg-white border border-amber-400 text-amber-900 text-[11px] font-medium">Keep them (reviewed)</button>
+              <button class="px-3 py-1.5 rounded-md bg-white border border-red-300 text-red-700 text-[11px] font-medium">Clear all custom prices</button>
+              <button class="px-3 py-1.5 rounded-md text-amber-800 text-[11px] font-medium hover:bg-amber-100">Review in dialog →</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 mb-4">
+        <div>
+          <label class="block text-[11px] font-medium text-slate-700 mb-1">Base Territory *</label>
+          <div class="rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-500">United States (USD)</div>
+        </div>
+        <div>
+          <label class="block text-[11px] font-medium text-slate-700 mb-1">Price Tier *</label>
+          <div class="rounded-md border-2 border-amber-400 px-2.5 py-2 text-xs font-medium">Tier 15 — $14.99</div>
+          <p class="text-[10px] text-amber-700 mt-1">Changed from Tier 10 — 6 customs need review</p>
+        </div>
+      </div>
+
+      <div class="rounded-lg border border-amber-300 bg-amber-50/60 p-3">
+        <div class="flex items-center gap-2">
+          <p class="text-xs font-semibold text-slate-900">Custom territory prices</p>
+          <span class="px-1.5 py-0.5 rounded bg-amber-300 text-amber-950 text-[10px] font-semibold">6 custom · stale</span>
+        </div>
+        <p class="text-[11px] text-slate-800 mt-1.5">
+          <span class="mono">Vietnam ₫25,000</span> · <span class="mono">Japan ¥1,200</span> ·
+          <span class="mono">Brazil R$24,90</span> · <span class="mono">India ₹899</span>
+          <span class="text-slate-500">+ 2 more</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- blocked sidebar -->
+    <aside class="space-y-3">
+      <div class="bg-white border border-slate-200 rounded-xl p-4 state-frame">
+        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Submit checklist</p>
+        <ul class="space-y-1.5 text-[11px]">
+          <li class="flex gap-1.5 text-emerald-700"><span>✓</span> Reference name</li>
+          <li class="flex gap-1.5 text-emerald-700"><span>✓</span> Product ID</li>
+          <li class="flex gap-1.5 text-emerald-700"><span>✓</span> Type</li>
+          <li class="flex gap-1.5 text-emerald-700"><span>✓</span> Price tier</li>
+          <li class="flex gap-1.5 text-emerald-700"><span>✓</span> Localization (en-US)</li>
+          <li class="flex gap-1.5 text-red-600 font-medium"><span>✕</span> 6 custom prices need review</li>
+        </ul>
+      </div>
+      <button class="w-full px-4 py-2 rounded-lg text-white text-sm font-medium gate-disabled"
+              title="Resolve the 6 stale custom prices first — Keep them (reviewed) or Clear all.">
+        Update on Apple
+      </button>
+      <button class="w-full px-4 py-2 rounded-lg bg-slate-100 text-slate-700 text-sm font-medium">Save as Draft</button>
+      <div class="rounded-lg border border-blue-200 bg-blue-50 p-2.5 text-[10px] text-blue-900">
+        <strong>Save as Draft stays ENABLED.</strong> A Manager mid-review must be able to persist without resolving.
+        Only the two Apple-write buttons are blocked.
+      </div>
+    </aside>
+  </div>
+
+  <div class="mt-4 grid md:grid-cols-2 gap-3">
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-[11px] text-emerald-900">
+      <p class="font-semibold mb-1.5">Why a comparison, not a boolean</p>
+      <p>Change Tier 15 → back to Tier 10 and <strong>the banner disappears on its own</strong>. Nothing to click,
+        nothing logged. A one-way boolean would force the Manager to acknowledge a no-op.</p>
+      <p class="mt-1.5"><strong>"Keep them (reviewed)"</strong> re-stamps the fingerprint to the current baseline and
+        changes no value. Change the base again → stale fires again. There is <strong>no</strong>
+        <span class="mono">reviewed: true</span> flag anywhere — that is exactly the boolean this design rules out,
+        and it would let a later baseline change go unnoticed.</p>
+    </div>
+    <div class="rounded-lg border border-red-200 bg-red-50 p-3 text-[11px] text-red-900">
+      <p class="font-semibold mb-1.5">Blocked is STRUCTURAL, on both layers, from one function</p>
+      <p><strong>Client</strong> — Create/Update on Apple disabled + a red checklist item.
+        <strong>Server</strong> — both write routes recompute the fingerprint and return <strong>422</strong> naming
+        the two resolutions, <em>before</em> any Apple call.</p>
+      <p class="mt-1.5">One exported pure <span class="mono">isCustomBaselineStale(form, storedBaseline)</span> used by
+        both. A client-only block is bypassable by a stale tab; a server-only block is a dead end with no way
+        forward from the UI. A banner can be scrolled past — a disabled button cannot.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================= -->
+<!-- STATE 7 — Dialog in stale + Apple-drift states                    -->
+<!-- ================================================================= -->
+<section class="max-w-6xl mx-auto mb-8">
+  <div class="flex items-center gap-3 mb-3">
+    <span class="flex-shrink-0 w-7 h-7 rounded-full bg-amber-500 text-white text-xs font-bold flex items-center justify-center">7</span>
+    <h2 class="text-lg font-semibold">Dialog — stale rows, plus the two Apple-drift states (§I)</h2>
+  </div>
+  <p class="text-sm text-slate-600 mb-4">
+    Price points come from Apple's own list, so validity at pick time is inherent. These are the things that can
+    still go wrong <em>afterwards</em> — customs persist for days, so the pick-to-submit window is long.
+  </p>
+
+  <div class="bg-white border border-slate-200 rounded-xl state-frame overflow-hidden">
+    <div class="px-5 py-3 bg-amber-50 border-b border-amber-300 flex items-center gap-2">
+      <span class="px-1.5 py-0.5 rounded bg-amber-300 text-amber-950 text-[10px] font-semibold">6 stale</span>
+      <p class="text-[11px] text-amber-900">
+        Set against <span class="mono">Tier 10 · App-specific template</span> — base is now
+        <span class="mono">Tier 15</span>. Values untouched.
+      </p>
+      <div class="ml-auto flex gap-1.5">
+        <button class="px-2.5 py-1 rounded bg-white border border-amber-400 text-amber-900 text-[10px] font-medium">Keep them (reviewed)</button>
+        <button class="px-2.5 py-1 rounded bg-white border border-red-300 text-red-700 text-[10px] font-medium">Clear all</button>
+      </div>
+    </div>
+
+    <table class="w-full text-xs">
+      <thead class="bg-white shadow-[0_1px_0_#e2e8f0]">
+        <tr class="text-left text-[10px] uppercase tracking-wider text-slate-500">
+          <th class="px-5 py-2.5 font-semibold">Territory</th>
+          <th class="px-3 py-2.5 font-semibold">Currency</th>
+          <th class="px-3 py-2.5 font-semibold">Current price · provenance</th>
+          <th class="px-3 py-2.5 font-semibold w-64">Custom price</th>
+          <th class="px-3 py-2.5 font-semibold text-right">New price</th>
+          <th class="px-3 py-2.5"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        <!-- plain stale -->
+        <tr class="row-stale">
+          <td class="px-5 py-2.5">
+            <span class="font-medium">Vietnam</span> <span class="mono text-[10px] text-slate-500 ml-1.5">VNM</span>
+            <span class="ml-1.5 px-1.5 py-0.5 rounded bg-amber-300 text-amber-950 text-[9px] font-semibold">stale</span>
+          </td>
+          <td class="px-3 py-2.5 mono text-slate-600">VND</td>
+          <td class="px-3 py-2.5">
+            <span class="mono">₫37,000</span>
+            <span class="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[9px] font-medium">template · Tier 15</span>
+            <div class="text-[10px] text-amber-800 mt-0.5">was ₫24,000 under Tier 10</div>
+          </td>
+          <td class="px-3 py-2.5">
+            <select class="w-full rounded-md border border-amber-500 bg-white px-2 py-1 text-xs font-medium">
+              <option>— use template ₫37,000 —</option><option selected>₫25,000</option><option>₫39,000</option>
+            </select>
+          </td>
+          <td class="px-3 py-2.5 text-right mono font-semibold text-amber-950">₫25,000</td>
+          <td class="px-3 py-2.5 text-right"><button class="px-1.5 py-0.5 rounded text-[10px] text-slate-600 hover:bg-white hover:text-red-600">Revert ×</button></td>
+        </tr>
+
+        <!-- I.3 withdrawn point -->
+        <tr class="row-stale">
+          <td class="px-5 py-2.5">
+            <span class="font-medium">Türkiye</span> <span class="mono text-[10px] text-slate-500 ml-1.5">TUR</span>
+            <span class="ml-1.5 px-1.5 py-0.5 rounded bg-red-200 text-red-900 text-[9px] font-semibold">no longer offered</span>
+          </td>
+          <td class="px-3 py-2.5 mono text-slate-600">TRY</td>
+          <td class="px-3 py-2.5">
+            <span class="mono">₺449.99</span>
+            <span class="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[9px] font-medium">template · Tier 15</span>
+          </td>
+          <td class="px-3 py-2.5">
+            <select class="w-full rounded-md border-2 border-red-400 bg-red-50 px-2 py-1 text-xs">
+              <option selected>₺199.99 — not in Apple's list</option>
+              <option>— use template ₺449.99 —</option><option>₺189.99</option><option>₺249.99</option>
+            </select>
+            <p class="text-[10px] text-red-700 mt-0.5">Apple withdrew this price point. Pick a replacement or revert.</p>
+          </td>
+          <td class="px-3 py-2.5 text-right mono text-red-700">₺199.99</td>
+          <td class="px-3 py-2.5 text-right"><button class="px-1.5 py-0.5 rounded text-[10px] text-slate-600 hover:bg-white hover:text-red-600">Revert ×</button></td>
+        </tr>
+
+        <!-- I.2 currency changed -->
+        <tr class="row-custom">
+          <td class="px-5 py-2.5">
+            <span class="font-medium">Bulgaria</span> <span class="mono text-[10px] text-slate-400 ml-1.5">BGR</span>
+            <span class="ml-1.5 px-1.5 py-0.5 rounded bg-amber-200 text-amber-900 text-[9px] font-semibold">currency changed</span>
+          </td>
+          <td class="px-3 py-2.5">
+            <span class="mono text-slate-400 line-through">BGN</span>
+            <span class="mono text-slate-700 ml-1">EUR</span>
+          </td>
+          <td class="px-3 py-2.5">
+            <span class="mono">€14.99</span>
+            <span class="ml-2 px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-[9px] font-medium">template</span>
+          </td>
+          <td class="px-3 py-2.5">
+            <select class="w-full rounded-md border border-amber-400 bg-white px-2 py-1 text-xs">
+              <option selected>€12.99</option><option>— use template €14.99 —</option><option>€10.99</option>
+            </select>
+            <p class="text-[10px] text-amber-800 mt-0.5">Territory currency changed since this custom was set. Confirm the value.</p>
+          </td>
+          <td class="px-3 py-2.5 text-right mono font-semibold text-amber-900">€12.99</td>
+          <td class="px-3 py-2.5 text-right"><button class="px-1.5 py-0.5 rounded text-[10px] text-slate-600 hover:bg-white hover:text-red-600">Revert ×</button></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="px-5 py-3 border-t border-slate-200 bg-slate-50/60 flex items-center justify-between gap-3">
+      <div class="text-[11px] text-slate-600">
+        <span class="font-semibold text-amber-900">6</span> customised ·
+        <span class="text-red-700 font-medium">1 needs a replacement</span>
+      </div>
+      <div class="flex gap-2">
+        <button class="px-3 py-1.5 rounded-md bg-slate-100 text-slate-700 text-xs font-medium">Cancel</button>
+        <button class="px-3 py-1.5 rounded-md bg-[#0071E3] text-white text-xs font-medium">Save custom prices</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-3 grid md:grid-cols-3 gap-2 text-[10px]">
+    <div class="rounded-md border border-amber-200 bg-amber-50 p-2 text-amber-900">
+      <strong>I.3 · re-validate on dialog OPEN.</strong> For templates the pick→submit window is one orchestration;
+      for customs it is <em>days</em>. So every open refetches the list for territories that already have a custom
+      (bounded by the customised count, typically &lt; 10) and flags anything Apple no longer offers.
+    </div>
+    <div class="rounded-md border border-amber-200 bg-amber-50 p-2 text-amber-900">
+      <strong>I.2 · currency is DISPLAY METADATA, never a join key.</strong> Matching is on
+      <span class="mono">customer_price</span> alone (<span class="mono">findPricePointByUsdPrice</span>).
+      Bulgaria BGN→EUR is the Google <span class="mono">regionsVersion</span> trap transposed to Apple — a stored
+      currency going stale must never break the match.
+    </div>
+    <div class="rounded-md border border-slate-200 bg-slate-50 p-2 text-slate-700">
+      <strong>Save is NOT blocked by an unresolvable custom.</strong> The server fail-softs to auto with a loud audit
+      row (<span class="mono">partial-template-fail</span> + the territory named), matching today's template
+      semantics. A hard reject would block a whole submit over a price Apple withdrew after the pick.
+      <span class="text-amber-700 font-medium">(Status-severity call: open question J-5.)</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================= -->
+<!-- SUBMIT PATH + AUDIT                                               -->
+<!-- ================================================================= -->
+<section class="max-w-6xl mx-auto mb-8">
+  <div class="flex items-center gap-3 mb-3">
+    <span class="flex-shrink-0 w-7 h-7 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">→</span>
+    <h2 class="text-lg font-semibold">Submit path — one replace-all POST, custom wins at one guard point</h2>
+  </div>
+  <div class="grid lg:grid-cols-2 gap-5">
+    <div class="bg-white border border-slate-200 rounded-xl p-5 state-frame">
+      <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">The merge (pricing-orchestration.ts)</p>
+      <pre class="text-[10px] leading-relaxed bg-slate-900 text-slate-100 rounded-lg p-3 overflow-x-auto">applyPricingSchedule(args + customPrices)
+  ├─ skipped-no-tier / no-usd-price guards        unchanged
+  ├─ base ← findPricePointByUsdPrice(basePts, usd)  unchanged
+  ├─ overridesByTerritory = new Map()
+  │   ├─ if source !== APPLE → template loop
+  │   │     set(territory, {id, "template"})
+  │   └─ ALWAYS: for each custom, territory !== base
+  │        points ← same per-territory fetch
+  │        match  ← findPricePointByUsdPrice(pts, price)
+  │        match ? <span class="text-amber-300">set(territory, {id, "custom"})  ◀ GUARD</span>
+  │              : missing.push({source:"custom", …})
+  └─ setPriceSchedule({ applePricePointId,
+       additionalPricePointIds: [...map.values()] })</pre>
+      <div class="mt-3 space-y-2 text-[10px]">
+        <div class="rounded-md border border-red-200 bg-red-50 p-2 text-red-900">
+          <strong>Two gates would otherwise silently drop a customs-only edit</strong> —
+          <span class="mono">isEmptyDiff</span> (5 clauses, no customs → route returns
+          <span class="mono">NO_CHANGES</span> and the modal never opens) and
+          <span class="mono">runPricingStage.shouldRun</span>
+          (<span class="mono">tier_changed || source !== APPLE</span> → Stage 4 skipped). Both need a
+          <span class="mono">custom_prices_changed</span> clause.
+        </div>
+        <div class="rounded-md border border-emerald-200 bg-emerald-50 p-2 text-emerald-900">
+          <strong>Customs apply under ALL THREE sources, including <span class="mono">APPLE</span></strong> — so the
+          custom loop sits <em>outside</em> <span class="mono">if (source.kind !== "APPLE")</span>. Google's
+          equivalent shipped template-only and had to be re-scoped a cycle later; designed in from day one here.
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-white border border-slate-200 rounded-xl p-5 state-frame">
+      <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-3">Create-flow ordering + audit</p>
+      <ol class="text-[11px] text-slate-700 space-y-1 mb-4">
+        <li><span class="mono text-slate-400">1</span> New form → <strong>Save as Draft</strong> → customs persisted</li>
+        <li><span class="mono text-slate-400">2</span> redirect → Edit page → customs re-hydrated from DB</li>
+        <li><span class="mono text-slate-400">3</span> POST <span class="mono">/v2/inAppPurchases</span> → shell</li>
+        <li><span class="mono text-slate-400">4</span> localizations · <span class="mono">getTierUsdPrice</span> · poll ready</li>
+        <li><span class="mono text-slate-400">5</span> <strong class="text-blue-700">applyPricingSchedule — base + template + customs in ONE POST</strong></li>
+        <li><span class="mono text-slate-400">6</span> screenshot · availability · GET state · mirror</li>
+      </ol>
+      <div class="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-[10px] text-amber-900 mb-3">
+        <strong>Persistence is mandatory, not a nice-to-have.</strong> There is no "Create on Apple" on the New form
+        (<span class="mono">canCreate = mode === "edit" &amp;&amp; !syncedToApple</span>) — every create runs from the
+        Edit page after a Save-Draft round trip. Client-only custom state would vanish silently.
+      </div>
+      <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Audit</p>
+      <ul class="text-[11px] text-slate-700 space-y-1">
+        <li>· <span class="mono">SET_PRICE_SCHEDULE</span> payload gains
+          <span class="mono">custom_territory_count</span>, <span class="mono">custom_overrode_template_count</span>,
+          <span class="mono">resolution_by_territory {custom, template, auto_fallback}</span>,
+          <span class="mono">custom_territories[].resolved</span> — no new action type needed.</li>
+        <li>· NEW <span class="mono">CUSTOM_PRICES_REBASELINE</span> — "Keep them (reviewed)" changes what ships while
+          changing no visible value; without a row a later reader sees prices from one tier attached to another.</li>
+        <li>· NEW <span class="mono">CUSTOM_PRICES_CLEARED</span> — logging the values is the only recovery path.</li>
+      </ul>
+      <div class="mt-3 rounded-lg border border-red-200 bg-red-50 p-2.5 text-[10px] text-red-900">
+        <strong>⚠ KB P2 · the CHECK constraint.</strong> New <span class="mono">action_type</span> values are
+        <em>silently swallowed</em> when absent from
+        <span class="mono">actions_log_action_type_check</span>. Tracing this feature also found a
+        <strong>live existing gap</strong>: the latest <span class="mono">iap_mgmt</span> CHECK
+        (<span class="mono">20260518000000</span>) does not contain
+        <span class="mono">AVAILABILITY_SET_ALL_TERRITORIES</span> or
+        <span class="mono">AVAILABILITY_REMOVE_FROM_SALES</span>, both emitted today — those audit rows are being
+        rejected right now. Same migration should close it.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================================================================= -->
+<!-- MUTATION-CHECK                                                    -->
+<!-- ================================================================= -->
+<section class="max-w-6xl mx-auto mb-10">
+  <div class="bg-slate-900 text-slate-100 rounded-2xl p-6">
+    <p class="text-[10px] font-bold uppercase tracking-wider text-amber-400 mb-2">Acceptance bar — prove it by breaking it (KB P10)</p>
+    <h2 class="text-lg font-semibold mb-3">The one behaviour a mutation-check must prove</h2>
+    <p class="text-sm text-slate-200 leading-relaxed mb-4">
+      Given a custom <strong>and</strong> a template entry for the <strong>same</strong> territory, exactly
+      <strong>ONE</strong> price point for that territory reaches <span class="mono">setPriceSchedule</span> —
+      and it is the custom's.
+    </p>
+    <ol class="text-xs text-slate-300 space-y-1.5 mb-4">
+      <li><span class="text-amber-400 font-bold">1</span> Fixture: source <span class="mono">APP_TEMPLATE</span> with
+        a <span class="mono">VNM</span> entry at ₫24,000 + a custom <span class="mono">VNM</span> at ₫25,000. Assert
+        <span class="mono">additionalPricePointIds</span> holds exactly one ID whose decoded
+        <span class="mono">{t}</span> is <span class="mono">VNM</span> — <span class="mono">decodePricePointId</span>
+        makes this directly assertable — and that its <span class="mono">{p}</span> is ₫25,000's tier.</li>
+      <li><span class="text-amber-400 font-bold">2</span> <strong>Break it</strong>: revert the Map to two independent
+        <span class="mono">additionalPricePointIds.push(...)</span> calls.</li>
+      <li><span class="text-amber-400 font-bold">3</span> Confirm the test <strong>FAILS with two VNM entries</strong>
+        — not with an unrelated error. A test that still passes with the Map removed is a fake test: the fixture had
+        no overlapping territory.</li>
+      <li><span class="text-amber-400 font-bold">4</span> Revert, confirm green.</li>
+    </ol>
+    <p class="text-[11px] text-slate-400">
+      Secondary, same treatment, each guarding a G1 gate: delete the
+      <span class="mono">custom_prices_changed</span> clause from <span class="mono">isEmptyDiff</span> → the
+      customs-only Update test must fail with <span class="mono">NO_CHANGES</span>; delete it from
+      <span class="mono">shouldRun</span> → the customs-only-under-<span class="mono">APPLE</span> test must fail
+      with zero <span class="mono">applyPricingSchedule</span> calls.
+    </p>
+  </div>
+</section>
+
+<footer class="max-w-6xl mx-auto text-center text-[11px] text-slate-400 pb-6">
+  Design mockup · Apple IAP Management · <span class="mono">docs/iap-management/design-apple-custom-territory-prices.md</span>
+  · no implementation · hold for Manager review
+</footer>
+
+</body>
+</html>
