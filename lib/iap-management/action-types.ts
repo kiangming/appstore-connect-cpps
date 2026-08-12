@@ -46,7 +46,7 @@
 
 /**
  * Every value allowed in `iap_mgmt.actions_log.action_type`, matching the
- * CHECK constraint as of migration `20260811000000`.
+ * CHECK constraint as of migration `20260812000000`.
  *
  * Two members are retained but no longer emitted by any code path
  * (`UPLOAD_SCREENSHOT`, `SYNC_FROM_APPLE` — from the original 20260515 init).
@@ -82,6 +82,10 @@ export const IAP_ACTION_TYPES = [
   // ── Availability (20260811000000 — the P2 fix) ─────────────────────────
   "AVAILABILITY_SET_ALL_TERRITORIES",
   "AVAILABILITY_REMOVE_FROM_SALES",
+  // ── Per-territory custom prices (20260812000000) ───────────────────────
+  "CUSTOM_PRICES_SAVED",
+  "CUSTOM_PRICES_CLEARED",
+  "CUSTOM_PRICES_REBASELINE",
 ] as const;
 
 export type IapActionType = (typeof IAP_ACTION_TYPES)[number];
