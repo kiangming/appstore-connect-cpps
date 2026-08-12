@@ -7,20 +7,33 @@
  */
 import { googleIapDb } from "../db";
 
-export type ActionType =
-  | "ACCOUNT_CREATE"
-  | "ACCOUNT_VERIFY"
-  | "ACCOUNT_DELETE"
-  | "APPS_SYNC"
-  | "IAPS_LIST_SYNC"
-  | "IAP_CREATE"
-  | "IAP_UPDATE"
-  | "IAP_DELETE"
-  | "IAP_ACKNOWLEDGE_REMOVE"
-  | "BULK_IMPORT_BATCH"
-  | "BULK_ACTIVATE"
-  | "BULK_DEACTIVATE"
-  | "PRICING_TEMPLATE_UPLOAD";
+/**
+ * Every value allowed in `google_iap_mgmt.actions_log.action_type`, matching
+ * the CHECK constraint as of migration `20260702120000`.
+ *
+ * Declared as a `const` array (not a bare union) so the cross-module P2 guard
+ * can enumerate it at runtime and assert set-equality against the migration —
+ * see `lib/audit-constraints/`. A union type alone is invisible to the guard.
+ * `ActionType` is derived from it, so `appendAction` keeps exactly the compiler
+ * coverage it had.
+ */
+export const GOOGLE_ACTION_TYPES = [
+  "ACCOUNT_CREATE",
+  "ACCOUNT_VERIFY",
+  "ACCOUNT_DELETE",
+  "APPS_SYNC",
+  "IAPS_LIST_SYNC",
+  "IAP_CREATE",
+  "IAP_UPDATE",
+  "IAP_DELETE",
+  "IAP_ACKNOWLEDGE_REMOVE",
+  "BULK_IMPORT_BATCH",
+  "BULK_ACTIVATE",
+  "BULK_DEACTIVATE",
+  "PRICING_TEMPLATE_UPLOAD",
+] as const;
+
+export type ActionType = (typeof GOOGLE_ACTION_TYPES)[number];
 
 export interface AppendActionArgs {
   actionType: ActionType;

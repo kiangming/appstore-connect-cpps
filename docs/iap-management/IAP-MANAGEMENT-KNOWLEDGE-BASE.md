@@ -263,12 +263,17 @@ Apple's `InAppPurchaseV2UpdateRequest` does NOT accept localizations, screenshot
 
 Each stage has per-stage try/catch + Railway log + audit-log write. Failure in stage N doesn't abort N+1 (each is independently audited); UI surfaces stage-level success/failure.
 
-**Action types** (action_type CHECK constraint, extended in migration `20260518000000`):
-- `UPDATE_ATTRIBUTES_ON_APPLE`
-- `UPDATE_LOCALIZATIONS_ON_APPLE`
-- `UPDATE_SCREENSHOT_ON_APPLE`
-- `UPDATE_PRICING_ON_APPLE`
-- `UPDATE_ON_APPLE` (parent rollup)
+**Action types** — ⚠ **CORRECTED (Aug 2026).** The previous list had 4 of 5 names wrong; these are the values the code actually emits, verified against `lib/audit-constraints/registry.ts` (which the guard test holds against the live CHECK):
+
+| Stage | action_type actually emitted | Emitted at |
+|---|---|---|
+| 2 Attributes | `UPDATE_ATTRIBUTES_ON_APPLE` | `update-orchestration.ts:169,258,269` |
+| 3 Localizations | `UPDATE_LOCALIZATION_ON_APPLE` (**singular**), plus `ADD_LOCALIZATION_ON_APPLE` and `DELETE_LOCALIZATION_ON_APPLE` — three types, one per diff verb, not one `UPDATE_LOCALIZATIONS_ON_APPLE` | `update-orchestration.ts:335-442` |
+| 4 Screenshot | `REPLACE_SCREENSHOT_ON_APPLE` (not `UPDATE_SCREENSHOT_ON_APPLE`) | `update-orchestration.ts:470,485,503` |
+| 5 Pricing | `SET_PRICE_SCHEDULE` — **reused** from IAP.o.11d. There is no `UPDATE_PRICING_ON_APPLE`; migration `20260518000000`'s own header states pricing reuses the existing type. | `pricing-orchestration.ts:423` |
+| 6 Availability | `AVAILABILITY_SET_ALL_TERRITORIES` / `AVAILABILITY_REMOVE_FROM_SALES` — was missing from this list entirely, and from the CHECK until `20260811000000` | `update-orchestration.ts:577-608` |
+
+There is **no `UPDATE_ON_APPLE` parent rollup**, and none is needed. Checked before writing it off as a doc error: the string appeared in exactly one place repo-wide — this KB line. `actions_log` has **zero code readers** (insert-only; every read is a Manager SQL query), the diagnostic SQL reads only `SET_PRICE_SCHEDULE` / `CREATE_ON_APPLE` (`queries/pricing-diagnostic.sql`), and the result UI renders `outcome.stages.*` from the route response, not the audit log. Nothing reads or expects a rollup row, and the per-stage rows already carry the full picture (each stage is independently audited by design). ⇒ documentation inaccuracy, not a missing feature.
 
 ### 4.5 Apple state machine (relevance to tool)
 
@@ -808,7 +813,17 @@ Ship-ready queries are in `docs/iap-management/queries/` directory and the Manag
 
 ### 8.2 Railway logs = ground truth (instrumentation-first pattern)
 
-The IAP.o.11a instrumentation pattern: every Apple call writes `[component] action_id ATTEMPT/SUCCESS/FAILURE` to Railway logs at orchestrator + endpoint boundaries. Audit-log writes happen in the same transaction as the data write so log + DB row are consistent.
+The IAP.o.11a instrumentation pattern: every Apple call writes `[component] action_id ATTEMPT/SUCCESS/FAILURE` to Railway logs at orchestrator + endpoint boundaries.
+
+> ⚠ **CORRECTED (Aug 2026).** This section previously claimed "audit-log writes happen in the same transaction as the data write so log + DB row are consistent." **That is false for `iap_mgmt` and `google_iap_mgmt`**, and believing it leads to exactly the wrong severity read on a constraint failure. Verified positions:
+>
+> - There is **no transaction and no RPC** on either module's audit path — supabase-js exposes neither (noted at `queries/templates.ts:460`, `queries/price-tiers.ts:6`). Every audit write is a **separate `.insert()` issued after the external API call already succeeded**.
+> - The write **cannot fail the user-visible operation**: `pricing-orchestration.ts:417-487`, `update-orchestration.ts:714-730` and `bulk-availability.ts:298-311` check `{error}`, `console.error` it and return; the bare inserts (`create-on-apple/route.ts:377`, `bulk-import/execute/route.ts:846`) discard it entirely. supabase-js returns `{error}` rather than throwing, so nothing propagates. Google's single choke point `appendAction` (`repository/actions-log.ts:32-49`) does the same, deliberately — its comment says so.
+> - ⇒ A rejected audit insert loses **only the audit row**. Apple/Google state and the local DB row are unaffected. This is precisely why the missing `AVAILABILITY_*` CHECK values (migration `20260811000000`) survived a successful Manager UAT of `bd54826`.
+>
+> **`store_mgmt` is the opposite** and the claim IS true there: `ticket_entries` INSERTs run *inside* the `*_tx` plpgsql functions that also perform the `tickets` UPDATE (`20260423000000_store_mgmt_ticket_engine_rpc.sql` + 7 more, called via `storeDb().rpc('…_tx')` — `tickets/user-actions.ts:190-231`, `tickets/engine.ts:125`). A plpgsql function is one implicit transaction, so a CHECK violation raises and **rolls back the data write too**. Higher severity — but self-announcing, so it cannot hide in production the way the silent modules' drift did.
+>
+> Cross-module guard: `lib/audit-constraints/` (see §10.13.K P2).
 
 **Canonical traces** to grep when investigating an issue:
 ```
@@ -2429,6 +2444,55 @@ shipping a new `ActionType` enum value.
 Fix pattern: include the new type in the migration's `DROP CONSTRAINT / ADD
 CONSTRAINT` block. Use a single additive migration rather than mutating in-place
 (forward-only migration discipline).
+
+**P2 RECURRED AFTER BEING WRITTEN DOWN (Aug 2026) — and that is the lesson.**
+
+Second confirmed instance, this time on Apple: `AVAILABILITY_SET_ALL_TERRITORIES`
+and `AVAILABILITY_REMOVE_FROM_SALES` were emitted from four call sites across
+three files (Cycles 37/39/40) and were never in `iap_mgmt`'s CHECK. Every one of
+those audit rows was rejected in production from the day the feature shipped;
+the Manager's successful UAT of `bd54826` is itself the evidence that the loss is
+invisible from the outside. Fixed by migration `20260811000000`.
+
+**The rule was documented, read, and still missed. So the rule was replaced by a
+guard**: `lib/audit-constraints/` — `guard.ts` (mechanism) + `registry.ts` (one
+declaration per module) + `guard.test.ts`, failing at `npm test` instead of
+silently in production. Properties that make it real rather than decorative:
+
+1. **Exact parity, both directions**, against the *newest* migration that
+   defines each module's CHECK — a value in code but not SQL fails, and vice
+   versa.
+2. **Source scan across every emission shape**, per module. Literal grep alone
+   would have reported the Apple drift as clean: both missing values hid in
+   indirect emitters (a `writeAuditRow` parameter and a ternary). Shapes are
+   **not portable between modules** (P8): iap uses `action_type: "X"` + two
+   positional helpers, Google funnels through `appendAction({ actionType })`,
+   store_mgmt emits mostly from plpgsql `INSERT`s.
+3. ⚠ **SELF-CHECK SENTINELS — one per shape per module.** A pattern that
+   silently stops matching finds zero violations and *passes vacuously*; the
+   sentinel (a value reachable only through that shape) turns that into a
+   failure. This is the single most important property in the guard.
+4. **Discovery completeness** — the test sweeps the migrations for every
+   `<schema>.actions_log`-shaped audit table and fails if one has no registry
+   entry, so a future module is covered without anyone remembering to extend it.
+5. **Declared blind spots.** store_mgmt's SQL tuple scan is `coverage-only`
+   (positional `entry_type` is textually indistinguishable from ticket-state
+   literals in the same statement), recorded in the registry and surfaced in a
+   test name rather than left implicit.
+
+**Cross-module audit result (Aug 2026)**: `iap_mgmt` had the 2-value drift (now
+closed); `google_iap_mgmt` **clean** (13 declared = 13 in CHECK; `IAP_DELETE`
+allowed-but-unused, retained); `store_mgmt.ticket_entries.entry_type` **clean**
+(7 = 7; `ASSIGNMENT`/`PRIORITY_CHANGE` deferred-but-declared); CPP/`public` has
+**no audit table at all** — a different posture, not a pass.
+
+**Two corollaries worth carrying forward.** (a) Never *remove* a value from a
+CHECK to "clean up": Postgres validates a recreated CHECK against existing rows,
+so dropping one that historical rows carry makes the `ALTER` fail — record it as
+explicitly-unused instead. (b) Severity is **module-specific**, so verify it
+rather than assuming: the silent modules lose only the audit row, but
+store_mgmt's `*_tx` RPCs roll back the *data write* too (see the correction in
+§8.2).
 
 **P3 — Surface divergence from external state; don't silently reconcile**
 

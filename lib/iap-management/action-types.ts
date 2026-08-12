@@ -86,17 +86,6 @@ export const IAP_ACTION_TYPES = [
 
 export type IapActionType = (typeof IAP_ACTION_TYPES)[number];
 
-/**
- * Allowed by the constraint but not emitted by any current code path.
- * Declared explicitly so the source-scan test can assert
- * `scanned ∪ UNUSED === IAP_ACTION_TYPES` — which turns "the scanner found
- * fewer types than exist" from an invisible pass into a failure.
- */
-export const UNUSED_ACTION_TYPES: readonly IapActionType[] = [
-  "UPLOAD_SCREENSHOT",
-  "SYNC_FROM_APPLE",
-];
-
 const ACTION_TYPE_SET: ReadonlySet<string> = new Set(IAP_ACTION_TYPES);
 
 /** Runtime membership check. Exported for the guard test and defensive callers. */
