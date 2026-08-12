@@ -14,6 +14,13 @@ import {
   PricingSourceSelector,
   resolveInitialPricingSource,
 } from "./PricingSourceSelector";
+import { CustomPricesDialog } from "./CustomPricesDialog";
+import { CustomPricesSummary } from "./CustomPricesSummary";
+import {
+  fingerprintOf,
+  type CustomPriceBaseline,
+  type CustomPriceEntry,
+} from "@/lib/iap-management/custom-prices/model";
 import {
   validateIapFormGrouped,
   type AvailabilityTarget,
@@ -59,6 +66,14 @@ export interface IapFormProps {
    *  Null = unknown (subset state or fetch failed); the section still
    *  renders but no CURRENT badge appears. Edit mode + syncedToApple only. */
   cachedAvailabilityTarget?: AvailabilityTarget | null;
+  /** SC2 — the persisted custom set (SC1 repository). */
+  customPrices?: readonly CustomPriceEntry[];
+  /** SC2 — the fingerprint that set was built against; null = no customs. */
+  customPricesBaseline?: CustomPriceBaseline | null;
+  /** SC2 / J-1 — this app has an IAP already on Apple whose price-point catalog
+   *  can be read. False ⇒ the picker is disabled with the reason shown; there is
+   *  deliberately no price_tier_territories fallback. */
+  pricePointDonorAvailable?: boolean;
 }
 
 const TYPES: { value: InAppPurchaseType; label: string }[] = [
@@ -82,6 +97,9 @@ export function IapForm({
   defaultTemplateEntryCount,
   appTemplateEntryCount,
   cachedAvailabilityTarget = null,
+  customPrices = [],
+  customPricesBaseline = null,
+  pricePointDonorAvailable = false,
 }: IapFormProps) {
   const router = useRouter();
   // Resolve the initial pricing-source: stored Manager choice wins (Q-J
@@ -104,6 +122,31 @@ export function IapForm({
   const [updating, setUpdating] = useState(false);
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [, startTransition] = useTransition();
+
+  // SC2 — custom territory prices. The dialog persists through its own route
+  // (SC1's single-writer repository), so this state mirrors what is stored; the
+  // submit path is wired in SC3.
+  const [customPricesDialogOpen, setCustomPricesDialogOpen] = useState(false);
+  const [savedCustomPrices, setSavedCustomPrices] = useState<
+    readonly CustomPriceEntry[]
+  >(customPrices);
+  const [savedCustomBaseline, setSavedCustomBaseline] =
+    useState<CustomPriceBaseline | null>(customPricesBaseline);
+
+  /** The fingerprint the CURRENT form values imply (G6). Compared against the
+   *  stored one by the single shared `isCustomBaselineStale`. */
+  const currentCustomBaseline = useMemo(
+    () =>
+      fingerprintOf({
+        tier_id: form.tier_id,
+        pricing_source: form.pricing_source ?? "APPLE",
+        // base territory is a constant today — IapForm renders a disabled
+        // select. It is still a fingerprint member so the promised multi-base
+        // follow-up cannot silently stop detecting staleness.
+        base_territory: "USA",
+      }),
+    [form.tier_id, form.pricing_source],
+  );
 
   const checklist = useMemo(() => validateIapFormGrouped(form), [form]);
 
@@ -138,6 +181,63 @@ export function IapForm({
 
   function patchForm(updates: Partial<IapFormState>) {
     setForm((prev) => ({ ...prev, ...updates }));
+  }
+
+  /** Persist the custom set through the dialog's route (SC1's repository is the
+   *  only writer). Shared by "Clear all" and "Keep them (reviewed)" so those two
+   *  resolutions never grow a second write path. */
+  async function persistCustomPrices(
+    entries: readonly CustomPriceEntry[],
+    baseline: CustomPriceBaseline | null,
+  ): Promise<boolean> {
+    if (!iapId) return false;
+    try {
+      const res = await fetch(`/api/iap-management/iaps/${iapId}/custom-prices`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          custom_prices: entries,
+          custom_prices_baseline: entries.length > 0 ? baseline : null,
+          source: "manual",
+        }),
+      });
+      const data = (await res.json()) as { ok?: true } | { error: string };
+      if (!res.ok || "error" in data) {
+        toast.error("error" in data ? data.error : `Save failed (${res.status})`);
+        return false;
+      }
+      setSavedCustomPrices(entries);
+      setSavedCustomBaseline(entries.length > 0 ? baseline : null);
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Network error");
+      return false;
+    }
+  }
+
+  async function handleClearAllCustomPrices() {
+    if (savedCustomPrices.length === 0) return;
+    if (
+      !confirm(
+        `Clear ${savedCustomPrices.length} custom price${savedCustomPrices.length === 1 ? "" : "s"}? ` +
+          "Those territories revert to template/auto. The values are written to the audit log.",
+      )
+    ) {
+      return;
+    }
+    if (await persistCustomPrices([], null)) {
+      toast.success("Custom prices cleared");
+    }
+  }
+
+  /** §D.3-3b — re-stamp the fingerprint without changing a single price. There
+   *  is deliberately no `reviewed` flag: the re-stamp IS the acknowledgement, so
+   *  a LATER baseline change re-triggers staleness on its own. */
+  async function handleKeepCustomPricesReviewed() {
+    if (!currentCustomBaseline) return;
+    if (await persistCustomPrices(savedCustomPrices, currentCustomBaseline)) {
+      toast.success("Custom prices kept — reviewed against the new base price");
+    }
   }
 
   function patchLocale(next: FormLocalization) {
@@ -608,7 +708,7 @@ export function IapForm({
                   </p>
                 );
               })()}
-              <p className="text-[11px] text-slate-400 dark:text-slate-500 dark:text-slate-500">
+              <p className="text-[11px] text-slate-400 dark:text-slate-500">
                 Apple auto-calculates territory prices from the base tier.
                 {tiers.length === 0 && (
                   <>
@@ -625,6 +725,20 @@ export function IapForm({
               </p>
             </div>
           </div>
+
+          {/* SC2 — per-territory custom prices. Sits BELOW Base Territory /
+              Price Tier so the base price is read above the thing that
+              overrides it. */}
+          <CustomPricesSummary
+            entries={savedCustomPrices}
+            currentBaseline={currentCustomBaseline}
+            storedBaseline={savedCustomBaseline}
+            donorAvailable={pricePointDonorAvailable}
+            persistedDraft={iapId !== null}
+            onOpen={() => setCustomPricesDialogOpen(true)}
+            onClearAll={handleClearAllCustomPrices}
+            onKeepReviewed={handleKeepCustomPricesReviewed}
+          />
         </section>
 
         {/* Localizations */}
@@ -769,6 +883,26 @@ export function IapForm({
           </p>
         )}
       </aside>
+
+      {/* SC2 — custom territory prices. Rendered only with a persisted draft:
+          customs are stored against the saved IAP row, and Create on Apple runs
+          from the edit page anyway (canCreate requires mode === "edit"). */}
+      {iapId !== null && (
+        <CustomPricesDialog
+          open={customPricesDialogOpen}
+          onClose={() => setCustomPricesDialogOpen(false)}
+          appAppleId={appAppleId}
+          iapId={iapId}
+          currentBaseline={currentCustomBaseline}
+          storedBaseline={savedCustomBaseline}
+          initialEntries={savedCustomPrices}
+          onSaved={(entries, baseline) => {
+            setSavedCustomPrices(entries);
+            setSavedCustomBaseline(baseline);
+            startTransition(() => router.refresh());
+          }}
+        />
+      )}
 
       {/* IAP.o.12 — diff preview modal for Update on Apple. */}
       <UpdateChangesPreviewModal

@@ -64,9 +64,14 @@ function readCodeOnly(rel: string): string {
 // ─── 1. ONE writer ───────────────────────────────────────────────────────────
 
 describe("single writer — iap_custom_prices is touched from exactly one module", () => {
-  it("no file except the repository references the table", () => {
+  it("no file except the repository references the table IN CODE", () => {
+    // Comments stripped: routes and docs legitimately NAME the table when
+    // explaining that they go through the repository. Flagging prose would push
+    // authors to delete the explanation — the same trap the price-point-id
+    // assertion below hit. With comments gone, any remaining occurrence is real
+    // access (including via a `const TABLE = "iap_custom_prices"`).
     const offenders = allSourceFiles().filter(
-      (f) => f !== REPOSITORY && /iap_custom_prices/.test(read(f)),
+      (f) => f !== REPOSITORY && /iap_custom_prices/.test(readCodeOnly(f)),
     );
     expect(
       offenders,
@@ -83,7 +88,10 @@ describe("single writer — iap_custom_prices is touched from exactly one module
     // over stale prices, which reads as clean and would ship to a live store.
     const offenders = allSourceFiles().filter(
       (f) =>
-        f !== REPOSITORY && /custom_prices_baseline_(tier_id|pricing_source|base_territory)/.test(read(f)),
+        f !== REPOSITORY &&
+        /custom_prices_baseline_(tier_id|pricing_source|base_territory)/.test(
+          readCodeOnly(f),
+        ),
     );
     expect(offenders).toEqual([]);
   });

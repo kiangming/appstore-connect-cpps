@@ -5,6 +5,8 @@ import { requireIapSession } from "@/lib/iap-management/auth";
 import { listTiers } from "@/lib/iap-management/queries/price-tiers";
 import { getIapWithRelations } from "@/lib/iap-management/queries/iaps";
 import { getTemplateSummary } from "@/lib/iap-management/queries/templates";
+import { getCustomPriceState } from "@/lib/iap-management/custom-prices/repository";
+import { resolvePricePointSource } from "@/lib/iap-management/queries/price-point-donor";
 import { getApp } from "@/lib/asc-client";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { IapForm } from "@/components/iap-management/iap-form/IapForm";
@@ -129,6 +131,28 @@ export default async function EditIapPage({ params }: PageProps) {
     // non-essential
   }
 
+  // SC2 — the persisted custom set + its fingerprint (SC1's single writer), and
+  // J-1 donor availability so the picker's disabled state is decided BEFORE the
+  // Manager opens the dialog rather than after a failed fetch.
+  let customPrices: Awaited<ReturnType<typeof getCustomPriceState>> = {
+    entries: [],
+    baseline: null,
+  };
+  let pricePointDonorAvailable = false;
+  try {
+    customPrices = await getCustomPriceState(params.iapId);
+    pricePointDonorAvailable =
+      (await resolvePricePointSource({
+        iapId: params.iapId,
+        appId: data.iap.app_id,
+        appleIapId: data.iap.apple_iap_id,
+        type: data.iap.type,
+      })) !== null;
+  } catch {
+    // Degrade to "no customs, picker disabled" rather than failing the page —
+    // every other field on this form stays editable.
+  }
+
   return (
     <div className="p-8 max-w-6xl mx-auto">
       <Link
@@ -175,6 +199,9 @@ export default async function EditIapPage({ params }: PageProps) {
         defaultTemplateEntryCount={defaultTemplateEntryCount}
         appTemplateEntryCount={appTemplateEntryCount}
         cachedAvailabilityTarget={availabilityTarget}
+        customPrices={customPrices.entries}
+        customPricesBaseline={customPrices.baseline}
+        pricePointDonorAvailable={pricePointDonorAvailable}
       />
     </div>
   );

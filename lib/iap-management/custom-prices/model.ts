@@ -286,6 +286,52 @@ export function isCustomPricesSubmitBlocked(args: {
   return isCustomBaselineStale(args.current, args.stored);
 }
 
+/**
+ * Which persistence operation a save actually is.
+ *
+ * SC1 deliberately gave the feature three audit action types, and they only
+ * carry their meaning if the writer picks the right one. This keeps that choice
+ * pure and testable instead of inlining it in a route handler:
+ *
+ *   "clear"    — the incoming set is empty. Destructive; audited with the
+ *                removed values, which is the only recovery path.
+ *   "rebaseline" — the prices are byte-identical to what is stored and only the
+ *                fingerprint moved. That is "Keep them (reviewed)": it changes
+ *                what will ship while changing nothing visible, so it must not
+ *                be logged as an ordinary save.
+ *   "replace"  — anything else.
+ */
+export type CustomPriceWriteKind = "clear" | "rebaseline" | "replace";
+
+export function decideCustomPriceWrite(args: {
+  storedEntries: readonly CustomPriceEntry[];
+  storedBaseline: CustomPriceBaseline | null;
+  incomingEntries: readonly CustomPriceEntry[];
+  incomingBaseline: CustomPriceBaseline | null;
+}): CustomPriceWriteKind {
+  const incoming = normalizeEntries(args.incomingEntries);
+  if (incoming.length === 0) return "clear";
+
+  const stored = normalizeEntries(args.storedEntries);
+  const sameEntries =
+    stored.length === incoming.length &&
+    stored.every((s, i) => {
+      const n = incoming[i];
+      return (
+        s.territory_code === n.territory_code &&
+        s.customer_price === n.customer_price &&
+        s.currency_code === n.currency_code
+      );
+    });
+  if (!sameEntries) return "replace";
+
+  const baselineMoved = isCustomBaselineStale(
+    args.incomingBaseline,
+    args.storedBaseline,
+  );
+  return baselineMoved ? "rebaseline" : "replace";
+}
+
 /** Human-readable difference, for the banner copy and the 422 body. Empty when
  *  not stale. Kept here so client and server word it identically. */
 export function describeBaselineDrift(
