@@ -2853,6 +2853,29 @@ boundary that keeps `dirty` coherent:
 > **tier / base = the Manager COMMANDING a recalculation → ignore `dirty`.
 > sync / validate = everything else → respect `dirty`.**
 
+**Legacy-fallback currency coupling (closed same cycle).** Legacy
+`inappproducts.*` requires `defaultPrice.currency` to equal the app's
+configured currency. That held BY ACCIDENT until a tier was allowed to set the
+base to USD on a non-USD app — the base had always been seeded from cache, i.e.
+the app's currency. The fallback now takes the app-currency AMOUNT out of the
+body's own `prices` map rather than relabelling the USD one (relabelling
+`{USD,4990000}` as VND sends ₫4.99 for a $4.99 product), and passes the body
+through untouched when no such entry exists, so Google returns its own clear
+error instead of a number we invented. ⇒ **A constraint that is satisfied
+incidentally is not satisfied. When a value stops being fixed, every consumer
+that quietly relied on it being fixed becomes a bug — and a fallback path
+deserves the fix precisely because it only runs when something else has already
+failed, i.e. while someone is diagnosing.**
+
+**OPEN BACKLOG (recorded, not fixed): `COMMON_CURRENCIES` is a curated ~30.**
+`regions.ts:52-54` derives the base-currency `<select>` options from
+`COMMON_REGIONS`. If the base ever lands on a currency outside that list, the
+select renders with no matching option while state holds the real value — the
+UI and the state disagree silently. `pickBaseFromDerived`'s USD-first order
+makes this nearly unreachable (USD is in the list; the app's own currency
+normally is too), so it is recorded rather than fixed. It becomes real if a
+tier carries neither USD nor the app's currency and the first entry is exotic.
+
 ---
 
 #### 10.13.K — OPEN BACKLOG: Google bulk-import OVERWRITE replaces listings (P4 replace-semantics RMW violation)

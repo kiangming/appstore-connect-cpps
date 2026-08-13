@@ -269,6 +269,11 @@ export async function updateIapOnGoogle(
 
   const updated = await patchInAppProduct(jwt, input.packageName, input.sku, body, {
     regionsVersion,
+    // The app's configured currency, from cache — NOT `baseCurrency`. Since
+    // SC3b a tier can set the base to USD on a non-USD app, and the legacy
+    // fallback (only reached when the v3 write has already failed) requires
+    // defaultPrice to be in the app's currency. See legacyFallbackBody.
+    appCurrency: input.current.iap.default_currency,
   });
 
   // ── SC1: HONEST STATUS ───────────────────────────────────────────────

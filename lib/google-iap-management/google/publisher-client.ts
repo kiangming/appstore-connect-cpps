@@ -579,6 +579,52 @@ export async function resolveLivePurchaseOptions(
   return results;
 }
 
+/**
+ * Build the body for a LEGACY fallback write.
+ *
+ * WHY: the legacy `inappproducts.*` resource enforces that
+ * `defaultPrice.currency` equals the app's configured currency — see the
+ * Phase-3 note further down ("Expecting currency VND for default price but
+ * found USD instead"). Until SC3b that held BY ACCIDENT: the Edit form's base
+ * currency was always seeded from the cache, which is the app's currency, so
+ * whatever we handed the fallback happened to match. SC3b lets a tier set the
+ * base to USD on a non-USD app, so the coupling has to be stated instead of
+ * borrowed. This makes an existing constraint explicit; it is not a workaround.
+ *
+ * ⚠ A BARE CURRENCY SWAP WOULD BE WORSE THAN THE BUG. Relabelling
+ * `{USD, 4990000}` as `{VND, 4990000}` does not translate the price — it sends
+ * ₫4.99 for a $4.99 product. So we take the app-currency AMOUNT that is already
+ * in the body's `prices` map (every region carries its own currency), the same
+ * primitive bulk-import's cross-currency resolution uses. Nothing is computed,
+ * converted or rounded here: the value is one already destined for Google.
+ *
+ * No app-currency entry in the map → return the body untouched and let Google
+ * reject it with its own message. Inventing a price would be worse than a
+ * clear 400.
+ *
+ * This path is very nearly dead — migrated apps answer the legacy resource with
+ * 403 "Please migrate to the new publishing API." It is kept correct precisely
+ * because it only runs when the v3 write has ALREADY failed, i.e. exactly when
+ * a Manager is diagnosing an incident. It must fail for the REAL reason, not
+ * for a currency error we introduced ourselves.
+ */
+function legacyFallbackBody(
+  body: InAppProduct,
+  appCurrency: string | null | undefined,
+): InAppProduct {
+  const want = appCurrency?.trim().toUpperCase();
+  if (!want || !body.defaultPrice) return body;
+  if ((body.defaultPrice.currency ?? "").trim().toUpperCase() === want) return body;
+  const match = Object.values(body.prices ?? {}).find(
+    (p) => (p?.currency ?? "").trim().toUpperCase() === want,
+  );
+  if (!match?.priceMicros) return body;
+  return {
+    ...body,
+    defaultPrice: { currency: want, priceMicros: match.priceMicros },
+  };
+}
+
 /** Insert a new in-app product.
  *  Public surface unchanged; internally uses Monetization API v3
  *  patch+allowMissing (the new API's create idiom) with legacy
@@ -592,7 +638,7 @@ export async function insertInAppProduct(
   jwt: JWT,
   packageName: string,
   body: InAppProduct,
-  options: { regionsVersion?: string } = {},
+  options: { regionsVersion?: string; appCurrency?: string | null } = {},
 ): Promise<InAppProduct> {
   try {
     const writeShape = inAppProductToOneTimeProduct({
@@ -635,7 +681,11 @@ export async function insertInAppProduct(
     return oneTimeProductToInAppProduct(fresh) as unknown as InAppProduct;
   } catch (err) {
     try {
-      const legacy = await legacyInsertInAppProduct(jwt, packageName, body);
+      const legacy = await legacyInsertInAppProduct(
+        jwt,
+        packageName,
+        legacyFallbackBody(body, options.appCurrency),
+      );
       console.warn(
         `[google-iap:publisher] insert fallback pkg=${packageName} sku=${body.sku ?? "?"}`,
       );
@@ -661,7 +711,7 @@ export async function patchInAppProduct(
   packageName: string,
   sku: string,
   body: InAppProduct,
-  options: { regionsVersion?: string } = {},
+  options: { regionsVersion?: string; appCurrency?: string | null } = {},
 ): Promise<InAppProduct> {
   try {
     const resolution = (
@@ -718,7 +768,12 @@ export async function patchInAppProduct(
     return oneTimeProductToInAppProduct(fresh) as unknown as InAppProduct;
   } catch (err) {
     try {
-      const legacy = await legacyPatchInAppProduct(jwt, packageName, sku, body);
+      const legacy = await legacyPatchInAppProduct(
+        jwt,
+        packageName,
+        sku,
+        legacyFallbackBody(body, options.appCurrency),
+      );
       console.warn(
         `[google-iap:publisher] patch fallback pkg=${packageName} sku=${sku}`,
       );
