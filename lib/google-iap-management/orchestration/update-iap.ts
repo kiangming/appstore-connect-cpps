@@ -34,6 +34,11 @@ import {
   diffSummary,
   type IapStateSnapshot,
 } from "./iap-diff";
+import {
+  verifyPricingLanded,
+  type PriceMap,
+  type WriteVerification,
+} from "./verify-write";
 import type {
   LocaleListingInput,
   RegionPriceInput,
@@ -59,7 +64,16 @@ export interface UpdateIapInput {
 export interface UpdateIapResult {
   sku: string;
   status: string | null;
+  /**
+   * SC1 — HONEST STATUS. This is now "did the Manager's change actually land
+   * on Google", not "did the tool compute a non-empty diff". It is set to
+   * false when the post-write re-read proves nothing moved. See
+   * verify-write.ts for why the verdict is deliberately conservative.
+   */
   hasChanges: boolean;
+  /** Evidence behind `hasChanges`. Absent only when the write was skipped
+   *  because the diff was empty before we called Google at all. */
+  verification?: WriteVerification;
 }
 
 /**
@@ -213,6 +227,38 @@ export async function updateIapOnGoogle(
     regionsVersion,
   });
 
+  // ── SC1: HONEST STATUS ───────────────────────────────────────────────
+  // `updated` is Google's own post-write re-read (publisher-client's
+  // refetchWithStateOverlay), so ground truth is already in hand. Compare
+  // what we asked for against what Google now holds, before claiming
+  // anything to the Manager or the audit log.
+  const verification = verifyPricingLanded({
+    before: before.prices,
+    intended: prices as PriceMap,
+    applied: (updated.prices as PriceMap | undefined) ?? null,
+    intendedBaseMicros: after.attributes.basePriceMicros,
+    appliedBaseMicros: updated.defaultPrice?.priceMicros ?? null,
+    baseChangeRequested: Boolean(
+      diff.attributes.basePriceMicros || diff.attributes.baseCurrency,
+    ),
+  });
+
+  if (verification.noOp) {
+    console.error(
+      `[google-iap:update-iap] NO-OP WRITE pkg=${input.packageName} sku=${input.sku} ` +
+        `requested_base=${after.attributes.baseCurrency}/${after.attributes.basePriceMicros} ` +
+        `applied_base=${updated.defaultPrice?.currency ?? "?"}/${updated.defaultPrice?.priceMicros ?? "?"} ` +
+        `intended_region_changes=${verification.intendedChangeCount} unapplied=${verification.unappliedRegions.length} ` +
+        `— Google returned success but its state is unchanged`,
+    );
+  } else if (verification.checked && verification.unappliedRegions.length > 0) {
+    console.warn(
+      `[google-iap:update-iap] PARTIAL WRITE pkg=${input.packageName} sku=${input.sku} ` +
+        `unapplied=${verification.unappliedRegions.length}/${Object.keys(prices).length} ` +
+        `regions=${verification.unappliedRegions.slice(0, 10).join(",")}`,
+    );
+  }
+
   await syncIapFromGoogle(input.appId, updated);
 
   const summary = diffSummary(diff);
@@ -227,12 +273,17 @@ export async function updateIapOnGoogle(
       attributes: diff.attributes,
       listings: diff.listings,
       prices: diff.prices,
+      // The audit row records the OUTCOME, not just the intent. A row that
+      // says "base price 1.99 → 2.99" while Google still holds 1.99 is a
+      // false record; `verification` is what makes it honest.
+      verification,
     },
   });
 
   return {
     sku: updated.sku ?? input.sku,
     status: updated.status ?? input.status,
-    hasChanges: true,
+    hasChanges: !verification.noOp,
+    verification,
   };
 }

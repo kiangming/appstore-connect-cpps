@@ -402,6 +402,33 @@ async function legacyDeleteInAppProduct(
   });
 }
 
+/**
+ * SC1 diagnostic. Emitted whenever the adapter reports that a caller's
+ * `defaultPrice` was shadowed by a disagreeing US region config — i.e. the
+ * base price is NOT in the body about to be sent, and Google will change
+ * nothing about it while still returning 200.
+ *
+ * Logged at BOTH write call sites (patch + insert) rather than patched at
+ * the one that reported a bug: the v3 schema has no base-price field, so
+ * the shape is structural and any caller can hit it.
+ */
+function warnIfDefaultPriceShadowed(
+  packageName: string,
+  sku: string,
+  op: "patch" | "insert",
+  shadowed: boolean,
+  body: InAppProduct,
+): void {
+  if (!shadowed) return;
+  const us = body.prices?.["US"];
+  console.warn(
+    `[google-iap:publisher] base-price-shadowed op=${op} pkg=${packageName} sku=${sku} ` +
+      `default_price=${body.defaultPrice?.currency ?? "?"}/${body.defaultPrice?.priceMicros ?? "?"} ` +
+      `us_region=${us?.currency ?? "missing"}/${us?.priceMicros ?? "missing"} ` +
+      `— OneTimeProduct has no base-price field; the US region config wins and the base price is absent from this write`,
+  );
+}
+
 /** Apply the desired state via the dedicated batchUpdateStates endpoint.
  *  Idempotent — ACTIVATE on an already-active option is harmless;
  *  DEACTIVATE on inactive same. Errors here are non-fatal for the
@@ -572,6 +599,13 @@ export async function insertInAppProduct(
       ...body,
       packageName,
     } as ToolInAppProduct);
+    warnIfDefaultPriceShadowed(
+      packageName,
+      body.sku ?? "?",
+      "insert",
+      writeShape.defaultPriceShadowed,
+      body,
+    );
     const created = await newPatchOneTimeProduct(
       jwt,
       packageName,
@@ -647,6 +681,13 @@ export async function patchInAppProduct(
     const writeShape = inAppProductToOneTimeProduct(
       { ...body, packageName, sku } as ToolInAppProduct,
       resolution.rawOptions ?? undefined,
+    );
+    warnIfDefaultPriceShadowed(
+      packageName,
+      sku,
+      "patch",
+      writeShape.defaultPriceShadowed,
+      body,
     );
     const updated = await newPatchOneTimeProduct(
       jwt,

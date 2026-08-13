@@ -212,6 +212,10 @@ export interface OneTimeProductWriteShape {
   /** Purchase-option id used in the patch body. The state-update call
    *  needs it to target the same option. */
   purchaseOptionId: string;
+  /** SC1 diagnostic — see {@link RegionalPricingResult.defaultPriceShadowed}.
+   *  True when the caller's base price disagrees with the US region config
+   *  that shadowed it, i.e. the base price is absent from this body. */
+  defaultPriceShadowed: boolean;
 }
 
 /** Stable purchase-option id for NEW products created by this tool. We
@@ -225,12 +229,37 @@ export const DEFAULT_PURCHASE_OPTION_ID = "buy";
 
 /* ── helpers for the write path ────────────────────────────────────────── */
 
+export interface RegionalPricingResult {
+  configs: NonNullable<
+    OneTimeProductPurchaseOption["regionalPricingAndAvailabilityConfigs"]
+  >;
+  /**
+   * SC1 diagnostic — GUARD THE CLASS, NOT THE INSTANCE.
+   *
+   * True when `defaultPrice` carried a value that DISAGREES with the US
+   * config already present in `prices`, so the base price the caller passed
+   * is silently absent from the body. The v3 OneTimeProduct schema has no
+   * base-price field: `defaultPrice` reaches Google only by being stamped
+   * onto the US region below. When `prices` already has US, that stamp is
+   * skipped and the base price has no carrier at all.
+   *
+   * This is the exact mechanism behind the silent no-op on the single-item
+   * edit path (regression at 44900f8, 2026-05-21), and the SAME shape can
+   * bite `insertInAppProduct` — hence a signal on the shared choke point
+   * rather than a patch at one call site.
+   *
+   * Note this is deliberately NOT "defaultPrice was skipped". A skip whose
+   * US config carries the identical value loses nothing and must not warn,
+   * or the signal drowns in noise.
+   *
+   * Purity is preserved: this module does no I/O. Callers in
+   * publisher-client.ts do the logging.
+   */
+  defaultPriceShadowed: boolean;
+}
+
 /** Build the new regional pricing config array from the tool's IAP shape. */
-function buildRegionalPricing(
-  iap: ToolInAppProduct,
-): NonNullable<
-  OneTimeProductPurchaseOption["regionalPricingAndAvailabilityConfigs"]
-> {
+function buildRegionalPricing(iap: ToolInAppProduct): RegionalPricingResult {
   const configs: NonNullable<
     OneTimeProductPurchaseOption["regionalPricingAndAvailabilityConfigs"]
   > = [];
@@ -249,14 +278,23 @@ function buildRegionalPricing(
   // Stamp a US-region default from `defaultPrice` if no explicit US
   // config exists. Preserves legacy semantics where Google's
   // auto-equalisation used `defaultPrice` for unlisted regions.
-  if (iap.defaultPrice && !regionsSeen.has("US")) {
-    configs.push({
-      regionCode: "US",
-      price: microsToMoney(iap.defaultPrice.priceMicros, iap.defaultPrice.currency),
-      availability: "AVAILABLE",
-    });
+  let defaultPriceShadowed = false;
+  if (iap.defaultPrice) {
+    if (!regionsSeen.has("US")) {
+      configs.push({
+        regionCode: "US",
+        price: microsToMoney(iap.defaultPrice.priceMicros, iap.defaultPrice.currency),
+        availability: "AVAILABLE",
+      });
+    } else {
+      const us = (iap.prices ?? {})["US"];
+      defaultPriceShadowed =
+        us.priceMicros !== iap.defaultPrice.priceMicros ||
+        us.currency.trim().toUpperCase() !==
+          iap.defaultPrice.currency.trim().toUpperCase();
+    }
   }
-  return configs;
+  return { configs, defaultPriceShadowed };
 }
 
 /**
@@ -321,7 +359,8 @@ export function inAppProductToOneTimeProduct(
     listings.push({ languageCode, title, description });
   }
 
-  const regionalPricing = buildRegionalPricing(iap);
+  const { configs: regionalPricing, defaultPriceShadowed } =
+    buildRegionalPricing(iap);
 
   let purchaseOptions: OneTimeProductPurchaseOption[];
   let activePurchaseOptionId: string;
@@ -372,5 +411,6 @@ export function inAppProductToOneTimeProduct(
     product,
     desiredState,
     purchaseOptionId: activePurchaseOptionId,
+    defaultPriceShadowed,
   };
 }
