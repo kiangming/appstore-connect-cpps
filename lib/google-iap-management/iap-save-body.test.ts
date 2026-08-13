@@ -37,9 +37,29 @@ describe("buildIapSaveBody — payload lock (must not change with the UI merge)"
     expect(body.listings).toEqual([
       { locale: "en-US", title: "Coins", description: "200 coins" },
     ]);
+    // SC2 — THE LOCK MOVED, DELIBERATELY. `dirty` is a new field on the
+    // payload and this assertion caught it, which is exactly what the lock is
+    // for. It is added on purpose: the server cannot otherwise tell a Manager
+    // edit from a preloaded cache echo, and that ambiguity IS the silent
+    // base-price no-op. Defaults to false — a row nobody typed into.
     expect(body.regionOverrides).toEqual([
-      { region: "US", currency: "USD", priceDecimal: "0.99" },
-      { region: "GB", currency: "GBP", priceDecimal: "0.79" },
+      { region: "US", currency: "USD", priceDecimal: "0.99", dirty: false },
+      { region: "GB", currency: "GBP", priceDecimal: "0.79", dirty: false },
+    ]);
+  });
+
+  it("SC2: a row the Manager typed into is carried to the server as dirty", () => {
+    const body = buildIapSaveBody(
+      state({
+        regionOverrides: [
+          { region: "US", currency: "USD", priceDecimal: "0.99" },
+          { region: "GB", currency: "GBP", priceDecimal: "0.89", dirty: true },
+        ],
+      }),
+    );
+    expect(body.regionOverrides).toEqual([
+      { region: "US", currency: "USD", priceDecimal: "0.99", dirty: false },
+      { region: "GB", currency: "GBP", priceDecimal: "0.89", dirty: true },
     ]);
   });
 
@@ -85,8 +105,8 @@ describe("buildIapSaveBody — payload lock (must not change with the UI merge)"
       ],
     });
     expect(buildIapSaveBody(edited).regionOverrides).toEqual([
-      { region: "US", currency: "USD", priceDecimal: "0.99" },
-      { region: "GB", currency: "GBP", priceDecimal: "0.89" },
+      { region: "US", currency: "USD", priceDecimal: "0.99", dirty: false },
+      { region: "GB", currency: "GBP", priceDecimal: "0.89", dirty: false },
     ]);
   });
 });

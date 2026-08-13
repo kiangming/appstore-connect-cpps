@@ -33,7 +33,14 @@ interface UpdateBody {
   listings?: Array<{ locale: string; title: string; description: string }>;
   baseCurrency?: string;
   basePriceDecimal?: string;
-  regionOverrides?: Array<{ region: string; currency: string; priceDecimal: string }>;
+  regionOverrides?: Array<{
+    region: string;
+    currency: string;
+    priceDecimal: string;
+    /** SC2 — the Manager pinned this row by hand; a base-price re-derive must
+     *  not overwrite it. Absent means "safe to re-derive". */
+    dirty?: boolean;
+  }>;
   pricingSource?: "google_default" | "default_template" | "app_template";
   tierIdentifier?: string | null;
 }
@@ -133,6 +140,7 @@ export async function PATCH(
         region: r.region.trim(),
         currency: (r.currency ?? "USD").trim(),
         priceDecimal: r.priceDecimal.trim(),
+        dirty: r.dirty === true,
       }));
 
     if (
@@ -153,10 +161,17 @@ export async function PATCH(
           { status: 404 },
         );
       }
+      // Template entries are PINNED, not derivable. Picking a tier is an
+      // explicit Manager choice of what every country should cost, so a
+      // base-price re-derive must not recompute over it — `dirty: true` is
+      // exactly that statement. (Reachable once SC3 threads pricingSource /
+      // tierIdentifier into this payload; the flag is set correctly now so the
+      // two changes can't disagree later.)
       regionOverrides = entries.map((e) => ({
         region: e.regionCode,
         currency: e.currency,
         priceDecimal: microsToDecimal(e.priceMicros, 6),
+        dirty: true,
       }));
     }
 

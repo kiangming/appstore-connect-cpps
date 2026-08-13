@@ -93,12 +93,26 @@ function snapshotFromInput(input: UpdateIapInput): IapStateSnapshot {
   // Hotfix 5: currency-aware precision validation. Per-region overrides
   // each carry their own currency, so each conversion validates against
   // its own.
+  //
+  // SC2 / option B — WHO AUTHORED THE VALUE DECIDES WHETHER IT CAN THROW.
+  // The currency check only runs on rows the Manager pinned. A NON-DIRTY row
+  // is a value Google itself gave us, echoed back untouched; rejecting it here
+  // makes the whole item un-editable over a row nobody touched (production:
+  // com.vng.passsdk.2508111020 carries TW = TWD 6.30, which this table calls
+  // invalid). The client already refuses to block on those rows — without this
+  // the server would still hard-throw and option B would be half-built.
+  //
+  // Dropping the currency argument does NOT transform the value: it is the
+  // same decimal→micros conversion minus the precision assertion, so 6.30
+  // round-trips as exactly 6300000. That is the byte-for-byte guarantee.
   const prices: Record<string, { currency: string; priceMicros: string }> = {};
   for (const r of input.regionOverrides) {
     if (!r.priceDecimal.trim()) continue;
     prices[r.region] = {
       currency: r.currency.trim().toUpperCase(),
-      priceMicros: decimalToMicros(r.priceDecimal, r.currency),
+      priceMicros: r.dirty
+        ? decimalToMicros(r.priceDecimal, r.currency)
+        : decimalToMicros(r.priceDecimal),
     };
   }
   return {
@@ -177,13 +191,38 @@ export async function updateIapOnGoogle(
   }
 
   // Hotfix 8 Phase 2: ensure comprehensive regions for the new API.
-  // Manager-supplied overrides (`prices` above) win over Google's
-  // auto-converted catalog values; missing regions get the conversion.
-  // Skipped if convertRegionPrices fails — the publisher-client
-  // fallback to legacy will then handle the call.
+  // Missing regions get Google's conversion of the base price.
+  //
+  // ── SC2: THE BASE PRICE RE-DERIVES THE REGIONS IT OWNS ────────────────
+  // Fill-missing alone is why a base-price change was a silent no-op. The
+  // Edit form preloads EVERY cached region as an override, so nothing was
+  // ever missing, every converted value was discarded, and the new base
+  // price — which has no field of its own in the v3 schema — reached Google
+  // through no carrier at all.
+  //
+  // A base-price change is the Manager ACTIVELY asking to recompute every
+  // country. So when the base moved, the conversion now OVERWRITES rows the
+  // Manager did not personally pin. Rows they did pin (`dirty`) are never
+  // touched — that is the merge rule: preserve only what the user did not
+  // change.
+  //
+  // `dirty` must come from the client; it is a record of an ACTION and
+  // cannot be re-derived here by comparing values (a value equal to cache
+  // may still have been typed on purpose, and vice versa). A payload that
+  // omits it — an older client, or a caller that never had the concept —
+  // is treated as all-non-dirty, which is the safe reading: it restores the
+  // documented "the base price drives the catalogue" behaviour rather than
+  // preserving echoes nobody vouched for.
   //
   // Hotfix 9: capture and forward the catalog version Google used —
   // see create-iap.ts header comment for the cross-version trap.
+  const baseChanged = Boolean(
+    diff.attributes.basePriceMicros || diff.attributes.baseCurrency,
+  );
+  const pinnedRegions = new Set(
+    input.regionOverrides.filter((r) => r.dirty).map((r) => r.region),
+  );
+
   let regionsVersion: string | undefined;
   try {
     const result = await buildRegionMapFromBasePrice(
@@ -192,15 +231,25 @@ export async function updateIapOnGoogle(
       after.attributes.basePriceMicros,
       after.attributes.baseCurrency,
     );
+    let rederived = 0;
     for (const a of result.regions) {
-      if (!prices[a.region]) {
-        prices[a.region] = {
-          currency: a.currency,
-          priceMicros: a.priceMicros,
-        };
-      }
+      const isMissing = !prices[a.region];
+      const rederivable = baseChanged && !pinnedRegions.has(a.region);
+      if (!isMissing && !rederivable) continue;
+      if (!isMissing) rederived += 1;
+      prices[a.region] = {
+        currency: a.currency,
+        priceMicros: a.priceMicros,
+      };
     }
     regionsVersion = result.regionsVersion ?? undefined;
+    if (baseChanged) {
+      console.info(
+        `[google-iap:update-iap] base-price re-derive pkg=${input.packageName} sku=${input.sku} ` +
+          `base=${after.attributes.baseCurrency}/${after.attributes.basePriceMicros} ` +
+          `rederived=${rederived} pinned=${pinnedRegions.size} catalog=${result.regions.length}`,
+      );
+    }
   } catch (err) {
     console.warn(
       `[google-iap:update-iap] regions bootstrap failed pkg=${input.packageName} sku=${input.sku} err="${

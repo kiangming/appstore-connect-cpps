@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -41,6 +41,19 @@ import {
   type IapFormInitial,
   type RegionOverrideRow,
 } from "@/lib/google-iap-management/form-state";
+import {
+  applyManagerEdit,
+  applyRederivedPrices,
+  partitionOverrideValidation,
+  reseedOverrides,
+  type DerivedRegionPrice,
+  type ReseedConflict,
+} from "@/lib/google-iap-management/override-merge";
+
+/** Debounce on the base-price input before asking Google to reconvert the
+ *  catalogue. One `convertRegionPrices` call per settled edit, not per
+ *  keystroke. */
+const REDERIVE_DEBOUNCE_MS = 500;
 
 type Mode =
   | { kind: "create" }
@@ -219,10 +232,74 @@ export function IapForm({
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [showDiff, setShowDiff] = useState(false);
 
+  // ── SC2 state ────────────────────────────────────────────────────────
+  // Dirty flags at field-group granularity. Region rows carry their own
+  // per-row `dirty`; these cover everything else the form seeds from
+  // `initial`. All of it exists for one reason: when a fresh `initial`
+  // arrives mid-edit we must be able to tell the Manager's work from a
+  // preloaded echo, per group, and re-seed only the echoes.
+  const [baseDirty, setBaseDirty] = useState(false);
+  const [listingsDirty, setListingsDirty] = useState(false);
+  const [attrsDirty, setAttrsDirty] = useState(false);
+  /** The `initial` snapshot the state currently reflects. */
+  const seededFrom = useRef<IapFormInitial | null>(initial);
+  const [conflicts, setConflicts] = useState<ReseedConflict[]>([]);
+  const [rederiving, setRederiving] = useState(false);
+  const [rederiveError, setRederiveError] = useState<string | null>(null);
+  const rederiveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(
+    () => () => {
+      if (rederiveTimer.current) clearTimeout(rederiveTimer.current);
+    },
+    [],
+  );
+
   const defaultLanguage = initial?.defaultLanguage ?? createDefaultLocale;
   const currentListing = listings[activeLocale] ?? { title: "", description: "" };
 
+  /**
+   * SC2 — RE-SEED WHEN A FRESH `initial` ARRIVES MID-EDIT.
+   *
+   * `initial` is a live prop, but every useState above seeds from it exactly
+   * once and the page renders <IapForm> with no key. `router.refresh()` —
+   * which "Sync from Google" fires deliberately (UnifiedPricingTable.tsx:
+   * 129-131, whose comment states this exact intent) — reconciles a NEW
+   * `initial` into the SURVIVING instance. Without this effect the diff then
+   * compares fresh server truth (before) against stale client state (after),
+   * INVERTED: the review modal proposes writing the pre-sync prices back over
+   * Google's current ones, and confirming it reverts real prices.
+   *
+   * Semantics (i): re-seed what the Manager has not touched, keep what they
+   * have, and never silently pick a side when both moved — that surfaces as a
+   * conflict for them to resolve.
+   */
+  useEffect(() => {
+    const prev = seededFrom.current;
+    if (!initial || !prev || prev === initial) return;
+    seededFrom.current = initial;
+
+    const { rows, conflicts: found } = reseedOverrides({
+      current: regionOverrides,
+      serverBefore: prev.regionOverrides,
+      serverAfter: initial.regionOverrides,
+    });
+    setRegionOverrides(rows);
+    setConflicts(found);
+
+    if (!baseDirty) {
+      setBasePriceDecimal(initial.basePriceDecimal);
+      setBaseCurrency(initial.baseCurrency);
+    }
+    if (!listingsDirty) setListings(initial.listings);
+    if (!attrsDirty) {
+      setPurchaseType(initial.purchaseType);
+      setStatus(initial.status);
+    }
+  }, [initial, regionOverrides, baseDirty, listingsDirty, attrsDirty]);
+
   function updateListing(field: keyof FormListing, value: string) {
+    setListingsDirty(true);
     setListings((prev) => ({
       ...prev,
       [activeLocale]: { ...currentListing, [field]: value },
@@ -245,21 +322,43 @@ export function IapForm({
     });
   }
 
+  /** Every Manager edit to a row goes through here, and every one stamps the
+   *  row dirty — that stamp is what protects it from a later re-derive. */
   function updateOverride(idx: number, updates: Partial<RegionOverrideRow>) {
     setRegionOverrides((prev) =>
-      prev.map((r, i) => {
-        if (i !== idx) return r;
-        const merged = { ...r, ...updates };
-        if (updates.region && updates.region !== r.region) {
-          merged.currency = defaultCurrencyForRegion(updates.region);
-        }
-        return merged;
-      }),
+      applyManagerEdit(prev, idx, updates, defaultCurrencyForRegion),
     );
   }
 
   function removeOverride(idx: number) {
     setRegionOverrides((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  /**
+   * SC2 — resolve one re-seed conflict. A conflict means the Manager edited a
+   * row AND the server value for that same row moved underneath them. The tool
+   * refuses to pick for them; this applies whichever side they choose.
+   *
+   * Taking Google's value clears `dirty`: the Manager has just said "theirs is
+   * right", so the row is no longer a hand-pinned one and a later re-derive
+   * may move it again.
+   */
+  function resolveConflict(region: string, keep: "mine" | "theirs") {
+    const conflict = conflicts.find((c) => c.region === region);
+    setConflicts((prev) => prev.filter((c) => c.region !== region));
+    if (!conflict || keep === "mine") return;
+    setRegionOverrides((prev) =>
+      prev.map((r) =>
+        r.region === region
+          ? {
+              region,
+              currency: conflict.theirs.currency,
+              priceDecimal: conflict.theirs.priceDecimal,
+              dirty: false,
+            }
+          : r,
+      ),
+    );
   }
 
   // Unified-table promote-to-override: an inherit/live-only row becomes an
@@ -280,6 +379,126 @@ export function IapForm({
     });
   }
 
+  /* ── SC2: RE-DERIVE ────────────────────────────────────────────────────
+   * In the v3 model a base price has no field of its own — the ONLY way to
+   * express "the base moved" is to write every regional config. So changing
+   * the base (or picking a tier) recomputes the catalogue here, replacing
+   * every row the Manager has not pinned, and shows the result BEFORE save.
+   * That is why the preview is not a nice-to-have: it IS the change.
+   *
+   * Values from the source are applied verbatim — no rounding, no
+   * re-formatting. Whatever decimals Google or the template returns are what
+   * the row carries and what gets sent.
+   */
+  async function fetchDerivedForBase(
+    priceDecimal: string,
+    currency: string,
+  ): Promise<DerivedRegionPrice[] | null> {
+    let micros: string;
+    try {
+      micros = decimalToMicros(priceDecimal, currency);
+    } catch {
+      // Invalid base price — the inline field error already says so. Don't
+      // burn a Google call on it.
+      return null;
+    }
+    const qs = new URLSearchParams({
+      packageName,
+      basePriceMicros: micros,
+      baseCurrency: currency,
+    });
+    const res = await fetch(
+      `/api/google-iap-management/regions/catalog?${qs.toString()}`,
+    );
+    const body = (await res.json().catch(() => ({}))) as {
+      regions?: Array<{
+        regionCode: string;
+        currency: string;
+        convertedDecimal?: string;
+      }>;
+      error?: string;
+    };
+    if (!res.ok) {
+      throw new Error(body.error ?? `Couldn't reconvert prices (HTTP ${res.status}).`);
+    }
+    return (body.regions ?? [])
+      .filter((r) => typeof r.convertedDecimal === "string")
+      .map((r) => ({
+        regionCode: r.regionCode,
+        currency: r.currency,
+        priceDecimal: r.convertedDecimal as string,
+      }));
+  }
+
+  async function fetchDerivedForTier(
+    tier: string,
+    source: PricingSource,
+  ): Promise<DerivedRegionPrice[] | null> {
+    if (source === "google_default" || !tier.trim()) return null;
+    const qs = new URLSearchParams({
+      scope: source === "app_template" ? "APP" : "GLOBAL",
+      appId,
+      identifier: tier.trim(),
+    });
+    const res = await fetch(
+      `/api/google-iap-management/pricing-templates/tier-entries?${qs.toString()}`,
+    );
+    const body = (await res.json().catch(() => ({}))) as {
+      entries?: Array<{ regionCode: string; currency: string; priceDecimal: string }>;
+      error?: string;
+    };
+    if (!res.ok) {
+      throw new Error(body.error ?? `Couldn't load tier prices (HTTP ${res.status}).`);
+    }
+    return (body.entries ?? []).map((e) => ({
+      regionCode: e.regionCode,
+      currency: e.currency,
+      priceDecimal: e.priceDecimal,
+    }));
+  }
+
+  function scheduleRederive(load: () => Promise<DerivedRegionPrice[] | null>) {
+    // Edit mode only: create mode has no preloaded catalogue to recompute,
+    // and the server bootstraps the regions on submit.
+    if (!isEdit) return;
+    if (rederiveTimer.current) clearTimeout(rederiveTimer.current);
+    rederiveTimer.current = setTimeout(() => {
+      void (async () => {
+        setRederiving(true);
+        setRederiveError(null);
+        try {
+          const derived = await load();
+          if (derived === null) return;
+          if (derived.length === 0) {
+            setRederiveError(
+              "No converted prices came back, so nothing was changed.",
+            );
+            return;
+          }
+          setRegionOverrides((rows) => applyRederivedPrices(rows, derived));
+        } catch (err) {
+          setRederiveError(
+            err instanceof Error ? err.message : "Couldn't reconvert prices.",
+          );
+        } finally {
+          setRederiving(false);
+        }
+      })();
+    }, REDERIVE_DEBOUNCE_MS);
+  }
+
+  /** Per-row validation split by authorship (option B). A value the Manager
+   *  typed blocks submit — they can fix it. A value Google authored only
+   *  warns: blocking it strands the whole item over a row nobody touched,
+   *  and "correcting" it would violate the no-transformation rule. */
+  const overrideValidation = useMemo(
+    () =>
+      partitionOverrideValidation(regionOverrides, (priceDecimal, currency) =>
+        validateDecimal(priceDecimal, currency),
+      ),
+    [regionOverrides],
+  );
+
   function validate(): boolean {
     const errors: Record<string, string> = {};
     if (!sku.trim()) errors.sku = "SKU is required.";
@@ -298,12 +517,12 @@ export function IapForm({
       if (decErr) errors.basePrice = decErr;
     }
 
-    for (let i = 0; i < regionOverrides.length; i += 1) {
-      const r = regionOverrides[i];
-      if (r.priceDecimal.trim()) {
-        const e = validateDecimal(r.priceDecimal, r.currency);
-        if (e) errors[`override_${i}`] = e;
-      }
+    // SC2 / option B — only rows the Manager actually typed can block submit.
+    // Production has an item whose Google-authored TW price (TWD 6.30) the
+    // tool's own currency table rejects; before this, that single untouched
+    // row blocked EVERY edit to the item, including its title.
+    for (const [idx, message] of Object.entries(overrideValidation.blocking)) {
+      errors[`override_${idx}`] = message;
     }
 
     if (pricingSource === null) {
@@ -539,7 +758,10 @@ export function IapForm({
                     name="purchaseType"
                     value={opt}
                     checked={purchaseType === opt}
-                    onChange={() => setPurchaseType(opt)}
+                    onChange={() => {
+                      setPurchaseType(opt);
+                      setAttrsDirty(true);
+                    }}
                     className="text-emerald-600 focus:ring-emerald-500"
                   />
                   <span className="capitalize">{opt}</span>
@@ -560,7 +782,10 @@ export function IapForm({
                     name="status"
                     value={opt}
                     checked={status === opt}
-                    onChange={() => setStatus(opt)}
+                    onChange={() => {
+                      setStatus(opt);
+                      setAttrsDirty(true);
+                    }}
                     className="text-emerald-600 focus:ring-emerald-500"
                   />
                   <span className="capitalize">{opt}</span>
@@ -649,10 +874,18 @@ export function IapForm({
             onChange={(s) => {
               setPricingSource(s);
               if (s === "google_default") setTierIdentifier("");
+              else if (tierIdentifier.trim()) {
+                scheduleRederive(() => fetchDerivedForTier(tierIdentifier, s));
+              }
             }}
             appId={appId}
             tierValue={tierIdentifier}
-            onTierChange={setTierIdentifier}
+            onTierChange={(tier) => {
+              setTierIdentifier(tier);
+              if (pricingSource) {
+                scheduleRederive(() => fetchDerivedForTier(tier, pricingSource));
+              }
+            }}
           />
           {pricingSource !== "google_default" && (
             <p className="mt-2 text-[11px] text-slate-500">
@@ -677,7 +910,12 @@ export function IapForm({
               type="text"
               inputMode={getCurrencyDecimals(baseCurrency) === 0 ? "numeric" : "decimal"}
               value={basePriceDecimal}
-              onChange={(e) => setBasePriceDecimal(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setBasePriceDecimal(next);
+                setBaseDirty(true);
+                scheduleRederive(() => fetchDerivedForBase(next, baseCurrency));
+              }}
               placeholder={getCurrencyDecimals(baseCurrency) === 0 ? "23000" : "1.99"}
               className={`w-full rounded-lg border px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition ${
                 fieldErrors.basePrice ? "border-red-400" : "border-slate-300"
@@ -698,7 +936,12 @@ export function IapForm({
             </label>
             <select
               value={baseCurrency}
-              onChange={(e) => setBaseCurrency(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setBaseCurrency(next);
+                setBaseDirty(true);
+                scheduleRederive(() => fetchDerivedForBase(basePriceDecimal, next));
+              }}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition"
             >
               {COMMON_CURRENCIES.map((c) => (
@@ -809,6 +1052,11 @@ export function IapForm({
           baseCurrency={baseCurrency}
           basePriceDecimal={basePriceDecimal}
           fieldErrors={fieldErrors}
+          fieldWarnings={overrideValidation.warnings}
+          conflicts={conflicts}
+          onResolveConflict={resolveConflict}
+          rederiving={rederiving}
+          rederiveError={rederiveError}
           onUpdateOverride={updateOverride}
           onRemoveOverride={removeOverride}
           onAddOverrideForRegion={addOverrideForRegion}

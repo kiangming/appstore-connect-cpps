@@ -252,3 +252,88 @@ describe("base-price change must reach the Google payload", () => {
     expect(identicalToLive).toBe(false);
   });
 });
+
+/* ── SC2: dirty tracking + the precedence rule (item 6) ─────────────────── */
+
+/** Same production shape, but the Manager pinned one row by hand. */
+function managerPinsThenChangesBase(pinned: {
+  region: string;
+  currency: string;
+  priceDecimal: string;
+}) {
+  const base = managerChangesBasePriceTo("2.99");
+  return {
+    ...base,
+    regionOverrides: base.regionOverrides.map((r) =>
+      r.region === pinned.region
+        ? { ...r, ...pinned, dirty: true }
+        : { ...r, dirty: false },
+    ),
+  };
+}
+
+describe("SC2 — dirty rows survive, unpinned rows re-derive", () => {
+  it("a row the Manager pinned survives a base-price change untouched", async () => {
+    await updateIapOnGoogle(
+      jwt,
+      managerPinsThenChangesBase({
+        region: "VN",
+        currency: "VND",
+        priceDecimal: "12345",
+      }),
+    );
+
+    const sent = sentRegionalConfigs();
+    // Pinned: exactly what the Manager typed, not the converted 74000.
+    expect(sent.VN).toEqual({ currency: "VND", micros: "12345000000" });
+    // Unpinned: re-derived from the new base.
+    expect(sent.US).toEqual({ currency: "USD", micros: "2990000" });
+    expect(sent.JP).toEqual({ currency: "JPY", micros: "450000000" });
+  });
+
+  it("PRECEDENCE (item 6a) PASSIVE submit: an untouched odd-precision row goes back byte-for-byte", async () => {
+    // No base-price change → no re-derive → preserve-bytes governs.
+    // TWD 6.30 is a real production value (com.vng.passsdk.2508111020) that
+    // the tool's own currency table calls invalid. It must still round-trip
+    // to Google EXACTLY as Google sent it.
+    const base = managerChangesBasePriceTo("1.99"); // unchanged base
+    await updateIapOnGoogle(jwt, {
+      ...base,
+      listings: [{ locale: "en-US", title: "Renamed", description: "200 gems." }],
+      regionOverrides: [
+        ...base.regionOverrides.map((r) => ({ ...r, dirty: false })),
+        { region: "TW", currency: "TWD", priceDecimal: "6.30", dirty: false },
+      ],
+    });
+
+    const sent = sentRegionalConfigs();
+    expect(sent.TW).toEqual({ currency: "TWD", micros: "6300000" });
+    expect(sent.US).toEqual({ currency: "USD", micros: "1990000" });
+  });
+
+  it("PRECEDENCE (item 6b) ACTIVE re-derive: the same odd row IS recomputed from the new base", async () => {
+    convertRegionPricesSpy.mockResolvedValue({
+      data: {
+        convertedRegionPrices: {
+          ...Object.fromEntries(
+            Object.entries(CONVERTED_FOR_299).map(([r, price]) => [r, { price }]),
+          ),
+          TW: { price: { currencyCode: "TWD", units: "9", nanos: 0 } },
+        },
+        regionVersion: { version: "2026/01" },
+      },
+    });
+
+    const base = managerChangesBasePriceTo("2.99"); // base DID change
+    await updateIapOnGoogle(jwt, {
+      ...base,
+      regionOverrides: [
+        ...base.regionOverrides.map((r) => ({ ...r, dirty: false })),
+        { region: "TW", currency: "TWD", priceDecimal: "6.30", dirty: false },
+      ],
+    });
+
+    const sent = sentRegionalConfigs();
+    expect(sent.TW).toEqual({ currency: "TWD", micros: "9000000" });
+  });
+});

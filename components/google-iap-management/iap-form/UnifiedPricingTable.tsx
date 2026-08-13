@@ -39,6 +39,7 @@ import {
 } from "@/lib/google-iap-management/unified-pricing";
 import type { RegionPrice } from "@/lib/google-iap-management/price-comparison";
 import type { RegionOverrideRow } from "@/lib/google-iap-management/form-state";
+import type { ReseedConflict } from "@/lib/google-iap-management/override-merge";
 import { regionNameFromCode } from "@/lib/google-iap-management/region-name";
 import { microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
 import { RegionPriceCell } from "@/components/google-iap-management/pricing/RegionPriceCell";
@@ -50,6 +51,17 @@ interface Props {
   baseCurrency: string;
   basePriceDecimal: string;
   fieldErrors: Record<string, string>;
+  /** SC2 — per-row messages that must NOT block submit: the value came from
+   *  Google, not from the Manager. Keyed by row index, same scheme as
+   *  fieldErrors. */
+  fieldWarnings?: Record<number, string>;
+  /** SC2 — rows the Manager edited whose server value ALSO moved during a
+   *  mid-edit refresh. Surfaced for the Manager to resolve; never auto-picked. */
+  conflicts?: ReseedConflict[];
+  onResolveConflict?: (region: string, keep: "mine" | "theirs") => void;
+  /** True while the catalogue is being reconverted from a new base price. */
+  rederiving?: boolean;
+  rederiveError?: string | null;
   onUpdateOverride: (index: number, updates: Partial<RegionOverrideRow>) => void;
   onRemoveOverride: (index: number) => void;
   onAddOverrideForRegion: (region: string, currency: string) => void;
@@ -76,6 +88,11 @@ export function UnifiedPricingTable({
   baseCurrency,
   basePriceDecimal,
   fieldErrors,
+  fieldWarnings,
+  conflicts,
+  onResolveConflict,
+  rederiving = false,
+  rederiveError = null,
   onUpdateOverride,
   onRemoveOverride,
   onAddOverrideForRegion,
@@ -216,6 +233,66 @@ export function UnifiedPricingTable({
 
       {syncError && <p className="px-5 pt-3 text-xs text-red-600">{syncError}</p>}
 
+      {rederiving && (
+        <p className="flex items-center gap-1.5 px-5 pt-3 text-xs text-slate-500">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Reconverting every country from the new base price…
+        </p>
+      )}
+      {rederiveError && (
+        <p className="px-5 pt-3 text-xs text-amber-700">
+          {rederiveError} Your existing prices were left untouched.
+        </p>
+      )}
+
+      {/* SC2 — re-seed conflicts. The Manager edited these rows AND the server
+          value moved underneath them during a refresh. The tool states both
+          sides and lets them choose; it never picks silently. */}
+      {conflicts && conflicts.length > 0 && (
+        <div className="mx-5 mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3">
+          <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-900">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            {conflicts.length} price{conflicts.length === 1 ? "" : "s"} changed on
+            Google while you were editing
+          </p>
+          <p className="mt-0.5 text-[11px] text-amber-800">
+            Your edit is kept until you choose. Nothing is overwritten on its own.
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {conflicts.map((c) => (
+              <li
+                key={c.region}
+                className="flex flex-wrap items-center gap-2 text-[11px]"
+              >
+                <span className="font-mono font-medium text-amber-900">
+                  {c.region}
+                </span>
+                <span className="rounded bg-white px-1.5 py-0.5 font-mono text-slate-700">
+                  yours {c.mine.currency} {c.mine.priceDecimal}
+                </span>
+                <span className="rounded bg-white px-1.5 py-0.5 font-mono text-slate-700">
+                  Google {c.theirs.currency} {c.theirs.priceDecimal}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onResolveConflict?.(c.region, "mine")}
+                  className="rounded border border-amber-300 px-2 py-0.5 font-medium text-amber-900 transition hover:bg-amber-100"
+                >
+                  Keep mine
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onResolveConflict?.(c.region, "theirs")}
+                  className="rounded border border-amber-300 px-2 py-0.5 font-medium text-amber-900 transition hover:bg-amber-100"
+                >
+                  Take Google&apos;s
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-[10px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
@@ -256,6 +333,9 @@ export function UnifiedPricingTable({
               fieldError={
                 r.override ? fieldErrors[`override_${r.override.index}`] : undefined
               }
+              fieldWarning={
+                r.override ? fieldWarnings?.[r.override.index] : undefined
+              }
               onUpdateOverride={onUpdateOverride}
               onRemoveOverride={onRemoveOverride}
               onAddOverrideForRegion={onAddOverrideForRegion}
@@ -295,6 +375,9 @@ export function UnifiedPricingTable({
                 row={r}
                 fieldError={
                   r.override ? fieldErrors[`override_${r.override.index}`] : undefined
+                }
+                fieldWarning={
+                  r.override ? fieldWarnings?.[r.override.index] : undefined
                 }
                 onUpdateOverride={onUpdateOverride}
                 onRemoveOverride={onRemoveOverride}
@@ -339,12 +422,14 @@ function StatusBadge({ status }: { status: UnifiedStatus }) {
 function PricingRow({
   row,
   fieldError,
+  fieldWarning,
   onUpdateOverride,
   onRemoveOverride,
   onAddOverrideForRegion,
 }: {
   row: UnifiedPricingRow;
   fieldError?: string;
+  fieldWarning?: string;
   onUpdateOverride: (index: number, updates: Partial<RegionOverrideRow>) => void;
   onRemoveOverride: (index: number) => void;
   onAddOverrideForRegion: (region: string, currency: string) => void;
@@ -388,6 +473,14 @@ function PricingRow({
             </span>
             {fieldError && <p className="mt-1 text-[11px] text-red-500">{fieldError}</p>}
           </>
+        )}
+        {fieldWarning && (
+          /* Google authored this value and nobody has touched it. Say so —
+             but do NOT block the submit, and do NOT "fix" the number. */
+          <p className="mt-1 text-[11px] text-amber-700">
+            {fieldWarning} Left exactly as Google has it; editing this row is
+            what makes it yours to fix.
+          </p>
         )}
       </td>
       <td className="px-5 py-2.5 align-top font-mono text-slate-600">

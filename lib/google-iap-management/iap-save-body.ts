@@ -34,7 +34,14 @@ export interface IapSaveBody {
   listings: Array<{ locale: string; title: string; description: string }>;
   baseCurrency: string;
   basePriceDecimal: string;
-  regionOverrides: Array<{ region: string; currency: string; priceDecimal: string }>;
+  regionOverrides: Array<{
+    region: string;
+    currency: string;
+    priceDecimal: string;
+    /** SC2 — carried to the server so it can tell Manager intent from a
+     *  preloaded cache echo. Dropping it here re-opens the inverted merge. */
+    dirty: boolean;
+  }>;
   pricingSource: PricingSource;
   tierIdentifier: string | null;
 }
@@ -60,6 +67,7 @@ export function buildIapSaveBody(state: IapSaveBodyState): IapSaveBody {
         region: r.region,
         currency: r.currency,
         priceDecimal: r.priceDecimal,
+        dirty: r.dirty === true,
       })),
     pricingSource: state.pricingSource,
     tierIdentifier:

@@ -36,6 +36,15 @@ export interface RegionPriceInput {
   currency: string;
   /** Manager-input decimal, e.g. "1.99". */
   priceDecimal: string;
+  /**
+   * SC2 — true when the Manager pinned THIS region by hand in this session.
+   * Pinned rows are never overwritten by a base-price re-derive; unpinned
+   * ones are. See form-state.ts `RegionOverrideRow.dirty` and
+   * override-merge.ts for the full rule. Unused on the create path (there is
+   * no prior state to preserve), carried here so both orchestrators share
+   * one input shape.
+   */
+  dirty?: boolean;
 }
 
 export interface CreateIapInput {
