@@ -31,6 +31,16 @@ import { iapDb } from "@/lib/iap-management/db";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { getIapWithRelations } from "@/lib/iap-management/queries/iaps";
 import { getTierUsdPrice } from "@/lib/iap-management/queries/price-tiers";
+import { getCustomPriceState } from "@/lib/iap-management/custom-prices/repository";
+import {
+  fingerprintOf,
+  isCustomPricesSubmitBlocked,
+  describeBaselineDrift,
+} from "@/lib/iap-management/custom-prices/model";
+import { effectiveNowManualPrices } from "@/lib/iap-management/custom-prices/baseline";
+import { customPricesDivergeFromApple } from "@/lib/iap-management/apple/diff-detector";
+import { getPriceScheduleForIap } from "@/lib/iap-management/apple/price-schedules";
+import { unpackPriceSchedule } from "@/lib/iap-management/queries/iap-detail";
 import {
   detectIapChanges,
   isEmptyDiff,
@@ -58,6 +68,18 @@ const ALLOWED_SCREENSHOT_TYPES = new Set([
   "image/jpeg",
   "image/jpg",
 ]);
+
+/** The form's pricing source, needed before the existing resolution block. One
+ *  reader so the two cannot disagree about the default. */
+function formPricingSourceEarly(
+  form: IapFormState,
+): "APPLE" | "DEFAULT_TEMPLATE" | "APP_TEMPLATE" {
+  return (
+    (form as IapFormState & {
+      pricing_source?: "APPLE" | "DEFAULT_TEMPLATE" | "APP_TEMPLATE";
+    }).pricing_source ?? "APPLE"
+  );
+}
 
 export async function POST(
   req: Request,
@@ -189,11 +211,86 @@ export async function POST(
     availability_target: cachedAvailabilityTarget,
   };
 
+  // 4.5 SC3 — custom prices: the stale guard, then the divergence that opens
+  // gate 1.
+  const customState = await getCustomPriceState(iapId);
+  const currentCustomFingerprint = fingerprintOf({
+    tier_id: form.tier_id ?? cached.tier_id,
+    pricing_source: formPricingSourceEarly(form),
+    base_territory: existing.iap.base_territory ?? "USA",
+  });
+  if (
+    isCustomPricesSubmitBlocked({
+      customPriceCount: customState.entries.length,
+      current: currentCustomFingerprint,
+      stored: customState.baseline,
+    })
+  ) {
+    // Same pure function the client uses to disable the button — refused before
+    // any Apple call, so a stale price can never reach the store even from a
+    // stale tab.
+    const drift = describeBaselineDrift(
+      currentCustomFingerprint,
+      customState.baseline,
+    );
+    return NextResponse.json(
+      {
+        error:
+          `${customState.entries.length} custom price(s) were set against a different base ` +
+          `(${drift.join(" · ")}). Resolve them first: "Clear all custom prices" or ` +
+          `"Keep them (reviewed)".`,
+        reason: "custom-prices-stale",
+        drift,
+      },
+      { status: 422 },
+    );
+  }
+
+  // Does Apple already charge what the customs say? Compared against the
+  // effective-now manual prices from the G4 read — startDate === null only, so a
+  // scheduled future change is never mistaken for the current price. Skipped
+  // when there is nothing on either side, so IAPs without customs pay nothing.
+  let customPricesDiverge: ReturnType<typeof customPricesDivergeFromApple> = null;
+  if (customState.entries.length > 0) {
+    try {
+      const schedule = await getPriceScheduleForIap(
+        creds,
+        existing.iap.apple_iap_id!,
+      );
+      const live = effectiveNowManualPrices(
+        unpackPriceSchedule(schedule).entries,
+      );
+      customPricesDiverge = customPricesDivergeFromApple({
+        customs: customState.entries,
+        appleManualPrices: live.map((e) => ({
+          territory: e.territory,
+          customerPrice: Number(e.customerPrice),
+        })),
+        baseTerritory: existing.iap.base_territory ?? "USA",
+      });
+    } catch (err) {
+      // P7 — prefer a missed signal over a wrong one, inverted here: we cannot
+      // prove Apple already has these prices, so assume a push IS needed. The
+      // pricing POST is replace-all and idempotent, so re-sending is harmless;
+      // skipping a needed push would silently lose the Manager's customs.
+      await log(
+        "iap-update-on-apple",
+        `custom-price divergence check failed iap=${iapId}: ${err instanceof Error ? err.message : err}`,
+        "WARN",
+      );
+      customPricesDiverge = {
+        count: customState.entries.length,
+        diverging_territories: customState.entries.map((e) => e.territory_code),
+      };
+    }
+  }
+
   // 5. Diff
   const diff = detectIapChanges({
     form,
     cached,
     hasNewScreenshotFile: screenshot !== null,
+    customPrices: customPricesDiverge,
   });
   if (isEmptyDiff(diff)) {
     return NextResponse.json({
@@ -214,9 +311,7 @@ export async function POST(
   //    IAP.p1.h: pricing stage runs when tier_changed OR when source is
   //    template-backed (Q-J — Manager re-selects source each Update). For
   //    the source-only path we look up USD against the current tier_id.
-  const formPricingSource =
-    (form as IapFormState & { pricing_source?: "APPLE" | "DEFAULT_TEMPLATE" | "APP_TEMPLATE" })
-      .pricing_source ?? "APPLE";
+  const formPricingSource = formPricingSourceEarly(form);
   const sourceTierId =
     diff.tier_changed?.new_tier_id ?? form.tier_id ?? cached.tier_id;
   let newUsdPrice: number | null = null;
@@ -247,6 +342,7 @@ export async function POST(
           ? { kind: "DEFAULT_TEMPLATE" }
           : { kind: "APPLE" },
     currentTierId: sourceTierId,
+    customPrices: customState.entries,
   });
 
   // 8. Mirror successful stages into local DB so the cache stays in sync.

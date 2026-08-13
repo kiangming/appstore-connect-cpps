@@ -156,6 +156,43 @@ describe("the staleness rule is one function, usable by client AND server", () =
     expect(definers).toEqual([MODEL]);
   });
 
+  it("⚠ SC3 — the client form AND both write routes import the SAME predicate", () => {
+    // The requirement is not "both layers block" — it is that they block using
+    // ONE function. Two implementations would drift, and the drift would be
+    // invisible until a stale price reached a live store.
+    const CLIENT = "components/iap-management/iap-form/IapForm.tsx";
+    const CREATE =
+      "app/api/iap-management/apps/[appId]/iaps/[iapId]/create-on-apple/route.ts";
+    const UPDATE =
+      "app/api/iap-management/apps/[appId]/iaps/[iapId]/update-on-apple/route.ts";
+    for (const rel of [CLIENT, CREATE, UPDATE]) {
+      const src = readCodeOnly(rel);
+      // ⚠ Match the CALL (`name(`), not the import. An earlier version of this
+      // assertion matched the bare identifier, so a mutation that kept the
+      // import and replaced the call with a hand-rolled tier comparison passed —
+      // the exact divergence the test exists to catch.
+      expect(
+        src,
+        `${rel} must CALL isCustomPricesSubmitBlocked from custom-prices/model, ` +
+          "not reimplement the comparison",
+      ).toMatch(/isCustomPricesSubmitBlocked\(/);
+      expect(src).toMatch(/custom-prices\/model/);
+    }
+  });
+
+  it("no write route reimplements the fingerprint comparison inline", () => {
+    const ROUTES = allSourceFiles().filter(
+      (f) => f.startsWith("app/api/iap-management/") && f.endsWith("route.ts"),
+    );
+    expect(ROUTES.length).toBeGreaterThan(5);
+    const offenders = ROUTES.filter((f) => {
+      const src = readCodeOnly(f);
+      // A hand-rolled baseline compare — the shape a second implementation takes.
+      return /custom_prices_baseline_tier_id\s*!==|baseline\.tier_id\s*!==/.test(src);
+    });
+    expect(offenders).toEqual([]);
+  });
+
   it("the model is pure: no I/O, no Date.now, no randomness in the fingerprint path", () => {
     const src = read(MODEL);
     expect(src).not.toMatch(/Date\.now|Math\.random|new Date\(/);

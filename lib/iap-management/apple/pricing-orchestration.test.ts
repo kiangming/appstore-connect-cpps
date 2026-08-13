@@ -575,14 +575,29 @@ describe("applyPricingSchedule — three-source pricing model (IAP.p1.e)", () =>
     });
     expect(out.kind).toBe("partial-template-fail");
     if (out.kind === "partial-template-fail") {
+      // SC3 §I.1 — MissingPricePoint gained `source` + `reason` so the amber
+      // template fallback and the RED custom failure (J-5) are distinguishable
+      // without inspecting which array an entry came from.
       expect(out.missing_price_points).toEqual([
-        { tier_id: "TIER_5", territory_code: "VNM", customer_price: 25000 },
+        {
+          tier_id: "TIER_5",
+          territory_code: "VNM",
+          customer_price: 25000,
+          source: "template",
+          reason: "no-apple-price-point",
+        },
       ]);
       expect(out.overridden_territory_count).toBe(0);
     }
     expect(lastAuditPayload().outcome).toBe("partial-template-fail");
     expect(lastAuditPayload().missing_price_points).toEqual([
-      { tier_id: "TIER_5", territory_code: "VNM", customer_price: 25000 },
+      {
+        tier_id: "TIER_5",
+        territory_code: "VNM",
+        customer_price: 25000,
+        source: "template",
+        reason: "no-apple-price-point",
+      },
     ]);
   });
 

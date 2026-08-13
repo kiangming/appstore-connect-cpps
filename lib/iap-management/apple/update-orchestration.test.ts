@@ -79,6 +79,7 @@ function emptyDiff(): IapDiff {
     screenshot_changed: false,
     tier_changed: null,
     availability_changed: null,
+    custom_prices_changed: null,
   };
 }
 
@@ -364,6 +365,101 @@ describe("updateIapOnApple — pricing stage (delegated)", () => {
     );
     expect(out.stages.pricing.outcome?.kind).toBe("set");
     expect(out.overall).toBe("SUCCESS");
+  });
+
+  // ── SC3 GATE 2 — the real guard, not a mirror ─────────────────────────────
+  //
+  // A customs-ONLY edit under source APPLE. Reverting the `customsChanged`
+  // clause in runPricingStage makes THIS test fail with zero
+  // applyPricingSchedule calls, which is the whole point: the merge can be
+  // perfect and the change still never reaches it.
+  it("⚠ GATE 2: runs the pricing stage for a customs-ONLY change under source APPLE", async () => {
+    applyPricingSchedule.mockResolvedValueOnce({
+      kind: "set",
+      price_point_id: "pp-1",
+      schedule_id: "sched-1",
+      usd_price: 9.99,
+      attempts: 1,
+      source_kind: "APPLE",
+      overridden_territory_count: 1,
+    });
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: {
+        ...emptyDiff(),
+        custom_prices_changed: { count: 1, diverging_territories: ["VNM"] },
+      },
+      newUsdPrice: 9.99,
+      currentTierId: "TIER_10",
+      // source omitted ⇒ APPLE, the case the old guard skipped entirely
+      customPrices: [
+        { territory_code: "VNM", customer_price: 25000, currency_code: "VND" },
+      ],
+      audit: baseAudit,
+    });
+    expect(applyPricingSchedule).toHaveBeenCalledTimes(1);
+    expect(applyPricingSchedule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        customPrices: [
+          { territory_code: "VNM", customer_price: 25000, currency_code: "VND" },
+        ],
+      }),
+    );
+    expect(out.stages.pricing.changed).toBe(true);
+    expect(out.overall).toBe("SUCCESS");
+  });
+
+  it("still skips the pricing stage when nothing pricing-related changed", async () => {
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: {
+        ...emptyDiff(),
+        attributes_changed: { name: "Renamed" },
+      },
+      audit: baseAudit,
+    });
+    expect(applyPricingSchedule).not.toHaveBeenCalled();
+    expect(out.stages.pricing.changed).toBe(false);
+  });
+
+  // ── J-5 — a failed custom must not read as success ────────────────────────
+  it("J-5: partial-custom-fail downgrades overall and NAMES the territory", async () => {
+    applyPricingSchedule.mockResolvedValueOnce({
+      kind: "partial-custom-fail",
+      schedule_id: "sched-1",
+      attempts: 1,
+      source_kind: "APPLE",
+      overridden_territory_count: 0,
+      missing_price_points: [],
+      failed_custom_territories: [
+        {
+          tier_id: null,
+          territory_code: "VNM",
+          customer_price: 99999,
+          source: "custom",
+          reason: "no-apple-price-point",
+        },
+      ],
+    });
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: {
+        ...emptyDiff(),
+        custom_prices_changed: { count: 1, diverging_territories: ["VNM"] },
+      },
+      newUsdPrice: 9.99,
+      currentTierId: "TIER_10",
+      audit: baseAudit,
+    });
+    expect(out.overall).not.toBe("SUCCESS");
+    // Per-territory, never a bare count — the Manager must be able to tell WHICH
+    // explicit instruction failed.
+    expect(out.summary).toContain("VNM");
+    expect(out.summary).toContain("no-apple-price-point");
+    expect(out.summary).toMatch(/custom prices NOT applied/i);
   });
 
   // IAP.p1.h — pricing stage runs for template-backed source even when tier

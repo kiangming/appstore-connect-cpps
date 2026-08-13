@@ -65,6 +65,13 @@ export interface UpdateIapOnAppleArgs {
    *  the source is template-backed, the stage runs even if `diff.tier_changed`
    *  is null so per-territory overrides get re-applied for the current tier. */
   source?: PricingSource;
+  /** SC3 — the stored custom set, threaded to the pricing stage. Resolved to
+   *  Apple price-point ids inside the orchestrator (gate G2: no stored ids). */
+  customPrices?: readonly {
+    territory_code: string;
+    customer_price: number;
+    currency_code: string;
+  }[];
   /** IAP.p1.h: current tier_id from the form, used when source is
    *  template-backed and tier didn't change (the pricing stage still needs
    *  a tier to look up USD + match Apple's price-point). */
@@ -149,7 +156,7 @@ export async function updateIapOnApple(
 ): Promise<UpdateIapOutcome> {
   const { creds, appleIapId, diff, audit } = args;
   console.log(
-    `[update-on-apple] start apple_iap_id=${appleIapId} attr=${diff.attributes_changed !== null} loc=${diff.localizations_changed !== null} scr=${diff.screenshot_changed} tier=${diff.tier_changed !== null} avail=${diff.availability_changed !== null}`,
+    `[update-on-apple] start apple_iap_id=${appleIapId} attr=${diff.attributes_changed !== null} loc=${diff.localizations_changed !== null} scr=${diff.screenshot_changed} tier=${diff.tier_changed !== null} avail=${diff.availability_changed !== null} customs=${diff.custom_prices_changed?.count ?? 0}`,
   );
 
   // ── Stage 0 — precheck poll (IAP.o.11a reuse) ─────────────────────────
@@ -181,7 +188,10 @@ export async function updateIapOnApple(
         attributes: { changed: diff.attributes_changed !== null },
         localizations: { changed: diff.localizations_changed !== null },
         screenshot: { changed: diff.screenshot_changed },
-        pricing: { changed: diff.tier_changed !== null },
+        pricing: {
+          changed:
+            diff.tier_changed !== null || diff.custom_prices_changed !== null,
+        },
         availability: { changed: diff.availability_changed !== null },
       },
       overall: "FAILURE",
@@ -525,8 +535,18 @@ async function runPricingStage(
   // IAP.p1.h: run pricing stage either when the tier changed (legacy
   // behavior) OR when the Manager picked a template-backed source — for the
   // latter we re-apply per-territory overrides for the current tier.
+  //
+  // ⚠ SC3 GATE 2. The third clause is what makes a customs-ONLY edit work.
+  // Without it, a Manager who opens an item purely to fix one territory's price
+  // under source APPLE gets the whole pricing stage SKIPPED — silently, with a
+  // "no changes" style result. Gate 1 (`isEmptyDiff`) gets the request past the
+  // route; this gate gets it into the orchestrator. Both are required: fixing
+  // one without the other still leaves the feature dead on the Edit path.
+  const customsChanged = diff.custom_prices_changed !== null;
   const shouldRun =
-    diff.tier_changed !== null || effectiveSource.kind !== "APPLE";
+    diff.tier_changed !== null ||
+    effectiveSource.kind !== "APPLE" ||
+    customsChanged;
   if (!shouldRun) {
     return { changed: false };
   }
@@ -551,6 +571,7 @@ async function runPricingStage(
     localTierId: tierId,
     usdPrice: newUsdPrice ?? null,
     source: effectiveSource,
+    customPrices: args.customPrices ?? [],
     // Precheck already done in Stage 0; pass ready so the pricing
     // orchestrator doesn't poll twice.
     precheck: { ready: true, attempts: 1, total_ms: 0 },
@@ -659,10 +680,25 @@ function aggregate(stages: {
     if (!ok) failureSummaries.push(`screenshot: ${stages.screenshot.error}`);
   }
   if (stages.pricing.changed) {
-    const ok = stages.pricing.outcome?.kind === "set";
+    const outcome = stages.pricing.outcome;
+    const ok = outcome?.kind === "set";
     okFlags.push(ok);
     if (!ok) {
-      failureSummaries.push(`pricing: ${stages.pricing.outcome?.kind ?? "unknown"}`);
+      // J-5 — name the territories whose custom did not apply. A bare
+      // "pricing: partial-custom-fail" would leave the Manager unable to tell
+      // WHICH explicit instruction failed, which is the whole point of the
+      // per-territory reporting.
+      if (outcome?.kind === "partial-custom-fail") {
+        const named = outcome.failed_custom_territories
+          .map((f) => `${f.territory_code} (${f.reason})`)
+          .join(", ");
+        failureSummaries.push(
+          `custom prices NOT applied for ${outcome.failed_custom_territories.length} territor` +
+            `${outcome.failed_custom_territories.length === 1 ? "y" : "ies"}: ${named}`,
+        );
+      } else {
+        failureSummaries.push(`pricing: ${outcome?.kind ?? "unknown"}`);
+      }
     }
   }
   if (stages.availability.changed) {

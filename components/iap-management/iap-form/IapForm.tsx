@@ -18,6 +18,7 @@ import { CustomPricesDialog } from "./CustomPricesDialog";
 import { CustomPricesSummary } from "./CustomPricesSummary";
 import {
   fingerprintOf,
+  isCustomPricesSubmitBlocked,
   type CustomPriceBaseline,
   type CustomPriceEntry,
 } from "@/lib/iap-management/custom-prices/model";
@@ -132,6 +133,23 @@ export function IapForm({
   >(customPrices);
   const [savedCustomBaseline, setSavedCustomBaseline] =
     useState<CustomPriceBaseline | null>(customPricesBaseline);
+  /**
+   * ⚠ SC3 GATE 1, CLIENT HALF. `handleUpdateOnAppleClick` runs its own
+   * `detectIapChanges` + `isEmptyDiff` before the request is even sent, so
+   * fixing the server-side gate alone still leaves a customs-only edit showing
+   * "No changes detected — nothing to push to Apple" and never opening the
+   * modal. The client cannot know Apple's live prices, so it uses the honest
+   * signal it does have: did the Manager touch customs in this session. The
+   * SERVER remains authoritative — it compares against the G4 read and may
+   * still answer NO_CHANGES.
+   */
+  const [customPricesTouched, setCustomPricesTouched] = useState(false);
+  const customPricesDiffInput = customPricesTouched
+    ? {
+        count: savedCustomPrices.length,
+        diverging_territories: savedCustomPrices.map((e) => e.territory_code),
+      }
+    : null;
 
   /** The fingerprint the CURRENT form values imply (G6). Compared against the
    *  stored one by the single shared `isCustomBaselineStale`. */
@@ -147,6 +165,23 @@ export function IapForm({
       }),
     [form.tier_id, form.pricing_source],
   );
+
+  /**
+   * SC3 — submit blocking. The SAME pure function both write routes call before
+   * touching Apple; this is the client half of one rule, not a second copy.
+   * Structural rather than advisory: a banner can be scrolled past, a disabled
+   * button cannot.
+   */
+  const customPricesBlockSubmit = isCustomPricesSubmitBlocked({
+    customPriceCount: savedCustomPrices.length,
+    current: currentCustomBaseline,
+    stored: savedCustomBaseline,
+  });
+  const staleCustomBlockReason = customPricesBlockSubmit
+    ? `${savedCustomPrices.length} custom price${savedCustomPrices.length === 1 ? "" : "s"} ` +
+      `were set against a different base price. Resolve them first — ` +
+      `"Keep them (reviewed)" or "Clear all custom prices".`
+    : null;
 
   const checklist = useMemo(() => validateIapFormGrouped(form), [form]);
 
@@ -208,6 +243,7 @@ export function IapForm({
       }
       setSavedCustomPrices(entries);
       setSavedCustomBaseline(entries.length > 0 ? baseline : null);
+      setCustomPricesTouched(true);
       return true;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Network error");
@@ -343,6 +379,10 @@ export function IapForm({
       toast.error("Complete Group A prerequisites first.");
       return;
     }
+    if (staleCustomBlockReason) {
+      toast.error(staleCustomBlockReason);
+      return;
+    }
     setCreating(true);
     try {
       const body = new FormData();
@@ -366,6 +406,7 @@ export function IapForm({
             price_schedule_note?:
               | "set"
               | "partial-template-fail"
+              | "partial-custom-fail"
               | "skipped-no-tier"
               | "skipped-no-usd-price"
               | "skipped-no-match"
@@ -375,6 +416,11 @@ export function IapForm({
               | "failed-exception";
             price_schedule_error?: string;
             price_usd?: number;
+            failed_custom_territories?: Array<{
+              territory_code: string;
+              customer_price: number;
+              reason: string;
+            }>;
           }
         | { error: string };
 
@@ -422,6 +468,22 @@ export function IapForm({
         // Manager doesn't miss the silent-fail symptom that triggered the
         // hotfix cycle. Other warnings (failed locales, screenshot) remain
         // warning-severity since they don't block the Manager workflow.
+        // J-5 — a custom that did not apply is RED and names the territory. It
+        // must never fold into the success summary: each custom is an explicit
+        // per-territory instruction, so one not applying is that instruction
+        // failing (unlike a bulk import, where partial is the expected shape).
+        if (data.failed_custom_territories?.length) {
+          const named = data.failed_custom_territories
+            .map((f) => `${f.territory_code} (${f.reason})`)
+            .join(", ");
+          toast.error(
+            `Created on Apple — ${data.failed_custom_territories.length} custom price(s) NOT applied: ${named}. ` +
+              "Those territories fell back to Apple's automatic price.",
+            { duration: 12000 },
+          );
+          router.push(`/iap-management/apps/${appAppleId}`);
+          return;
+        }
         if (allClean) {
           toast.success(`Created on Apple · ${parts.join(" · ")}`);
         } else if (pricingFailed) {
@@ -441,10 +503,15 @@ export function IapForm({
   /** IAP.o.12: open the diff preview modal (or no-op toast if nothing changed). */
   function handleUpdateOnAppleClick() {
     if (!iapId || !syncedToApple) return;
+    if (staleCustomBlockReason) {
+      toast.error(staleCustomBlockReason);
+      return;
+    }
     const diff = detectIapChanges({
       form,
       cached: cachedForDiff,
       hasNewScreenshotFile: screenshotFile !== null,
+      customPrices: customPricesDiffInput,
     });
     if (isEmptyDiff(diff)) {
       toast.message("No changes detected — nothing to push to Apple.");
@@ -808,12 +875,18 @@ export function IapForm({
             <button
               type="button"
               onClick={handleCreateOnApple}
-              disabled={!checklist.createReady || creating || saving}
+              disabled={
+                !checklist.createReady ||
+                creating ||
+                saving ||
+                customPricesBlockSubmit
+              }
               className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
               title={
-                checklist.createReady
+                staleCustomBlockReason ??
+                (checklist.createReady
                   ? "Push to Apple Connect (Submit for Review is a separate action on the IAP list page)"
-                  : "Complete Group A first"
+                  : "Complete Group A first")
               }
             >
               {creating ? (
@@ -831,12 +904,13 @@ export function IapForm({
             <button
               type="button"
               onClick={handleUpdateOnAppleClick}
-              disabled={updating || saving}
+              disabled={updating || saving || customPricesBlockSubmit}
               className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
               title={
-                editableStateBlockedLikely
+                staleCustomBlockReason ??
+                (editableStateBlockedLikely
                   ? `Apple may reject edits while the IAP is in ${appleState ?? "review"}. Try anyway?`
-                  : "Push edited fields to Apple Connect"
+                  : "Push edited fields to Apple Connect")
               }
             >
               {updating ? (
@@ -870,6 +944,14 @@ export function IapForm({
           )}
         </div>
 
+        {staleCustomBlockReason && (
+          <p
+            data-testid="submit-blocked-stale-customs"
+            className="text-[11px] font-medium text-red-600 dark:text-red-400 px-2"
+          >
+            ✕ {staleCustomBlockReason}
+          </p>
+        )}
         {canCreate && !checklist.createReady && (
           <p className="text-[11px] text-slate-500 dark:text-slate-400 px-2">
             Create unlocks when all Group A items are green. Screenshot is
@@ -899,6 +981,7 @@ export function IapForm({
           onSaved={(entries, baseline) => {
             setSavedCustomPrices(entries);
             setSavedCustomBaseline(baseline);
+            setCustomPricesTouched(true);
             startTransition(() => router.refresh());
           }}
         />
@@ -914,6 +997,7 @@ export function IapForm({
         cached={cachedForDiff}
         hasNewScreenshotFile={screenshotFile !== null}
         tiers={tiers}
+        customPrices={customPricesDiffInput}
       />
     </div>
   );

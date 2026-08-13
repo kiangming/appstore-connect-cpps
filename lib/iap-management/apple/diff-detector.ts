@@ -79,6 +79,29 @@ export interface IapDiff {
     old_target: AvailabilityTarget | null;
     new_target: AvailabilityTarget;
   } | null;
+  /**
+   * ⚠ SC3 GATE 1. Per-territory custom prices that need re-sending to Apple.
+   * Null when the stored custom set already matches Apple's effective-now
+   * manual prices.
+   *
+   * Without this clause `isEmptyDiff` returns true for a customs-ONLY edit —
+   * which is the COMMON case, a Manager opening an item purely to fix one
+   * territory's price. The route would answer NO_CHANGES and the confirm modal
+   * would never open: the merge could be perfect and the change would still
+   * never reach it, with no message anywhere. This is the LAYER-GAP failure in
+   * its Apple form.
+   *
+   * Customs are not part of `IapFormState` (they live in `iap_custom_prices`),
+   * so unlike every other bucket this one is computed by the CALLER — from the
+   * stored set versus the G4 schedule read — and threaded in. See
+   * `customPricesDivergeFromApple`.
+   */
+  custom_prices_changed: {
+    /** How many customs the push will carry. */
+    count: number;
+    /** Territories whose custom differs from what Apple currently charges. */
+    diverging_territories: string[];
+  } | null;
 }
 
 const normalize = (s: string | null | undefined): string =>
@@ -97,6 +120,15 @@ export interface DetectIapChangesArgs {
    *  being uploaded with the request. The form itself only carries the
    *  filename, not the bytes, so this flag is explicit. */
   hasNewScreenshotFile: boolean;
+  /**
+   * SC3 — custom prices needing a push, computed by the caller (they live in
+   * `iap_custom_prices`, not in the form). Omitted ⇒ no customs, which keeps
+   * every existing caller's behaviour byte-identical.
+   */
+  customPrices?: {
+    count: number;
+    diverging_territories: string[];
+  } | null;
 }
 
 /**
@@ -218,6 +250,68 @@ export function detectIapChanges(args: DetectIapChangesArgs): IapDiff {
     screenshot_changed,
     tier_changed,
     availability_changed,
+    // SC3 — threaded in by the caller (customs are not form state). Normalised
+    // so an empty diverging list can never masquerade as a change.
+    custom_prices_changed:
+      args.customPrices && args.customPrices.diverging_territories.length > 0
+        ? args.customPrices
+        : null,
+  };
+}
+
+/**
+ * Do the stored customs differ from what Apple is charging right now?
+ *
+ * This is what makes a customs-ONLY edit detectable without a new form field or
+ * a new DB column: compare the set against the effective-now manual prices from
+ * the G4 read. It is also the honest question — "does Apple need this push?" —
+ * rather than "did the Manager touch the dialog in this session".
+ *
+ * Both directions count as divergence:
+ *   · a custom Apple does not have, or has at a different price ⇒ push needed
+ *   · a manual price on Apple with NO custom behind it ⇒ the Manager cleared
+ *     that custom, and the replace-all push is what reverts the territory to
+ *     template/auto. Missing this direction would make "clear all" a no-op on
+ *     Apple while the UI reported success.
+ *
+ * The base territory is excluded: it is carried by `applePricePointId`, never by
+ * an override (§E).
+ */
+export function customPricesDivergeFromApple(args: {
+  customs: ReadonlyArray<{ territory_code: string; customer_price: number }>;
+  /** Effective-now manual prices — MUST already be startDate === null filtered. */
+  appleManualPrices: ReadonlyArray<{ territory: string; customerPrice: number }>;
+  baseTerritory?: string;
+}): { count: number; diverging_territories: string[] } | null {
+  const base = (args.baseTerritory ?? "USA").toUpperCase();
+  const customs = new Map(
+    args.customs
+      .filter((c) => c.territory_code.toUpperCase() !== base)
+      .map((c) => [c.territory_code.toUpperCase(), c.customer_price]),
+  );
+  const apple = new Map(
+    args.appleManualPrices
+      .filter((p) => p.territory.toUpperCase() !== base)
+      .map((p) => [p.territory.toUpperCase(), Number(p.customerPrice)]),
+  );
+
+  const diverging: string[] = [];
+  for (const [territory, price] of customs) {
+    const live = apple.get(territory);
+    // Same epsilon discipline as findPricePointByUsdPrice — Apple's prices are
+    // at most 3-decimal, so 0.001 is safe and must not be widened.
+    if (live === undefined || Math.abs(live - price) >= 0.001) {
+      diverging.push(territory);
+    }
+  }
+  for (const territory of apple.keys()) {
+    if (!customs.has(territory)) diverging.push(territory);
+  }
+
+  if (diverging.length === 0) return null;
+  return {
+    count: customs.size,
+    diverging_territories: [...new Set(diverging)].sort(),
   };
 }
 
@@ -229,6 +323,10 @@ export function isEmptyDiff(diff: IapDiff): boolean {
     diff.localizations_changed === null &&
     diff.screenshot_changed === false &&
     diff.tier_changed === null &&
-    diff.availability_changed === null
+    diff.availability_changed === null &&
+    // ⚠ SC3 GATE 1 — without this clause a customs-only edit reports
+    // NO_CHANGES and the confirm modal never opens. Removing it does not break
+    // any other test; it silently deletes the feature on the Edit path.
+    diff.custom_prices_changed === null
   );
 }

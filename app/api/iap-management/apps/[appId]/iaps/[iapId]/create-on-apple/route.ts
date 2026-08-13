@@ -49,6 +49,12 @@ import {
 } from "@/lib/iap-management/apple/pricing-orchestration";
 import { pollIapReadyForPricing } from "@/lib/iap-management/apple/poll-iap-ready";
 import { getTierUsdPrice } from "@/lib/iap-management/queries/price-tiers";
+import { getCustomPriceState } from "@/lib/iap-management/custom-prices/repository";
+import {
+  fingerprintOf,
+  isCustomPricesSubmitBlocked,
+  describeBaselineDrift,
+} from "@/lib/iap-management/custom-prices/model";
 import {
   validateIapFormForCreate,
   type IapFormState,
@@ -72,6 +78,7 @@ interface SuccessResponse {
   price_schedule_note?:
     | "set"
     | "partial-template-fail"
+    | "partial-custom-fail"
     | "skipped-no-tier"
     | "skipped-no-usd-price"
     | "skipped-no-match"
@@ -83,6 +90,13 @@ interface SuccessResponse {
   price_usd?: number;
   availability_set: boolean;
   availability_error?: string;
+  /** J-5 — customs that could NOT be applied, named per territory. Red in the
+   *  UI; never folded into the success summary. */
+  failed_custom_territories?: Array<{
+    territory_code: string;
+    customer_price: number;
+    reason: string;
+  }>;
 }
 
 export async function POST(
@@ -190,6 +204,45 @@ export async function POST(
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "localizations save failed" },
       { status: 500 },
+    );
+  }
+
+  // 6.5 SC3 — custom prices + the stale guard.
+  //
+  // The SAME pure `isCustomPricesSubmitBlocked` the client uses to disable the
+  // button. Both layers, one function: a client-only block is bypassable from a
+  // stale tab, a server-only block is a dead end with no way forward from the
+  // UI. Refused BEFORE any Apple call, so a stale price cannot reach the store.
+  const customState = await getCustomPriceState(iapId);
+  if (
+    isCustomPricesSubmitBlocked({
+      customPriceCount: customState.entries.length,
+      current: fingerprintOf({
+        tier_id: form.tier_id,
+        pricing_source: form.pricing_source ?? "APPLE",
+        base_territory: existing.iap.base_territory ?? "USA",
+      }),
+      stored: customState.baseline,
+    })
+  ) {
+    const drift = describeBaselineDrift(
+      fingerprintOf({
+        tier_id: form.tier_id,
+        pricing_source: form.pricing_source ?? "APPLE",
+        base_territory: existing.iap.base_territory ?? "USA",
+      }),
+      customState.baseline,
+    );
+    return NextResponse.json(
+      {
+        error:
+          `${customState.entries.length} custom price(s) were set against a different base ` +
+          `(${drift.join(" · ")}). Resolve them first: "Clear all custom prices" or ` +
+          `"Keep them (reviewed)".`,
+        reason: "custom-prices-stale",
+        drift,
+      },
+      { status: 422 },
     );
   }
 
@@ -303,6 +356,9 @@ export async function POST(
     localTierId: form.tier_id,
     usdPrice,
     source,
+    // SC3 — customs resolve to Apple price-point ids inside the orchestrator,
+    // down the same path template entries take (gate G2: no stored ids).
+    customPrices: customState.entries,
     precheck: {
       ready: pollResult.ready,
       reason: pollResult.ready ? undefined : pollResult.reason,
@@ -434,6 +490,16 @@ export async function POST(
     ...(usdPrice !== null ? { price_usd: usdPrice } : {}),
     availability_set: availabilitySet,
     ...(availabilityError ? { availability_error: availabilityError } : {}),
+    // J-5 — per-territory, never a bare count.
+    ...(pricing.kind === "partial-custom-fail"
+      ? {
+          failed_custom_territories: pricing.failed_custom_territories.map((f) => ({
+            territory_code: f.territory_code,
+            customer_price: f.customer_price,
+            reason: f.reason,
+          })),
+        }
+      : {}),
   };
   return NextResponse.json(response);
 }

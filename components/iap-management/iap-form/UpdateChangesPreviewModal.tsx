@@ -30,6 +30,12 @@ export interface UpdateChangesPreviewModalProps {
   cached: CachedIapState;
   hasNewScreenshotFile: boolean;
   tiers: PriceTierRow[];
+  /** SC3 — customs the push will carry (they are not form state). Threaded so
+   *  the confirm modal opens for a customs-only edit AND lists them. */
+  customPrices?: {
+    count: number;
+    diverging_territories: string[];
+  } | null;
 }
 
 export function UpdateChangesPreviewModal(props: UpdateChangesPreviewModalProps) {
@@ -45,8 +51,14 @@ export function UpdateChangesPreviewModal(props: UpdateChangesPreviewModalProps)
   } = props;
 
   const diff: IapDiff = useMemo(
-    () => detectIapChanges({ form, cached, hasNewScreenshotFile }),
-    [form, cached, hasNewScreenshotFile],
+    () =>
+      detectIapChanges({
+        form,
+        cached,
+        hasNewScreenshotFile,
+        customPrices: props.customPrices ?? null,
+      }),
+    [form, cached, hasNewScreenshotFile, props.customPrices],
   );
   const empty = isEmptyDiff(diff);
 
@@ -174,6 +186,31 @@ export function UpdateChangesPreviewModal(props: UpdateChangesPreviewModalProps)
               <p className="text-xs">
                 Replace existing review screenshot with{" "}
                 <span className="font-medium">{form.screenshot_filename}</span>.
+              </p>
+            </section>
+          )}
+
+          {/* SC3 — custom territory prices carried by this push. */}
+          {diff.custom_prices_changed && (
+            <section data-testid="preview-custom-prices">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
+                Custom territory prices
+              </h3>
+              <p className="text-xs">
+                <span className="font-medium">
+                  {diff.custom_prices_changed.count}
+                </span>{" "}
+                territor
+                {diff.custom_prices_changed.count === 1 ? "y" : "ies"} will be
+                pushed with a custom price, overriding the template for those
+                territories.
+              </p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 font-mono">
+                {diff.custom_prices_changed.diverging_territories
+                  .slice(0, 12)
+                  .join(" · ")}
+                {diff.custom_prices_changed.diverging_territories.length > 12 &&
+                  ` + ${diff.custom_prices_changed.diverging_territories.length - 12} more`}
               </p>
             </section>
           )}
