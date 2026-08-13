@@ -304,21 +304,53 @@ describe("SC2b — the Manager's 4-step loop, each step overwriting the last", (
   });
 });
 
-describe("pickBaseFromDerived — a tier sets the base price", () => {
+describe("pickBaseFromDerived — a tier sets the base price, USD first", () => {
+  // ⚠ ORDER CHANGED IN SC3b (Manager decision). It used to prefer the app's
+  // configured currency and fall back to the US region. It now prefers USD
+  // outright, because Google's pricing templates carry a fixed `Price (USD)`
+  // column — that figure is the tier's canonical number and the one a Manager
+  // reads off the template. The old "app currency first" case below was
+  // inverted deliberately, not quietly relaxed.
   const entries = [
     { regionCode: "US", currency: "USD", priceDecimal: "4.990000" },
     { regionCode: "VN", currency: "VND", priceDecimal: "119000.000000" },
   ];
 
-  it("prefers the entry in the app's configured currency", () => {
+  it("prefers USD even when the app is configured in another currency", () => {
     expect(pickBaseFromDerived(entries, "VND")).toEqual({
+      currency: "USD",
+      priceDecimal: "4.990000",
+    });
+  });
+
+  it("falls back to the app's currency when the tier has no USD entry", () => {
+    const noUsd = [
+      { regionCode: "VN", currency: "VND", priceDecimal: "119000.000000" },
+      { regionCode: "JP", currency: "JPY", priceDecimal: "700.000000" },
+    ];
+    expect(pickBaseFromDerived(noUsd, "JPY")).toEqual({
+      currency: "JPY",
+      priceDecimal: "700.000000",
+    });
+  });
+
+  it("falls back to the first entry when the tier has neither USD nor the app currency", () => {
+    const neither = [
+      { regionCode: "VN", currency: "VND", priceDecimal: "119000.000000" },
+      { regionCode: "JP", currency: "JPY", priceDecimal: "700.000000" },
+    ];
+    expect(pickBaseFromDerived(neither, "EUR")).toEqual({
       currency: "VND",
       priceDecimal: "119000.000000",
     });
   });
 
-  it("falls back to the US entry, matching how a base price is read back", () => {
-    expect(pickBaseFromDerived(entries, "EUR")).toEqual({
+  it("matches by CURRENCY, not region — several regions share USD", () => {
+    const usdElsewhere = [
+      { regionCode: "VN", currency: "VND", priceDecimal: "119000.000000" },
+      { regionCode: "EC", currency: "USD", priceDecimal: "4.990000" },
+    ];
+    expect(pickBaseFromDerived(usdElsewhere, "VND")).toEqual({
       currency: "USD",
       priceDecimal: "4.990000",
     });
@@ -328,12 +360,19 @@ describe("pickBaseFromDerived — a tier sets the base price", () => {
     expect(pickBaseFromDerived([], "USD")).toBeNull();
   });
 
-  it("carries the decimal through verbatim", () => {
+  it("carries the decimal through VERBATIM — odd precision survives", () => {
     expect(
       pickBaseFromDerived(
         [{ regionCode: "TW", currency: "TWD", priceDecimal: "6.297531" }],
         "TWD",
       ),
     ).toEqual({ currency: "TWD", priceDecimal: "6.297531" });
+    // And a USD entry with odd precision is not rounded either.
+    expect(
+      pickBaseFromDerived(
+        [{ regionCode: "US", currency: "USD", priceDecimal: "4.987654" }],
+        "VND",
+      ),
+    ).toEqual({ currency: "USD", priceDecimal: "4.987654" });
   });
 });

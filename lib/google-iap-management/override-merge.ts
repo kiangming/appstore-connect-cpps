@@ -153,26 +153,36 @@ export function applyRederivedPrices(
  * Pick the base price to display after a tier is chosen.
  *
  * "Choosing a tier sets the base" — the tier carries ~170 entries and the base
- * field must show one of them. Preference order:
- *   1. the entry in the app's current base currency (Google enforces a
- *      configured currency per app, so this is the one that means something)
- *   2. the US entry (how the tool derives a base price when reading back:
- *      onetime-product-adapter.ts pickDefaultPricingConfig)
+ * field must show one of them.
+ *
+ * ⚠ USD FIRST (Manager decision, SC3b). Google's pricing templates use a fixed
+ * `Price (USD)` header, so the USD figure is the tier's CANONICAL number — the
+ * one a Manager reads off the template and recognises. Showing a converted
+ * local amount instead would make the base field disagree with the document
+ * the tier came from.
+ *
+ * Preference order:
+ *   1. USD — the tier's canonical price
+ *   2. the app's configured base currency, when the tier has no USD entry
  *   3. the first entry, so a tier with neither still sets something
  *
- * Returned verbatim — the tier's own decimal string, never reformatted.
+ * Matching is by CURRENCY, not by region code: a tier is a currency→price
+ * table, and several regions can share USD.
+ *
+ * Returned verbatim — the tier's own decimal string, never reformatted,
+ * never converted.
  */
 export function pickBaseFromDerived(
   derived: readonly DerivedRegionPrice[],
-  preferredCurrency: string,
+  appCurrency: string,
 ): { currency: string; priceDecimal: string } | null {
   if (derived.length === 0) return null;
-  const want = preferredCurrency.trim().toUpperCase();
-  const byCurrency = derived.find(
+  const usd = derived.find((d) => d.currency.trim().toUpperCase() === "USD");
+  const want = appCurrency.trim().toUpperCase();
+  const byAppCurrency = derived.find(
     (d) => d.currency.trim().toUpperCase() === want,
   );
-  const us = derived.find((d) => d.regionCode === "US");
-  const pick = byCurrency ?? us ?? derived[0];
+  const pick = usd ?? byAppCurrency ?? derived[0];
   return { currency: pick.currency, priceDecimal: pick.priceDecimal };
 }
 

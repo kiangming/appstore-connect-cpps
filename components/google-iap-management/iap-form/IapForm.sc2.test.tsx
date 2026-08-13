@@ -348,12 +348,15 @@ describe("SC3 — pricingSource + tierIdentifier reach the PATCH payload", () =>
       .find((el) => el.textContent?.includes("Pick a tier"))!;
     await user.selectOptions(tierSelect, "Tier 5");
 
-    // Picking a tier recalculates AND sets the base price from it.
+    // Picking a tier recalculates AND sets the base price from it — SC3b:
+    // the tier's USD figure, which is the canonical `Price (USD)` column of
+    // the Google template.
     await waitFor(
       async () => expect(await toolPriceInput("US")).toHaveValue("4.99"),
       { timeout: 4000 },
     );
     expect(screen.getByPlaceholderText("1.99")).toHaveValue("4.99");
+    expect(screen.getByDisplayValue("USD")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /review changes/i }));
     await screen.findByText(/confirm to push these updates/i);
