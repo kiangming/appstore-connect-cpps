@@ -13,27 +13,37 @@
  * here keys off it.
  *
  * ─────────────────────────────────────────────────────────────────────────
- * ⚠ THE PRECEDENCE RULE — WHERE TWO GOOD RULES COLLIDE (Manager decision)
+ * ⚠ WHAT `dirty` DOES AND DOES NOT PROTECT (Manager decision, SC2b)
  *
- * Two rules are both correct on their own and disagree on exactly one cell:
+ * The base price is the SINGLE SOURCE for every country price. Picking a tier
+ * is just a fast way to set the base. Both are RECALCULATE-EVERYTHING
+ * commands, they overwrite each other, and the loop is unbounded:
  *
- *   (i)  re-seed / re-derive : a NON-DIRTY row takes the new source value.
- *   (B)  preserve-bytes      : a NON-DIRTY row is sent back byte-for-byte.
+ *     tier -> base jumps to the tier, ~170 prices recomputed
+ *     edit base -> ~170 prices recomputed from the new base
+ *     another tier -> base jumps again, ~170 recomputed again ... no limit
  *
- * They collide on "non-dirty row, and a re-derive was requested" — most
- * visibly on a row whose stored value the tool's own validator rejects
- * (production has exactly one: com.vng.passsdk.2508111020, TW = TWD 6.30).
+ * A recalculation is TOTAL. It overwrites every row INCLUDING ones the
+ * Manager typed by hand. `dirty` does NOT shield a row from it.
  *
- * DECIDED: RE-DERIVE WINS.
- *   Changing the base price is the Manager ACTIVELY asking "recompute every
- *   country from this new base". Honouring that on every row the Manager has
- *   not personally pinned is the whole point of the feature.
- *   Preserve-bytes governs the PASSIVE case — an ordinary submit where nobody
- *   asked for a recomputation. There, an untouched row goes back exactly as
- *   Google sent it, odd decimals and all.
+ * The line:
+ *     tier / base   = the Manager COMMANDING a recalculation  -> ignore dirty
+ *     sync / validate = everything else                       -> respect dirty
  *
- * So: `applyRederivedPrices` overwrites non-dirty rows (active request), while
- * a plain submit never calls it and the rows travel untouched.
+ * `dirty` is still load-bearing for exactly two jobs, and they are the two
+ * where nobody asked for a recalculation:
+ *
+ *   (a) RE-SEED after "Sync from Google" (`reseedOverrides`). A sync is data
+ *       arriving FROM OUTSIDE, not a Manager instruction to recompute, so an
+ *       unsaved hand edit must survive it. Different in kind from tier/base.
+ *   (b) DIRTY-SCOPED VALIDATION (`partitionOverrideValidation`, and its server
+ *       half in update-iap.ts's snapshotFromInput). Only a value the Manager
+ *       typed can block a submit; a value Google authored warns and travels
+ *       back untouched.
+ *
+ * Because a recalculation is destructive to hand-typed work, the CALLER must
+ * warn BEFORE invoking `applyRederivedPrices` when any row is dirty — never
+ * recompute first and report afterwards. IapForm implements that gate.
  *
  * ─────────────────────────────────────────────────────────────────────────
  * ⚠ NO VALUE FROM GOOGLE IS EVER TRANSFORMED HERE.
@@ -86,16 +96,23 @@ export function applyManagerEdit(
 /* ── 2. Re-derive (active Manager request) ─────────────────────────────── */
 
 /**
- * Replace every NON-DIRTY row with the newly derived price, and add rows for
- * regions the form did not have yet.
+ * Recalculate every row from a new source (a base-price conversion, or a
+ * tier's own table) and add rows for regions the form did not have yet.
  *
  * In the v3 model a base price has no field of its own — the ONLY way to
  * express "the base moved" is to write every regional config. This function
  * is that expression.
  *
- * Dirty rows are returned untouched: the Manager pinned them by hand and a
- * base-price change must not silently un-pin them (see `findReseedConflicts`
- * for how divergence is surfaced instead of resolved).
+ * ⚠ THE RESET IS TOTAL — hand-typed rows included. See the header: tier and
+ * base are recalculate-everything commands, so `dirty` is deliberately NOT
+ * consulted here. Every recomputed row comes back with dirty:false, because
+ * after a recalculation nothing is hand-pinned any more.
+ *
+ * ⚠ This is destructive to Manager work. Callers MUST warn first when any row
+ * is dirty (IapForm gates on exactly that) — never recompute and apologise.
+ *
+ * A region the source says nothing about is left exactly as it is: silence is
+ * not an instruction to change anything.
  */
 export function applyRederivedPrices(
   rows: RegionOverrideRow[],
@@ -108,9 +125,7 @@ export function applyRederivedPrices(
   for (const row of rows) {
     seen.add(row.region);
     const d = byRegion.get(row.region);
-    if (!d || row.dirty) {
-      // Dirty → Manager pinned it. No derived value → nothing to say about
-      // this region; leave it exactly as it is.
+    if (!d) {
       out.push(row);
       continue;
     }
@@ -132,6 +147,33 @@ export function applyRederivedPrices(
     });
   }
   return out;
+}
+
+/**
+ * Pick the base price to display after a tier is chosen.
+ *
+ * "Choosing a tier sets the base" — the tier carries ~170 entries and the base
+ * field must show one of them. Preference order:
+ *   1. the entry in the app's current base currency (Google enforces a
+ *      configured currency per app, so this is the one that means something)
+ *   2. the US entry (how the tool derives a base price when reading back:
+ *      onetime-product-adapter.ts pickDefaultPricingConfig)
+ *   3. the first entry, so a tier with neither still sets something
+ *
+ * Returned verbatim — the tier's own decimal string, never reformatted.
+ */
+export function pickBaseFromDerived(
+  derived: readonly DerivedRegionPrice[],
+  preferredCurrency: string,
+): { currency: string; priceDecimal: string } | null {
+  if (derived.length === 0) return null;
+  const want = preferredCurrency.trim().toUpperCase();
+  const byCurrency = derived.find(
+    (d) => d.currency.trim().toUpperCase() === want,
+  );
+  const us = derived.find((d) => d.regionCode === "US");
+  const pick = byCurrency ?? us ?? derived[0];
+  return { currency: pick.currency, priceDecimal: pick.priceDecimal };
 }
 
 /* ── 3. Re-seed (a fresh `initial` arrives mid-edit) ───────────────────── */
@@ -160,6 +202,10 @@ export interface ReseedResult {
  * compares fresh server truth (before) against stale client state (after),
  * inverted, so the review modal proposes writing the PRE-sync prices back
  * over Google's current ones. Confirming it would revert real prices.
+ *
+ * ⚠ THIS is where `dirty` still protects a row. A sync is data arriving from
+ * outside, NOT a Manager instruction to recompute — unlike tier/base, which
+ * reset everything (see the file header for the boundary).
  *
  * Semantics (i), as decided:
  *   - non-dirty row → re-seed from the new snapshot (it was only an echo)

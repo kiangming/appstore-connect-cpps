@@ -161,17 +161,17 @@ export async function PATCH(
           { status: 404 },
         );
       }
-      // Template entries are PINNED, not derivable. Picking a tier is an
-      // explicit Manager choice of what every country should cost, so a
-      // base-price re-derive must not recompute over it — `dirty: true` is
-      // exactly that statement. (Reachable once SC3 threads pricingSource /
-      // tierIdentifier into this payload; the flag is set correctly now so the
-      // two changes can't disagree later.)
+      // SC2b — template entries are NOT pinned. A tier is a fast way to set
+      // the base price, and base/tier are both recalculate-everything
+      // commands that overwrite each other without limit. Marking these dirty
+      // would freeze the tier against a later base edit, which is the
+      // opposite of the model. (Reachable once SC3 threads pricingSource /
+      // tierIdentifier into this payload.)
       regionOverrides = entries.map((e) => ({
         region: e.regionCode,
         currency: e.currency,
         priceDecimal: microsToDecimal(e.priceMicros, 6),
-        dirty: true,
+        dirty: false,
       }));
     }
 

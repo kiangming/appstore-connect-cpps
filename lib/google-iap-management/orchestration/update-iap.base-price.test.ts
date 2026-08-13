@@ -272,8 +272,18 @@ function managerPinsThenChangesBase(pinned: {
   };
 }
 
-describe("SC2 — dirty rows survive, unpinned rows re-derive", () => {
-  it("a row the Manager pinned survives a base-price change untouched", async () => {
+describe("SC2b — a base/tier recalculation is TOTAL", () => {
+  // ⚠ THIS TEST WAS INVERTED ON PURPOSE (SC2 -> SC2b). It used to assert that
+  // a hand-typed row SURVIVED a base-price change. The Manager decided the
+  // opposite model: the base price is the single source for every country
+  // price, a tier is just a fast way to set the base, and both are
+  // recalculate-everything commands that overwrite each other without limit.
+  // So a recalculation now overwrites hand-typed rows too — and the form warns
+  // BEFORE doing it (IapForm's pendingRederive gate), rather than after.
+  //
+  // `dirty` still protects a row from a "Sync from Google" re-seed, and still
+  // decides which rows can block a submit. Those are not recalculations.
+  it("overwrites a hand-typed row too — the reset spares nothing", async () => {
     await updateIapOnGoogle(
       jwt,
       managerPinsThenChangesBase({
@@ -284,9 +294,8 @@ describe("SC2 — dirty rows survive, unpinned rows re-derive", () => {
     );
 
     const sent = sentRegionalConfigs();
-    // Pinned: exactly what the Manager typed, not the converted 74000.
-    expect(sent.VN).toEqual({ currency: "VND", micros: "12345000000" });
-    // Unpinned: re-derived from the new base.
+    // Hand-typed, and still recomputed: 12345 is gone, the conversion wins.
+    expect(sent.VN).toEqual({ currency: "VND", micros: "74000000000" });
     expect(sent.US).toEqual({ currency: "USD", micros: "2990000" });
     expect(sent.JP).toEqual({ currency: "JPY", micros: "450000000" });
   });

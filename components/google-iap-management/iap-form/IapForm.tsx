@@ -45,6 +45,7 @@ import {
   applyManagerEdit,
   applyRederivedPrices,
   partitionOverrideValidation,
+  pickBaseFromDerived,
   reseedOverrides,
   type DerivedRegionPrice,
   type ReseedConflict,
@@ -247,6 +248,22 @@ export function IapForm({
   const [rederiving, setRederiving] = useState(false);
   const [rederiveError, setRederiveError] = useState<string | null>(null);
   const rederiveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * A recalculation the Manager must confirm first, because it would discard
+   * hand-typed rows. Held here rather than run-then-report: overwriting work
+   * and apologising afterwards is not a warning.
+   */
+  const [pendingRederive, setPendingRederive] = useState<{
+    run: () => Promise<void>;
+    dirtyCount: number;
+    trigger: "base price" | "tier";
+  } | null>(null);
+  /** Mirror of regionOverrides, readable from the debounce timer without
+   *  re-arming it on every keystroke. */
+  const overridesRef = useRef(regionOverrides);
+  useEffect(() => {
+    overridesRef.current = regionOverrides;
+  }, [regionOverrides]);
 
   useEffect(
     () => () => {
@@ -457,33 +474,73 @@ export function IapForm({
     }));
   }
 
-  function scheduleRederive(load: () => Promise<DerivedRegionPrice[] | null>) {
+  /**
+   * Run a recalculation. THE RESET IS TOTAL — every row is replaced, hand-typed
+   * ones included (SC2b: base and tier are recalculate-everything commands and
+   * overwrite each other without limit). `setBase` is true for a tier, which
+   * also moves the base price, since a tier is just a fast way to set it.
+   */
+  async function runRederive(
+    load: () => Promise<DerivedRegionPrice[] | null>,
+    setBase: boolean,
+  ) {
+    setRederiving(true);
+    setRederiveError(null);
+    try {
+      const derived = await load();
+      if (derived === null) return;
+      if (derived.length === 0) {
+        setRederiveError("No converted prices came back, so nothing was changed.");
+        return;
+      }
+      setRegionOverrides((rows) => applyRederivedPrices(rows, derived));
+      if (setBase) {
+        const base = pickBaseFromDerived(derived, baseCurrency);
+        if (base) {
+          setBasePriceDecimal(base.priceDecimal);
+          setBaseCurrency(base.currency);
+          setBaseDirty(true);
+        }
+      }
+    } catch (err) {
+      setRederiveError(
+        err instanceof Error ? err.message : "Couldn't reconvert prices.",
+      );
+    } finally {
+      setRederiving(false);
+    }
+  }
+
+  /**
+   * Debounce a recalculation, and GATE IT ON A WARNING when hand-typed rows
+   * would be lost.
+   *
+   * A total reset silently destroying five rows the Manager typed is not
+   * acceptable, so the count is stated BEFORE anything is recomputed and the
+   * Manager can cancel. With nothing hand-typed there is nothing to lose, so
+   * it just runs. (Same principle as the Apple stale-data feature: a
+   * destructive action asks first, it does not toast afterwards.)
+   */
+  function scheduleRederive(
+    load: () => Promise<DerivedRegionPrice[] | null>,
+    trigger: "base price" | "tier",
+  ) {
     // Edit mode only: create mode has no preloaded catalogue to recompute,
     // and the server bootstraps the regions on submit.
     if (!isEdit) return;
+    const setBase = trigger === "tier";
     if (rederiveTimer.current) clearTimeout(rederiveTimer.current);
     rederiveTimer.current = setTimeout(() => {
-      void (async () => {
-        setRederiving(true);
-        setRederiveError(null);
-        try {
-          const derived = await load();
-          if (derived === null) return;
-          if (derived.length === 0) {
-            setRederiveError(
-              "No converted prices came back, so nothing was changed.",
-            );
-            return;
-          }
-          setRegionOverrides((rows) => applyRederivedPrices(rows, derived));
-        } catch (err) {
-          setRederiveError(
-            err instanceof Error ? err.message : "Couldn't reconvert prices.",
-          );
-        } finally {
-          setRederiving(false);
-        }
-      })();
+      const dirtyCount = overridesRef.current.filter((r) => r.dirty).length;
+      if (dirtyCount > 0) {
+        setPendingRederive({
+          run: () => runRederive(load, setBase),
+          dirtyCount,
+          trigger,
+        });
+        return;
+      }
+      void runRederive(load, setBase);
     }, REDERIVE_DEBOUNCE_MS);
   }
 
@@ -875,7 +932,7 @@ export function IapForm({
               setPricingSource(s);
               if (s === "google_default") setTierIdentifier("");
               else if (tierIdentifier.trim()) {
-                scheduleRederive(() => fetchDerivedForTier(tierIdentifier, s));
+                scheduleRederive(() => fetchDerivedForTier(tierIdentifier, s), "tier");
               }
             }}
             appId={appId}
@@ -883,7 +940,7 @@ export function IapForm({
             onTierChange={(tier) => {
               setTierIdentifier(tier);
               if (pricingSource) {
-                scheduleRederive(() => fetchDerivedForTier(tier, pricingSource));
+                scheduleRederive(() => fetchDerivedForTier(tier, pricingSource), "tier");
               }
             }}
           />
@@ -914,7 +971,10 @@ export function IapForm({
                 const next = e.target.value;
                 setBasePriceDecimal(next);
                 setBaseDirty(true);
-                scheduleRederive(() => fetchDerivedForBase(next, baseCurrency));
+                scheduleRederive(
+                  () => fetchDerivedForBase(next, baseCurrency),
+                  "base price",
+                );
               }}
               placeholder={getCurrencyDecimals(baseCurrency) === 0 ? "23000" : "1.99"}
               className={`w-full rounded-lg border px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition ${
@@ -940,7 +1000,10 @@ export function IapForm({
                 const next = e.target.value;
                 setBaseCurrency(next);
                 setBaseDirty(true);
-                scheduleRederive(() => fetchDerivedForBase(basePriceDecimal, next));
+                scheduleRederive(
+                  () => fetchDerivedForBase(basePriceDecimal, next),
+                  "base price",
+                );
               }}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition"
             >
@@ -1086,6 +1149,53 @@ export function IapForm({
               : "Create on Google Play"}
         </button>
       </div>
+
+      {/* SC2b — WARN BEFORE A DESTRUCTIVE RESET, never after.
+          Recalculating from a tier or a new base price replaces EVERY row,
+          including ones the Manager typed by hand. Losing that work silently
+          is not acceptable, so the count is stated up front with a way out. */}
+      {pendingRederive && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+            <h2 className="text-base font-semibold text-slate-900">
+              Recalculate every country price?
+            </h2>
+            <p className="mt-2 text-sm text-slate-600">
+              Changing the {pendingRederive.trigger} recalculates all country
+              prices from it. That will overwrite{" "}
+              <strong className="font-semibold text-slate-900">
+                {pendingRederive.dirtyCount} price
+                {pendingRederive.dirtyCount === 1 ? "" : "s"} you typed by hand
+              </strong>
+              .
+            </p>
+            <p className="mt-1.5 text-xs text-slate-500">
+              Cancel keeps your prices exactly as they are; nothing is sent to
+              Google either way.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingRederive(null)}
+                className="rounded-lg px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const pending = pendingRederive;
+                  setPendingRederive(null);
+                  void pending.run();
+                }}
+                className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-700"
+              >
+                Recalculate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showDiff && diff && (
         <UpdateChangesPreviewModal

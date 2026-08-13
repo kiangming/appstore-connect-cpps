@@ -201,28 +201,24 @@ export async function updateIapOnGoogle(
   // through no carrier at all.
   //
   // A base-price change is the Manager ACTIVELY asking to recompute every
-  // country. So when the base moved, the conversion now OVERWRITES rows the
-  // Manager did not personally pin. Rows they did pin (`dirty`) are never
-  // touched — that is the merge rule: preserve only what the user did not
-  // change.
+  // country, so when the base moved the conversion OVERWRITES the catalogue.
   //
-  // `dirty` must come from the client; it is a record of an ACTION and
-  // cannot be re-derived here by comparing values (a value equal to cache
-  // may still have been typed on purpose, and vice versa). A payload that
-  // omits it — an older client, or a caller that never had the concept —
-  // is treated as all-non-dirty, which is the safe reading: it restores the
-  // documented "the base price drives the catalogue" behaviour rather than
-  // preserving echoes nobody vouched for.
+  // ⚠ SC2b — THE RESET IS TOTAL, hand-typed rows included. The base price is
+  // the single source for every country price, and picking a tier is just a
+  // fast way to set the base; both are recalculate-everything commands that
+  // overwrite each other, unbounded. So `dirty` is deliberately NOT consulted
+  // here. The boundary (see override-merge.ts header):
+  //     tier / base     = a command to recalculate  -> ignore dirty
+  //     sync / validate = everything else           -> respect dirty
+  // `dirty` still governs which rows may block a submit — see
+  // snapshotFromInput above — and the form warns BEFORE recalculating when
+  // hand-typed rows would be lost.
   //
   // Hotfix 9: capture and forward the catalog version Google used —
   // see create-iap.ts header comment for the cross-version trap.
   const baseChanged = Boolean(
     diff.attributes.basePriceMicros || diff.attributes.baseCurrency,
   );
-  const pinnedRegions = new Set(
-    input.regionOverrides.filter((r) => r.dirty).map((r) => r.region),
-  );
-
   let regionsVersion: string | undefined;
   try {
     const result = await buildRegionMapFromBasePrice(
@@ -234,8 +230,7 @@ export async function updateIapOnGoogle(
     let rederived = 0;
     for (const a of result.regions) {
       const isMissing = !prices[a.region];
-      const rederivable = baseChanged && !pinnedRegions.has(a.region);
-      if (!isMissing && !rederivable) continue;
+      if (!isMissing && !baseChanged) continue;
       if (!isMissing) rederived += 1;
       prices[a.region] = {
         currency: a.currency,
@@ -247,7 +242,7 @@ export async function updateIapOnGoogle(
       console.info(
         `[google-iap:update-iap] base-price re-derive pkg=${input.packageName} sku=${input.sku} ` +
           `base=${after.attributes.baseCurrency}/${after.attributes.basePriceMicros} ` +
-          `rederived=${rederived} pinned=${pinnedRegions.size} catalog=${result.regions.length}`,
+          `rederived=${rederived} catalog=${result.regions.length}`,
       );
     }
   } catch (err) {

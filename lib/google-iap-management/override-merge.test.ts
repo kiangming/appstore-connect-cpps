@@ -11,6 +11,7 @@ import {
   applyManagerEdit,
   applyRederivedPrices,
   partitionOverrideValidation,
+  pickBaseFromDerived,
   reseedOverrides,
 } from "./override-merge";
 import type { RegionOverrideRow } from "./form-state";
@@ -80,15 +81,17 @@ describe("applyRederivedPrices — the base price owns every row nobody pinned",
     expect(out.find((r) => r.region === "JP")?.priceDecimal).toBe("450.000000");
   });
 
-  it("NEVER touches a row the Manager pinned", () => {
+  it("SC2b: overwrites a hand-typed row too, and clears its dirty flag", () => {
+    // Inverted from SC2 on Manager decision — see the file header. After a
+    // recalculation nothing is hand-pinned any more, so dirty resets.
     const out = applyRederivedPrices(
       [row("US", "USD", "1.99"), row("VN", "VND", "12345", true)],
       derived,
     );
     expect(out.find((r) => r.region === "US")?.priceDecimal).toBe("2.990000");
     const vn = out.find((r) => r.region === "VN")!;
-    expect(vn.priceDecimal).toBe("12345");
-    expect(vn.dirty).toBe(true);
+    expect(vn.priceDecimal).toBe("74000.000000");
+    expect(vn.dirty).toBe(false);
   });
 
   it("applies the source value VERBATIM — no rounding, no reformatting", () => {
@@ -104,11 +107,11 @@ describe("applyRederivedPrices — the base price owns every row nobody pinned",
     expect(out.find((r) => r.region === "XX")?.priceDecimal).toBe("9.99");
   });
 
-  it("PRECEDENCE RULE (item 6): re-derive wins over preserve-bytes on a non-dirty odd-precision row", () => {
+  it("PRECEDENCE RULE: re-derive wins over preserve-bytes on an odd-precision row", () => {
     // TWD 6.30 is a real production value the tool's own validator rejects.
-    // On an ACTIVE re-derive request it is recomputed like any other unpinned
-    // row — the Manager asked for exactly that. Preserve-bytes governs the
-    // PASSIVE case, which never calls this function.
+    // On an ACTIVE recalculation it is recomputed like every other row — the
+    // Manager asked for exactly that. Preserve-bytes governs the PASSIVE case
+    // (an ordinary submit), which never calls this function.
     const out = applyRederivedPrices(
       [row("TW", "TWD", "6.30")],
       [{ regionCode: "TW", currency: "TWD", priceDecimal: "9.000000" }],
@@ -219,5 +222,118 @@ describe("partitionOverrideValidation — who authored the bad value decides", (
     );
     expect(blocking).toEqual({});
     expect(warnings).toEqual({});
+  });
+});
+
+/* ── SC2b: base is the single source; tier/base reset everything ────────── */
+
+describe("SC2b — the Manager's 4-step loop, each step overwriting the last", () => {
+  const tierA = [
+    { regionCode: "US", currency: "USD", priceDecimal: "4.990000" },
+    { regionCode: "VN", currency: "VND", priceDecimal: "119000.000000" },
+  ];
+  const fromBase = [
+    { regionCode: "US", currency: "USD", priceDecimal: "2.990000" },
+    { regionCode: "VN", currency: "VND", priceDecimal: "74000.000000" },
+  ];
+  const tierB = [
+    { regionCode: "US", currency: "USD", priceDecimal: "9.990000" },
+    { regionCode: "VN", currency: "VND", priceDecimal: "239000.000000" },
+  ];
+
+  it("tier → base → another tier: every step recomputes all, last write wins", () => {
+    // Start: live prices, plus one row the Manager typed by hand.
+    let rows = [
+      row("US", "USD", "1.99"),
+      row("VN", "VND", "49000.00", true), // hand-typed
+    ];
+
+    // 1. Pick a tier → everything recomputed, hand-typed row included.
+    rows = applyRederivedPrices(rows, tierA);
+    expect(rows.map((r) => r.priceDecimal)).toEqual([
+      "4.990000",
+      "119000.000000",
+    ]);
+    expect(rows.every((r) => r.dirty === false)).toBe(true);
+    // The tier also sets the base price.
+    expect(pickBaseFromDerived(tierA, "USD")).toEqual({
+      currency: "USD",
+      priceDecimal: "4.990000",
+    });
+
+    // 2. Edit the base to something else → recomputed again from the base.
+    rows = applyRederivedPrices(rows, fromBase);
+    expect(rows.map((r) => r.priceDecimal)).toEqual([
+      "2.990000",
+      "74000.000000",
+    ]);
+
+    // 3. Pick a different tier → recomputed again, overwriting step 2.
+    rows = applyRederivedPrices(rows, tierB);
+    expect(rows.map((r) => r.priceDecimal)).toEqual([
+      "9.990000",
+      "239000.000000",
+    ]);
+    expect(pickBaseFromDerived(tierB, "USD")).toEqual({
+      currency: "USD",
+      priceDecimal: "9.990000",
+    });
+
+    // 4. And again, unbounded — back to a base edit.
+    rows = applyRederivedPrices(rows, fromBase);
+    expect(rows.map((r) => r.priceDecimal)).toEqual([
+      "2.990000",
+      "74000.000000",
+    ]);
+  });
+
+  it("THE BOUNDARY: the same hand-typed row that a recalculation overwrites still survives a Sync", () => {
+    // Recalculation ignores dirty…
+    const afterRecalc = applyRederivedPrices([row("VN", "VND", "12345", true)], [
+      { regionCode: "VN", currency: "VND", priceDecimal: "74000.000000" },
+    ]);
+    expect(afterRecalc[0].priceDecimal).toBe("74000.000000");
+
+    // …but a sync (data arriving from outside, not a Manager command) does not.
+    const { rows } = reseedOverrides({
+      current: [row("VN", "VND", "12345", true)],
+      serverBefore: [row("VN", "VND", "49000.00")],
+      serverAfter: [row("VN", "VND", "74000.00")],
+    });
+    expect(rows[0].priceDecimal).toBe("12345");
+  });
+});
+
+describe("pickBaseFromDerived — a tier sets the base price", () => {
+  const entries = [
+    { regionCode: "US", currency: "USD", priceDecimal: "4.990000" },
+    { regionCode: "VN", currency: "VND", priceDecimal: "119000.000000" },
+  ];
+
+  it("prefers the entry in the app's configured currency", () => {
+    expect(pickBaseFromDerived(entries, "VND")).toEqual({
+      currency: "VND",
+      priceDecimal: "119000.000000",
+    });
+  });
+
+  it("falls back to the US entry, matching how a base price is read back", () => {
+    expect(pickBaseFromDerived(entries, "EUR")).toEqual({
+      currency: "USD",
+      priceDecimal: "4.990000",
+    });
+  });
+
+  it("returns null for an empty tier rather than inventing a base", () => {
+    expect(pickBaseFromDerived([], "USD")).toBeNull();
+  });
+
+  it("carries the decimal through verbatim", () => {
+    expect(
+      pickBaseFromDerived(
+        [{ regionCode: "TW", currency: "TWD", priceDecimal: "6.297531" }],
+        "TWD",
+      ),
+    ).toEqual({ currency: "TWD", priceDecimal: "6.297531" });
   });
 });

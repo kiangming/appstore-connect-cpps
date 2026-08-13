@@ -149,8 +149,8 @@ describe("SC2 — re-seed kills the write-backwards diff", () => {
   });
 });
 
-describe("SC2 — dirty tracking through a base-price re-derive", () => {
-  it("a row the Manager pinned survives; a row they never touched is recomputed", async () => {
+describe("SC2b — recalculation warns BEFORE it overwrites hand-typed work", () => {
+  it("with hand-typed rows: warns first, states the count, and recalculates only on confirm", async () => {
     const user = userEvent.setup();
     const initial = iapDetailToInitial(
       detail("1990000", "49000000000"),
@@ -159,13 +159,66 @@ describe("SC2 — dirty tracking through a base-price re-derive", () => {
     render(<IapForm {...props} mode={{ kind: "edit", initial }} />);
     await screen.findByText(/Per-country pricing/i);
 
-    // Manager pins VN by hand.
     const vn = await toolPriceInput("VN");
     await user.clear(vn);
     await user.type(vn, "12345");
-    expect(vn).toHaveValue("12345");
 
-    // …then changes the base price, which re-derives everything unpinned.
+    const basePrice = screen.getByPlaceholderText("1.99");
+    await user.clear(basePrice);
+    await user.type(basePrice, "2.99");
+
+    // The warning must arrive BEFORE anything is overwritten.
+    const dialog = await screen.findByText(/Recalculate every country price\?/i, {}, { timeout: 4000 });
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByText(/1 price you typed by hand/i)).toBeInTheDocument();
+    // Nothing recomputed yet.
+    expect(await toolPriceInput("US")).toHaveValue("1.99");
+    expect(await toolPriceInput("VN")).toHaveValue("12345");
+
+    await user.click(screen.getByRole("button", { name: /^Recalculate$/i }));
+
+    // Confirmed → the reset is TOTAL, hand-typed row included.
+    await waitFor(
+      async () => expect(await toolPriceInput("US")).toHaveValue("2.990000"),
+      { timeout: 4000 },
+    );
+    expect(await toolPriceInput("VN")).toHaveValue("74000.000000");
+  });
+
+  it("Cancel leaves every price exactly as it was", async () => {
+    const user = userEvent.setup();
+    const initial = iapDetailToInitial(
+      detail("1990000", "49000000000"),
+      APP_DEFAULTS,
+    );
+    render(<IapForm {...props} mode={{ kind: "edit", initial }} />);
+    await screen.findByText(/Per-country pricing/i);
+
+    const vn = await toolPriceInput("VN");
+    await user.clear(vn);
+    await user.type(vn, "12345");
+
+    const basePrice = screen.getByPlaceholderText("1.99");
+    await user.clear(basePrice);
+    await user.type(basePrice, "2.99");
+
+    await screen.findByText(/Recalculate every country price\?/i, {}, { timeout: 4000 });
+    await user.click(screen.getByRole("button", { name: /^Cancel$/i }));
+
+    expect(screen.queryByText(/Recalculate every country price\?/i)).toBeNull();
+    expect(await toolPriceInput("US")).toHaveValue("1.99");
+    expect(await toolPriceInput("VN")).toHaveValue("12345");
+  });
+
+  it("with NOTHING hand-typed: no warning, it just recalculates", async () => {
+    const user = userEvent.setup();
+    const initial = iapDetailToInitial(
+      detail("1990000", "49000000000"),
+      APP_DEFAULTS,
+    );
+    render(<IapForm {...props} mode={{ kind: "edit", initial }} />);
+    await screen.findByText(/Per-country pricing/i);
+
     const basePrice = screen.getByPlaceholderText("1.99");
     await user.clear(basePrice);
     await user.type(basePrice, "2.99");
@@ -174,8 +227,7 @@ describe("SC2 — dirty tracking through a base-price re-derive", () => {
       async () => expect(await toolPriceInput("US")).toHaveValue("2.990000"),
       { timeout: 4000 },
     );
-    // The pinned row is untouched by the re-derive.
-    expect(await toolPriceInput("VN")).toHaveValue("12345");
+    expect(screen.queryByText(/Recalculate every country price\?/i)).toBeNull();
   });
 
   it("the re-derive applies Google's decimals verbatim — no rounding", async () => {
