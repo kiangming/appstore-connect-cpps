@@ -3759,6 +3759,71 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <strong>Sync from Google</strong> = Google → tool (cập nhật snapshot, không push gì lên Google). Chọn đúng hướng trước khi action.</p>
         </div>
 
+        <h2 class="section-title">Base price &amp; Tier — nguồn duy nhất quyết định giá mọi nước (Cycle 44)</h2>
+        <p><strong>Base price là nguồn DUY NHẤT</strong> quyết định giá của khoảng 170 nước. Chọn tier chỉ là
+        cách nhanh để đặt base — base sẽ nhảy theo <strong>giá USD</strong> của tier đó (template giá của Google
+        luôn dùng cột <code class="inline">Price (USD)</code> cố định, nên con số USD là giá chuẩn của tier).</p>
+        <p>Cả hai thao tác đều có nghĩa <em>"tính lại giá tất cả các nước"</em>, và <strong>lần sau ghi đè lần
+        trước</strong>, lặp bao nhiêu lần cũng được:</p>
+        <table class="docs-table">
+          <thead><tr><th>#</th><th>Bạn làm</th><th>Kết quả</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Chọn tier</td><td>Base nhảy theo giá USD của tier → ~170 giá nước tính lại theo tier</td></tr>
+            <tr><td>2</td><td>Sửa base price</td><td>~170 giá nước tính lại theo base mới</td></tr>
+            <tr><td>3</td><td>Chọn tier khác</td><td>Base nhảy lần nữa → ~170 giá tính lại lần nữa</td></tr>
+            <tr><td>4</td><td>…</td><td>Không giới hạn — thao tác cuối cùng thắng</td></tr>
+          </tbody>
+        </table>
+        <p>Giá tính lại hiện ngay trong bảng per-country <strong>trước khi Save</strong>, nên bạn xem lại
+        (và chỉnh tay thêm nếu muốn) rồi mới lưu.</p>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Tính lại sẽ GHI ĐÈ cả những giá bạn tự gõ tay</div>
+          <p>Reset là <strong>toàn bộ</strong>. Nếu có giá bạn tự gõ sắp bị mất, tool <strong>hỏi trước</strong>
+          và nói rõ mất bao nhiêu dòng — bấm <strong>Cancel</strong> thì không có gì thay đổi.
+          Tool không bao giờ tính lại xong rồi mới báo.</p>
+        </div>
+
+        <div class="callout">
+          <div class="callout-title">Phân biệt: "tính lại" ≠ "Sync from Google"</div>
+          <p><strong>Tier / sửa base = bạn RA LỆNH tính lại</strong> → ghi đè hết, kể cả dòng gõ tay.<br>
+          <strong>Sync from Google = dữ liệu từ Google về</strong> → dòng bạn chưa đụng thì cập nhật, còn
+          <strong>dòng bạn đã gõ tay thì GIỮ NGUYÊN</strong>. Nếu dòng bạn sửa mà trên Google cũng đổi,
+          tool hiện cả hai giá kèm nút <em>Keep mine</em> / <em>Take Google's</em> — tool không tự chọn thay bạn.</p>
+        </div>
+
+        <h2 class="section-title">Giá lẻ từ Google — tool KHÔNG bao giờ tự sửa (Cycle 44)</h2>
+        <p>Một số giá trên Google có nhiều số lẻ hơn bảng currency của tool cho phép (thực tế có 1 item:
+        <code class="inline">com.vng.passsdk.2508111020</code>, TW = <strong>TWD 6.30</strong>, trong khi tool coi
+        TWD là số nguyên).</p>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Nguyên tắc cứng: không làm tròn, không cắt, không "chuẩn hoá"</div>
+          <p>Tool hiển thị <strong>đủ số lẻ</strong>, và dòng bạn <strong>không đụng tới</strong> sẽ được gửi lại
+          Google <strong>y hệt byte-for-byte</strong> như lúc nhận về. Làm tròn TWD 6.30 → 6 là âm thầm giảm giá
+          thật 4,8% — tool không được phép quyết định thay bạn.</p>
+        </div>
+        <ul>
+          <li>Dòng như vậy hiện <strong>cảnh báo màu amber</strong>, <strong>KHÔNG chặn</strong> Save — bạn vẫn
+          sửa và lưu được mọi thứ khác của item (kể cả title).</li>
+          <li>Chỉ khi <strong>bạn tự gõ</strong> vào dòng đó nó mới thành lỗi chặn — vì lúc đó giá là của bạn,
+          bạn sửa được.</li>
+          <li>Muốn đổi TWD 6.30 thành số khác? Sửa <strong>có chủ đích</strong> trên form hoặc trên Play Console.</li>
+        </ul>
+
+        <h2 class="section-title">Update báo "no changes" dù bạn có sửa (Cycle 44)</h2>
+        <p>Sau mỗi lần update, tool <strong>đọc lại item từ Google</strong> và so với thứ vừa gửi. Nếu trạng thái
+        trên Google không đổi, tool báo <strong>no changes</strong> chứ không báo thành công.</p>
+        <div class="callout">
+          <div class="callout-title">Vì sao lại quan trọng</div>
+          <p>Trước Cycle 44, tool báo thành công dựa trên <em>diff nó tự tính</em>, không phải thứ Google
+          <em>thực sự làm</em> — nên một lần ghi không-thay-đổi-gì trông y hệt một lần ghi thật ở mọi tầng
+          (toast, log, audit). Bug base price vì thế sống ~3 tháng. Giờ tool chỉ báo thành công khi kiểm chứng được.</p>
+        </div>
+        <p>Gặp "no changes" mà bạn chắc chắn có sửa → item trên Google <strong>không</strong> giống thứ modal
+        vừa hiện. Kiểm tra lại trên Play Console; log server có dòng
+        <code class="inline">[google-iap:update-iap] NO-OP WRITE …</code> (hoặc <code class="inline">PARTIAL WRITE</code>
+        kèm danh sách nước nếu chỉ áp dụng được một phần).</p>
+
         <h2 class="section-title">Item bị xóa trên Google (Deleted-on-Google)</h2>
         <p>Nếu item đã bị xóa hoặc đổi tên trên Play Console, trang Edit sẽ hiển thị trạng thái
         <strong>"This item was deleted on Google Play"</strong> thay vì form edit thông thường.

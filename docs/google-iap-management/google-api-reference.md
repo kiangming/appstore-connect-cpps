@@ -379,6 +379,40 @@ conversion). The resulting region map is merged into the IAP body
 *before* the patch call. Manager-supplied region overrides win over
 the converted result.
 
+#### ⚠ OneTimeProduct has NO base-price field
+
+The legacy `InAppProduct` carried `defaultPrice` as a first-class,
+honoured field. **The v3 `OneTimeProduct` schema does not.** All pricing
+lives in `purchaseOptions[].regionalPricingAndAvailabilityConfigs`, one
+entry per region.
+
+Consequences, learned the hard way (regression at `44900f8`, found
+2026-08-13 after ~3 months live):
+
+- The tool's `defaultPrice` reaches Google **only** by being stamped onto
+  the `US` region config, and the adapter skips that stamp whenever
+  `prices` already contains `US`. The Edit form preloads every cached
+  region, so `US` was always present and a base-price change reached
+  Google through **no carrier at all** — a 200 response, zero change.
+- Therefore **the only way to express "the base price moved" is to write
+  every regional config.** `update-iap.ts` re-derives the whole catalogue
+  via `convertRegionPrices` when the base changes; fill-missing is not
+  enough.
+- `inAppProductToOneTimeProduct` reports `defaultPriceShadowed` when the
+  caller's `defaultPrice` disagrees with the `US` config that shadowed it;
+  `publisher-client.ts` logs it on **both** write paths (patch + insert):
+
+  ```
+  [google-iap:publisher] base-price-shadowed op=patch pkg=… sku=… default_price=… us_region=…
+  ```
+
+- On READ, the base price is *derived back* from the `US`-or-first config
+  (`pickDefaultPricingConfig`), which is why a no-op write looks like "the
+  price reverted" after a refresh.
+
+**When migrating any other endpoint: enumerate the fields the old API
+honoured and prove each one still lands. A 200 is not proof.**
+
 If `convertRegionPrices` itself fails, the orchestrator logs and
 proceeds with only the explicit prices — Google will then reject
 with a clear "must provide a price..." error and the Manager gets

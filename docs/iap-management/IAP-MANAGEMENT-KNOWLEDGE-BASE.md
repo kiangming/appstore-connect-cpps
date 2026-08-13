@@ -2749,6 +2749,110 @@ Neither is detectable by reading the test; only a mutation reveals them.
 that fails for the wrong reason proves nothing (P10's rule, extended: the failure
 message must name the defect, not an unrelated symptom).
 
+**P17 — A MUTATION MUST PROVE IT WAS APPLIED. A GREEN MUTATION IS A FAILED
+MUTATION, NOT A PASS.**
+
+Companion to P16, and the missing half of it. P16 says mutate the test and check
+what it failed on. P17 says: first check the mutation *landed on the code you
+meant to break*.
+
+Instance (Google base-price cycle SC3, `a3e9b1b`): the fix moved
+`submitUpdate` to send `buildBody()` whole instead of hand-picking fields. The
+mutation-check was a `perl -0pi -e 's/body: JSON.stringify(buildBody()),/<hand-
+rolled>/'` — but `submitCreate` contains the SAME line and appears FIRST, so the
+non-global substitution rewrote the create path (already correct, untested here)
+and never touched `submitUpdate`. The suite stayed green. **A green result there
+is visually indistinguishable from a legitimate "the guard holds" pass** — the
+only reason it was caught was expecting red and interrogating the green.
+Re-applied to `submitUpdate` it failed with `expected undefined to be
+'default_template'`, naming the dropped field exactly.
+
+Rules:
+1. After mutating, **verify the edit landed**: `grep -c MUTATION <file>`, or read
+   back the diff, before running anything. Prefer an anchored, position-aware
+   edit (split on the enclosing function) over a bare pattern that may match
+   siblings — duplicated call sites are the norm in twin-path code (P1), so a
+   bare pattern matching the wrong twin is the DEFAULT failure, not an edge case.
+2. **Treat a green mutation as an incident.** Investigate it as either (a) the
+   mutation missed, or (b) the test is fake (P16). Never record it as a pass.
+3. State in the report which site was mutated and what the failure message said.
+
+This is a discipline correction to the mutation-check practice itself, which by
+this point had been used ~8 times across the project (P10, P16, and the Google
+base-price cycle's four sub-chunks).
+
+---
+
+#### 10.13.K — Google single-item base-price cycle (2026-08-13, `f6b9b22` → `c0a9715`)
+
+Symptom: on the Google IAP Edit form, changing the base price (or picking a
+tier) reported success while Google's state never moved. Three distinct
+defects, all worth keeping.
+
+**(a) THE SHARPEST STATUS-PRINCIPLE INSTANCE YET (P5).** `updateIapOnGoogle`
+returned `hasChanges: true` unconditionally — it reported the diff it COMPUTED,
+never what Google DID. With `logging.ts` recording no body and no size, a write
+that changed nothing was **indistinguishable from a real one at every layer**:
+success toast, API response, audit row, Railway log. That is why it survived
+from `44900f8` (2026-05-21) to a Manager spot-check ~3 months later. The fix
+compares against the post-write re-read the client already fetched
+(`orchestration/verify-write.ts`) and reports `hasChanges:false` + a `NO-OP
+WRITE` log line when nothing moved. **If a tool cannot distinguish its own
+no-op from its own success, no amount of testing downstream will surface the
+bug.**
+
+**(b) A MIGRATION SILENTLY DROPPED A CAPABILITY THE OLD API HAD.** Legacy
+`inappproducts.patch` honoured `defaultPrice` as a first-class field. The v3
+`OneTimeProduct` schema has **no base-price field at all** — pricing lives only
+in `purchaseOptions[].regionalPricingAndAvailabilityConfigs`. The Hotfix-8
+Phase-2 write migration (`44900f8`) ported the call but not that capability, and
+nothing failed loudly because the adapter stamps `defaultPrice` onto the US
+region *only when `prices` has no US entry* — and the Edit form preloads every
+cached region, so US was always present and the base price had no carrier.
+⇒ **When migrating an API, enumerate the fields the OLD one honoured and prove
+each still lands. A 200 response is not proof.** Guarded now by
+`defaultPriceShadowed` on the adapter write shape, logged at BOTH write call
+sites (patch and insert), because the shape is a property of the schema, not of
+one code path (P1).
+
+**(c) THE WRITE-BACKWARDS DIFF — an inverted merge in a second coat.**
+`initial` is a live prop, but the form seeds `useState` from it exactly once and
+the page renders `<IapForm>` with no `key`. `router.refresh()` — which "Sync
+from Google" fires deliberately — reconciles a NEW `initial` into the SURVIVING
+instance. The diff then compared **fresh server truth (before) against stale
+client state (after)**, so the review modal proposed writing the PRE-sync prices
+back over Google's current ones: confirming it would have reverted real prices.
+The comment at `UnifiedPricingTable.tsx:129-131` states the intended re-seed
+("so the edit form reloads regionOverrides from the freshly-synced DB") — an
+intent `useState(initial)` can never honour. ⇒ **A comment asserting a behaviour
+React does not implement is a bug with a green light on it. When state is seeded
+from a prop, either key the component or write the re-seed.**
+
+**(d) DATA FROM THE STORE IS NEVER TRANSFORMED — hard constraint, not advice.**
+A cache scan (286,443 price rows / 1,664 items) found exactly ONE row whose
+value the tool's own currency table rejects: `com.vng.passsdk.2508111020`,
+TW = **TWD 6.30**. Every other 0-decimal currency (VND, JPY, KRW, IDR, CLP, HUF)
+had **zero** fractional rows. So it is not float noise from `convertRegionPrices`
+— it is a REAL price on Google. The originally-prescribed fix (round on seed)
+would have silently rewritten a live price by −4.8% on the next submit.
+⇒ **Never round, truncate, normalise or "clean up" a value that came from the
+store. Display every decimal; send an untouched row back byte-for-byte.** The
+authorship rule follows from it: only a value the MANAGER typed may block a
+submit; a value the store authored warns (client `partitionOverrideValidation`
+AND server `snapshotFromInput` — a guard duplicated in two layers, P14).
+
+**The tier/base model (Manager-locked).** The base price is the SINGLE SOURCE
+for every country price; picking a tier is just a fast way to set the base
+(from the tier's **USD** figure — Google templates use a fixed `Price (USD)`
+header, so that is the canonical number). Both are RECALCULATE-EVERYTHING
+commands, they overwrite each other, and the loop is unbounded. The reset is
+TOTAL — hand-typed rows included — so the form **warns before** recalculating
+when any hand-typed row would be lost, naming the count, with a cancel. The
+boundary that keeps `dirty` coherent:
+
+> **tier / base = the Manager COMMANDING a recalculation → ignore `dirty`.
+> sync / validate = everything else → respect `dirty`.**
+
 ---
 
 #### 10.13.K — OPEN BACKLOG: Google bulk-import OVERWRITE replaces listings (P4 replace-semantics RMW violation)

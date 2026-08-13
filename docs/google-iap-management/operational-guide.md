@@ -123,12 +123,79 @@ the submit button.
    - Attributes (status, base price, currency, …)
    - Listings (Added · Modified · Removed) per locale
    - Region pricing (Added · Modified · Removed) per region
-4. Click **Confirm update.** The server posts the new state via
-   `inappproducts.patch`, syncs the cache, and records the full diff
-   in the IAP_UPDATE audit entry.
+4. Click **Confirm update.** The server posts the new state, syncs the
+   cache, and records the diff **plus the verified outcome** in the
+   IAP_UPDATE audit entry.
 
 If the diff is empty (i.e. you opened the form and clicked Review
 without changes), the modal disables Confirm.
+
+### 5.1 Base price and tiers — how country prices are decided
+
+**The base price is the single source for every country price.** Picking a
+tier is just a fast way to set the base: the base jumps to the tier's
+**USD** figure (Google's pricing templates use a fixed `Price (USD)`
+column, so that number is the tier's canonical price).
+
+Both actions mean the same thing — *recalculate every country from this* —
+and each one overwrites the last, as many times as you like:
+
+| # | You do | What happens |
+|---|---|---|
+| 1 | Pick a tier | Base jumps to the tier's USD price; ~170 country prices recalculated from the tier |
+| 2 | Type a different base price | ~170 country prices recalculated from the new base |
+| 3 | Pick a different tier | Base jumps again; ~170 recalculated again |
+| 4 | … | No limit — the last action wins |
+
+The recalculated prices appear in the per-country table **before** you
+save, so you can review (and then hand-adjust) them.
+
+> ⚠ **A recalculation replaces EVERY row, including prices you typed by
+> hand.** If any hand-typed price would be lost, the tool asks first and
+> tells you how many — Cancel changes nothing. It never recalculates and
+> then tells you afterwards.
+
+### 5.2 Why an untouched price may show a warning instead of an error
+
+Some prices on Google carry more decimal places than the tool's currency
+table expects (production has one: `com.vng.passsdk.2508111020`,
+TW = TWD 6.30, where the tool treats TWD as whole-number-only).
+
+**The tool never rounds, trims or "fixes" a value that came from Google.**
+It shows every decimal, and a row you have not touched is sent back to
+Google byte-for-byte, exactly as received.
+
+So such a row shows an amber **warning**, not a blocking error — you can
+still edit and save anything else on the item. It only becomes a blocking
+error once *you* type into that row, because then it is your value to fix.
+If you want TWD 6.30 to become something else, change it deliberately —
+the tool will not decide that for you.
+
+### 5.3 "Sync from Google" mid-edit
+
+**Sync from Google** replaces the tool's stored prices with Google's live
+values and reloads the form. Rows you have not edited are refreshed;
+**rows you typed by hand are kept.** If a row you edited ALSO changed on
+Google, the tool shows both values side by side with *Keep mine* /
+*Take Google's* — it will not choose for you.
+
+(Note this is the opposite of a tier/base recalculation, which does
+overwrite hand-typed rows. A sync is data arriving from Google; a
+recalculation is you telling the tool to recompute.)
+
+### 5.4 If the update did not actually change anything
+
+After every update the tool re-reads the item from Google and compares it
+against what it sent. If Google's state did not move, the result is
+reported as **no changes**, not success, and the server log carries:
+
+```
+[google-iap:update-iap] NO-OP WRITE pkg=… sku=… requested_base=… applied_base=… …
+```
+
+A partially-applied write logs `PARTIAL WRITE` with the region list. If
+you see either, the item on Google is NOT what the review modal showed —
+re-check on Play Console before assuming the change landed.
 
 ---
 
@@ -406,3 +473,13 @@ The template file format is documented in
 - **Stale cache after manual change on Google Play UI** → click
   Refresh on Apps or App detail. The tool's cache only updates on the
   tool's own writes (single IAP / Bulk Import) or explicit Refresh.
+- **Update said "no changes" but you did change something** → the tool
+  verified against Google after writing and Google's state had not moved
+  (see §5.4). Grep the server log for `NO-OP WRITE`. This is the tool
+  refusing to claim a success it could not confirm — it is not a display
+  glitch.
+- **A country price shows an amber warning you did not cause** → the value
+  came from Google with more decimals than that currency normally allows
+  (see §5.2). It does not block saving and it is sent back unchanged.
+- **Price precision audit across the whole cache** → run the runbook at
+  `docs/google-iap-management/diagnostics/price-precision-audit.md`.
