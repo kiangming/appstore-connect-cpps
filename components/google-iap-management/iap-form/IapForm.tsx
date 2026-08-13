@@ -704,15 +704,25 @@ export function IapForm({
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            purchaseType,
-            status,
-            defaultLanguage,
-            listings: buildBody().listings,
-            baseCurrency,
-            basePriceDecimal,
-            regionOverrides: buildBody().regionOverrides,
-          }),
+          /**
+           * SC3 — SEND THE BODY WHOLE.
+           *
+           * This used to hand-roll the payload and pick two fields out of
+           * buildBody(), silently dropping `pricingSource` and
+           * `tierIdentifier`. The PATCH route has always had a branch that
+           * resolves a tier's ~170 prices from those two fields
+           * (route.ts:146-176) — with them never sent, that branch was
+           * unreachable dead code, and the on-screen promise below the
+           * pricing-source cards ("Picked tier's region prices will replace
+           * any manual overrides") was true on create and FALSE on edit.
+           *
+           * The shared builder is the single definition of this payload
+           * (iap-save-body.ts). Re-picking fields here is what let the two
+           * drift apart in the first place, so don't: send what it builds.
+           * `sku` is ignored by the route (it comes from the URL and is
+           * immutable) and is harmless in the body.
+           */
+          body: JSON.stringify(buildBody()),
         },
       );
       const body = (await res.json().catch(() => ({}))) as {

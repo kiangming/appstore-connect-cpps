@@ -285,3 +285,93 @@ describe("SC2 — dirty-scoped blocking (option B)", () => {
     ).toBeInTheDocument();
   });
 });
+
+/* ── SC3: the tier reaches the server ──────────────────────────────────── */
+
+describe("SC3 — pricingSource + tierIdentifier reach the PATCH payload", () => {
+  it("the update body carries the tier, so the route's template branch is live", async () => {
+    const user = userEvent.setup();
+    // A default template exists, so the selector auto-picks it and a tier
+    // must be chosen before submit is allowed.
+    fetchMock.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes("pricing-templates/availability")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            defaultExists: true,
+            appExists: false,
+            defaultTiers: ["Tier 5"],
+            appTiers: [],
+          }),
+        });
+      }
+      if (u.includes("tier-entries")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            entries: [
+              { regionCode: "US", currency: "USD", priceDecimal: "4.99" },
+              { regionCode: "VN", currency: "VND", priceDecimal: "119000" },
+            ],
+          }),
+        });
+      }
+      if (u.includes("live-prices")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ ok: true, prices: livePrices }),
+        });
+      }
+      if (u.includes("regions/catalog")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ regions: catalogRegions }),
+        });
+      }
+      // The PATCH itself.
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({ sku: "gem_pack_small", hasChanges: true }),
+      });
+    });
+
+    const initial = iapDetailToInitial(
+      detail("1990000", "49000000000"),
+      APP_DEFAULTS,
+    );
+    render(<IapForm {...props} mode={{ kind: "edit", initial }} />);
+    await screen.findByText(/— Pick a tier —/i);
+
+    const tierSelect = screen
+      .getAllByRole("combobox")
+      .find((el) => el.textContent?.includes("Pick a tier"))!;
+    await user.selectOptions(tierSelect, "Tier 5");
+
+    // Picking a tier recalculates AND sets the base price from it.
+    await waitFor(
+      async () => expect(await toolPriceInput("US")).toHaveValue("4.99"),
+      { timeout: 4000 },
+    );
+    expect(screen.getByPlaceholderText("1.99")).toHaveValue("4.99");
+
+    await user.click(screen.getByRole("button", { name: /review changes/i }));
+    await screen.findByText(/confirm to push these updates/i);
+    await user.click(screen.getByRole("button", { name: /confirm update/i }));
+
+    await waitFor(() => {
+      const patch = fetchMock.mock.calls.find(
+        (c) => (c[1] as RequestInit | undefined)?.method === "PATCH",
+      );
+      expect(patch).toBeDefined();
+      const sent = JSON.parse((patch![1] as RequestInit).body as string);
+      // The two fields the hand-rolled payload used to drop.
+      expect(sent.pricingSource).toBe("default_template");
+      expect(sent.tierIdentifier).toBe("Tier 5");
+      // …and the rest of the payload is still intact.
+      expect(sent.basePriceDecimal).toBe("4.99");
+      expect(sent.listings).toBeDefined();
+      expect(sent.regionOverrides.length).toBeGreaterThan(0);
+    });
+  });
+});
