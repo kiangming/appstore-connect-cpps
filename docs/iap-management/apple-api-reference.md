@@ -351,6 +351,77 @@ This matches Manager Q-K's "continue-on-fail semantics — Manager workflow
 tolerant" directive. POST failures (5xx, 4xx) still hit the existing
 `failed-set` / `failed-lookup` / `failed-exception` outcomes.
 
+### Per-territory CUSTOM prices (SC1–SC3, Aug 2026)
+
+Manager-authored per-territory overrides that sit **on top of** the template
+layer above. Design: `design-apple-custom-territory-prices.md`.
+
+**Storage shape — never a price-point id.** `iap_mgmt.iap_custom_prices`
+(`iap_id, territory_code, currency_code, customer_price`, PK
+`(iap_id, territory_code)`) is deliberately isomorphic to
+`price_tier_template_entries` minus `tier_id`/`proceeds`. Apple's price-point id
+is per-IAP (`{s,t,p}` base64, `price-point-id.ts`) so it cannot exist before the
+IAP does — and the Create flow reaches the orchestrator only *after* the shell is
+POSTed. Storing `(territory, price)` means ids resolve server-side at submit down
+the **same** path a template entry takes, which is what makes Create and Edit
+structurally identical. A stored id would also go stale the moment Apple
+withdraws that point.
+
+**The merge — one price point per territory, keyed.** `additionalPricePointIds`
+is territory-**anonymous**: the territory exists only inside the opaque id and
+nothing downstream dedupes. `runPricingFlow` therefore resolves overrides into a
+`Map<territory, {pricePointId, provenance}>` — template loop first, then the
+custom loop whose `set()` is unconditional — and flattens the array from the Map
+last. Appending customs to a flat array would put **two `manualPrices` entries
+for one territory** into a single replace-all POST: that corrupts the request
+shape (Apple's response to it is unverified), it does not merely pick a wrong
+value. The Map mirrors in the payload what the PK enforces in the DB.
+
+**Scope**: customs apply under **all three** sources including `APPLE`, where
+they are the only overrides — the custom loop sits outside the
+`source.kind !== "APPLE"` branch by construction.
+
+**Reading the current set** (`custom-prices/baseline` route): territory list from
+`/v1/territories`, template values from the DB for the current tier only, and
+existing manual prices via `getPriceScheduleForIap` → `unpackPriceSchedule`,
+filtered to `startDate === null`. That filter is load-bearing: `unpackPriceSchedule`
+also returns future-dated entries (they feed the view page's upcoming-changes
+table), so without it a scheduled change reads as the current price and the
+import action below would adopt tomorrow's price as today's custom.
+
+**The picker's option list** (`price-points` route) reuses
+`listPricePointsForIap` — the same function the orchestrator matches against at
+submit, so the client rule ("only offer prices Apple lists here") and the server
+rule ("`findPricePointByUsdPrice` must match") cannot diverge. It returns
+**prices only, never ids**. Because the `(territory, customerPrice) → tier`
+catalog is global across IAPs (§10.13.I), an unsynced draft reads the catalog
+through a **donor** IAP already on Apple in the same app; with no donor anywhere
+the picker is disabled with its reason and there is deliberately **no**
+`price_tier_territories` fallback (that table is a Manager CSV, ~96 prices per
+territory against Apple's ~600, and can name prices Apple has no point for).
+
+**J-5 outcome precedence.** A custom that cannot be applied is **red**, not the
+amber template-partial:
+
+| Outcome | When | Severity |
+|---|---|---|
+| `set` | everything resolved | SUCCESS |
+| `partial-template-fail` | only TEMPLATE entries unresolved — those territories fall back to Apple auto-equalisation, the documented behaviour of a sparse template | ERROR (amber in UI) |
+| `partial-custom-fail` | ≥1 CUSTOM unresolved. **Outranks** the above so a failed custom can never be flattened into it, nor reported as `set` | ERROR (red, territory named) |
+
+`MissingPricePoint` gained `source: "template" \| "custom"` and
+`reason: "no-apple-price-point" \| "territory-fetch-failed"`; `tier_id` is now
+nullable (a custom has no tier). Each custom is an explicit per-territory
+instruction, so one that cannot be applied is that instruction failing —
+customs deliberately do **not** inherit the template path's silent fallback.
+
+**Audit** reuses `SET_PRICE_SCHEDULE` (no new action type for the pricing run),
+with `custom_territory_count`, `custom_territories[].resolved`,
+`resolution_by_territory {custom, template, custom_over_template}` and
+`failed_custom_territories`. The three persistence types
+(`CUSTOM_PRICES_SAVED` / `_CLEARED` / `_REBASELINE`) were added by migration
+`20260812000000`.
+
 ### Source selection UI
 
 Selection lives in three surfaces:

@@ -1,7 +1,11 @@
 # Apple IAP — per-territory Custom Prices (Create + Edit)
 
 **Module**: Apple IAP Management (`lib/iap-management/`, schema `iap_mgmt`) — **NOT** Google IAP.
-**Status**: INVESTIGATION + DESIGN + MOCKUP. No implementation. Hold for Manager review.
+**Status**: ✅ **IMPLEMENTED** (Aug 2026) — SC1 `c8dcbef` persistence + pure model ·
+SC2 `90560fc` dialog + picker + import-existing · SC3 `74b9739` orchestration merge +
+both silent gates + submit blocking. Migrations `20260811000000` (P2 fix) and
+`20260812000000` (this feature) applied by the Manager.
+As-built corrections in **§6** — the original design text above them is kept verbatim.
 **Mockup**: `docs/iap-management/design/apple-custom-territory-prices-mockup.html`
 **Date**: 2026-08-11
 
@@ -19,6 +23,7 @@ over template values for the territories they cover.
 | # | Locked decision |
 |---|---|
 | 1 | Scope covers BOTH the Edit IAP form and the Create IAP form. |
+| | ↳ **AS-BUILT wording (Manager, Aug 2026)**: custom prices are available **once a draft exists**, which is a precondition of every create — `canCreate = mode === "edit" && !syncedToApple`, so *Create on Apple* only ever runs from the Edit page. The New form shows *"Save as draft first"*. This adds no step the create flow did not already require, and keeps the write path to one route. See §6.5. |
 | 2 | Custom overrides template entries for the territories it covers; territories without a custom keep template/auto behaviour exactly as today. |
 | 3 | **Base-price change → STALE, not reset.** Customs are never auto-destroyed. They are marked stale and **submit is blocked** until the Manager resolves it. |
 
@@ -917,3 +922,113 @@ the customs-only-under-`APPLE` test fails with zero `applyPricingSchedule` calls
 | EDIT | `components/iap-management/iap-form/IapForm.tsx` (both payload sites) · `SubmitChecklist.tsx` · `UpdateChangesPreviewModal.tsx` |
 | EDIT | `app/api/iap-management/apps/[appId]/iaps/route.ts` · `iaps/[iapId]/route.ts` · `…/create-on-apple/route.ts` · `…/update-on-apple/route.ts` · `app/(dashboard)/…/iaps/[iapId]/page.tsx` |
 | DOCS (later) | KB §10 new cycle entry · `operational-guide.md` workflow · `docs/user-docs/` |
+
+
+---
+
+## 6. AS-BUILT NOTES (Aug 2026)
+
+Written after the fact. Everything above is the signed-off design text, kept verbatim;
+these are the places the build diverged from it, or where it under-specified something the
+implementation had to decide. Each note says what shipped and why.
+
+### 6.1 §I.1's `source` discriminator was a CONTRACT change, not additive
+
+§I.1 asked `MissingPricePoint` to gain a `source` field. In practice that is not additive:
+`pricing-orchestration.test.ts` pinned the exact shape of `missing_price_points`, so adding
+`source` + `reason` (and making `tier_id` nullable — a custom has no tier) broke that
+assertion. Updated deliberately, with a comment naming SC3 as the reason. Worth flagging as
+a pattern: "add a field to a result type" is a contract change wherever a test asserts the
+whole object with `toEqual`.
+
+### 6.2 The design never defined how `custom_prices_changed` is computed
+
+§G.4 said `shouldRun` gains `|| diff.custom_prices_changed !== null` and A.4 listed
+`isEmptyDiff`, but customs are not part of `IapFormState` — so there was **no defined
+source** for that diff bucket.
+
+Resolved with a pure `customPricesDivergeFromApple(stored set vs the G4 effective-now read)`
+in `diff-detector.ts`, threaded in by the caller. It answers the honest question — *does
+Apple need this push?* — and needs no new column and no new form field.
+
+It counts **both** directions, and the second one is easy to miss:
+
+- a custom Apple does not have, or has at a different price ⇒ push needed;
+- **a manual price on Apple with NO custom behind it** ⇒ the Manager cleared that custom,
+  and the replace-all push is what reverts the territory. Without this direction
+  *"clear all"* would be a **no-op on Apple while the UI reported success**.
+
+Cost: one extra 2-stage schedule read on Update, and only for IAPs that actually have
+customs. On failure the check assumes a push IS needed (the POST is idempotent, so
+re-sending is harmless; skipping a needed push would silently lose the customs).
+
+### 6.3 The design MISSED the client half of gate 1
+
+A.4 listed `diff-detector` once. In practice `isEmptyDiff` is called on **both** sides, and
+`handleUpdateOnAppleClick`'s copy is the one the Manager hits first — so the server-side fix
+alone still showed *"No changes detected — nothing to push to Apple"* and never opened the
+confirm modal.
+
+Both halves shipped. The client cannot know Apple's live prices, so it uses the signal it
+does have (did the Manager touch customs in this session, via `customPricesTouched`); the
+server stays authoritative and may still answer `NO_CHANGES`. This is the LAYER-GAP lesson
+recurring inside a design that already cited LAYER-GAP — see KB §9 for the generalised form.
+
+### 6.4 SC2 — provenance precedence, and what a draft can know
+
+§B listed the provenance pills but not what wins when a territory has both a live manual
+price and a template entry. As built: **`existing-manual` > `template` > `auto`**. A live
+Apple price is what the store charges *today*; a template is only what the next push *would*
+send.
+
+Also unstated: `existing-manual` is only knowable for **synced** IAPs. The baseline route
+reads the schedule only when `apple_iap_id` exists, so a local draft shows template/auto
+rows only — and therefore has no J-6 import banner.
+
+### 6.5 Locked decision 1's wording
+
+See the annotation under the decision table. Recorded here too because the design's §A.3
+argued the opposite (that customs entered on the New form must survive a round-trip, via
+payload threading). The Manager chose the simpler arrangement; §A.3's reasoning is still
+correct about *why* persistence is mandatory, just not about which form needs the affordance.
+
+### 6.6 SC1 — `replaceCustomPrices` write ordering is load-bearing
+
+§A.2 gave the schema but not the write sequence. As built: **delete → insert → stamp**, and
+the order is chosen for crash-safety, not style:
+
+| Crash point | Resulting state | How it reads |
+|---|---|---|
+| after delete | zero customs, OLD fingerprint | visibly empty — Manager re-enters |
+| after insert, before stamp | new set, OLD fingerprint | **STALE** — submit blocked, Manager reviews |
+| (stamp first — rejected) | stale prices, FRESH fingerprint | reads as clean, and would **SHIP** |
+
+Not transactional (supabase-js exposes none — the same constraint `replaceTemplate` and
+`replacePriceTiers` live with), so every intermediate state has to be safe by inspection.
+
+### 6.7 J-5 as built — a new outcome kind, not a flag
+
+§J-5 (Manager: red, not amber) shipped as a distinct outcome kind
+**`partial-custom-fail`** (severity `ERROR`) that **outranks** `partial-template-fail`, so a
+failed custom can never be flattened into the amber template-partial the Manager has learned
+to read as "expected", nor reported as `set`. A discriminator rather than an array the UI
+must inspect.
+
+Templates keep their documented silent auto fallback (§G5 `template · unverified`); customs
+deliberately do **not** inherit it. `MissingPricePoint` carries
+`source: "template" | "custom"` and `reason: "no-apple-price-point" | "territory-fetch-failed"`,
+and both write paths surface the failed territories by name.
+
+### 6.8 What the design got right and is worth reusing
+
+- **G1's merge point was exactly right**, including the reason (territory-anonymous array ⇒
+  a corrupted request shape, not a wrong value). The mutation-check failed with two `VNM`
+  entries, as predicted.
+- **G2's shape decision** (store `(territory, price)`, resolve ids server-side) made Create
+  and Edit structurally identical, as claimed — the create path needed no special casing.
+- **G3's "the baseline table needs no price points"** held: one request on dialog open, and
+  a per-territory fetch only on picker open.
+- **G4's warning about `startDate === null`** was load-bearing and would have been a real
+  bug: without it J-6 would import tomorrow's scheduled price as today's custom.
+- **§D's comparison-not-boolean** insistence paid for itself — the "change the base back"
+  behaviour falls out for free and needed no extra state.

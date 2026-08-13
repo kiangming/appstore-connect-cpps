@@ -2423,6 +2423,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <div class="step-body">
               <p><strong>Availabilities section</strong>: chọn territories — default 175. Có thể remove territories cụ thể (vd: chỉ bán ở Vietnam + Japan).</p>
               <p><strong>Pricing section</strong>: chọn nguồn — Default template (toàn workspace), Per-App template (override), hoặc Manual (chọn tier USD trực tiếp).</p>
+              <p><strong>Custom territory prices</strong> (ghi đè giá từng quốc gia) nằm ngay dưới, nhưng ở form này nút bị disable kèm lý do <em>“Save as draft first”</em> — custom prices lưu gắn với IAP đã save. Không thêm bước nào: <strong>Create on Apple</strong> vốn chỉ có trên form Edit, nên luồng create luôn đã đi qua draft. Chi tiết: <a class="inline-link" data-goto="apple-edit-iap">Chỉnh sửa IAP</a>.</p>
             </div>
           </li>
           <li class="step">
@@ -2526,7 +2527,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <tr><td>Type</td><td><strong>Không</strong></td><td>Apple không cho đổi type</td></tr>
             <tr><td>Locales (Display Name + Description)</td><td>Có</td><td>Apple sẽ re-review</td></tr>
             <tr><td>Availabilities</td><td>Có</td><td>Effect immediate sau save</td></tr>
-            <tr><td>Pricing</td><td>Có</td><td>Thay đổi schedule mới</td></tr>
+            <tr><td>Pricing</td><td>Có</td><td>Thay đổi schedule mới · gồm cả <strong>Custom territory prices</strong> (xem dưới)</td></tr>
             <tr><td>Screenshot</td><td>Có</td><td>Apple sẽ re-review nếu replace</td></tr>
           </tbody>
         </table>
@@ -2558,8 +2559,148 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </li>
         </ol>
 
+        <h2 class="section-title">Custom territory prices — đặt giá riêng cho từng quốc gia</h2>
+        <p>
+          Trong section <strong>Pricing</strong> của form Edit, dưới Base Territory / Price Tier, có khối
+          <strong>Custom territory prices</strong>. Nó cho phép <strong>ghi đè giá của bất kỳ quốc gia nào</strong> —
+          kể cả quốc gia đã được pricing template phủ. Những quốc gia bạn không chạm vào giữ nguyên hoàn toàn
+          (giá template, hoặc giá Apple tự quy đổi).
+        </p>
+        <p>
+          <strong>Áp dụng cho cả 3 nguồn giá</strong> — Apple base data, Default Template, App-specific Template.
+          Với <code class="inline">Apple base data</code> thì custom là <em>nguồn override duy nhất</em> trong lần push.
+        </p>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Quan trọng nhất — giá set tay trên App Store Connect sẽ BỊ XOÁ ở lần push kế tiếp</div>
+          <p>
+            API price schedule của Apple là <strong>replace-all</strong>: mỗi lần push thay thế <strong>toàn bộ</strong>
+            bảng giá. Giá bạn set tay trực tiếp trên App Store Connect không nằm trong dữ liệu tool gửi lên, nên lần
+            push sau quốc gia đó <strong>âm thầm quay về giá Apple tự quy đổi</strong>.
+          </p>
+          <p style="margin-top:8px;">
+            <strong>Điều này luôn đúng từ trước tới nay</strong> — điểm mới là dialog bây giờ <em>nói ra</em>, và đưa
+            luôn cách xử lý ở cùng một chỗ: <strong>Import as custom price</strong>. Hãy làm việc này
+            <strong>trước</strong> mọi lần Update on Apple, với IAP nào từng được sửa giá trên App Store Connect.
+          </p>
+        </div>
+
+        <h3 class="subsection-title">Luồng import giá đang có trên Apple</h3>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Mở dialog</div>
+            <div class="step-body"><p>Edit IAP → section <strong>Pricing</strong> → <strong>Set custom prices</strong> / <strong>Edit custom prices</strong>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Nhận diện row đang có giá set tay</div>
+            <div class="step-body"><p>Row đó mang pill <code class="inline">on Apple now</code> kèm dòng <em>“will revert to auto on the next push unless you import it as a custom price”</em>.</p></div>
+          </li>
+          <li class="step">
+            <div class="step-title">Import — tất cả hoặc từng row</div>
+            <div class="step-body">
+              <p>Nếu có row nào như vậy, banner ở đầu dialog đếm sẵn: <em>“N territories have a price set on Apple that the next push will erase”</em> → bấm <strong>Import all as custom prices</strong>. Muốn từng row thì bấm link <strong>Import as custom price</strong> ngay trên row.</p>
+              <p style="margin-top:8px;">Giá được import <strong>đúng bằng giá Apple đang tính</strong>, không đổi — mục đích là để nó <em>sống sót</em> qua lần push.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Save custom prices</div>
+            <div class="step-body"><p>Sau khi lưu, section Pricing hiện số lượng kèm <strong>giá thật</strong> của 4 quốc gia đầu (<code class="inline">+ N more</code>), và mở lại được để xem đầy đủ. Custom không bao giờ chỉ là một con số đếm.</p></div>
+          </li>
+        </ol>
+
+        <h3 class="subsection-title">Đọc một row trong dialog</h3>
+        <table class="docs-table">
+          <thead><tr><th>Pill</th><th>Nghĩa</th><th>Có hiện số?</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code class="inline">base tier</code></td>
+              <td>Quốc gia base (USA). <strong>Read-only</strong> tại đây — đổi ở field <strong>Price Tier</strong>.</td>
+              <td>Có</td>
+            </tr>
+            <tr>
+              <td><code class="inline">on Apple now</code></td>
+              <td>Giá Apple đang tính hôm nay, do set tay. <strong>Bị xoá ở lần push kế tiếp</strong> nếu không import.</td>
+              <td>Có</td>
+            </tr>
+            <tr>
+              <td><code class="inline">template · unverified</code></td>
+              <td>Giá theo pricing template đang chọn. Gọi là <em>unverified</em> vì nếu Apple không có price point khớp thì lúc push quốc gia đó <strong>âm thầm rơi về giá tự quy đổi</strong>.</td>
+              <td>Có</td>
+            </tr>
+            <tr>
+              <td><code class="inline">Apple equalises</code></td>
+              <td>Apple tự suy ra từ giá base.</td>
+              <td><strong>KHÔNG — hiện <code class="inline">— auto —</code>.</strong> Tool không tái tạo được phép tính của Apple; hiện một con số “trông có lý” sẽ bị đọc thành giá thật của Apple.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p style="margin-top:8px;">
+          Thứ tự ưu tiên khi một quốc gia thuộc nhiều nhóm: <code class="inline">on Apple now</code> &gt;
+          <code class="inline">template</code> &gt; <code class="inline">auto</code> — giá đang có trên Apple là giá
+          store <em>đang</em> tính, còn template chỉ là giá <em>sẽ</em> được gửi ở lần push sau.
+          <code class="inline">on Apple now</code> chỉ xuất hiện với IAP đã sync lên Apple; draft chưa tạo thì
+          chỉ thấy template / auto.
+        </p>
+
+        <h3 class="subsection-title">Chọn giá</h3>
+        <ul>
+          <li><strong>Luôn là dropdown các price point Apple hỗ trợ ở quốc gia đó</strong> — không bao giờ là ô nhập số tự do. Apple chỉ nhận các mức giá trong danh mục của mình.</li>
+          <li>Danh sách chỉ tải khi bạn mở dropdown của <em>row đó</em> — không tải trước cho cả ~175 quốc gia.</li>
+          <li>Ô search khớp <strong>tên nước / mã 3 ký tự / currency</strong>; thêm pill lọc theo châu lục và <strong>Only customised</strong>.</li>
+          <li>Bỏ custom 1 quốc gia: chọn lại option <code class="inline">— use template … —</code> / <code class="inline">— use auto —</code>, hoặc bấm <strong>Revert ×</strong> trên row.</li>
+          <li>Bỏ tất cả: <strong>Clear all custom prices</strong> — có ở cả footer dialog và ngay trên section Pricing. Giá bị bỏ được ghi vào audit log.</li>
+        </ul>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Đổi giá base sau khi đã có custom → custom thành “stale”, submit bị CHẶN</div>
+          <p>
+            Đổi <strong>Price Tier</strong>, <strong>nguồn giá</strong>, hoặc base territory sẽ làm các custom hiện có
+            trở thành <strong>stale</strong>. <strong>Không có gì bị xoá</strong>, nhưng
+            <strong>Create / Update on Apple bị chặn</strong> đến khi bạn chọn một trong hai:
+          </p>
+          <ul>
+            <li><strong>Keep them (reviewed)</strong> — giữ nguyên mọi giá, đóng dấu lại theo base mới. Đổi base lần nữa thì tool hỏi lại.</li>
+            <li><strong>Clear all custom prices</strong> — bỏ hết.</li>
+          </ul>
+          <p style="margin-top:8px;">
+            <strong>Đổi base về lại giá trị cũ thì cảnh báo tự biến mất</strong> — không phải bấm gì cả. Cảnh báo hiện
+            ở 3 nơi: banner trên form, badge <code class="inline">N custom · stale</code> ở section Pricing, và row màu
+            amber trong dialog.
+          </p>
+        </div>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Custom không áp được → báo ĐỎ và nêu tên quốc gia</div>
+          <p>
+            Nếu Apple không có price point cho mức giá bạn chọn ở quốc gia đó (ví dụ Apple đã bỏ mức giá đó sau khi
+            bạn chọn), quốc gia đó được báo <strong>đỏ kèm tên</strong> — ví dụ
+            <em>“custom prices NOT applied for 1 territory: VNM (no-apple-price-point)”</em>. Phần còn lại của lần push
+            vẫn diễn ra.
+          </p>
+          <p style="margin-top:8px;">
+            <strong>Khác với template:</strong> template không khớp thì rơi về giá tự quy đổi một cách im lặng. Custom
+            <strong>không</strong> thừa hưởng sự im lặng đó — bạn đã yêu cầu một giá cụ thể cho một quốc gia cụ thể,
+            nên không áp được là một <em>thất bại</em> và được báo như thất bại. Mở lại dialog, tool kiểm tra lại các
+            custom đã lưu với danh sách hiện tại của Apple và gắn cờ <code class="inline">no longer offered</code>.
+          </p>
+        </div>
+
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Vì sao phải Save as draft trước</div>
+          <p>
+            Ở form <a class="inline-link" data-goto="apple-new-iap">Tạo IAP mới</a> nút bị disable kèm lý do
+            <em>“Save as draft first”</em>: custom prices được lưu gắn với IAP đã save. Điều này
+            <strong>không thêm bước nào</strong> — mọi luồng create đều đã đi qua draft rồi, vì nút
+            <strong>Create on Apple</strong> chỉ có trên form Edit.
+          </p>
+          <p style="margin-top:8px;">
+            Nếu app chưa có IAP nào tồn tại trên Apple, picker bị disable kèm lý do: tool đọc danh sách giá của Apple
+            <em>thông qua</em> một IAP đã có trên Apple. Tạo IAP trước, rồi vào Edit để thêm custom prices.
+          </p>
+        </div>
+
         <h2 class="section-title">Hình ảnh minh họa</h2>
-        <div class="screenshot" data-lightbox data-caption="UpdateChangesPreviewModal · diff Reference Name + Pricing tier">
+        <div class="screenshot" data-lightbox data-caption="UpdateChangesPreviewModal · diff Reference Name + Pricing tier + Custom territory prices">
           <div class="screenshot-frame">
             <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
               <rect class="wf-bg" width="640" height="360"/>
@@ -2587,18 +2728,22 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
                 <text class="wf-text" x="108" y="232">Availabilities</text>
                 <text class="wf-text" x="240" y="232">175 territories</text>
                 <text class="wf-text" x="400" y="232">175 territories</text>
+                <rect fill="var(--warning-bg)" x="96" y="242" width="448" height="26"/>
+                <text fill="var(--warning)" x="108" y="259" font-weight="600">Custom territory prices</text>
+                <text class="wf-text" x="240" y="259">—</text>
+                <text fill="var(--warning)" x="400" y="259" font-weight="600">3 · VNM JPN BRA</text>
               </g>
-              <rect fill="var(--surface-2)" x="80" y="276" width="480" height="44"/>
-              <text class="wf-text" x="100" y="300" font-size="11" font-style="italic">Apple sẽ phải re-review các thay đổi localization</text>
-              <rect class="wf-card" x="380" y="288" width="70" height="22" rx="4"/>
-              <text class="wf-text" x="415" y="303" text-anchor="middle" font-size="10">Cancel</text>
-              <rect fill="var(--primary)" x="460" y="288" width="80" height="22" rx="4"/>
-              <text fill="#fff" x="500" y="303" text-anchor="middle" font-size="10" font-weight="600">Confirm</text>
+              <rect fill="var(--surface-2)" x="80" y="278" width="480" height="42"/>
+              <text class="wf-text" x="100" y="301" font-size="11" font-style="italic">Apple sẽ phải re-review các thay đổi localization</text>
+              <rect class="wf-card" x="380" y="289" width="70" height="22" rx="4"/>
+              <text class="wf-text" x="415" y="304" text-anchor="middle" font-size="10">Cancel</text>
+              <rect fill="var(--primary)" x="460" y="289" width="80" height="22" rx="4"/>
+              <text fill="#fff" x="500" y="304" text-anchor="middle" font-size="10" font-weight="600">Confirm</text>
             </svg>
           </div>
           <div class="screenshot-caption">
             <span class="screenshot-caption-label">TODO</span>
-            <span>Diff modal · vàng = thay đổi · disclaimer re-review</span>
+            <span>Diff modal · vàng = thay đổi · gồm dòng Custom territory prices · disclaimer re-review</span>
           </div>
         </div>
 

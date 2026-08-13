@@ -508,7 +508,7 @@ All IAP Management tables live in the `iap_mgmt` Postgres schema. CLAUDE.md inva
 
 **Access pattern**: all queries go through `lib/iap-management/db.ts` which returns `iapDb()` — a Supabase client wrapper bound to `.schema('iap_mgmt')`.
 
-### 5.2 Tables (10 total, post-Cycle 30)
+### 5.2 Tables (12 total — verified Aug 2026 by counting `CREATE TABLE iap_mgmt.*` across all migrations)
 
 ```
 iap_mgmt.price_tiers                — global cache, replace-on-import (Q-IAP.7)
@@ -529,11 +529,11 @@ iap_mgmt.actions_log                — append-only event log (CLAUDE.md invaria
 1. **Schema isolation** — all queries via `iapDb()`; no cross-schema FK; CPP/Store linkage is soft via TEXT columns
 2. **Append-only audit log** — `iap_mgmt.actions_log` never UPDATEd, only INSERTed (CLAUDE.md invariant #2)
 3. **Forward-only migrations** — no down migrations; revert = new forward migration that reverses (CLAUDE.md invariant)
-4. **action_type CHECK constraint** — extended per cycle via migration; never add a new action_type in code without the matching migration (Cycle 29 IAP.o.11d incident)
+4. **action_type CHECK constraint** — extended per cycle via migration; never add a new action_type in code without the matching migration. This has been violated **twice** (Cycle 29 IAP.o.11d; Cycle 37/39/40 `AVAILABILITY_*`), the second time after the rule was written down — so it is now enforced structurally by `lib/audit-constraints/` (parity against the newest migration + a source scan with per-shape sentinels), cross-module. A rule that relies on memory is not a guard.
 5. **`pricing_source` enum** — `'APPLE'` | `'DEFAULT_TEMPLATE'` | `'APP_TEMPLATE'` (Cycle 30)
 6. **`tier_id` is TEXT** — was `INT` pre-IAP.h2; Apple Alternate Tiers required string IDs
 
-### 5.4 Migrations (chronological, 7 total)
+### 5.4 Migrations (chronological, 10 `iap_mgmt` migrations — verified Aug 2026)
 
 | Migration | Purpose | Cycle |
 |---|---|---|
@@ -544,6 +544,9 @@ iap_mgmt.actions_log                — append-only event log (CLAUDE.md invaria
 | `20260518000000_iap_mgmt_actions_log_update_on_apple.sql` | action_type CHECK adds 5 `*_ON_APPLE` rows for IAP.o.12 | 29 (IAP.o.12a) |
 | `20260519000000_iap_mgmt_pricing_templates.sql` | `price_tier_templates` + entries + Q-B legacy migration | 30 (IAP.p1.a) |
 | `20260520000000_iap_mgmt_p1j_hotfix.sql` | `iaps.pricing_source` + `apps.asc_account_id` columns | 30 (IAP.p1.j) |
+| `20260715000000_iap_mgmt_hub_tracking_config.sql` | `hub_tracking_config` singleton (encrypted token) | 42 (Hub tracking) |
+| `20260811000000_iap_mgmt_actions_log_availability.sql` | **P2 fix** — CHECK adds the two `AVAILABILITY_*` values that had been emitted since Cycle 37 with no constraint entry, so every one of those audit inserts was silently rejected in production | Audit pass (Aug 2026) |
+| `20260812000000_iap_mgmt_custom_prices.sql` | `iap_custom_prices` (PK `(iap_id, territory_code)`) + 3 `iaps.custom_prices_baseline_*` columns + CHECK adds `CUSTOM_PRICES_SAVED` / `_CLEARED` / `_REBASELINE` | Custom prices SC1 |
 
 Cycles 32-34 added no IAP migrations (parser + UI + helper changes only).
 
@@ -2705,6 +2708,47 @@ push-hygiene verification session, where a backup taken immediately
 before the mutation (not `git stash`/`git checkout`) was what actually
 recovered the correct pre-mutation file.
 
+**P14 — LAYER-GAP, 3rd instance: a guard duplicated on client and server must be opened on BOTH.**
+
+"The server accepts it" ≠ "the user can reach it". Confirmed instances: Google's
+`canSave` dialog gate blocking exactly what the server had just been taught to
+accept (§10.13.K P1 companion); and Apple's `isEmptyDiff`, which exists on the
+server route **and** as a client copy inside `handleUpdateOnAppleClick` — opening
+only the server one still left a customs-only edit showing "No changes detected"
+and never opening the confirm modal, so the feature was dead on the Edit path
+despite a correct merge behind it (`74b9739`, design §6.3). **When a rule lives in
+two layers, grep for every evaluation site before declaring it fixed.**
+
+**P15 — Structural tests that grep source MUST strip comments.**
+
+A fitness test that reads raw source and forbids a string will fire on the
+*prose that explains the rule*. Hit twice in two consecutive sub-chunks: the
+"never store an Apple price-point id" assertion failed on its own explanatory
+comment (`c8dcbef`), then the single-writer assertion failed on three route files
+that merely NAME the table while documenting that they go through the repository
+(`90560fc`). Both now strip block/line comments and assert on declarations or
+call sites. **A test that punishes the explanation teaches authors to delete the
+explanation.**
+
+**P16 — Two fake-test shapes, both caught this cycle by mutating them.**
+
+Neither is detectable by reading the test; only a mutation reveals them.
+
+1. **A test that MIRRORS the guard's own logic** cannot fail when the real guard
+   is reverted. The first gate-2 test re-implemented `shouldRun` as a local truth
+   table and asserted against itself — reverting the production clause left it
+   green. Replaced with a test that drives the real `updateIapOnApple`, which then
+   failed with 0 orchestrator calls.
+2. **A shared-function pin that matches the bare IDENTIFIER** passes when someone
+   keeps the import and hand-rolls the logic. The "client and server call the same
+   predicate" test matched `isCustomPricesSubmitBlocked`, so a mutation that kept
+   the import and inlined a tier comparison PASSED. Now matches the CALL site
+   (`name(`), re-verified against that same mutation.
+
+⇒ **Mutate every guard test you write, and check WHAT it failed on.** A mutation
+that fails for the wrong reason proves nothing (P10's rule, extended: the failure
+message must name the defect, not an unrelated symptom).
+
 ---
 
 #### 10.13.K — OPEN BACKLOG: Google bulk-import OVERWRITE replaces listings (P4 replace-semantics RMW violation)
@@ -3481,6 +3525,52 @@ typecheck, 2995/2995 tests, lint, build.
 - ✅ Cycle 34: IAP.q.3 Top Apple Guidelines pagination + SQL ordering determinism (cross-module)
 
 **Production-grade SaaS strategic feature continuum delivery pattern proven sustainable at scale.** 60+ memory patterns crystallized across 50+ Manager refinement iterations; 4 confirmed Apple V2 trap classes documented + tested + memorized; institutional knowledge preserved in this artifact + the SESSION-ARC files + the apple-api-reference + the MEMORY.md feedback index.
+
+### 10.17 Cycle 45 — Apple per-territory custom prices + cross-module audit-constraint guard (Aug 2026)
+
+Summary level only — the operator how-to lives in
+[`operational-guide.md`](operational-guide.md) §3 and the user-docs site; the API
+detail in [`apple-api-reference.md`](apple-api-reference.md); the full design +
+as-built notes in
+[`design-apple-custom-territory-prices.md`](design-apple-custom-territory-prices.md).
+
+**Part 0 — the P2 recurrence (`0cb9292`, `a27c965`).** The availability paths had
+been emitting two `action_type` values absent from the CHECK since Cycle 37, so
+every one of those audit inserts was silently rejected in production (both writers
+log the error and deliberately never throw). Fixed by `20260811000000`, then
+generalised: `lib/audit-constraints/` now guards **every** module's audit column
+from one mechanism — parity against the newest migration per module, a source scan
+with per-shape sentinels, and a discovery check that fails when a new
+`<schema>.actions_log` appears unregistered. Cross-module audit found
+`google_iap_mgmt` and `store_mgmt` clean; CPP has no audit table. Severity note:
+`store_mgmt`'s `ticket_entries` inserts run inside `*_tx` plpgsql functions, so a
+drift there is **loud** (the transaction aborts) rather than silent — higher
+severity, but self-announcing.
+
+**Part 1 — the feature (`c8dcbef`, `90560fc`, `74b9739`).** Per-territory price
+overrides on the Edit form, layered on top of the existing 3-source pricing model
+and shipped through the same `POST /v1/inAppPurchasePriceSchedules`. Four
+structural decisions worth carrying forward:
+
+| Decision | Why it mattered |
+|---|---|
+| Store `(territory, price, currency)`, never a price-point id | Apple's id is per-IAP and cannot exist before the IAP does, so ids resolve server-side at submit down the template path — which makes Create and Edit structurally identical instead of two flows |
+| Resolve overrides through a `Map<territory, …>`, flatten last | `additionalPricePointIds` is territory-anonymous; appending would send Apple two `manualPrices` for one territory — a corrupted request shape, not a wrong value. The Map mirrors the DB's PK in the payload |
+| Staleness as a COMPARISON of a stored fingerprint, never a boolean | "Change the base back" clears itself with no user action and no extra state; a one-way flag would force an acknowledgement of a no-op *and* could swallow a later real change |
+| A failed custom is its own outcome kind (`partial-custom-fail`), outranking the amber template-partial | A custom is an explicit per-territory instruction; templates keep their documented silent auto fallback, customs deliberately do not inherit it |
+
+**The dialog also surfaced a long-standing truth nobody had written down**: Apple's
+price schedule is replace-all, so a price set by hand in App Store Connect is
+erased by the next push from the tool. That was already the behaviour; showing it
+without a remedy would have been worse than silence, so the same view offers
+"Import as custom price" (per-row and bulk) — the single most valuable thing the
+dialog does for an existing IAP.
+
+New meta-rules from this cycle: **P14** (LAYER-GAP 3rd instance), **P15**
+(structural tests must strip comments), **P16** (two fake-test shapes). Tests
+3356, gauntlet 4/4.
+
+---
 
 **Knowledge base preserved for future development continuity.**
 

@@ -1,8 +1,8 @@
 # Apple IAP Management — Operational Guide
 
-This guide currently covers two topics: reading Bulk Import results
-(including the new expandable Apple error detail), and configuring
-VNGGames Hub run tracking. For pricing templates, see
+This guide currently covers three topics: reading Bulk Import results
+(including the new expandable Apple error detail), configuring
+VNGGames Hub run tracking, and per-territory custom prices. For pricing templates, see
 [pricing-templates-guide.md](pricing-templates-guide.md). For the full
 step-by-step tour of every feature (Apps list, Create/Edit IAP, View
 Detail, Bulk Availabilities, Submit batch, …), see the standalone
@@ -17,6 +17,12 @@ documentation site (`docs/user-docs/index.html`).
   module (Apple, Google) that reports each tracked operation's outcome to
   the VNGGames Hub dashboard. It's optional — off, everything works
   exactly the same, just without dashboard visibility.
+- **Custom territory prices** (Edit IAP → Pricing) let you override the
+  price for any single territory, on top of whatever pricing source the
+  IAP uses. The one thing to read before using it: **Apple replaces the
+  whole price schedule on every push**, so any price you set by hand in
+  App Store Connect disappears on the next push unless you import it as
+  a custom price first. §3 explains the flow.
 
 ## 1. Reading Bulk Import results & viewing error detail
 
@@ -123,3 +129,104 @@ A run showing `RUNNING` and never resolving usually means the browser
 tab was closed mid-operation — a known, low-volume gap (no auto-expiry
 today); it doesn't mean the underlying operation failed, just that its
 dashboard entry was never closed out.
+
+
+---
+
+## 3. Per-territory custom prices
+
+Available on the **Edit IAP** form → *Pricing* → **Custom territory
+prices**. Overrides the price for the territories you pick; every other
+territory keeps exactly what it had (template value, or Apple's automatic
+equalisation).
+
+Works with all three pricing sources — Apple base data, Default
+Template, App-specific Template. Under *Apple base data* your customs are
+the only per-territory overrides in the push.
+
+### Why it needs a saved draft first
+
+The button is disabled on the **New IAP** form with *"Save as draft
+first"*. Custom prices are stored against the saved IAP row, and every
+create already goes through a saved draft — there is no *Create on
+Apple* button on the New form, only on Edit. So this adds no step the
+create flow didn't already require.
+
+### ⚠ The important one: existing hand-set prices are erased on the next push
+
+Apple's price-schedule API is **replace-all**: every push replaces the
+entire schedule. A price you set manually in App Store Connect is not
+part of what the tool sends, so the next push silently reverts that
+territory to Apple's automatic price.
+
+**This has always been true.** What changed is that the dialog now shows
+it, and offers the fix in the same view:
+
+1. Open **Edit IAP → Pricing → Custom territory prices**.
+2. Rows priced by hand on Apple show the pill `on Apple now` and the
+   line *"will revert to auto on the next push unless you import it as a
+   custom price"*.
+3. If any exist, a banner at the top counts them:
+   *"N territories have a price set on Apple that the next push will
+   erase"* → **Import all as custom prices**. Per-row, use the
+   *Import as custom price* link on the row itself.
+4. The imported value is Apple's current price, unchanged — the point is
+   that it survives.
+5. **Save custom prices.**
+
+Do this **before** any Update on Apple on an IAP whose prices were
+touched in App Store Connect.
+
+### Reading a row
+
+| Pill | Means | Number shown? |
+|---|---|---|
+| `base tier` | The base territory (USA). Read-only here — change it in the **Price Tier** field. | Yes |
+| `on Apple now` | What Apple charges today, set by hand. **Erased by the next push** unless imported. | Yes |
+| `template · unverified` | What the active pricing template says. Called *unverified* because if Apple has no matching price point the push silently falls back to the automatic price. | Yes |
+| `Apple equalises` | Apple derives this one from the base price. | **No — shows `— auto —`.** The tool cannot reproduce Apple's calculation, and showing a plausible-looking figure would read as Apple's real price. |
+
+Prices come from a dropdown of the points Apple actually supports in that
+territory — never a free-text box. The list loads when you open that
+row's dropdown (not for all ~175 territories at once). Search matches
+country name, 3-letter code, or currency; the continent pills and
+*Only customised* narrow the list further.
+
+### Undoing
+
+- **One territory** — pick the `— use template … —` / `— use auto —`
+  option, or the row's **Revert ×**.
+- **All** — **Clear all custom prices**, in the dialog footer and on the
+  Pricing section itself. The removed values are written to the audit log.
+
+### Changing the base price after setting customs
+
+Changing the **Price Tier**, the **pricing source**, or the base
+territory makes existing customs **stale**. Nothing is deleted, but
+**Create/Update on Apple is blocked** until you resolve it:
+
+- **Keep them (reviewed)** — keeps every value and re-stamps them against
+  the new base. Change the base again and it asks again.
+- **Clear all custom prices** — removes them.
+- **Change the base back** — the warning disappears on its own, nothing
+  to click.
+
+### When a custom cannot be applied
+
+If Apple has no price point for a territory at the price you picked (it
+was withdrawn since you chose it, for example), that territory is
+reported **red** and named — e.g. *"custom prices NOT applied for 1
+territory: VNM (no-apple-price-point)"*. The rest of the push still goes
+through. Unlike a template entry, a custom does **not** quietly fall back
+to the automatic price: you asked for a specific price in a specific
+territory, so a failure is reported as a failure.
+
+Re-opening the dialog re-checks stored customs against Apple's current
+list and flags anything withdrawn with `no longer offered`.
+
+### If the picker is unavailable
+
+The tool reads Apple's price list through an IAP that already exists on
+Apple. In an app where nothing has been created yet, the picker is
+disabled with that reason — create the IAP first, then edit it to add
+custom prices.
