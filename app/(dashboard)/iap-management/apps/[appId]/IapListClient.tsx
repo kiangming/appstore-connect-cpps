@@ -20,6 +20,7 @@ import {
   Eye,
   Globe,
   MinusCircle,
+  MapPin,
 } from "lucide-react";
 import type {
   InAppPurchase,
@@ -411,6 +412,21 @@ export function IapListClient({
         >
           <Globe className="h-3.5 w-3.5" />
           Set Availabilities
+        </button>
+        {/* D1 — the entry point for per-territory selection. Built in SC6 and
+            reachable from nothing until this button landed: the modal, route,
+            orchestrator and tests all supported "set-territories" while
+            nothing set that mode, so the feature shipped dead. Placed between
+            the two all-or-nothing presets because it is the middle ground
+            between them. */}
+        <button
+          type="button"
+          onClick={() => setBulkMode("set-territories")}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-lg transition"
+          title="Choose exactly which Apple territories a multi-selection of items sells in"
+        >
+          <MapPin className="h-3.5 w-3.5" />
+          Choose territories
         </button>
         <button
           type="button"

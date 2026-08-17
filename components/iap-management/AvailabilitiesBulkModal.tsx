@@ -678,25 +678,50 @@ export function AvailabilitiesBulkModal({
   const someSelected = selected.size > 0 && !allSelected;
   const destructive = mode === "remove";
 
-  const title =
-    mode === "set-all" ? "Set Availabilities for items" : "Remove from Sales";
-  const subtitle =
-    mode === "set-all"
-      ? "Mark selected items as available in all Apple territories."
-      : "Mark selected items as unavailable in all territories.";
+  /**
+   * ⚠ D1 — these five strings were BINARY ternaries on `mode === "set-all"`,
+   * so the third mode fell into the else branch and would have rendered
+   * "Remove from Sales" copy over a territory picker. The entry point could
+   * not be added without fixing them: the button and the copy are one change,
+   * not two. Switch statements rather than nested ternaries so a fourth mode
+   * fails to compile instead of silently inheriting someone else's wording.
+   */
   const filterCount = eligible.length;
-  const filterCopy =
-    mode === "set-all"
-      ? `Showing ${filterCount} ${plural(filterCount, "item", "items")} currently in Remove from Sales. Items already Available are filtered out.`
-      : `Showing ${filterCount} ${plural(filterCount, "item", "items")} currently Available. Items already Removed from Sales are filtered out.`;
-  const emptyTitle =
-    mode === "set-all"
-      ? "All items are currently Available."
-      : "All items are currently Removed from Sales.";
-  const emptySub =
-    mode === "set-all"
-      ? "Nothing to enable — every IAP in this app already sells in all territories."
-      : "Nothing to remove — every IAP in this app is already unavailable.";
+  const shown = `${filterCount} ${plural(filterCount, "item", "items")}`;
+
+  let title: string;
+  let subtitle: string;
+  let filterCopy: string;
+  let emptyTitle: string;
+  let emptySub: string;
+  switch (mode) {
+    case "set-all":
+      title = "Set Availabilities for items";
+      subtitle = "Mark selected items as available in all Apple territories.";
+      filterCopy = `Showing ${shown} currently in Remove from Sales. Items already Available are filtered out.`;
+      emptyTitle = "All items are currently Available.";
+      emptySub =
+        "Nothing to enable — every IAP in this app already sells in all territories.";
+      break;
+    case "remove":
+      title = "Remove from Sales";
+      subtitle = "Mark selected items as unavailable in all territories.";
+      filterCopy = `Showing ${shown} currently Available. Items already Removed from Sales are filtered out.`;
+      emptyTitle = "All items are currently Removed from Sales.";
+      emptySub = "Nothing to remove — every IAP in this app is already unavailable.";
+      break;
+    case "set-territories":
+      title = "Choose territories";
+      subtitle =
+        "Pick exactly where the selected items sell. Every item receives the same set.";
+      // No bucket restriction for this mode (filterEligible), so the copy must
+      // not claim anything was filtered out by current availability.
+      filterCopy = `Showing ${shown}. Items whose current availability could not be read are left out and named before you confirm.`;
+      emptyTitle = "No items available to change.";
+      emptySub =
+        "Every selected item is either a local draft or its availability could not be read from Apple.";
+      break;
+  }
 
   return (
     <div

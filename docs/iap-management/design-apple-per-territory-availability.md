@@ -630,7 +630,7 @@ records what actually shipped and why it differs.
 |---|---|---|
 | **C** Edit item | picker, default = current | ✅ shipped, reachable. Renders only for `mode === "edit" && syncedToApple` — the **create form has no availability control at all**, since a draft has no Apple resource to edit. §PART 2 said "Create/Edit"; only Edit exists. |
 | **B** Bulk Import | picker step, default ALL | ✅ shipped, reachable as step 4 of 5. |
-| **A** Set Availabilities modal | picker as a third mode | ⚠ **built but NOT reachable.** Modal, route, orchestrator and tests all support `set-territories`; **no button sets that mode** (`IapListClient.tsx` offers only `set-all` and `remove`). Tracked in `TODO.md`. |
+| **A** Set Availabilities modal | picker as a third mode | ✅ shipped, reachable since the D1 fix. Shipped *unreachable* at arc close — the modal, route, orchestrator and ~60 tests all supported `set-territories` while nothing set that mode. Wiring it also required fixing five header strings that were binary ternaries and would have labelled the picker "Remove from Sales". |
 
 ### A2. SC6p1 — the design's own §G5 groundwork was unreachable over HTTP
 
@@ -685,9 +685,13 @@ prevent. Replaced with a `TerritorySelection` throughout, with
 `availability_previous_known` as a separate field so a failed read is never
 conflated with a genuine Removed-from-Sale.
 
-### A8. Still open at arc close
+### A8. Still open at arc close (both fixed in the follow-up cycle)
 
-- Surface A entry point (A1).
+- ~~Surface A entry point (A1).~~ **Fixed.** The lesson kept: a
+  build-it-then-wire-it sequence needs the wiring tracked as its own
+  deliverable, and needs one test that starts *outside* the component being
+  built. Every SC6 test began inside the modal or below it, so none could see
+  that nothing opened it.
 - `set-all` / `remove` render `NOT_ATTEMPTED` as "Failed" — those modes kept the
   legacy `ProgressList`, which keys off `ok` alone; SC3 added a third state to
   the shared orchestrator without auditing that consumer.

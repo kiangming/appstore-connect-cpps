@@ -3125,30 +3125,35 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         <div class="meta-strip">
           <span class="meta-chip module-apple">Apple IAP Management</span>
           <span class="meta-chip cycle">Cycle 39 Phase 2 · Hotfix 25</span>
-          <span class="meta-chip">2-mode modal · all-or-nothing</span>
+          <span class="meta-chip">3-mode modal</span>
         </div>
         <h1 class="page-title">Bulk Availabilities</h1>
         <p class="page-lede">
-          Modal đổi availability của nhiều IAP cùng lúc — 2 mode trong cùng modal: <strong>Set Availabilities</strong>
-          (bán ở <em>mọi</em> nước) và <strong>Remove from Sales</strong> (ngừng sales · destructive variant với confirm gate).
-          Cycle 39 Phase 2 · Hotfix 25 lazy-load client strategy.
+          Đổi availability của nhiều IAP cùng lúc. <strong>Ba nút riêng</strong> trên toolbar của
+          danh sách IAPs, mỗi nút mở modal ở một chế độ — <strong>không có tab để chuyển chế độ
+          bên trong modal</strong>, chọn sai thì đóng lại và bấm nút khác:
         </p>
+        <ul>
+          <li><strong>Set Availabilities</strong> — bán ở <em>mọi</em> nước (kèm thị trường Apple mở sau này).</li>
+          <li><strong>Choose territories</strong> — chọn chính xác tập nước, áp cho mọi item đã chọn.</li>
+          <li><strong>Remove from Sales</strong> — ngừng bán ở mọi nước (destructive · có confirm gate).</li>
+        </ul>
         <p class="page-lede">
-          ⚠ Modal này là <strong>all-or-nothing</strong>: mọi nước, hoặc không nước nào. Cần
-          <strong>chọn tập con</strong> thì dùng
-          <a class="inline-link" data-goto="apple-edit-iap">form Edit của từng IAP</a> (chọn chính xác từng nước),
-          hoặc <a class="inline-link" data-goto="apple-bulk-import">Bulk Import Step 4</a> cho IAP tạo mới.
+          Muốn khác nhau theo từng item thì làm ở
+          <a class="inline-link" data-goto="apple-edit-iap">form Edit</a> của từng IAP;
+          IAP tạo mới thì chọn ở <a class="inline-link" data-goto="apple-bulk-import">Bulk Import Step 4</a>.
         </p>
 
-        <h2 class="section-title">2 mode khác biệt</h2>
+        <h2 class="section-title">Ba chế độ khác nhau ở đâu</h2>
         <table class="docs-table">
-          <thead><tr><th>Khía cạnh</th><th>Set Availabilities</th><th>Remove from Sales</th></tr></thead>
+          <thead><tr><th>Khía cạnh</th><th>Set Availabilities</th><th>Choose territories</th><th>Remove from Sales</th></tr></thead>
           <tbody>
-            <tr><td>Đối tượng eligible</td><td>IAPs đang <code class="inline">Removed from Sales</code></td><td>IAPs đang <code class="inline">Available</code></td></tr>
-            <tr><td>Action</td><td>Re-enable sales</td><td>Stop sales</td></tr>
-            <tr><td>Palette modal</td><td>Neutral / primary</td><td>Red accent (destructive)</td></tr>
-            <tr><td>Confirm gate</td><td>Không (1-click submit)</td><td>Có (modal-within-modal)</td></tr>
-            <tr><td>Customer entitlements</td><td>—</td><td>Giữ nguyên · chỉ stop purchases mới</td></tr>
+            <tr><td>Đối tượng eligible</td><td>IAPs đang <code class="inline">Removed from Sales</code></td><td><strong>Mọi</strong> IAP đã sync (không lọc theo trạng thái)</td><td>IAPs đang <code class="inline">Available</code></td></tr>
+            <tr><td>Kết quả</td><td>Bán mọi nước + thị trường tương lai</td><td>Đúng tập nước bạn chọn</td><td>Không bán ở đâu</td></tr>
+            <tr><td>Palette modal</td><td>Neutral / primary</td><td>Neutral / blue</td><td>Red accent (destructive)</td></tr>
+            <tr><td>Confirm gate</td><td>Không (1-click submit)</td><td><strong>Có</strong> — nêu item nào thực sự đổi</td><td>Có (modal-within-modal)</td></tr>
+            <tr><td>Item không đọc được trạng thái</td><td>Bị lọc ra (im lặng)</td><td>Bị loại · <strong>nêu tên trong confirm</strong></td><td>Bị lọc ra (im lặng)</td></tr>
+            <tr><td>Customer entitlements</td><td>—</td><td>—</td><td>Giữ nguyên · chỉ stop purchases mới</td></tr>
           </tbody>
         </table>
 
@@ -3162,7 +3167,12 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </li>
           <li class="step">
             <div class="step-title">Chọn mode</div>
-            <div class="step-body"><p>Modal có 2 tab ngang trên đầu: <strong>Set Availabilities</strong> | <strong>Remove from Sales</strong>. Chuyển tab → filter IAPs eligible thay đổi.</p></div>
+            <div class="step-body">
+              <p><strong>Chế độ được quyết định bởi nút bạn bấm trên toolbar</strong>, không phải bằng tab trong modal —
+              modal không có tab. Bấm <strong>Choose territories</strong> thì modal mở kèm picker chọn nước;
+              hai nút kia mở modal all-or-nothing tương ứng.</p>
+              <p>Muốn đổi chế độ: đóng modal, bấm nút khác. Lựa chọn nước không được giữ lại giữa hai lần mở.</p>
+            </div>
           </li>
           <li class="step">
             <div class="step-title">Preview eligible items</div>
@@ -3199,7 +3209,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         </ol>
 
         <h2 class="section-title">Hình ảnh minh họa</h2>
-        <div class="screenshot" data-lightbox data-caption="Bulk Availabilities · Set Availabilities mode · 12 items eligible">
+        <div class="screenshot" data-lightbox data-caption="Bulk Availabilities · chế độ Set Availabilities · 12 items eligible">
           <div class="screenshot-frame">
             <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
               <rect class="wf-bg" width="640" height="360"/>
@@ -3209,9 +3219,11 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <text fill="var(--text)" x="80" y="60" font-weight="600">Set Availabilities for items</text>
               <text class="wf-text" x="558" y="60" font-size="16">✕</text>
               <rect class="wf-card" x="80" y="94" width="480" height="32" rx="6"/>
-              <rect class="wf-primary-bg" x="88" y="100" width="160" height="20" rx="4"/>
-              <text fill="var(--primary)" x="168" y="114" text-anchor="middle" font-size="11" font-weight="600">Set Availabilities</text>
-              <text class="wf-text" x="332" y="114" text-anchor="middle" font-size="11">Remove from Sales</text>
+              <text class="wf-text" x="88" y="114" font-size="10">Mở từ nút:</text>
+              <rect class="wf-primary-bg" x="146" y="100" width="112" height="20" rx="4"/>
+              <text fill="var(--primary)" x="202" y="114" text-anchor="middle" font-size="10" font-weight="600">Set Availabilities</text>
+              <text class="wf-text" x="300" y="114" text-anchor="middle" font-size="10">Choose territories</text>
+              <text class="wf-text" x="410" y="114" text-anchor="middle" font-size="10">Remove from Sales</text>
               <rect fill="var(--primary-bg)" x="80" y="138" width="480" height="28" rx="4"/>
               <text fill="var(--primary)" x="96" y="156" font-size="11">Showing items currently Removed from Sales — eligible to re-enable</text>
               <g font-size="10">
@@ -3238,7 +3250,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </div>
           <div class="screenshot-caption">
             <span class="screenshot-caption-label">TODO</span>
-            <span>2-tab modal · primary mode Set · 12 items eligible · 5 selected</span>
+            <span>Modal mở ở chế độ Set Availabilities (một trong ba nút toolbar) · 12 items eligible · 5 selected</span>
           </div>
         </div>
 

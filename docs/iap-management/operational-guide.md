@@ -245,7 +245,8 @@ gap note at the end of this section before you go looking for it.
 |---|---|---|
 | Set one existing IAP's countries precisely | **Edit form → Availability** (synced IAPs only) | The item's **current** territories |
 | Set countries for a batch you are creating | **Bulk Import → Step 4 (Territories)** | **All** countries + future markets |
-| Turn many existing IAPs fully on or fully off | **Bulk Availabilities modal** | all-or-nothing only — no subset |
+| Set the same countries on many existing IAPs | **Bulk Availabilities → Choose territories** | **All** countries + future markets |
+| Turn many existing IAPs fully on or fully off | **Bulk Availabilities → Set Availabilities / Remove from Sales** | all-or-nothing, no picker |
 
 The Edit form's default is deliberately *not* ALL. Opening a form to fix a
 display name and pressing Update must not silently widen a 12-territory item
@@ -314,9 +315,10 @@ selection is a valid Apple request meaning *removed from sale*, so falling
 back to "nothing selected" would hide items nobody asked to hide. Reload and
 retry.
 
-### 4.7 ⚠ Known gap — the bulk subset picker is not reachable yet
+### 4.7 Reaching the bulk subset picker
 
-The Bulk Availabilities modal fully supports choosing a territory subset, and
-the server accepts it, but **no button opens it in that mode**. Until that is
-wired, subsets are per-item (Edit form) or per-batch-at-create (Bulk Import).
-Tracked in `TODO.md`. Do not document or train on it as available.
+The IAP list toolbar carries **three** buttons: *Set Availabilities* (all),
+**Choose territories** (subset), *Remove from Sales* (none). The mode is fixed
+by the button you press — the modal has no tab switcher, so changing mode means
+closing and pressing a different button, and the territory selection is not
+carried over between opens.
