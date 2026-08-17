@@ -80,8 +80,15 @@ export const IAP_ACTION_TYPES = [
   "DELETE_LOCALIZATION_ON_APPLE",
   "REPLACE_SCREENSHOT_ON_APPLE",
   // ── Availability (20260811000000 — the P2 fix) ─────────────────────────
+  // ⚠ SET_ALL_TERRITORIES is emitted ONLY for the genuine "All countries or
+  //   regions" case (full catalogue + availableInNewTerritories true), so
+  //   historical rows keep meaning what they meant. Any explicit set — even
+  //   one covering every territory, which is a DIFFERENT Apple request (KB
+  //   §4.13) — uses SET_TERRITORIES below.
   "AVAILABILITY_SET_ALL_TERRITORIES",
   "AVAILABILITY_REMOVE_FROM_SALES",
+  // ── Per-territory availability (20260817000000) ────────────────────────
+  "AVAILABILITY_SET_TERRITORIES",
   // ── Per-territory custom prices (20260812000000) ───────────────────────
   "CUSTOM_PRICES_SAVED",
   "CUSTOM_PRICES_CLEARED",

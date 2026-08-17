@@ -88,6 +88,13 @@ const IAP_MGMT: AuditConstraintModule = {
     // migration 20260811000000. If an edit ever drops them, parity fails.
     "AVAILABILITY_SET_ALL_TERRITORIES",
     "AVAILABILITY_REMOVE_FROM_SALES",
+    // Per-territory availability (20260817000000). Pinned on arrival rather
+    // than after an incident: it is emitted from a ternary binding — the
+    // exact shape whose scanner gap caused the P2 recurrence — and its
+    // sibling SET_ALL_TERRITORIES survives, so a regression that collapses
+    // the two would silently relabel subsets as "all" and lose nothing the
+    // parity check would otherwise notice.
+    "AVAILABILITY_SET_TERRITORIES",
   ],
   scan: {
     roots: [

@@ -34,13 +34,29 @@ import type { AscCredentials } from "@/lib/asc-jwt";
 import { withConcurrency } from "@/lib/iap-management/concurrency";
 import { iapDb } from "@/lib/iap-management/db";
 import {
-  setAvailabilityToAllTerritories,
-  setAvailabilityRemoveFromSales,
+  getAllTerritoryIds,
+  setAvailabilityTerritories,
 } from "@/lib/iap-management/apple/availabilities";
+import {
+  allTerritoriesSelection,
+  noTerritoriesSelection,
+  type TerritorySelection,
+} from "@/lib/iap-management/apple/territory-selection";
+import {
+  availabilityActionType,
+  availabilityAuditProvenance,
+  type PreviousAvailability,
+} from "@/lib/iap-management/apple/availability-audit";
 import { withRetry } from "@/lib/iap-management/apple/fetch";
 import type { IapActionType } from "@/lib/iap-management/action-types";
 
-export type BulkAvailabilityAction = "set-all" | "remove";
+/**
+ * `set-territories` (per-territory availability) carries an explicit
+ * selection; the other two are presets the orchestrator expands itself.
+ * This is the Manager's UI MODE — it is NOT the audit action type, which
+ * is derived from what was actually sent (P5, see availability-audit.ts).
+ */
+export type BulkAvailabilityAction = "set-all" | "remove" | "set-territories";
 
 /**
  * Cycle 40 Phase A — Apple ASC ~1 req/sec hourly budget. Concurrency 2
@@ -55,10 +71,28 @@ export interface BulkAvailabilityArgs {
   /** Internal `iap_mgmt.iaps.id` rows targeted by Manager's selection. */
   iapIds: readonly string[];
   action: BulkAvailabilityAction;
+  /**
+   * Required when `action === "set-territories"`, ignored otherwise. The
+   * territory ids are Apple's, passed straight through — see
+   * `setAvailabilityTerritories`.
+   */
+  selection?: TerritorySelection;
   /** Email or session identifier captured into actions_log.actor. */
   actor: string;
   /** Concurrency ceiling — defaults to DEFAULT_CONCURRENCY (Phase A: 2). */
   concurrency?: number;
+  /**
+   * What the caller already knew about each item's availability, keyed by
+   * internal IAP id. Surface A's modal reads every listed item on open
+   * (client queue, concurrency 3) so this costs no extra Apple calls; it
+   * exists purely so the audit row can state what changed.
+   *
+   * ⚠ Absent or missing entries are recorded as `previous_known: false`,
+   * never backfilled with a plausible number. The orchestrator does NOT
+   * read Apple to fill this in — a second read per item to decorate an
+   * audit row would be the wrong trade against the rate-limit budget.
+   */
+  previousByIapId?: Readonly<Record<string, PreviousAvailability | null>>;
 }
 
 /**
@@ -138,7 +172,14 @@ export interface BulkAvailabilityOutcome {
 export async function executeBulkAvailability(
   args: BulkAvailabilityArgs,
 ): Promise<BulkAvailabilityOutcome> {
-  const { creds, iapIds, action, actor, concurrency = DEFAULT_CONCURRENCY } = args;
+  const {
+    creds,
+    iapIds,
+    action,
+    actor,
+    concurrency = DEFAULT_CONCURRENCY,
+    previousByIapId,
+  } = args;
 
   if (iapIds.length === 0) {
     return {
@@ -162,10 +203,37 @@ export async function executeBulkAvailability(
   // inside the workers.
   const appleIdByRow = await resolveAppleIapIds(iapIds);
 
-  const action_type =
-    action === "set-all"
-      ? "AVAILABILITY_SET_ALL_TERRITORIES"
-      : "AVAILABILITY_REMOVE_FROM_SALES";
+  // ── Resolve ONE selection for the whole batch ─────────────────────────
+  // Every item gets exactly the same territories (Manager decision 1:
+  // replace, no per-row variation). Building it once here means the
+  // per-row work is just the Apple POST + the audit insert.
+  //
+  // `getAllTerritoryIds` is the per-process 1h cache, so this is at most
+  // one extra Apple call per batch — and "remove" skips it entirely since
+  // an empty selection can never be ALL.
+  let selection: TerritorySelection;
+  let catalogue: readonly string[] = [];
+  if (action === "remove") {
+    selection = noTerritoriesSelection();
+  } else if (action === "set-all") {
+    catalogue = await getAllTerritoryIds(creds);
+    selection = allTerritoriesSelection(catalogue);
+  } else {
+    if (!args.selection) {
+      throw new Error(
+        'executeBulkAvailability: action "set-territories" requires a selection',
+      );
+    }
+    selection = args.selection;
+    // Needed to tell ALL from ALL_FROZEN/SUBSET when labelling the audit
+    // row — the flag is not derivable from the list (KB §4.13).
+    catalogue = await getAllTerritoryIds(creds);
+  }
+
+  // ⚠ Derived from what will actually be SENT, never from `action`
+  // (P5 status principle). "set-territories" covering every territory with
+  // the forward flag on is genuinely an "all" write and is labelled as one.
+  const action_type = availabilityActionType(selection, catalogue);
 
   const results = await withConcurrency<string, BulkAvailabilityRowResult>(
     iapIds,
@@ -178,22 +246,20 @@ export async function executeBulkAvailability(
         await writeAuditRow(actor, iapId, action_type, {
           result: "ERROR",
           error,
-          target: action === "set-all" ? "ALL" : "NONE",
+          ...availabilityAuditProvenance(selection, previousByIapId?.[iapId]),
         });
         return { iapId, ok: false, error };
       }
       const counters = createRetryCounters();
       try {
         const res = await trackedWithRetry(counters, () =>
-          action === "set-all"
-            ? setAvailabilityToAllTerritories(creds, appleIapId)
-            : setAvailabilityRemoveFromSales(creds, appleIapId),
+          setAvailabilityTerritories(creds, appleIapId, selection),
         );
         const apple_availability_id = res.data?.id;
         await writeAuditRow(actor, iapId, action_type, {
           apple_iap_id: appleIapId,
           result: "SUCCESS",
-          target: action === "set-all" ? "ALL" : "NONE",
+          ...availabilityAuditProvenance(selection, previousByIapId?.[iapId]),
           ...(apple_availability_id ? { apple_availability_id } : {}),
           source: "bulk",
           rate_limit: counters,
@@ -210,7 +276,7 @@ export async function executeBulkAvailability(
         await writeAuditRow(actor, iapId, action_type, {
           apple_iap_id: appleIapId,
           result: "ERROR",
-          target: action === "set-all" ? "ALL" : "NONE",
+          ...availabilityAuditProvenance(selection, previousByIapId?.[iapId]),
           source: "bulk",
           error,
           rate_limit: counters,
