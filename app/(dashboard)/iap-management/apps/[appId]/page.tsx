@@ -6,7 +6,7 @@ import { requireIapSession } from "@/lib/iap-management/auth";
 import {
   ensureAppRegistered,
   listDraftIaps,
-  listSyncedAppleIapMap,
+  listSyncedAppleIapDetail,
   seedMissingIapStubs,
   type IapDbRow,
 } from "@/lib/iap-management/queries/iaps";
@@ -65,6 +65,8 @@ async function IapListContent({ appId }: { appId: string }) {
   let iaps: InAppPurchase[] = [];
   let drafts: IapDbRow[] = [];
   let appleToInternal: Record<string, string> = {};
+  // SC6 — per-item base territory for surface A's confirm advisory.
+  let baseTerritoryByAppleId: Record<string, string> = {};
   let internalAppId: string | null = null;
   let ascAccountId: string | null = null;
 
@@ -106,7 +108,9 @@ async function IapListContent({ appId }: { appId: string }) {
     }
     if (internalAppId) {
       drafts = (await listDraftIaps(internalAppId)).drafts;
-      appleToInternal = await listSyncedAppleIapMap(internalAppId);
+      const synced = await listSyncedAppleIapDetail(internalAppId);
+      appleToInternal = synced.appleToInternal;
+      baseTerritoryByAppleId = synced.baseTerritoryByAppleId;
       const summary = await getTemplateSummary({ kind: "APP", app_id: internalAppId });
       if (summary) {
         appTemplate = summary.template;
@@ -152,6 +156,7 @@ async function IapListContent({ appId }: { appId: string }) {
         iaps={iaps}
         drafts={drafts}
         appleToInternal={appleToInternal}
+        baseTerritoryByAppleId={baseTerritoryByAppleId}
       />
     </>
   );

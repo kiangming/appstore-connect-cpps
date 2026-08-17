@@ -342,23 +342,50 @@ export async function listDraftIaps(appId: string): Promise<ListDraftsResult> {
 export async function listSyncedAppleIapMap(
   internalAppId: string,
 ): Promise<Record<string, string>> {
+  return (await listSyncedAppleIapDetail(internalAppId)).appleToInternal;
+}
+
+/**
+ * SC6 — the synced map PLUS each item's `base_territory`, in one round-trip.
+ *
+ * Surface A's confirm dialog names the items whose base territory falls
+ * outside the chosen selection, and `base_territory` is a PER-ITEM column
+ * (migration 20260515000000:94) — across a bulk batch the bases genuinely
+ * differ, so a single "USA" assumption would mislabel every item based
+ * elsewhere. Selecting it alongside the id map costs no extra query.
+ */
+export async function listSyncedAppleIapDetail(
+  internalAppId: string,
+): Promise<{
+  appleToInternal: Record<string, string>;
+  /** Apple IAP id → that item's own base territory. */
+  baseTerritoryByAppleId: Record<string, string>;
+}> {
   const db = iapDb();
   const res = await db
     .from("iaps")
-    .select("id, apple_iap_id")
+    .select("id, apple_iap_id, base_territory")
     .eq("app_id", internalAppId)
     .not("apple_iap_id", "is", null);
   if (res.error) {
     throw new Error(`synced map fetch failed: ${res.error.message}`);
   }
-  const map: Record<string, string> = {};
+  const appleToInternal: Record<string, string> = {};
+  const baseTerritoryByAppleId: Record<string, string> = {};
   for (const row of (res.data ?? []) as Array<{
     id: string;
     apple_iap_id: string | null;
+    base_territory: string | null;
   }>) {
-    if (row.apple_iap_id) map[row.apple_iap_id] = row.id;
+    if (!row.apple_iap_id) continue;
+    appleToInternal[row.apple_iap_id] = row.id;
+    // Never invent a base. An absent column value stays absent so the
+    // advisory can skip the item rather than warn about a guessed "USA".
+    if (row.base_territory) {
+      baseTerritoryByAppleId[row.apple_iap_id] = row.base_territory;
+    }
   }
-  return map;
+  return { appleToInternal, baseTerritoryByAppleId };
 }
 
 /** Hotfix 13: pure partition step used by `seedMissingIapStubs`. Returns

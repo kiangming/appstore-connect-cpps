@@ -54,7 +54,11 @@ import {
 } from "@/lib/iap-management/client-fetch-queue";
 import type { InAppPurchase } from "@/types/iap-management/apple";
 
-export type BulkMode = "set-all" | "remove";
+/**
+ * SC6 added "set-territories". The first two are unchanged single-shot modes;
+ * the third mounts the picker and carries an explicit selection.
+ */
+export type BulkMode = "set-all" | "remove" | "set-territories";
 
 export interface AvailabilitiesBulkModalProps {
   open: boolean;
@@ -63,6 +67,9 @@ export interface AvailabilitiesBulkModalProps {
   iaps: InAppPurchase[];
   /** Apple-IAP-id → internal-UUID map. Internal UUIDs are what the API expects. */
   appleToInternal: Record<string, string>;
+  /** SC6 — Apple IAP id → that item's OWN base_territory (§G6 advisory).
+   *  Bases differ across a batch, so this is per-item, never a constant. */
+  baseTerritoryByAppleId?: Record<string, string>;
   onClose: () => void;
   /** Called after a successful bulk action so the parent can refresh the list. */
   onComplete?: () => void;
@@ -740,6 +747,12 @@ export function filterEligible(
     const bucket = classifyAvailability(states.get(iap.id) ?? null, false);
     if (mode === "set-all" && bucket !== "removed") continue;
     if (mode === "remove" && bucket !== "available") continue;
+    // ⚠ "set-territories" applies NO bucket restriction (Manager decision 5
+    // keeps the existing mode filter rather than adding a new read): setting an
+    // explicit territory list is meaningful for an item that is currently
+    // available AND for one that is removed. The read-error and unmapped
+    // guards above still apply — an item whose state we could not read stays
+    // out, and the confirm dialog names it rather than hiding the exclusion.
     out.push({
       appleIapId: iap.id,
       productId: iap.attributes.productId,

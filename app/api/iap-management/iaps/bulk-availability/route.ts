@@ -53,18 +53,47 @@ import { log } from "@/lib/logger";
 
 export const runtime = "nodejs";
 
+/**
+ * ⚠ SC6 widened `action` to include "set-territories".
+ *
+ * SC2 built the selection-driven orchestrator (BulkAvailabilityAction already
+ * had all three values, bulk-availability.ts:84) but this schema was never
+ * widened — so SC3's stop-and-resume machinery was unreachable from any client:
+ * the third action existed server-side and was rejected at the HTTP boundary.
+ */
+const SelectionSchema = z.object({
+  /** Apple territory ids, verbatim. Never normalised here. */
+  territoryIds: z.array(z.string().min(1)),
+  /**
+   * ⚠ Required, not defaulted. The flag is NOT derivable from the id list
+   * (KB §4.13) — "all territories" and "all territories ticked by hand" carry
+   * identical ids and different flags. A `.default(false)` here would let a
+   * client that forgot the field silently send the frozen variant, which is
+   * the phantom-field class of bug SC1 corrected.
+   */
+  availableInNewTerritories: z.boolean(),
+});
+
 const BodySchema = z.object({
   iapIds: z.array(z.string().min(1)).min(1).max(500),
-  action: z.enum(["set-all", "remove"]),
+  action: z.enum(["set-all", "remove", "set-territories"]),
+  /** Required when action === "set-territories"; ignored otherwise. */
+  selection: SelectionSchema.optional(),
   /** Threaded from the modal's button-click Hub-tracking start call.
    *  Absent/empty means tracking never started (unconfigured/disabled,
    *  or the client's race cap expired before /start resolved) — a no-op. */
   hub_run_id: z.string().nullish(),
 });
 
-const FEATURE_BY_ACTION: Record<"set-all" | "remove", string> = {
+const FEATURE_BY_ACTION: Record<
+  "set-all" | "remove" | "set-territories",
+  string
+> = {
   "set-all": "iap-set-availabilities",
   remove: "iap-remove-from-sales",
+  // Distinct tag: a per-territory write is not the same operation as
+  // "publish everywhere", and the hub must not report it as one.
+  "set-territories": "iap-set-territories",
 };
 
 /** Threaded by reference so the outer `finally` always closes the run
@@ -128,22 +157,47 @@ export async function POST(req: Request) {
       );
     }
 
+    // The orchestrator throws when "set-territories" arrives without a
+    // selection; reject it here with a 400 so the client gets a usable message
+    // rather than a 500 from a thrown Error.
+    if (body.action === "set-territories" && !body.selection) {
+      const message = 'action "set-territories" requires a selection';
+      tracking.errorMessage = message;
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+
     const outcome: BulkAvailabilityOutcome = await executeBulkAvailability({
       creds,
       iapIds: body.iapIds,
       action: body.action,
       actor,
+      ...(body.selection ? { selection: body.selection } : {}),
     });
 
     // Terminal status from the SAME per-IAP outcome the modal renders
-    // (status principle) — reused as-is, zero logic changes.
-    const terminal = computeBulkImportTerminalStatus({
-      total: outcome.total,
-      succeeded: outcome.succeeded,
-      failed: outcome.failed,
-    });
-    tracking.status = terminal.status;
-    tracking.errorMessage = terminal.errorMessage;
+    // (status principle).
+    //
+    // ⚠ A STOPPED run cannot go through the shared mapping unmodified. That
+    // mapping keys off `failed`, and a rate-limit stop typically produces
+    // failed === 0 with a large NOT_ATTEMPTED remainder — which would map to
+    // SUCCESS and tell the hub the batch completed while N items were never
+    // attempted. A stopped run is PARTIAL by definition: some work landed,
+    // some was deliberately abandoned. The count of unattempted items goes in
+    // the message so the row says what is still owed.
+    if (outcome.overall === "STOPPED_RATE_LIMITED") {
+      const notAttempted =
+        outcome.total - outcome.succeeded - outcome.failed;
+      tracking.status = "PARTIAL";
+      tracking.errorMessage = `stopped on Apple rate limit — ${notAttempted}/${outcome.total} not attempted`;
+    } else {
+      const terminal = computeBulkImportTerminalStatus({
+        total: outcome.total,
+        succeeded: outcome.succeeded,
+        failed: outcome.failed,
+      });
+      tracking.status = terminal.status;
+      tracking.errorMessage = terminal.errorMessage;
+    }
 
     return NextResponse.json(outcome);
   } finally {

@@ -57,6 +57,9 @@ interface Props {
   drafts?: IapDbRow[];
   /** Apple-IAP-id → internal-UUID map for synced rows. Required for multi-select submit. */
   appleToInternal: Record<string, string>;
+  /** SC6 — Apple IAP id → that item's own base_territory, for the
+   *  Set Availabilities confirm advisory. Bases differ across a batch. */
+  baseTerritoryByAppleId?: Record<string, string>;
 }
 
 const TYPE_LABEL: Record<InAppPurchaseType, string> = {
@@ -133,6 +136,7 @@ export function IapListClient({
   iaps,
   drafts = [],
   appleToInternal,
+  baseTerritoryByAppleId = {},
 }: Props) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -806,6 +810,7 @@ export function IapListClient({
           mode={bulkMode}
           iaps={filtered}
           appleToInternal={appleToInternal}
+          baseTerritoryByAppleId={baseTerritoryByAppleId}
           onClose={() => setBulkMode(null)}
           onComplete={() => router.refresh()}
         />
