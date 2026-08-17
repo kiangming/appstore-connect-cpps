@@ -2820,6 +2820,47 @@ This is a discipline correction to the mutation-check practice itself, which by
 this point had been used ~8 times across the project (P10, P16, and the Google
 base-price cycle's four sub-chunks).
 
+**P18 — A VERIFICATION RUN MUST PROVE IT RAN SOMETHING. "GREEN" AND "RAN
+NOTHING" ARE THE SAME OUTPUT.**
+
+The third face of P16/P17, and the one that attacks the *report* rather than the
+test. P16: the test may be fake. P17: the mutation may have missed. P18: the
+run itself may have executed zero tests, and nothing in the output says so.
+
+Instance (Apple per-territory availability arc, SC5-SC7, closed `6f206f8`):
+guard suites were verified by naming file paths, e.g.
+
+```
+npx vitest run lib/iap-management/action-types.test.ts lib/audit-constraints ...
+```
+
+`lib/iap-management/action-types.test.ts` **had already been deleted** — its
+parity checks were folded into `lib/audit-constraints/guard.test.ts`, whose own
+header says "supersedes lib/iap-management/action-types.test.ts
+(single-module)". Vitest treats positional args as **filters, not assertions**:
+a path matching nothing contributes zero files, emits **no warning**, and the
+aggregate line still reads `Test Files N passed`. So "action-types parity ✓"
+appeared in three consecutive chunk wrap-ups as a verified guard while
+contributing exactly nothing. The substance was never at risk (the 35-test
+audit-guard did cover it) — the *reporting mechanism* was, and it fails silently
+and identically for a guard that was deleted, renamed, moved, or typo'd.
+
+Rules:
+1. When verifying guards by file path, **assert a non-zero test count per run**.
+   A per-file loop that prints `path → N tests` and flags `N == 0` costs one
+   line and makes a ghost entry impossible. A single batched invocation cannot
+   distinguish "all six ran" from "five ran and one is a ghost".
+2. **A path is not a guarantee that a guard exists.** Guards get folded into
+   broader suites (this is good — see the audit-constraints consolidation);
+   verify-lists do not follow automatically and rot silently.
+3. Same rule as P17 step 3: name what ran and what it produced, not that it
+   "passed". A count is a claim that can be wrong; "green" is not.
+
+Deferred, not built (would have widened the closing commit): a cheap repo-level
+guard asserting every path in a verify-list resolves to a real file. Candidate
+shape — a test that reads the documented guard-suite list and `statSync`s each
+entry, failing on a missing path, so the list cannot outlive its files.
+
 ---
 
 #### 10.13.K — Google single-item base-price cycle (2026-08-13, `f6b9b22` → `c0a9715`)
