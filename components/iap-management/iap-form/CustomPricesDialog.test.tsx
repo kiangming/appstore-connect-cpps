@@ -474,3 +474,177 @@ describe("search + filter across ~175 rows", () => {
     expect(screen.queryByText("Kazakhstan")).not.toBeInTheDocument();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// The chrome net (SC4 BƯỚC 1).
+//
+// These pin the toolbar/filter behaviours that were about to be extracted
+// into TerritoryPickerShell. They were written and confirmed GREEN against
+// the ORIGINAL inline chrome, BEFORE the extraction — that ordering is the
+// whole point. Written afterwards they would be tests of the shell that
+// happen to pass, not a regression net for the refactor.
+//
+// The continent predicate in particular had ZERO coverage: it could have
+// been deleted outright and the other 476 lines stayed green.
+//
+// Fixture geography (verified via getContinentForTerritory):
+//   Americas = { USA (base), BRA }      Asia = { VNM, KAZ }
+//
+// Row selectors use `custom-price-row-<CODE>` testids rather than country
+// names, because the header also renders the base territory code.
+//
+// NOT COVERED HERE, deliberately: sticky thead + scroll frame. jsdom has no
+// layout, so the only assertable thing is a className — a gate that proves
+// nothing. Declared as a gap, verified by eye on the dev server.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const row = (code: string) => screen.queryByTestId(`custom-price-row-${code}`);
+
+async function renderLoaded(props?: Partial<Parameters<typeof CustomPricesDialog>[0]>) {
+  mockFetch();
+  const handles = renderDialog(props);
+  await waitFor(() => expect(row("VNM")).toBeInTheDocument());
+  return handles;
+}
+
+const continentChip = (name: string) => screen.getByRole("button", { name });
+const searchBox = () => screen.getByLabelText("Search territories");
+
+describe("chrome — continent chip filter", () => {
+  it("filters to the chosen continent and drops every other row", async () => {
+    await renderLoaded();
+
+    fireEvent.click(continentChip("Asia"));
+
+    expect(row("VNM")).toBeInTheDocument();
+    expect(row("KAZ")).toBeInTheDocument();
+    expect(row("USA")).not.toBeInTheDocument();
+    expect(row("BRA")).not.toBeInTheDocument();
+  });
+
+  it("'All' restores the full catalogue after a continent filter", async () => {
+    await renderLoaded();
+
+    fireEvent.click(continentChip("Americas"));
+    expect(row("VNM")).not.toBeInTheDocument();
+
+    fireEvent.click(continentChip("All"));
+    for (const code of ["USA", "VNM", "BRA", "KAZ"]) {
+      expect(row(code)).toBeInTheDocument();
+    }
+  });
+});
+
+describe("chrome — search predicate branches", () => {
+  it("matches on alpha-3 code, not only on name", async () => {
+    await renderLoaded();
+
+    // "usa" is a substring of neither "United States" nor "USD" — the only
+    // way this row can survive is the territory_code branch.
+    fireEvent.change(searchBox(), { target: { value: "usa" } });
+
+    expect(row("USA")).toBeInTheDocument();
+    expect(row("VNM")).not.toBeInTheDocument();
+    expect(row("BRA")).not.toBeInTheDocument();
+    expect(row("KAZ")).not.toBeInTheDocument();
+  });
+
+  it("matches on currency code", async () => {
+    await renderLoaded();
+
+    // "vnd" appears in neither "Vietnam" nor "VNM" — currency branch only.
+    fireEvent.change(searchBox(), { target: { value: "vnd" } });
+
+    expect(row("VNM")).toBeInTheDocument();
+    expect(row("USA")).not.toBeInTheDocument();
+  });
+
+  it("is reversible — clearing the box restores every row", async () => {
+    await renderLoaded();
+
+    fireEvent.change(searchBox(), { target: { value: "brazil" } });
+    expect(row("VNM")).not.toBeInTheDocument();
+
+    fireEvent.change(searchBox(), { target: { value: "" } });
+    for (const code of ["USA", "VNM", "BRA", "KAZ"]) {
+      expect(row(code)).toBeInTheDocument();
+    }
+  });
+});
+
+describe("chrome — the predicates compose", () => {
+  it("continent AND query both apply; a row must satisfy both", async () => {
+    await renderLoaded();
+
+    fireEvent.click(continentChip("Asia"));
+    fireEvent.change(searchBox(), { target: { value: "kaz" } });
+
+    expect(row("KAZ")).toBeInTheDocument();
+    // In Asia but fails the query.
+    expect(row("VNM")).not.toBeInTheDocument();
+    // Matches nothing and is out of continent.
+    expect(row("USA")).not.toBeInTheDocument();
+    expect(row("BRA")).not.toBeInTheDocument();
+  });
+});
+
+describe("chrome — the base row's exemption is filter-specific", () => {
+  it("'Only customised' exempts the base row", async () => {
+    await renderLoaded({
+      initialEntries: [
+        { territory_code: "VNM", customer_price: 25000, currency_code: "VND" },
+      ],
+    });
+
+    fireEvent.click(screen.getByLabelText(/Only customised/));
+
+    // USA has no custom price and is kept anyway — is_base is exempt (:181).
+    expect(row("USA")).toBeInTheDocument();
+    expect(row("KAZ")).not.toBeInTheDocument();
+  });
+
+  it("continent and query do NOT exempt it — the base row can be filtered away", async () => {
+    await renderLoaded();
+
+    fireEvent.click(continentChip("Asia"));
+    expect(row("USA")).not.toBeInTheDocument();
+
+    fireEvent.click(continentChip("All"));
+    fireEvent.change(searchBox(), { target: { value: "vietnam" } });
+    expect(row("USA")).not.toBeInTheDocument();
+  });
+});
+
+describe("chrome — the count chip counts the SET, not the view", () => {
+  it("stays put when a filter hides the customised row", async () => {
+    await renderLoaded({
+      initialEntries: [
+        { territory_code: "VNM", customer_price: 25000, currency_code: "VND" },
+      ],
+    });
+
+    const chip = () => screen.getByTestId("custom-prices-changed-count").textContent;
+    expect(chip()).toContain("1 customised");
+
+    // Filter to a continent the custom is NOT in. If the count were ever
+    // derived from the visible rows instead of the full set it would read 0.
+    fireEvent.click(continentChip("Americas"));
+    expect(row("VNM")).not.toBeInTheDocument();
+    expect(chip()).toContain("1 customised");
+  });
+});
+
+describe("chrome — empty state", () => {
+  it("says the filter matched nothing rather than rendering a blank table", async () => {
+    await renderLoaded();
+
+    fireEvent.change(searchBox(), { target: { value: "zzzznotaterritory" } });
+
+    expect(
+      screen.getByText("No territories match the current filter."),
+    ).toBeInTheDocument();
+    for (const code of ["USA", "VNM", "BRA", "KAZ"]) {
+      expect(row(code)).not.toBeInTheDocument();
+    }
+  });
+});

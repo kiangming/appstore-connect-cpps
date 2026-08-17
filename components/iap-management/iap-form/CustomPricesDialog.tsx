@@ -26,12 +26,8 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Search, X, AlertTriangle, Download } from "lucide-react";
-import {
-  APPLE_CONTINENTS,
-  getContinentForTerritory,
-  type Continent,
-} from "@/lib/iap-management/apple/territory-continent";
+import { X, AlertTriangle, Download } from "lucide-react";
+import { TerritoryPickerShell } from "@/components/iap-management/territory/TerritoryPickerShell";
 import {
   assembleBaselineRows,
   baselineCounts,
@@ -71,6 +67,13 @@ export interface CustomPricesDialogProps {
   onSaved: (entries: CustomPriceEntry[], baseline: CustomPriceBaseline | null) => void;
 }
 
+/* Module-level so their identity is stable across renders — the shell memoises
+   the filter on these, and inline arrows would re-filter every render. */
+const rowCode = (row: BaselineRow) => row.territory_code;
+/** "Only customised" — the base row is exempt (§E: it is always shown). */
+const notCustomisedFilter = (row: BaselineRow) =>
+  row.custom_price !== null || row.is_base;
+
 type PriceOptionState =
   | { status: "idle" }
   | { status: "loading" }
@@ -100,9 +103,16 @@ export function CustomPricesDialog({
    * value anywhere in this map.
    */
   const [draft, setDraft] = useState(() => toCustomPriceSet(initialEntries));
-  const [query, setQuery] = useState("");
-  const [continent, setContinent] = useState<Continent | "ALL">("ALL");
   const [onlyCustomised, setOnlyCustomised] = useState(false);
+  /**
+   * Bumped by the open-reset effect below. The shell owns the search box and
+   * the continent chip, so this is how they get cleared — it reproduces the
+   * previous inline `setQuery("")` / `setContinent("ALL")` exactly, INCLUDING
+   * the `initialEntries` dependency (a new array identity from the parent
+   * clears the box mid-session). That is pre-existing behaviour, carried over
+   * deliberately rather than quietly changed inside a refactor.
+   */
+  const [filterEpoch, setFilterEpoch] = useState(0);
   const [options, setOptions] = useState<Record<string, PriceOptionState>>({});
   /** Territories whose stored custom is no longer in Apple's list (§I.3). Only
    *  populated for territories whose options were actually fetched — we never
@@ -117,10 +127,9 @@ export function CustomPricesDialog({
   useEffect(() => {
     if (!open) return;
     setDraft(toCustomPriceSet(initialEntries));
-    setQuery("");
-    setContinent("ALL");
     setOnlyCustomised(false);
     setUnavailable([]);
+    setFilterEpoch((e) => e + 1);
   }, [open, initialEntries]);
 
   // ── Dialog-open baseline load: ONE request, no price points (G3) ───────────
@@ -174,18 +183,6 @@ export function CustomPricesDialog({
 
   const counts = useMemo(() => baselineCounts(rows), [rows]);
   const importable = useMemo(() => importableManualRows(rows), [rows]);
-
-  const visibleRows = useMemo(
-    () =>
-      rows.filter((row) => {
-        if (onlyCustomised && row.custom_price === null && !row.is_base) return false;
-        if (continent !== "ALL" && getContinentForTerritory(row.territory_code) !== continent) {
-          return false;
-        }
-        return matchesBaselineQuery(row, query);
-      }),
-    [rows, onlyCustomised, continent, query],
-  );
 
   const stale = isCustomBaselineStale(currentBaseline, storedBaseline);
   const donorAvailable = baseline?.donor_available ?? false;
@@ -490,101 +487,65 @@ export function CustomPricesDialog({
           ))}
         </div>
 
-        {/* Toolbar */}
-        <div className="px-5 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-slate-400" />
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search territory, code, or currency…"
-              aria-label="Search territories"
-              className="w-full rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pl-8 pr-3 py-1.5 text-xs"
+        {/* Toolbar + table — chrome lives in the shared shell (SC4 §G4). The
+            "Only customised" filter and the count chip are ours: the shell
+            owns the frame and the filter pipeline, never what is counted. */}
+        <TerritoryPickerShell<BaselineRow>
+          items={rows}
+          codeOf={rowCode}
+          matches={matchesBaselineQuery}
+          extraFilter={onlyCustomised ? notCustomisedFilter : undefined}
+          resetKey={filterEpoch}
+          searchPlaceholder="Search territory, code, or currency…"
+          emptyLabel="No territories match the current filter."
+          loading={loading}
+          loadError={loadError}
+          columnCount={6}
+          columns={
+            <>
+              <th className="px-5 py-2.5 font-semibold">Territory</th>
+              <th className="px-3 py-2.5 font-semibold">Currency</th>
+              <th className="px-3 py-2.5 font-semibold">Current price · provenance</th>
+              <th className="px-3 py-2.5 font-semibold w-56">Custom price</th>
+              <th className="px-3 py-2.5 font-semibold text-right">New price</th>
+              <th className="px-3 py-2.5" />
+            </>
+          }
+          toolbarSlot={
+            <label className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-300 ml-auto">
+              <input
+                type="checkbox"
+                checked={onlyCustomised}
+                onChange={(e) => setOnlyCustomised(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-slate-300"
+              />
+              Only customised ({counts.customised})
+            </label>
+          }
+          countSlot={
+            <span
+              data-testid="custom-prices-changed-count"
+              className="px-2 py-1 rounded bg-amber-100 text-amber-900 text-[11px] font-semibold"
+            >
+              {counts.customised} customised
+            </span>
+          }
+          renderRow={(row) => (
+            <Row
+              key={row.territory_code}
+              row={row}
+              options={options[row.territory_code] ?? { status: "idle" }}
+              donorAvailable={donorAvailable}
+              onOpenPicker={() => loadOptions(row.territory_code)}
+              onPick={(raw) => handlePick(row, raw)}
+              onRevert={() => handleRevert(row)}
+              onImport={() => {
+                markImported();
+                handleImportRow(row);
+              }}
             />
-          </div>
-          <div className="flex gap-1">
-            {(["ALL", ...APPLE_CONTINENTS] as Array<Continent | "ALL">).map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setContinent(c)}
-                className={`px-2.5 py-1 rounded-full text-[11px] font-medium border ${
-                  continent === c
-                    ? "bg-slate-900 text-white border-slate-900"
-                    : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700"
-                }`}
-              >
-                {c === "ALL" ? "All" : c}
-              </button>
-            ))}
-          </div>
-          <label className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-300 ml-auto">
-            <input
-              type="checkbox"
-              checked={onlyCustomised}
-              onChange={(e) => setOnlyCustomised(e.target.checked)}
-              className="h-3.5 w-3.5 rounded border-slate-300"
-            />
-            Only customised ({counts.customised})
-          </label>
-          <span
-            data-testid="custom-prices-changed-count"
-            className="px-2 py-1 rounded bg-amber-100 text-amber-900 text-[11px] font-semibold"
-          >
-            {counts.customised} customised
-          </span>
-        </div>
-
-        {/* Table */}
-        <div className="flex-1 overflow-y-auto">
-          {loading && (
-            <p className="p-6 text-center text-xs text-slate-500 flex items-center justify-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> Loading territories…
-            </p>
           )}
-          {loadError && (
-            <p className="p-6 text-center text-xs text-red-600">{loadError}</p>
-          )}
-          {!loading && !loadError && (
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-white dark:bg-slate-900 shadow-[0_1px_0_#e2e8f0]">
-                <tr className="text-left text-[10px] uppercase tracking-wider text-slate-500">
-                  <th className="px-5 py-2.5 font-semibold">Territory</th>
-                  <th className="px-3 py-2.5 font-semibold">Currency</th>
-                  <th className="px-3 py-2.5 font-semibold">Current price · provenance</th>
-                  <th className="px-3 py-2.5 font-semibold w-56">Custom price</th>
-                  <th className="px-3 py-2.5 font-semibold text-right">New price</th>
-                  <th className="px-3 py-2.5" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {visibleRows.map((row) => (
-                  <Row
-                    key={row.territory_code}
-                    row={row}
-                    options={options[row.territory_code] ?? { status: "idle" }}
-                    donorAvailable={donorAvailable}
-                    onOpenPicker={() => loadOptions(row.territory_code)}
-                    onPick={(raw) => handlePick(row, raw)}
-                    onRevert={() => handleRevert(row)}
-                    onImport={() => {
-                      markImported();
-                      handleImportRow(row);
-                    }}
-                  />
-                ))}
-                {visibleRows.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-5 py-6 text-center text-slate-400">
-                      No territories match the current filter.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          )}
-        </div>
+        />
 
         {/* Footer */}
         <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/30 flex items-center justify-between gap-3">

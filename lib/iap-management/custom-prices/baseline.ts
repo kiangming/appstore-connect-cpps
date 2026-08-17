@@ -25,6 +25,7 @@
  */
 import type { CustomPriceEntry } from "./model";
 import { normalizeTerritoryCode } from "./model";
+import { matchesTerritoryQuery } from "../territory-query";
 
 /**
  * Where a territory's CURRENT price comes from. Two of the four are weaker
@@ -227,14 +228,23 @@ export function manualRowToCustomEntry(row: BaselineRow): CustomPriceEntry | nul
   };
 }
 
-/** Search across name, alpha-3 code and currency (the dialog's one input). */
+/**
+ * Search across name, alpha-3 code and currency (the dialog's one input).
+ *
+ * A thin adapter over the shared predicate since SC4: the availability
+ * territory picker needs the same match and sits adjacent to this dialog on
+ * the Edit form, so the logic lives in `territory-query.ts` and this
+ * function only maps `BaselineRow`'s field names onto it (P1 — one
+ * predicate, not two that drift).
+ */
 export function matchesBaselineQuery(row: BaselineRow, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (q.length === 0) return true;
-  return (
-    row.territory_name.toLowerCase().includes(q) ||
-    row.territory_code.toLowerCase().includes(q) ||
-    (row.currency_code ?? "").toLowerCase().includes(q)
+  return matchesTerritoryQuery(
+    {
+      name: row.territory_name,
+      code: row.territory_code,
+      currency: row.currency_code,
+    },
+    query,
   );
 }
 
