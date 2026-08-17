@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<!--
+  ================================================================================
+  APPLE IAP — PER-TERRITORY AVAILABILITY (3 surfaces)
+  ================================================================================
+
+  Module      : Apple IAP Management (lib/iap-management/, schema iap_mgmt)
+                — NOT Google IAP.
+  Design doc  : docs/iap-management/design-apple-per-territory-availability.md
+  Status      : DESIGN ONLY — hold for Manager review. No implementation.
+
+  MANAGER-LOCKED
+    1  REPLACE, not add. Every targeted item ends with EXACTLY the chosen set.
+       A warning names the items that actually change; confirm required BEFORE.
+    2  Surface C (individual Edit) defaults to the ITEM'S CURRENT territories.
+       Surfaces A and B default to ALL.
+    3  On rate limit, after automatic retry is exhausted: STOP immediately,
+       preserve the unprocessed remainder for manual retry.
+
+  WHAT THE API FORCES (design gate G1 — verified against openapi.oas.v20260717
+  v4.4.1, identical to 4.3.1 on this surface)
+    · POST /v1/inAppPurchaseAvailabilities is the ONLY write. No PATCH, no
+      DELETE. One request carries ONE IAP's FULL territory list ⇒ N items =
+      N requests, NOT 175 x N.
+    · relationships.availableTerritories.data is a REQUIRED complete array ⇒
+      replace is not a choice, it is the only semantic the API has.
+    · There is NO `availableInAllTerritories` field — zero occurrences in the
+      spec. The real attribute is `availableInNewTerritories`, a FORWARD-
+      looking flag ("auto-include markets Apple launches later").
+      ⇒ "All countries or regions" and "175 of 175 ticked by hand" send
+        DIFFERENT bodies. State 4 below makes that visible; they must never
+        render identically.
+
+  REUSED, NOT REBUILT (gate G4 — P1 twin-path)
+    · APPLE_CONTINENTS / getContinentForTerritory — lib/iap-management/apple/
+      territory-continent.ts, verbatim.
+    · territoryName(code) — components/iap-management/view-detail/
+      territory-name.ts, verbatim.
+    · Search box + continent chip row + sticky-header scroll table + live count
+      chip — EXTRACTED from CustomPricesDialog.tsx:493-545 into a shared shell.
+      Prices are a per-territory VALUE; availability is a per-territory
+      BOOLEAN. Only the chrome is shared; the right-hand cell is the caller's.
+
+  8 states rendered (static HTML, Tailwind CDN, no JS deps):
+     1  Picker — "All countries or regions" (surface A/B default)
+     2  Picker — "Selected", search + continent filter, select-all-SHOWN
+     3  Picker — surface C, pre-selected from CURRENT + reset + USA advisory
+     4  The distinction: "All" vs 175-ticked-by-hand (different requests)
+     5  REPLACE WARNING confirm dialog — 3 buckets, incl. the honest UNKNOWN
+     6  Surface B — Bulk Import gains Step 3 (default ALL ⇒ today's behaviour)
+     7  Surface C — Availability section, 2 radios become 3
+     8  STOP-AND-RESUME — rate limit hit, remainder preserved, per-item errors
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Apple IAP — per-territory Availability (design mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#f1f5f9; }
+    .state-frame { box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.05); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .row-on   { background:#f0fdf4; box-shadow: inset 3px 0 0 #22c55e; }
+    .row-off  { background:#ffffff; }
+    .row-add  { background:#eff6ff; box-shadow: inset 3px 0 0 #3b82f6; }
+    .row-drop { background:#fef2f2; box-shadow: inset 3px 0 0 #ef4444; }
+    .note { border-left:3px solid #94a3b8; }
+  </style>
+</head>
+<body class="p-8 text-slate-800">
+
+<header class="max-w-6xl mx-auto mb-10">
+  <p class="text-[11px] font-semibold tracking-widest text-slate-500 uppercase">Apple IAP Management · design mockup · hold for review</p>
+  <h1 class="text-3xl font-bold mt-1">Per-territory availability</h1>
+  <p class="text-sm text-slate-600 mt-2 max-w-3xl">
+    Replaces “set all territories” with “choose territories” across three surfaces:
+    <strong>A</strong> Set Availabilities (bulk), <strong>B</strong> Bulk Import (new step),
+    <strong>C</strong> individual Create/Edit. One shared picker, one shared write path
+    (<span class="mono text-[12px]">setAvailabilityTerritories</span>), four existing emitters folded into it.
+  </p>
+  <div class="mt-4 flex flex-wrap gap-2 text-[11px]">
+    <span class="px-2 py-1 rounded bg-emerald-100 text-emerald-800 font-medium">G1 FEASIBLE — 1 request per item</span>
+    <span class="px-2 py-1 rounded bg-emerald-100 text-emerald-800 font-medium">G2 read cost already paid on A + C</span>
+    <span class="px-2 py-1 rounded bg-amber-100 text-amber-800 font-medium">G6 UNCERTAIN — custom price × excluded territory</span>
+    <span class="px-2 py-1 rounded bg-slate-200 text-slate-700 font-medium">Hotfix-26 throttle untouched</span>
+  </div>
+</header>
+
+<!-- ═══════════════ STATE 1 ═══════════════ -->
+<section class="max-w-6xl mx-auto mb-12">
+  <h2 class="text-sm font-bold text-slate-900 mb-1">State 1 — Picker, “All countries or regions” (surfaces A and B default)</h2>
+  <p class="text-xs text-slate-600 mb-3">Decision 2: A and B open on <strong>All</strong>. A Manager who never touches this dialog gets exactly today’s behaviour — the same body the tool already sends.</p>
+
+  <div class="state-frame rounded-xl bg-white overflow-hidden border border-slate-200">
+    <div class="px-5 py-4 border-b border-slate-200">
+      <div class="flex items-start justify-between">
+        <div>
+          <h3 class="text-base font-semibold">Choose territories</h3>
+          <p class="text-xs text-slate-500 mt-0.5">Where these in-app purchases can be sold.</p>
+        </div>
+        <button class="text-slate-400 text-lg leading-none">&times;</button>
+      </div>
+
+      <!-- segmented control: the G1 distinction, surfaced -->
+      <div class="mt-4 inline-flex rounded-lg border border-slate-300 p-0.5 bg-slate-50">
+        <button class="px-3 py-1.5 rounded-md text-xs font-medium bg-slate-900 text-white">All countries or regions</button>
+        <button class="px-3 py-1.5 rounded-md text-xs font-medium text-slate-600">Selected countries or regions</button>
+      </div>
+      <p class="text-[11px] text-slate-500 mt-2">Includes any new market Apple launches later.</p>
+    </div>
+
+    <div class="px-5 py-8 bg-slate-50/60 text-center">
+      <p class="text-sm font-medium text-slate-800">All 175 countries and regions</p>
+      <p class="text-xs text-slate-500 mt-1">Plus every market Apple adds in the future.</p>
+      <p class="mono text-[11px] text-slate-500 mt-4 bg-white inline-block px-3 py-2 rounded border border-slate-200 text-left">
+        availableInNewTerritories: <span class="text-emerald-700 font-semibold">true</span><br />
+        availableTerritories: [ …175 ids… ]
+      </p>
+    </div>
+
+    <div class="px-5 py-3 border-t border-slate-200 flex items-center justify-between bg-white">
+      <span class="px-2 py-1 rounded bg-slate-100 text-slate-700 text-[11px] font-semibold">175 of 175 selected</span>
+      <div class="flex gap-2">
+        <button class="px-3 py-1.5 rounded-md border border-slate-300 text-xs">Cancel</button>
+        <button class="px-3 py-1.5 rounded-md bg-[#0071E3] text-white text-xs font-medium">Use these territories</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ STATE 2 ═══════════════ -->
+<section class="max-w-6xl mx-auto mb-12">
+  <h2 class="text-sm font-bold text-slate-900 mb-1">State 2 — “Selected”, search + continent filter, <span class="text-red-700">select-all applies to the FILTER</span></h2>
+  <p class="text-xs text-slate-600 mb-3">
+    The most dangerous control in the dialog. It is labelled with the number it will affect
+    (<em>Select all 42 shown</em>) so it can never be read as a global action.
+  </p>
+
+  <div class="state-frame rounded-xl bg-white overflow-hidden border border-slate-200">
+    <div class="px-5 py-4 border-b border-slate-200 flex items-start justify-between">
+      <div>
+        <h3 class="text-base font-semibold">Choose territories</h3>
+        <div class="mt-3 inline-flex rounded-lg border border-slate-300 p-0.5 bg-slate-50">
+          <button class="px-3 py-1.5 rounded-md text-xs font-medium text-slate-600">All countries or regions</button>
+          <button class="px-3 py-1.5 rounded-md text-xs font-medium bg-slate-900 text-white">Selected countries or regions</button>
+        </div>
+      </div>
+      <button class="text-slate-400 text-lg leading-none">&times;</button>
+    </div>
+
+    <!-- toolbar — extracted from CustomPricesDialog.tsx:493-545 -->
+    <div class="px-5 py-3 border-b border-slate-200 bg-slate-50/60 flex flex-wrap items-center gap-2">
+      <div class="relative flex-1 min-w-[220px]">
+        <input class="w-full rounded-md border border-slate-300 bg-white pl-3 pr-3 py-1.5 text-xs" value="a" />
+      </div>
+      <div class="flex gap-1">
+        <button class="px-2.5 py-1 rounded-full text-[11px] font-medium border bg-white text-slate-600 border-slate-300">All</button>
+        <button class="px-2.5 py-1 rounded-full text-[11px] font-medium border bg-slate-900 text-white border-slate-900">Asia Pacific</button>
+        <button class="px-2.5 py-1 rounded-full text-[11px] font-medium border bg-white text-slate-600 border-slate-300">Europe</button>
+        <button class="px-2.5 py-1 rounded-full text-[11px] font-medium border bg-white text-slate-600 border-slate-300">Americas</button>
+        <button class="px-2.5 py-1 rounded-full text-[11px] font-medium border bg-white text-slate-600 border-slate-300">Africa, Middle East, India</button>
+      </div>
+    </div>
+
+    <div class="px-5 py-2 border-b border-slate-200 bg-amber-50 flex items-center gap-3">
+      <span class="text-[11px] text-amber-900">Filter active — <strong>42 of 175</strong> shown</span>
+      <button class="px-2 py-1 rounded border border-amber-400 bg-white text-amber-900 text-[11px] font-medium">Select all 42 shown</button>
+      <button class="px-2 py-1 rounded border border-amber-400 bg-white text-amber-900 text-[11px] font-medium">Clear all 42 shown</button>
+      <span class="text-[10px] text-amber-700 ml-auto">Applies to the filtered list only — not all 175.</span>
+    </div>
+
+    <div class="max-h-72 overflow-y-auto">
+      <table class="w-full text-xs">
+        <thead class="sticky top-0 bg-white shadow-[0_1px_0_#e2e8f0]">
+          <tr class="text-left text-[10px] uppercase tracking-wider text-slate-500">
+            <th class="px-5 py-2.5 font-semibold w-10"></th>
+            <th class="px-3 py-2.5 font-semibold">Country or region</th>
+            <th class="px-3 py-2.5 font-semibold">Code</th>
+            <th class="px-3 py-2.5 font-semibold">Continent</th>
+            <th class="px-3 py-2.5 font-semibold text-right">Currently</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="row-on border-b border-slate-100"><td class="px-5 py-2"><input type="checkbox" checked class="h-3.5 w-3.5" /></td><td class="px-3 py-2 font-medium">Australia</td><td class="px-3 py-2 mono text-slate-500">AUS</td><td class="px-3 py-2 text-slate-500">Asia Pacific</td><td class="px-3 py-2 text-right text-emerald-700">Available</td></tr>
+          <tr class="row-on border-b border-slate-100"><td class="px-5 py-2"><input type="checkbox" checked class="h-3.5 w-3.5" /></td><td class="px-3 py-2 font-medium">Japan</td><td class="px-3 py-2 mono text-slate-500">JPN</td><td class="px-3 py-2 text-slate-500">Asia Pacific</td><td class="px-3 py-2 text-right text-emerald-700">Available</td></tr>
+          <tr class="row-off border-b border-slate-100"><td class="px-5 py-2"><input type="checkbox" class="h-3.5 w-3.5" /></td><td class="px-3 py-2 font-medium">Kazakhstan</td><td class="px-3 py-2 mono text-slate-500">KAZ</td><td class="px-3 py-2 text-slate-500">Asia Pacific</td><td class="px-3 py-2 text-right text-emerald-700">Available</td></tr>
+          <tr class="row-on border-b border-slate-100"><td class="px-5 py-2"><input type="checkbox" checked class="h-3.5 w-3.5" /></td><td class="px-3 py-2 font-medium">Malaysia</td><td class="px-3 py-2 mono text-slate-500">MYS</td><td class="px-3 py-2 text-slate-500">Asia Pacific</td><td class="px-3 py-2 text-right text-slate-400">—</td></tr>
+          <tr class="row-on border-b border-slate-100"><td class="px-5 py-2"><input type="checkbox" checked class="h-3.5 w-3.5" /></td><td class="px-3 py-2 font-medium">Thailand</td><td class="px-3 py-2 mono text-slate-500">THA</td><td class="px-3 py-2 text-slate-500">Asia Pacific</td><td class="px-3 py-2 text-right text-emerald-700">Available</td></tr>
+          <tr class="row-on"><td class="px-5 py-2"><input type="checkbox" checked class="h-3.5 w-3.5" /></td><td class="px-3 py-2 font-medium">Vietnam</td><td class="px-3 py-2 mono text-slate-500">VNM</td><td class="px-3 py-2 text-slate-500">Asia Pacific</td><td class="px-3 py-2 text-right text-emerald-700">Available</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="px-5 py-3 border-t border-slate-200 flex items-center justify-between bg-white">
+      <div class="flex items-center gap-2">
+        <span class="px-2 py-1 rounded bg-blue-100 text-blue-900 text-[11px] font-semibold">12 of 175 selected</span>
+        <span class="text-[11px] text-slate-500">New Apple markets will <strong>not</strong> be added automatically.</span>
+      </div>
+      <div class="flex gap-2">
+        <button class="px-3 py-1.5 rounded-md border border-slate-300 text-xs">Cancel</button>
+        <button class="px-3 py-1.5 rounded-md bg-[#0071E3] text-white text-xs font-medium">Use these territories</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ STATE 3 ═══════════════ -->
+<section class="max-w-6xl mx-auto mb-12">
+  <h2 class="text-sm font-bold text-slate-900 mb-1">State 3 — Surface C: pre-selected from the item’s CURRENT territories (decision 2)</h2>
+  <p class="text-xs text-slate-600 mb-3">
+    Read cost is already paid — the Edit page server component fetches availability today to pre-fill the radio
+    (<span class="mono text-[11px]">page.tsx:64-67</span>). Rows show what is being <span class="text-blue-700 font-medium">added</span> and
+    <span class="text-red-700 font-medium">removed</span> relative to that.
+  </p>
+
+  <div class="state-frame rounded-xl bg-white overflow-hidden border border-slate-200">
+    <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between bg-slate-50/60">
+      <span class="text-xs font-medium">Choose territories — <span class="mono">com.vng.gem.100</span></span>
+      <button class="px-2.5 py-1 rounded border border-slate-300 bg-white text-[11px] font-medium">Reset to current (175)</button>
+    </div>
+
+    <div class="max-h-60 overflow-y-auto">
+      <table class="w-full text-xs">
+        <thead class="sticky top-0 bg-white shadow-[0_1px_0_#e2e8f0]">
+          <tr class="text-left text-[10px] uppercase tracking-wider text-slate-500">
+            <th class="px-5 py-2.5 w-10"></th><th class="px-3 py-2.5 font-semibold">Country or region</th>
+            <th class="px-3 py-2.5 font-semibold">Code</th><th class="px-3 py-2.5 font-semibold text-right">Change</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="row-drop border-b border-slate-100"><td class="px-5 py-2"><input type="checkbox" class="h-3.5 w-3.5" /></td><td class="px-3 py-2 font-medium">United States</td><td class="px-3 py-2 mono text-slate-500">USA</td><td class="px-3 py-2 text-right text-red-700 font-medium">Will be removed</td></tr>
+          <tr class="row-on border-b border-slate-100"><td class="px-5 py-2"><input type="checkbox" checked class="h-3.5 w-3.5" /></td><td class="px-3 py-2 font-medium">Vietnam</td><td class="px-3 py-2 mono text-slate-500">VNM</td><td class="px-3 py-2 text-right text-slate-400">unchanged</td></tr>
+          <tr class="row-add border-b border-slate-100"><td class="px-5 py-2"><input type="checkbox" checked class="h-3.5 w-3.5" /></td><td class="px-3 py-2 font-medium">Taiwan</td><td class="px-3 py-2 mono text-slate-500">TWN</td><td class="px-3 py-2 text-right text-blue-700 font-medium">Will be added</td></tr>
+          <tr class="row-drop"><td class="px-5 py-2"><input type="checkbox" class="h-3.5 w-3.5" /></td><td class="px-3 py-2 font-medium">Germany</td><td class="px-3 py-2 mono text-slate-500">DEU</td><td class="px-3 py-2 text-right text-red-700 font-medium">Will be removed</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- G6 advisory — NOT a block -->
+    <div class="px-5 py-3 border-t border-amber-200 bg-amber-50">
+      <p class="text-[11px] text-amber-900">
+        <strong>Prices are calculated from United States (USA), which this selection excludes.</strong>
+        Check the price schedule for this item.
+      </p>
+      <p class="text-[10px] text-amber-700 mt-1">
+        Advisory, not a block — Apple’s spec says nothing about how it treats a price in an
+        excluded territory (design gate G6, <span class="font-semibold">UNCERTAIN</span>). We do not
+        encode a guess as a guard.
+      </p>
+    </div>
+
+    <div class="px-5 py-3 border-t border-slate-200 flex items-center justify-between">
+      <span class="px-2 py-1 rounded bg-blue-100 text-blue-900 text-[11px] font-semibold">12 of 175 selected · +2 / −165</span>
+      <div class="flex gap-2">
+        <button class="px-3 py-1.5 rounded-md border border-slate-300 text-xs">Cancel</button>
+        <button class="px-3 py-1.5 rounded-md bg-[#0071E3] text-white text-xs font-medium">Use these territories</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ STATE 4 ═══════════════ -->
+<section class="max-w-6xl mx-auto mb-12">
+  <h2 class="text-sm font-bold text-slate-900 mb-1">State 4 — “All” vs “175 ticked by hand” are <span class="text-red-700">different requests</span> (gate G1)</h2>
+  <p class="text-xs text-slate-600 mb-3">Same 175 territory ids; different <span class="mono">availableInNewTerritories</span>. Two states that send different bodies must never render identically.</p>
+
+  <div class="grid grid-cols-2 gap-4">
+    <div class="state-frame rounded-xl bg-white border-2 border-emerald-300 p-4">
+      <p class="text-xs font-semibold text-emerald-800">Segmented control set to “All countries or regions”</p>
+      <p class="mono text-[11px] mt-3 bg-slate-50 p-3 rounded border border-slate-200">
+        availableInNewTerritories: <span class="text-emerald-700 font-bold">true</span><br />
+        availableTerritories: [175 ids]
+      </p>
+      <p class="text-[11px] text-slate-600 mt-3">Footer reads: <em>175 of 175 selected — includes any new market Apple launches later.</em></p>
+      <p class="text-[10px] text-slate-500 mt-2">Audit action_type: <span class="mono">AVAILABILITY_SET_ALL_TERRITORIES</span> (unchanged; old rows stay true)</p>
+    </div>
+    <div class="state-frame rounded-xl bg-white border-2 border-amber-300 p-4">
+      <p class="text-xs font-semibold text-amber-800">“Selected”, then every box ticked by hand</p>
+      <p class="mono text-[11px] mt-3 bg-slate-50 p-3 rounded border border-slate-200">
+        availableInNewTerritories: <span class="text-amber-700 font-bold">false</span><br />
+        availableTerritories: [175 ids]
+      </p>
+      <p class="text-[11px] text-slate-600 mt-3">Footer reads: <em>175 of 175 selected — new Apple markets will <strong>NOT</strong> be added automatically.</em></p>
+      <p class="text-[10px] text-slate-500 mt-2">Audit action_type: <span class="mono">AVAILABILITY_SET_TERRITORIES</span> (new — gate G5 option a)</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ STATE 5 ═══════════════ -->
+<section class="max-w-6xl mx-auto mb-12">
+  <h2 class="text-sm font-bold text-slate-900 mb-1">State 5 — THE REPLACE WARNING (decision 1). Destructive ⇒ ask BEFORE, never toast after.</h2>
+  <p class="text-xs text-slate-600 mb-3">Three buckets, all shown. The <strong>Unknown</strong> bucket is the honest part: those items <em>will</em> be written and the tool cannot claim whether that is a change.</p>
+
+  <div class="state-frame rounded-xl bg-white overflow-hidden border-2 border-red-300 max-w-3xl">
+    <div class="px-5 py-4 border-b border-slate-200 bg-red-50">
+      <h3 class="text-base font-semibold text-red-900">Replace availability on 47 items?</h3>
+      <p class="text-xs text-red-800 mt-1.5">
+        Each item’s availability will be <strong>replaced</strong> with the 12 territories you chose.
+        Territories not in your selection <strong>will be removed</strong>.
+      </p>
+    </div>
+
+    <div class="px-5 py-3 border-b border-slate-100">
+      <p class="text-[11px] font-semibold text-slate-700 uppercase tracking-wide">Will change — 47 items</p>
+      <div class="mt-2 max-h-40 overflow-y-auto border border-slate-200 rounded-md">
+        <table class="w-full text-xs">
+          <tbody>
+            <tr class="border-b border-slate-100"><td class="px-3 py-1.5 mono">com.vng.gem.100</td><td class="px-3 py-1.5 text-slate-600">Gem Pack 100</td><td class="px-3 py-1.5 text-right text-slate-700">175 → 12 <span class="text-blue-700">+2</span> <span class="text-red-700">−165</span></td></tr>
+            <tr class="border-b border-slate-100"><td class="px-3 py-1.5 mono">com.vng.gem.500</td><td class="px-3 py-1.5 text-slate-600">Gem Pack 500</td><td class="px-3 py-1.5 text-right text-slate-700">175 → 12 <span class="text-blue-700">+2</span> <span class="text-red-700">−165</span></td></tr>
+            <tr class="border-b border-slate-100"><td class="px-3 py-1.5 mono">com.vng.starter</td><td class="px-3 py-1.5 text-slate-600">Starter Bundle</td><td class="px-3 py-1.5 text-right text-slate-700">0 → 12 <span class="text-blue-700">+12</span></td></tr>
+            <tr><td class="px-3 py-1.5 mono">com.vng.vip.month</td><td class="px-3 py-1.5 text-slate-600">VIP Monthly</td><td class="px-3 py-1.5 text-right text-slate-700">34 → 12 <span class="text-blue-700">+1</span> <span class="text-red-700">−23</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="text-[10px] text-slate-500 mt-1.5">Complete and scrollable — never truncated to “and 43 more”.</p>
+    </div>
+
+    <div class="px-5 py-2.5 border-b border-slate-100 bg-slate-50">
+      <p class="text-[11px] text-slate-600"><strong>8 items already have exactly this set</strong> — no call will be made for them.</p>
+    </div>
+
+    <div class="px-5 py-3 border-b border-slate-200 bg-amber-50">
+      <p class="text-[11px] font-semibold text-amber-900 uppercase tracking-wide">Unknown — 3 items</p>
+      <p class="text-[11px] text-amber-800 mt-1">Their current availability could not be read. They <strong>will still be replaced</strong>; the tool cannot say whether that changes anything.</p>
+      <ul class="mt-1.5 text-[11px] text-amber-900 space-y-0.5">
+        <li><span class="mono">com.vng.gem.900</span> — App Store Connect rate limit while reading</li>
+        <li><span class="mono">com.vng.pass.wk</span> — read failed (503)</li>
+        <li><span class="mono">com.vng.draft.x</span> — not on Apple yet</li>
+      </ul>
+    </div>
+
+    <div class="px-5 py-2.5 note bg-slate-50">
+      <p class="text-[10px] text-slate-600">
+        Based on each item’s availability as read a moment ago. If someone changed it on
+        App Store Connect since, this list may be out of date.
+      </p>
+    </div>
+
+    <div class="px-5 py-3 border-t border-slate-200 flex items-center justify-end gap-2">
+      <button class="px-4 py-2 rounded-md border-2 border-slate-400 text-xs font-semibold">Cancel</button>
+      <button class="px-4 py-2 rounded-md bg-red-600 text-white text-xs font-semibold">Replace availability on 47 items</button>
+    </div>
+  </div>
+  <p class="text-[11px] text-slate-500 mt-2">If “will change” = 0 <em>and</em> “unknown” = 0, no write is offered at all — the dialog says there is nothing to do.</p>
+</section>
+
+<!-- ═══════════════ STATE 6 ═══════════════ -->
+<section class="max-w-6xl mx-auto mb-12">
+  <h2 class="text-sm font-bold text-slate-900 mb-1">State 6 — Surface B: Bulk Import gains Step 3 (default ALL ⇒ today’s behaviour)</h2>
+  <p class="text-xs text-slate-600 mb-3">
+    One set for the whole batch, no per-row variation. Zero extra Apple calls per row — the availability POST the
+    pipeline already makes at <span class="mono text-[11px]">execute/route.ts:824</span> simply carries a different array.
+    <strong>The Hotfix-26 throttle (concurrency 2 + 1&nbsp;s/row) is untouched.</strong>
+  </p>
+
+  <div class="state-frame rounded-xl bg-white overflow-hidden border border-slate-200">
+    <div class="px-5 py-4 border-b border-slate-200 flex gap-2 text-[11px]">
+      <span class="px-3 py-1.5 rounded-full bg-slate-200 text-slate-600">1 · Excel</span>
+      <span class="px-3 py-1.5 rounded-full bg-slate-200 text-slate-600">2 · Screenshots</span>
+      <span class="px-3 py-1.5 rounded-full bg-slate-900 text-white font-medium">3 · Territories</span>
+      <span class="px-3 py-1.5 rounded-full bg-slate-100 text-slate-400">4 · Preview</span>
+      <span class="px-3 py-1.5 rounded-full bg-slate-100 text-slate-400">5 · Result</span>
+    </div>
+    <div class="px-5 py-5">
+      <h3 class="text-sm font-semibold">Step 3 — Where these 24 items can be sold</h3>
+      <p class="text-xs text-slate-500 mt-1">Applies to every row in this import. Per-row territories are not supported.</p>
+
+      <div class="mt-4 flex items-center gap-3 p-3 rounded-lg border-2 border-emerald-300 bg-emerald-50">
+        <input type="radio" checked class="h-4 w-4" />
+        <div>
+          <p class="text-sm font-medium text-emerald-900">All countries or regions <span class="ml-2 px-1.5 py-0.5 text-[10px] rounded bg-white border border-emerald-300 text-emerald-800">DEFAULT</span></p>
+          <p class="text-xs text-emerald-800 mt-0.5">All 175, plus any new market Apple launches later. Same as today.</p>
+        </div>
+      </div>
+      <div class="mt-2 flex items-center gap-3 p-3 rounded-lg border border-slate-200">
+        <input type="radio" class="h-4 w-4" />
+        <div class="flex-1">
+          <p class="text-sm font-medium">Selected countries or regions</p>
+          <p class="text-xs text-slate-500 mt-0.5">Choose from the 175 Apple supports.</p>
+        </div>
+        <button class="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-medium">Choose territories…</button>
+      </div>
+
+      <p class="text-[11px] text-slate-500 mt-4 note pl-3">
+        No replace-warning here — these items don’t exist on Apple yet, so there is nothing to replace.
+        The confirm gate at Step 4 states the set and the row count only.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════ STATE 7 ═══════════════ -->
+<section class="max-w-6xl mx-auto mb-12">
+  <h2 class="text-sm font-bold text-slate-900 mb-1">State 7 — Surface C: the 2-radio section becomes 3</h2>
+  <p class="text-xs text-slate-600 mb-3">
+    <span class="mono text-[11px]">AvailabilitiesSection.tsx</span> keeps its shape — the CURRENT badge, the
+    “change pending” line, the deferred-push discipline. It gains a third arm carrying the set.
+  </p>
+
+  <div class="state-frame rounded-xl bg-white border border-slate-200 p-6 max-w-2xl">
+    <h3 class="text-sm font-semibold pb-2 border-b border-slate-100">Availability</h3>
+    <p class="text-xs text-slate-500 mb-4 mt-2">Where this in-app purchase can be sold. Changes here only push to Apple when you click <span class="font-medium">Update on Apple</span>.</p>
+
+    <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3 mb-2">
+      <input type="radio" class="mt-1 h-4 w-4" />
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-medium">Publish — Available in all countries or regions</span>
+          <span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-slate-100 text-slate-600 border border-slate-200">CURRENT</span>
+        </div>
+        <p class="text-xs text-slate-500 mt-0.5">Sell in every Apple territory plus any new market Apple launches in the future.</p>
+      </div>
+    </label>
+
+    <label class="flex items-start gap-3 rounded-lg border-2 border-[#0071E3] bg-blue-50/50 p-3 mb-2">
+      <input type="radio" checked class="mt-1 h-4 w-4" />
+      <div class="flex-1">
+        <span class="text-sm font-medium">Selected countries or regions</span>
+        <p class="text-xs text-slate-500 mt-0.5">Sell only where you choose. New Apple markets are not added automatically.</p>
+        <div class="mt-2 flex items-center gap-2">
+          <span class="px-2 py-1 rounded bg-white border border-blue-200 text-blue-900 text-[11px] font-semibold">12 of 175 selected</span>
+          <button class="px-2.5 py-1 rounded-md border border-slate-300 bg-white text-[11px] font-medium">Choose territories…</button>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-1.5">Australia, Japan, Malaysia, Singapore, Taiwan, Thailand, Vietnam +5</p>
+      </div>
+    </label>
+
+    <label class="flex items-start gap-3 rounded-lg border border-slate-200 p-3">
+      <input type="radio" class="mt-1 h-4 w-4" />
+      <div>
+        <span class="text-sm font-medium text-red-700">Remove from Sales</span>
+        <p class="text-xs text-slate-500 mt-0.5">Not available in any territory.</p>
+      </div>
+    </label>
+
+    <p class="text-[11px] text-amber-600 mt-3 font-medium">Change pending — will be pushed to Apple on the next <span class="underline">Update on Apple</span>.</p>
+  </div>
+</section>
+
+<!-- ═══════════════ STATE 8 ═══════════════ -->
+<section class="max-w-6xl mx-auto mb-12">
+  <h2 class="text-sm font-bold text-slate-900 mb-1">State 8 — STOP AND PRESERVE (decision 3) + per-item, per-case errors</h2>
+  <p class="text-xs text-slate-600 mb-3">
+    Stop fires <strong>only</strong> on 429-with-retries-exhausted. Every other failure keeps today’s fail-soft
+    behaviour — a bad territory on item 3 says nothing about item 4, but an exhausted budget does.
+  </p>
+
+  <div class="state-frame rounded-xl bg-white overflow-hidden border border-slate-200">
+    <div class="px-5 py-4 border-b-2 border-amber-300 bg-amber-50">
+      <p class="text-sm font-semibold text-amber-900">Stopped — App Store Connect rate limit</p>
+      <p class="text-xs text-amber-800 mt-1">
+        <strong>34 of 120</strong> items were updated. <strong>1</strong> item failed.
+        <strong>85 items were not attempted.</strong>
+      </p>
+      <div class="mt-3 flex items-center gap-2">
+        <button class="px-3 py-1.5 rounded-md bg-amber-600 text-white text-xs font-semibold">Retry remaining 85</button>
+        <span class="text-[11px] text-amber-700">Wait a few minutes first. Successful items are not re-sent.</span>
+      </div>
+      <p class="text-[10px] text-amber-700 mt-2">
+        The remainder lives in this dialog — <strong>closing it discards the list.</strong>
+      </p>
+    </div>
+
+    <div class="max-h-64 overflow-y-auto">
+      <table class="w-full text-xs">
+        <thead class="sticky top-0 bg-white shadow-[0_1px_0_#e2e8f0]">
+          <tr class="text-left text-[10px] uppercase tracking-wider text-slate-500">
+            <th class="px-5 py-2.5 font-semibold">Item</th><th class="px-3 py-2.5 font-semibold">Result</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="border-b border-slate-100"><td class="px-5 py-2 mono">com.vng.gem.100</td><td class="px-3 py-2 text-emerald-700">Updated — 12 territories</td></tr>
+          <tr class="border-b border-slate-100"><td class="px-5 py-2 mono">com.vng.gem.600</td><td class="px-3 py-2 text-slate-600">Updated. <span class="text-amber-700">Previous availability was unknown.</span></td></tr>
+          <tr class="border-b border-slate-100"><td class="px-5 py-2 mono">com.vng.gem.400</td><td class="px-3 py-2 text-red-700">In Review; App Store Connect refused the change.</td></tr>
+          <tr class="border-b border-slate-100"><td class="px-5 py-2 mono">com.vng.gem.300</td><td class="px-3 py-2 text-red-700">Apple rejected territory “XYZ” (422).</td></tr>
+          <tr class="border-b border-slate-100"><td class="px-5 py-2 mono">com.vng.gem.500</td><td class="px-3 py-2 text-slate-500">Not on Apple yet. Run Create on Apple first.</td></tr>
+          <tr class="border-b border-slate-100 bg-amber-50"><td class="px-5 py-2 mono">com.vng.gem.200</td><td class="px-3 py-2 text-amber-800 font-medium">App Store Connect rate limit, retries exhausted.</td></tr>
+          <tr class="bg-slate-50"><td class="px-5 py-2 mono text-slate-500">com.vng.gem.700</td><td class="px-3 py-2 text-slate-500">Not attempted (stopped at rate limit).</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="px-5 py-2.5 border-t border-slate-200 bg-slate-50 flex items-center gap-2">
+      <span class="px-2 py-1 rounded bg-amber-100 text-amber-900 text-[11px] font-semibold">7 rows throttled · 19 retries · 24.3 s backoff</span>
+      <span class="text-[10px] text-slate-500">Existing Cycle-40 Phase A telemetry chip, unchanged.</span>
+    </div>
+  </div>
+
+  <p class="text-[11px] text-slate-500 mt-3 note pl-3">
+    Hub tracking: the stopped run finalizes with its own terminal status — <strong>not FAILED</strong>, because 34 items
+    really did succeed. <em>Retry remaining</em> opens a genuinely new run (R3 multi-start hygiene).
+    A tracking status must reflect the real outcome, never the button clicked.
+  </p>
+</section>
+
+<footer class="max-w-6xl mx-auto pt-6 border-t border-slate-300 text-[11px] text-slate-500">
+  <p><strong>Open questions carried into review</strong> (design doc §G): G6 custom-price × excluded territory is UNCERTAIN;
+  <span class="mono">baseTerritory</span> defaults to USA and a USA-excluding selection is incoherent;
+  Apple’s hourly cap figure is still unresolved (250 vs 3,600 — KB §4.9);
+  surface A’s mode filter needs rethinking now that every item is a candidate;
+  the remainder is client-held, not durable.</p>
+</footer>
+
+</body>
+</html>
