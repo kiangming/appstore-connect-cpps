@@ -3189,21 +3189,15 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <div class="step-title">Xem kết quả</div>
             <div class="step-body">
               <p>Mỗi row hiện ✓ (<em>Updated on Apple</em>) hoặc ! kèm lỗi cụ thể từ Apple. Danh sách IAPs background tự refresh sau khi đóng modal.</p>
-              <div class="callout callout-danger">
-                <div class="callout-title">🚫 Row "!" chưa chắc là đã thất bại</div>
-                <p>
-                  Nếu batch <strong>dừng giữa đường</strong> vì hết ngân sách retry của Apple (xem callout
-                  rate-limit dưới), những item <strong>chưa được gửi đi</strong> hiện tại cũng vẽ thành "!"
-                  giống item Apple thực sự từ chối. Hai thứ này khác nhau về bản chất: item chưa gửi thì
-                  <strong>chưa có gì thay đổi</strong> và chạy lại là an toàn; item bị từ chối thì cần đọc
-                  lý do trước.
-                </p>
-                <p>
-                  Cách phân biệt hiện tại: đọc text bên phải. Có message lỗi từ Apple = thật sự bị từ chối.
-                  Chỉ ghi "Failed" trơn, và nằm ở cuối danh sách sau một loạt ✓ = rất có thể là chưa được gửi.
-                  <strong>Đang có ticket sửa chỗ này</strong> để hai trạng thái được tách rõ.
-                </p>
-              </div>
+              <p>
+                Nếu batch <strong>dừng giữa đường</strong> vì hết ngân sách retry của Apple, những item
+                <strong>chưa được gửi</strong> hiện thành trạng thái riêng — dấu <strong>–</strong> màu vàng,
+                chữ <em>"Not attempted — safe to re-run"</em>, kèm banner phía trên đếm số lượng. Đây
+                <strong>không phải</strong> lỗi: chưa gửi nghĩa là chưa có gì thay đổi, chọn lại và chạy lại
+                là an toàn. Item Apple thực sự từ chối mới hiện dấu <strong>!</strong> đỏ kèm nguyên văn lý do
+                từ Apple — mới là thứ cần đọc trước khi làm gì.
+              </p>
+              <p>⚠ Danh sách phần chưa chạy <strong>không được lưu ở đâu</strong> — ghi lại product id trước khi đóng modal.</p>
             </div>
           </li>
         </ol>

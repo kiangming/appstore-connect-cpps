@@ -692,9 +692,12 @@ conflated with a genuine Removed-from-Sale.
   deliverable, and needs one test that starts *outside* the component being
   built. Every SC6 test began inside the modal or below it, so none could see
   that nothing opened it.
-- `set-all` / `remove` render `NOT_ATTEMPTED` as "Failed" — those modes kept the
-  legacy `ProgressList`, which keys off `ok` alone; SC3 added a third state to
-  the shared orchestrator without auditing that consumer.
+- ~~`set-all` / `remove` render `NOT_ATTEMPTED` as "Failed".~~ **Fixed** by
+  teaching `ProgressList` the third state rather than routing those modes
+  through `BulkResultsView` (whose retry re-posts a `TerritorySelection` these
+  modes do not have). Lesson kept: **adding a state to a shared producer
+  obliges an audit of every consumer** — SC3 added the state, SC6p2 updated one
+  of the two consumers, and the older one kept mislabelling for two chunks.
 - No HTTP e2e reaches the execute route's row loop (multipart + full create
   pipeline). Chain held from both ends around
   `resolveBatchAvailabilitySelection` — a declared limitation, not an oversight.

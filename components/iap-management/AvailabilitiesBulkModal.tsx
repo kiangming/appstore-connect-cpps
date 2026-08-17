@@ -1177,38 +1177,101 @@ function EmptyState({
   );
 }
 
+/**
+ * ⚠ D2 — THIS LIST USED TO KEY OFF `ok` ALONE, AND THAT WAS A LIE.
+ *
+ * SC3 added rate-limit stop-and-resume to the SHARED orchestrator, so ALL
+ * three actions can now return a third row state: `NOT_ATTEMPTED` — nothing was
+ * sent for that item. Those rows carry `ok: false`
+ * (bulk-availability.ts:339) and no `error`, so this list drew them as a red
+ * "!" labelled "Failed". The operator was told to redo work that had never been
+ * sent, and could not see that re-running was safe.
+ *
+ * SC6p2 gave `set-territories` the three-state `BulkResultsView`; these two
+ * legacy modes were left on this component. Adding a state to a shared producer
+ * obliges an audit of every consumer — this is the consumer that was missed.
+ *
+ * ⚠ WHY NOT REUSE `BulkResultsView` HERE. It owns a retry affordance that
+ * re-posts the SAME `TerritorySelection`, and these two modes have no
+ * selection to re-post — retry for them means re-selecting in the list and
+ * pressing the button again, which is what the operational guide says. Routing
+ * them through it would mean either a dead retry button or teaching it a second
+ * retry shape. Teaching this list the third state is the smaller blast radius
+ * and leaves the two surfaces honest.
+ *
+ * ⚠ `NOT_ATTEMPTED` is read from `status`, never inferred from `ok`. `ok` cannot
+ * express "nothing was sent", so guessing would invite exactly the confusion
+ * this fixes.
+ */
 function ProgressList({ results }: { results: RowResult[] }) {
+  const notAttempted = results.filter((r) => r.status === "NOT_ATTEMPTED");
   return (
+    <>
+      {notAttempted.length > 0 && (
+        <div
+          data-testid="progress-not-attempted-banner"
+          className="mb-3 rounded-lg border-2 border-amber-300 bg-amber-50 dark:bg-amber-900/20 px-3 py-2.5"
+        >
+          <p className="text-xs font-semibold text-amber-900 dark:text-amber-200">
+            {notAttempted.length} item{notAttempted.length === 1 ? "" : "s"} were
+            never attempted — the run stopped on Apple&apos;s rate limit
+          </p>
+          <p className="text-[11px] text-amber-800 dark:text-amber-300/90 mt-1">
+            Nothing was sent for them, so nothing about them changed. Re-select
+            them in the list and run again — this is not a failure and does not
+            need diagnosing. Items Apple actually rejected are marked separately
+            below, with its reason.
+          </p>
+          <p className="text-[11px] text-amber-800 dark:text-amber-300/90 mt-1">
+            ⚠ This list is not saved anywhere — note the product ids before
+            closing.
+          </p>
+        </div>
+      )}
     <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-      {results.map((r) => (
+      {results.map((r) => {
+        const skipped = r.status === "NOT_ATTEMPTED";
+        return (
         <li
           key={r.iapId}
+          data-testid={`progress-row-${r.iapId}`}
+          data-state={skipped ? "not-attempted" : r.ok ? "success" : "failed"}
           className="flex items-center gap-3 py-2 text-xs"
         >
           <span
             className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
-              r.ok
-                ? "bg-emerald-100 text-emerald-700"
-                : "bg-red-100 text-red-700"
+              skipped
+                ? "bg-amber-100 text-amber-700"
+                : r.ok
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "bg-red-100 text-red-700"
             }`}
           >
-            {r.ok ? "✓" : "!"}
+            {skipped ? "–" : r.ok ? "✓" : "!"}
           </span>
           <span className="font-mono text-slate-500 truncate flex-1">
             {r.apple_iap_id ?? r.iapId}
           </span>
           <span
             className={`text-[11px] truncate max-w-[220px] ${
-              r.ok
-                ? "text-emerald-700 dark:text-emerald-400"
-                : "text-red-700 dark:text-red-400"
+              skipped
+                ? "text-amber-700 dark:text-amber-400"
+                : r.ok
+                  ? "text-emerald-700 dark:text-emerald-400"
+                  : "text-red-700 dark:text-red-400"
             }`}
           >
-            {r.ok ? "Updated on Apple" : (r.error ?? "Failed")}
+            {skipped
+              ? "Not attempted — safe to re-run"
+              : r.ok
+                ? "Updated on Apple"
+                : (r.error ?? "Failed")}
           </span>
         </li>
-      ))}
+        );
+      })}
     </ul>
+    </>
   );
 }
 
