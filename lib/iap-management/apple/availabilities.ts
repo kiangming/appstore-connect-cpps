@@ -1,11 +1,13 @@
 /**
  * Cycle 37 Phase 1 — Apple In-App Purchase Availabilities client.
  *
- * Unblocks IAP-MANAGEMENT-KNOWLEDGE-BASE §10.4 deferred item:
- * `availableInAllTerritories` is NOT a field on InAppPurchaseV2 — Apple
- * exposes territory selection through a separate resource type. The
- * Manager's "All countries or regions" radio in Apple Connect web maps
- * to:
+ * Unblocks IAP-MANAGEMENT-KNOWLEDGE-BASE §10.4 deferred item.
+ * `availableInAllTerritories` is not merely absent from InAppPurchaseV2 —
+ * it does not exist ANYWHERE in the OAS (0 occurrences in 4.3.1 and
+ * 4.4.1; KB §4.13). Apple exposes territory selection through a separate
+ * resource type, whose only attribute is the FORWARD-looking
+ * `availableInNewTerritories`. The Manager's "All countries or regions"
+ * radio in Apple Connect web maps to:
  *
  *   POST /v1/inAppPurchaseAvailabilities
  *     attributes: { availableInNewTerritories: true }
@@ -28,6 +30,11 @@
 
 import type { AscCredentials } from "@/lib/asc-jwt";
 import { iapFetch } from "./fetch";
+import {
+  allTerritoriesSelection,
+  noTerritoriesSelection,
+  type TerritorySelection,
+} from "./territory-selection";
 import type {
   AscApiResponse,
   AscResource,
@@ -95,20 +102,32 @@ export function __resetTerritoryCacheForTests(): void {
 }
 
 /**
- * POST /v1/inAppPurchaseAvailabilities — assign the IAP to every
- * Apple-supported territory + flag it to auto-include any new ones.
- * Apple's API has no `availableInAllTerritories` boolean; "All
- * territories" is expressed as (full list) + (new-territories flag).
+ * ⚠ THE SINGLE WRITE PATH. Every availability mutation in this module —
+ * all four emitters (bulk Set Availabilities, Bulk Import, single Create
+ * on Apple, individual Edit) — goes through here. Do not add a fifth
+ * `iapFetch(… "/v1/inAppPurchaseAvailabilities" …)` anywhere else.
  *
- * NB: Apple's API does not expose a PATCH on this resource — re-POST is
- * the standard "replace" path. For Phase 1 we only ever call this when
- * Manager wants "All" so the no-PATCH limitation doesn't bind us.
+ * The reason is P1 (twin-path): before per-territory availability there
+ * were two near-identical bodies copy-pasted below, and a change to one
+ * had to be remembered in the other. There are now four call sites and a
+ * flag that is NOT derivable from the list (KB §4.13) — four copies of
+ * that logic is four chances to send `availableInNewTerritories: true`
+ * with a 12-territory subset. `availabilities.write-path.test.ts` fails
+ * if any emitter bypasses this function.
+ *
+ * Apple exposes NO PATCH and NO DELETE on this resource (KB §4.12), so a
+ * fresh POST *is* the replace. `availableTerritories.data` is required
+ * but has no `minItems`, which is what lets the empty-list case express
+ * "Remove from Sales".
+ *
+ * ⚠ Territory ids are passed through verbatim — no sorting, casing or
+ * normalisation. They came from Apple; they go back unchanged.
  */
-export async function setAvailabilityToAllTerritories(
+export async function setAvailabilityTerritories(
   creds: AscCredentials,
   appleIapId: string,
+  selection: TerritorySelection,
 ): Promise<AscApiResponse<InAppPurchaseAvailability>> {
-  const territoryIds = await getAllTerritoryIds(creds);
   return iapFetch<AscApiResponse<InAppPurchaseAvailability>>(
     creds,
     "POST",
@@ -117,14 +136,17 @@ export async function setAvailabilityToAllTerritories(
       data: {
         type: "inAppPurchaseAvailabilities",
         attributes: {
-          availableInNewTerritories: true,
+          availableInNewTerritories: selection.availableInNewTerritories,
         },
         relationships: {
           inAppPurchase: {
             data: { type: "inAppPurchases", id: appleIapId },
           },
           availableTerritories: {
-            data: territoryIds.map((id) => ({ type: "territories", id })),
+            data: selection.territoryIds.map((id) => ({
+              type: "territories",
+              id,
+            })),
           },
         },
       },
@@ -133,46 +155,39 @@ export async function setAvailabilityToAllTerritories(
 }
 
 /**
- * Cycle 39 Phase 1 — "Remove from Sales" via re-POST with empty territory
- * list. Apple's API has no DELETE or PATCH on the availability resource
- * (verified against `/v1/inAppPurchaseAvailabilities` + `/{id}` operations
- * in openapi.oas.json — only POST + GET exist), so the only path to
- * "available in zero territories" is a fresh POST that replaces the prior
- * availability snapshot.
+ * "All countries or regions" — every Apple territory, plus any market
+ * Apple launches later.
  *
- * Payload shape mirrors `setAvailabilityToAllTerritories` exactly except
- * `availableInNewTerritories: false` + `availableTerritories.data: []`.
- * The OpenAPI schema (InAppPurchaseAvailabilityCreateRequest) requires the
- * relationship object + `data` array, but imposes no `minItems`, so an
- * empty array satisfies the contract.
- *
- * Apple Connect web UI's "Remove from Sale" action surfaces the same
- * semantic — once submitted, the IAP isn't sold in any territory.
+ * ⚠ NOT the same request as a Manager ticking all 175 boxes by hand:
+ * that sends the same ids with `availableInNewTerritories: false`. See
+ * KB §4.13 — the flag is independent of the list, and the UI must not
+ * render the two states identically.
+ */
+export async function setAvailabilityToAllTerritories(
+  creds: AscCredentials,
+  appleIapId: string,
+): Promise<AscApiResponse<InAppPurchaseAvailability>> {
+  const territoryIds = await getAllTerritoryIds(creds);
+  return setAvailabilityTerritories(
+    creds,
+    appleIapId,
+    allTerritoriesSelection(territoryIds),
+  );
+}
+
+/**
+ * Cycle 39 Phase 1 — "Remove from Sales": the same POST with an empty
+ * territory list and the forward flag off. Apple Connect web's "Remove
+ * from Sale" surfaces the same semantic — the IAP isn't sold anywhere.
  */
 export async function setAvailabilityRemoveFromSales(
   creds: AscCredentials,
   appleIapId: string,
 ): Promise<AscApiResponse<InAppPurchaseAvailability>> {
-  return iapFetch<AscApiResponse<InAppPurchaseAvailability>>(
+  return setAvailabilityTerritories(
     creds,
-    "POST",
-    "/v1/inAppPurchaseAvailabilities",
-    {
-      data: {
-        type: "inAppPurchaseAvailabilities",
-        attributes: {
-          availableInNewTerritories: false,
-        },
-        relationships: {
-          inAppPurchase: {
-            data: { type: "inAppPurchases", id: appleIapId },
-          },
-          availableTerritories: {
-            data: [],
-          },
-        },
-      },
-    },
+    appleIapId,
+    noTerritoriesSelection(),
   );
 }
 

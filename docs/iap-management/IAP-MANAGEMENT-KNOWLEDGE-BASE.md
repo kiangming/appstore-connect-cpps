@@ -498,6 +498,45 @@ integration over the bulk-actions path (§10.15, 6th+7th integrations) —
 tracking wraps the SAME two calls, it doesn't introduce a third Apple
 operation.
 
+### 4.13 LANDMARK — `availableInAllTerritories` does not exist; the real flag is forward-looking, and "All" ≠ "175 ticked by hand"
+
+**Symptom.** Three docs (this KB's backlog row, `apple-api-reference.md`,
+two session archives) named a field `availableInAllTerritories` as the
+thing standing between the tool and territory editing. Anyone planning
+from those docs looks for a boolean that is not there.
+
+**Behavior.** `availableInAllTerritories` appears **zero times** in OAS
+4.3.1 (`docs/iap-management/openapi.oas.json`) *and* 4.4.1
+(`docs/openapi.oas.v20260717.json`). The only attribute on
+`InAppPurchaseAvailabilityCreateRequest` is **`availableInNewTerritories`**
+(required, boolean) — and it means something different:
+
+| Field | Meaning |
+|---|---|
+| ~~`availableInAllTerritories`~~ | **does not exist** |
+| `availableInNewTerritories` | **forward-looking** — auto-include markets Apple launches *later*. Says nothing about the current set. |
+
+**Consequence that must reach the UI.** Because the flag is independent
+of the list, two selections that look identical send different bodies:
+
+| Manager intent | `availableInNewTerritories` | `availableTerritories.data` |
+|---|---|---|
+| "All countries or regions" | `true` | all ~175 |
+| all 175 ticked by hand | `false` | all ~175 (same ids) |
+| a subset | `false` | the chosen N |
+| Remove from Sales | `false` | `[]` |
+
+⇒ **A UI that renders those first two states identically is lying about
+what it will send.** This is pinned by a test, not left to convention
+(`territory-selection.test.ts` — "All vs 175-ticked-by-hand").
+
+**Pattern crystallized.** *A doc naming a field is not evidence the field
+exists.* The code was right all along
+(`lib/iap-management/apple/availabilities.ts:5-18` has said so since
+Cycle 37); the docs propagated the phantom for three cycles because
+nobody grepped the spec. Grep the OAS before planning around any field
+name you first met in prose.
+
 ---
 
 ## 5. Database Schema
@@ -967,7 +1006,7 @@ Before wiring ANY new Apple V2 IAP endpoint:
 | ID | Item | Notes |
 |---|---|---|
 | **IAP.p3** | Inline edit Reference Name in view mode | Q-A deferral from Cycle 31 |
-| **IAP.p2+** | `contentHosting` edit | Separate Apple endpoint; not in `InAppPurchaseV2UpdateRequest`. `availableInAllTerritories` FULLY UNBLOCKED by Cycle 39 Phase 1 (edit affordance + Remove-from-Sale toggle) — see §10.8. Bulk-action toolbar deferred to Cycle 39 Phase 2. |
+| **IAP.p2+** | `contentHosting` edit | Separate Apple endpoint; not in `InAppPurchaseV2UpdateRequest`. ⚠ This row previously said "`availableInAllTerritories`" — **that field does not exist** (0 occurrences in OAS 4.3.1 and 4.4.1); see §4.13. Territory availability is FULLY UNBLOCKED: binary ALL/NONE by Cycle 39 Phase 1 (§10.8), arbitrary subsets by the per-territory availability cycle. |
 | **IAP.p2+** | Apply pricing template to existing IAPs bulk action | Q-G deferral from Cycle 30 |
 | **IAP.p2+** | Per-row pricing source override in Bulk Import | Q-E deferral from Cycle 30 (batch-level v1 shipped) |
 | **IAP.p2+** | Pricing template versioning + history | Q-A REPLACE-ONLY locked v1 |

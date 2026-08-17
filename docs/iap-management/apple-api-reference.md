@@ -287,10 +287,17 @@ orchestrator skips stages with no change.
 
 ### Deferred to IAP.o.13+
 
-`contentHosting` and `availableInAllTerritories` are NOT in the
-`InAppPurchaseV2UpdateRequest` schema — Apple exposes them via dedicated
-child endpoints (e.g. `/v1/inAppPurchaseAvailabilities`) which are not
-yet wrapped. Manager surfaces these on demand in a future cycle.
+`contentHosting` is NOT in the `InAppPurchaseV2UpdateRequest` schema —
+Apple exposes it via a dedicated child endpoint which is not yet
+wrapped. Manager surfaces it on demand in a future cycle.
+
+⚠ **This paragraph used to name `availableInAllTerritories` alongside it.
+That field does not exist** — 0 occurrences in OAS 4.3.1 *and* 4.4.1. The
+real attribute on `/v1/inAppPurchaseAvailabilities` is
+**`availableInNewTerritories`**, and it means something different: it is
+*forward-looking* ("auto-include markets Apple launches later"), not
+"currently sold everywhere". Territory availability is wrapped and
+shipped — see KB §4.12 and §4.13.
 
 ## Pricing Template System (IAP.p1)
 
