@@ -26,6 +26,10 @@ import {
 import { DownloadTemplateButton } from "@/components/ui/shared/DownloadTemplateButton";
 import type { ParsedIapItem, IapItemsParseResult } from "@/lib/iap-management/parsers/iap-items";
 import { summarizeAppleError } from "@/lib/iap-management/bulk-import/apple-error-summary";
+import { TerritoryAvailabilityPicker } from "@/components/iap-management/territory/TerritoryAvailabilityPicker";
+import { bulkSurfaceDefaultSelection } from "@/lib/iap-management/apple/availability-surface-defaults";
+import type { TerritorySelection } from "@/lib/iap-management/apple/territory-selection";
+import type { TerritoriesRouteResponse } from "@/app/api/iap-management/territories/route";
 import { ExpandableErrorCell } from "@/components/ui/shared/ExpandableErrorCell";
 import {
   matchScreenshotToProductId,
@@ -70,7 +74,8 @@ interface Props {
   appTemplateEntryCount?: number;
 }
 
-type Step = 1 | 2 | 3 | 4;
+/** SC7 inserted "Territories" as step 4; Result moved to 5. */
+type Step = 1 | 2 | 3 | 4 | 5;
 
 interface ScreenshotEntry {
   file: File;
@@ -160,6 +165,53 @@ export function BulkImportWizard({
 }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>(1);
+  /**
+   * SC7 — the batch's territory selection. ONE selection for every row: the
+   * Manager's decision was batch-level, so there is deliberately no per-row
+   * override anywhere in this wizard.
+   */
+  const [territoryIds, setTerritoryIds] = useState<string[] | null>(null);
+  const [territoriesError, setTerritoriesError] = useState<string | null>(null);
+  const [availabilitySelection, setAvailabilitySelection] =
+    useState<TerritorySelection | null>(null);
+
+  /**
+   * Catalogue fetched when the Territories step is first reached — the SAME
+   * lazy route surface A uses (added in SC6p1), so there is no new API surface
+   * and nothing is paid by a Manager who abandons the wizard at step 1.
+   *
+   * ⚠ This is the display source; the execute route independently resolves the
+   * catalogue once per batch for the write. Both read `getAllTerritoryIds`, so
+   * "N of 175" describes the same list Apple receives.
+   */
+  useEffect(() => {
+    if (step !== 4 || territoryIds || territoriesError) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/iap-management/territories");
+        const data = (await res.json()) as TerritoriesRouteResponse;
+        if (cancelled) return;
+        if (data.error || data.territoryIds.length === 0) {
+          setTerritoriesError("Could not load Apple's country and region list.");
+          return;
+        }
+        setTerritoryIds(data.territoryIds);
+        // Surface B defaults to ALL (Manager decision 2), via the shared policy
+        // so B and C cannot silently converge.
+        setAvailabilitySelection(bulkSurfaceDefaultSelection(data.territoryIds));
+      } catch (err) {
+        if (!cancelled) {
+          setTerritoriesError(
+            err instanceof Error ? err.message : "Network error",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [step, territoryIds, territoriesError]);
   // IAP.p1.g: batch-level pricing source (Q-E). Initialised to the most
   // specific available source per Q-D and applied to every CREATE/OVERWRITE
   // row in the execute call.
@@ -350,6 +402,9 @@ export function BulkImportWizard({
           tier_overrides: tierOverrides,
           submit_on_create: submitOnCreate,
           pricing_source: pricingSource,
+          // SC7 — the batch's ONE selection, ids verbatim. Absent would make
+          // the route fall back to ALL, so it is always sent explicitly.
+          availability_selection: availabilitySelection,
         }),
       );
       // Threaded to the execute route's `finally` block, which closes the
@@ -369,7 +424,7 @@ export function BulkImportWizard({
       }
       if ("succeeded" in data) {
         setResult(data);
-        setStep(4);
+        setStep(5);
         const msg = `${data.succeeded} created · ${data.skipped} skipped · ${data.failed} failed`;
         // IAP.o.7c — failed rows now escalate to error toast (previously
         // .warning, which Manager missed during MV30). Success path
@@ -518,7 +573,48 @@ export function BulkImportWizard({
         />
       )}
 
-      {step === 4 && result && (
+      {/* SC7 — step 4 is Territories; the batch's ONE selection. */}
+      {step === 4 && (
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+          <div className="px-5 pt-5 pb-2">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Where these {resolved ? resolved.counts.create + resolved.counts.overwrite : 0} items can be sold
+            </h3>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+              One selection is applied to every item in this import. There is no
+              per-item override here — pick it once, and edit individual items
+              afterwards if you need to.
+            </p>
+          </div>
+          {territoriesError ? (
+            /* No real catalogue ⇒ no picker (SC5/SC6 precedent). An empty
+               selection posted would remove every new item from sale. */
+            <p
+              data-testid="bulk-territories-load-error"
+              className="mx-5 mb-5 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-900/20 p-3 text-[11px] text-amber-900 dark:text-amber-200"
+            >
+              {territoriesError} Territories cannot be chosen right now. Go back
+              and retry — importing without a real list would risk removing
+              every new item from sale.
+            </p>
+          ) : !territoryIds || !availabilitySelection ? (
+            <p className="mx-5 mb-5 flex items-center gap-2 text-xs text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading countries and
+              regions…
+            </p>
+          ) : (
+            <div className="flex flex-col max-h-[52vh]">
+              <TerritoryAvailabilityPicker
+                territoryIds={territoryIds}
+                value={availabilitySelection}
+                onChange={setAvailabilitySelection}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {step === 5 && result && (
         <Step4Result
           result={result}
           appId={appId}
@@ -533,14 +629,14 @@ export function BulkImportWizard({
         <button
           type="button"
           onClick={() => setStep((s) => (s > 1 ? ((s - 1) as Step) : s))}
-          disabled={step === 1 || step === 4 || executing}
+          disabled={step === 1 || step === 5 || executing}
           className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-500 hover:text-slate-700 disabled:opacity-40 transition"
         >
           <ArrowLeft className="h-4 w-4" />
           Back
         </button>
 
-        {step < 3 && (
+        {step < 4 && (
           <button
             type="button"
             onClick={handleNext}
@@ -548,6 +644,7 @@ export function BulkImportWizard({
               // items.length === 0 covers the unedited-template case: all
               // rows were skipped as samples — nothing to import.
               (step === 1 && (!parsed || parsed.items.length === 0)) ||
+              // Step 3 → 4 always allowed; the Territories step gates Execute.
               executing
             }
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-40"
@@ -557,11 +654,19 @@ export function BulkImportWizard({
           </button>
         )}
 
-        {step === 3 && (
+        {step === 4 && (
           <button
             type="button"
             onClick={handleExecute}
-            disabled={executing || !resolved || resolved.counts.create + resolved.counts.overwrite === 0}
+            disabled={
+              executing ||
+              !resolved ||
+              resolved.counts.create + resolved.counts.overwrite === 0 ||
+              // ⚠ No catalogue ⇒ no execute. Posting without a real selection
+              // would fall back to a list nobody chose.
+              !availabilitySelection ||
+              territoriesError !== null
+            }
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-40"
           >
             {executing ? (
@@ -582,7 +687,7 @@ export function BulkImportWizard({
 // ─── Stepper ────────────────────────────────────────────────────────────────
 
 function Stepper({ step }: { step: Step }) {
-  const labels = ["Excel", "Screenshots", "Preview", "Result"];
+  const labels = ["Excel", "Screenshots", "Preview", "Territories", "Result"];
   return (
     <div className="flex items-center gap-2">
       {labels.map((label, idx) => {

@@ -22,7 +22,11 @@
  * is asserted, and the SC6 mutation-checks land on them.
  */
 
-import { diffSelection, type TerritorySelection } from "./territory-selection";
+import {
+  allTerritoriesSelection,
+  diffSelection,
+  type TerritorySelection,
+} from "./territory-selection";
 import type { AvailabilityForIap } from "./availabilities";
 
 /** Per-row outcome as the orchestrator reports it (bulk-availability.ts). */
@@ -268,4 +272,56 @@ export function buildBulkAvailabilityRequestBody(args: {
     };
   }
   return body;
+}
+
+// ─── Surface B: the batch selection, resolved from the wizard's config ───────
+
+/**
+ * Resolve the batch's territory selection from the wizard's `config` blob.
+ *
+ * The execute route receives `config` as loose JSON inside FormData (there is
+ * no zod on that boundary), so this is where the shape is actually checked. It
+ * is a shared function rather than inline parsing for the same reason
+ * `buildBulkAvailabilityRequestBody` is: it gives the wizard end and the route
+ * end one contract that a test can hold from both sides.
+ *
+ * ⚠ A MISSING OR MALFORMED SELECTION FALLS BACK TO ALL, NEVER TO EMPTY.
+ * An empty territory list is a valid Apple request meaning "removed from
+ * sale" — so a parse slip that produced `[]` would silently publish every new
+ * IAP as unavailable. ALL is the documented surface-B default (Manager
+ * decision 2) and is the safe direction for a fallback.
+ *
+ * ⚠ Ids are filtered for type but never transformed: no trim, no upper-casing,
+ * no sort. The flag must be an explicit boolean — it is not derivable from the
+ * list (KB §4.13), so an absent flag makes the whole selection untrusted rather
+ * than defaulting to `false`.
+ */
+export function resolveBatchAvailabilitySelection(
+  raw: unknown,
+  catalogue: readonly string[],
+): TerritorySelection {
+  const candidate = raw as
+    | { territoryIds?: unknown; availableInNewTerritories?: unknown }
+    | null
+    | undefined;
+
+  if (
+    candidate &&
+    Array.isArray(candidate.territoryIds) &&
+    typeof candidate.availableInNewTerritories === "boolean"
+  ) {
+    const ids = candidate.territoryIds.filter(
+      (t): t is string => typeof t === "string",
+    );
+    // An explicitly-empty list is still not honoured here: surface B creates
+    // items, and "create it then hide it everywhere" is not a thing the wizard
+    // offers. Only a non-empty explicit selection wins.
+    if (ids.length > 0) {
+      return {
+        territoryIds: ids,
+        availableInNewTerritories: candidate.availableInNewTerritories,
+      };
+    }
+  }
+  return allTerritoriesSelection(catalogue);
 }

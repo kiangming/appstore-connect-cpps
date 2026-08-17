@@ -44,6 +44,7 @@ import {
   classifySelection,
   type SelectionKind,
 } from "./territory-selection";
+import { availabilityActionType } from "./availability-audit";
 import type { IapDiff } from "./diff-detector";
 import { iapDb } from "@/lib/iap-management/db";
 import type { IapActionType } from "@/lib/iap-management/action-types";
@@ -597,27 +598,13 @@ async function runPricingStage(
 
 // ─── Stage 5 — Availability (Cycle 39 Phase 1) ───────────────────────────────
 
-/**
- * The action type is derived from WHAT WILL BE SENT, never from the control the
- * Manager touched (SC2, the status principle).
- *
- * `AVAILABILITY_SET_ALL_TERRITORIES` survives for exactly one case — every
- * territory PLUS the forward-looking flag — so historical rows carrying that
- * name stay true forever. "All 175 ticked by hand" is `ALL_FROZEN`: the same
- * ids, a different request, and therefore a different action type.
+/*
+ * ⚠ The action-type derivation is NOT duplicated here. It lives in
+ * `availability-audit.ts` (shared with surfaces A and B) because all three
+ * must answer "what did we actually send?" identically, and because that
+ * module's shape keeps the P2 guard's binding scan free of false positives.
+ * SC5 briefly kept a private copy; SC7 collapsed it.
  */
-function availabilityActionType(kind: SelectionKind) {
-  switch (kind) {
-    case "ALL":
-      return "AVAILABILITY_SET_ALL_TERRITORIES" as const;
-    case "NONE":
-      return "AVAILABILITY_REMOVE_FROM_SALES" as const;
-    case "ALL_FROZEN":
-    case "SUBSET":
-      return "AVAILABILITY_SET_TERRITORIES" as const;
-  }
-}
-
 async function runAvailabilityStage(
   args: UpdateIapOnAppleArgs,
 ): Promise<StageAvailabilityResult> {
@@ -630,7 +617,7 @@ async function runAvailabilityStage(
   // Classified against the SAME catalogue the ids came from, so "all" means
   // all-of-what-we-offered rather than all-of-some-other-list.
   const kind = classifySelection(new_selection, allTerritoryIds ?? []);
-  const actionType = availabilityActionType(kind);
+  const actionType = availabilityActionType(new_selection, allTerritoryIds ?? []);
   const target = kind;
 
   console.log(

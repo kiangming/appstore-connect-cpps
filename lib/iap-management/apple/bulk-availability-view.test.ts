@@ -14,6 +14,7 @@ import {
   hasWorkToConfirm,
   isStoppedRun,
   partitionResults,
+  resolveBatchAvailabilitySelection,
   resumableIds,
   type BulkRowResult,
   type ConfirmItem,
@@ -284,5 +285,70 @@ describe("baseTerritoryAdvisory", () => {
     expect(
       baseTerritoryAdvisory([item("a")], noTerritoriesSelection(), bases),
     ).toEqual([]);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 4 — surface B: the batch selection resolved from the wizard's config
+// ═══════════════════════════════════════════════════════════════════════════
+describe("resolveBatchAvailabilitySelection", () => {
+  it("honours an explicit selection verbatim, both flag values", () => {
+    expect(
+      resolveBatchAvailabilitySelection(
+        { territoryIds: ["VNM", "USA"], availableInNewTerritories: false },
+        CATALOGUE,
+      ),
+    ).toEqual({ territoryIds: ["VNM", "USA"], availableInNewTerritories: false });
+
+    expect(
+      resolveBatchAvailabilitySelection(
+        { territoryIds: CATALOGUE, availableInNewTerritories: true },
+        CATALOGUE,
+      ).availableInNewTerritories,
+    ).toBe(true);
+  });
+
+  it("does not sort, trim or re-case the ids", () => {
+    const out = resolveBatchAvailabilitySelection(
+      { territoryIds: ["VNM", "BRA", "USA"], availableInNewTerritories: false },
+      CATALOGUE,
+    );
+    expect(out.territoryIds).toEqual(["VNM", "BRA", "USA"]);
+  });
+
+  it("⚠ falls back to ALL, never to EMPTY, when the config is absent", () => {
+    // An empty list is a VALID Apple request meaning removed-from-sale. A parse
+    // slip that produced [] would publish every new IAP as unavailable.
+    for (const bad of [undefined, null, {}, "nonsense", 42]) {
+      const out = resolveBatchAvailabilitySelection(bad, CATALOGUE);
+      expect(out.territoryIds).toEqual(CATALOGUE);
+      expect(out.availableInNewTerritories).toBe(true);
+    }
+  });
+
+  it("⚠ an absent flag makes the selection untrusted rather than defaulting false", () => {
+    // The flag is not derivable from the list (KB §4.13), so a body missing it
+    // cannot be honoured as ALL_FROZEN.
+    const out = resolveBatchAvailabilitySelection(
+      { territoryIds: ["USA"] },
+      CATALOGUE,
+    );
+    expect(out).toEqual(allTerritoriesSelection(CATALOGUE));
+  });
+
+  it("an explicitly EMPTY list is not honoured — surface B creates items", () => {
+    const out = resolveBatchAvailabilitySelection(
+      { territoryIds: [], availableInNewTerritories: false },
+      CATALOGUE,
+    );
+    expect(out.territoryIds).toEqual(CATALOGUE);
+  });
+
+  it("drops non-string entries without rewriting the survivors", () => {
+    const out = resolveBatchAvailabilitySelection(
+      { territoryIds: ["USA", 7, null, "VNM"], availableInNewTerritories: false },
+      CATALOGUE,
+    );
+    expect(out.territoryIds).toEqual(["USA", "VNM"]);
   });
 });

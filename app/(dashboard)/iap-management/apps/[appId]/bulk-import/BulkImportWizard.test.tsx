@@ -85,6 +85,10 @@ const EMPTY_TIERS: Record<PricingSourceKind, UsdTierEntry[]> = {
   APP_TEMPLATE: [],
 };
 
+/** SC7 — the wizard's Territories step reads the shared catalogue route. */
+const TERRITORIES_URL = "/api/iap-management/territories";
+const CATALOGUE = ["USA", "VNM", "BRA", "KAZ"];
+
 function successExecuteResponse() {
   return {
     ok: true,
@@ -115,6 +119,9 @@ interface FetchScenario {
 function installFetchMock(scenario: FetchScenario) {
   const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input);
+    if (url.includes(TERRITORIES_URL)) {
+      return { ok: true, status: 200, json: async () => ({ territoryIds: CATALOGUE }) };
+    }
     if (url.includes(START_URL)) {
       return Promise.resolve({
         ok: true,
@@ -169,9 +176,24 @@ async function goToStep2AndAdoptRun(container: HTMLElement, fetchMock: ReturnTyp
   void runId;
 }
 
+/**
+ * Drives Preview → Territories → the Execute affordance.
+ *
+ * ⚠ SC7 inserted a Territories step (4) before Result (5), so Execute now
+ * lives one step further along. The extra Next below is that step, and the
+ * wait is for the picker's own footer rather than for Execute directly —
+ * Execute is disabled until the catalogue has actually loaded, so waiting on
+ * its presence alone would race the fetch.
+ */
 async function goToStep3() {
   await waitFor(() => expect(screen.getByRole("button", { name: /Next/ })).toBeInTheDocument());
   fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+  // Preview → Territories.
+  await waitFor(() => expect(screen.getByRole("button", { name: /Next/ })).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+  await waitFor(() =>
+    expect(screen.getByTestId("territory-picker-footer")).toBeInTheDocument(),
+  );
   await waitFor(() => expect(screen.getByRole("button", { name: /Execute/ })).toBeInTheDocument());
 }
 
@@ -363,6 +385,12 @@ describe("BulkImportWizard — Hub tracking cancel-on-exit guard", () => {
     });
     const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
+      if (url.includes(TERRITORIES_URL))
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ territoryIds: CATALOGUE }),
+        });
       if (url.includes(START_URL)) return startPromise;
       if (url.includes(CANCEL_URL)) return Promise.resolve({ ok: true, json: async () => ({}) });
       if (url.includes(EXECUTE_URL_FRAGMENT)) return Promise.resolve(successExecuteResponse());

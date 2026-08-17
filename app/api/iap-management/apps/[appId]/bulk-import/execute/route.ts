@@ -53,7 +53,16 @@ import {
   updateInAppPurchase,
 } from "@/lib/iap-management/apple/client";
 import { replaceScreenshotOnApple } from "@/lib/iap-management/apple/screenshot-upload";
-import { setAvailabilityToAllTerritories } from "@/lib/iap-management/apple/availabilities";
+import {
+  getAllTerritoryIds,
+  setAvailabilityTerritories,
+} from "@/lib/iap-management/apple/availabilities";
+import {
+  classifySelection,
+  type TerritorySelection,
+} from "@/lib/iap-management/apple/territory-selection";
+import { resolveBatchAvailabilitySelection } from "@/lib/iap-management/apple/bulk-availability-view";
+import { availabilityActionType } from "@/lib/iap-management/apple/availability-audit";
 import { decideOverwritePricing } from "@/lib/iap-management/bulk-import/overwrite-pricing-decision";
 import { planLocalizationSync } from "@/lib/iap-management/bulk-import/localization-sync";
 import {
@@ -329,6 +338,12 @@ async function runExecute(
     /** Per-productId tier_id override from the Manager (IAP.o.5 Issue C). */
     tier_overrides?: Record<string, string>;
     submit_on_create?: boolean;
+    /** SC7 — the batch's territory selection, chosen in the wizard's step 4.
+     *  Applied to EVERY row; there is no per-row override. */
+    availability_selection?: {
+      territoryIds?: unknown;
+      availableInNewTerritories?: unknown;
+    };
     /** IAP.p1.g: batch-level pricing source per Q-E. APP_TEMPLATE resolves
      *  to the bulk-import's app_id server-side; client only sends the kind. */
     pricing_source?: PricingSource["kind"];
@@ -507,6 +522,26 @@ async function runExecute(
   //    worker spaces its successive rows. Manager-locked tradeoff: ~4-5
   //    min for 50 items vs ~1 min before, in exchange for surviving Apple's
   //    documented 1 req/sec average per token.
+  /**
+   * ── The batch's ONE availability selection, resolved ONCE ──────────────
+   *
+   * ⚠ ONE CATALOGUE READ PER BATCH, STRUCTURALLY. `getAllTerritoryIds` is
+   * called here and nowhere inside the row loop. It was previously reached
+   * per-row (via `setAvailabilityToAllTerritories`) and stayed a single Apple
+   * request only because the module-scope 1h cache absorbed the repeats — which
+   * makes a rate-limit guarantee depend on a cache TTL outliving the batch.
+   * Hotfix 26's 1000ms inter-row delay and concurrency 2 are untouched; this
+   * stage still adds exactly one POST per row and zero reads.
+   *
+   * ⚠ The catalogue is also what lets the audit tell ALL from ALL_FROZEN. The
+   * flag is not derivable from the id list (KB §4.13), so both travel together.
+   */
+  const territoryCatalogue = await getAllTerritoryIds(creds);
+  const availabilitySelection = resolveBatchAvailabilitySelection(
+    config.availability_selection,
+    territoryCatalogue,
+  );
+
   const results: PerIapResult[] = await withConcurrency(
     resolved.decisions,
     CONCURRENCY_LIMIT,
@@ -529,6 +564,10 @@ async function runExecute(
         // Hotfix 26 — one counter bag per row, mutated by every
         // trackedWithRetry call across the row's stages.
         rateCounters: createRetryCounters(),
+        availability: {
+          selection: availabilitySelection,
+          catalogue: territoryCatalogue,
+        },
       });
       // Skip the trailing delay on the very last decision a worker may
       // pick up — cheap optimisation; the overhead at batch end is tiny
@@ -650,6 +689,25 @@ interface OrchestrateArgs {
   /** Cycle 44: batch-level price-point catalog shared across all rows so the
    *  per-territory price points are fetched once per batch, not once per IAP. */
   pricePointCatalog: BatchPricePointCatalog;
+  /**
+   * SC7 — batch-level availability, resolved ONCE before the row loop.
+   *
+   * ⚠ THIS IS A RATE-LIMIT INVARIANT, NOT A TIDINESS PREFERENCE. Before SC7
+   * the row called `setAvailabilityToAllTerritories`, which calls
+   * `getAllTerritoryIds` internally — so the catalogue lookup was INVOKED once
+   * per row and stayed a single Apple request only because the module-scope
+   * cache happened to absorb it (availabilities.ts:80-81, 1h TTL). Resolving it
+   * here makes "one catalogue read per batch" structural instead of
+   * cache-dependent: a batch that outlives the TTL, or a cold process mid-run,
+   * can no longer turn into N territory reads on top of N availability POSTs.
+   * Same shape as `pricePointCatalog` directly above, for the same reason.
+   */
+  availability: {
+    /** Applied to EVERY row — no per-row override (Manager decision). */
+    selection: TerritorySelection;
+    /** Apple's full catalogue, for classifying the action type (SC2). */
+    catalogue: readonly string[];
+  };
   /** Hotfix 26 — per-row 429 telemetry. Populated by `orchestrateOne`
    *  before delegating to runCreate/runOverwrite; every Apple call in
    *  the row's stages threads through `trackedWithRetry(args.rateCounters, …)`
@@ -821,38 +879,56 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
-  // 4.5 Cycle 37 Phase 1 — default availability to "All territories"
-  // (Manager Q1.A). Per-row + non-fatal: if Apple rejects this call the
-  // IAP is still on Apple, Manager can fix it via Apple Connect web.
-  // `setAvailabilityToAllTerritories` reuses the per-process territory
-  // cache, so the territories list is fetched once per batch and the
-  // overhead per row is a single POST.
+  // 4.5 Availability — the batch's ONE selection, applied to this row.
+  //
+  // Non-fatal by design: if Apple rejects it the IAP still exists, and the
+  // Manager can fix it in Apple Connect. The territory list was resolved once
+  // before the row loop (see OrchestrateArgs.availability), so the only Apple
+  // traffic this stage adds per row is the single POST it has always been.
+  const { selection, catalogue } = args.availability;
   let availabilitySet = false;
   let availabilityErr: string | undefined;
   try {
+    // ⚠ THE SINGLE WRITE PATH (SC1). Not a fifth POST site.
     await trackedWithRetry(args.rateCounters, () =>
-      setAvailabilityToAllTerritories(creds, appleIapId),
+      setAvailabilityTerritories(creds, appleIapId, selection),
     );
     availabilitySet = true;
   } catch (err) {
     availabilityErr = errMsg(err);
     await log(
       "iap-bulk-execute",
-      `availability set-all failed on product=${item.product_id}: ${availabilityErr}`,
+      `availability set failed on product=${item.product_id}: ${availabilityErr}`,
       "WARN",
     );
   }
+  // ⚠ Action type from WHAT WAS SENT, never from the surface or the button
+  // (SC2, the status principle). Derived by the SHARED helper, which also
+  // keeps the P2 guard's binding scan clean — see its header for why the kind
+  // comparisons must stay out of the assignment statement.
+  const kind = classifySelection(selection, catalogue);
+  const actionType = availabilityActionType(selection, catalogue);
   await iapDb()
     .from("actions_log")
     .insert({
       iap_id: null,
       actor: args.actor,
-      action_type: "AVAILABILITY_SET_ALL_TERRITORIES",
+      action_type: actionType,
       payload: {
         batch_id: args.batchId,
         product_id: item.product_id,
         apple_iap_id: appleIapId,
         success: availabilitySet,
+        source: "bulk-import",
+        target: kind,
+        // SC2 reconstructability — the FULL list actually sent, verbatim.
+        territories: selection.territoryIds,
+        territory_count: selection.territoryIds.length,
+        available_in_new_territories: selection.availableInNewTerritories,
+        // Pre-create: there is no previous availability to compare against,
+        // and saying so is more honest than a fabricated count of 0.
+        previous_known: false,
+        previous_territory_count: null,
         ...(availabilityErr ? { error: availabilityErr } : {}),
       },
     });
