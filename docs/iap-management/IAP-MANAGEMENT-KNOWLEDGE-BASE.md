@@ -481,6 +481,9 @@ IAP's territory availability — confirmed against `openapi.oas.json`:
 and `/v1/inAppPurchaseAvailabilities/{id}` exposes `getInstance` (GET)
 only. **No PATCH, no DELETE anywhere on this resource.**
 
+⚠ *Historical for the bulk modal only — see §4.14. Arbitrary subsets ship on
+the Edit form and Bulk Import; the bulk modal itself is still all-or-nothing.*
+
 Both "Set Availabilities" (all territories) and "Remove from Sales" (zero
 territories) are therefore the exact same call —
 `setAvailabilityToAllTerritories` / `setAvailabilityRemoveFromSales`
@@ -540,6 +543,63 @@ name you first met in prose.
 ---
 
 ## 5. Database Schema
+
+### 4.14 Per-territory availability — as shipped (arc `19051e8..6f206f8`)
+
+Summary only; procedures live in `operational-guide.md` §4 and the request
+shape in `apple-api-reference.md`.
+
+**What shipped.** Arbitrary territory subsets on two reachable surfaces: the
+Edit form for one synced item (defaults to the item's CURRENT territories) and
+Bulk Import step 4 for a whole batch (defaults to ALL). One selection per
+batch; no per-row override. All writes funnel through
+`setAvailabilityTerritories` — a single choke point with a structural guard.
+Action type is derived from **what was sent**, never the control clicked:
+`AVAILABILITY_SET_ALL_TERRITORIES` survives only for all-plus-flag, so old rows
+stay true; everything else is `AVAILABILITY_SET_TERRITORIES`, and the empty set
+is `AVAILABILITY_REMOVE_FROM_SALES`.
+
+**Three latent defects the arc surfaced — all pre-existing, all now fixed:**
+
+1. **A complete feature unreachable behind a stale zod enum (LAYER-GAP #5).**
+   SC2 shipped a selection-driven orchestrator and SC3 shipped stop-and-resume
+   on top of it. Both were correct and **neither could be invoked**: the route
+   schema still read `z.enum(["set-all","remove"])` and rejected the third
+   action at the HTTP boundary. Undetected for two chunks because every test
+   below the route called the orchestrator *directly* — no test ever put a
+   request body through the real schema. **Rule: a feature reached over HTTP
+   needs at least one test that crosses the HTTP boundary.** Unit tests on both
+   sides of a schema prove nothing about the schema.
+
+2. **A stopped run reported to the hub as SUCCESS (status principle).** The
+   shared terminal-status mapping keys off `failed`, and a rate-limit stop
+   typically ends with `failed === 0` plus a large NOT_ATTEMPTED remainder — so
+   it mapped to SUCCESS and the hub row claimed a 50-item batch completed while
+   N items were never attempted. A stopped run is PARTIAL by definition: some
+   work landed, some was deliberately abandoned. **Rule: any roll-up that
+   buckets by success/failure must account for a third "not attempted" state
+   before it can be trusted.**
+
+3. **A rate-limit guarantee resting on a cache TTL.** Bulk Import's per-row
+   availability step called `setAvailabilityToAllTerritories`, which resolves
+   the catalogue internally — so the catalogue lookup was *invoked per row* and
+   stayed one Apple request only because the module-scope 1 h cache absorbed the
+   repeats. A cold process mid-run, or a batch crossing the hour, would have
+   become N reads on top of N writes. Now resolved once before the row loop and
+   passed down. **Rule: if "we only call this once" is load-bearing, make it
+   structural — a cache making it true is a coincidence, not a design.**
+
+**Two defects found during the closing docs pass, still open** (see `TODO.md`):
+
+- The bulk modal's subset picker has **no UI entry point** — nothing sets
+  `bulkMode = "set-territories"`. Same layer-gap shape as #1, one layer further
+  out: HTTP fixed, entry point never added. A build-it-then-wire-it sequence
+  needs the wiring step tracked as its own deliverable, or it evaporates.
+- `set-all` / `remove` render `NOT_ATTEMPTED` as **"Failed"** — those modes
+  still use the legacy `ProgressList`, which keys off `ok` alone, and a
+  never-attempted row carries `ok: false`. SC3 gave the *shared* orchestrator a
+  third state without updating the legacy view that consumes it. **Adding a
+  state to a shared producer obliges an audit of every consumer.**
 
 ### 5.1 Schema isolation
 
@@ -1187,7 +1247,7 @@ state (stale risk), lazy/on-click fetch (blank column UX gap).
 **Shared data layer.** One `fetchAvailabilityStatesForIaps(creds, iapIds)`
 call drives:
 - Unit D — per-row column rendering via `classifyAvailability(state, hasError)` → `available | removed | unknown`.
-- Unit C — bulk-modal filter via the same classifier, mode-aware: `set-all` keeps `removed`, `remove` keeps `available`, both modes drop `unknown` so Manager doesn't act on stale state.
+- Unit C — bulk-modal filter via the same classifier, mode-aware: `set-all` keeps `removed`, `remove` keeps `available`, both modes drop `unknown` so Manager doesn't act on stale state. (SC6 added a third branch `set-territories` with **no** bucket restriction — an explicit list is meaningful for available AND removed items — while the `unknown` drop still applies and is now NAMED in the confirm dialog rather than silent.)
 
 The pre-fetched `Map<appleIapId, AvailabilityForIap | null>` plus an
 error Map thread from the Server Component → IapListClient prop →
@@ -3444,6 +3504,8 @@ Both operations share ONE flow — `AvailabilitiesBulkModal.tsx` →
 `executeBulkAvailability` (`lib/iap-management/orchestrators/
 bulk-availability.ts`), discriminated only by the route body's
 `action: "set-all" | "remove"` — not two separate hub-tracking wire-ups.
+(SC6 widened this to `| "set-territories"` with its own tag
+`iap-set-territories`; the one-route-many-actions shape held.)
 Full detail in [design-iap-availability-hub-tracking.md](design-iap-availability-hub-tracking.md);
 summary:
 

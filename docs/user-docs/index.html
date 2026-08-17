@@ -1187,7 +1187,7 @@
         <div class="quick-grid">
           <div class="quick-card" data-goto="apple-bulk-import">
             <div class="quick-card-title">Nhập hàng loạt IAP (Apple)</div>
-            <div class="quick-card-desc">Wizard 4 bước · Excel template · auto-retry rate limit</div>
+            <div class="quick-card-desc">Wizard 5 bước · Excel template · chọn territory cho cả batch</div>
           </div>
           <div class="quick-card" data-goto="apple-pricing-matrix">
             <div class="quick-card-title">Pricing matrix</div>
@@ -1275,12 +1275,12 @@
       <section class="page" data-page="apple-bulk-import">
         <div class="meta-strip">
           <span class="meta-chip module-apple">Apple IAP Management</span>
-          <span class="meta-chip">Wizard · 4 bước</span>
+          <span class="meta-chip">Wizard · 5 bước</span>
           <span class="meta-chip cycle">Hotfix 26 · 27 · 28</span>
         </div>
         <h1 class="page-title">Bulk Import wizard</h1>
         <p class="page-lede">
-          Tạo nhiều IAP cùng lúc trên App Store Connect bằng Excel template. Wizard 4 bước
+          Tạo nhiều IAP cùng lúc trên App Store Connect bằng Excel template. Wizard 5 bước
           với validate per-row, preview trước khi commit, và auto-retry khi gặp rate-limit
           từ Apple API.
         </p>
@@ -1350,7 +1350,7 @@
           <li class="step">
             <div class="step-title">Mở wizard và upload file (Step 1 — Excel)</div>
             <div class="step-body">
-              <p>Từ <code class="inline">/iap-management/apps/[appId]</code>, click nút <strong>Bulk Import</strong> ở góc phải bảng IAPs. Wizard mở với 4 bước: <strong>Excel → Screenshots → Preview → Result</strong>. Ở Step 1, drag &amp; drop file <code class="inline">.xlsx</code> vào dropzone — tool parse ngay tại chỗ và hiển thị card xanh: số IAP đọc được + số cặp locale. Warning "example row(s) skipped" (nếu còn dòng sample) cũng hiện ở đây.</p>
+              <p>Từ <code class="inline">/iap-management/apps/[appId]</code>, click nút <strong>Bulk Import</strong> ở góc phải bảng IAPs. Wizard mở với 5 bước: <strong>Excel → Screenshots → Preview → Territories → Result</strong>. Ở Step 1, drag &amp; drop file <code class="inline">.xlsx</code> vào dropzone — tool parse ngay tại chỗ và hiển thị card xanh: số IAP đọc được + số cặp locale. Warning "example row(s) skipped" (nếu còn dòng sample) cũng hiện ở đây.</p>
             </div>
           </li>
           <li class="step">
@@ -1372,7 +1372,39 @@
             </div>
           </li>
           <li class="step">
-            <div class="step-title">Execute và đọc kết quả (Step 4 — Result)</div>
+            <div class="step-title">Chọn territory cho cả batch (Step 4 — Territories)</div>
+            <div class="step-body">
+              <p>Bước này quyết định <strong>các IAP mới sẽ được bán ở đâu</strong>. Mặc định là
+              <strong>All countries or regions</strong> — mọi territory Apple có, cộng thêm thị trường
+              Apple mở trong tương lai.</p>
+              <p><strong>Một lựa chọn áp cho TẤT CẢ row trong batch.</strong> Không có override theo
+              từng row ở đây — nếu cần khác nhau, import trước rồi sửa từng item ở form Edit.</p>
+              <p>Muốn giới hạn: bấm <strong>Selected countries or regions</strong> rồi tick những
+              nước cần. Có ô search (khớp tên nước và mã), chip lọc theo châu lục, và
+              <strong>Select all N shown</strong> / <strong>Clear all N shown</strong> —
+              hai nút này <strong>chỉ áp cho danh sách đang lọc</strong>, không phải toàn bộ
+              catalogue, nên số trên nút luôn là số sẽ bị ảnh hưởng.</p>
+              <div class="callout callout-warning">
+                <div class="callout-title">⚠️ "All countries or regions" KHÁC "tick tay đủ hết"</div>
+                <p>Hai trạng thái này gửi <strong>body khác nhau</strong> lên Apple dù danh sách
+                nước giống nhau:</p>
+                <ul>
+                  <li><strong>All countries or regions</strong> → Apple <em>tự thêm</em> thị trường
+                  mới khi Apple mở (footer ghi <em>"includes any new market Apple launches later"</em>).</li>
+                  <li><strong>Tick tay đủ hết</strong> → danh sách <em>đóng băng</em>; thị trường Apple
+                  mở sau này <strong>KHÔNG</strong> tự được thêm (footer ghi <em>"new Apple markets
+                  will NOT be added automatically"</em>).</li>
+                </ul>
+                <p>Đọc footer để biết mình đang ở trạng thái nào — đó là chỗ duy nhất phân biệt được.</p>
+              </div>
+              <p>Nếu tool <strong>không tải được</strong> danh sách nước từ Apple, bước này hiện lý do
+              và <strong>không</strong> cho chọn, nút <strong>Execute</strong> bị disable. Đây là cố ý:
+              gửi một selection rỗng lên Apple chính là <em>Remove from Sale</em> — không ai muốn tạo
+              IAP rồi ẩn nó khỏi mọi nơi. Quay lại và thử lại.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Execute và đọc kết quả (Step 5 — Result)</div>
             <div class="step-body">
               <p>Tool tạo IAP lên App Store Connect với concurrency có kiểm soát + auto-retry khi gặp 429 rate-limit (Hotfix 26 telemetry). Kết quả per-row:</p>
               <ul>
@@ -2421,7 +2453,13 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <li class="step">
             <div class="step-title">Set Availabilities + Pricing</div>
             <div class="step-body">
-              <p><strong>Availabilities section</strong>: chọn territories — default 175. Có thể remove territories cụ thể (vd: chỉ bán ở Vietnam + Japan).</p>
+              <p><strong>Không có Availabilities section ở form này.</strong> Chọn territory chỉ có
+              trên form <a class="inline-link" data-goto="apple-edit-iap">Edit</a> của một IAP
+              <em>đã sync lên Apple</em> — vì việc chọn nước là thao tác trên resource của Apple, mà
+              IAP chưa tạo thì chưa có resource đó. Luồng create vốn luôn đi qua draft rồi
+              <strong>Create on Apple</strong> trên form Edit, nên bạn sẽ gặp nó ngay sau đó.
+              Tạo nhiều IAP một lượt thì chọn territory ở
+              <a class="inline-link" data-goto="apple-bulk-import">Bulk Import</a> (Step 4).</p>
               <p><strong>Pricing section</strong>: chọn nguồn — Default template (toàn workspace), Per-App template (override), hoặc Manual (chọn tier USD trực tiếp).</p>
               <p><strong>Custom territory prices</strong> (ghi đè giá từng quốc gia) nằm ngay dưới, nhưng ở form này nút bị disable kèm lý do <em>“Save as draft first”</em> — custom prices lưu gắn với IAP đã save. Không thêm bước nào: <strong>Create on Apple</strong> vốn chỉ có trên form Edit, nên luồng create luôn đã đi qua draft. Chi tiết: <a class="inline-link" data-goto="apple-edit-iap">Chỉnh sửa IAP</a>.</p>
             </div>
@@ -2526,7 +2564,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <tr><td>Product ID</td><td><strong>Không</strong></td><td>Immutable sau khi tạo</td></tr>
             <tr><td>Type</td><td><strong>Không</strong></td><td>Apple không cho đổi type</td></tr>
             <tr><td>Locales (Display Name + Description)</td><td>Có</td><td>Apple sẽ re-review</td></tr>
-            <tr><td>Availabilities</td><td>Có</td><td>Effect immediate sau save</td></tr>
+            <tr><td>Availabilities (territory)</td><td>Có</td><td>Chỉ khi IAP đã sync · thay đổi được <strong>staged</strong>, chỉ đẩy lên Apple khi bấm <strong>Update on Apple</strong> — xem mục dưới</td></tr>
             <tr><td>Pricing</td><td>Có</td><td>Thay đổi schedule mới · gồm cả <strong>Custom territory prices</strong> (xem dưới)</td></tr>
             <tr><td>Screenshot</td><td>Có</td><td>Apple sẽ re-review nếu replace</td></tr>
           </tbody>
@@ -2558,6 +2596,86 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <div class="step-body"><p>Click <strong>Confirm</strong> → tool PATCH lên ASC. Toast success → redirect về Danh sách IAPs.</p></div>
           </li>
         </ol>
+
+        <h2 class="section-title">Availability — chọn nước bán cho một IAP</h2>
+        <p>
+          Section <strong>Availability</strong> trên form Edit cho phép chọn chính xác những nước IAP này
+          được bán. Chỉ hiện với IAP <strong>đã sync lên Apple</strong> — IAP draft chưa có resource
+          availability bên Apple để sửa.
+        </p>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Đây là REPLACE, không phải thêm vào</div>
+          <p>
+            Apple không có API "thêm nước" hay "bỏ nước" — mỗi lần đẩy là <strong>ghi lại toàn bộ
+            danh sách</strong>. Item đang bán ở 175 nước, bạn chọn 10 nước rồi
+            <strong>Update on Apple</strong> → item còn <strong>đúng 10 nước</strong>, 165 nước kia
+            bị bỏ. Không có bước "merge" nào ở giữa.
+          </p>
+        </div>
+
+        <h3 class="subsection-title">Mặc định mở form là territory HIỆN TẠI của item</h3>
+        <p>
+          Form mở ra với đúng những nước item đang bán — không phải "tất cả". Đây là cố ý: nếu mặc định
+          là ALL, một người mở form chỉ để sửa Display Name rồi bấm Update sẽ <strong>âm thầm mở rộng</strong>
+          một item đang bán 12 nước ra toàn bộ thị trường, và không có gì trong luồng nói cho họ biết.
+          Không chạm section này thì không có gì bị đẩy.
+        </p>
+        <p>
+          Bấm <strong>Reset to current</strong> bất cứ lúc nào để về đúng trạng thái Apple đang có.
+          Khi lựa chọn khác trạng thái hiện tại, dưới picker hiện dòng
+          <em>"Change pending — … will be pushed to Apple on the next Update on Apple"</em> kèm
+          từ → đến, nên bạn thấy mình đang đổi cái gì trước khi đẩy.
+        </p>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ "All countries or regions" KHÁC "tick tay đủ hết"</div>
+          <p>
+            Cùng một danh sách nước, nhưng <strong>hai request khác nhau</strong> gửi lên Apple:
+          </p>
+          <table class="docs-table">
+            <thead><tr><th>Chọn</th><th>Thị trường Apple mở sau này</th><th>Footer hiển thị</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><strong>All countries or regions</strong></td>
+                <td>Tự động được thêm</td>
+                <td><em>includes any new market Apple launches later</em></td>
+              </tr>
+              <tr>
+                <td>Tick tay đủ hết (chế độ <strong>Selected</strong>)</td>
+                <td><strong>KHÔNG</strong> được thêm</td>
+                <td><em>new Apple markets will NOT be added automatically</em></td>
+              </tr>
+            </tbody>
+          </table>
+          <p>
+            Nhìn số đếm thì hai trạng thái giống nhau y hệt. <strong>Footer là chỗ duy nhất phân biệt</strong> —
+            đọc nó trước khi Update. Nếu bạn muốn "bán mọi nơi, kể cả nước Apple mở năm sau", phải dùng
+            <strong>All countries or regions</strong>, không phải tick hết bằng tay.
+          </p>
+        </div>
+
+        <h3 class="subsection-title">Cảnh báo base territory</h3>
+        <p>
+          Nếu lựa chọn <strong>loại trừ base territory</strong> của chính item đó (nước mà giá được tính
+          từ đó), picker hiện dòng: <em>"Prices are calculated from {nước}, which this selection excludes.
+          Check the price schedule."</em>
+        </p>
+        <p>
+          Đây là <strong>ghi nhận một sự kiện cấu hình</strong>, <strong>không chặn</strong>, và
+          <strong>không</strong> nói rằng Apple sẽ từ chối — chúng tôi chưa chứng minh được Apple xử lý
+          thế nào với giá của một nước không bán. Base territory là <strong>của từng item</strong>
+          (không phải luôn USA), nên cảnh báo nêu đúng nước của item đang mở.
+        </p>
+
+        <div class="callout callout-danger">
+          <div class="callout-title">🚫 Không đọc được trạng thái hiện tại → không cho sửa</div>
+          <p>
+            Nếu tool không đọc được availability hiện tại từ Apple, section hiện lý do và
+            <strong>không render picker</strong>. Cố ý: sửa từ một điểm xuất phát không biết đúng sai
+            có thể xoá mất nước mà không ai thấy. Reload trang để thử lại.
+          </p>
+        </div>
 
         <h2 class="section-title">Custom territory prices — đặt giá riêng cho từng quốc gia</h2>
         <p>
@@ -2725,9 +2843,9 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
                 <text fill="var(--warning)" x="108" y="204" font-weight="600">Price Tier</text>
                 <text class="wf-text" x="240" y="204">USD_0_99</text>
                 <text fill="var(--warning)" x="400" y="204" font-weight="600">USD_1_99</text>
-                <text class="wf-text" x="108" y="232">Availabilities</text>
-                <text class="wf-text" x="240" y="232">175 territories</text>
-                <text class="wf-text" x="400" y="232">175 territories</text>
+                <text class="wf-text" x="108" y="232">Availability</text>
+                <text class="wf-text" x="240" y="232">175 · +future</text>
+                <text class="wf-text" x="400" y="232">12 of 175</text>
                 <rect fill="var(--warning-bg)" x="96" y="242" width="448" height="26"/>
                 <text fill="var(--warning)" x="108" y="259" font-weight="600">Custom territory prices</text>
                 <text class="wf-text" x="240" y="259">—</text>
@@ -3007,13 +3125,19 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         <div class="meta-strip">
           <span class="meta-chip module-apple">Apple IAP Management</span>
           <span class="meta-chip cycle">Cycle 39 Phase 2 · Hotfix 25</span>
-          <span class="meta-chip">2-mode modal</span>
+          <span class="meta-chip">2-mode modal · all-or-nothing</span>
         </div>
         <h1 class="page-title">Bulk Availabilities</h1>
         <p class="page-lede">
           Modal đổi availability của nhiều IAP cùng lúc — 2 mode trong cùng modal: <strong>Set Availabilities</strong>
-          (kích hoạt sales) và <strong>Remove from Sales</strong> (ngừng sales · destructive variant với confirm gate).
+          (bán ở <em>mọi</em> nước) và <strong>Remove from Sales</strong> (ngừng sales · destructive variant với confirm gate).
           Cycle 39 Phase 2 · Hotfix 25 lazy-load client strategy.
+        </p>
+        <p class="page-lede">
+          ⚠ Modal này là <strong>all-or-nothing</strong>: mọi nước, hoặc không nước nào. Cần
+          <strong>chọn tập con</strong> thì dùng
+          <a class="inline-link" data-goto="apple-edit-iap">form Edit của từng IAP</a> (chọn chính xác từng nước),
+          hoặc <a class="inline-link" data-goto="apple-bulk-import">Bulk Import Step 4</a> cho IAP tạo mới.
         </p>
 
         <h2 class="section-title">2 mode khác biệt</h2>
@@ -3047,13 +3171,30 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <li class="step">
             <div class="step-title">Confirm (Set mode) hoặc Confirm + Modal-within (Remove mode)</div>
             <div class="step-body">
-              <p><strong>Set mode</strong>: click <strong>Set Availabilities for N items</strong> → tool gửi PATCH per IAP. Auto-retry nếu gặp 429 rate-limit. Realtime progress bar.</p>
+              <p><strong>Set mode</strong>: click <strong>Set Availabilities for N items</strong> → tool gửi <strong>một POST cho mỗi IAP</strong>. Apple <em>không có</em> API PATCH cho availability: mỗi lần ghi là <strong>ghi lại toàn bộ danh sách nước</strong>, nên "set" ở đây nghĩa là replace bằng full territory list. Auto-retry nếu gặp 429 rate-limit. Realtime progress bar.</p>
               <p><strong>Remove mode</strong>: click <strong>Remove from Sales</strong> → mở confirm modal-within-modal với red palette, hiển thị số items + cảnh báo "Existing customer entitlements stay intact; only new purchases stop". Click <strong>Confirm</strong> để execute.</p>
             </div>
           </li>
           <li class="step">
             <div class="step-title">Xem kết quả</div>
-            <div class="step-body"><p>Result state: ✓ succeeded count · ⏭ skipped · ❌ failed. Failed rows hiển thị error message cụ thể. Danh sách IAPs background tự refresh sau khi đóng modal.</p></div>
+            <div class="step-body">
+              <p>Mỗi row hiện ✓ (<em>Updated on Apple</em>) hoặc ! kèm lỗi cụ thể từ Apple. Danh sách IAPs background tự refresh sau khi đóng modal.</p>
+              <div class="callout callout-danger">
+                <div class="callout-title">🚫 Row "!" chưa chắc là đã thất bại</div>
+                <p>
+                  Nếu batch <strong>dừng giữa đường</strong> vì hết ngân sách retry của Apple (xem callout
+                  rate-limit dưới), những item <strong>chưa được gửi đi</strong> hiện tại cũng vẽ thành "!"
+                  giống item Apple thực sự từ chối. Hai thứ này khác nhau về bản chất: item chưa gửi thì
+                  <strong>chưa có gì thay đổi</strong> và chạy lại là an toàn; item bị từ chối thì cần đọc
+                  lý do trước.
+                </p>
+                <p>
+                  Cách phân biệt hiện tại: đọc text bên phải. Có message lỗi từ Apple = thật sự bị từ chối.
+                  Chỉ ghi "Failed" trơn, và nằm ở cuối danh sách sau một loạt ✓ = rất có thể là chưa được gửi.
+                  <strong>Đang có ticket sửa chỗ này</strong> để hai trạng thái được tách rõ.
+                </p>
+              </div>
+            </div>
           </li>
         </ol>
 
@@ -3107,8 +3248,22 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <p>Trước khi multi-select trong IAPs list, dùng filter State để zoom vào nhóm cần. Vd: filter <code class="inline">State = Approved</code> trước khi click <strong>Remove from Sales</strong>.</p>
         </div>
         <div class="callout callout-warning">
-          <div class="callout-title">⚠️ Auto-retry rate-limit</div>
-          <p>Cycle 40 Phase A telemetry: tool tự retry khi gặp 429 từ Apple. Modal sẽ pause progress bar và hiển thị "Throttled · retrying in Xs". Không cần action — đợi auto-resume.</p>
+          <div class="callout-title">⚠️ Rate-limit: tự retry, nhưng có thể DỪNG hẳn</div>
+          <p>
+            Tool tự retry khi gặp 429 từ Apple và hiện chip telemetry (số row bị throttle, tổng thời gian
+            backoff). Phần lớn trường hợp tự hồi phục, không cần làm gì.
+          </p>
+          <p>
+            <strong>Nhưng nếu retry cạn ngân sách</strong>, batch <strong>dừng lại</strong> thay vì tiếp tục
+            đốt quota — những item chưa tới lượt sẽ <strong>không được gửi</strong>. Đây là hành vi cố ý:
+            khi Apple đã chặn thì gửi tiếp chỉ làm tình hình xấu hơn. Việc cần làm là
+            <strong>đợi vài phút rồi chạy lại</strong> cho phần chưa xong (chọn lại đúng những IAP đó
+            trong danh sách).
+          </p>
+          <p>
+            ⚠ Danh sách phần chưa chạy <strong>không được lưu ở đâu cả</strong> — đóng modal là mất.
+            Ghi lại product id trước khi đóng nếu batch dừng giữa đường.
+          </p>
         </div>
         <div class="callout callout-danger">
           <div class="callout-title">🚫 Remove from Sales — không stop customer entitlements</div>

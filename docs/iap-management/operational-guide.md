@@ -230,3 +230,93 @@ The tool reads Apple's price list through an IAP that already exists on
 Apple. In an app where nothing has been created yet, the picker is
 disabled with that reason — create the IAP first, then edit it to add
 custom prices.
+
+---
+
+## 4. Per-territory availability — choosing where an IAP sells
+
+Shipped by the per-territory availability arc (`19051e8..6f206f8`). Two
+surfaces are reachable today; a third is built but not yet wired — see the
+gap note at the end of this section before you go looking for it.
+
+### 4.1 Which surface to use
+
+| You want to… | Use | Default when it opens |
+|---|---|---|
+| Set one existing IAP's countries precisely | **Edit form → Availability** (synced IAPs only) | The item's **current** territories |
+| Set countries for a batch you are creating | **Bulk Import → Step 4 (Territories)** | **All** countries + future markets |
+| Turn many existing IAPs fully on or fully off | **Bulk Availabilities modal** | all-or-nothing only — no subset |
+
+The Edit form's default is deliberately *not* ALL. Opening a form to fix a
+display name and pressing Update must not silently widen a 12-territory item
+to every market, so an untouched section pushes nothing.
+
+### 4.2 The distinction that costs money if you miss it
+
+"All countries or regions" and "every country ticked by hand" hold the **same
+country list** and send **different requests**:
+
+- **All countries or regions** → `availableInNewTerritories: true`. Apple adds
+  future markets to this IAP automatically.
+- **Selected, with everything ticked** → `availableInNewTerritories: false`.
+  The list is frozen; markets Apple opens later are **not** added.
+
+The counts are identical, so the count cannot tell you which state you are in.
+The picker's footer line is the only place that says so. Read it before
+pushing.
+
+### 4.3 Every push is a REPLACE
+
+Apple exposes no PATCH, no DELETE, and no add/remove on the availability
+resource — a write always carries the whole list. An item on 175 countries,
+pushed with 10 selected, ends on **10**. The Bulk Availabilities confirm
+dialog states this and lists which items actually change before anything is
+sent; on the Edit form the pending-change line shows from → to.
+
+Items whose current availability **could not be read** are left out of a batch
+entirely, and the confirm dialog names them individually. That is not a
+silent narrowing: the tool cannot tell whether writing would be a change, so
+it does not write them.
+
+### 4.4 When a batch stops on Apple's rate limit
+
+Bulk runs retry 429s with backoff. If the retry budget is exhausted the batch
+**stops dispatching** rather than burning more quota. This is not a failure:
+
+- Items already written **stayed written** — do not redo them.
+- Items never sent have **not changed** and are safe to re-run.
+
+`STOPPED_RATE_LIMITED` is a distinct outcome from `FAILURE`. On the hub it
+closes as **PARTIAL** with the unattempted count in the reason, never SUCCESS.
+
+**Recovery:** wait a few minutes, then re-run the unattempted items only.
+Items Apple actively **rejected** are *not* auto-resumed by design — read the
+reason first, fix the cause, then re-run those separately.
+
+> ⚠ **The unattempted list is not persisted anywhere.** It lives in the open
+> dialog and is gone when you close it. If a batch stops mid-way, write the
+> product ids down before closing.
+
+### 4.5 Base-territory advisory
+
+If a selection excludes the item's own base territory (the one prices are
+calculated from), the picker says so. It is a **configuration note, not a
+block**, and it deliberately does **not** claim Apple will reject anything —
+that behaviour is unproven. Base territory is per-item, not always USA, so the
+note names the item's actual base. On the bulk surface this changes
+availability only and touches no prices; on the Edit form the price schedule
+is worth a look.
+
+### 4.6 If the country list will not load
+
+No catalogue ⇒ **no picker**, and Execute is disabled. Deliberate: an empty
+selection is a valid Apple request meaning *removed from sale*, so falling
+back to "nothing selected" would hide items nobody asked to hide. Reload and
+retry.
+
+### 4.7 ⚠ Known gap — the bulk subset picker is not reachable yet
+
+The Bulk Availabilities modal fully supports choosing a territory subset, and
+the server accepts it, but **no button opens it in that mode**. Until that is
+wired, subsets are per-item (Edit form) or per-batch-at-create (Bulk Import).
+Tracked in `TODO.md`. Do not document or train on it as available.

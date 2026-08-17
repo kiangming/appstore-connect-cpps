@@ -1,6 +1,10 @@
 # Design — Apple IAP per-territory availability (3 surfaces)
 
-**Status:** DESIGN ONLY — no implementation. Gates first, design second.
+**Status:** ✅ **IMPLEMENTED** — arc `19051e8..6f206f8` (SC1-SC7), pushed
+2026-08-17. Docs pass `6d138f1`+. **The design text below is preserved verbatim
+as signed off**; as-built divergences are recorded in the appendix at the end of
+this file, in the same style as the Q6 note. Where design and appendix disagree,
+**the appendix is what shipped.**
 **Scope:** Apple IAP Management only. Google module untouched.
 **Picks up:** KB §10.4 backlog `IAP.p2+` — "`availableInAllTerritories` edit —
 separate Apple endpoints (e.g. `/v1/inAppPurchaseAvailabilities`); not in
@@ -611,3 +615,82 @@ records the batch-wide selection once.
 - **Never transform Apple's values.** Territory ids and error bodies are recorded and displayed verbatim.
 - **One `withRetry`, at the orchestrator, over a retry-naive leaf** (§G3). Do not nest.
 - **Do not touch** `INTER_ROW_DELAY_MS` or the concurrency-2 setting in bulk-import.
+
+
+---
+
+## APPENDIX — AS BUILT (added at arc close, design text above unchanged)
+
+Same convention as the Q6 note: the design is left as signed off; this appendix
+records what actually shipped and why it differs.
+
+### A1. Surface coverage — one of three is not reachable
+
+| Surface | Design | As built |
+|---|---|---|
+| **C** Edit item | picker, default = current | ✅ shipped, reachable. Renders only for `mode === "edit" && syncedToApple` — the **create form has no availability control at all**, since a draft has no Apple resource to edit. §PART 2 said "Create/Edit"; only Edit exists. |
+| **B** Bulk Import | picker step, default ALL | ✅ shipped, reachable as step 4 of 5. |
+| **A** Set Availabilities modal | picker as a third mode | ⚠ **built but NOT reachable.** Modal, route, orchestrator and tests all support `set-territories`; **no button sets that mode** (`IapListClient.tsx` offers only `set-all` and `remove`). Tracked in `TODO.md`. |
+
+### A2. SC6p1 — the design's own §G5 groundwork was unreachable over HTTP
+
+SC2 shipped the selection-driven orchestrator and SC3 the stop-and-resume on top
+of it. Both were complete and **neither could be invoked from any client**: the
+route's zod schema still read `z.enum(["set-all","remove"])` and rejected the
+third action at the boundary. It survived two chunks because every test below the
+route called `executeBulkAvailability` directly, so no test crossed the schema.
+The design did not call for a route-level test; it should have.
+
+### A3. SC6p1 — stopped runs closed the hub as SUCCESS
+
+§D specified `STOPPED_RATE_LIMITED` as a distinct outcome, which shipped. What
+the design did not trace was the **hub terminal status**: that mapping buckets by
+`failed`, and a rate-limit stop typically ends `failed === 0` with a large
+NOT_ATTEMPTED remainder — mapping to SUCCESS. Now forced to PARTIAL with the
+unattempted count in the reason. Lesson: specifying a new outcome value obliges
+tracing every consumer that buckets outcomes.
+
+### A4. SC7 — the "one catalogue read per batch" claim was cache-dependent
+
+§G3 assumed the per-row availability write was "a single POST". True for the
+POST, but the row called `setAvailabilityToAllTerritories`, which resolves the
+catalogue internally — so `getAllTerritoryIds` was *invoked per row* and stayed
+one Apple request only because the 1 h module cache absorbed the repeats. A cold
+process mid-run or a batch crossing the hour would have produced N reads. Now
+resolved once before the row loop and threaded down, matching the existing
+`pricePointCatalog` pattern.
+
+### A5. Surface B skips the §G6 base-territory advisory
+
+§B behaviour 7 specified the advisory on every picker. Surface B **omits it**:
+Bulk Import rows are **pre-create**, so no `base_territory` exists yet anywhere
+in the execute route or bulk-import lib. Per the no-invented-defaults rule, an
+item with no recorded base is skipped rather than warned against a guessed
+"USA". Surfaces A and C carry it.
+
+### A6. Surface A's advisory wording diverges from C's
+
+§G6 gave one copy for all surfaces. As built, surface A says *"This action
+changes availability only — it does not touch prices"* because surface A runs no
+pricing stage, whereas C points at the price schedule. Same underlying fact,
+different true statement per surface.
+
+### A7. The model had to change shape, not just gain a field
+
+§PART 2 A assumed the existing form field could carry the selection. It could
+not: `AvailabilityTarget` was `"ALL" | "NONE"`, and a two-valued enum cannot
+express a subset — keeping it would have forced Stage 5 to record an action type
+derived from the UI mode, the exact status-principle violation §G5 exists to
+prevent. Replaced with a `TerritorySelection` throughout, with
+`availability_previous_known` as a separate field so a failed read is never
+conflated with a genuine Removed-from-Sale.
+
+### A8. Still open at arc close
+
+- Surface A entry point (A1).
+- `set-all` / `remove` render `NOT_ATTEMPTED` as "Failed" — those modes kept the
+  legacy `ProgressList`, which keys off `ok` alone; SC3 added a third state to
+  the shared orchestrator without auditing that consumer.
+- No HTTP e2e reaches the execute route's row loop (multipart + full create
+  pipeline). Chain held from both ends around
+  `resolveBatchAvailabilitySelection` — a declared limitation, not an oversight.

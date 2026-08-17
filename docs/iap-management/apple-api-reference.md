@@ -299,6 +299,97 @@ real attribute on `/v1/inAppPurchaseAvailabilities` is
 "currently sold everywhere". Territory availability is wrapped and
 shipped — see KB §4.12 and §4.13.
 
+---
+
+## Availability — `/v1/inAppPurchaseAvailabilities`
+
+### Request shape: one request carries the WHOLE list, for ONE item
+
+```jsonc
+POST /v1/inAppPurchaseAvailabilities
+{
+  "data": {
+    "type": "inAppPurchaseAvailabilities",
+    "attributes": { "availableInNewTerritories": false },
+    "relationships": {
+      "inAppPurchase":        { "data": { "type": "inAppPurchases", "id": "<iap>" } },
+      "availableTerritories": { "data": [
+        { "type": "territories", "id": "USA" },
+        { "type": "territories", "id": "VNM" }
+      ] }
+    }
+  }
+}
+```
+
+`availableTerritories.data` is **required** but has no `minItems` — an empty
+array is a valid request, and it is how "Remove from Sale" is expressed.
+That is why an accidentally-empty selection is dangerous rather than inert.
+
+### REPLACE-ONLY — there is no PATCH, DELETE, add, or remove
+
+Apple exposes **no** `PATCH /v1/inAppPurchaseAvailabilities/{id}`, no `DELETE`,
+and no sub-resource mutation for adding or removing individual territories.
+A fresh POST **is** the update, and it overwrites the whole territory set.
+Consequences that follow directly:
+
+- Any write must enumerate every territory the item should keep.
+- A partial list silently drops the omitted territories.
+- There is no read-modify-write hazard to manage *within* one request, but
+  there is one *across* surfaces: two operators pushing different lists means
+  last-write-wins with no merge.
+
+### `availableInNewTerritories` is FORWARD-looking
+
+It does not mean "sold everywhere now". It means "when Apple opens a new
+market, add this IAP to it automatically". Therefore:
+
+| Manager intent | `availableTerritories` | `availableInNewTerritories` |
+|---|---|---|
+| All countries or regions | all ~175 ids | `true` |
+| Every country ticked by hand | all ~175 ids (**same**) | `false` |
+| A subset | the chosen ids | `false` |
+| Remove from Sale | `[]` | `false` |
+
+Rows 1 and 2 are **byte-different requests carrying identical id lists**. The
+flag is therefore **not derivable** from the list — any code or UI that
+computes one from the other has a bug. See KB §4.13.
+
+### Read path, and the `?include` cap trap (§4.1)
+
+```
+GET /v2/inAppPurchases/{id}/inAppPurchaseAvailability
+GET /v1/inAppPurchaseAvailabilities/{availId}/availableTerritories?limit=200
+```
+
+⚠ **The two paths have different page caps, and this is a real trap.** The V2
+relationship read with `?include=availableTerritories` caps included resources
+at **50**, so an item selling in ~175 territories comes back *silently
+truncated* — the response looks well-formed and the count is simply wrong. The
+dedicated sub-resource accepts `limit=200`, which covers Apple's current
+territory count with room to grow, and must be paginated via `links.next`
+beyond that.
+
+⇒ **Never derive a territory count from the V2 `?include` form.** Read
+metadata from V2 (for `availableInNewTerritories` and the resource id), then
+page the territory list from the V1 sub-resource. This is the shape
+`getAvailabilityForIap` implements.
+
+A **404** on the V2 read means Apple holds *no availability resource* for the
+item — that is the Removed-from-Sale state, not an error. A failed read for any
+other reason is **not** the same thing and must not be collapsed into it: one
+means "sold nowhere", the other means "we do not know".
+
+### Territory catalogue
+
+```
+GET /v1/territories?limit=200
+```
+
+Feeds both the "all territories" list and any count denominator. Cached
+per-process for 1 h; the display side and the write side must read the **same**
+source or a rendered count can describe a different list than Apple receives.
+
 ## Pricing Template System (IAP.p1)
 
 Manager scope (Q-IAP.p1.A..K, May 2026): three pricing sources usable on
