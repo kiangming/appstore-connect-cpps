@@ -11,9 +11,10 @@
  *   • Stage 3 — Screenshot replace (IAP.o.8a `replaceScreenshotOnApple`).
  *   • Stage 4 — Pricing schedule (IAP.o.11d `applyPricingSchedule` — owns
  *               its own audit log row + retry budget + jitter).
- *   • Stage 5 — Availability (Cycle 39 Phase 1) — `setAvailabilityToAll
- *               Territories` for "ALL", or `setAvailabilityRemoveFromSales`
- *               (re-POST with empty territory list) for "NONE".
+ *   • Stage 5 — Availability — one POST through the shared
+ *               `setAvailabilityTerritories` write path (SC1). Since SC5 the
+ *               selection can be a SUBSET, so the action type is derived from
+ *               what is SENT (SC2) rather than from the control clicked.
  *
  * Per Manager IAP.o.11 instrumentation-first discipline: every stage emits
  * `[update-on-apple] stage=X start/result` console.log so Railway tail shows
@@ -38,10 +39,11 @@ import {
   type PricingOutcome,
   type PricingSource,
 } from "./pricing-orchestration";
+import { setAvailabilityTerritories } from "./availabilities";
 import {
-  setAvailabilityToAllTerritories,
-  setAvailabilityRemoveFromSales,
-} from "./availabilities";
+  classifySelection,
+  type SelectionKind,
+} from "./territory-selection";
 import type { IapDiff } from "./diff-detector";
 import { iapDb } from "@/lib/iap-management/db";
 import type { IapActionType } from "@/lib/iap-management/action-types";
@@ -76,6 +78,16 @@ export interface UpdateIapOnAppleArgs {
    *  template-backed and tier didn't change (the pricing stage still needs
    *  a tier to look up USD + match Apple's price-point). */
   currentTierId?: string | null;
+  /**
+   * Apple's full territory catalogue, as read by the caller.
+   *
+   * ⚠ Stage 5 classifies the outgoing selection against THIS list to pick the
+   * action type. It must be the same catalogue the picker offered, or "all
+   * territories" gets recorded as a SUBSET (or worse, vice versa). Absent ⇒
+   * the stage cannot prove a selection is "all", so it records the honest
+   * SUBSET/ALL_FROZEN rather than guessing ALL.
+   */
+  allTerritoryIds?: readonly string[];
 }
 
 // ─── Stage result shapes ─────────────────────────────────────────────────────
@@ -119,8 +131,8 @@ export interface StagePricingResult {
 export interface StageAvailabilityResult {
   changed: boolean;
   ok?: boolean;
-  /** "ALL" or "NONE" — the target Manager picked. */
-  target?: "ALL" | "NONE";
+  /** What was actually SENT, classified — not the control that was clicked. */
+  target?: SelectionKind;
   /** Apple-side availability resource id after the POST. */
   apple_availability_id?: string;
   error?: string;
@@ -585,36 +597,72 @@ async function runPricingStage(
 
 // ─── Stage 5 — Availability (Cycle 39 Phase 1) ───────────────────────────────
 
+/**
+ * The action type is derived from WHAT WILL BE SENT, never from the control the
+ * Manager touched (SC2, the status principle).
+ *
+ * `AVAILABILITY_SET_ALL_TERRITORIES` survives for exactly one case — every
+ * territory PLUS the forward-looking flag — so historical rows carrying that
+ * name stay true forever. "All 175 ticked by hand" is `ALL_FROZEN`: the same
+ * ids, a different request, and therefore a different action type.
+ */
+function availabilityActionType(kind: SelectionKind) {
+  switch (kind) {
+    case "ALL":
+      return "AVAILABILITY_SET_ALL_TERRITORIES" as const;
+    case "NONE":
+      return "AVAILABILITY_REMOVE_FROM_SALES" as const;
+    case "ALL_FROZEN":
+    case "SUBSET":
+      return "AVAILABILITY_SET_TERRITORIES" as const;
+  }
+}
+
 async function runAvailabilityStage(
   args: UpdateIapOnAppleArgs,
 ): Promise<StageAvailabilityResult> {
-  const { creds, appleIapId, diff, audit } = args;
+  const { creds, appleIapId, diff, audit, allTerritoryIds } = args;
   if (!diff.availability_changed) {
     return { changed: false };
   }
-  const target = diff.availability_changed.new_target;
+  const { new_selection, old_selection, previous_known } = diff.availability_changed;
+
+  // Classified against the SAME catalogue the ids came from, so "all" means
+  // all-of-what-we-offered rather than all-of-some-other-list.
+  const kind = classifySelection(new_selection, allTerritoryIds ?? []);
+  const actionType = availabilityActionType(kind);
+  const target = kind;
+
   console.log(
-    `[update-on-apple] stage=availability start apple_iap_id=${appleIapId} target=${target}`,
+    `[update-on-apple] stage=availability start apple_iap_id=${appleIapId} kind=${kind} count=${new_selection.territoryIds.length} new_flag=${new_selection.availableInNewTerritories}`,
   );
-  const actionType =
-    target === "ALL"
-      ? "AVAILABILITY_SET_ALL_TERRITORIES"
-      : "AVAILABILITY_REMOVE_FROM_SALES";
+
+  /** SC2 reconstructability — a reader must rebuild the exact set without
+   *  calling Apple. The list is what was SENT, verbatim, not a diff. */
+  const basePayload = {
+    apple_iap_id: appleIapId,
+    source: "edit" as const,
+    target,
+    territories: new_selection.territoryIds,
+    territory_count: new_selection.territoryIds.length,
+    available_in_new_territories: new_selection.availableInNewTerritories,
+    previous_territory_count: old_selection?.territoryIds.length ?? null,
+    previous_known,
+  };
+
   try {
-    const res =
-      target === "ALL"
-        ? await setAvailabilityToAllTerritories(creds, appleIapId)
-        : await setAvailabilityRemoveFromSales(creds, appleIapId);
+    // ⚠ THE SINGLE WRITE PATH (SC1). All four emitters go through
+    // `setAvailabilityTerritories`; the structural guard in
+    // `availabilities.write-path.test.ts` fails if this bypasses it.
+    const res = await setAvailabilityTerritories(creds, appleIapId, new_selection);
     const apple_availability_id = res.data?.id;
     console.log(
-      `[update-on-apple] stage=availability success apple_iap_id=${appleIapId} target=${target} avail_id=${apple_availability_id}`,
+      `[update-on-apple] stage=availability success apple_iap_id=${appleIapId} kind=${kind} avail_id=${apple_availability_id}`,
     );
     await writeAuditRow(audit, actionType, {
-      apple_iap_id: appleIapId,
+      ...basePayload,
       result: "SUCCESS",
-      target,
       ...(apple_availability_id ? { apple_availability_id } : {}),
-      previous_target: diff.availability_changed.old_target,
     });
     return {
       changed: true,
@@ -625,13 +673,11 @@ async function runAvailabilityStage(
   } catch (err) {
     const errStr = errToString(err);
     console.error(
-      `[update-on-apple] stage=availability failure apple_iap_id=${appleIapId} target=${target}: ${errStr}`,
+      `[update-on-apple] stage=availability failure apple_iap_id=${appleIapId} kind=${kind}: ${errStr}`,
     );
     await writeAuditRow(audit, actionType, {
-      apple_iap_id: appleIapId,
+      ...basePayload,
       result: "ERROR",
-      target,
-      previous_target: diff.availability_changed.old_target,
       error: errStr,
     });
     return { changed: true, ok: false, target, error: errStr };

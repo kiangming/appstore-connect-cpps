@@ -12,6 +12,10 @@
  */
 
 import type { InAppPurchaseType } from "@/types/iap-management/apple";
+import type {
+  SelectionKind,
+  TerritorySelection,
+} from "@/lib/iap-management/apple/territory-selection";
 
 export const PRODUCT_ID_REGEX = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
 export const REFERENCE_NAME_MAX = 64;
@@ -29,10 +33,17 @@ export interface FormLocalization {
  *  params). */
 export type PricingSourceKind = "APPLE" | "DEFAULT_TEMPLATE" | "APP_TEMPLATE";
 
-/** Cycle 39 Phase 1 Unit B — Manager's choice for the IAP's territorial
- *  availability. "ALL" maps to the full territory list + new-territories
- *  flag; "NONE" maps to empty territories + flag off (Remove from Sales). */
-export type AvailabilityTarget = "ALL" | "NONE";
+/**
+ * The shape of a territorial-availability choice, for display only.
+ *
+ * ⚠ SC5: this is DERIVED from a `TerritorySelection` via `classifySelection`,
+ * never stored alongside one. Cycle 39 stored a 2-value target as the source
+ * of truth; per-territory availability made that impossible to keep honest
+ * (no subset, and the forward-looking flag is not derivable from the list —
+ * KB §4.13). `SelectionKind` from `territory-selection.ts` is the real
+ * vocabulary; this alias exists only where a label is needed.
+ */
+export type AvailabilityTarget = SelectionKind;
 
 export interface IapFormState {
   reference_name: string;
@@ -53,10 +64,24 @@ export interface IapFormState {
    *  Defaults to APPLE; UI gates DEFAULT_TEMPLATE / APP_TEMPLATE by
    *  template availability (Q-D most-specific selection). */
   pricing_source?: PricingSourceKind;
-  /** Cycle 39 Phase 1 Unit B — pre-filled from the Apple-side availability
-   *  fetch on the Edit page server component. Only meaningful for synced
-   *  IAPs (edit mode). Diff stage fires only when this differs from cached. */
-  availability_target?: AvailabilityTarget;
+  /**
+   * Where this IAP can be sold, pre-filled from the Apple-side availability
+   * fetch on the Edit page server component. Only meaningful for synced IAPs
+   * (edit mode). Stage 5 fires only when this differs from cached.
+   *
+   * ⚠ SC5 replaced the previous 2-value `availability_target` ("ALL" | "NONE")
+   * with the full selection. A two-valued enum cannot express a territory
+   * SUBSET, so keeping it would have forced Stage 5 to record an action type
+   * derived from the UI mode rather than from what was actually sent — exactly
+   * the status-principle violation SC2's new action type exists to prevent.
+   * One field, one concept: the selection is the truth, and "ALL" / "NONE" /
+   * "SUBSET" are *derived* from it via `classifySelection`.
+   *
+   * ⚠ The forward-looking flag is NOT derivable from the id list (KB §4.13),
+   * which is the other reason this is a `TerritorySelection` and not a
+   * `string[]`.
+   */
+  availability_selection?: TerritorySelection | null;
 }
 
 export type ChecklistKey =
@@ -229,10 +254,10 @@ export function emptyIapForm(): IapFormState {
     review_note: null,
     family_sharable: false,
     pricing_source: "APPLE",
-    // Cycle 39 Phase 1 — create flow already defaults Apple-side to ALL via
-    // create-on-apple's `AVAILABILITY_SET_ALL_TERRITORIES` audit step. The
-    // form's availability_target is informational only at create; it has no
-    // effect because Section 5 is only rendered for synced IAPs (edit mode).
-    availability_target: "ALL",
+    // Availability is absent at create, not "ALL": create-on-apple sets the
+    // Apple side itself and Section 5 only renders for synced IAPs. Carrying a
+    // decorative "ALL" here would be a value nothing reads pretending to be a
+    // decision the Manager made.
+    availability_selection: null,
   };
 }

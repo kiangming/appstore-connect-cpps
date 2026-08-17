@@ -24,11 +24,11 @@ import {
 } from "@/lib/iap-management/custom-prices/model";
 import {
   validateIapFormGrouped,
-  type AvailabilityTarget,
   type IapFormState,
   type FormLocalization,
   type PricingSourceKind,
 } from "@/lib/iap-management/validation";
+import type { TerritorySelection } from "@/lib/iap-management/apple/territory-selection";
 import {
   detectIapChanges,
   isEmptyDiff,
@@ -63,10 +63,15 @@ export interface IapFormProps {
   /** Entry counts surfaced in PricingSourceSelector helper copy. */
   defaultTemplateEntryCount?: number;
   appTemplateEntryCount?: number;
-  /** Cycle 39 Phase 1 — Apple-side availability target at page-render time.
-   *  Null = unknown (subset state or fetch failed); the section still
-   *  renders but no CURRENT badge appears. Edit mode + syncedToApple only. */
-  cachedAvailabilityTarget?: AvailabilityTarget | null;
+  /** SC5 — the item's Apple-side availability at page-render time. Null means
+   *  Apple has no availability resource (Removed from Sale). Edit + synced only. */
+  availabilitySelection?: TerritorySelection | null;
+  /** SC5 — false when that read FAILED, so null cannot be read as "removed". */
+  availabilityPreviousKnown?: boolean;
+  /** SC5 — Apple's catalogue, threaded from the server component (no new read). */
+  allTerritoryIds?: readonly string[];
+  /** SC5 — the item's own base_territory for the §G6 advisory. */
+  baseTerritory?: string | null;
   /** SC2 — the persisted custom set (SC1 repository). */
   customPrices?: readonly CustomPriceEntry[];
   /** SC2 — the fingerprint that set was built against; null = no customs. */
@@ -97,7 +102,10 @@ export function IapForm({
   appTemplateAvailable = false,
   defaultTemplateEntryCount,
   appTemplateEntryCount,
-  cachedAvailabilityTarget = null,
+  availabilitySelection = null,
+  availabilityPreviousKnown = false,
+  allTerritoryIds = [],
+  baseTerritory = null,
   customPrices = [],
   customPricesBaseline = null,
   pricePointDonorAvailable = false,
@@ -205,11 +213,13 @@ export function IapForm({
       ),
       screenshot_apple_id: null,
       screenshot_file_name: initial.screenshot_filename,
-      // Cycle 39 Phase 1 — the diff needs the Apple-side target to suppress
-      // a no-op stage call when the radio matches what's already on Apple.
-      availability_target: cachedAvailabilityTarget,
+      // SC5 — the diff needs Apple-side ground truth so a selection that
+      // matches what's already there doesn't fire Stage 5. `previous_known`
+      // keeps a FAILED read distinct from a genuine Removed-from-Sale.
+      availability_selection: availabilitySelection,
+      availability_previous_known: availabilityPreviousKnown,
     }),
-    [initial, cachedAvailabilityTarget],
+    [initial, availabilitySelection, availabilityPreviousKnown],
   );
 
   const editableStateBlockedLikely = isStateEditLikelyBlocked(appleState);
@@ -313,10 +323,10 @@ export function IapForm({
         review_note: form.review_note ?? null,
         family_sharable: form.family_sharable ?? false,
         pricing_source: form.pricing_source ?? "APPLE",
-        // Cycle 39 Phase 1 — Section 5 radio choice. Only Stage 5 reads it;
-        // local Save Draft / Create on Apple ignore it (availability lives
-        // on Apple, not in our DB cache).
-        availability_target: form.availability_target ?? "ALL",
+        // SC5 — Section 5's territory selection. Only Stage 5 reads it; local
+        // Save Draft / Create on Apple ignore it (availability lives on Apple,
+        // not in our DB cache). Sent as-is: ids are Apple's, verbatim.
+        availability_selection: form.availability_selection ?? null,
       },
     };
   }
@@ -841,13 +851,16 @@ export function IapForm({
           />
         </section>
 
-        {/* Cycle 39 Phase 1 Unit B — Availabilities Section 5 (synced IAPs only).
-            Manager Q3.A locked 2-radio Publish / Remove from Sales. */}
+        {/* SC5 — per-territory availability (synced IAPs only). Surface C
+            defaults to the item's CURRENT territories, not ALL. */}
         {mode === "edit" && syncedToApple && (
           <AvailabilitiesSection
-            value={form.availability_target ?? "ALL"}
-            cached={cachedAvailabilityTarget ?? "ALL"}
-            onChange={(next) => patchForm({ availability_target: next })}
+            value={form.availability_selection ?? null}
+            cached={availabilitySelection}
+            previousKnown={availabilityPreviousKnown}
+            allTerritoryIds={allTerritoryIds}
+            baseTerritory={baseTerritory}
+            onChange={(next) => patchForm({ availability_selection: next })}
           />
         )}
       </div>

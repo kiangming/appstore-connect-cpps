@@ -16,11 +16,11 @@
  * string ("" / null) are also collapsed — neither represents a value Apple
  * would store as different.
  */
-import type {
-  AvailabilityTarget,
-  FormLocalization,
-  IapFormState,
-} from "../validation";
+import type { FormLocalization, IapFormState } from "../validation";
+import {
+  selectionsEqual,
+  type TerritorySelection,
+} from "./territory-selection";
 
 /** Locally-cached IAP state as last persisted from Apple (or local draft). */
 export interface CachedIapState {
@@ -42,10 +42,26 @@ export interface CachedIapState {
   screenshot_apple_id: string | null;
   /** Local cached file_name from iap_mgmt.iap_screenshots.file_name. */
   screenshot_file_name: string | null;
-  /** Cycle 39 Phase 1 — Apple-side availability target as last fetched.
-   *  Null when the availability resource hasn't been fetched (legacy /
-   *  pre-Cycle-37 IAPs whose Apple-side state is unknown). */
-  availability_target: AvailabilityTarget | null;
+  /**
+   * Apple-side availability as last read. `null` means "no availability
+   * resource" — Apple's Removed-from-Sale state.
+   *
+   * ⚠ `null` does NOT mean "we failed to read it". A failed read is
+   * `availability_previous_known: false`, and the two must not be conflated:
+   * treating a failed read as null would silently assert "it was removed"
+   * about an item nobody managed to read. Same distinction
+   * `diffSelection` refuses to model and `filterEligible` keeps in its own
+   * bucket.
+   */
+  availability_selection: TerritorySelection | null;
+  /**
+   * False when the Apple-side read failed or was never attempted, so
+   * `availability_selection === null` cannot be read as "removed from sale".
+   * The audit payload carries this verbatim as `previous_known` — SC2's
+   * reconstructability rule requires it to be honest rather than defaulting
+   * to a count.
+   */
+  availability_previous_known: boolean;
 }
 
 export interface IapDiff {
@@ -70,14 +86,20 @@ export interface IapDiff {
     old_tier_id: string | null;
     new_tier_id: string;
   } | null;
-  /** Cycle 39 Phase 1 — availability target change. Null when the form's
-   *  selection matches the cached Apple-side state (no Stage 5 work to do).
-   *  Pre-Cycle-37 IAPs whose `cached.availability_target` is null surface a
-   *  diff only when the form explicitly picks a target — Manager has to
-   *  affirm the choice before we POST. */
+  /**
+   * Availability change. Null when the form's selection would produce a
+   * byte-equal Apple request to what is already there (no Stage 5 work).
+   *
+   * ⚠ An availability-ONLY edit must reach the orchestrator. This bucket is
+   * one of the two gates that decides that (`isEmptyDiff` here, `shouldRun`
+   * in Stage 5) — the LAYER-GAP shape that has bitten this project four
+   * times. Both are tested, and each is mutated independently.
+   */
   availability_changed: {
-    old_target: AvailabilityTarget | null;
-    new_target: AvailabilityTarget;
+    old_selection: TerritorySelection | null;
+    new_selection: TerritorySelection;
+    /** Mirrors `CachedIapState.availability_previous_known`. */
+    previous_known: boolean;
   } | null;
   /**
    * ⚠ SC3 GATE 1. Per-territory custom prices that need re-sending to Apple.
@@ -231,17 +253,41 @@ export function detectIapChanges(args: DetectIapChangesArgs): IapDiff {
   }
 
   // ── Availability ──────────────────────────────────────────────────────
-  // Cycle 39 Phase 1 — only fire Stage 5 when the form carries an explicit
-  // target AND it differs from the cached Apple-side state. A form target
-  // of `undefined` means the IapForm didn't render Section 5 (create flow
-  // or a UI variant) — leave availability untouched.
+  // Fire Stage 5 only when the form carries an explicit selection AND it
+  // would produce a different Apple request than what is already there. A
+  // form selection of `undefined`/`null` means Section 5 didn't render
+  // (create flow) — leave availability untouched.
+  //
+  // ⚠ Comparison is `selectionsEqual`, NOT a length or id-set check: "all
+  // territories" and "all territories ticked by hand" carry identical ids and
+  // different flags, so an id-only comparison would call a real change a
+  // no-op and silently skip the write (KB §4.13).
+  //
+  // ⚠ When the previous state is UNKNOWN (read failed) any explicit selection
+  // is treated as a change. The alternative — comparing against null and
+  // calling it equal — would skip the write on exactly the items whose state
+  // we could not see.
   let availability_changed: IapDiff["availability_changed"] = null;
-  const formTarget = form.availability_target;
-  if (formTarget && formTarget !== cached.availability_target) {
-    availability_changed = {
-      old_target: cached.availability_target,
-      new_target: formTarget,
-    };
+  const formSelection = form.availability_selection;
+  if (formSelection) {
+    const previousKnown = cached.availability_previous_known;
+    const current = cached.availability_selection;
+    const unchanged =
+      previousKnown && current !== null && selectionsEqual(formSelection, current);
+    // A known-absent availability (Removed from Sale) vs an empty selection is
+    // also a no-op — both send zero territories with the flag off.
+    const bothEmpty =
+      previousKnown &&
+      current === null &&
+      formSelection.territoryIds.length === 0 &&
+      !formSelection.availableInNewTerritories;
+    if (!unchanged && !bothEmpty) {
+      availability_changed = {
+        old_selection: current,
+        new_selection: formSelection,
+        previous_known: previousKnown,
+      };
+    }
   }
 
   return {
@@ -324,6 +370,7 @@ export function isEmptyDiff(diff: IapDiff): boolean {
     diff.screenshot_changed === false &&
     diff.tier_changed === null &&
     diff.availability_changed === null &&
+
     // ⚠ SC3 GATE 1 — without this clause a customs-only edit reports
     // NO_CHANGES and the confirm modal never opens. Removing it does not break
     // any other test; it silently deletes the feature on the Edit path.

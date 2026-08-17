@@ -19,6 +19,7 @@ import {
   type IapDiff,
 } from "@/lib/iap-management/apple/diff-detector";
 import type { IapFormState } from "@/lib/iap-management/validation";
+import type { TerritorySelection } from "@/lib/iap-management/apple/territory-selection";
 import type { PriceTierRow } from "@/lib/iap-management/queries/price-tiers";
 
 export interface UpdateChangesPreviewModalProps {
@@ -235,32 +236,46 @@ export function UpdateChangesPreviewModal(props: UpdateChangesPreviewModalProps)
             </section>
           )}
 
-          {/* Cycle 39 Phase 1 — Availability change. Red-tinted when the
-              target is NONE (Remove from Sales) so the destructive choice
-              stays visible in the confirmation. */}
+          {/* SC5 — availability change, stated as a REPLACE. Red-tinted when
+              the outgoing selection removes territories, since that is the
+              destructive direction and it must stay visible in the confirm. */}
           {diff.availability_changed && (
-            <section>
+            <section data-testid="preview-availability">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
                 Availability
               </h3>
               <p
                 className={
-                  diff.availability_changed.new_target === "NONE"
+                  availabilityRemoves(diff.availability_changed)
                     ? "text-xs font-medium text-red-700 dark:text-red-300"
                     : "text-xs text-slate-700 dark:text-slate-200"
                 }
               >
-                {availabilityLabel(diff.availability_changed.old_target)} →{" "}
+                {availabilityLabel(diff.availability_changed.old_selection)} →{" "}
                 <span className="font-semibold">
-                  {availabilityLabel(diff.availability_changed.new_target)}
+                  {availabilityLabel(diff.availability_changed.new_selection)}
                 </span>
               </p>
-              {diff.availability_changed.new_target === "NONE" && (
+              {!diff.availability_changed.previous_known && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+                  This item&apos;s current availability could not be read from
+                  Apple, so the &ldquo;from&rdquo; side is unknown — the
+                  selection will still be written in full.
+                </p>
+              )}
+              {diff.availability_changed.new_selection.territoryIds.length === 0 && (
                 <p className="text-[11px] text-red-600 dark:text-red-400 mt-1">
                   Customers will be unable to purchase this in-app purchase
                   in any country or region once Apple acknowledges the change.
                 </p>
               )}
+              {availabilityRemoves(diff.availability_changed) &&
+                diff.availability_changed.new_selection.territoryIds.length > 0 && (
+                  <p className="text-[11px] text-red-600 dark:text-red-400 mt-1">
+                    Apple replaces the whole territory list on every push, so
+                    territories not in the new selection are removed.
+                  </p>
+                )}
             </section>
           )}
 
@@ -326,8 +341,25 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1) + "…";
 }
 
-function availabilityLabel(t: "ALL" | "NONE" | null): string {
-  if (t === "ALL") return "Publish — Available in all countries or regions";
-  if (t === "NONE") return "Remove from Sales";
-  return "Unknown (Apple-side state pre-Cycle-37)";
+/**
+ * ⚠ "all N territories" and "all N ticked by hand" must NOT read alike — they
+ * send different bodies (KB §4.13). The flag is stated in words for exactly
+ * that reason.
+ */
+function availabilityLabel(sel: TerritorySelection | null): string {
+  if (!sel) return "Unknown / no availability on Apple";
+  const n = sel.territoryIds.length;
+  if (n === 0) return "Remove from Sales";
+  return sel.availableInNewTerritories
+    ? `${n} countries or regions, plus future Apple markets`
+    : `${n} countries or regions (future markets not included)`;
+}
+
+/** True when the push drops at least one territory the item currently has. */
+function availabilityRemoves(change: {
+  old_selection: TerritorySelection | null;
+  new_selection: TerritorySelection;
+}): boolean {
+  const next = new Set(change.new_selection.territoryIds);
+  return (change.old_selection?.territoryIds ?? []).some((id) => !next.has(id));
 }

@@ -18,8 +18,9 @@ const deleteInAppPurchaseLocalization = vi.hoisted(() => vi.fn());
 const listInAppPurchaseLocalizations = vi.hoisted(() => vi.fn());
 const replaceScreenshotOnApple = vi.hoisted(() => vi.fn());
 const applyPricingSchedule = vi.hoisted(() => vi.fn());
-const setAvailabilityToAllTerritories = vi.hoisted(() => vi.fn());
-const setAvailabilityRemoveFromSales = vi.hoisted(() => vi.fn());
+// SC5 — the orchestrator now goes through the ONE shared write path; the two
+// legacy helpers are no longer called from Stage 5.
+const setAvailabilityTerritories = vi.hoisted(() => vi.fn());
 const auditInsert = vi.hoisted(() => vi.fn());
 
 vi.mock("./poll-iap-ready", () => ({ pollIapReadyForPricing }));
@@ -33,8 +34,7 @@ vi.mock("./client", () => ({
 vi.mock("./screenshot-upload", () => ({ replaceScreenshotOnApple }));
 vi.mock("./pricing-orchestration", () => ({ applyPricingSchedule }));
 vi.mock("./availabilities", () => ({
-  setAvailabilityToAllTerritories,
-  setAvailabilityRemoveFromSales,
+  setAvailabilityTerritories,
 }));
 vi.mock("./fetch", () => ({
   AppleApiError: class extends Error {
@@ -61,6 +61,12 @@ vi.mock("@/lib/iap-management/db", () => ({
 import { updateIapOnApple } from "./update-orchestration";
 import type { IapDiff } from "./diff-detector";
 import type { AscCredentials } from "@/lib/asc-jwt";
+import {
+  allTerritoriesSelection,
+  noTerritoriesSelection,
+  subsetSelection,
+  type TerritorySelection,
+} from "./territory-selection";
 
 const creds: AscCredentials = {
   id: "test",
@@ -92,8 +98,7 @@ beforeEach(() => {
   listInAppPurchaseLocalizations.mockReset();
   replaceScreenshotOnApple.mockReset();
   applyPricingSchedule.mockReset();
-  setAvailabilityToAllTerritories.mockReset();
-  setAvailabilityRemoveFromSales.mockReset();
+  setAvailabilityTerritories.mockReset();
   auditInsert.mockReset();
   // Default precheck = ready
   pollIapReadyForPricing.mockResolvedValue({
@@ -533,22 +538,43 @@ describe("updateIapOnApple — aggregation", () => {
   });
 });
 
-describe("updateIapOnApple — availability stage (Cycle 39 Phase 1)", () => {
-  it("calls setAvailabilityRemoveFromSales when diff target is NONE and writes the AVAILABILITY_REMOVE_FROM_SALES audit row", async () => {
-    setAvailabilityRemoveFromSales.mockResolvedValueOnce({
+describe("updateIapOnApple — availability stage", () => {
+  const CATALOGUE = ["USA", "VNM", "BRA"];
+  const change = (
+    next: TerritorySelection,
+    prev: TerritorySelection | null = allTerritoriesSelection(CATALOGUE),
+    previous_known = true,
+  ) => ({
+    ...emptyDiff(),
+    availability_changed: {
+      old_selection: prev,
+      new_selection: next,
+      previous_known,
+    },
+  });
+
+  /** The payload the audit row carried. */
+  const auditRow = (action: string) =>
+    auditInsert.mock.calls.find(
+      (c) => (c[0] as { action_type: string }).action_type === action,
+    )?.[0] as { action_type: string; payload: Record<string, unknown> } | undefined;
+
+  it("an EMPTY selection writes AVAILABILITY_REMOVE_FROM_SALES through the shared path", async () => {
+    setAvailabilityTerritories.mockResolvedValueOnce({
       data: { id: "avail-removed-1", type: "inAppPurchaseAvailabilities" },
     });
     const out = await updateIapOnApple({
       creds,
       appleIapId: "iap-1",
-      diff: {
-        ...emptyDiff(),
-        availability_changed: { old_target: "ALL", new_target: "NONE" },
-      },
+      diff: change(noTerritoriesSelection()),
+      allTerritoryIds: CATALOGUE,
       audit: baseAudit,
     });
-    expect(setAvailabilityRemoveFromSales).toHaveBeenCalledWith(creds, "iap-1");
-    expect(setAvailabilityToAllTerritories).not.toHaveBeenCalled();
+    expect(setAvailabilityTerritories).toHaveBeenCalledWith(
+      creds,
+      "iap-1",
+      noTerritoriesSelection(),
+    );
     expect(out.stages.availability).toMatchObject({
       changed: true,
       ok: true,
@@ -556,61 +582,127 @@ describe("updateIapOnApple — availability stage (Cycle 39 Phase 1)", () => {
       apple_availability_id: "avail-removed-1",
     });
     expect(out.overall).toBe("SUCCESS");
-    const row = auditInsert.mock.calls.find(
-      (c) =>
-        (c[0] as { action_type: string }).action_type ===
-        "AVAILABILITY_REMOVE_FROM_SALES",
-    );
-    expect(row).toBeDefined();
+    expect(auditRow("AVAILABILITY_REMOVE_FROM_SALES")).toBeDefined();
   });
 
-  it("calls setAvailabilityToAllTerritories when diff target is ALL and writes the AVAILABILITY_SET_ALL_TERRITORIES audit row", async () => {
-    setAvailabilityToAllTerritories.mockResolvedValueOnce({
+  it("ALL + the forward flag keeps AVAILABILITY_SET_ALL_TERRITORIES", async () => {
+    setAvailabilityTerritories.mockResolvedValueOnce({
       data: { id: "avail-all-1", type: "inAppPurchaseAvailabilities" },
     });
     const out = await updateIapOnApple({
       creds,
       appleIapId: "iap-1",
-      diff: {
-        ...emptyDiff(),
-        availability_changed: { old_target: "NONE", new_target: "ALL" },
-      },
+      diff: change(allTerritoriesSelection(CATALOGUE), noTerritoriesSelection()),
+      allTerritoryIds: CATALOGUE,
       audit: baseAudit,
     });
-    expect(setAvailabilityToAllTerritories).toHaveBeenCalledWith(creds, "iap-1");
-    expect(setAvailabilityRemoveFromSales).not.toHaveBeenCalled();
     expect(out.stages.availability).toMatchObject({
       changed: true,
       ok: true,
       target: "ALL",
     });
-    const row = auditInsert.mock.calls.find(
-      (c) =>
-        (c[0] as { action_type: string }).action_type ===
-        "AVAILABILITY_SET_ALL_TERRITORIES",
-    );
-    expect(row).toBeDefined();
+    expect(auditRow("AVAILABILITY_SET_ALL_TERRITORIES")).toBeDefined();
   });
 
-  it("surfaces a stage failure without breaking sibling stages or the overall aggregate path", async () => {
+  // ── SC5: the action type follows WHAT WAS SENT ────────────────────────────
+
+  it("⚠ a SUBSET writes AVAILABILITY_SET_TERRITORIES, not SET_ALL", async () => {
+    setAvailabilityTerritories.mockResolvedValueOnce({ data: { id: "avail-2" } });
+    const sel = subsetSelection(["USA", "VNM"]);
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: change(sel),
+      allTerritoryIds: CATALOGUE,
+      audit: baseAudit,
+    });
+    expect(out.stages.availability.target).toBe("SUBSET");
+    expect(auditRow("AVAILABILITY_SET_ALL_TERRITORIES")).toBeUndefined();
+    const row = auditRow("AVAILABILITY_SET_TERRITORIES");
+    expect(row).toBeDefined();
+    // SC2 reconstructability: the FULL sent list, verbatim, plus honest counts.
+    expect(row!.payload).toMatchObject({
+      territories: ["USA", "VNM"],
+      territory_count: 2,
+      available_in_new_territories: false,
+      previous_territory_count: 3,
+      previous_known: true,
+      source: "edit",
+    });
+  });
+
+  it("⚠ all-ticked-by-hand is SET_TERRITORIES, not SET_ALL — the flag decides", async () => {
+    // Same ids as the catalogue but the forward flag off: a different request,
+    // so a different action type. Recording SET_ALL here would make the row
+    // assert something false about what Apple was told (KB §4.13).
+    setAvailabilityTerritories.mockResolvedValueOnce({ data: { id: "avail-3" } });
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: change(subsetSelection(CATALOGUE), noTerritoriesSelection()),
+      allTerritoryIds: CATALOGUE,
+      audit: baseAudit,
+    });
+    expect(out.stages.availability.target).toBe("ALL_FROZEN");
+    expect(auditRow("AVAILABILITY_SET_ALL_TERRITORIES")).toBeUndefined();
+    expect(auditRow("AVAILABILITY_SET_TERRITORIES")!.payload).toMatchObject({
+      available_in_new_territories: false,
+      territory_count: 3,
+    });
+  });
+
+  it("records previous_known: false honestly rather than inventing a count", async () => {
+    setAvailabilityTerritories.mockResolvedValueOnce({ data: { id: "avail-4" } });
+    await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: change(subsetSelection(["USA"]), null, false),
+      allTerritoryIds: CATALOGUE,
+      audit: baseAudit,
+    });
+    expect(auditRow("AVAILABILITY_SET_TERRITORIES")!.payload).toMatchObject({
+      previous_known: false,
+      previous_territory_count: null,
+    });
+  });
+
+  it("sends Apple's ids verbatim — no sort, no rewrite", async () => {
+    setAvailabilityTerritories.mockResolvedValueOnce({ data: { id: "avail-5" } });
+    await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: change(subsetSelection(["VNM", "USA"])),
+      allTerritoryIds: CATALOGUE,
+      audit: baseAudit,
+    });
+    const [, , sent] = setAvailabilityTerritories.mock.calls[0];
+    expect((sent as TerritorySelection).territoryIds).toEqual(["VNM", "USA"]);
+  });
+
+  it("surfaces a stage failure without breaking sibling stages", async () => {
     updateInAppPurchase.mockResolvedValueOnce({ data: { id: "iap-1" } });
-    setAvailabilityRemoveFromSales.mockRejectedValueOnce(
+    setAvailabilityTerritories.mockRejectedValueOnce(
       new Error("Apple 409 PRICING_LOCK"),
     );
     const out = await updateIapOnApple({
       creds,
       appleIapId: "iap-1",
       diff: {
-        ...emptyDiff(),
+        ...change(noTerritoriesSelection()),
         attributes_changed: { name: "New" },
-        availability_changed: { old_target: "ALL", new_target: "NONE" },
       },
+      allTerritoryIds: CATALOGUE,
       audit: baseAudit,
     });
     expect(out.stages.attributes.ok).toBe(true);
     expect(out.stages.availability.ok).toBe(false);
     expect(out.stages.availability.error).toContain("Apple 409 PRICING_LOCK");
     expect(out.overall).toBe("PARTIAL");
+    // The failure is still reconstructable.
+    expect(auditRow("AVAILABILITY_REMOVE_FROM_SALES")!.payload).toMatchObject({
+      result: "ERROR",
+      territory_count: 0,
+    });
   });
 
   it("stays a no-op (no Apple call) when diff.availability_changed is null", async () => {
@@ -620,8 +712,7 @@ describe("updateIapOnApple — availability stage (Cycle 39 Phase 1)", () => {
       diff: emptyDiff(),
       audit: baseAudit,
     });
-    expect(setAvailabilityToAllTerritories).not.toHaveBeenCalled();
-    expect(setAvailabilityRemoveFromSales).not.toHaveBeenCalled();
+    expect(setAvailabilityTerritories).not.toHaveBeenCalled();
     expect(out.stages.availability.changed).toBe(false);
   });
 });

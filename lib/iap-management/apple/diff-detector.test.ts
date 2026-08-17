@@ -11,6 +11,16 @@ import {
   type CachedIapState,
 } from "./diff-detector";
 import type { IapFormState } from "../validation";
+import {
+  allTerritoriesSelection,
+  noTerritoriesSelection,
+  subsetSelection,
+} from "./territory-selection";
+
+/** Fixture catalogue + the two named selections the old 2-value fixtures used. */
+const CATALOGUE = ["USA", "VNM", "BRA"];
+const ALL_SEL = allTerritoriesSelection(CATALOGUE);
+const NONE_SEL = noTerritoriesSelection();
 
 function baseForm(overrides: Partial<IapFormState> = {}): IapFormState {
   return {
@@ -25,7 +35,7 @@ function baseForm(overrides: Partial<IapFormState> = {}): IapFormState {
     screenshot_filename: "shot.png",
     review_note: "Reviewer note",
     family_sharable: false,
-    availability_target: "ALL",
+    availability_selection: ALL_SEL,
     ...overrides,
   };
 }
@@ -42,7 +52,8 @@ function baseCached(overrides: Partial<CachedIapState> = {}): CachedIapState {
     },
     screenshot_apple_id: "scr-1",
     screenshot_file_name: "shot.png",
-    availability_target: "ALL",
+    availability_selection: ALL_SEL,
+    availability_previous_known: true,
     ...overrides,
   };
 }
@@ -285,59 +296,138 @@ describe("isEmptyDiff", () => {
   });
 });
 
-describe("detectIapChanges — availability (Cycle 39 Phase 1)", () => {
-  it("detects ALL → NONE as a Remove-from-Sales availability change", () => {
+describe("detectIapChanges — availability", () => {
+  it("detects all-territories → removed as an availability change", () => {
     const diff = detectIapChanges({
-      form: baseForm({ availability_target: "NONE" }),
-      cached: baseCached({ availability_target: "ALL" }),
+      form: baseForm({ availability_selection: NONE_SEL }),
+      cached: baseCached({ availability_selection: ALL_SEL }),
       hasNewScreenshotFile: false,
     });
     expect(diff.availability_changed).toEqual({
-      old_target: "ALL",
-      new_target: "NONE",
+      old_selection: ALL_SEL,
+      new_selection: NONE_SEL,
+      previous_known: true,
     });
     expect(isEmptyDiff(diff)).toBe(false);
   });
 
-  it("detects NONE → ALL as an availability change in the opposite direction", () => {
+  it("detects removed → all-territories in the opposite direction", () => {
     const diff = detectIapChanges({
-      form: baseForm({ availability_target: "ALL" }),
-      cached: baseCached({ availability_target: "NONE" }),
+      form: baseForm({ availability_selection: ALL_SEL }),
+      cached: baseCached({ availability_selection: NONE_SEL }),
       hasNewScreenshotFile: false,
     });
     expect(diff.availability_changed).toEqual({
-      old_target: "NONE",
-      new_target: "ALL",
+      old_selection: NONE_SEL,
+      new_selection: ALL_SEL,
+      previous_known: true,
     });
   });
 
-  it("returns null availability_changed when form target matches cached", () => {
+  it("returns null when the form selection matches cached", () => {
     const diff = detectIapChanges({
-      form: baseForm({ availability_target: "ALL" }),
-      cached: baseCached({ availability_target: "ALL" }),
+      form: baseForm({ availability_selection: ALL_SEL }),
+      cached: baseCached({ availability_selection: ALL_SEL }),
       hasNewScreenshotFile: false,
     });
     expect(diff.availability_changed).toBeNull();
   });
 
-  it("surfaces a diff when cached target is unknown (null) and the form picks one", () => {
+  it("surfaces a diff when the previous state is UNKNOWN and the form picks one", () => {
+    // previous_known false ⇒ we could not read Apple. Any explicit selection
+    // must be treated as a change: skipping the write here would skip exactly
+    // the items whose state we cannot see.
     const diff = detectIapChanges({
-      form: baseForm({ availability_target: "NONE" }),
-      cached: baseCached({ availability_target: null }),
+      form: baseForm({ availability_selection: NONE_SEL }),
+      cached: baseCached({
+        availability_selection: null,
+        availability_previous_known: false,
+      }),
       hasNewScreenshotFile: false,
     });
     expect(diff.availability_changed).toEqual({
-      old_target: null,
-      new_target: "NONE",
+      old_selection: null,
+      new_selection: NONE_SEL,
+      previous_known: false,
     });
   });
 
-  it("returns null availability_changed when form target is undefined (Section 5 not rendered)", () => {
+  it("returns null when the form selection is absent (Section 5 not rendered)", () => {
     const diff = detectIapChanges({
-      form: baseForm({ availability_target: undefined }),
-      cached: baseCached({ availability_target: "ALL" }),
+      form: baseForm({ availability_selection: null }),
+      cached: baseCached({ availability_selection: ALL_SEL }),
       hasNewScreenshotFile: false,
     });
     expect(diff.availability_changed).toBeNull();
+  });
+
+  // ── SC5 additions ──────────────────────────────────────────────────────
+
+  it("⚠ a SUBSET edit is a change — the model can express it now", () => {
+    const diff = detectIapChanges({
+      form: baseForm({ availability_selection: subsetSelection(["USA", "VNM"]) }),
+      cached: baseCached({ availability_selection: ALL_SEL }),
+      hasNewScreenshotFile: false,
+    });
+    expect(diff.availability_changed?.new_selection.territoryIds).toEqual([
+      "USA",
+      "VNM",
+    ]);
+    expect(isEmptyDiff(diff)).toBe(false);
+  });
+
+  it("⚠ same ids, different forward-flag IS a change (KB §4.13)", () => {
+    // The whole reason the flag is a field and not a derivation. An id-only
+    // comparison would call this a no-op and silently skip the write.
+    const ids = ["USA", "VNM", "BRA"];
+    const diff = detectIapChanges({
+      form: baseForm({ availability_selection: subsetSelection(ids) }),
+      cached: baseCached({
+        availability_selection: allTerritoriesSelection(ids),
+      }),
+      hasNewScreenshotFile: false,
+    });
+    expect(diff.availability_changed).not.toBeNull();
+    expect(diff.availability_changed?.new_selection.availableInNewTerritories).toBe(
+      false,
+    );
+    expect(isEmptyDiff(diff)).toBe(false);
+  });
+
+  it("territory id ORDER alone is not a change — Apple does not care", () => {
+    const diff = detectIapChanges({
+      form: baseForm({ availability_selection: subsetSelection(["VNM", "USA"]) }),
+      cached: baseCached({ availability_selection: subsetSelection(["USA", "VNM"]) }),
+      hasNewScreenshotFile: false,
+    });
+    expect(diff.availability_changed).toBeNull();
+  });
+
+  it("known-absent availability vs an empty selection is a no-op", () => {
+    const diff = detectIapChanges({
+      form: baseForm({ availability_selection: NONE_SEL }),
+      cached: baseCached({
+        availability_selection: null,
+        availability_previous_known: true,
+      }),
+      hasNewScreenshotFile: false,
+    });
+    expect(diff.availability_changed).toBeNull();
+  });
+
+  it("⚠ LAYER-GAP: an availability-ONLY edit is not an empty diff", () => {
+    // isEmptyDiff is gate 1. If this regresses, the route answers NO_CHANGES
+    // and the confirm modal never opens — the feature is silently dead on the
+    // Edit path with no message anywhere.
+    const diff = detectIapChanges({
+      form: baseForm({ availability_selection: subsetSelection(["USA"]) }),
+      cached: baseCached({ availability_selection: ALL_SEL }),
+      hasNewScreenshotFile: false,
+    });
+    expect(diff.attributes_changed).toBeNull();
+    expect(diff.localizations_changed).toBeNull();
+    expect(diff.tier_changed).toBeNull();
+    expect(diff.screenshot_changed).toBe(false);
+    expect(isEmptyDiff(diff)).toBe(false);
   });
 });

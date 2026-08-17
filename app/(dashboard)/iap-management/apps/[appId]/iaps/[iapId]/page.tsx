@@ -15,10 +15,11 @@ import {
   getAllTerritoryIds,
 } from "@/lib/iap-management/apple/availabilities";
 import type {
-  AvailabilityTarget,
   IapFormState,
   FormLocalization,
 } from "@/lib/iap-management/validation";
+import type { TerritorySelection } from "@/lib/iap-management/apple/territory-selection";
+import { editSurfaceDefaultSelection } from "@/lib/iap-management/apple/availability-surface-defaults";
 import type { InAppPurchaseType } from "@/types/iap-management/apple";
 
 export const dynamic = "force-dynamic";
@@ -46,36 +47,48 @@ export default async function EditIapPage({ params }: PageProps) {
 
   const tiers = await listTiers();
 
-  // Cycle 39 Phase 1 — fetch the Apple-side availability for the Edit form's
-  // Section 5 prefill. Only meaningful when the IAP is synced; for local
-  // drafts we leave the target undefined (Section 5 won't render).
-  let availabilityTarget: AvailabilityTarget | null = null;
+  /**
+   * SC5 — the Apple-side availability for Section 5, as a real selection.
+   *
+   * The subset state is no longer collapsed into a radio. Pre-SC5 this block
+   * mapped Apple's answer onto "ALL" | "NONE" and, when the item genuinely
+   * held a subset, gave up and returned null — the Manager saw two radios that
+   * could not express what was actually on Apple. Now the exact territory list
+   * comes through verbatim and the picker renders it.
+   *
+   * ⚠ Both reads here are ALREADY PAID: `getAvailabilityForIap` supplies the
+   * current territory ids and `getAllTerritoryIds` the catalogue, and both were
+   * already being fetched at this point to derive the old radio. SC5 adds ZERO
+   * Apple requests to opening this page — it stops throwing away what the page
+   * had already read.
+   *
+   * ⚠ `null` selection means Apple has no availability resource (Removed from
+   * Sale). A FAILED read is `previousKnown: false` with a null selection, and
+   * the two must not be conflated: writing "removed" into the audit for an item
+   * nobody could read would be a fact we invented.
+   */
+  let availabilitySelection: TerritorySelection | null = null;
+  let availabilityPreviousKnown = false;
+  let allTerritoryIds: string[] = [];
   if (creds && data.iap.apple_iap_id) {
     try {
       const [avail, totalIds] = await Promise.all([
         getAvailabilityForIap(creds, data.iap.apple_iap_id),
         getAllTerritoryIds(creds).catch(() => [] as string[]),
       ]);
-      if (!avail) {
-        availabilityTarget = "NONE";
-      } else if (
-        totalIds.length > 0 &&
-        avail.territoryCount >= totalIds.length &&
-        avail.availableInNewTerritories
-      ) {
-        availabilityTarget = "ALL";
-      } else if (avail.territoryCount === 0 && !avail.availableInNewTerritories) {
-        availabilityTarget = "NONE";
-      } else {
-        // Subset state — pre-Cycle-37 / Apple-Connect-managed IAPs may sit
-        // here. We don't surface a third radio; default the form to ALL so
-        // Manager flipping to NONE produces an unambiguous Remove from Sales
-        // diff. The CURRENT badge stays off because cached !== ALL.
-        availabilityTarget = null;
-      }
+      allTerritoryIds = totalIds;
+      availabilityPreviousKnown = true;
+      // Ids pass through untouched — no sort, no case change (SC1 rule).
+      availabilitySelection = avail
+        ? {
+            territoryIds: avail.territoryIds,
+            availableInNewTerritories: avail.availableInNewTerritories,
+          }
+        : null;
     } catch {
-      // best-effort — section will render with no CURRENT badge.
-      availabilityTarget = null;
+      // Read failed. Leave previousKnown false so nothing downstream can read
+      // the null selection as "this item is removed from sale".
+      availabilityPreviousKnown = false;
     }
   }
 
@@ -102,11 +115,15 @@ export default async function EditIapPage({ params }: PageProps) {
     // IAP.p1.j Issue 1: hydrate persisted pricing-source so the form
     // doesn't re-derive Q-D default and override the Manager's choice.
     pricing_source: data.iap.pricing_source ?? undefined,
-    // Cycle 39 Phase 1 — pre-fill the Availabilities radio with the
-    // Apple-side state. When unknown (pre-Cycle-37 subset / fetch failed)
-    // we still default the form to "ALL" so the diff is unambiguous if
-    // Manager flips to Remove from Sales.
-    availability_target: availabilityTarget ?? "ALL",
+    // SC5 default = the item's CURRENT territories (Manager decision 2 —
+    // surfaces A and B default to ALL, surface C to what the item already has).
+    // The policy lives in a tested pure function rather than inline here: it is
+    // the single most consequential behaviour in the feature, and inline in a
+    // server component nothing could assert it.
+    availability_selection: editSurfaceDefaultSelection(
+      availabilitySelection,
+      availabilityPreviousKnown,
+    ),
   };
 
   // IAP.p1.f: per-edit pricing-source selection. Defaults to most-specific
@@ -198,7 +215,10 @@ export default async function EditIapPage({ params }: PageProps) {
         appTemplateAvailable={appTemplateAvailable}
         defaultTemplateEntryCount={defaultTemplateEntryCount}
         appTemplateEntryCount={appTemplateEntryCount}
-        cachedAvailabilityTarget={availabilityTarget}
+        availabilitySelection={availabilitySelection}
+        availabilityPreviousKnown={availabilityPreviousKnown}
+        allTerritoryIds={allTerritoryIds}
+        baseTerritory={data.iap.base_territory}
         customPrices={customPrices.entries}
         customPricesBaseline={customPrices.baseline}
         pricePointDonorAvailable={pricePointDonorAvailable}

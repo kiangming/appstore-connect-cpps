@@ -23,6 +23,10 @@ import {
 } from "@/lib/iap-management/custom-prices/model";
 import type { IapFormState } from "@/lib/iap-management/validation";
 
+import { allTerritoriesSelection } from "./territory-selection";
+
+const AVAIL = allTerritoriesSelection(["USA", "VNM"]);
+
 const form: IapFormState = {
   reference_name: "Diamonds",
   product_id: "com.vng.diamonds",
@@ -35,7 +39,9 @@ const form: IapFormState = {
   review_note: null,
   family_sharable: false,
   pricing_source: "APPLE",
-  availability_target: "ALL",
+  // SC5 — same selection on both sides, so availability stays OUT of the diff
+  // and these gate tests keep measuring customs alone.
+  availability_selection: AVAIL,
 };
 
 const cached: CachedIapState = {
@@ -48,7 +54,8 @@ const cached: CachedIapState = {
   },
   screenshot_apple_id: null,
   screenshot_file_name: null,
-  availability_target: "ALL",
+  availability_selection: AVAIL,
+  availability_previous_known: true,
 };
 
 // ─── GATE 1 ──────────────────────────────────────────────────────────────────

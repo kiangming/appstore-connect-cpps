@@ -54,10 +54,8 @@ import {
   getAvailabilityForIap,
   getAllTerritoryIds,
 } from "@/lib/iap-management/apple/availabilities";
-import type {
-  AvailabilityTarget,
-  IapFormState,
-} from "@/lib/iap-management/validation";
+import type { IapFormState } from "@/lib/iap-management/validation";
+import type { TerritorySelection } from "@/lib/iap-management/apple/territory-selection";
 import { log } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -160,25 +158,34 @@ export async function POST(
   //    truth (the client's form value alone can't tell us whether the radio
   //    represents a change or matches what's already on Apple).
   const creds = await getActiveAccount();
-  let cachedAvailabilityTarget: AvailabilityTarget | null = null;
+  /**
+   * SC5 — server-side ground truth for the availability diff. The client's
+   * selection alone cannot say whether it represents a change, so the
+   * comparison base is read here and the client's copy is never trusted for it.
+   *
+   * ⚠ `previousKnown` is the honest flag: a FAILED read leaves the selection
+   * null AND `previousKnown` false, so the diff treats any explicit selection
+   * as a change (write rather than skip) and the audit records
+   * `previous_known: false` instead of a fabricated count. Pre-SC5 this block
+   * silently turned a failed read into `null`, which the old 2-value model
+   * could not distinguish from "removed from sale".
+   */
+  let cachedAvailabilitySelection: TerritorySelection | null = null;
+  let cachedAvailabilityPreviousKnown = false;
+  let allTerritoryIds: string[] = [];
   try {
     const [avail, totalIds] = await Promise.all([
       getAvailabilityForIap(creds, appleIapId),
       getAllTerritoryIds(creds).catch(() => [] as string[]),
     ]);
-    if (!avail) {
-      cachedAvailabilityTarget = "NONE";
-    } else if (
-      totalIds.length > 0 &&
-      avail.territoryCount >= totalIds.length &&
-      avail.availableInNewTerritories
-    ) {
-      cachedAvailabilityTarget = "ALL";
-    } else if (avail.territoryCount === 0 && !avail.availableInNewTerritories) {
-      cachedAvailabilityTarget = "NONE";
-    } else {
-      cachedAvailabilityTarget = null;
-    }
+    allTerritoryIds = totalIds;
+    cachedAvailabilityPreviousKnown = true;
+    cachedAvailabilitySelection = avail
+      ? {
+          territoryIds: avail.territoryIds,
+          availableInNewTerritories: avail.availableInNewTerritories,
+        }
+      : null;
   } catch (err) {
     await log(
       "iap-update-on-apple",
@@ -208,7 +215,8 @@ export async function POST(
     ),
     screenshot_apple_id: cachedScreenshot?.apple_id ?? null,
     screenshot_file_name: cachedScreenshot?.file_name ?? null,
-    availability_target: cachedAvailabilityTarget,
+    availability_selection: cachedAvailabilitySelection,
+    availability_previous_known: cachedAvailabilityPreviousKnown,
   };
 
   // 4.5 SC3 — custom prices: the stale guard, then the divergence that opens
@@ -343,6 +351,9 @@ export async function POST(
           : { kind: "APPLE" },
     currentTierId: sourceTierId,
     customPrices: customState.entries,
+    // Stage 5 classifies the outgoing selection against the SAME catalogue the
+    // picker offered, so "all territories" is recorded as ALL and not SUBSET.
+    allTerritoryIds,
   });
 
   // 8. Mirror successful stages into local DB so the cache stays in sync.
