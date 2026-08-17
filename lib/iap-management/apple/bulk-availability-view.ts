@@ -213,3 +213,59 @@ export function baseTerritoryAdvisory(
     .map(([baseTerritory, group]) => ({ baseTerritory, items: group }))
     .sort((a, b) => a.baseTerritory.localeCompare(b.baseTerritory));
 }
+
+// ─── The request body (the LAYER-GAP seam) ───────────────────────────────────
+
+export interface BulkAvailabilityRequestBody {
+  iapIds: string[];
+  action: "set-all" | "remove" | "set-territories";
+  /** Present ONLY for "set-territories" — the route rejects it missing. */
+  selection?: TerritorySelection;
+  hub_run_id?: string | null;
+}
+
+/**
+ * Build exactly what the modal POSTs.
+ *
+ * ⚠ WHY THIS IS A FUNCTION AND NOT AN INLINE OBJECT LITERAL.
+ * SC6 part 1 found the fifth LAYER-GAP in this project: SC2's selection-driven
+ * orchestrator and SC3's stop-and-resume were complete, and unreachable,
+ * because the route's zod enum still listed two actions. Nothing caught it —
+ * every test below the route called the orchestrator directly, so no test ever
+ * put a body through the schema.
+ *
+ * Extracting the body makes that seam testable: a test can build the body the
+ * modal really sends and push it through the real `POST`. If the selection goes
+ * missing here, or the route stops accepting it, that test fails. An inline
+ * literal inside the modal's `submit()` is reachable only by rendering the
+ * modal AND stubbing fetch, which is exactly the setup that hid the gap.
+ */
+export function buildBulkAvailabilityRequestBody(args: {
+  mode: "set-all" | "remove" | "set-territories";
+  iapIds: string[];
+  /** Required when mode === "set-territories". */
+  selection: TerritorySelection | null;
+  hubRunId: string | null;
+}): BulkAvailabilityRequestBody {
+  const { mode, iapIds, selection, hubRunId } = args;
+  const body: BulkAvailabilityRequestBody = {
+    iapIds,
+    action: mode,
+    hub_run_id: hubRunId,
+  };
+  if (mode === "set-territories") {
+    if (!selection) {
+      // Fail loudly here rather than posting a body the route will 400 on with
+      // a message about a field the Manager never saw.
+      throw new Error(
+        'buildBulkAvailabilityRequestBody: "set-territories" requires a selection',
+      );
+    }
+    // Verbatim — the ids are Apple's and the flag is not derivable from them.
+    body.selection = {
+      territoryIds: selection.territoryIds,
+      availableInNewTerritories: selection.availableInNewTerritories,
+    };
+  }
+  return body;
+}

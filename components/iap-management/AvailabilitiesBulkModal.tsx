@@ -53,6 +53,20 @@ import {
   releaseSlot,
 } from "@/lib/iap-management/client-fetch-queue";
 import type { InAppPurchase } from "@/types/iap-management/apple";
+import { TerritoryAvailabilityPicker } from "@/components/iap-management/territory/TerritoryAvailabilityPicker";
+import { SetTerritoriesConfirm } from "@/components/iap-management/availabilities/SetTerritoriesConfirm";
+import { BulkResultsView } from "@/components/iap-management/availabilities/BulkResultsView";
+import { bulkSurfaceDefaultSelection } from "@/lib/iap-management/apple/availability-surface-defaults";
+import {
+  baseTerritoryAdvisory,
+  buildBulkAvailabilityRequestBody,
+  buildConfirmBuckets,
+  hasWorkToConfirm,
+  type BulkRowResult,
+  type BulkRowStatus,
+} from "@/lib/iap-management/apple/bulk-availability-view";
+import type { TerritorySelection } from "@/lib/iap-management/apple/territory-selection";
+import type { TerritoriesRouteResponse } from "@/app/api/iap-management/territories/route";
 
 /**
  * SC6 added "set-territories". The first two are unchanged single-shot modes;
@@ -80,6 +94,29 @@ interface RowResult {
   apple_iap_id?: string;
   ok: boolean;
   error?: string;
+  /** SC3 sets this on every row; absent only on a response from an older
+   *  deploy. See `toBulkRows` for why it is never inferred as NOT_ATTEMPTED. */
+  status?: BulkRowStatus;
+}
+
+/**
+ * Adapt the wire rows for the three-state view.
+ *
+ * ⚠ A MISSING STATUS IS NEVER INFERRED AS NOT_ATTEMPTED. `ok` only
+ * distinguishes "Apple accepted" from "Apple did not" — it cannot express
+ * "nothing was sent". Guessing NOT_ATTEMPTED from `ok: false` would invite a
+ * retry to re-POST rows Apple actually refused, which is precisely what SC3
+ * forbade. So an absent status degrades to SUCCESS/FAILED and the resumable
+ * bucket stays empty, which is the safe direction: a missed resume beats a
+ * wrong one.
+ */
+function toBulkRows(rows: readonly RowResult[]): BulkRowResult[] {
+  return rows.map((r) => ({
+    iapId: r.iapId,
+    ...(r.apple_iap_id ? { apple_iap_id: r.apple_iap_id } : {}),
+    status: r.status ?? (r.ok ? "SUCCESS" : "FAILED"),
+    ...(r.error ? { error: r.error } : {}),
+  }));
 }
 
 /** Cycle 40 Phase A — batch-level 429 telemetry surfaced from the
@@ -103,6 +140,7 @@ export function AvailabilitiesBulkModal({
   mode,
   iaps,
   appleToInternal,
+  baseTerritoryByAppleId = {},
   onClose,
   onComplete,
 }: AvailabilitiesBulkModalProps) {
@@ -120,6 +158,15 @@ export function AvailabilitiesBulkModal({
   const [rateLimitTotal, setRateLimitTotal] = useState<RateLimitTotal | null>(
     null,
   );
+  // SC6 — the catalogue, fetched lazily on open from the SAME source the write
+  // path enumerates, so "N of M selected" is not a claim about a different
+  // list than Apple receives.
+  const [territoryIds, setTerritoryIds] = useState<string[] | null>(null);
+  const [territoriesError, setTerritoriesError] = useState<string | null>(null);
+  const [selection, setSelection] = useState<TerritorySelection | null>(null);
+  const [overall, setOverall] = useState<string | null>(null);
+  const [summary, setSummary] = useState<string>("");
+  const [retrying, setRetrying] = useState(false);
 
   // Hub tracking — see the header comment for the full lifecycle.
   const HUB_FEATURE =
@@ -304,6 +351,93 @@ export function AvailabilitiesBulkModal({
     [iaps, states, errors, mode, appleToInternal],
   );
 
+  /**
+   * SC6 — fetch Apple's catalogue on open, for the set-territories mode only.
+   *
+   * Lazy by design: the other two modes need no client-side catalogue, and the
+   * IAP-list Server Component deliberately does not prefetch Apple state
+   * (Hotfix 25's Strategy A → D pivot). `getAllTerritoryIds` behind the route
+   * memoises for an hour, so this is normally a cache hit.
+   */
+  useEffect(() => {
+    if (!open || mode !== "set-territories") return;
+    let cancelled = false;
+    setTerritoriesError(null);
+    (async () => {
+      try {
+        const res = await fetch("/api/iap-management/territories");
+        const data = (await res.json()) as TerritoriesRouteResponse;
+        if (cancelled) return;
+        if (data.error || data.territoryIds.length === 0) {
+          // ⚠ An empty catalogue is NOT a valid starting point. SC5 set the
+          // precedent: building a selection on an invented baseline is worse
+          // than saying we could not load it.
+          setTerritoriesError(
+            "Could not load Apple's country and region list.",
+          );
+          return;
+        }
+        setTerritoryIds(data.territoryIds);
+        // Surface A defaults to ALL (Manager decision 2). Derived from the
+        // shared policy so A and C cannot silently converge.
+        setSelection(bulkSurfaceDefaultSelection(data.territoryIds));
+      } catch (err) {
+        if (!cancelled) {
+          setTerritoriesError(
+            err instanceof Error ? err.message : "Network error",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, mode]);
+
+  /** Items dropped by `filterEligible` because their Apple read errored — the
+   *  exclusion the confirm dialog must name rather than hide. */
+  const readErrored = useMemo(
+    () =>
+      iaps
+        .filter((i) => appleToInternal[i.id] && errors.has(i.id))
+        .map((i) => ({
+          appleIapId: i.id,
+          productId: i.attributes.productId,
+          name: i.attributes.name,
+        })),
+    [iaps, errors, appleToInternal],
+  );
+
+  const selectedEligible = useMemo(
+    () => eligible.filter((e) => selected.has(e.appleIapId)),
+    [eligible, selected],
+  );
+
+  const confirmBuckets = useMemo(
+    () =>
+      selection
+        ? buildConfirmBuckets({
+            eligible: selectedEligible,
+            readErrored,
+            states,
+            selection,
+          })
+        : null,
+    [selectedEligible, readErrored, states, selection],
+  );
+
+  const advisory = useMemo(
+    () =>
+      selection && confirmBuckets
+        ? baseTerritoryAdvisory(
+            confirmBuckets.willChange,
+            selection,
+            baseTerritoryByAppleId,
+          )
+        : [],
+    [selection, confirmBuckets, baseTerritoryByAppleId],
+  );
+
   if (!open) return null;
 
   // Reset state when the modal closes via parent.
@@ -313,7 +447,81 @@ export function AvailabilitiesBulkModal({
     setConfirmOpen(false);
     setResults(null);
     setRateLimitTotal(null);
+    setOverall(null);
+    setSummary("");
+    setTerritoryIds(null);
+    setTerritoriesError(null);
+    setSelection(null);
     onClose();
+  }
+
+  /** Internal UUID → a human label. Results come back keyed by internal id. */
+  function labelForInternalId(internalId: string): string {
+    for (const [appleId, internal] of Object.entries(appleToInternal)) {
+      if (internal !== internalId) continue;
+      const iap = iaps.find((i) => i.id === appleId);
+      if (iap) return `${iap.attributes.name} · ${iap.attributes.productId}`;
+      return appleId;
+    }
+    return internalId;
+  }
+
+  /**
+   * Manual retry — NOT_ATTEMPTED only, and the ids come from `resumableIds`
+   * via the results view. Re-posts the SAME selection so the resumed rows get
+   * exactly what the first pass would have written.
+   */
+  async function retryNotAttempted(iapIds: string[]) {
+    if (iapIds.length === 0 || !selection) return;
+    setRetrying(true);
+    try {
+      const res = await fetch("/api/iap-management/iaps/bulk-availability", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          buildBulkAvailabilityRequestBody({
+            mode: "set-territories",
+            iapIds,
+            selection,
+            hubRunId: null,
+          }),
+        ),
+      });
+      const data = (await res.json()) as
+        | {
+            overall: string;
+            summary: string;
+            results: BulkRowResult[];
+            rate_limit_total?: RateLimitTotal;
+          }
+        | { error: string };
+      if (!res.ok || !("overall" in data)) {
+        toast.error(
+          "error" in data ? data.error : `Retry failed (${res.status})`,
+        );
+        return;
+      }
+      // Merge: previously-succeeded and previously-failed rows are untouched;
+      // only the retried ids get their new status. A success is never re-sent,
+      // so it can never be downgraded by a later pass.
+      setResults((prev) => {
+        const retried = new Map(
+          data.results.map((r) => [
+            r.iapId,
+            { ...r, ok: r.status === "SUCCESS" } as RowResult,
+          ]),
+        );
+        return (prev ?? []).map((r) => retried.get(r.iapId) ?? r);
+      });
+      setOverall(data.overall);
+      setSummary(data.summary);
+      setRateLimitTotal(data.rate_limit_total ?? null);
+      if (onComplete) onComplete();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setRetrying(false);
+    }
   }
 
   function toggleOne(appleIapId: string) {
@@ -379,15 +587,27 @@ export function AvailabilitiesBulkModal({
       const res = await fetch("/api/iap-management/iaps/bulk-availability", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          iapIds: internalIds,
-          action: mode,
-          hub_run_id: runIdForWrite,
-        }),
+        // ⚠ Built by the shared helper, not inline. That seam is what makes
+        // the HTTP-level test possible — the fifth LAYER-GAP (SC2/SC3
+        // unreachable behind a stale zod enum) was invisible precisely
+        // because no test ever put this body through the real route.
+        body: JSON.stringify(
+          buildBulkAvailabilityRequestBody({
+            mode,
+            iapIds: internalIds,
+            selection,
+            hubRunId: runIdForWrite,
+          }),
+        ),
       });
       const data = (await res.json()) as
         | {
-            overall: "SUCCESS" | "PARTIAL" | "FAILURE" | "NO_OP";
+            overall:
+              | "SUCCESS"
+              | "PARTIAL"
+              | "FAILURE"
+              | "NO_OP"
+              | "STOPPED_RATE_LIMITED";
             succeeded: number;
             failed: number;
             summary: string;
@@ -406,6 +626,8 @@ export function AvailabilitiesBulkModal({
       }
       if ("overall" in data) {
         setResults(data.results);
+        setOverall(data.overall);
+        setSummary(data.summary);
         setRateLimitTotal(data.rate_limit_total ?? null);
         const verb =
           mode === "set-all" ? "Set Availabilities" : "Remove from Sales";
@@ -429,7 +651,10 @@ export function AvailabilitiesBulkModal({
 
   function onPrimaryClick() {
     fireStart();
-    if (mode === "remove") {
+    // ⚠ set-territories is destructive too (Apple has no PATCH here, so every
+    // push is a full REPLACE) — it asks BEFORE, exactly like remove. Only
+    // set-all, which can add but never take away, submits straight through.
+    if (mode === "remove" || mode === "set-territories") {
       setConfirmOpen(true);
     } else {
       void submit();
@@ -549,8 +774,40 @@ export function AvailabilitiesBulkModal({
                   </p>
                 </div>
               )}
-              <ProgressList results={results} />
+              {/* SC6 — the set-territories run gets the three-state view:
+                  ProgressList has no NOT_ATTEMPTED concept and would render a
+                  stopped run as a flat list of ok/not-ok, collapsing the only
+                  safely-resumable bucket. The other two modes are single-shot
+                  and keep their original view unchanged. */}
+              {mode === "set-territories" ? (
+                <BulkResultsView
+                  results={toBulkRows(results)}
+                  overall={overall ?? "SUCCESS"}
+                  summary={summary}
+                  labelFor={labelForInternalId}
+                  retrying={retrying}
+                  onRetryNotAttempted={retryNotAttempted}
+                  onCloseConfirmed={handleClose}
+                />
+              ) : (
+                <ProgressList results={results} />
+              )}
             </>
+          ) : mode === "set-territories" && territoriesError ? (
+            /* ⚠ No real catalogue ⇒ no picker. SC5's precedent: a selection
+               built on an invented starting point is worse than saying so. */
+            <p
+              data-testid="territories-load-error"
+              className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-900/20 p-3 text-[11px] text-amber-900 dark:text-amber-200"
+            >
+              {territoriesError} Territories cannot be chosen right now, so
+              nothing has been changed. Close and reopen to retry.
+            </p>
+          ) : mode === "set-territories" && (!territoryIds || !selection) ? (
+            <p className="flex items-center gap-2 p-4 text-xs text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading countries and
+              regions…
+            </p>
           ) : eligible.length === 0 ? (
             <EmptyState
               destructive={destructive}
@@ -568,6 +825,16 @@ export function AvailabilitiesBulkModal({
               >
                 {filterCopy}
               </p>
+
+              {mode === "set-territories" && territoryIds && selection && (
+                <div className="mb-4 rounded-lg border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col max-h-[46vh]">
+                  <TerritoryAvailabilityPicker
+                    territoryIds={territoryIds}
+                    value={selection}
+                    onChange={setSelection}
+                  />
+                </div>
+              )}
 
               <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800 mb-2">
                 <label className="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300 cursor-pointer">
@@ -628,14 +895,19 @@ export function AvailabilitiesBulkModal({
 
         {/* Footer */}
         <div className="flex justify-end gap-2 px-5 py-3 border-t border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/40">
-          <button
-            type="button"
-            onClick={handleClose}
-            disabled={submitting}
-            className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition disabled:opacity-50"
-          >
-            {results ? "Close" : "Cancel"}
-          </button>
+          {/* The set-territories results view owns its own close affordance,
+              because the remainder-loss warning must sit ABOVE it (decision 6)
+              rather than beside an unrelated footer button. */}
+          {!(results && mode === "set-territories") && (
+            <button
+              type="button"
+              onClick={handleClose}
+              disabled={submitting}
+              className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition disabled:opacity-50"
+            >
+              {results ? "Close" : "Cancel"}
+            </button>
+          )}
           {!results && (
             <button
               type="button"
@@ -661,8 +933,65 @@ export function AvailabilitiesBulkModal({
         </div>
       </div>
 
+      {/* SC6 — the set-territories confirm: three buckets + the grouped base
+          advisory. Skip-when-nothing-to-do (§C): with nothing that would
+          change, no write is offered at all. */}
+      {confirmOpen && mode === "set-territories" && selection && confirmBuckets && (
+        hasWorkToConfirm(confirmBuckets) ? (
+          <SetTerritoriesConfirm
+            buckets={confirmBuckets}
+            selection={selection}
+            allTerritoryIds={territoryIds ?? []}
+            advisory={advisory}
+            submitting={submitting}
+            onCancel={declineConfirm}
+            onConfirm={() => void submit()}
+          />
+        ) : (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Nothing to change"
+          >
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl w-full max-w-md p-5">
+              <h3
+                data-testid="confirm-nothing-to-do"
+                className="text-sm font-semibold text-slate-900 dark:text-slate-100"
+              >
+                Nothing to change
+              </h3>
+              <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1">
+                Every selected item already has exactly this set of countries
+                and regions, so there is nothing to send to Apple.
+                {confirmBuckets.unknownExcluded.length > 0 && (
+                  <>
+                    {" "}
+                    {confirmBuckets.unknownExcluded.length} item
+                    {confirmBuckets.unknownExcluded.length === 1
+                      ? " was"
+                      : "s were"}{" "}
+                    left out because their current availability could not be
+                    read.
+                  </>
+                )}
+              </p>
+              <div className="flex justify-end mt-3">
+                <button
+                  type="button"
+                  onClick={declineConfirm}
+                  className="px-3 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 text-xs"
+                >
+                  Back
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      )}
+
       {/* Confirm popup — destructive Q5.C, layered above the selection modal. */}
-      {confirmOpen && (
+      {confirmOpen && mode === "remove" && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60"
           role="dialog"
