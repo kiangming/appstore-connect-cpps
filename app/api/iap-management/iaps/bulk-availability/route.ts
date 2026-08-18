@@ -50,6 +50,7 @@ import {
 } from "@/lib/iap-management/hub-tracking/tracking";
 import { computeBulkImportTerminalStatus } from "@/lib/iap-management/hub-tracking/status-mapping";
 import { log } from "@/lib/logger";
+import { AVAILABILITY_HUB_FEATURE } from "@/lib/iap-management/apple/availability-hub-feature";
 
 export const runtime = "nodejs";
 
@@ -85,16 +86,10 @@ const BodySchema = z.object({
   hub_run_id: z.string().nullish(),
 });
 
-const FEATURE_BY_ACTION: Record<
-  "set-all" | "remove" | "set-territories",
-  string
-> = {
-  "set-all": "iap-set-availabilities",
-  remove: "iap-remove-from-sales",
-  // Distinct tag: a per-territory write is not the same operation as
-  // "publish everywhere", and the hub must not report it as one.
-  "set-territories": "iap-set-territories",
-};
+// ⚠ Extracted to a shared module so the CLIENT's `/start` + `/cancel` calls
+// and this route's finalize cannot disagree — they did for `set-territories`.
+// See `availability-hub-feature.ts` for the split-brain this closed.
+const FEATURE_BY_ACTION = AVAILABILITY_HUB_FEATURE;
 
 /** Threaded by reference so the outer `finally` always closes the run
  *  correctly, even on an unforeseen exception (R1 finalize-in-finally). */

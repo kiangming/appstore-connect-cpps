@@ -67,6 +67,7 @@ import {
 } from "@/lib/iap-management/apple/bulk-availability-view";
 import type { TerritorySelection } from "@/lib/iap-management/apple/territory-selection";
 import type { TerritoriesRouteResponse } from "@/app/api/iap-management/territories/route";
+import { AVAILABILITY_HUB_FEATURE } from "@/lib/iap-management/apple/availability-hub-feature";
 
 /**
  * SC6 added "set-territories". The first two are unchanged single-shot modes;
@@ -169,8 +170,13 @@ export function AvailabilitiesBulkModal({
   const [retrying, setRetrying] = useState(false);
 
   // Hub tracking — see the header comment for the full lifecycle.
-  const HUB_FEATURE =
-    mode === "set-all" ? "iap-set-availabilities" : "iap-remove-from-sales";
+  // ⚠ The SIXTH D1 binary ternary, and the only one that was not user-visible.
+  // This was `mode === "set-all" ? "…set-availabilities" : "…remove-from-sales"`,
+  // so `set-territories` STARTed and CANCELLED its run tagged
+  // "iap-remove-from-sales" while the write route finalized the same run tagged
+  // "iap-set-territories" — opened under one identity, closed under another.
+  // Now both ends read ONE map (P1 choke point); a fourth mode fails to compile.
+  const HUB_FEATURE = AVAILABILITY_HUB_FEATURE[mode];
   const hubRunIdRef = useRef<string | null>(null);
   const hubStartPromiseRef = useRef<Promise<string | null> | null>(null);
   // PERMANENT — set the instant submit() commits to the write, never

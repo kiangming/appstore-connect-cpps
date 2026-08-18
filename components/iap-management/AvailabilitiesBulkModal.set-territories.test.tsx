@@ -172,6 +172,33 @@ describe("no real catalogue ⇒ no picker", () => {
   });
 });
 
+describe("hub tracking is tagged for THIS mode, not a sibling's", () => {
+  it("⚠ /start carries feature=iap-set-territories — NOT iap-remove-from-sales", async () => {
+    const { calls } = stubFetch();
+    renderModal();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("territory-picker-footer")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByLabelText("Select com.x.a"));
+    fireEvent.click(screen.getByRole("button", { name: /^OK \(/ }));
+
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.url.includes("hub-tracking/start")),
+      ).toBe(true),
+    );
+    const start = calls.find((c) => c.url.includes("hub-tracking/start"));
+    // ⚠ MUTATION TARGET. `HUB_FEATURE` was a BINARY ternary on
+    // `mode === "set-all"`, so this third mode opened its run tagged
+    // "iap-remove-from-sales" while the write route closed the SAME run tagged
+    // "iap-set-territories" — one run, two identities. Restore the ternary and
+    // this assertion goes red.
+    expect(start?.body?.feature).toBe("iap-set-territories");
+    expect(start?.body?.feature).not.toBe("iap-remove-from-sales");
+  });
+});
+
 describe("the confirm gate stands between the click and the write", () => {
   it("⚠ Cancel sends ZERO write requests", async () => {
     const { calls } = stubFetch();
