@@ -161,7 +161,7 @@ Surfaced during MV28-30 hotfix run.
 | Lock | Decision | Sub-chunk |
 |---|---|---|
 | Apple 2-stage workflow | Create + Submit are separate operations | IAP.o.6a |
-| `existsOnApple_validated` tri-state | NEVER_SYNCED / OK / FAILED — never silent "unknown" | IAP.o.6 |
+| ~~`existsOnApple_validated` tri-state~~ | ⚠ **PHANTOM — this column was never built.** No migration defines it, no code reads or writes it. The lock's *intent* (never a silent "unknown" sync state) shipped as `apple_iap_id IS NULL` + the `not_synced` 409. See [§4.15](#415-landmark--existsonapple_validated-does-not-exist-either--phantom-field-2-in-this-module) | IAP.o.6 |
 | Screenshot endpoint family | `appStoreReviewScreenshot` (NOT `inAppPurchaseAppStoreReviewScreenshot`) | IAP.o.9b |
 | Pricing match by USD `customerPrice` | Replace tier-number matching with customer-price lookup | IAP.o.10a / o.11d |
 | Multi-stage update orchestration | Attributes → Localizations → Screenshot → Pricing, each with audit log | IAP.o.12 |
@@ -601,6 +601,60 @@ is `AVAILABILITY_REMOVE_FROM_SALES`.
   third state without updating the legacy view that consumes it. **Adding a
   state to a shared producer obliges an audit of every consumer.**
 
+### 4.15 LANDMARK — `existsOnApple_validated` does not exist either — phantom field #2 in this module
+
+**Symptom.** Three places in this KB (§3.4 lock table, §9.2 integration-depth
+list, §12 glossary) plus one session archive
+(`SESSION-ARC-2026-05-15-FINAL-summary.md:289`) described
+`existsOnApple_validated` as a **tri-state column on `iap_mgmt.iaps`**
+(`NEVER_SYNCED` / `OK` / `FAILED`). A session planning the Set Availabilities
+item-list redesign went looking for it to classify "not yet synced to Apple"
+and found nothing.
+
+**Behavior — the column has never existed.** Verified exhaustively, not
+sampled:
+
+| Search | Result |
+|---|---|
+| `grep -rn "exists_on_apple\|existsOnApple" supabase/migrations/` | **0 hits** |
+| `grep -rni "exists_on_apple\|existsonapple"` repo-wide (excl. `node_modules`, `.git`) | **0 hits outside `docs/`** |
+| `grep -rn "NEVER_SYNCED"` repo-wide | **0 hits outside the same KB lines** — the enum values are phantom too |
+| `iap_mgmt.iaps` column list ([20260515000000:82-102](../../supabase/migrations/20260515000000_iap_mgmt_init.sql#L82-L102)) | no such column; later `ALTER`s add only `pricing_source` and three `custom_prices_baseline_*` |
+
+**What actually shipped for the lock's intent.** The requirement — *never a
+silent "unknown" sync state* — is real and is satisfied, by a different and
+simpler mechanism:
+
+| Question | Real mechanism |
+|---|---|
+| Is this IAP on Apple? | **`apple_iap_id IS NULL`** — [`listDraftIaps`](../../lib/iap-management/queries/iaps.ts#L325-L335), the partial index [20260515000000:106](../../supabase/migrations/20260515000000_iap_mgmt_init.sql#L106), and the availability route's `409 not_synced` ([route.ts:89](../../app/api/iap-management/iaps/%5BiapId%5D/availability/route.ts#L89)) |
+| Did the last sync fail? | not persisted per-row; surfaced per-run in `iap_mgmt.actions_log` |
+| Is an edit likely blocked? | `state-edit-blocked.ts` — a *different* concern, and its own header attributes it to IAP.o.12a, not IAP.o.6 |
+
+⚠ Note the ambiguity that helped this survive: `IAP.o.6` is cited in this KB
+for **two unrelated things** — this phantom column (§3.4, §9.2) and the
+Apple-state edit guard (§5-area file map, `state-edit-blocked.ts`). Only the
+second one exists.
+
+**Pattern — SECOND INSTANCE, so it is a pattern, not an accident.**
+[§4.13](#413-landmark--availableinallterritories-does-not-exist-the-real-flag-is-forward-looking-and-all--175-ticked-by-hand)
+recorded exactly this for `availableInAllTerritories`: a field name that lived
+only in prose, propagated across docs for three cycles, and cost a planning
+session. **`existsOnApple_validated` is the same failure in the same module,
+found the same way — by grepping instead of trusting.**
+
+⇒ **The lookup source is generating field names.** §4.13's rule was *"grep the
+OAS before planning around any field name you first met in prose."* Widen it:
+
+> **Grep the OAS *and* the migrations before planning around ANY field name
+> you first met in this KB.** Two for two. A field named only in docs is a
+> hypothesis, and in this module the base rate on that hypothesis is now 0/2.
+> When you confirm one is phantom, correct **every** site — §4.13 corrected the
+> backlog row but left the glossary and the archives alone, which is part of
+> why this one took a third cycle to catch.
+
+---
+
 ### 5.1 Schema isolation
 
 All IAP Management tables live in the `iap_mgmt` Postgres schema. CLAUDE.md invariant #9 forbids cross-schema FKs; references to `public.*` (CPP) or `store_mgmt.*` (Store Submission) tables are TEXT-typed soft references (e.g. `iap_mgmt.apps.asc_account_id`).
@@ -980,7 +1034,7 @@ The IAP arc crystallized 60+ reusable patterns. Documented in MEMORY.md feedback
 - **`customerPrice` match discipline** — over `priceTier` numbering (Apple's 2024 tier rollover, IAP.o.11d)
 - **Per-territory price-point fetch cost** — documented overhead, NOT a bug to optimise (Q-IAP.p1.C)
 - **3-step screenshot upload** — reserve → PUT presigned → confirm (IAP.o.8a + IAP.o.9b)
-- **`existsOnApple_validated` tri-state** — NEVER_SYNCED / OK / FAILED, never silent "unknown" (IAP.o.6)
+- **Never a silent "unknown" sync state** — as shipped this is `apple_iap_id IS NULL` (draft) + the availability route's `not_synced` 409, **not** a tri-state column. ⚠ This bullet previously named `existsOnApple_validated`; **that column does not exist** — see [§4.15](#415-landmark--existsonapple_validated-does-not-exist-either--phantom-field-2-in-this-module) (IAP.o.6)
 - **Stage 1 truncation, Stage 2 authoritative** (IAP.p2.m)
 - **Sub-letter notation in reject reasons** — `Guideline 2.1(b)` etc. (Cycle 33 cross-module)
 
@@ -3721,7 +3775,7 @@ typecheck, 2995/2995 tests, lint, build.
 | **Apple V2 `?include` truncation** | LANDMARK: V2 endpoints with `?include` cap the relationship enumeration at 10 IDs even when the underlying schedule has more. See [§4.1](#41-landmark--apple-v2-include-relationship-truncation-iapp2m) |
 | **Cycle 29-34** | Pattern 10 reuse #19 sequential cycles. Cycles 29-31 = strategic 5-deliverable trajectory milestone. Cycles 32-34 = post-trajectory hardening |
 | **`customerPrice`** | Apple's USD-denominated localized price. Use for tier matching, NOT the historical numeric tier (Tier 1, Tier 2…) which Apple's 2024 rollover invalidated |
-| **`existsOnApple_validated`** | Tri-state column on `iap_mgmt.iaps`: NEVER_SYNCED / OK / FAILED. No silent "unknown" |
+| **~~`existsOnApple_validated`~~** | ⚠ **PHANTOM — does not exist.** Never in any migration, never in any code path. Described here for three cycles as a tri-state column on `iap_mgmt.iaps`. The real "is this on Apple" test is **`apple_iap_id IS NULL`**. See [§4.15](#415-landmark--existsonapple_validated-does-not-exist-either--phantom-field-2-in-this-module) |
 | **IAP** | In-App Purchase |
 | **iapDb()** | Schema-isolation Supabase client wrapper. All `iap_mgmt.*` queries go through this |
 | **Iris API** | Apple Connect Web's undocumented internal API at `/iris/v1/*`. Used for diagnosis only, never in production (cookie auth, unstable) |

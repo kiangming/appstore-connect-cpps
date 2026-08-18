@@ -286,7 +286,7 @@ See [SESSION-ARC-2026-05-15-summary.md](./SESSION-ARC-2026-05-15-summary.md) for
 - `customerPrice` match discipline over `priceTier` numbering (IAP.o.11d — Apple's 2024 tier rollover)
 - Per-territory price-point fetch cost (IAP.p1.e — documented overhead, not bug)
 - 3-step screenshot upload (reserve → PUT presigned → confirm; IAP.o.8a + IAP.o.9b)
-- Apple validation states (`existsOnApple_validated` tri-state via IAP.o.6)
+- Apple validation states (~~`existsOnApple_validated` tri-state~~ via IAP.o.6) — ⚠ **correction (Aug 2026): that column was never built.** The intent shipped as `apple_iap_id IS NULL` + the `not_synced` 409. See KB §4.15 (phantom field #2). Line left in place as the historical record of what was claimed.
 - Stage 1 truncation, Stage 2 authoritative (IAP.p2.m)
 
 ### Architectural discipline

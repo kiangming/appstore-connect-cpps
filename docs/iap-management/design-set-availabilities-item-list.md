@@ -505,11 +505,13 @@ the divergence must never be silent.
 > - the partial index — [20260515000000:106](../../supabase/migrations/20260515000000_iap_mgmt_init.sql#L106), `WHERE apple_iap_id IS NULL`
 > - the availability route's 409 — [route.ts:86-89](<../../app/api/iap-management/iaps/[iapId]/availability/route.ts#L86-L89>), `error: "not_synced"`
 >
-> ⚠ **There is no `existsOnApple_validated` field in the Apple IAP module.**
-> Grep for `existsOnApple` / `exists_on_apple` across `lib/iap-management`,
-> `components/iap-management` and `app` returns **zero hits**. If that name
-> came from the Google module, do not port it — Apple's marker is
-> `apple_iap_id IS NULL`.
+> ⚠ **`existsOnApple_validated` does not exist — CONFIRMED, and it is phantom
+> field #2 in this module.** Repo-wide, case-insensitive: **0 hits** outside
+> `docs/`. No migration defines it; no code reads or writes it; even its enum
+> values (`NEVER_SYNCED`) appear nowhere. The KB described it as a tri-state
+> column on `iap_mgmt.iaps` in three places; all three are now corrected and
+> the finding is recorded as **KB §4.15**, alongside §4.13's
+> `availableInAllTerritories`. Apple's marker is `apple_iap_id IS NULL`.
 
 **⚠ The blocker: drafts are not passed to the modal at all.**
 [page.tsx:110](<../../app/(dashboard)/iap-management/apps/[appId]/page.tsx#L110>)
