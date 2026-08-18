@@ -68,6 +68,18 @@ import {
 import type { TerritorySelection } from "@/lib/iap-management/apple/territory-selection";
 import type { TerritoriesRouteResponse } from "@/app/api/iap-management/territories/route";
 import { AVAILABILITY_HUB_FEATURE } from "@/lib/iap-management/apple/availability-hub-feature";
+import {
+  buildBulkItemRows,
+  partitionRows,
+  emptyCause,
+  type DraftItemInput,
+  type ExcludedRow,
+  type EmptyCause as EmptyCauseKind,
+} from "@/lib/iap-management/apple/bulk-item-rows";
+import {
+  runAvailabilityReadPhase,
+  type ReadPhaseTarget,
+} from "@/lib/iap-management/apple/availability-read-phase";
 
 /**
  * SC6 added "set-territories". The first two are unchanged single-shot modes;
@@ -85,10 +97,19 @@ export interface AvailabilitiesBulkModalProps {
   /** SC6 — Apple IAP id → that item's OWN base_territory (§G6 advisory).
    *  Bases differ across a batch, so this is per-item, never a constant. */
   baseTerritoryByAppleId?: Record<string, string>;
+  /** A′ — local-only drafts (`apple_iap_id IS NULL`). SHOWN BUT DISABLED, with
+   *  a reason: a Manager who cannot find an item assumes it was deleted. They
+   *  were previously absent from this modal entirely — not filtered out,
+   *  never passed in — so "why is my draft missing" had no answer on screen. */
+  drafts?: DraftItemInput[];
   onClose: () => void;
   /** Called after a successful bulk action so the parent can refresh the list. */
   onComplete?: () => void;
 }
+
+/** Stable identity — a `[]` default would be a fresh array each render and
+ *  would defeat every downstream useMemo (the N-layer-cascade trap). */
+const EMPTY_DRAFTS: DraftItemInput[] = [];
 
 interface RowResult {
   iapId: string;
@@ -142,6 +163,7 @@ export function AvailabilitiesBulkModal({
   iaps,
   appleToInternal,
   baseTerritoryByAppleId = {},
+  drafts = EMPTY_DRAFTS,
   onClose,
   onComplete,
 }: AvailabilitiesBulkModalProps) {
@@ -168,6 +190,16 @@ export function AvailabilitiesBulkModal({
   const [overall, setOverall] = useState<string | null>(null);
   const [summary, setSummary] = useState<string>("");
   const [retrying, setRetrying] = useState(false);
+
+  // A′ — the read phase. `idle` before the Manager commits; `reading` while
+  // Apple is being asked about the SELECTED items only; `stopped` when a rate
+  // limit ended it early and a remainder survives.
+  const [readStatus, setReadStatus] = useState<
+    "idle" | "reading" | "stopped"
+  >("idle");
+  const [readProgress, setReadProgress] = useState({ done: 0, total: 0 });
+  const [readRemainder, setReadRemainder] = useState<ReadPhaseTarget[]>([]);
+  const readCancelledRef = useRef(false);
 
   // Hub tracking — see the header comment for the full lifecycle.
   // ⚠ The SIXTH D1 binary ternary, and the only one that was not user-visible.
@@ -287,8 +319,24 @@ export function AvailabilitiesBulkModal({
 
   // Hotfix 25 — Fetch availability for every visible (filtered) IAP that
   // has a local UUID, on modal open. Bounded by the shared queue.
+  //
+  // ⚠ A′ — THIS NO LONGER RUNS FOR `set-territories`. It costs 2 Apple
+  // requests per item in the list, unbatchable and uncached, BEFORE the
+  // Manager has selected anything: ~1,000 requests at N=500, ~2,000 at
+  // N=1000 (×4 under 429 retry). Against Hotfix 25's 250/h figure that
+  // exhausts the hour at ~125 items; against Hotfix 26's ~3,600/h it
+  // survives one open and dies on the second. Both figures give the same
+  // verdict, so this does not wait on KB §4.9.
+  //
+  // The two all-or-nothing modes KEEP it, deliberately: their list filter is
+  // BY current availability (Manager decision 5) and there is no other source
+  // for that. Only `set-territories`, which applies no bucket restriction,
+  // can drop the read — and it reads the SELECTED items later instead
+  // (`runReadPhase`). Do not "simplify" this into one branch: the two modes
+  // are not equivalent, and merging them silently reintroduces the cost.
   useEffect(() => {
     if (!open) return;
+    if (mode === "set-territories") return;
     let cancelled = false;
     const targets = iaps
       .map((i) => ({ appleId: i.id, internalId: appleToInternal[i.id] }))
@@ -350,11 +398,47 @@ export function AvailabilitiesBulkModal({
     return () => {
       cancelled = true;
     };
-  }, [open, iaps, appleToInternal]);
+  }, [open, mode, iaps, appleToInternal]);
 
-  const eligible = useMemo(
-    () => filterEligible(iaps, states, errors, mode, appleToInternal),
+  /**
+   * ⚠ `filterEligible` IS UNTOUCHED AND REMAINS THE SOLE AUTHORITY on who is
+   * selectable in the two all-or-nothing modes. `set-territories` passes
+   * `null` instead — under A′ there is no on-open read, so there is no state
+   * to filter on and the question is never asked. `null` ≠ empty Set: an
+   * empty Set would mean "asked, and nothing qualified", which would hide
+   * every row.
+   */
+  const eligibleAppleIds = useMemo(
+    () =>
+      mode === "set-territories"
+        ? null
+        : new Set(
+            filterEligible(iaps, states, errors, mode, appleToInternal).map(
+              (e) => e.appleIapId,
+            ),
+          ),
     [iaps, states, errors, mode, appleToInternal],
+  );
+
+  /** Every row the Manager should see — including the ones they cannot act on,
+   *  each carrying the reason it is out. Replaces the silent drop. */
+  const rows = useMemo(
+    () =>
+      buildBulkItemRows({
+        iaps,
+        drafts,
+        appleToInternal,
+        states,
+        errors,
+        mode,
+        eligibleAppleIds,
+      }),
+    [iaps, drafts, appleToInternal, states, errors, mode, eligibleAppleIds],
+  );
+
+  const { selectable: eligible, excluded } = useMemo(
+    () => partitionRows(rows),
+    [rows],
   );
 
   /**
@@ -400,8 +484,11 @@ export function AvailabilitiesBulkModal({
     };
   }, [open, mode]);
 
-  /** Items dropped by `filterEligible` because their Apple read errored — the
-   *  exclusion the confirm dialog must name rather than hide. */
+  /** Items whose Apple read errored — the exclusion the confirm dialog must
+   *  NAME rather than hide. Under A′ these come from the read phase (which
+   *  only touches selected items); under the two all-or-nothing modes they
+   *  come from the on-open pre-read. One derivation either way, because both
+   *  land in the same `errors` Map. */
   const readErrored = useMemo(
     () =>
       iaps
@@ -414,9 +501,20 @@ export function AvailabilitiesBulkModal({
     [iaps, errors, appleToInternal],
   );
 
+  /**
+   * ⚠ Under A′ the selection is made BEFORE the read, so a selected item can
+   * still turn out to be unreadable. Those must not reach the write — the
+   * confirm dialog names them in its third bucket instead
+   * (`unknownExcluded`). In the two all-or-nothing modes this subtracts
+   * nothing, because their filter already excluded errored rows from
+   * `eligible` before the Manager could tick them.
+   */
   const selectedEligible = useMemo(
-    () => eligible.filter((e) => selected.has(e.appleIapId)),
-    [eligible, selected],
+    () =>
+      eligible.filter(
+        (e) => selected.has(e.appleIapId) && !errors.has(e.appleIapId),
+      ),
+    [eligible, selected, errors],
   );
 
   const confirmBuckets = useMemo(
@@ -424,12 +522,14 @@ export function AvailabilitiesBulkModal({
       selection
         ? buildConfirmBuckets({
             eligible: selectedEligible,
-            readErrored,
+            // Only the items the Manager actually chose — an unselected item
+            // that happened to error is not an exclusion from THIS run.
+            readErrored: readErrored.filter((r) => selected.has(r.appleIapId)),
             states,
             selection,
           })
         : null,
-    [selectedEligible, readErrored, states, selection],
+    [selectedEligible, readErrored, selected, states, selection],
   );
 
   const advisory = useMemo(
@@ -449,6 +549,10 @@ export function AvailabilitiesBulkModal({
   // Reset state when the modal closes via parent.
   function handleClose() {
     cancelPendingRun();
+    readCancelledRef.current = true;
+    setReadStatus("idle");
+    setReadProgress({ done: 0, total: 0 });
+    setReadRemainder([]);
     setSelected(new Set());
     setConfirmOpen(false);
     setResults(null);
@@ -548,9 +652,22 @@ export function AvailabilitiesBulkModal({
   }
 
   async function submit() {
+    // ⚠ THE WRITE SET IS `selectedEligible`, NOT `selected`.
+    //
+    // Under A′ the Manager selects BEFORE anything is read, so a selected item
+    // may since have turned out to be unreadable. Those are dropped here and
+    // NAMED in the confirm dialog's third bucket — writing an item whose
+    // current state we could not read is exactly the blind action decision 1's
+    // warning exists to prevent.
+    //
+    // ⚠ Items in `alreadyMatches` ARE still sent. It is tempting to skip them
+    // and save a POST, but decision 1 is REPLACE semantics — "every targeted
+    // item ends with exactly the chosen set". A read that is seconds stale
+    // could call a drifted item a no-op, and skipping it would silently leave
+    // the wrong territories in place. Pay the POST; keep the guarantee.
     const internalIds: string[] = [];
-    for (const appleId of selected) {
-      const internal = appleToInternal[appleId];
+    for (const row of selectedEligible) {
+      const internal = appleToInternal[row.appleIapId];
       if (internal) internalIds.push(internal);
     }
     if (internalIds.length === 0) {
@@ -655,16 +772,97 @@ export function AvailabilitiesBulkModal({
     }
   }
 
+  /**
+   * A′ PHASE 2 — read current availability for the SELECTED items, right
+   * before the confirm dialog that reports what will change.
+   *
+   * ⚠ THIS IS THE ONLY PLACE `set-territories` READS APPLE. Opening the modal
+   * reads nothing. Cost is 2 requests × the number of items the Manager
+   * selected, not × the size of the app's catalogue.
+   *
+   * ⚠ Decision 3 applies HERE TOO, and independently of the write. A rate
+   * limit stops the phase; items already read are kept, the item Apple refused
+   * becomes an ERROR (it was asked — it is not safe to blind-retry), and the
+   * untouched remainder is preserved for an explicit retry. Nothing is written
+   * until the Manager confirms, so a stopped read costs nothing but time.
+   */
+  async function runReadPhase(targets: ReadPhaseTarget[]): Promise<void> {
+    readCancelledRef.current = false;
+    setReadStatus("reading");
+    setReadProgress({ done: 0, total: targets.length });
+
+    const result = await runAvailabilityReadPhase({
+      targets,
+      acquire: acquireSlot,
+      release: releaseSlot,
+      isCancelled: () => readCancelledRef.current,
+      onProgress: (done, total) => setReadProgress({ done, total }),
+      readOne: async (t) => {
+        const res = await fetch(
+          `/api/iap-management/iaps/${t.internalId}/availability`,
+          { cache: "no-store" },
+        );
+        const data = (await res.json()) as ApiAvailabilityResponse;
+        if (data.error === "rate_limited") return { kind: "rate_limited" };
+        if (data.error) return { kind: "failed", reason: data.error };
+        return { kind: "ok", state: data.state ?? null };
+      },
+    });
+
+    if (readCancelledRef.current) return;
+
+    // Merge rather than replace: a "retry the remainder" pass must not discard
+    // what the first pass already learned.
+    setStates((prev) => new Map([...prev, ...result.states]));
+    setErrors((prev) => new Map([...prev, ...result.errors]));
+    setReadRemainder(result.notRead);
+
+    if (result.stoppedByRateLimit && result.notRead.length > 0) {
+      // Stop and PRESERVE — surfaced, never swallowed. The Manager chooses
+      // between proceeding with what was read and retrying the rest.
+      setReadStatus("stopped");
+      return;
+    }
+    setReadStatus("idle");
+    setConfirmOpen(true);
+  }
+
   function onPrimaryClick() {
     fireStart();
     // ⚠ set-territories is destructive too (Apple has no PATCH here, so every
     // push is a full REPLACE) — it asks BEFORE, exactly like remove. Only
     // set-all, which can add but never take away, submits straight through.
-    if (mode === "remove" || mode === "set-territories") {
+    if (mode === "set-territories") {
+      // A′ — the read has not happened yet. Read the selection, THEN confirm.
+      const targets: ReadPhaseTarget[] = eligible
+        .filter((e) => selected.has(e.appleIapId))
+        .map((e) => ({ appleIapId: e.appleIapId, internalId: e.internalId }));
+      void runReadPhase(targets);
+      return;
+    }
+    if (mode === "remove") {
       setConfirmOpen(true);
     } else {
       void submit();
     }
+  }
+
+  /** "Retry the remaining N" after a rate-limit stop — the preserved
+   *  remainder only. Items already read are not re-sent (they cost budget and
+   *  the answer would not change), and the item Apple refused is not
+   *  re-sent either. */
+  function retryReadRemainder() {
+    const remainder = readRemainder;
+    setReadRemainder([]);
+    void runReadPhase(remainder);
+  }
+
+  /** "Continue with the N we read" — proceed to confirm on the subset. The
+   *  unread remainder simply is not part of this run, and the confirm dialog
+   *  shows the reduced count. */
+  function continueWithRead() {
+    setReadStatus("idle");
+    setConfirmOpen(true);
   }
 
   /**
@@ -720,12 +918,14 @@ export function AvailabilitiesBulkModal({
       title = "Choose territories";
       subtitle =
         "Pick exactly where the selected items sell. Every item receives the same set.";
-      // No bucket restriction for this mode (filterEligible), so the copy must
-      // not claim anything was filtered out by current availability.
-      filterCopy = `Showing ${shown}. Items whose current availability could not be read are left out and named before you confirm.`;
-      emptyTitle = "No items available to change.";
+      // ⚠ A′ — nothing has been read when this renders, so the copy must not
+      // describe the list in terms of availability AT ALL. It also states
+      // where the Apple cost actually falls, because "why is this slow" and
+      // "why did that burn my budget" are the same question asked twice.
+      filterCopy = `Showing all ${shown}. Current availability is read only for the items you select, when you continue.`;
+      emptyTitle = "This app has no In-App Purchases.";
       emptySub =
-        "Every selected item is either a local draft or its availability could not be read from Apple.";
+        "There is nothing to set territories on yet.";
       break;
   }
 
@@ -783,6 +983,16 @@ export function AvailabilitiesBulkModal({
         <div className="px-5 py-4 overflow-y-auto flex-1">
           {fetching ? (
             <FetchingState progress={fetchProgress} destructive={destructive} />
+          ) : readStatus === "reading" ? (
+            <ReadingState progress={readProgress} listTotal={eligible.length} />
+          ) : readStatus === "stopped" ? (
+            <ReadStoppedState
+              read={readProgress.done}
+              remaining={readRemainder.length}
+              onContinue={continueWithRead}
+              onRetry={retryReadRemainder}
+              onCancel={declineConfirm}
+            />
           ) : results ? (
             <>
               {/* Cycle 40 Phase A — amber rate-limit chip mirrors the
@@ -839,7 +1049,12 @@ export function AvailabilitiesBulkModal({
               <Loader2 className="h-4 w-4 animate-spin" /> Loading countries and
               regions…
             </p>
-          ) : eligible.length === 0 ? (
+          ) : rows.length === 0 ? (
+            /* ⚠ The ONLY genuinely empty case: the app has no items at all.
+               "Everything was excluded" is a different fact and is rendered
+               below, next to the rows that explain it — collapsing the two is
+               what let this modal claim "every IAP already sells in all
+               territories" when Apple had throttled 500 reads. */
             <EmptyState
               destructive={destructive}
               title={emptyTitle}
@@ -867,6 +1082,10 @@ export function AvailabilitiesBulkModal({
                 </div>
               )}
 
+              {eligible.length === 0 ? (
+                <NothingSelectable cause={emptyCause(rows)} mode={mode} />
+              ) : (
+              <>
               <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800 mb-2">
                 <label className="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300 cursor-pointer">
                   <input
@@ -907,7 +1126,23 @@ export function AvailabilitiesBulkModal({
                       <span className="text-slate-800 dark:text-slate-200 flex-1 truncate">
                         {row.name}
                       </span>
-                      {destructive ? (
+                      {/* ⚠ NO BADGE UNDER A′. This was a binary
+                          `destructive ? "Available" : "Removed"`, which is
+                          only true because the two all-or-nothing modes had
+                          already filtered the list BY that value. In
+                          set-territories nothing has been read when this
+                          renders, so the same expression would stamp
+                          "Removed" on every row — a state claim about data we
+                          do not have. It is read at confirm and shown there. */}
+                      {mode === "set-territories" ? (
+                        <span
+                          data-testid={`row-state-unread-${row.appleIapId}`}
+                          className="text-[11px] text-slate-400 dark:text-slate-500"
+                          title="Current availability is read when you continue"
+                        >
+                          —
+                        </span>
+                      ) : destructive ? (
                         <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400">
                           <Globe className="h-3 w-3" /> Available
                         </span>
@@ -920,6 +1155,16 @@ export function AvailabilitiesBulkModal({
                   );
                 })}
               </ul>
+              </>
+              )}
+
+              {/* ⚠ THE ANTI-SILENT-DROP SURFACE. Every row the action cannot
+                  touch is listed here with the reason it is out. Previously
+                  these rows simply vanished and the caption above blamed
+                  availability regardless of the real cause. */}
+              {excluded.length > 0 && (
+                <ExcludedRows rows={excluded} />
+              )}
             </>
           )}
         </div>
@@ -956,9 +1201,15 @@ export function AvailabilitiesBulkModal({
               }`}
             >
               {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+              {/* ⚠ set-territories names the COST, not just the count: this
+                  click is what spends the Apple budget, and A′'s honest limit
+                  is that a big selection is still expensive — it is merely
+                  chosen now rather than unconditional. */}
               {destructive
                 ? `Remove (${selected.size} selected)`
-                : `OK (${selected.size} selected)`}
+                : mode === "set-territories"
+                  ? `Continue — read ${selected.size} ${plural(selected.size, "item", "items")}`
+                  : `OK (${selected.size} selected)`}
             </button>
           )}
         </div>
@@ -1154,6 +1405,238 @@ function FetchingState({
         />
       </div>
     </div>
+  );
+}
+
+/**
+ * A′ phase 2 — reading the SELECTED items.
+ *
+ * ⚠ The copy states the honest limit. A′ does not make a full-catalogue sweep
+ * cheap; selecting all 1,000 items still costs ~2,000 Apple reads. What it
+ * changes is that the cost is now proportional to what the Manager ASKED FOR
+ * rather than to the size of the app's catalogue — so the number of items
+ * being read, and the number not being read, are both on screen.
+ */
+function ReadingState({
+  progress,
+  listTotal,
+}: {
+  progress: { done: number; total: number };
+  listTotal: number;
+}) {
+  const pct =
+    progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 0;
+  const skipped = Math.max(0, listTotal - progress.total);
+  return (
+    <div className="py-6" data-testid="read-phase-progress">
+      <p className="text-sm font-medium text-slate-700 dark:text-slate-200 flex items-center gap-2">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Reading current availability for {progress.total}{" "}
+        {plural(progress.total, "selected item", "selected items")}…
+      </p>
+      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+        {progress.done}/{progress.total} ({pct}%) · concurrency 3 · about{" "}
+        {progress.total * 2} Apple requests.
+        {skipped > 0 && (
+          <>
+            {" "}
+            <strong>{skipped}</strong>{" "}
+            {plural(skipped, "item", "items")} you did not select{" "}
+            {skipped === 1 ? "is" : "are"} not being read.
+          </>
+        )}
+      </p>
+      <div className="mt-3 h-1.5 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+        <div
+          className="h-full bg-[#0071E3] transition-[width] duration-200"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Decision 3, on the read side: STOPPED, with the remainder preserved.
+ *
+ * ⚠ Nothing has been written at this point, so this is a cheap stop — but it
+ * must still be SURFACED rather than swallowed. The two offers are genuinely
+ * different actions and neither is safe to pick automatically: continuing acts
+ * on a subset, retrying spends more budget.
+ */
+function ReadStoppedState({
+  read,
+  remaining,
+  onContinue,
+  onRetry,
+  onCancel,
+}: {
+  read: number;
+  remaining: number;
+  onContinue: () => void;
+  onRetry: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div
+      className="py-4 rounded-lg border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 px-4"
+      data-testid="read-phase-stopped"
+    >
+      <p className="text-sm font-medium text-amber-900 dark:text-amber-200 flex items-center gap-2">
+        <AlertTriangle className="h-4 w-4" />
+        Apple throttled the read after {read}{" "}
+        {plural(read, "item", "items")}.
+      </p>
+      <p className="text-[11px] text-amber-800 dark:text-amber-300/90 mt-1">
+        <strong>Nothing has been written.</strong> {remaining}{" "}
+        {plural(remaining, "item was", "items were")} not read, so{" "}
+        {remaining === 1 ? "its" : "their"} current availability is unknown —
+        {remaining === 1 ? " it is" : " they are"} left out unless you retry.
+      </p>
+      <div className="flex flex-wrap gap-2 mt-3">
+        <button
+          type="button"
+          onClick={onContinue}
+          data-testid="read-stopped-continue"
+          className="px-3 py-1.5 text-xs font-medium rounded-md bg-[#0071E3] hover:bg-[#0077ED] text-white"
+        >
+          Continue with the {read} we read
+        </button>
+        <button
+          type="button"
+          onClick={onRetry}
+          data-testid="read-stopped-retry"
+          className="px-3 py-1.5 text-xs font-medium rounded-md border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200"
+        >
+          Retry the remaining {remaining}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          data-testid="read-stopped-cancel"
+          className="px-3 py-1.5 text-xs font-medium rounded-md text-slate-600 dark:text-slate-300"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Nothing is selectable, but the app is NOT empty — say which of those two
+ * very different situations this is.
+ *
+ * ⚠ "Nothing matched" tells the Manager to change the filter. "Nothing could
+ * be read" tells them to wait and retry. The old empty state said the first
+ * regardless, which is how a throttled run came to read as "every IAP in this
+ * app already sells in all territories".
+ */
+function NothingSelectable({
+  cause,
+  mode,
+}: {
+  cause: EmptyCauseKind;
+  mode: BulkMode;
+}) {
+  const unreadable = cause === "all_excluded_unreadable";
+  return (
+    <div
+      className={`rounded-lg border px-3 py-3 text-xs ${
+        unreadable
+          ? "border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200"
+          : "border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 text-slate-600 dark:text-slate-300"
+      }`}
+      data-testid={`nothing-selectable-${cause}`}
+    >
+      {unreadable ? (
+        <>
+          <p className="font-medium">
+            No item can be changed right now — their current availability could
+            not be read from Apple.
+          </p>
+          <p className="text-[11px] mt-1 opacity-90">
+            ⚠ This is <strong>not</strong> a statement about what these items
+            sell. Each row below carries the reason it is out. Close and reopen
+            once Apple&apos;s request budget recovers.
+          </p>
+        </>
+      ) : (
+        <p className="font-medium">
+          No item is eligible for{" "}
+          {mode === "remove"
+            ? "Remove from Sales"
+            : mode === "set-all"
+              ? "Set Availabilities"
+              : "this action"}
+          . Every row below shows why.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The shown-but-disabled tail: rows the action cannot touch, each with its own
+ * true reason.
+ *
+ * ⚠ Grouped by reason so a Manager sees "480 rate-limited" as one fact rather
+ * than scrolling 480 identical lines — but the rows themselves are still
+ * listed, because a bare count is not actionable and was never the ask.
+ */
+function ExcludedRows({ rows }: { rows: readonly ExcludedRow[] }) {
+  const groups = new Map<string, ExcludedRow[]>();
+  for (const r of rows) {
+    const k = r.exclusion.kind;
+    const g = groups.get(k);
+    if (g) g.push(r);
+    else groups.set(k, [r]);
+  }
+  return (
+    <section className="mt-4 pt-3 border-t border-slate-200 dark:border-slate-800" data-testid="excluded-rows">
+      <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">
+        Not available for this action ({rows.length})
+      </h3>
+      <div className="space-y-3">
+        {Array.from(groups.entries()).map(([kind, group]) => (
+          <div key={kind} data-testid={`excluded-group-${kind}`}>
+            <p className="text-[11px] text-slate-600 dark:text-slate-300">
+              {group[0].exclusion.reason}
+              {group[0].exclusion.hint && (
+                <span className="text-slate-400 dark:text-slate-500">
+                  {" "}
+                  {group[0].exclusion.hint}
+                </span>
+              )}
+            </p>
+            <ul className="mt-1 divide-y divide-slate-100 dark:divide-slate-800/60">
+              {group.map((r) => (
+                <li
+                  key={r.key}
+                  data-testid={`excluded-row-${r.key}`}
+                  className="flex items-center gap-3 py-1.5 text-sm opacity-60"
+                >
+                  <input
+                    type="checkbox"
+                    checked={false}
+                    disabled
+                    readOnly
+                    aria-label={`${r.productId} — ${r.exclusion.reason}`}
+                    className="h-3.5 w-3.5 rounded border-slate-300"
+                  />
+                  <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400 truncate w-44">
+                    {r.productId}
+                  </span>
+                  <span className="text-slate-700 dark:text-slate-300 flex-1 truncate">
+                    {r.name}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 

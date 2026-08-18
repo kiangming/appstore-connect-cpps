@@ -827,6 +827,10 @@ export function IapListClient({
           iaps={filtered}
           appleToInternal={appleToInternal}
           baseTerritoryByAppleId={baseTerritoryByAppleId}
+          /* ⚠ Drafts were never passed here. They are not "filtered out" of
+             the modal — they were never in it, so a Manager looking for one
+             had no explanation on screen. Shown-but-disabled, per the lock. */
+          drafts={drafts}
           onClose={() => setBulkMode(null)}
           onComplete={() => router.refresh()}
         />

@@ -181,7 +181,7 @@ describe("hub tracking is tagged for THIS mode, not a sibling's", () => {
       expect(screen.getByTestId("territory-picker-footer")).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByLabelText("Select com.x.a"));
-    fireEvent.click(screen.getByRole("button", { name: /^OK \(/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Continue — read/ }));
 
     await waitFor(() =>
       expect(
@@ -209,7 +209,7 @@ describe("the confirm gate stands between the click and the write", () => {
     );
     // Select an item, then open the confirm.
     fireEvent.click(screen.getByLabelText("Select com.x.a"));
-    fireEvent.click(screen.getByRole("button", { name: /^OK \(/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Continue — read/ }));
 
     await waitFor(() =>
       expect(screen.getByTestId("confirm-headline")).toBeInTheDocument(),
@@ -238,7 +238,7 @@ describe("the confirm gate stands between the click and the write", () => {
       expect(screen.getByTestId("territory-picker-footer")).toBeInTheDocument(),
     );
     fireEvent.click(screen.getByLabelText("Select com.x.a"));
-    fireEvent.click(screen.getByRole("button", { name: /^OK \(/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Continue — read/ }));
     await waitFor(() =>
       expect(screen.getByTestId("confirm-submit")).toBeInTheDocument(),
     );
