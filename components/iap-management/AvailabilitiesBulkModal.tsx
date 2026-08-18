@@ -80,6 +80,12 @@ import {
   runAvailabilityReadPhase,
   type ReadPhaseTarget,
 } from "@/lib/iap-management/apple/availability-read-phase";
+import {
+  filterRowsByQuery,
+  selectionCounts,
+  toggleAllForQuery,
+  ROW_WINDOW_STEP,
+} from "@/lib/iap-management/apple/bulk-item-search";
 
 /**
  * SC6 added "set-territories". The first two are unchanged single-shot modes;
@@ -200,6 +206,11 @@ export function AvailabilitiesBulkModal({
   const [readProgress, setReadProgress] = useState({ done: 0, total: 0 });
   const [readRemainder, setReadRemainder] = useState<ReadPhaseTarget[]>([]);
   const readCancelledRef = useRef(false);
+
+  // A′ render — a 1,000-row app needs a way in that is not scrolling. Search is
+  // the primary tool; the window is the safety net behind it.
+  const [query, setQuery] = useState("");
+  const [windowSize, setWindowSize] = useState(ROW_WINDOW_STEP);
 
   // Hub tracking — see the header comment for the full lifecycle.
   // ⚠ The SIXTH D1 binary ternary, and the only one that was not user-visible.
@@ -441,6 +452,34 @@ export function AvailabilitiesBulkModal({
     [rows],
   );
 
+  /** ⚠ SEARCH NARROWS WHAT IS SHOWN, NEVER WHAT IS SELECTED. Rows the query
+   *  hides stay in `selected` and stay in the batch; the count of those is
+   *  rendered so the Manager can account for every ticked box. */
+  const matchingEligible = useMemo(
+    () => filterRowsByQuery(eligible, query),
+    [eligible, query],
+  );
+  const matchingExcluded = useMemo(
+    () => filterRowsByQuery(excluded, query),
+    [excluded, query],
+  );
+  const counts = useMemo(
+    () =>
+      selectionCounts({
+        selectableRows: eligible,
+        totalRows: rows.length,
+        selected,
+        query,
+      }),
+    [eligible, rows.length, selected, query],
+  );
+  /** The window is a RENDER bound only — never a selection bound. */
+  const windowedEligible = useMemo(
+    () => matchingEligible.slice(0, windowSize),
+    [matchingEligible, windowSize],
+  );
+  const hiddenByWindow = matchingEligible.length - windowedEligible.length;
+
   /**
    * SC6 — fetch Apple's catalogue on open, for the set-territories mode only.
    *
@@ -553,6 +592,8 @@ export function AvailabilitiesBulkModal({
     setReadStatus("idle");
     setReadProgress({ done: 0, total: 0 });
     setReadRemainder([]);
+    setQuery("");
+    setWindowSize(ROW_WINDOW_STEP);
     setSelected(new Set());
     setConfirmOpen(false);
     setResults(null);
@@ -643,12 +684,17 @@ export function AvailabilitiesBulkModal({
     });
   }
 
+  /**
+   * ⚠ SELECT ALL = EVERY ITEM MATCHING THE SEARCH, not the rendered window.
+   * Scoping it to the window would silently hand back 60 of 500 under a label
+   * that says "all"; scoping it to the whole app would ignore the search the
+   * Manager just typed. Un-ticking is scoped the same way, so narrowing the
+   * list and clicking once cannot wipe an off-screen selection.
+   */
   function toggleAll() {
-    if (eligible.every((e) => selected.has(e.appleIapId))) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(eligible.map((e) => e.appleIapId)));
-    }
+    setSelected(
+      toggleAllForQuery({ selectableRows: eligible, selected, query }),
+    );
   }
 
   async function submit() {
@@ -877,9 +923,11 @@ export function AvailabilitiesBulkModal({
     setConfirmOpen(false);
   }
 
+  // Scoped to the matching set so the checkbox state and `toggleAll` cannot
+  // disagree — a "checked" box that unticks something else is worse than none.
   const allSelected =
-    eligible.length > 0 && eligible.every((e) => selected.has(e.appleIapId));
-  const someSelected = selected.size > 0 && !allSelected;
+    counts.matching > 0 && counts.selectedMatching === counts.matching;
+  const someSelected = counts.selectedMatching > 0 && !allSelected;
   const destructive = mode === "remove";
 
   /**
@@ -1062,6 +1110,22 @@ export function AvailabilitiesBulkModal({
             />
           ) : (
             <>
+              {/* A 1,000-row app needs a way in that is not scrolling. */}
+              {rows.length > ROW_WINDOW_STEP && (
+                <input
+                  type="search"
+                  value={query}
+                  onChange={(e) => {
+                    setQuery(e.target.value);
+                    setWindowSize(ROW_WINDOW_STEP);
+                  }}
+                  placeholder="Search product ID or name…"
+                  aria-label="Search items"
+                  data-testid="item-search"
+                  className="w-full mb-3 px-3 py-2 text-sm rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 placeholder:text-slate-400"
+                />
+              )}
+
               <p
                 className={`text-xs px-3 py-2 rounded-md mb-3 ${
                   destructive
@@ -1098,15 +1162,38 @@ export function AvailabilitiesBulkModal({
                     className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
                     aria-label="Select all"
                   />
-                  Select all ({eligible.length})
+                  {/* ⚠ "matching", not a bare count: with a search active this
+                      takes every match, INCLUDING rows the window has not
+                      rendered. The label has to say which set that is. */}
+                  Select all ({counts.matching} matching)
                 </label>
-                <span className="text-[11px] text-slate-400 dark:text-slate-500">
-                  {selected.size} selected
+                <span
+                  className="text-[11px] text-slate-400 dark:text-slate-500"
+                  data-testid="selection-counts"
+                >
+                  {counts.selectedMatching} selected of {counts.matching}
+                  {" · "}
+                  {counts.total} total
                 </span>
               </div>
 
+              {/* ⚠ The divergence must be VISIBLE. Narrowing the search hides
+                  ticked rows without unticking them; without this line the
+                  count appears to drop and the Manager concludes the tool lost
+                  their selection. */}
+              {counts.selectedHidden > 0 && (
+                <p
+                  data-testid="selection-hidden-notice"
+                  className="text-[11px] text-amber-700 dark:text-amber-300 mb-2"
+                >
+                  + {counts.selectedHidden} more selected{" "}
+                  {plural(counts.selectedHidden, "item is", "items are")} hidden
+                  by this search — still selected, and still part of the batch.
+                </p>
+              )}
+
               <ul className="divide-y divide-slate-100 dark:divide-slate-800">
-                {eligible.map((row) => {
+                {windowedEligible.map((row) => {
                   const checked = selected.has(row.appleIapId);
                   return (
                     <li
@@ -1155,6 +1242,27 @@ export function AvailabilitiesBulkModal({
                   );
                 })}
               </ul>
+
+              {/* ⚠ Never a silent truncation. The window is a render bound; it
+                  has no effect on what "Select all" takes or what is written,
+                  and it says so. */}
+              {hiddenByWindow > 0 && (
+                <div className="pt-2 text-center">
+                  <button
+                    type="button"
+                    onClick={() => setWindowSize((n) => n + ROW_WINDOW_STEP)}
+                    data-testid="show-more-rows"
+                    className="text-[11px] font-medium text-[#0071E3] hover:underline"
+                  >
+                    Show {Math.min(hiddenByWindow, ROW_WINDOW_STEP)} more (
+                    {hiddenByWindow} not shown)
+                  </button>
+                  <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">
+                    Not shown is not excluded — Select all still takes all{" "}
+                    {counts.matching}.
+                  </p>
+                </div>
+              )}
               </>
               )}
 
@@ -1162,8 +1270,8 @@ export function AvailabilitiesBulkModal({
                   touch is listed here with the reason it is out. Previously
                   these rows simply vanished and the caption above blamed
                   availability regardless of the real cause. */}
-              {excluded.length > 0 && (
-                <ExcludedRows rows={excluded} />
+              {matchingExcluded.length > 0 && (
+                <ExcludedRows rows={matchingExcluded} />
               )}
             </>
           )}

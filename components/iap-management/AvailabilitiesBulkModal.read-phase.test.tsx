@@ -466,3 +466,98 @@ describe("⚠ the empty state names the REAL cause", () => {
     expect(screen.getByTestId("excluded-group-not_in_bucket")).toBeInTheDocument();
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+describe("⚠ rendering 500-1000 items — search, window, honest select-all", () => {
+  const MANY_N = 150;
+  const MANY = Array.from({ length: MANY_N }, (_, i) => iap(`m${i}`));
+  const MANY_MAP = Object.fromEntries(MANY.map((x, i) => [x.id, `i-m${i}`]));
+
+  const renderMany = () =>
+    renderModal("set-territories", { iaps: MANY, appleToInternal: MANY_MAP });
+
+  it("windows the render instead of mounting every row", async () => {
+    stubFetch();
+    renderMany();
+    await waitFor(() => expect(screen.getByTestId("item-search")).toBeInTheDocument());
+
+    const boxes = screen.getAllByRole("checkbox").filter((b) => !(b as HTMLInputElement).disabled);
+    // 60 rows + the select-all box — nowhere near 150.
+    expect(boxes.length).toBeLessThan(MANY_N);
+    expect(screen.getByTestId("show-more-rows")).toBeInTheDocument();
+  });
+
+  it("⚠ 'Select all' takes ALL matching items, not just the rendered window", async () => {
+    stubFetch();
+    renderMany();
+    await waitFor(() => expect(screen.getByTestId("item-search")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("Select all"));
+
+    // ⚠ MUTATION TARGET: scope toggleAll to the window and this reads 60.
+    expect(
+      screen.getByRole("button", { name: new RegExp(`^Continue — read ${MANY_N} items`) }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("selection-counts").textContent).toContain(
+      `${MANY_N} selected of ${MANY_N}`,
+    );
+  });
+
+  it("the label says 'matching', and the not-shown count is disclosed", async () => {
+    stubFetch();
+    renderMany();
+    await waitFor(() => expect(screen.getByTestId("item-search")).toBeInTheDocument());
+    expect(screen.getByText(`Select all (${MANY_N} matching)`)).toBeInTheDocument();
+    expect(screen.getByTestId("show-more-rows").textContent).toMatch(/not shown/);
+  });
+
+  it("search narrows the list AND scopes Select all to the matches", async () => {
+    stubFetch();
+    renderMany();
+    await waitFor(() => expect(screen.getByTestId("item-search")).toBeInTheDocument());
+
+    // "m14" matches com.x.m14 and com.x.m140..m149 → 11 items.
+    fireEvent.change(screen.getByTestId("item-search"), { target: { value: "m14" } });
+    await waitFor(() =>
+      expect(screen.getByText("Select all (11 matching)")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByLabelText("Select all"));
+    expect(
+      screen.getByRole("button", { name: /^Continue — read 11 items/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("⚠ narrowing the search HIDES selected rows without unselecting them, and says so", async () => {
+    stubFetch();
+    renderMany();
+    await waitFor(() => expect(screen.getByTestId("item-search")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("Select all")); // all 150
+    fireEvent.change(screen.getByTestId("item-search"), { target: { value: "m14" } });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("selection-hidden-notice")).toBeInTheDocument(),
+    );
+    // ⚠ MUTATION TARGET: drop selectedHidden and the Manager sees the count
+    // fall from 150 to 11 with no explanation.
+    expect(screen.getByTestId("selection-hidden-notice").textContent).toContain(
+      `${MANY_N - 11} more selected`,
+    );
+    // The batch is still 150 — the search changed what is shown, not what runs.
+    expect(
+      screen.getByRole("button", { name: new RegExp(`^Continue — read ${MANY_N} items`) }),
+    ).toBeInTheDocument();
+  });
+
+  it("'Show more' reveals additional rows without touching the selection", async () => {
+    stubFetch();
+    renderMany();
+    await waitFor(() => expect(screen.getByTestId("show-more-rows")).toBeInTheDocument());
+    const before = screen.getAllByRole("checkbox").length;
+    fireEvent.click(screen.getByTestId("show-more-rows"));
+    await waitFor(() =>
+      expect(screen.getAllByRole("checkbox").length).toBeGreaterThan(before),
+    );
+    expect(screen.getByTestId("selection-counts").textContent).toContain("0 selected");
+  });
+});
