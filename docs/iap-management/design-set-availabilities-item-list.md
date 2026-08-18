@@ -1,6 +1,9 @@
 # Investigation + Design — Set Availabilities: measured rate-limit cost + item-list redesign
 
-**Status:** INVESTIGATION + DESIGN. **No code shipped by this document.**
+**Status:** ✅ **IMPLEMENTED** — SA1-SA3, `20aa35e..4b16666`, 2026-08-18, not
+pushed. **The investigation and design text below is preserved as written**;
+what actually shipped, and where it diverges, is in the as-built appendix at
+the end. Where design and appendix disagree, **the appendix is what shipped.**
 **Scope:** Apple IAP Management, **surface A only** (the bulk Availabilities
 modal). Google module untouched. Bulk Import (surface B) and Edit (surface C)
 untouched.
@@ -711,3 +714,99 @@ must start at `IapListClient`, open the modal, and assert that opening it
 issues ZERO calls to `/api/iap-management/iaps/*/availability`** — asserting an
 *absence* of requests, which is the only assertion that can fail if someone
 re-adds the pre-read later.
+
+
+---
+
+## APPENDIX — AS BUILT (SA1-SA3)
+
+Same convention as the per-territory-availability design: the body above is left
+as investigated and signed off; this records what shipped and why it differs.
+
+### B1. H1's two candidates resolved — candidate 1, confirmed by UAT
+
+The Manager re-ran UAT after D1 deployed: **"Choose Territories" works
+correctly** — the list shows every item, unfiltered. The reported symptom came
+from clicking the older **Set Availabilities** button (mode `set-all`), whose
+filter is correct for its purpose. `filterEligible` was never defective and was
+**not modified by this arc — not one line**.
+
+⚠ **Candidate 2 was fixed anyway, and it was a real bug.** It is independent of
+which button was clicked: read-errored / unlinked / unfetched rows were dropped
+silently in ALL THREE modes while the caption blamed availability. It survived
+UAT only because nobody had yet opened the modal on an app large enough to
+throttle. Confirming candidate 1 did not make candidate 2 go away.
+
+### B2. Scope narrowed by the Manager: A′ applies to `set-territories` only
+
+The design proposed moving decision 5's filter to confirm-time for **all three**
+modes. The Manager declined that for `set-all` / `remove` — those keep their
+open-time pre-read and their filter. Consequence, recorded honestly rather than
+buried: **those two modes still carry the full rate-limit exposure PART 2
+measured** (~1,000 reads at N=500). Logged as `[SA2-scoped-out]`; the machinery
+to close it is already built and reachable, so it is wiring plus copy.
+
+⇒ In practice **decision 5 did not change at all.** It constrains modes 1 and 2,
+which are untouched; mode 3 never had a bucket filter. The "changes in letter"
+trade the design asked the Manager to weigh turned out not to be needed.
+
+### B3. Decision 1 held, and the write set had to narrow
+
+Preserved as designed, with one thing the design did not spell out: under A′ the
+selection is made **before** the read, so a selected item can turn out
+unreadable. The write set is therefore `selectedEligible` (selected MINUS
+read-errored), not `selected`. Items in `alreadyMatches` are still sent —
+REPLACE semantics beat saving a POST on a read that could be seconds stale.
+
+### B4. A defect the design did not predict — the row badge lied under A′
+
+Each row rendered `destructive ? "Available" : "Removed"`. That was only ever
+true because the two all-or-nothing modes had already filtered the list BY that
+value. With the pre-read gone, the same expression stamps **"Removed" on every
+row with nothing read** — a state claim about data the modal does not have.
+Renders `—` in `set-territories` now. **Lesson: removing an input invalidates
+every expression that silently depended on it.** Grep for readers of the state
+you just stopped fetching; a binary ternary is where they hide.
+
+### B5. Decision 3's read-side stop needed a worker pool, not the shared queue
+
+The design said "read the selection with the shared client queue". That alone
+cannot preserve a remainder: if every target is dispatched and the Hotfix-25
+queue throttles them, **every target has already been claimed** and "not yet
+started" is the empty set. The read phase therefore owns its own **worker
+count** while still drawing each SLOT from the shared queue — bounded fan-out
+for correctness, shared budget for rate limiting. A test with only 3 targets and
+3 workers passes trivially and proves nothing, so the stop tests use 8.
+
+### B6. Phantom field #2 (KB §4.15)
+
+`existsOnApple_validated` — named in the KB as a tri-state column on
+`iap_mgmt.iaps` — **has never existed**: 0 hits in migrations, 0 in code, and
+its enum values (`NEVER_SYNCED`) appear nowhere either. Second instance in this
+module after §4.13's `availableInAllTerritories`, which makes it a pattern.
+Corrected at all four sites. Real marker: `apple_iap_id IS NULL`.
+
+### B7. The sixth D1 binary ternary (SA2a)
+
+`HUB_FEATURE` in the modal was `mode === "set-all" ? … : "iap-remove-from-sales"`,
+so `set-territories` opened its tracked run under one identity and the write
+route closed it under another. It sat **eleven lines above** the five strings D1
+converted, same file, same shape, and survived because it is the only member of
+the family that is not user-visible. **Lesson for P1: when you sweep a file for
+a defect shape, the invisible instances are the ones that survive the sweep.
+Grep the shape, not the symptom.**
+
+### B8. The primary acceptance is an ABSENCE
+
+"Opening the modal issues NO `/availability` request." Every SC6 test rendered
+the modal with state already in hand, so none could observe what opening it
+cost. Only an assertion that a request was **not** made fails when someone
+re-adds the pre-read. Same family as A8's lesson from the previous arc — the
+bug lives at a layer no existing test started from.
+
+### B9. Still open
+
+See `TODO.md`: `[SA2-scoped-out]` (modes 1-2 still pre-read the full list),
+`[SA2-upstream]` (`seedMissingIapStubs` fails silently on the page — the modal
+now names the symptom, the page still hides the cause), `[SA-followup]` (the
+window is a slice, not virtualisation).
