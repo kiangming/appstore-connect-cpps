@@ -235,3 +235,120 @@ describe("runStoppablePool — degenerate inputs", () => {
     expect(out).toEqual({ results: ["ran:0", "ran:1", "ran:2"], stopped: false });
   });
 });
+
+/**
+ * `shouldStopOnResult` — the stop signal that arrives on a SUCCESS.
+ *
+ * ⚠ WHY THIS EXISTS AT THE POOL LAYER AT ALL. Some work is partially
+ * recoverable: the xlsx export's price read can be rate-limited while the row
+ * it belongs to is still worth exporting. Forcing that to throw would delete a
+ * usable row in order to report a budget fact. So the item succeeds AND the
+ * latch falls.
+ *
+ * ⚠ AND WHY THESE TESTS ARE HERE RATHER THAN ONLY IN export-fetch. The
+ * predicate was added for one caller, and its only coverage was through that
+ * caller — the same layer gap that let a dead feature and two double-wraps
+ * ship green in this module. A test that starts at the pool is the only one
+ * that fails if the pool's own contract regresses.
+ */
+describe("runStoppablePool — shouldStopOnResult: a successful result can stop the pool", () => {
+  it("(i) items after the trigger are skipped, and `run` is never called for them", async () => {
+    const run = vi.fn(async (n: number) => (n === 1 ? "partial:1" : `ran:${n}`));
+
+    const out = await runStoppablePool<number, string>({
+      items: [0, 1, 2, 3],
+      concurrency: 1,
+      run,
+      onError: async (n) => `failed:${n}`,
+      shouldStop,
+      shouldStopOnResult: (r) => r.startsWith("partial:"),
+      skipped: (n) => `skipped:${n}`,
+    });
+
+    expect(out.stopped).toBe(true);
+    // THE assertion: 2 and 3 never reached `run` at all.
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run).toHaveBeenNthCalledWith(1, 0);
+    expect(run).toHaveBeenNthCalledWith(2, 1);
+  });
+
+  it("(ii) the TRIGGERING item keeps its own real result — it is not rewritten as skipped", async () => {
+    // Rule 3, extended to this predicate. The item that trips the latch
+    // SUCCEEDED; in the export it is a PARTIAL row that still belongs in the
+    // file. Replacing it with the skip marker would report it as "nothing was
+    // sent" when its request was sent, answered, and used.
+    const out = await runStoppablePool<number, string>({
+      items: [0, 1, 2],
+      concurrency: 1,
+      run: async (n) => (n === 1 ? "partial:1" : `ran:${n}`),
+      onError: async (n) => `failed:${n}`,
+      shouldStop,
+      shouldStopOnResult: (r) => r.startsWith("partial:"),
+      skipped: (n) => `skipped:${n}`,
+    });
+
+    expect(out.results).toEqual(["ran:0", "partial:1", "skipped:2"]);
+    expect(out.results[1]).not.toBe("skipped:1");
+  });
+
+  it("(iii) the POOL owns the decision — identical results, opposite predicates, opposite outcomes", async () => {
+    // Rule 2 stays structural with the new predicate: `run` cannot stop the
+    // pool by returning a magic value. The same returned value stops one pool
+    // and not the other, because the predicate — not the value — decides.
+    const args = {
+      items: [0, 1, 2],
+      concurrency: 1,
+      run: async (n: number) => (n === 1 ? "partial:1" : `ran:${n}`),
+      onError: async (n: number) => `failed:${n}`,
+      shouldStop,
+      skipped: (n: number) => `skipped:${n}`,
+    };
+
+    const stops = await runStoppablePool<number, string>({
+      ...args,
+      shouldStopOnResult: (r) => r.startsWith("partial:"),
+    });
+    const doesNot = await runStoppablePool<number, string>({
+      ...args,
+      shouldStopOnResult: () => false,
+    });
+
+    expect(stops.stopped).toBe(true);
+    expect(doesNot.stopped).toBe(false);
+    expect(doesNot.results).toEqual(["ran:0", "partial:1", "ran:2"]);
+  });
+
+  it("(iii-b) omitting the predicate entirely leaves behaviour identical — bulk-availability's path", async () => {
+    const out = await runStoppablePool<number, string>({
+      items: [0, 1, 2],
+      concurrency: 1,
+      run: async (n) => (n === 1 ? "partial:1" : `ran:${n}`),
+      onError: async (n) => `failed:${n}`,
+      shouldStop,
+      skipped: (n) => `skipped:${n}`,
+    });
+    expect(out).toEqual({
+      results: ["ran:0", "partial:1", "ran:2"],
+      stopped: false,
+    });
+  });
+
+  it("a throw still routes to shouldStop, not to shouldStopOnResult", async () => {
+    const shouldStopOnResult = vi.fn(() => false);
+    const out = await runStoppablePool<number, string>({
+      items: [0, 1, 2],
+      concurrency: 1,
+      run: async (n) => {
+        if (n === 0) throw new StopError();
+        return `ran:${n}`;
+      },
+      onError: async (n) => `failed:${n}`,
+      shouldStop,
+      shouldStopOnResult,
+      skipped: (n) => `skipped:${n}`,
+    });
+    expect(out.stopped).toBe(true);
+    // never consulted — item 0 threw, items 1-2 never ran
+    expect(shouldStopOnResult).not.toHaveBeenCalled();
+  });
+});

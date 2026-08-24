@@ -69,6 +69,25 @@ export interface StoppablePoolArgs<T, R> {
    * `withRetry`'s full backoff, never a bare 429.
    */
   shouldStop: (err: unknown) => boolean;
+  /**
+   * "Does this SUCCESSFUL result nevertheless prove the remaining work cannot
+   * succeed?" Optional; omitted by callers whose only stop signal is a throw.
+   *
+   * ⚠ WHY A SECOND PREDICATE RATHER THAN MAKING THE CALLER THROW. Some work
+   * is partially recoverable: the xlsx export's price-schedule read can be
+   * rate-limited while the row it belongs to is still worth exporting (its
+   * product id, name, status and localizations were all read successfully).
+   * Forcing that to throw would delete a usable row to report a budget fact.
+   * So the row succeeds AND the latch falls — two independent decisions.
+   *
+   * ⚠ Rule 2 is unchanged: this is a POOL-EVALUATED PREDICATE, like
+   * `shouldStop`. `run` and `onError` still have no way to reach the latch;
+   * they can only return a value the pool then judges.
+   *
+   * ⚠ Rule 1 is unchanged too: this runs AFTER `run`, so it cannot affect
+   * whether the item's own I/O happened — only whether the NEXT item's does.
+   */
+  shouldStopOnResult?: (result: R) => boolean;
   /** The result recorded for an item the pool never attempted (rule 1). */
   skipped: (item: T) => R;
 }
@@ -84,6 +103,7 @@ export async function runStoppablePool<T, R>(
   args: StoppablePoolArgs<T, R>,
 ): Promise<StoppablePoolResult<R>> {
   const { items, concurrency, run, onError, shouldStop, skipped } = args;
+  const shouldStopOnResult = args.shouldStopOnResult;
 
   let stopped = false;
 
@@ -96,7 +116,11 @@ export async function runStoppablePool<T, R>(
       if (stopped) return skipped(item);
 
       try {
-        return await run(item);
+        const result = await run(item);
+        // A success that still carries the stop signal (see
+        // `shouldStopOnResult`). Judged by the pool, never set by `run`.
+        if (shouldStopOnResult?.(result)) stopped = true;
+        return result;
       } catch (err) {
         // ── RULE 2. The latch is set here and NOWHERE else. `onError`
         //    receives the error but has no way to reach `stopped`.

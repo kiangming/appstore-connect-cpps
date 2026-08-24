@@ -83,7 +83,14 @@ describe("fetchExportSources", () => {
 
     expect(result.sources.map((s) => s.productId)).toEqual(["com.x.ok"]);
     expect(result.failures).toEqual([
-      { productId: "com.x.bad", appleIapId: "bad-1", error: "500: boom" },
+      {
+        productId: "com.x.bad",
+        appleIapId: "bad-1",
+        // `kind` is new in this commit: a 500 is Apple refusing, which the
+        // failure sheet must not word like a rate limit.
+        kind: "APPLE_ERROR",
+        error: "500: boom",
+      },
     ]);
   });
 
@@ -288,5 +295,211 @@ describe("fetchExportSources — retry semantics on the detail read (Chunk 3 dep
     expect(result.sources).toEqual([]);
     expect(result.failures).toHaveLength(1);
     expect(result.failures[0].error).toContain("500");
+  });
+});
+
+/**
+ * G4b — the price read no longer degrades silently.
+ *
+ * ⚠ `priceSchedule: null` used to mean two different things: "Apple has no
+ * schedule" and "we could not read it". Both rendered identical blank price
+ * cells, and because the workbook's territory columns are the union of
+ * territories WITH a price, a territory priced only on throttled rows
+ * disappeared from the file with no trace at all. These tests pin the split.
+ */
+describe("fetchExportSources — price-read classification (G4b)", () => {
+  const detailOk = (id: string) =>
+    vi.fn(async () => ({
+      iap: iap(id, `com.x.${id}`),
+      localizations: [localization("en-US", id)],
+      screenshot: null,
+    }));
+
+  it("a 404 is NOT a failure — it is the legitimate no-schedule case", async () => {
+    // Verified through both stages: neither getPriceScheduleForIap nor
+    // fetchManualPricesPaginated catches, and appleFetch throws
+    // AppleApiError(404). So 404 arrives at the catch and is recognised there.
+    const getPriceScheduleForIap = vi
+      .fn()
+      .mockRejectedValue(new AppleApiError(404, "GET", "/sched", "not found"));
+
+    const r = await fetchExportSources(creds, [iap("a1", "com.x.a1")], {
+      getIapDetail: detailOk("a1"),
+      getPriceScheduleForIap,
+    });
+
+    expect(r.sources).toHaveLength(1);
+    expect(r.sources[0].priceSchedule).toBeNull();
+    expect(r.sources[0].priceReadFailure).toBeNull(); // ← the whole point
+    expect(r.failures).toEqual([]);
+    expect(r.stopped).toBe(false);
+  });
+
+  it("a rate-limited price read keeps the row but records RATE_LIMITED", async () => {
+    const getPriceScheduleForIap = vi
+      .fn()
+      .mockRejectedValue(new AppleRateLimitError("GET", "/sched", "slow down", 0));
+
+    const r = await fetchExportSources(creds, [iap("a1", "com.x.a1")], {
+      getIapDetail: detailOk("a1"),
+      getPriceScheduleForIap,
+    });
+
+    // The row still exports — product id, name, status, localizations are real.
+    expect(r.sources).toHaveLength(1);
+    expect(r.sources[0].productId).toBe("com.x.a1");
+    expect(r.sources[0].priceSchedule).toBeNull();
+    // ...but the blank prices now carry their reason.
+    expect(r.sources[0].priceReadFailure).toMatchObject({
+      kind: "RATE_LIMITED",
+      status: 429,
+    });
+  });
+
+  it("a non-404 Apple error records APPLE_ERROR with its status, not RATE_LIMITED", async () => {
+    const getPriceScheduleForIap = vi
+      .fn()
+      .mockRejectedValue(new AppleApiError(403, "GET", "/sched", "forbidden"));
+
+    const r = await fetchExportSources(creds, [iap("a1", "com.x.a1")], {
+      getIapDetail: detailOk("a1"),
+      getPriceScheduleForIap,
+    });
+
+    expect(r.sources[0].priceReadFailure).toMatchObject({
+      kind: "APPLE_ERROR",
+      status: 403,
+    });
+    expect(r.sources[0].priceReadFailure?.kind).not.toBe("RATE_LIMITED");
+  });
+
+  it("a non-Apple throw records UNKNOWN — neither of the other two may be claimed", async () => {
+    const getPriceScheduleForIap = vi.fn().mockRejectedValue(new TypeError("socket hang up"));
+
+    const r = await fetchExportSources(creds, [iap("a1", "com.x.a1")], {
+      getIapDetail: detailOk("a1"),
+      getPriceScheduleForIap,
+    });
+
+    expect(r.sources[0].priceReadFailure).toMatchObject({ kind: "UNKNOWN" });
+    expect(r.sources[0].priceReadFailure?.status).toBeUndefined();
+  });
+});
+
+/**
+ * G4a — the pool stops dispatching once a 429 has survived retry.
+ *
+ * ⚠ The assertions are on the SPY, not on the result set. A pool that keeps
+ * firing requests into an API already returning 429 produces the same-looking
+ * failure rows; only the call count shows the budget being burned.
+ */
+describe("fetchExportSources — stop latch (G4a)", () => {
+  const okDetail = async (_c: unknown, id: string) => ({
+    iap: iap(id, `com.x.${id}`),
+    localizations: [localization("en-US", id)],
+    screenshot: null,
+  });
+
+  it("a 429 surviving retry on the DETAIL read stops the run; later items are NOT_ATTEMPTED with zero Apple calls", async () => {
+    const seen: string[] = [];
+    const getIapDetail = vi.fn(async (c: unknown, id: string) => {
+      seen.push(id);
+      if (id === "b") throw new AppleRateLimitError("GET", "/iap/b", "slow down", 0);
+      return okDetail(c, id);
+    });
+    const getPriceScheduleForIap = vi.fn().mockResolvedValue(scheduleResponse("USA"));
+
+    const r = await fetchExportSources(
+      creds,
+      [iap("a", "com.x.a"), iap("b", "com.x.b"), iap("c", "com.x.c"), iap("d", "com.x.d")],
+      { getIapDetail, getPriceScheduleForIap, concurrency: 1 },
+    );
+
+    expect(r.stopped).toBe(true);
+    // c and d were never sent to Apple at all. Distinct ids, because `b` is
+    // legitimately attempted 4 times — Chunk 1's single withRetry — and that
+    // count is itself asserted below so the retry budget stays pinned here too.
+    expect([...new Set(seen)]).toEqual(["a", "b"]);
+    expect(seen.filter((id) => id === "b")).toHaveLength(4);
+    expect(seen).not.toContain("c");
+    expect(seen).not.toContain("d");
+    expect(r.sources.map((s) => s.productId)).toEqual(["com.x.a"]);
+    expect(r.failures).toEqual([
+      { productId: "com.x.b", appleIapId: "b", kind: "RATE_LIMITED", error: expect.any(String) },
+      {
+        productId: "com.x.c",
+        appleIapId: "c",
+        kind: "NOT_ATTEMPTED",
+        error: "Export stopped before this item — nothing was sent.",
+      },
+      {
+        productId: "com.x.d",
+        appleIapId: "d",
+        kind: "NOT_ATTEMPTED",
+        error: "Export stopped before this item — nothing was sent.",
+      },
+    ]);
+  });
+
+  it("⚠ a 429 on the PRICE read also stops the run — the latch is not deaf to 2 of the 3 requests per item", async () => {
+    // The price read does not throw (a missing price must not delete a usable
+    // row), so its rate limit rides back on a SUCCESSFUL result. A latch wired
+    // only to the throwing read would miss it — and the price read is two of
+    // the three Apple requests each item costs.
+    const detailSeen: string[] = [];
+    const getIapDetail = vi.fn(async (c: unknown, id: string) => {
+      detailSeen.push(id);
+      return okDetail(c, id);
+    });
+    const getPriceScheduleForIap = vi.fn(async (_c: unknown, id: string) => {
+      if (id === "a") throw new AppleRateLimitError("GET", "/sched/a", "slow down", 0);
+      return scheduleResponse("USA");
+    });
+
+    const r = await fetchExportSources(
+      creds,
+      [iap("a", "com.x.a"), iap("b", "com.x.b"), iap("c", "com.x.c")],
+      { getIapDetail, getPriceScheduleForIap, concurrency: 1 },
+    );
+
+    expect(r.stopped).toBe(true);
+    expect(detailSeen).toEqual(["a"]); // b and c never touched Apple
+    // ...and item `a` is still exported, as PARTIAL — the two decisions are
+    // independent: the row is usable, the budget is gone.
+    expect(r.sources).toHaveLength(1);
+    expect(r.sources[0].priceReadFailure).toMatchObject({ kind: "RATE_LIMITED" });
+    expect(r.failures.map((f) => f.kind)).toEqual(["NOT_ATTEMPTED", "NOT_ATTEMPTED"]);
+  });
+
+  it("a non-429 failure does NOT stop the run — one bad row is not a halted batch", async () => {
+    const getIapDetail = vi.fn(async (c: unknown, id: string) => {
+      if (id === "b") throw new AppleApiError(404, "GET", "/iap/b", "gone");
+      return okDetail(c, id);
+    });
+    const getPriceScheduleForIap = vi.fn().mockResolvedValue(scheduleResponse("USA"));
+
+    const r = await fetchExportSources(
+      creds,
+      [iap("a", "com.x.a"), iap("b", "com.x.b"), iap("c", "com.x.c")],
+      { getIapDetail, getPriceScheduleForIap, concurrency: 1 },
+    );
+
+    expect(r.stopped).toBe(false);
+    expect(r.sources.map((s) => s.productId)).toEqual(["com.x.a", "com.x.c"]);
+    expect(r.failures).toHaveLength(1);
+    expect(r.failures[0].kind).toBe("APPLE_ERROR");
+  });
+
+  it("a clean run reports stopped:false and no failures", async () => {
+    const r = await fetchExportSources(
+      creds,
+      [iap("a", "com.x.a"), iap("b", "com.x.b")],
+      {
+        getIapDetail: vi.fn(okDetail),
+        getPriceScheduleForIap: vi.fn().mockResolvedValue(scheduleResponse("USA")),
+      },
+    );
+    expect(r).toMatchObject({ stopped: false, failures: [] });
+    expect(r.sources).toHaveLength(2);
   });
 });

@@ -32,8 +32,69 @@ import countries from "i18n-iso-countries";
 import type { PriceScheduleView } from "./queries/iap-detail";
 
 const SHEET_NAME = "Apple IAP Export";
+/** ⚠ Appended only when there is something to report. A clean export stays a
+ *  ONE-SHEET workbook, byte-shape identical to before this feature. */
+const FAILURE_SHEET_NAME = "Export Failures";
+const FAILURE_COLUMNS = [
+  "Product ID",
+  "Apple IAP ID",
+  "Status",
+  "Reason",
+  "Detail",
+] as const;
 const FIXED_COLUMNS = ["Product ID", "SKU Name", "Status", "Base Country"] as const;
 const LOCALIZATION_SUBHEADERS = ["Locale", "Display Name", "Description"] as const;
+
+/**
+ * Why an Apple read did not produce data. ⚠ The kinds are kept APART on
+ * purpose and are never merged into one "failed" bucket: they lead a Manager
+ * to three different actions.
+ *
+ *   RATE_LIMITED  — a 429 that survived `withRetry`'s full backoff. Wait and
+ *                   re-export; the data is fine, the budget was not.
+ *   APPLE_ERROR   — Apple was asked and refused for a reason of its own
+ *                   (404 gone, 403, 409). Carries the status; retrying the
+ *                   same request changes nothing.
+ *   UNKNOWN       — transport/parse. Neither of the above may be claimed.
+ *   NOT_ATTEMPTED — nothing was sent, because the run had already stopped.
+ *                   The ONLY kind that is safe to re-export blindly.
+ */
+export type ExportFailureKind =
+  | "RATE_LIMITED"
+  | "APPLE_ERROR"
+  | "UNKNOWN"
+  | "NOT_ATTEMPTED";
+
+/**
+ * A price-schedule read that failed for a reason that is NOT "Apple has no
+ * schedule". ⚠ THIS TYPE EXISTS BECAUSE `priceSchedule: null` USED TO MEAN
+ * TWO THINGS. A throttled read and a genuinely price-less IAP both collapsed
+ * to `null`, so a rate-limited row exported with blank price cells that were
+ * indistinguishable from a correct blank. `priceSchedule: null` now carries
+ * exactly one meaning again — Apple has no schedule — and every other cause
+ * lands here instead.
+ */
+export interface PriceReadFailure {
+  kind: Exclude<ExportFailureKind, "NOT_ATTEMPTED">;
+  /** Apple's HTTP status when there was one. */
+  status?: number;
+  /** Human-readable, for the Detail column. Never parsed for `kind`. */
+  message: string;
+}
+
+/** One row of the "Export Failures" sheet. */
+export interface ExportFailureRow {
+  productId: string;
+  appleIapId: string;
+  /**
+   * PARTIAL      — the row IS in the main sheet, but its prices are missing.
+   * FAILED       — the row is not in the main sheet at all.
+   * NOT_ATTEMPTED— nothing was sent for it.
+   */
+  status: "PARTIAL" | "FAILED" | "NOT_ATTEMPTED";
+  kind: ExportFailureKind;
+  detail: string;
+}
 
 export interface ExportSourceLocalization {
   locale: string;
@@ -45,13 +106,28 @@ export interface ExportSourceLocalization {
  *  View Detail's own primitives (getInAppPurchase + splitIncluded,
  *  getPriceScheduleForIap + unpackPriceSchedule). */
 export interface ExportSource {
+  /** Apple's opaque IAP id — carried so the failure sheet can name the row
+   *  by the same identifier the rest of the module uses. */
+  appleIapId: string;
   productId: string;
   skuName: string;
   /** Raw Apple `inAppPurchaseState` — no 2-state collapse. */
   status: string;
-  /** Null when Apple has no price schedule yet for this IAP (e.g. a
-   *  freshly-created MISSING_METADATA product). */
+  /**
+   * ⚠ EXACTLY ONE MEANING: Apple has no price schedule for this IAP (a
+   * freshly-created MISSING_METADATA product, or a 404 on the schedule
+   * sub-resource, which is Apple's way of saying the same thing).
+   *
+   * It does NOT mean "we could not read the prices" — that is
+   * `priceReadFailure`. Before those were split, a rate-limited read wrote
+   * `null` here and the workbook rendered blank price cells with nothing to
+   * distinguish them from a correct blank.
+   */
   priceSchedule: PriceScheduleView | null;
+  /** Non-null ⇒ the prices in this row are MISSING, not absent. The row still
+   *  exports (its product id, name, status and localizations are real) and is
+   *  additionally listed in the failure sheet as PARTIAL. */
+  priceReadFailure: PriceReadFailure | null;
   localizations: ExportSourceLocalization[];
 }
 
@@ -61,6 +137,10 @@ export interface ExportRowPrice {
 }
 
 export interface ExportRow {
+  appleIapId: string;
+  /** Carried through so the workbook builder can mark PARTIAL rows without
+   *  re-deriving the cause from blank cells (which is what it could not do). */
+  priceReadFailure: PriceReadFailure | null;
   productId: string;
   skuName: string;
   status: string;
@@ -104,12 +184,14 @@ function toExportRow(source: ExportSource): ExportRow {
   }
 
   return {
+    appleIapId: source.appleIapId,
     productId: source.productId,
     skuName: source.skuName,
     status: source.status,
     baseTerritory: schedule ? toAlpha2(schedule.baseTerritory) : null,
     prices,
     localizations: source.localizations,
+    priceReadFailure: source.priceReadFailure,
   };
 }
 
@@ -157,9 +239,136 @@ export function buildExportPlan(
   };
 }
 
-/** Build the two-row merged-header workbook from a plan. */
-export function buildExportWorkbook(plan: ExportPlan): XLSX.WorkBook {
+/** A per-item outcome the fetch could not turn into a row at all. Mirrors
+ *  `ExportFetchFailure` structurally; declared here so the workbook module
+ *  does not import from the fetch module (which imports from this one). */
+export interface ExportFetchFailureLike {
+  productId: string;
+  appleIapId: string;
+  kind: ExportFailureKind;
+  error: string;
+}
+
+const KIND_LABEL: Record<ExportFailureKind, string> = {
+  RATE_LIMITED: "Rate limited",
+  APPLE_ERROR: "Apple refused",
+  UNKNOWN: "Unknown error",
+  NOT_ATTEMPTED: "Not attempted",
+};
+
+/**
+ * Every item that is not fully in the main sheet, as failure-sheet rows.
+ *
+ * ⚠ PARTIAL rows come from `plan.rows`, not from `failures` — they DID
+ * export, they are in the main sheet, and they are listed here as well
+ * because their price cells are blank for a reason a reader cannot see.
+ *
+ * ⚠ The three kinds are never collapsed. "Rate limited" tells a Manager to
+ * wait and re-export; "Apple refused" tells them retrying changes nothing;
+ * "Not attempted" tells them it is safe to re-export blindly. One merged
+ * "failed" column would destroy all three messages at once.
+ */
+export function buildFailureRows(
+  rows: readonly ExportRow[],
+  failures: readonly ExportFetchFailureLike[],
+): ExportFailureRow[] {
+  const out: ExportFailureRow[] = [];
+
+  for (const row of rows) {
+    const f = row.priceReadFailure;
+    if (!f) continue;
+    out.push({
+      productId: row.productId,
+      appleIapId: row.appleIapId,
+      status: "PARTIAL",
+      kind: f.kind,
+      detail: detailFor(f.kind, f.status, f.message),
+    });
+  }
+
+  for (const f of failures) {
+    out.push({
+      productId: f.productId,
+      appleIapId: f.appleIapId,
+      status: f.kind === "NOT_ATTEMPTED" ? "NOT_ATTEMPTED" : "FAILED",
+      kind: f.kind,
+      detail: detailFor(f.kind, undefined, f.error),
+    });
+  }
+
+  return out;
+}
+
+function detailFor(
+  kind: ExportFailureKind,
+  status: number | undefined,
+  message: string,
+): string {
+  if (kind === "NOT_ATTEMPTED") {
+    // ⚠ The one bucket that is safe to re-export blindly — nothing was sent
+    // for it, so the sentence says so plainly rather than leaving a Manager
+    // to infer it from the word "not attempted".
+    return "Export stopped before this item — rate limit reached. Safe to re-export.";
+  }
+  if (kind === "RATE_LIMITED") {
+    return `Apple rate-limited the read after retries were exhausted. ${message}`.trim();
+  }
+  if (kind === "APPLE_ERROR") {
+    return status !== undefined
+      ? `Apple returned ${status}. ${message}`.trim()
+      : message;
+  }
+  return message;
+}
+
+function buildFailureSheet(failureRows: readonly ExportFailureRow[]) {
+  const aoa: Array<Array<string | null>> = [
+    [...FAILURE_COLUMNS],
+    ...failureRows.map((r) => [
+      r.productId,
+      r.appleIapId,
+      r.status,
+      KIND_LABEL[r.kind],
+      r.detail,
+    ]),
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 40 }, { wch: 16 }, { wch: 15 }, { wch: 16 }, { wch: 72 }];
+  return ws;
+}
+
+/**
+ * Build the two-row merged-header workbook from a plan.
+ *
+ * ⚠ A CLEAN EXPORT IS UNCHANGED. With no failures and no partial rows this
+ * returns exactly the single-sheet workbook it always did — same sheet name,
+ * same header rows, same merges, no note row. The failure sheet and the note
+ * row appear ONLY when there is something real to report, because a
+ * permanently-present empty sheet trains people to stop looking at it.
+ */
+export function buildExportWorkbook(
+  plan: ExportPlan,
+  failures: readonly ExportFetchFailureLike[] = [],
+): XLSX.WorkBook {
   const { territories, localizationGroupCount, rows } = plan;
+  const failureRows = buildFailureRows(rows, failures);
+  const partialCount = failureRows.filter((r) => r.status === "PARTIAL").length;
+
+  // ⚠ The note goes in the main sheet because that is the sheet someone
+  // reads first, and a blank price cell there is exactly what it warns
+  // about. It is ONE prepended row, present only when a partial row exists,
+  // so every header/merge coordinate below is offset by `noteOffset` rather
+  // than hard-coded to 0 — and on a clean export the offset is 0 and the
+  // arithmetic collapses to what it was.
+  const noteRow: Array<Array<string | null>> =
+    partialCount > 0
+      ? [
+          [
+            `⚠ ${partialCount} row${partialCount === 1 ? "" : "s"} incomplete — price columns are blank because the read failed, not because there is no price. See the "${FAILURE_SHEET_NAME}" sheet.`,
+          ],
+        ]
+      : [];
+  const noteOffset = noteRow.length;
 
   const headerRow1: Array<string | null> = [
     ...FIXED_COLUMNS.map((label) => label as string),
@@ -194,24 +403,30 @@ export function buildExportWorkbook(plan: ExportPlan): XLSX.WorkBook {
     }).flat(),
   ]);
 
-  const aoa = [headerRow1, headerRow2, ...dataRows];
+  const aoa = [...noteRow, headerRow1, headerRow2, ...dataRows];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
 
   // Vertical merges for the fixed columns (span both header rows).
   const merges: XLSX.Range[] = FIXED_COLUMNS.map((_, c) => ({
-    s: { r: 0, c },
-    e: { r: 1, c },
+    s: { r: noteOffset, c },
+    e: { r: noteOffset + 1, c },
   }));
   // Horizontal 2-col merges for every territory group header.
   for (let g = 0; g < territories.length; g += 1) {
     const startCol = FIXED_COLUMNS.length + g * 2;
-    merges.push({ s: { r: 0, c: startCol }, e: { r: 0, c: startCol + 1 } });
+    merges.push({
+      s: { r: noteOffset, c: startCol },
+      e: { r: noteOffset, c: startCol + 1 },
+    });
   }
   // Horizontal 3-col merges for every localization group header.
   const locStart = FIXED_COLUMNS.length + territories.length * 2;
   for (let g = 0; g < localizationGroupCount; g += 1) {
     const startCol = locStart + g * 3;
-    merges.push({ s: { r: 0, c: startCol }, e: { r: 0, c: startCol + 2 } });
+    merges.push({
+      s: { r: noteOffset, c: startCol },
+      e: { r: noteOffset, c: startCol + 2 },
+    });
   }
   ws["!merges"] = merges;
 
@@ -230,6 +445,9 @@ export function buildExportWorkbook(plan: ExportPlan): XLSX.WorkBook {
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, SHEET_NAME);
+  if (failureRows.length > 0) {
+    XLSX.utils.book_append_sheet(wb, buildFailureSheet(failureRows), FAILURE_SHEET_NAME);
+  }
   return wb;
 }
 

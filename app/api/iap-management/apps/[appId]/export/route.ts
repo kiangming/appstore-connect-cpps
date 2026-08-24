@@ -78,13 +78,29 @@ export async function POST(
     const iapsRes = await listAllInAppPurchases(creds, appleAppId);
     const appleIaps = iapsRes.data ?? [];
 
-    const { sources, failures } = await fetchExportSources(creds, appleIaps, {
-      getIapDetail: getIapDetailFromApple,
-      getPriceScheduleForIap,
-    });
+    const { sources, failures, stopped } = await fetchExportSources(
+      creds,
+      appleIaps,
+      { getIapDetail: getIapDetailFromApple, getPriceScheduleForIap },
+    );
 
     const plan = buildExportPlan(sources, territories);
-    const workbook = buildExportWorkbook(plan);
+    const workbook = buildExportWorkbook(plan, failures);
+
+    // ⚠ THREE COUNTS, NOT ONE. A stopped run is not a failed run: most items
+    // may already have exported cleanly. Collapsing these would tell the
+    // operator to redo work that already landed.
+    //   exported      — full rows in the main sheet
+    //   partial       — in the main sheet, but with prices missing
+    //   failed        — Apple was asked and refused
+    //   notAttempted  — nothing was sent; the ONLY count safe to re-export
+    // `X-Export-Failed-Count` keeps its original meaning (rows that are NOT
+    // in the main sheet) so the existing toast is not silently redefined;
+    // partial and not-attempted get their own headers rather than being
+    // folded into it.
+    const partialCount = sources.filter((s) => s.priceReadFailure !== null).length;
+    const notAttemptedCount = failures.filter((f) => f.kind === "NOT_ATTEMPTED").length;
+    const failedCount = failures.length - notAttemptedCount;
     const buffer = XLSX.write(workbook, {
       type: "buffer",
       bookType: "xlsx",
@@ -98,7 +114,10 @@ export async function POST(
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="${filename}"`,
         "X-Export-Item-Count": String(plan.rows.length),
-        "X-Export-Failed-Count": String(failures.length),
+        "X-Export-Failed-Count": String(failedCount),
+        "X-Export-Partial-Count": String(partialCount),
+        "X-Export-Not-Attempted-Count": String(notAttemptedCount),
+        ...(stopped ? { "X-Export-Stopped": "rate_limit" } : {}),
       },
     });
   } catch (err) {

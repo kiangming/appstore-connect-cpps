@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import * as XLSX from "xlsx";
 
-import { buildExportPlan, buildExportWorkbook, xlsxExportFilename } from "./xlsx-export";
+import { buildExportPlan, buildExportWorkbook, xlsxExportFilename,
+  buildFailureRows,
+} from "./xlsx-export";
 import type { ExportSource } from "./xlsx-export";
 import type { PriceScheduleView, PriceScheduleEntry } from "./queries/iap-detail";
 
@@ -24,10 +26,12 @@ function schedule(entries: PriceScheduleEntry[], baseTerritory = "USA"): PriceSc
 
 function source(overrides: Partial<ExportSource>): ExportSource {
   return {
+    appleIapId: "apple-1",
     productId: "com.example.item",
     skuName: "Item",
     status: "APPROVED",
     priceSchedule: null,
+    priceReadFailure: null,
     localizations: [],
     ...overrides,
   };
@@ -309,5 +313,108 @@ describe("xlsxExportFilename", () => {
   it("sanitises unsafe filename characters", () => {
     const now = new Date(2026, 6, 6);
     expect(xlsxExportFilename("com/bad name", now)).toMatch(/^Apple-IAP-export-com_bad_name-20260706\.xlsx$/);
+  });
+});
+
+/**
+ * The failure sheet, and the promise that a clean export is unchanged.
+ */
+describe("buildExportWorkbook — the Export Failures sheet", () => {
+  const partial = (kind: "RATE_LIMITED" | "APPLE_ERROR" | "UNKNOWN", status?: number) =>
+    source({
+      appleIapId: "apple-p",
+      productId: "com.x.partial",
+      priceReadFailure: { kind, status, message: "boom" },
+    });
+
+  it("⚠ a CLEAN export is a ONE-SHEET workbook — unchanged from before this feature", () => {
+    const wb = buildExportWorkbook(buildExportPlan([source({})]));
+    expect(wb.SheetNames).toEqual(["Apple IAP Export"]);
+  });
+
+  it("a clean export has NO note row — the header is still the first row", () => {
+    const wb = buildExportWorkbook(buildExportPlan([source({})]));
+    const ws = wb.Sheets["Apple IAP Export"];
+    // A1 is the first fixed column header, exactly as before.
+    expect(ws["A1"].v).toBe("Product ID");
+    // and the two-row header merge still starts at row 0
+    expect(ws["!merges"]?.[0]).toEqual({ s: { r: 0, c: 0 }, e: { r: 1, c: 0 } });
+  });
+
+  it("the failure sheet appears only when there is something to report", () => {
+    const wb = buildExportWorkbook(buildExportPlan([partial("RATE_LIMITED", 429)]));
+    expect(wb.SheetNames).toEqual(["Apple IAP Export", "Export Failures"]);
+  });
+
+  it("a PARTIAL row is in BOTH sheets — it exported, and its blanks have a reason", () => {
+    const plan = buildExportPlan([partial("RATE_LIMITED", 429)]);
+    const rows = buildFailureRows(plan.rows, []);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      productId: "com.x.partial",
+      appleIapId: "apple-p",
+      status: "PARTIAL",
+      kind: "RATE_LIMITED",
+    });
+    // and it is still a data row in the main sheet
+    expect(plan.rows.map((r) => r.productId)).toContain("com.x.partial");
+  });
+
+  it("⚠ RATE_LIMITED and APPLE_ERROR never share wording", () => {
+    const rl = buildFailureRows([], [
+      { productId: "p1", appleIapId: "a1", kind: "RATE_LIMITED", error: "429: slow" },
+    ])[0];
+    const ae = buildFailureRows([], [
+      { productId: "p2", appleIapId: "a2", kind: "APPLE_ERROR", error: "404: gone" },
+    ])[0];
+    expect(rl.kind).not.toBe(ae.kind);
+    expect(rl.detail).not.toBe(ae.detail);
+    expect(rl.detail).toContain("rate-limited");
+    expect(ae.detail).not.toContain("rate-limited");
+  });
+
+  it("NOT_ATTEMPTED says it is safe to re-export — the only bucket for which that is true", () => {
+    const [row] = buildFailureRows([], [
+      { productId: "p3", appleIapId: "a3", kind: "NOT_ATTEMPTED", error: "stopped" },
+    ]);
+    expect(row.status).toBe("NOT_ATTEMPTED");
+    expect(row.detail).toContain("Safe to re-export");
+    // and no other kind claims that
+    const [rl] = buildFailureRows([], [
+      { productId: "p4", appleIapId: "a4", kind: "RATE_LIMITED", error: "429" },
+    ]);
+    expect(rl.detail).not.toContain("Safe to re-export");
+  });
+
+  it("the failure sheet counts NOT_ATTEMPTED rows one per real item — no theoretical estimates", () => {
+    const failures = ["a", "b", "c"].map((id) => ({
+      productId: `com.x.${id}`,
+      appleIapId: id,
+      kind: "NOT_ATTEMPTED" as const,
+      error: "stopped",
+    }));
+    const wb = buildExportWorkbook(buildExportPlan([source({})]), failures);
+    const ws = wb.Sheets["Export Failures"];
+    // header + 3 rows
+    expect(ws["!ref"]).toBeDefined();
+    expect(XLSX.utils.sheet_to_json(ws, { header: 1 })).toHaveLength(4);
+  });
+
+  it("the main sheet gains a note row ONLY when a PARTIAL row exists, and merges shift with it", () => {
+    const wb = buildExportWorkbook(buildExportPlan([partial("RATE_LIMITED", 429)]));
+    const ws = wb.Sheets["Apple IAP Export"];
+    expect(String(ws["A1"].v)).toContain("incomplete");
+    expect(String(ws["A1"].v)).toContain("Export Failures");
+    // header moved down one row, and the merge moved with it
+    expect(ws["A2"].v).toBe("Product ID");
+    expect(ws["!merges"]?.[0]).toEqual({ s: { r: 1, c: 0 }, e: { r: 2, c: 0 } });
+  });
+
+  it("a FAILED-only export gets the failure sheet but NO note row (no partial rows)", () => {
+    const wb = buildExportWorkbook(buildExportPlan([source({})]), [
+      { productId: "p", appleIapId: "a", kind: "APPLE_ERROR", error: "404: gone" },
+    ]);
+    expect(wb.SheetNames).toEqual(["Apple IAP Export", "Export Failures"]);
+    expect(wb.Sheets["Apple IAP Export"]["A1"].v).toBe("Product ID");
   });
 });
