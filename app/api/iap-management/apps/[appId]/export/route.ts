@@ -18,6 +18,40 @@
  * means "no filter," matching pre-dialog behavior exactly. The selection
  * only narrows which columns the workbook renders — it does NOT change
  * the fetch; every IAP's full price schedule is still fetched regardless.
+ *
+ * ─── TWO SCOPES, TWO DIFFERENT HONESTY MECHANISMS ──────────────────────────
+ *
+ * `selectedIds` decides which of the two runs, and they are NOT variants of
+ * one path — each guarantees completeness by its own means:
+ *
+ *   ABSENT / null → EXPORT ALL. `listAllInAppPurchases` enumerates the app,
+ *     and its all-or-nothing contract is what makes the file trustworthy: a
+ *     page failure or an unfollowable `links.next` THROWS, so a truncated set
+ *     can never reach the workbook and masquerade as a complete export. This
+ *     path is unchanged.
+ *
+ *   NON-EMPTY → EXPORT EXACTLY THESE. There is nothing to enumerate, so the
+ *     completeness guarantee has to come from somewhere else: EVERY id the
+ *     operator sent is attempted, and every id is accounted for in the file —
+ *     as a row, or as a failure-sheet entry.
+ *
+ * ⚠ THE ROUTE DOES NOT VALIDATE IDS AGAINST APPLE'S LIST FIRST. Enumerating
+ * and intersecting would look safer and is the trap: an id the operator
+ * selected but that the intersection drops would vanish silently, producing a
+ * file that is short by one row with nothing anywhere saying why — the exact
+ * silent-drop class this arc has been removing. A dead or deleted id is sent,
+ * Apple answers 404, and it lands in the failure sheet as APPLE_ERROR where a
+ * human can see it. A visible failure beats an invisible omission.
+ *
+ * ⚠ EMPTY ARRAY IS A 400, NOT AN EXPORT-ALL. `[]` is a client bug or a UI
+ * that let someone through with nothing ticked; quietly widening it to the
+ * whole app would bill the operator ~3N Apple requests they did not ask for.
+ * Only ABSENCE means "no selection was made".
+ *
+ * ⚠ NO CAP ON THE SELECTION SIZE. The stop latch in `fetchExportSources` IS
+ * the budget mechanism — it stops dispatching when Apple's budget is gone and
+ * preserves the remainder. A second, invented cap here would refuse work the
+ * latch already handles correctly.
  */
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
@@ -28,6 +62,7 @@ import {
 } from "@/lib/iap-management/auth";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { listAllInAppPurchases } from "@/lib/iap-management/apple/client";
+import type { InAppPurchase } from "@/types/iap-management/apple";
 import { getIapDetailFromApple } from "@/lib/iap-management/queries/iap-detail";
 import { getPriceScheduleForIap } from "@/lib/iap-management/apple/price-schedules";
 import { AppleApiError } from "@/lib/iap-management/apple/fetch";
@@ -42,6 +77,33 @@ export const runtime = "nodejs";
 
 interface ExportRequestBody {
   territories?: string[] | null;
+  /** Apple IAP ids. See the header: absent/null = every IAP, `[]` = 400,
+   *  non-empty = exactly these, deduped, each one attempted. */
+  selectedIds?: string[] | null;
+}
+
+/**
+ * The minimum `fetchExportSources` needs per item: an Apple id.
+ *
+ * ⚠ `productId` AND `name` ARE BLANK ON PURPOSE, and that is the honest
+ * value. They are read FROM Apple, in the detail call — so for an item whose
+ * read fails we genuinely do not know them, and the failure row must not
+ * assert one. The failure sheet's "Apple IAP ID" column identifies the row,
+ * which is also the id a re-export takes. A client-supplied last-known
+ * product id would read as fetched fact and could be stale for exactly the
+ * items most likely to fail.
+ */
+function stubForSelectedId(id: string): InAppPurchase {
+  return {
+    type: "inAppPurchases",
+    id,
+    attributes: {
+      name: "",
+      productId: "",
+      inAppPurchaseType: "CONSUMABLE",
+      state: "MISSING_METADATA",
+    },
+  } as InAppPurchase;
 }
 
 export async function POST(
@@ -61,6 +123,20 @@ export async function POST(
   const body = (await req.json().catch(() => ({}))) as ExportRequestBody;
   const territories = Array.isArray(body.territories) ? body.territories : null;
 
+  // ⚠ `[]` and "absent" must not collapse — see the header. `Array.isArray`
+  // first, so only a REAL empty array reaches the 400.
+  const selectedIds = Array.isArray(body.selectedIds) ? body.selectedIds : null;
+  if (selectedIds !== null && selectedIds.length === 0) {
+    return NextResponse.json(
+      { error: "No items selected. Pick at least one item to export." },
+      { status: 400 },
+    );
+  }
+  // Order-preserving dedupe: a duplicated id is one item, not two Apple reads
+  // and two identical rows.
+  const uniqueSelectedIds =
+    selectedIds === null ? null : [...new Set(selectedIds)];
+
   try {
     const creds = await getActiveAccount();
     // listAllInAppPurchases follows Apple's pagination cursor and applies
@@ -75,8 +151,17 @@ export async function POST(
     // N=1000). Enumeration is all-or-nothing: a page failure or an
     // unfollowable `links.next` THROWS, so a truncated set can never reach
     // the workbook and masquerade as a complete export.
-    const iapsRes = await listAllInAppPurchases(creds, appleAppId);
-    const appleIaps = iapsRes.data ?? [];
+    //
+    // ⚠ With a selection there is NO enumeration at all — not even to
+    // validate. See the header: intersecting would silently drop a selected
+    // id, and a dropped id is invisible while a 404 is not.
+    let appleIaps: InAppPurchase[];
+    if (uniqueSelectedIds !== null) {
+      appleIaps = uniqueSelectedIds.map(stubForSelectedId);
+    } else {
+      const iapsRes = await listAllInAppPurchases(creds, appleAppId);
+      appleIaps = iapsRes.data ?? [];
+    }
 
     const { sources, failures, stopped } = await fetchExportSources(
       creds,
