@@ -6,7 +6,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 import { fetchExportSources } from "./export-fetch";
-import { AppleApiError } from "./fetch";
+import { AppleApiError, AppleRateLimitError } from "./fetch";
 import type { InAppPurchase, InAppPurchaseLocalization, AscApiResponse, InAppPurchasePriceSchedule } from "@/types/iap-management/apple";
 import type { AscCredentials } from "@/lib/asc-jwt";
 
@@ -167,5 +167,126 @@ describe("fetchExportSources", () => {
 
     expect(result.sources.map((s) => s.productId).sort()).toEqual(["com.x.ok-1", "com.x.ok-2"]);
     expect(result.failures).toHaveLength(2);
+  });
+});
+
+/**
+ * BEHAVIOURAL counterpart to `retry-composition.structural.test.ts`.
+ *
+ * The structural test proves ONE `withRetry` lexically encloses the detail
+ * read. It cannot prove that wrapper actually retries, or how many times, or
+ * that it stays off non-429s. Chunk 3's stop latch will treat an escaping
+ * `AppleRateLimitError` as "Apple's budget is gone, stop the pool" — a claim
+ * that is only true if a transient 429 was already absorbed here. So the
+ * attempt counts are pinned at runtime, not inferred from the wrapper count.
+ *
+ * ⚠ SPIES, NOT CANNED MOCKS. Each fake is a real function that increments a
+ * counter, because the assertion IS the call count.
+ *
+ * ⚠ FRESH ERROR PER THROW. Re-throwing one `Error` instance across retry
+ * attempts produces spurious failures under vitest (KB: the mock-reject reuse
+ * gotcha) — every rejection below constructs a new one.
+ *
+ * ⚠ WHY THESE RUN FAST WITHOUT FAKE TIMERS. `withRetry` sleeps
+ * `Math.min(err.retryAfterMs ?? backoff[attempt], 10_000)`, so an error
+ * carrying `retryAfterMs: 0` yields `sleep(0)` and the backoff curve
+ * collapses to nothing while the ATTEMPT COUNT — the thing under test — is
+ * untouched. Same trick `client.test.ts:409-412` already uses. The production
+ * call site passes no `RetryOptions`, and this test does not change that:
+ * nothing about `withRetry` or `export-fetch` was altered to make it testable.
+ */
+describe("fetchExportSources — retry semantics on the detail read (Chunk 3 depends on these)", () => {
+  const rateLimited = () =>
+    new AppleRateLimitError("GET", "/v2/inAppPurchases/a1", "rate limited", 0);
+
+  it("(i) absorbs a transient 429 — 2 failures then success = 3 calls, item exports", async () => {
+    let calls = 0;
+    const getIapDetail = vi.fn(async () => {
+      calls += 1;
+      if (calls <= 2) throw rateLimited();
+      return {
+        iap: iap("a1", "com.x.a"),
+        localizations: [localization("en-US", "A")],
+        screenshot: null,
+      };
+    });
+    const getPriceScheduleForIap = vi.fn().mockResolvedValue(scheduleResponse("USA"));
+
+    const result = await fetchExportSources(creds, [iap("a1", "com.x.a")], {
+      getIapDetail,
+      getPriceScheduleForIap,
+    });
+
+    // If this fails, withRetry is not composed around the detail read at all
+    // (export-fetch.ts:103) — the exact defect this chunk fixed.
+    expect(calls).toBe(3);
+    expect(getIapDetail).toHaveBeenCalledTimes(3);
+    expect(result.failures).toEqual([]);
+    expect(result.sources).toHaveLength(1);
+    expect(result.sources[0].productId).toBe("com.x.a");
+  });
+
+  it("(ii) a 429 that survives every attempt = exactly 4 calls, isolated to its own item", async () => {
+    // 4 = withRetry's ceiling: `for (attempt = 0; attempt <= backoff.length)`
+    // with DEFAULT_BACKOFF_MS = [500, 1000, 2000] (apple-fetch.ts:23,109).
+    // Pinning the number means a change to that budget cannot pass unnoticed.
+    let badCalls = 0;
+    const getIapDetail = vi.fn(async (_c: unknown, id: string) => {
+      if (id === "bad") {
+        badCalls += 1;
+        throw rateLimited();
+      }
+      return {
+        iap: iap(id, `com.x.${id}`),
+        localizations: [localization("en-US", id)],
+        screenshot: null,
+      };
+    });
+    const getPriceScheduleForIap = vi.fn().mockResolvedValue(scheduleResponse("USA"));
+
+    const result = await fetchExportSources(
+      creds,
+      [iap("ok1", "com.x.ok1"), iap("bad", "com.x.bad"), iap("ok2", "com.x.ok2")],
+      { getIapDetail, getPriceScheduleForIap },
+    );
+
+    expect(badCalls).toBe(4);
+
+    // The exhausted 429 lands in the per-item catch as a recorded failure —
+    // this is the signal Chunk 3's latch will key on, and it means "retried
+    // and still refused", never "one un-retried 429".
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].appleIapId).toBe("bad");
+    expect(result.failures[0].error).toContain("429");
+
+    // Failure isolation: the other two are untouched and still export.
+    expect(result.sources.map((s) => s.productId).sort()).toEqual([
+      "com.x.ok1",
+      "com.x.ok2",
+    ]);
+  });
+
+  it("(iii) a NON-429 is not retried — exactly 1 call", async () => {
+    // Guards the other direction: `withRetry` retries ONLY
+    // AppleRateLimitError (apple-fetch.ts:113-115). If someone later
+    // "improves" it into a blind retry-any-error, export would multiply every
+    // 500 by 4 against the endpoint whose whole problem is request budget —
+    // and without this test, nothing would say so.
+    let calls = 0;
+    const getIapDetail = vi.fn(async () => {
+      calls += 1;
+      throw new AppleApiError(500, "GET", "/v2/inAppPurchases/a1", "boom");
+    });
+    const getPriceScheduleForIap = vi.fn().mockResolvedValue(scheduleResponse("USA"));
+
+    const result = await fetchExportSources(creds, [iap("a1", "com.x.a")], {
+      getIapDetail,
+      getPriceScheduleForIap,
+    });
+
+    expect(calls).toBe(1);
+    expect(result.sources).toEqual([]);
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0].error).toContain("500");
   });
 });

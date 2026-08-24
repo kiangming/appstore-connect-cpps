@@ -30,7 +30,7 @@ import { getActiveAccount } from "@/lib/get-active-account";
 import { listAllInAppPurchases } from "@/lib/iap-management/apple/client";
 import { getIapDetailFromApple } from "@/lib/iap-management/queries/iap-detail";
 import { getPriceScheduleForIap } from "@/lib/iap-management/apple/price-schedules";
-import { withRetry, AppleApiError } from "@/lib/iap-management/apple/fetch";
+import { AppleApiError } from "@/lib/iap-management/apple/fetch";
 import { fetchExportSources } from "@/lib/iap-management/apple/export-fetch";
 import {
   buildExportPlan,
@@ -65,9 +65,17 @@ export async function POST(
     const creds = await getActiveAccount();
     // listAllInAppPurchases follows Apple's pagination cursor and applies
     // no state filter — every IAP, every state, per Manager's ask.
-    const iapsRes = await withRetry(() =>
-      listAllInAppPurchases(creds, appleAppId),
-    );
+    //
+    // ⚠ NO outer `withRetry`. This helper retries each page internally
+    // (client.ts:70) and its docstring forbids wrapping it (client.ts:52-54).
+    // Wrapping turned 4 attempts into 16, and because the outer retry
+    // restarts the helper from page 1, a tail-page 429 on a 5-page app cost
+    // up to 32 requests for a list that costs 5 — on the route whose whole
+    // problem is Apple's hourly budget (3 requests per IAP, ~3,005 at
+    // N=1000). Enumeration is all-or-nothing: a page failure or an
+    // unfollowable `links.next` THROWS, so a truncated set can never reach
+    // the workbook and masquerade as a complete export.
+    const iapsRes = await listAllInAppPurchases(creds, appleAppId);
     const appleIaps = iapsRes.data ?? [];
 
     const { sources, failures } = await fetchExportSources(creds, appleIaps, {

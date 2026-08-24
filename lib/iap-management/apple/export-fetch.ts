@@ -26,7 +26,7 @@
 import { withConcurrency } from "@/lib/iap-management/concurrency";
 import { getIapDetailFromApple, unpackPriceSchedule } from "@/lib/iap-management/queries/iap-detail";
 import { getPriceScheduleForIap } from "@/lib/iap-management/apple/price-schedules";
-import { AppleApiError } from "@/lib/iap-management/apple/fetch";
+import { withRetry, AppleApiError } from "@/lib/iap-management/apple/fetch";
 import type { AscCredentials } from "@/lib/asc-jwt";
 import type { InAppPurchase } from "@/types/iap-management/apple";
 import type { ExportSource } from "@/lib/iap-management/xlsx-export";
@@ -52,7 +52,29 @@ export interface ExportFetchResult {
  *  functions; tests inject fakes to exercise the isolation/degrade
  *  paths without a live Apple call. */
 export interface ExportFetchDeps {
+  /**
+   * ⚠ MUST be a retry-naive leaf. `fetchExportSources` composes EXACTLY ONE
+   * `withRetry` around it; injecting a self-retrying function recreates the
+   * export:68 double-wrap (4 attempts → 16, and the outer retry restarts the
+   * inner work from the beginning).
+   *
+   * An `AppleRateLimitError` reaching the per-item catch below therefore means
+   * the 429 SURVIVED retry — Chunk 3's stop latch depends on this. Without the
+   * wrapper, a single transient 429 on one item would read as a real
+   * rate-limit wall and stop the whole pool.
+   *
+   * Today's only real caller passes `getIapDetailFromApple`, which is
+   * retry-naive: → `getInAppPurchase` (client.ts:119) → `iapFetch`, and
+   * `iapFetch` throws `AppleRateLimitError` without retrying (fetch.ts:13-17).
+   */
   getIapDetail: typeof getIapDetailFromApple;
+  /**
+   * ⚠ MUST NOT be wrapped here — it ALREADY retries internally, at BOTH
+   * stages: stage 1 (price-schedules.ts:319) and stage 2's per-page loop
+   * (price-schedules.ts:266). This is the same contract shape as
+   * `listAllInAppPurchases` (client.ts:52-54): the helper owns its retry, the
+   * caller must not add a second one.
+   */
   getPriceScheduleForIap: typeof getPriceScheduleForIap;
   concurrency?: number;
 }
@@ -73,10 +95,17 @@ export async function fetchExportSources(
     try {
       // Critical path — a failure here means this row can't be built at
       // all (no product id / SKU name / localizations to fall back on).
-      const detail = await deps.getIapDetail(creds, iap.id);
+      //
+      // ⚠ EXACTLY ONE withRetry, over a retry-naive leaf — see
+      // `ExportFetchDeps.getIapDetail` for the contract and why the count is
+      // load-bearing. Do not add a second wrapper here, at the route, or
+      // inside the leaf.
+      const detail = await withRetry(() => deps.getIapDetail(creds, iap.id));
 
       // Best-effort — any failure degrades to blank pricing, matching
       // View Detail's own priceSchedule-is-optional resilience.
+      // ⚠ NO withRetry: this dep retries internally at both stages
+      // (price-schedules.ts:319 + :266).
       let priceSchedule = null as ExportSource["priceSchedule"];
       try {
         const scheduleRes = await deps.getPriceScheduleForIap(creds, iap.id);

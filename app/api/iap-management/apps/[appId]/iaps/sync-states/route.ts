@@ -37,10 +37,7 @@ import { ensureAppRegistered } from "@/lib/iap-management/queries/iaps";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { listAllInAppPurchases } from "@/lib/iap-management/apple/client";
 import { getApp } from "@/lib/asc-client";
-import {
-  withRetry,
-  AppleApiError,
-} from "@/lib/iap-management/apple/fetch";
+import { AppleApiError } from "@/lib/iap-management/apple/fetch";
 import { classifySyncStates } from "@/lib/iap-management/sync-states/classify";
 import { log } from "@/lib/logger";
 
@@ -86,9 +83,15 @@ export async function POST(
   let internalAppId: string;
   try {
     const creds = await getActiveAccount();
+    // ⚠ NO outer `withRetry` on listAllInAppPurchases — it retries each page
+    // internally (client.ts:70) and its docstring forbids wrapping it
+    // (client.ts:52-54). The wrapper made it 4 × 4 = 16 attempts, and since
+    // the outer retry restarts enumeration from page 1, a tail-page 429 also
+    // re-fetched every page already read. Twin of the export:68 site; both
+    // fixed together.
     const [appRes, iapsRes] = await Promise.all([
       getApp(creds, appleAppId),
-      withRetry(() => listAllInAppPurchases(creds, appleAppId)),
+      listAllInAppPurchases(creds, appleAppId),
     ]);
     internalAppId = await ensureAppRegistered({
       apple_app_id: appleAppId,

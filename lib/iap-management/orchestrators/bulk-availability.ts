@@ -360,9 +360,24 @@ export async function executeBulkAvailability(
         // ⚠ EXACTLY ONE withRetry, over a retry-naive leaf.
         // `setAvailabilityTerritories` → `iapFetch`, which throws
         // AppleRateLimitError and never retries on its own (fetch.ts:13-17).
-        // Do not add a second wrapper here or inside the leaf — that is the
-        // sync-states:91 × client.ts:70 double-wrap, which turns 4 attempts
-        // into 16 and ~10s of stacked backoff on a single row.
+        // Do not add a second wrapper here or inside the leaf.
+        //
+        // THE CONTRACT LIVES AT THE HELPER, NOT IN THESE COMMENTS.
+        // `listAllInAppPurchases`'s own docstring (client.ts:52-54) states
+        // "Callers MUST NOT wrap this in their own `withRetry`" — that is the
+        // single source to check before wrapping ANY Apple helper. Read it
+        // there rather than trusting a comment like this one to be complete;
+        // this family was swept twice and both sweeps missed a sibling.
+        //
+        // Known double-wrap sites, both over `listAllInAppPurchases`
+        // (helper retries per page at client.ts:70) — ⚠ BOTH NOW FIXED:
+        //   • sync-states/route.ts:91  — fixed (outer wrapper removed)
+        //   • export/route.ts:68       — fixed (outer wrapper removed)
+        // Each was 4 × 4 = 16 attempts, and because the outer retry restarts
+        // the helper from page 1, a tail-page 429 also re-fetched every page
+        // already read: up to 32 requests for a 5-page list.
+        // Sites that were always correct and are the reference shape:
+        // page.tsx:78, submit-batch/route.ts:353 + :432 (bare, no wrapper).
         const res = await trackedWithRetry(counters, () =>
           setAvailabilityTerritories(creds, appleIapId, selection),
         );
