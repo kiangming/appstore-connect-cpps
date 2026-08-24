@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Export list — item selection, filters, stop-and-preserve (design mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; background:#f1f5f9; }
+    .state-shell { background:#f8fafc; border:1px solid #e2e8f0; border-radius:16px; padding:24px; }
+    .state-title { font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#64748b; margin-bottom:4px; }
+    .state-sub { font-size:12px; color:#64748b; margin-bottom:16px; }
+    .surface { background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
+    .badge-type { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-size:10px; font-weight:500; border-width:1px; }
+    .badge-type-consumable { background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe; }
+    .badge-type-non-consumable { background:#faf5ff; color:#6b21a8; border-color:#e9d5ff; }
+    .badge-state { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-size:10px; font-weight:500; border-width:1px; }
+    .badge-approved { background:#ecfdf5; color:#047857; border-color:#a7f3d0; }
+    .badge-removed  { background:#f1f5f9; color:#475569; border-color:#cbd5e1; }
+    .badge-mm       { background:#fefce8; color:#a16207; border-color:#fde68a; }
+    .btn-primary { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; font-size:13px; font-weight:500; background:#0071E3; color:#fff; border-radius:8px; }
+    .btn-cancel  { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; font-size:13px; font-weight:500; background:#fff; color:#475569; border:1px solid #e2e8f0; border-radius:8px; }
+    .btn-ghost   { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; font-size:12px; font-weight:500; background:#f1f5f9; color:#334155; border:1px solid #e2e8f0; border-radius:8px; }
+    .row { display:grid; grid-template-columns:28px 1fr 200px 130px 150px; align-items:center; gap:12px; padding:8px 14px; border-bottom:1px solid #f1f5f9; font-size:13px; }
+    .row-disabled { background:#fafafa; color:#94a3b8; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
+    .sticky-bar { background:#f8fafc; border-bottom:1px solid #e2e8f0; padding:9px 14px; }
+    .sticky-foot { background:#f8fafc; border-top:1px solid #e2e8f0; padding:12px 14px; }
+    .note { font-size:11.5px; color:#64748b; }
+    .warn { background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:8px; padding:10px 12px; font-size:12px; }
+    .danger { background:#fef2f2; border:1px solid #fecaca; color:#991b1b; border-radius:8px; padding:10px 12px; font-size:12px; }
+    .ok { background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; border-radius:8px; padding:10px 12px; font-size:12px; }
+    .info { background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; border-radius:8px; padding:10px 12px; font-size:12px; }
+    input[type=checkbox] { width:14px; height:14px; accent-color:#0071E3; }
+    .cost { font-size:12.5px; font-weight:600; color:#0f172a; }
+    table.sheet { width:100%; border-collapse:collapse; font-size:12px; }
+    table.sheet th { background:#f1f5f9; text-align:left; padding:6px 10px; border:1px solid #e2e8f0; font-weight:600; color:#334155; }
+    table.sheet td { padding:6px 10px; border:1px solid #e2e8f0; color:#334155; }
+  </style>
+</head>
+<body class="p-8">
+<div class="max-w-5xl mx-auto space-y-8">
+
+  <header>
+    <h1 class="text-2xl font-semibold text-slate-900">Export list — item selection, filters, stop-and-preserve</h1>
+    <p class="text-sm text-slate-500 mt-1">
+      Design mockup for <span class="mono">docs/iap-management/design-export-list-item-selection.md</span>.
+      Apple IAP Management only. The country dialog (step 2) is the existing shared component and is <strong>not</strong> redesigned here.
+    </p>
+    <div class="info mt-3">
+      <strong>Cost model (gate G1).</strong> Every exported item costs <strong>3 Apple requests</strong>
+      (detail + price-schedule stage 1 + stage 2). Today the export sweeps the whole app unconditionally:
+      N=1000 → ~3,005 requests. Steps 1 and 2 below cost <strong>zero</strong>; only the final Export reads Apple.
+    </div>
+  </header>
+
+  <!-- STEP 1 -->
+  <section class="state-shell">
+    <div class="state-title">Step 1 of 2 — choose items</div>
+    <div class="state-sub">0 Apple requests. Everything on this screen comes from data the page already holds.</div>
+
+    <div class="surface">
+      <div class="px-4 pt-4 pb-3 border-b border-slate-100">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <h3 class="text-base font-semibold text-slate-900">Export list — choose items</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Pick the items to export. Nothing is read from Apple until you export.</p>
+          </div>
+          <button class="text-slate-400 text-sm">✕</button>
+        </div>
+      </div>
+
+      <!-- filters -->
+      <div class="px-4 py-3 space-y-2.5 border-b border-slate-100">
+        <div class="flex items-center gap-2">
+          <input class="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-[13px]" value="gem" />
+          <select class="rounded-lg border border-slate-300 px-2 py-2 text-[13px]"><option>Type: All</option><option>Consumable</option><option>Non-consumable</option></select>
+          <select class="rounded-lg border border-slate-300 px-2 py-2 text-[13px]"><option>Apple status: All</option><option>Approved</option><option>Removed from sale</option><option>Missing metadata</option></select>
+        </div>
+        <div class="flex items-center justify-between gap-3">
+          <p class="note">
+            ⓘ <strong>“Apple status”</strong> is the review state (Approved, Removed from sale, …),
+            <strong>not</strong> territory availability. Two different things — see the optional filter below.
+          </p>
+          <button class="btn-ghost whitespace-nowrap">+ Filter by availability…</button>
+        </div>
+      </div>
+
+      <!-- sticky select-all -->
+      <div class="sticky-bar flex items-center justify-between">
+        <label class="flex items-center gap-2 text-[13px] font-medium text-slate-700">
+          <input type="checkbox" checked /> Select all (38 matching)
+        </label>
+        <div class="text-right">
+          <div class="text-[12px] font-medium text-slate-700">12 selected of 38 matching · 947 total</div>
+          <div class="note">+ 3 selected items hidden by the current search</div>
+        </div>
+      </div>
+
+      <!-- rows -->
+      <div>
+        <div class="row"><input type="checkbox" checked /><span class="mono">com.vng.gems.60</span><span>Gems 60</span><span class="badge-type badge-type-consumable">Consumable</span><span class="badge-state badge-approved">Approved</span></div>
+        <div class="row"><input type="checkbox" checked /><span class="mono">com.vng.gems.300</span><span>Gems 300</span><span class="badge-type badge-type-consumable">Consumable</span><span class="badge-state badge-approved">Approved</span></div>
+        <div class="row"><input type="checkbox" /><span class="mono">com.vng.gems.980</span><span>Gems 980</span><span class="badge-type badge-type-consumable">Consumable</span><span class="badge-state badge-removed">Removed from sale</span></div>
+        <div class="row row-disabled"><input type="checkbox" disabled /><span class="mono">com.vng.gems.1980</span><span>Gems 1980</span><span class="badge-type badge-type-consumable">Consumable</span><span class="badge-state badge-mm">—</span></div>
+        <div class="px-4 pb-2 -mt-1 flex items-center justify-between">
+          <span class="note">└ Local draft — not on Apple yet. Nothing to export.</span>
+          <button class="btn-ghost">Edit item</button>
+        </div>
+        <div class="row"><input type="checkbox" /><span class="mono">com.vng.starter.pack</span><span>Starter Pack</span><span class="badge-type badge-type-non-consumable">Non-consumable</span><span class="badge-state badge-approved">Approved</span></div>
+        <div class="px-4 py-3 text-center border-t border-slate-100">
+          <button class="btn-ghost">Show 60 more (26 hidden)</button>
+          <p class="note mt-1.5">Not shown is not excluded — <strong>Select all still takes all 38</strong>.</p>
+        </div>
+      </div>
+
+      <!-- sticky footer -->
+      <div class="sticky-foot flex items-center justify-between">
+        <span class="cost">Export 12 items · about 36 Apple requests</span>
+        <div class="flex gap-2">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-primary">Next — choose countries</button>
+        </div>
+      </div>
+    </div>
+
+    <p class="note mt-3">
+      ⚠ <strong>Select all = every row matching the current search and filters</strong>, never the rendered window.
+      Un-ticking removes only the matches, so narrowing the search cannot silently wipe an off-screen selection
+      (<span class="mono">toggleAllForQuery</span>, reused unchanged from A′).
+    </p>
+  </section>
+
+  <!-- OPTIONAL FILTER -->
+  <section class="state-shell">
+    <div class="state-title">Step 1 — optional availability filter (opt-in, priced on the control)</div>
+    <div class="state-sub">Gate G2: no cheap source exists. The cost is shown, never absorbed.</div>
+    <div class="surface p-4 space-y-3">
+      <h4 class="text-sm font-semibold text-slate-900">Filter by availability</h4>
+      <div class="warn">
+        ⚠ <strong>Not free.</strong> Reads current availability from Apple for the <strong>12 items you selected</strong> —
+        about 12 extra requests. Everything else on this screen is already in hand.
+      </div>
+      <div class="flex items-center gap-5 text-[13px] text-slate-700">
+        <label class="flex items-center gap-2"><input type="radio" name="av" /> Available</label>
+        <label class="flex items-center gap-2"><input type="radio" name="av" /> Removed from sales</label>
+        <label class="flex items-center gap-2"><input type="radio" name="av" checked /> Don’t filter</label>
+        <button class="btn-ghost ml-auto">Read 12 items and filter</button>
+      </div>
+      <p class="note">
+        ⚠ Why this is not in the main filter bar: classifying availability needs a per-item territory <em>count</em>.
+        Apple’s list <span class="mono">include=inAppPurchaseAvailability</span> is free but only proves the resource
+        <em>exists</em> — and “Remove from Sales” is a <strong>present</strong> resource with an <strong>empty</strong>
+        territory list (KB §4.12), so presence would label every removed item “Available”.
+      </p>
+    </div>
+  </section>
+
+  <!-- LARGE SELECTION -->
+  <section class="state-shell">
+    <div class="state-title">Step 1 — large selection (caution, never a block)</div>
+    <div class="state-sub">The Manager asked for stop-and-preserve, not prevention.</div>
+    <div class="surface">
+      <div class="sticky-foot space-y-2">
+        <span class="cost">Export 947 items · about 2,841 Apple requests</span>
+        <div class="warn">
+          ⚠ Large exports can reach Apple’s hourly limit. If that happens the export <strong>stops</strong>,
+          you still get the file with everything that succeeded, and the items it missed are listed inside it.
+        </div>
+        <div class="flex justify-end gap-2">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-primary">Next — choose countries</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 2 -->
+  <section class="state-shell">
+    <div class="state-title">Step 2 of 2 — choose countries</div>
+    <div class="state-sub">0 Apple requests (gate G5 — territory selection only narrows columns from already-fetched rows).</div>
+    <div class="surface p-4">
+      <div class="danger mb-3">
+        ⚠ <strong>This dialog is shared with the Google IAP module</strong>
+        (<span class="mono">components/iap-management/ExportOptionsDialog.tsx</span>, imported by both
+        <span class="mono">IapListClient</span>s). It is <strong>not modified</strong> by this design — the item step
+        is a separate component. Apple needs a step Google does not, because Google’s list fetch returns complete
+        pricing in one pass.
+      </div>
+      <h4 class="text-sm font-semibold text-slate-900">Export options <span class="text-xs font-normal text-slate-500">(12 items selected)</span></h4>
+      <p class="text-xs text-slate-500 mt-0.5 mb-3">Choose which countries &amp; currencies to include in the exported file.</p>
+      <div class="border border-slate-200 rounded-lg p-3 text-[13px] text-slate-500">… unchanged territory list …</div>
+      <div class="flex justify-between mt-3">
+        <button class="btn-cancel">← Back to items</button>
+        <div class="flex gap-2">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-primary">Export 61 countries</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STOPPED -->
+  <section class="state-shell">
+    <div class="state-title">Step 3 — stopped on rate limit</div>
+    <div class="state-sub">Three states, kept separate. A stopped run is not a failed run.</div>
+    <div class="surface p-4 space-y-3">
+      <h4 class="text-sm font-semibold text-slate-900">Export stopped</h4>
+      <div class="warn">⚠ Apple’s rate limit stopped the export after <strong>380 of 400</strong> items. The file has downloaded.</div>
+      <ul class="text-[13px] text-slate-700 space-y-1.5">
+        <li>▸ <strong>374 items exported</strong></li>
+        <li>▸ <strong>6 items partially exported</strong> — prices missing (rate limited)</li>
+        <li>▸ <strong>2 items failed</strong> — Apple was asked and refused (reasons in the file)</li>
+        <li>▸ <strong>18 items not attempted</strong> — nothing was sent. <span class="text-emerald-700 font-medium">Safe to export again.</span></li>
+      </ul>
+      <div class="ok">Sheet <strong>“Not exported”</strong> in the downloaded file lists all 26, each with its real reason.</div>
+      <div class="flex justify-end gap-2">
+        <button class="btn-primary">Export the 18 not-attempted</button>
+        <button class="btn-cancel">Close</button>
+      </div>
+      <p class="note">
+        ⚠ Only <strong>NOT_ATTEMPTED</strong> is pre-ticked by that button — nothing was sent for those items, so
+        re-sending is harmless. <strong>FAILED</strong> items are not pre-ticked: Apple was asked and refused, and a
+        human reads the reason first.
+      </p>
+    </div>
+  </section>
+
+  <!-- FILE -->
+  <section class="state-shell">
+    <div class="state-title">The file — sheet 2, “Not exported”</div>
+    <div class="state-sub">Manager lock: a clean main sheet, and a separate sheet naming every miss with its real reason. xlsx supports this natively (gate G4).</div>
+    <div class="surface p-4 space-y-4">
+      <div>
+        <p class="text-[12px] font-semibold text-slate-700 mb-1.5">Sheet 1 — <span class="mono">Apple IAP Export</span></p>
+        <div class="warn mb-2">⚠ 26 of 400 items were not fully exported — see the “Not exported” sheet.</div>
+        <div class="border border-slate-200 rounded-lg p-3 text-[13px] text-slate-500">… unchanged two-row merged-header layout …</div>
+      </div>
+      <div>
+        <p class="text-[12px] font-semibold text-slate-700 mb-1.5">Sheet 2 — <span class="mono">Not exported</span> <span class="font-normal text-slate-500">(present only when non-empty)</span></p>
+        <table class="sheet">
+          <thead><tr><th>Product ID</th><th>SKU Name</th><th>Outcome</th><th>Reason</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">com.vng.gems.980</td><td>Gems 980</td><td>Failed</td><td>Apple rate-limited the read after retries were exhausted.</td></tr>
+            <tr><td class="mono">com.vng.gems.1980</td><td>Gems 1980</td><td>Partial</td><td>Row exported, but prices could not be read (rate limited).</td></tr>
+            <tr><td class="mono">com.vng.starter</td><td>Starter Pack</td><td>Failed</td><td>Apple returned 404 — the item no longer exists on Apple.</td></tr>
+            <tr><td class="mono">com.vng.vip.1</td><td>VIP 1</td><td>Not attempted</td><td>Export stopped before this item. Safe to export again.</td></tr>
+          </tbody>
+        </table>
+        <p class="note mt-2">
+          ⚠ Reasons are never merged into one bucket and never a bare count. “Rate limited”, “Apple rejected” and
+          “fetch failed” lead to three different Manager actions.
+        </p>
+      </div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>
