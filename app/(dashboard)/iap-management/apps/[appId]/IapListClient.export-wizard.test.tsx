@@ -23,6 +23,7 @@
  * sits two clicks away from it in the same toolbar).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { toast } from "sonner";
 import {
   render,
   screen,
@@ -69,7 +70,7 @@ const IAPS = [
 
 let fetchSpy: ReturnType<typeof vi.fn>;
 
-function stubFetch() {
+function stubFetch(exportHeaders: Record<string, string> = {}) {
   fetchSpy = vi.fn(
     async () =>
       ({
@@ -81,6 +82,7 @@ function stubFetch() {
           "Content-Disposition": 'attachment; filename="e.xlsx"',
           "X-Export-Item-Count": "2",
           "X-Export-Failed-Count": "0",
+          ...exportHeaders,
         }),
       }) as unknown as Response,
   );
@@ -420,5 +422,107 @@ describe("items with no internal UUID are exportable from this page", () => {
       "apple-b",
       "apple-c",
     ]);
+  });
+});
+
+// ─── the outcome copy (2f) ─────────────────────────────────────────────────
+
+/** Drive the wizard all the way through to a finished export. */
+async function runExport(pick: string[]) {
+  openWizard();
+  for (const p of pick) {
+    fireEvent.click(wizard().getByRole("checkbox", { name: `Select ${p}` }));
+  }
+  fireEvent.click(wizard().getByTestId("wizard-continue"));
+  await waitFor(() =>
+    expect(screen.getByText("Export options")).toBeInTheDocument(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: /^Export \d+ countr/ }));
+  await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+}
+
+describe("the toast names the denominator the operator asked for", () => {
+  it("⚠ says 'X of M selected' — not a bare count that hides what is missing", async () => {
+    // 3 picked, 2 came back, 1 refused. "Exported 2 items" is true and
+    // useless; it hides the one that did not.
+    stubFetch({ "X-Export-Item-Count": "2", "X-Export-Failed-Count": "1" });
+    renderList();
+
+    await runExport(["com.x.a", "com.x.b", "com.x.c"]);
+
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        expect.stringContaining("Exported 2 of 3 selected."),
+        expect.anything(),
+      ),
+    );
+  });
+
+  it("a stopped run is warned, not celebrated, and still reports what landed", async () => {
+    stubFetch({
+      "X-Export-Item-Count": "2",
+      "X-Export-Not-Attempted-Count": "1",
+      "X-Export-Stopped": "rate_limit",
+    });
+    renderList();
+
+    await runExport(["com.x.a", "com.x.b", "com.x.c"]);
+
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        expect.stringContaining("stopped on Apple's rate limit"),
+        expect.anything(),
+      ),
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it("a clean run succeeds, with the selection denominator intact", async () => {
+    stubFetch({ "X-Export-Item-Count": "2" });
+    renderList();
+
+    await runExport(["com.x.a", "com.x.b"]);
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        "Exported 2 of 2 selected.",
+        expect.anything(),
+      ),
+    );
+  });
+});
+
+describe("the result panel appears only when a toast cannot carry it", () => {
+  it("opens on a stopped run, naming the three outcomes separately", async () => {
+    stubFetch({
+      "X-Export-Item-Count": "2",
+      "X-Export-Failed-Count": "1",
+      "X-Export-Partial-Count": "1",
+      "X-Export-Not-Attempted-Count": "3",
+      "X-Export-Stopped": "rate_limit",
+    });
+    renderList();
+
+    await runExport(["com.x.a", "com.x.b", "com.x.c"]);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("export-result-summary")).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("result-failed")).toHaveTextContent("1");
+    expect(screen.getByTestId("result-not-attempted")).toHaveTextContent("3");
+    expect(screen.getByTestId("result-partial")).toHaveTextContent("1");
+    expect(screen.getByTestId("failure-sheet-pointer")).toHaveTextContent(
+      "Export Failures",
+    );
+  });
+
+  it("stays shut on a clean run — no dialog for nothing", async () => {
+    stubFetch({ "X-Export-Item-Count": "2" });
+    renderList();
+
+    await runExport(["com.x.a", "com.x.b"]);
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(screen.queryByTestId("export-result-summary")).toBeNull();
   });
 });

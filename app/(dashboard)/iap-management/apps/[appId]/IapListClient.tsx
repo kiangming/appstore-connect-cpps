@@ -36,6 +36,7 @@ import {
 } from "@/components/iap-management/AvailabilitiesBulkModal";
 import { AvailabilityCell } from "@/components/iap-management/AvailabilityCell";
 import { ExportItemWizard } from "@/components/iap-management/export-wizard/ExportItemWizard";
+import { ExportResultSummary } from "@/components/iap-management/export-wizard/ExportResultSummary";
 
 const PAGE_SIZE = 100;
 
@@ -148,6 +149,14 @@ export function IapListClient({
   const [refreshing, setRefreshing] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportWizardOpen, setExportWizardOpen] = useState(false);
+  const [exportResult, setExportResult] = useState<{
+    exported: number;
+    partial: number;
+    failed: number;
+    notAttempted: number;
+    stopped: boolean;
+    selectedCount: number | null;
+  } | null>(null);
   const [page, setPage] = useState(1);
   // Cycle 39 Phase 2 — bulk modal state. Null = closed.
   // Hotfix 25: the modal now fetches availability on open via the
@@ -357,13 +366,50 @@ export function IapListClient({
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
+      // ⚠ Read from the headers 2a pinned — no new header was added for any
+      //   of this, and none of their meanings changed.
       const count = res.headers.get("X-Export-Item-Count");
+      const exported = Number(count ?? "0");
       const failedCount = Number(res.headers.get("X-Export-Failed-Count") ?? "0");
-      const summary = count ? `Exported ${count} item${count === "1" ? "" : "s"}.` : "Export ready.";
-      if (failedCount > 0) {
+      const partialCount = Number(res.headers.get("X-Export-Partial-Count") ?? "0");
+      const notAttemptedCount = Number(
+        res.headers.get("X-Export-Not-Attempted-Count") ?? "0",
+      );
+      const stopped = res.headers.get("X-Export-Stopped") === "rate_limit";
+      const selectedCount = selectedIds.length > 0 ? selectedIds.length : null;
+
+      // ⚠ WITH A SELECTION THE DENOMINATOR IS THE ASK, NOT THE APP. "Exported
+      //   38 items" against a 40-item pick hides that 2 are missing; "38 of 40
+      //   selected" is the same number telling the truth. X is
+      //   X-Export-Item-Count unchanged — the count was never redefined, only
+      //   given the denominator it always implied.
+      const summary = !count
+        ? "Export ready."
+        : selectedCount !== null
+          ? `Exported ${count} of ${selectedCount} selected.`
+          : `Exported ${count} item${count === "1" ? "" : "s"}.`;
+
+      if (stopped) {
+        // ⚠ A stopped run is NOT a failed run — most items already landed.
+        toast.warning(`${summary} · stopped on Apple's rate limit.`, { id: toastId });
+      } else if (failedCount > 0) {
         toast.warning(`${summary} · ${failedCount} item(s) skipped (fetch failed).`, { id: toastId });
       } else {
         toast.success(summary, { id: toastId });
+      }
+
+      // The panel only appears when a toast cannot carry it honestly — three
+      // separate outcomes do not fit in one line, and a clean run needs no
+      // dialog.
+      if (stopped || failedCount > 0 || notAttemptedCount > 0 || partialCount > 0) {
+        setExportResult({
+          exported,
+          partial: partialCount,
+          failed: failedCount,
+          notAttempted: notAttemptedCount,
+          stopped,
+          selectedCount,
+        });
       }
     } catch (err) {
       const message =
@@ -862,6 +908,13 @@ export function IapListClient({
         onCancel={() => setExportWizardOpen(false)}
         onExport={handleConfirmExport}
       />
+
+      {exportResult && (
+        <ExportResultSummary
+          {...exportResult}
+          onClose={() => setExportResult(null)}
+        />
+      )}
     </div>
   );
 }
