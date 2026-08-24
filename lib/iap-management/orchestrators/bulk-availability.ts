@@ -53,7 +53,7 @@
  */
 
 import type { AscCredentials } from "@/lib/asc-jwt";
-import { withConcurrency } from "@/lib/iap-management/concurrency";
+import { runStoppablePool } from "@/lib/iap-management/stoppable-pool";
 import { iapDb } from "@/lib/iap-management/db";
 import {
   getAllTerritoryIds,
@@ -311,33 +311,41 @@ export async function executeBulkAvailability(
   const action_type = availabilityActionType(selection, catalogue);
 
   /**
-   * ⚠ THE STOP LATCH (Manager decision 3). Set once, never cleared.
+   * ⚠ THE STOP LATCH (Manager decision 3) now lives in `runStoppablePool`,
+   * which owns all three of its rules — checked before any I/O, settable
+   * only by `shouldStop`, in-flight rows finish and are recorded honestly.
+   * This file supplies the three Apple-specific pieces and nothing else:
    *
-   * Only rate-limit exhaustion sets it. A rejected territory or a state
-   * guard on item 3 says nothing about item 4, so those stay fail-soft
-   * exactly as before (Q-K) — an exhausted budget is the one failure that
-   * predicts the next call will also fail, and burning the remaining
-   * budget to prove it is what we are avoiding.
+   *   shouldStop  — ONLY rate-limit exhaustion. A rejected territory or a
+   *                 state guard on row 3 says nothing about row 4, so those
+   *                 stay fail-soft (Q-K). An exhausted budget is the one
+   *                 failure that predicts the next call fails too, and
+   *                 burning the rest to prove it is what we are avoiding.
+   *   skipped     — the NOT_ATTEMPTED row: no Apple call, no audit row, so
+   *                 it is safe to resume blindly.
+   *   onError     — the audit row + failure_kind for a row that WAS sent.
    *
-   * Implemented as a latch checked at the top of each row rather than an
-   * abort inside `withConcurrency`, deliberately: that primitive is shared
-   * with bulk-import and submit-batch, and adding cancellation to it would
-   * put a new failure mode on two paths this feature has no business
-   * touching. Rows already in flight (concurrency 2 ⇒ at most one sibling)
-   * are allowed to finish and are recorded honestly; every row after the
-   * latch does ZERO Apple work and writes NO audit row.
+   * The extraction is a parity move: behaviour is byte-for-byte what
+   * `withConcurrency` + a local boolean did before, and the 37 existing
+   * tests are the gate that says so.
+   *
+   * ⚠ `counters` is per-row telemetry mutated in place by `trackedWithRetry`
+   * during `run`, and the FAILED row must carry it. `run` and `onError` are
+   * separate callbacks now, so it is parked here keyed by row rather than
+   * closed over — same values, same rows, just reachable from both halves.
    */
-  let stoppedByRateLimit = false;
+  const countersByIap = new Map<string, RetryCounters>();
 
-  const results = await withConcurrency<string, BulkAvailabilityRowResult>(
-    iapIds,
+  // ⚠ `stopped` is the pool's own latch state, not a re-derivation from the
+  //    rows. Inferring it from "any row is NOT_ATTEMPTED" would be a second
+  //    source of the same truth, free to drift.
+  const { results, stopped: stoppedByRateLimit } =
+    await runStoppablePool<string, BulkAvailabilityRowResult>({
+    items: iapIds,
     concurrency,
-    async (iapId) => {
-      if (stoppedByRateLimit) {
-        // No Apple call, no audit row — this item's state on Apple is
-        // untouched, which is what makes it safe to resume blindly.
-        return { iapId, ok: false, status: "NOT_ATTEMPTED" };
-      }
+    shouldStop: (err) => err instanceof AppleRateLimitError,
+    skipped: (iapId) => ({ iapId, ok: false, status: "NOT_ATTEMPTED" }),
+    run: async (iapId) => {
       const appleIapId = appleIdByRow.get(iapId);
       if (!appleIapId) {
         const error =
@@ -356,7 +364,8 @@ export async function executeBulkAvailability(
         };
       }
       const counters = createRetryCounters();
-      try {
+      countersByIap.set(iapId, counters);
+      {
         // ⚠ EXACTLY ONE withRetry, over a retry-naive leaf.
         // `setAvailabilityTerritories` → `iapFetch`, which throws
         // AppleRateLimitError and never retries on its own (fetch.ts:13-17).
@@ -398,40 +407,46 @@ export async function executeBulkAvailability(
           ...(apple_availability_id ? { apple_availability_id } : {}),
           rate_limit: counters,
         };
-      } catch (err) {
-        // Retries are already exhausted by the time this fires — `withRetry`
-        // re-throws the LAST AppleRateLimitError only after burning the
-        // whole backoff curve. Reacting to the error is the whole strategy:
-        // nothing here pre-computes a budget from a guessed hourly cap,
-        // because that number is unresolved (KB §4.9, 250 vs 3,600).
-        const isRateLimited = err instanceof AppleRateLimitError;
-        if (isRateLimited) {
-          stoppedByRateLimit = true;
-          console.warn(
-            `[bulk-availability] STOP — Apple rate limit exhausted on iap=${iapId}; remaining rows will not be attempted`,
-          );
-        }
-        const error = err instanceof Error ? err.message : String(err);
-        await writeAuditRow(actor, iapId, action_type, {
-          apple_iap_id: appleIapId,
-          result: "ERROR",
-          ...availabilityAuditProvenance(selection, previousByIapId?.[iapId]),
-          source: "bulk",
-          error,
-          rate_limit: counters,
-        });
-        return {
-          iapId,
-          apple_iap_id: appleIapId,
-          ok: false,
-          status: "FAILED",
-          failure_kind: isRateLimited ? "RATE_LIMITED" : "APPLE_REJECTED",
-          error,
-          rate_limit: counters,
-        };
       }
     },
-  );
+    onError: async (iapId, err) => {
+      // Retries are already exhausted by the time this fires — `withRetry`
+      // re-throws the LAST AppleRateLimitError only after burning the
+      // whole backoff curve. Reacting to the error is the whole strategy:
+      // nothing here pre-computes a budget from a guessed hourly cap,
+      // because that number is unresolved (KB §4.9, 250 vs 3,600).
+      //
+      // ⚠ The latch is ALREADY set by the time this runs — the pool consults
+      // `shouldStop` first (rule 2). Nothing here can stop the batch, and
+      // nothing here needs to.
+      const appleIapId = appleIdByRow.get(iapId);
+      const counters = countersByIap.get(iapId) ?? createRetryCounters();
+      const isRateLimited = err instanceof AppleRateLimitError;
+      if (isRateLimited) {
+        console.warn(
+          `[bulk-availability] STOP — Apple rate limit exhausted on iap=${iapId}; remaining rows will not be attempted`,
+        );
+      }
+      const error = err instanceof Error ? err.message : String(err);
+      await writeAuditRow(actor, iapId, action_type, {
+        apple_iap_id: appleIapId,
+        result: "ERROR",
+        ...availabilityAuditProvenance(selection, previousByIapId?.[iapId]),
+        source: "bulk",
+        error,
+        rate_limit: counters,
+      });
+      return {
+        iapId,
+        apple_iap_id: appleIapId,
+        ok: false,
+        status: "FAILED",
+        failure_kind: isRateLimited ? "RATE_LIMITED" : "APPLE_REJECTED",
+        error,
+        rate_limit: counters,
+      };
+    },
+  });
 
   const succeeded = results.filter((r) => r.status === "SUCCESS").length;
   // ⚠ NOT `results.length - succeeded`. Not-attempted rows are not
