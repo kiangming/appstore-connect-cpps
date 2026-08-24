@@ -13,12 +13,24 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // hitting the network. Hoisted so the imports below see the mocked symbols.
 const getInAppPurchase = vi.hoisted(() => vi.fn());
 const getPriceScheduleForIap = vi.hoisted(() => vi.fn());
+const NoPriceScheduleError = vi.hoisted(
+  () =>
+    class NoPriceScheduleError extends Error {
+      status = 404;
+      body = "";
+    },
+);
+
 
 vi.mock("@/lib/iap-management/apple/client", () => ({
   getInAppPurchase,
 }));
+// ⚠ The subclass must be in the mock too: production code does
+// `err instanceof NoPriceScheduleError` against THIS binding, and a
+// missing export makes it `instanceof undefined`, which throws.
 vi.mock("@/lib/iap-management/apple/price-schedules", () => ({
   getPriceScheduleForIap,
+  NoPriceScheduleError,
 }));
 vi.mock("@/lib/iap-management/apple/fetch", () => ({
   AppleApiError: class extends Error {
@@ -561,17 +573,30 @@ describe("getIapViewData", () => {
     expect(out.priceScheduleError).toBeNull();
   });
 
-  it("returns priceSchedule=null when Apple 404s (no schedule yet)", async () => {
+  it("returns priceSchedule=null when Apple has no schedule (stage-1 404)", async () => {
     getInAppPurchase.mockResolvedValueOnce({ data: baseIap() });
-    getPriceScheduleForIap.mockRejectedValueOnce(
-      new AppleApiError(404, "GET", "/v2/.../inAppPurchasePriceSchedule", ""),
-    );
+    // ⚠ Fixture changed by the stage-label work: a BARE AppleApiError(404) no
+    // longer means "no schedule", because stage 2 can also 404 and that means
+    // the read broke. Only the stage-1 subclass carries the claim.
+    getPriceScheduleForIap.mockRejectedValueOnce(new NoPriceScheduleError());
 
     const out = await getIapViewData(creds, "apple-1");
 
     expect(out.iap.id).toBe("apple-1");
     expect(out.priceSchedule).toBeNull();
     expect(out.priceScheduleError).toBeNull();
+  });
+
+  it("⚠ a bare 404 (stage-2 — the schedule EXISTS but its read broke) surfaces an error, NOT an empty placeholder", async () => {
+    getInAppPurchase.mockResolvedValueOnce({ data: baseIap() });
+    getPriceScheduleForIap.mockRejectedValueOnce(
+      new AppleApiError(404, "GET", "/v1/inAppPurchasePriceSchedules/s1/manualPrices?cursor=X", "not found"),
+    );
+
+    const out = await getIapViewData(creds, "apple-1");
+
+    expect(out.priceSchedule).toBeNull();
+    expect(out.priceScheduleError).not.toBeNull();
   });
 
   it("surfaces priceScheduleError when the fetch fails for non-404", async () => {

@@ -7,6 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 
 import { fetchExportSources } from "./export-fetch";
 import { AppleApiError, AppleRateLimitError } from "./fetch";
+import { NoPriceScheduleError } from "./price-schedules";
 import type { InAppPurchase, InAppPurchaseLocalization, AscApiResponse, InAppPurchasePriceSchedule } from "@/types/iap-management/apple";
 import type { AscCredentials } from "@/lib/asc-jwt";
 
@@ -315,13 +316,14 @@ describe("fetchExportSources — price-read classification (G4b)", () => {
       screenshot: null,
     }));
 
-  it("a 404 is NOT a failure — it is the legitimate no-schedule case", async () => {
-    // Verified through both stages: neither getPriceScheduleForIap nor
-    // fetchManualPricesPaginated catches, and appleFetch throws
-    // AppleApiError(404). So 404 arrives at the catch and is recognised there.
+  it("a STAGE-1 404 is NOT a failure — it is the legitimate no-schedule case", async () => {
+    // `getPriceScheduleForIap` catches its own stage-1 404 and re-throws the
+    // subclass, because it is the only place that knows which stage threw.
     const getPriceScheduleForIap = vi
       .fn()
-      .mockRejectedValue(new AppleApiError(404, "GET", "/sched", "not found"));
+      .mockRejectedValue(
+        new NoPriceScheduleError("a1", new AppleApiError(404, "GET", "/sched", "not found")),
+      );
 
     const r = await fetchExportSources(creds, [iap("a1", "com.x.a1")], {
       getIapDetail: detailOk("a1"),
@@ -354,6 +356,33 @@ describe("fetchExportSources — price-read classification (G4b)", () => {
       kind: "RATE_LIMITED",
       status: 429,
     });
+  });
+
+  it("⚠ a BARE 404 (stage 2 — schedule exists, read broke) is a REAL failure, not no-schedule", async () => {
+    // THE #4 FIXTURE. `isNoSchedule` used to be `status === 404`, which is
+    // stage-blind. Stage 2 only runs once stage 1 has returned a schedule
+    // WITH manual-price refs, so a 404 from there cannot mean "this IAP has
+    // no prices" — it means a broken continuation path or a schedule that
+    // vanished mid-read. Classifying it as no-schedule reproduced the exact
+    // G4b defect (a row exported clean with blank prices and no reason)
+    // through a different door.
+    const getPriceScheduleForIap = vi
+      .fn()
+      .mockRejectedValue(
+        new AppleApiError(404, "GET", "/v1/inAppPurchasePriceSchedules/s1/manualPrices?cursor=X", "not found"),
+      );
+
+    const r = await fetchExportSources(creds, [iap("a1", "com.x.a1")], {
+      getIapDetail: detailOk("a1"),
+      getPriceScheduleForIap,
+    });
+
+    expect(r.sources).toHaveLength(1);
+    expect(r.sources[0].priceReadFailure).toMatchObject({
+      kind: "APPLE_ERROR",
+      status: 404,
+    });
+    expect(r.sources[0].priceReadFailure).not.toBeNull();
   });
 
   it("a non-404 Apple error records APPLE_ERROR with its status, not RATE_LIMITED", async () => {
@@ -501,5 +530,90 @@ describe("fetchExportSources — stop latch (G4a)", () => {
     );
     expect(r).toMatchObject({ stopped: false, failures: [] });
     expect(r.sources).toHaveLength(2);
+  });
+});
+
+/**
+ * #2 — a price read that SUCCEEDS but comes back short.
+ *
+ * ⚠ The failure mode this closes is the same family as the bare `catch {}`,
+ * one layer down: `fetchManualPricesPaginated` already `console.warn`ed on
+ * both truncation paths and then returned the short set anyway, so a row with
+ * missing prices exported looking exactly like a complete one.
+ */
+describe("fetchExportSources — incomplete price sets (#2)", () => {
+  const detailOk2 = (id: string) =>
+    vi.fn(async () => ({
+      iap: iap(id, `com.x.${id}`),
+      localizations: [localization("en-US", id)],
+      screenshot: null,
+    }));
+  const scheduleWith = (incomplete?: unknown) => ({
+    ...scheduleResponse("USA"),
+    ...(incomplete ? { incomplete } : {}),
+  });
+
+  it("(a) PAGE_CAP marks the row PARTIAL — it exported, but its prices are a subset", async () => {
+    const r = await fetchExportSources(creds, [iap("a1", "com.x.a1")], {
+      getIapDetail: detailOk2("a1"),
+      getPriceScheduleForIap: vi
+        .fn()
+        .mockResolvedValue(scheduleWith({ reason: "PAGE_CAP", collected: 4000 })),
+    });
+
+    expect(r.sources).toHaveLength(1);
+    expect(r.sources[0].priceReadFailure).toMatchObject({
+      kind: "INCOMPLETE_PRICES",
+      incompleteReason: "PAGE_CAP",
+    });
+    // ⚠ and it does NOT stop the run — short is not a budget signal.
+    expect(r.stopped).toBe(false);
+  });
+
+  it("(b) COUNT_MISMATCH carries both numbers", async () => {
+    const r = await fetchExportSources(creds, [iap("a1", "com.x.a1")], {
+      getIapDetail: detailOk2("a1"),
+      getPriceScheduleForIap: vi.fn().mockResolvedValue(
+        scheduleWith({ reason: "COUNT_MISMATCH", collected: 170, expected: 175 }),
+      ),
+    });
+
+    expect(r.sources[0].priceReadFailure).toMatchObject({
+      kind: "INCOMPLETE_PRICES",
+      incompleteReason: "COUNT_MISMATCH",
+    });
+    expect(r.sources[0].priceReadFailure?.message).toContain("170 of 175");
+    expect(r.stopped).toBe(false);
+  });
+
+  it("(d) a complete read stays clean — no priceReadFailure, no PARTIAL", async () => {
+    const r = await fetchExportSources(creds, [iap("a1", "com.x.a1")], {
+      getIapDetail: detailOk2("a1"),
+      getPriceScheduleForIap: vi.fn().mockResolvedValue(scheduleWith()),
+    });
+    expect(r.sources[0].priceReadFailure).toBeNull();
+    expect(r.failures).toEqual([]);
+  });
+
+  it("incompleteness never sets the latch, even across several items", async () => {
+    const getIapDetail = vi.fn(async (_c: unknown, id: string) => ({
+      iap: iap(id, `com.x.${id}`),
+      localizations: [],
+      screenshot: null,
+    }));
+    const r = await fetchExportSources(
+      creds,
+      [iap("a", "com.x.a"), iap("b", "com.x.b"), iap("c", "com.x.c")],
+      {
+        getIapDetail,
+        getPriceScheduleForIap: vi
+          .fn()
+          .mockResolvedValue(scheduleWith({ reason: "PAGE_CAP", collected: 4000 })),
+        concurrency: 1,
+      },
+    );
+    expect(r.stopped).toBe(false);
+    expect(r.sources).toHaveLength(3); // every item still processed
+    expect(getIapDetail).toHaveBeenCalledTimes(3);
   });
 });

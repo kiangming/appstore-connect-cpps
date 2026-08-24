@@ -32,7 +32,10 @@ import {
 import { getIapWithRelations } from "@/lib/iap-management/queries/iaps";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { getAllTerritoryIds } from "@/lib/iap-management/apple/availabilities";
-import { getPriceScheduleForIap } from "@/lib/iap-management/apple/price-schedules";
+import {
+  getPriceScheduleForIap,
+  NoPriceScheduleError,
+} from "@/lib/iap-management/apple/price-schedules";
 import { unpackPriceSchedule } from "@/lib/iap-management/queries/iap-detail";
 import {
   getDefaultTemplate,
@@ -172,10 +175,14 @@ export async function GET(
         currency: e.currency,
       }));
     } catch (err) {
-      // A 404 simply means Apple has no schedule yet — not an error worth
-      // surfacing to the Manager.
-      const msg = err instanceof Error ? err.message : "unknown";
-      if (!/404/.test(msg)) {
+      // Apple having no schedule yet is not an error worth surfacing.
+      // ⚠ Was `/404/.test(err.message)` — a REGEX OVER A MESSAGE STRING.
+      // It matched any error whose text happened to contain "404" (including
+      // one whose URL did), and it could not tell a stage-1 404 from a
+      // stage-2 one. The type carries the fact now; nothing parses it back
+      // out of prose.
+      if (!(err instanceof NoPriceScheduleError)) {
+        const msg = err instanceof Error ? err.message : "unknown";
         warnings.push(`Live Apple prices unavailable (${msg}).`);
       }
     }

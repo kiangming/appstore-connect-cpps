@@ -55,7 +55,14 @@ import {
   findPricePointByUsdPrice,
   type InAppPurchasePricePoint,
 } from "./price-points";
-import { setPriceSchedule, getPriceScheduleForIap } from "./price-schedules";
+import {
+  setPriceSchedule,
+  getPriceScheduleForIap,
+  NoPriceScheduleError,
+} from "./price-schedules";
+// The mocked class from the `./fetch` mock above — `NoPriceScheduleError`
+// extends THAT binding, so instanceof stays consistent inside this file.
+import { AppleApiError } from "./fetch";
 
 const creds: AscCredentials = {
   id: "test",
@@ -469,6 +476,94 @@ describe("API schema: pricing endpoints", () => {
     await getPriceScheduleForIap(creds, "iap-1");
     // 1 Stage-1 + 20 Stage-2 pages (cap MAX_STAGE2_PAGES).
     expect(iapFetch.mock.calls.length).toBe(21);
+  });
+
+  // ── #2 — Stage 2 incompleteness is DATA, not just a console.warn ───────
+  //
+  // ⚠ Both paths below already warned and then returned the short set anyway,
+  // so a caller could not tell a complete schedule from a truncated one. The
+  // flag makes the difference readable from code.
+
+  it("PAGE_CAP: hitting MAX_STAGE2_PAGES with a cursor still pointing on sets the flag", async () => {
+    iapFetch.mockResolvedValueOnce(
+      stage1Response({ scheduleId: "sched-cap", manualPriceIds: ["p-1"], baseTerritory: null }),
+    );
+    for (let i = 0; i < 25; i++) {
+      iapFetch.mockResolvedValueOnce({
+        data: [{ type: "inAppPurchasePrices", id: "p-1" }],
+        links: { next: `/v1/inAppPurchasePriceSchedules/sched-cap/manualPrices?cursor=L${i}` },
+      });
+    }
+    const out = await getPriceScheduleForIap(creds, "iap-1");
+    expect(out.incomplete).toMatchObject({ reason: "PAGE_CAP" });
+    // PAGE_CAP needs nothing from Apple — no meta.paging in any fixture above.
+    expect(out.incomplete?.expected).toBeUndefined();
+  });
+
+  it("COUNT_MISMATCH: collected < meta.paging.total sets the flag with both numbers", async () => {
+    iapFetch
+      .mockResolvedValueOnce(
+        stage1Response({ scheduleId: "sched-short", manualPriceIds: ["p-1"], baseTerritory: null }),
+      )
+      .mockResolvedValueOnce({
+        data: [{ type: "inAppPurchasePrices", id: "p-1" }],
+        meta: { paging: { total: 175, limit: 200 } },
+      });
+    const out = await getPriceScheduleForIap(creds, "iap-1");
+    expect(out.incomplete).toMatchObject({
+      reason: "COUNT_MISMATCH",
+      collected: 1,
+      expected: 175,
+    });
+  });
+
+  it("⚠ (c) apple_total ABSENT → NO flag. A missed signal beats a wrong one", async () => {
+    // Apple does not always send `meta.paging.total`. Fabricating an
+    // "incomplete" from a field that is not there would mark healthy
+    // schedules as broken; the known cost is that a short set can slip
+    // through this particular check. PAGE_CAP covers the runaway-cursor case
+    // without needing any Apple field.
+    iapFetch
+      .mockResolvedValueOnce(
+        stage1Response({ scheduleId: "sched-nototal", manualPriceIds: ["p-1"], baseTerritory: null }),
+      )
+      .mockResolvedValueOnce({ data: [{ type: "inAppPurchasePrices", id: "p-1" }] });
+    const out = await getPriceScheduleForIap(creds, "iap-1");
+    expect(out.incomplete).toBeUndefined();
+  });
+
+  it("a complete page set carries NO flag", async () => {
+    iapFetch
+      .mockResolvedValueOnce(
+        stage1Response({ scheduleId: "sched-ok", manualPriceIds: ["p-1", "p-2"], baseTerritory: null }),
+      )
+      .mockResolvedValueOnce({
+        data: [
+          { type: "inAppPurchasePrices", id: "p-1" },
+          { type: "inAppPurchasePrices", id: "p-2" },
+        ],
+        meta: { paging: { total: 2, limit: 200 } },
+      });
+    const out = await getPriceScheduleForIap(creds, "iap-1");
+    expect(out.incomplete).toBeUndefined();
+  });
+
+  it("a STAGE-1 404 throws NoPriceScheduleError; a STAGE-2 404 stays a plain AppleApiError", async () => {
+    // The distinction #3 exists for: stage 2 only runs once stage 1 has
+    // returned a schedule, so a 404 there cannot mean "no schedule".
+    iapFetch.mockRejectedValueOnce(new AppleApiError(404, "GET", "/v2/…/iapPriceSchedule", ""));
+    await expect(getPriceScheduleForIap(creds, "iap-1")).rejects.toBeInstanceOf(
+      NoPriceScheduleError,
+    );
+
+    iapFetch
+      .mockResolvedValueOnce(
+        stage1Response({ scheduleId: "sched-s2", manualPriceIds: ["p-1"], baseTerritory: null }),
+      )
+      .mockRejectedValueOnce(new AppleApiError(404, "GET", "/v1/…/manualPrices?cursor=X", ""));
+    const err = await getPriceScheduleForIap(creds, "iap-2").catch((e) => e);
+    expect(err).toBeInstanceOf(AppleApiError);
+    expect(err).not.toBeInstanceOf(NoPriceScheduleError);
   });
 
   // ── IAP.p2.m — Stage 1 truncation tolerance ────────────────────────────

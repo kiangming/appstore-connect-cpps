@@ -25,7 +25,10 @@
  */
 import { runStoppablePool } from "@/lib/iap-management/stoppable-pool";
 import { getIapDetailFromApple, unpackPriceSchedule } from "@/lib/iap-management/queries/iap-detail";
-import { getPriceScheduleForIap } from "@/lib/iap-management/apple/price-schedules";
+import {
+  getPriceScheduleForIap,
+  NoPriceScheduleError,
+} from "@/lib/iap-management/apple/price-schedules";
 import {
   withRetry,
   AppleApiError,
@@ -198,16 +201,38 @@ export async function fetchExportSources(
       try {
         const scheduleRes = await deps.getPriceScheduleForIap(creds, iap.id);
         priceSchedule = unpackPriceSchedule(scheduleRes);
+        // ⚠ A SUCCESSFUL read that came back SHORT. Stage 2 stopped at its
+        // page cap, or collected fewer rows than Apple's own count — either
+        // way the prices in this row are a subset, and saying nothing would
+        // put a truncated row in the file looking exactly like a complete
+        // one. The row still exports; it is marked PARTIAL.
+        //
+        // ⚠ This does NOT stop the pool. Incompleteness is not a budget
+        // signal — Apple answered, it just answered short — so the latch
+        // (`shouldStopOnResult`, keyed on RATE_LIMITED only) stays up and the
+        // remaining items keep going.
+        const short = scheduleRes.incomplete;
+        if (short) {
+          priceReadFailure = {
+            kind: "INCOMPLETE_PRICES",
+            incompleteReason: short.reason,
+            message:
+              short.expected !== undefined
+                ? `collected ${short.collected} of ${short.expected} prices`
+                : `collected ${short.collected} prices; more remained`,
+          };
+        }
       } catch (err) {
         const c = classifyAppleError(err);
-        // ⚠ 404 IS NOT A FAILURE. Apple answers "this IAP has no price
-        // schedule" with 404 on the sub-resource — verified through both
-        // stages: neither `getPriceScheduleForIap` nor
-        // `fetchManualPricesPaginated` catches anything, and `appleFetch`
-        // throws `AppleApiError(404)` (apple-fetch.ts:243-259). So it lands
-        // here, and here is where it is recognised as the legitimate
-        // no-schedule case that `priceSchedule: null` has always meant.
-        const isNoSchedule = c.kind === "APPLE_ERROR" && c.status === 404;
+        // ⚠ NO-SCHEDULE IS A TYPE, NOT A STATUS. This check used to be
+        // `status === 404`, which is STAGE-BLIND and wrong: stage 2 only runs
+        // when stage 1 already returned a schedule, so a 404 from there is a
+        // broken read, not an IAP without prices. Classifying it as
+        // no-schedule reproduced the exact G4b shape — a row exported clean
+        // with blank prices and no recorded reason — through a different
+        // door. `getPriceScheduleForIap` is the only place that knows which
+        // stage threw, so it makes the call and hands us the type.
+        const isNoSchedule = err instanceof NoPriceScheduleError;
         priceReadFailure = isNoSchedule
           ? null
           : { kind: c.kind, status: c.status, message: c.message };

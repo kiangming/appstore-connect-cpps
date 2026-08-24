@@ -16,8 +16,10 @@
 
 import type { AscCredentials } from "@/lib/asc-jwt";
 import { getInAppPurchase } from "@/lib/iap-management/apple/client";
-import { getPriceScheduleForIap } from "@/lib/iap-management/apple/price-schedules";
-import { AppleApiError } from "@/lib/iap-management/apple/fetch";
+import {
+  getPriceScheduleForIap,
+  NoPriceScheduleError,
+} from "@/lib/iap-management/apple/price-schedules";
 import {
   getAvailabilityForIap,
   getAllTerritoryIds,
@@ -349,9 +351,12 @@ export async function getIapViewData(
     }
   } else {
     const err = scheduleSettled.err;
-    if (err instanceof AppleApiError && err.status === 404) {
+    if (err instanceof NoPriceScheduleError) {
       // Manager-created IAP that's been pushed but has no schedule yet —
       // the view renders the "no pricing set" placeholder.
+      // ⚠ Was `AppleApiError && status === 404`, which also swallowed a
+      // STAGE-2 404 — a schedule that exists but could not be read — and
+      // rendered it as "no pricing set". The subclass is stage-1 only.
       priceSchedule = null;
     } else {
       priceScheduleError =

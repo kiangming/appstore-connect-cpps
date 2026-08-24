@@ -244,12 +244,35 @@ function nextPathFromLink(nextLink: string): string {
  *  Apple returns a malformed cursor that links back to itself. */
 const MAX_STAGE2_PAGES = 20;
 
+/**
+ * Stage 2 returned FEWER prices than exist, and knows it.
+ *
+ * ⚠ WHY THIS IS DATA AND NOT JUST A LOG LINE. Both paths below already
+ * `console.warn`ed and then returned the short set anyway. The caller could
+ * not tell a complete schedule from a truncated one, so a row with missing
+ * prices exported looking exactly like a row with all of them — the same
+ * silent-partial shape as the bare `catch {}` on the price read, one layer
+ * down. A warning nobody can read from code is not a signal.
+ *
+ *   PAGE_CAP        — hit MAX_STAGE2_PAGES with a cursor still pointing on.
+ *                     Needs nothing from Apple to detect; always reliable.
+ *   COUNT_MISMATCH  — collected fewer rows than `meta.paging.total` said
+ *                     exist. Depends on Apple sending that field.
+ */
+export interface PriceScheduleIncomplete {
+  reason: "PAGE_CAP" | "COUNT_MISMATCH";
+  collected: number;
+  /** Apple's own count, when it sent one. */
+  expected?: number;
+}
+
 async function fetchManualPricesPaginated(
   creds: AscCredentials,
   scheduleId: string,
 ): Promise<{
   data: InAppPurchasePrice[];
   included: Array<AscResource<string, Record<string, unknown>>>;
+  incomplete?: PriceScheduleIncomplete;
 }> {
   const collectedPrices: InAppPurchasePrice[] = [];
   const collectedIncluded: Array<
@@ -280,16 +303,30 @@ async function fetchManualPricesPaginated(
     nextPath = hasNext && page.links?.next ? nextPathFromLink(page.links.next) : null;
   }
 
+  let incomplete: PriceScheduleIncomplete | undefined;
+
   if (pageNum >= MAX_STAGE2_PAGES && nextPath) {
     console.warn(
       `[get-schedule] stage2 hit MAX_STAGE2_PAGES=${MAX_STAGE2_PAGES} schedule_id=${scheduleId}; surfacing ${collectedPrices.length} prices`,
     );
+    incomplete = { reason: "PAGE_CAP", collected: collectedPrices.length };
   }
 
   // Trust `apple_total` (meta.paging.total) as the canonical count from
   // Apple. If pagination + collection still falls short, log loudly —
   // there's no individual-ID recovery to lean on (Stage 1's manualRel is
   // truncated, so we have no canonical ID list to compare against).
+  //
+  // ⚠ KNOWN BLIND SPOT, and it is deliberate. The guard requires
+  // `meta.paging.total` to be a number; Apple does not always send it (hence
+  // the `?? "?"` in the log format). When it is absent NO flag fires, so a
+  // short page set reports as complete. That is a missed signal, and a missed
+  // signal beats a wrong one (P7): inventing an "incomplete" from a field
+  // that is not there would mark healthy schedules as broken. Live probe
+  // 2026-08-24 observed `meta.paging = {total:175, nextCursor, limit}` on a
+  // real manualPrices page, so the field IS normally present — this guard is
+  // for the case where it is not. PAGE_CAP above needs nothing from Apple and
+  // covers the runaway-cursor case regardless.
   if (
     typeof lastPagingTotal === "number" &&
     collectedPrices.length < lastPagingTotal
@@ -297,18 +334,61 @@ async function fetchManualPricesPaginated(
     console.warn(
       `[get-schedule] stage2 INCOMPLETE collected=${collectedPrices.length} apple_total=${lastPagingTotal} schedule_id=${scheduleId} — pagination may have dropped rows; investigate Railway logs for missing has_next links`,
     );
+    incomplete ??= {
+      reason: "COUNT_MISMATCH",
+      collected: collectedPrices.length,
+      expected: lastPagingTotal,
+    };
   }
 
   console.log(
     `[get-schedule] stage2 done total_prices=${collectedPrices.length} apple_total=${lastPagingTotal ?? "?"} schedule_id=${scheduleId}`,
   );
-  return { data: collectedPrices, included: collectedIncluded };
+  return {
+    data: collectedPrices,
+    included: collectedIncluded,
+    ...(incomplete ? { incomplete } : {}),
+  };
+}
+
+/**
+ * "Apple has no price schedule for this IAP" — a STAGE-1 404, and nothing else.
+ *
+ * ⚠ WHY THIS IS A TYPE AND NOT A STATUS CHECK. Every caller used to decide
+ * "no schedule" from `status === 404`, which is stage-blind, and the two
+ * stages mean opposite things:
+ *
+ *   stage 1 404 → the schedule resource does not exist. Legitimate: a
+ *                 MISSING_METADATA product, or one pushed without pricing.
+ *   stage 2 404 → the schedule DOES exist (stage 1 returned it and reported
+ *                 manual-price refs) and its sub-resource read failed —
+ *                 a broken continuation path, or the schedule disappearing
+ *                 mid-read. A REAL failure that must never be reported as
+ *                 "this IAP has no prices".
+ *
+ * Extending `AppleApiError` keeps every existing `instanceof AppleApiError`
+ * call site working untouched; callers opt into the finer distinction by
+ * testing for this subclass. `apple-fetch.ts` is not modified — the subclass
+ * lives here, next to the only function that knows which stage threw.
+ */
+export class NoPriceScheduleError extends AppleApiError {
+  readonly appleIapId: string;
+  constructor(appleIapId: string, cause: AppleApiError) {
+    super(404, cause.method, cause.endpoint, cause.body);
+    this.name = "NoPriceScheduleError";
+    this.appleIapId = appleIapId;
+    this.message = `No price schedule for IAP ${appleIapId} (stage-1 404) — Apple has no schedule resource for it.`;
+  }
 }
 
 export async function getPriceScheduleForIap(
   creds: AscCredentials,
   appleIapId: string,
-): Promise<AscApiResponse<InAppPurchasePriceSchedule>> {
+): Promise<
+  AscApiResponse<InAppPurchasePriceSchedule> & {
+    incomplete?: PriceScheduleIncomplete;
+  }
+> {
   // ── Stage 1 ────────────────────────────────────────────────────────────
   // IAP.p2.m: explicit `limit[manualPrices]=50` (the documented max) to
   // make the relationship enumeration as complete as possible. Apple has
@@ -316,13 +396,27 @@ export async function getPriceScheduleForIap(
   // the unpacker treats Stage 2's data as authoritative regardless.
   console.log(`[get-schedule] stage1 fetching apple_iap_id=${appleIapId}`);
   const stage1Path = `/v2/inAppPurchases/${appleIapId}/iapPriceSchedule?include=baseTerritory,manualPrices&limit[manualPrices]=50`;
-  const stage1 = await withRetry(() =>
-    iapFetch<AscApiResponse<InAppPurchasePriceSchedule>>(
-      creds,
-      "GET",
-      stage1Path,
-    ),
-  );
+  let stage1: AscApiResponse<InAppPurchasePriceSchedule>;
+  try {
+    stage1 = await withRetry(() =>
+      iapFetch<AscApiResponse<InAppPurchasePriceSchedule>>(
+        creds,
+        "GET",
+        stage1Path,
+      ),
+    );
+  } catch (err) {
+    // ⚠ ONLY here. A 404 from Stage 2 below is deliberately left as a plain
+    // AppleApiError: Stage 2 runs only when Stage 1 already returned a
+    // schedule with manual-price refs, so a 404 there cannot mean "no
+    // schedule" — it means the read broke.
+    // `AppleRateLimitError` also extends `AppleApiError` but carries 429, so
+    // a rate limit can never be mistaken for this.
+    if (err instanceof AppleApiError && err.status === 404) {
+      throw new NoPriceScheduleError(appleIapId, err);
+    }
+    throw err;
+  }
 
   const scheduleId = stage1.data.id;
   const baseTerritoryId = (stage1.data.relationships as
@@ -358,6 +452,9 @@ export async function getPriceScheduleForIap(
   );
 
   return {
+    // ⚠ Forwarded, not swallowed. Structural addition only — every existing
+    // caller reads `.data` / `.included` and is unaffected by the extra key.
+    ...(stage2Result.incomplete ? { incomplete: stage2Result.incomplete } : {}),
     data: stage1.data,
     included: [
       ...stage1WithoutPriceStubs,

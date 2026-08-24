@@ -17,10 +17,22 @@ import { render, screen } from "@testing-library/react";
 
 const getInAppPurchase = vi.hoisted(() => vi.fn());
 const getPriceScheduleForIap = vi.hoisted(() => vi.fn());
+const NoPriceScheduleError = vi.hoisted(
+  () =>
+    class NoPriceScheduleError extends Error {
+      status = 404;
+      body = "";
+    },
+);
+
 
 vi.mock("@/lib/iap-management/apple/client", () => ({ getInAppPurchase }));
+// ⚠ The subclass must be in the mock too: production code does
+// `err instanceof NoPriceScheduleError` against THIS binding, and a
+// missing export makes it `instanceof undefined`, which throws.
 vi.mock("@/lib/iap-management/apple/price-schedules", () => ({
   getPriceScheduleForIap,
+  NoPriceScheduleError,
 }));
 vi.mock("@/lib/iap-management/apple/fetch", () => ({
   AppleApiError: class extends Error {
@@ -264,16 +276,13 @@ describe("IAP View Detail — integration", () => {
     expect(screen.getByText("No screenshot on Apple.")).toBeInTheDocument();
   });
 
-  it("renders Price Schedule empty placeholder on Apple 404 (no schedule yet)", async () => {
+  it("renders Price Schedule empty placeholder when Apple has no schedule (stage-1 404)", async () => {
     getInAppPurchase.mockResolvedValueOnce(fullIapResponse());
-    getPriceScheduleForIap.mockRejectedValueOnce(
-      new AppleApiError(
-        404,
-        "GET",
-        "/v2/.../inAppPurchasePriceSchedule",
-        "",
-      ),
-    );
+    // ⚠ Fixture changed by the stage-label work — see iap-detail.test.ts.
+    // A bare AppleApiError(404) can now come from stage 2, where it means the
+    // read broke rather than "no pricing set", so the placeholder is keyed on
+    // the stage-1 subclass only.
+    getPriceScheduleForIap.mockRejectedValueOnce(new NoPriceScheduleError());
 
     await renderPage();
     expect(

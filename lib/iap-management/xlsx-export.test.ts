@@ -410,6 +410,45 @@ describe("buildExportWorkbook — the Export Failures sheet", () => {
     expect(ws["!merges"]?.[0]).toEqual({ s: { r: 1, c: 0 }, e: { r: 2, c: 0 } });
   });
 
+  it("INCOMPLETE_PRICES renders its own reason, distinct from every other kind", () => {
+    const rows = buildFailureRows(
+      buildExportPlan([
+        source({
+          appleIapId: "apple-i",
+          productId: "com.x.incomplete",
+          priceReadFailure: {
+            kind: "INCOMPLETE_PRICES",
+            incompleteReason: "COUNT_MISMATCH",
+            message: "collected 170 of 175 prices",
+          },
+        }),
+      ]).rows,
+      [],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "PARTIAL", kind: "INCOMPLETE_PRICES" });
+    expect(rows[0].detail).toContain("COUNT_MISMATCH");
+    expect(rows[0].detail).toContain("170 of 175");
+    // ⚠ and it never borrows another kind's wording
+    expect(rows[0].detail).not.toContain("rate-limited");
+    expect(rows[0].detail).not.toContain("Apple returned");
+  });
+
+  it("PAGE_CAP and COUNT_MISMATCH are told apart in the sheet", () => {
+    const mk = (reason: "PAGE_CAP" | "COUNT_MISMATCH") =>
+      buildFailureRows(
+        buildExportPlan([
+          source({
+            priceReadFailure: { kind: "INCOMPLETE_PRICES", incompleteReason: reason, message: "m" },
+          }),
+        ]).rows,
+        [],
+      )[0];
+    expect(mk("PAGE_CAP").detail).toContain("PAGE_CAP");
+    expect(mk("COUNT_MISMATCH").detail).toContain("COUNT_MISMATCH");
+    expect(mk("PAGE_CAP").detail).not.toBe(mk("COUNT_MISMATCH").detail);
+  });
+
   it("a FAILED-only export gets the failure sheet but NO note row (no partial rows)", () => {
     const wb = buildExportWorkbook(buildExportPlan([source({})]), [
       { productId: "p", appleIapId: "a", kind: "APPLE_ERROR", error: "404: gone" },

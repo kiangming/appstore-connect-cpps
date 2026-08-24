@@ -63,7 +63,18 @@ export type ExportFailureKind =
   | "RATE_LIMITED"
   | "APPLE_ERROR"
   | "UNKNOWN"
+  | "INCOMPLETE_PRICES"
   | "NOT_ATTEMPTED";
+
+/**
+ * ⚠ INCOMPLETE_PRICES IS ITS OWN KIND, not a flavour of the others. The read
+ * SUCCEEDED — Apple did not refuse, nothing was rate-limited, nothing threw.
+ * Stage 2 simply came back short and said so. Filing it under APPLE_ERROR
+ * would claim a refusal that never happened; under UNKNOWN would claim we
+ * cannot explain it, when we can, exactly. And the Manager action differs
+ * from all three: the prices in this row are a subset, so re-read the
+ * schedule rather than waiting for a budget or giving up on the item.
+ */
 
 /**
  * A price-schedule read that failed for a reason that is NOT "Apple has no
@@ -78,6 +89,10 @@ export interface PriceReadFailure {
   kind: Exclude<ExportFailureKind, "NOT_ATTEMPTED">;
   /** Apple's HTTP status when there was one. */
   status?: number;
+  /** Only for INCOMPLETE_PRICES — which of the two truncation paths fired.
+   *  Structured rather than baked into `message` so the sheet renders it from
+   *  data instead of re-reading it out of prose. */
+  incompleteReason?: "PAGE_CAP" | "COUNT_MISMATCH";
   /** Human-readable, for the Detail column. Never parsed for `kind`. */
   message: string;
 }
@@ -253,6 +268,7 @@ const KIND_LABEL: Record<ExportFailureKind, string> = {
   RATE_LIMITED: "Rate limited",
   APPLE_ERROR: "Apple refused",
   UNKNOWN: "Unknown error",
+  INCOMPLETE_PRICES: "Incomplete prices",
   NOT_ATTEMPTED: "Not attempted",
 };
 
@@ -282,7 +298,10 @@ export function buildFailureRows(
       appleIapId: row.appleIapId,
       status: "PARTIAL",
       kind: f.kind,
-      detail: detailFor(f.kind, f.status, f.message),
+      detail:
+        f.kind === "INCOMPLETE_PRICES"
+          ? `${f.incompleteReason ?? "UNKNOWN_REASON"} — ${f.message}`
+          : detailFor(f.kind, f.status, f.message),
     });
   }
 
