@@ -2975,6 +2975,180 @@ guard asserting every path in a verify-list resolves to a real file. Candidate
 shape — a test that reads the documented guard-suite list and `statSync`s each
 entry, failing on a missing path, so the list cannot outlive its files.
 
+**P19 — PARITY OF OUTPUT IS NOT PARITY OF COST. THE ASSERTION HAS TO SIT ON A
+SPY THAT COUNTS REQUESTS, NOT ON THE RESULTS.**
+
+Fourth face of the P16-P18 family, and the one that survives all three. The
+test can be real (P16), the mutation can land (P17), the run can execute
+(P18) — and the suite still cannot see the defect, because the defect does not
+change any value it looks at.
+
+Instance (export arc, `9ff0c05` pool extraction, mutation (a) — the commit
+message is the primary record): the mutated pool failed only as *"expected 1
+time but got 5 times"*, and that commit states the rule in its own words —
+**"the result sets look identical either way; only the spy sees the budget
+being spent, which is why the assertion is on the spy."** Every
+results-shaped assertion passed. Nothing in the returned data distinguishes
+"asked Apple once per item" from "asked five times and kept the last answer".
+
+This is the same family as the double-wrap `withRetry` bug the arc opened with
+(`915deff`): 4 attempts became 16 *with no change in outcome* on every path
+that eventually succeeded. Both are invisible to output assertions by
+construction, and both are the failure mode that actually hurts on a
+rate-limited API.
+
+Rules:
+1. For any code whose *purpose* is cost — a pool, a retry wrapper, a cache, a
+   lazy loader, a batch — **at least one assertion must count calls**:
+   `expect(spy).toHaveBeenCalledTimes(n)`, not `expect(result).toEqual(...)`.
+2. State the expected count as a **derivation**, not a magic number: "3 per
+   item × 2 items = 6". A bare `6` silently absorbs a regression that changes
+   both the code and the number.
+3. The strongest form is an assertion of **absence** — see `IapListClient.
+   export-wizard.test.tsx`, where the whole feature's primary acceptance is
+   `expect(fetch).not.toHaveBeenCalled()` after opening a wizard. That test
+   fails for a pre-read and for nothing else.
+4. Scope such a spy **by time, not by URL allowlist**. Allowlisting "ignore the
+   territories route" would have passed a version that fetched the territory
+   catalogue on open — precisely the regression being guarded. Clear the spy at
+   the moment of interest, then forbid *any* call.
+
+**P20 — A CENSUS BEFORE CODE CAN INVERT THE FIX, NOT JUST SIZE IT. A DOCSTRING
+THAT CONTRADICTS A SIBLING IS THE SIGNAL TO RUN ONE.**
+
+P9 says design-first pays off where a feature looks like a proven pattern.
+P20 is the sharper case: the census does not refine the plan, it **deletes**
+it, and the plan was the obvious one.
+
+Instance (export arc, `ac6acd7`): the `links.next` handling in
+`nextPathFromLink` (`apple/price-schedules.ts:267`) has a `catch` branch that
+was read as sloppiness, and the proposal was "make it throw, like its twin"
+(`extractNextPagePath`, `apple/client.ts:106-125`). The census found the branch
+is a **deliberate feature carrying a tested relative-URL fallback from Manager
+UAT MV30** — now stated in `client.ts:107-111`. The twins differ because
+they are solving different problems, and the correct output was a sourced note
+in *both* docstrings explaining the asymmetry — not a code change. The proposal
+died before a line was written.
+
+Same shape, same arc, second instance (`f7e1bdb`): the design doc said
+`runAvailabilityReadPhase` is client-only. Its only import is
+`import type { AvailabilityForIap }`, erased at compile time, and every seam is
+injected. The claim was false, the *conclusion* it supported was right, and the
+real reason (pre-claim latch for a shared client queue vs. `runStoppablePool`'s
+claim-then-await) was already written correctly in `stoppable-pool.ts:41-48` —
+the doc had drifted from the code that documented itself properly.
+
+Rules:
+1. **Two sources that disagree about the same mechanism is a census trigger**,
+   not a tie to break by preference. One of them is stale, and which one is
+   stale is load-bearing.
+2. When a `catch`, a fallback, or an "obviously wrong" branch has a test, the
+   test is the specification until proven otherwise. `git log -S` the branch
+   before proposing its removal.
+3. A census may legitimately conclude **"the code is right, the prose is
+   wrong"**. That outcome is a success, and the deliverable is a docs commit —
+   see P20's own instances, both of which shipped as documentation.
+4. Cite the twin's line range in the correction so the next reader lands on the
+   authoritative version instead of re-deriving it.
+
+**P21 — ONE HTTP STATUS, TWO MEANINGS: DISAMBIGUATE BY STAGE WITH A SUBCLASS,
+NEVER BY A BARE STATUS CHECK — AND NEVER BY A REGEX OVER THE MESSAGE.**
+
+Instance (export arc, `a4d52e2`): `getPriceScheduleForIap` is a two-stage read.
+A **stage-1** 404 means "Apple has no price schedule for this IAP" — a real
+answer, and the row exports clean with genuinely no prices. A **stage-2** 404
+means the schedule existed a moment ago and the sub-resource read broke — a
+real failure. The original check was `status === 404`, which is **stage-blind**:
+it classified a broken stage-2 read as "no schedule", producing a row exported
+clean with blank prices and no recorded reason. That is the G4b defect shape,
+reached through a different door.
+
+The fix is structural: `NoPriceScheduleError extends AppleApiError`, thrown
+**only** by the stage that can legitimately mean it, because
+`getPriceScheduleForIap` is the only code that knows which stage threw. Callers
+then test `err instanceof NoPriceScheduleError` — a claim about meaning — rather
+than `err.status === 404` — a claim about transport.
+
+Rules:
+1. When a status code can arrive from more than one stage of a composite read,
+   **only the composite knows which**. Classify there and export a subclass;
+   never make callers guess from the status.
+2. **Kill `/404/.test(message)` and its relatives on sight.** Parsing a status
+   back out of prose is not a type; it breaks on the first wording change and
+   it cannot distinguish stages even in principle. Same rule as
+   `classifyAppleError`, which classifies at the `catch` where `instanceof`
+   still works and never re-derives `kind` from the string.
+3. A subclass is cheap and greppable. `AppleApiError` was **not** modified —
+   the subclass lives next to the function that can construct it correctly.
+4. Corollary for the sibling paths: once the subclass exists, every other
+   caller that special-cases the bare status becomes a candidate. Audit, do not
+   assume — see `[UPDATE-stage1-404-redundant-price-push]`, deliberately left
+   alone because "no schedule" and "no custom prices" may not be the same claim
+   on that path.
+
+**P22 — A TARGETED-DROP MUTATION IS SHARPER THAN A DROP-EVERYTHING MUTATION.
+THE SUITE MUST CATCH A SANITISER THAT SILENTLY REMOVES *ONE* INPUT.**
+
+Refines P16/P17 on mutation *selection*. A mutation that empties the input set
+proves very little: almost any assertion goes red when nothing is processed. The
+question a silent-drop defect actually poses is whether the suite notices **one**
+item disappearing between the request and the result.
+
+Instance (export arc, pre-gate V4 on `70b1434`). Two distinct temptations, both
+of which must be red, and only the second is diagnostic:
+
+- **enumerate-then-intersect** — cross-check ids against Apple's list and keep
+  the intersection. → 7 FAIL. Wide, but it also removes the enumeration
+  assertions, so much of the redness is incidental.
+- **targeted sanitiser** — `.filter(id => !id.startsWith("ghost"))`, i.e. drop
+  the one id the route "doesn't recognise", locally, before attempting. → 2
+  FAIL, and they fail on exactly the right assertions:
+  `expected [ 's1', 's2' ] to include 'ghost'` (never *attempted*) and
+  `expected 3 to be 5` (two ids vanished between request and file).
+
+The second is the one that proves the guarantee, because it leaves the happy
+path entirely intact and still goes red.
+
+Rules:
+1. For any "nothing is silently dropped" claim, mutate to drop **exactly one**
+   element, not the whole set. If only the drop-everything mutation is red, the
+   suite is asserting "it did something", not "it did all of it".
+2. Pair every completeness claim with an **accounting assertion** —
+   `exported + failed + notAttempted === requested`. It is one line and it is
+   what caught the second failure above.
+3. Distinguish the temptations and run each: *validate-then-drop* (local, no
+   I/O) and *fetch-then-intersect* (remote) are different code, different
+   review blind spots, and a suite can easily catch one and not the other.
+
+**P23 — AN ERROR SUBCLASS WITH A NON-OBVIOUS CONSTRUCTOR IS A TEST FIXTURE
+TRAP: BUILD IT FRESH PER CALL, AND CHECK THE SIGNATURE.**
+
+Extends the vitest mock-reject note (`IAP.o.10a`, "reusing one Error instance
+across retry attempts triggers spurious FAILs") with the failure mode one step
+earlier: the fixture error is **mis-constructed**, and the damage surfaces far
+from the cause.
+
+Instance (export arc, `70b1434` tests): `NoPriceScheduleError`'s constructor is
+`(appleIapId: string, cause: AppleApiError)`, not `AppleApiError`'s
+`(status, method, endpoint, body)`. Built with four strings, `cause.body` was
+`undefined`, so `errMsg()` threw a `TypeError` **inside the catch handler** —
+which the pool then classified as `UNKNOWN` and failed *every row*. The symptom
+was `X-Export-Item-Count: 0` across eight unrelated tests, pointing at the
+route's item-set logic; the cause was one fixture line.
+
+Rules:
+1. **Read the subclass constructor before building one in a fixture.** A
+   subclass that narrows or reorders its parent's parameters is normal, and TS
+   will not always catch it through a `vi.fn()` boundary.
+2. Build the error **inside `mockImplementation`**, fresh per call, rather than
+   handing one instance to `mockRejectedValue` — the `IAP.o.10a` rule, extended
+   from retry paths to all paths, because it costs nothing and removes a whole
+   class of cross-test coupling.
+3. **A failure inside a `catch` handler is the diagnostic to reach for** when
+   many unrelated tests fail with the same suspiciously-total number (0 rows,
+   all failed). The catch converts a fixture bug into a plausible-looking
+   domain outcome, which is why it reads as a logic bug in the code under test.
+
 ---
 
 #### 10.13.K — Google single-item base-price cycle (2026-08-13, `f6b9b22` → `c0a9715`)
