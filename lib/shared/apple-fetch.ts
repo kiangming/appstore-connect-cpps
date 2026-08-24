@@ -175,8 +175,20 @@ export function parseRateLimit(headers: Headers): RateLimitInfo | null {
     if (sep < 0) continue;
     const key = trimmed.slice(0, sep).trim().toLowerCase();
     const value = trimmed.slice(sep + 1).trim();
+    // ⚠ NOT `Number(value)`. `Number("")` is **0**, not NaN, so an empty
+    // component (`user-hour-rem:;`) used to parse as `remaining: 0` —
+    // "budget exhausted" — when the truth is "unreadable". Those are two
+    // different facts and only one of them is a reason to stop working.
+    // Today the cost is one wrong log line; the moment anything reads
+    // `remaining` to decide whether to keep going, it is the difference
+    // between a job that pauses for cause and a job frozen for none.
+    //
+    // A digits-only match rejects every shape that cannot be a reading —
+    // "" and " " (empty), "abc" (NaN), "-5" (negative budget is not a
+    // thing), "1e3" / "0x10" (finite but not what Apple sends) — so a
+    // non-reading stays a non-reading instead of becoming a number.
+    if (!/^\d+$/.test(value)) continue;
     const n = Number(value);
-    if (!Number.isFinite(n)) continue;
     if (key === "user-hour-lim") limit = n;
     else if (key === "user-hour-rem") remaining = n;
   }
@@ -234,9 +246,20 @@ export async function appleFetch<T>(
 
   const budget = parseRateLimit(res.headers);
   if (budget) {
+    // ⚠ `key=` IS APPENDED, NOT INSERTED. The established audit grep is
+    // `[asc-client] … budget=` — adding a trailing k=v field keeps every
+    // existing pattern matching, while putting the key id in the middle
+    // would break anyone anchoring on `[asc-client] GET`. New field at the
+    // end, existing fields untouched, same order.
+    //
+    // ⚠ Not truncated. `key_id` is documented non-secret in the
+    // `asc_accounts` migration, the sibling log lines below already print it
+    // in full as `[${creds.keyId}]`, and a 10-char ASC key id abbreviated to
+    // a prefix stops being an identifier — which is the entire point of
+    // logging it. Attribution per key is unusable if two keys share a prefix.
     await log(
       logTag,
-      `[asc-client] ${method} ${endpoint} → ${res.status} budget=${budget.remaining}/${budget.limit} duration=${durationMs}ms`,
+      `[asc-client] ${method} ${endpoint} → ${res.status} budget=${budget.remaining}/${budget.limit} duration=${durationMs}ms key=${creds.keyId}`,
     );
   }
 

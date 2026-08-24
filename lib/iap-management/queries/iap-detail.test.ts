@@ -339,10 +339,96 @@ describe("unpackPriceSchedule", () => {
     expect(out.entries).toEqual([]);
   });
 
-  it("falls back to USA when baseTerritory relationship is missing", () => {
+  /**
+   * ⚠ REWRITTEN AT F2. This test used to be
+   * `"falls back to USA when baseTerritory relationship is missing"` and
+   * asserted `.toBe("USA")` — it PINNED the silent default as intended
+   * behaviour. It was the only test standing between the fallback and its
+   * removal, which is why it is rewritten rather than deleted: the condition
+   * it covers is real and still needs an assertion, only the right answer
+   * changed. Unreadable is now reported as unreadable.
+   */
+  it("⚠ an unreadable baseTerritory is null — NOT a confident 'USA'", () => {
     const res = priceScheduleResponse({});
     delete (res.data.relationships as { baseTerritory?: unknown }).baseTerritory;
-    expect(unpackPriceSchedule(res).baseTerritory).toBe("USA");
+    expect(unpackPriceSchedule(res).baseTerritory).toBeNull();
+  });
+
+  /**
+   * ⚠ THE SHAPE THAT MADE THIS FIX URGENT — a `links`-only relationship.
+   *
+   * JSON:API gives a resource sitting in `included[]` relationships that
+   * carry `links` and NO `data` ids. That rule is already written down in
+   * this repo's CLAUDE.md (the CPP screenshot-set quirk: "Resources trong
+   * mảng `included` → `relationships.xxx` CHỈ có `links`, KHÔNG có `data`
+   * IDs") — it is not a guess made up for this test.
+   *
+   * It matters because the proposed export optimisation (drop the
+   * price-schedule Stage 1 by side-loading `?include=iapPriceSchedule` off
+   * the IAP detail read) moves the schedule from PRIMARY position into
+   * `included[]`. `unpackPriceSchedule` reads
+   * `res.data.relationships.baseTerritory.data.id`; under that move
+   * `data` disappears and only `links` remains.
+   *
+   * With the old `?? "USA"` that produced no error, no log and no
+   * failure-sheet row — just "USA" in every exported row and a "(base)" tag
+   * on the wrong price. This test is what makes that outcome impossible to
+   * ship silently, whether or not the optimisation is ever attempted.
+   */
+  it("⚠ a links-only baseTerritory (the included[] shape) is null, not 'USA'", () => {
+    const res = priceScheduleResponse({});
+    (res.data.relationships as Record<string, unknown>).baseTerritory = {
+      links: {
+        self: "https://api.appstoreconnect.apple.com/v1/inAppPurchasePriceSchedules/sched-1/relationships/baseTerritory",
+        related:
+          "https://api.appstoreconnect.apple.com/v1/inAppPurchasePriceSchedules/sched-1/baseTerritory",
+      },
+    };
+    expect(unpackPriceSchedule(res).baseTerritory).toBeNull();
+  });
+
+  it("an unreadable base means NO basePrice — it must not match the USA row", () => {
+    // ⚠ The consequence the null exists to prevent. The schedule below has a
+    // real USA price; with `?? "USA"` the unpacker would hand it back as THE
+    // BASE PRICE of a schedule whose base it never learned.
+    const res = priceScheduleResponse({
+      manualPrices: [
+        {
+          priceId: "p-usa",
+          pricePointId: "pp-usa",
+          territory: "USA",
+          customerPrice: "0.99",
+          currency: "USD",
+        },
+      ],
+    });
+    delete (res.data.relationships as { baseTerritory?: unknown }).baseTerritory;
+    const out = unpackPriceSchedule(res);
+    expect(out.baseTerritory).toBeNull();
+    expect(out.basePrice).toBeNull();
+    // The entry itself is NOT dropped — one unreadable pointer must not
+    // delete prices that read perfectly well.
+    expect(out.entries).toHaveLength(1);
+    expect(out.entries[0].territory).toBe("USA");
+  });
+
+  it("a READABLE base still resolves its basePrice — the fix is not a blanket null", () => {
+    const out = unpackPriceSchedule(
+      priceScheduleResponse({
+        baseTerritory: "BRA",
+        manualPrices: [
+          {
+            priceId: "p-bra",
+            pricePointId: "pp-bra",
+            territory: "BRA",
+            customerPrice: "4.90",
+            currency: "BRL",
+          },
+        ],
+      }),
+    );
+    expect(out.baseTerritory).toBe("BRA");
+    expect(out.basePrice?.territory).toBe("BRA");
   });
 
   it("renders all manualPrices from included even when Stage 1's manualRel is short (IAP.p2.m)", () => {

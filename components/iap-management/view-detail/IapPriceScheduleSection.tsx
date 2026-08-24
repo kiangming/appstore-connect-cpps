@@ -131,10 +131,24 @@ export function IapPriceScheduleSection({
                 filtered by base territory) — Apple stores the base in
                 automaticPrices, NOT manualPrices. `basePrice` may be null
                 when Stage 3 fails or returns no row; we still render the
-                territory name so Manager sees the base location. */}
+                territory name so Manager sees the base location.
+
+                ⚠ F2: `baseTerritory` itself may now be null — Apple returned
+                a schedule but no readable base pointer. Render that as
+                "Unknown" rather than a territory name. The old `?? "USA"`
+                upstream printed a confident "United States" here for every
+                app, which is the one thing this field must never do: it is
+                the field a Manager reads to decide which territory the other
+                prices are equalised FROM. */}
             <p>
               <span className="font-medium">
-                {territoryName(priceSchedule.baseTerritory)}
+                {priceSchedule.baseTerritory === null ? (
+                  <span className="text-slate-400 italic">
+                    Unknown — Apple returned no base territory
+                  </span>
+                ) : (
+                  territoryName(priceSchedule.baseTerritory)
+                )}
               </span>
               {priceSchedule.basePrice?.currency && (
                 <span className="text-slate-400">

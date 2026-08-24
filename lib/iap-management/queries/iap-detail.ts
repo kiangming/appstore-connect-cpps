@@ -96,8 +96,25 @@ export interface PriceScheduleEntry {
 }
 
 export interface PriceScheduleView {
-  /** Base territory ID (always present after Apple's POST). */
-  baseTerritory: string;
+  /**
+   * Base territory ID, or `null` when the schedule exists but Apple did not
+   * hand back a readable base.
+   *
+   * ⚠ NULLABLE ON PURPOSE, AND IT USED TO BE `?? "USA"`. That fallback was
+   * indistinguishable from a real answer: every consumer below renders or
+   * exports this value directly, so an unreadable base surfaced as a
+   * confident "United States" in the View Detail header and as `US` in the
+   * export workbook's Base Territory column — wrong, and with no error, no
+   * failure-sheet row and no log line to contradict it. Exactly the shape
+   * §4.1/G4b keeps producing: a silent default standing in for a fact we
+   * never learned.
+   *
+   * It is `null` rather than a throw because ONE unreadable field must not
+   * delete a schedule whose prices, territories and dates all read fine —
+   * the same reasoning `export-fetch`'s `shouldStopOnResult` docstring gives
+   * for keeping a rate-limited row instead of throwing it away.
+   */
+  baseTerritory: string | null;
   /**
    * IAP.p2.l — corrected after iris-API ground truth: Apple stores the
    * base price IN `manualPrices` (alongside the other manual overrides),
@@ -215,13 +232,22 @@ export function unpackPriceSchedule(
 ): PriceScheduleView {
   const scheduleBuckets = indexIncluded(res.included ?? []);
 
-  // Base territory id sits on the schedule's relationships. Defensive
-  // fallback to "USA" matches the bulk-import default — every Apple POST
-  // we've ever sent uses USA as the base.
+  // Base territory id sits on the schedule's relationships.
+  //
+  // ⚠ NO `?? "USA"` HERE. It was a guess dressed as a reading. Worse, it was
+  // a guess that would start firing on any change to WHERE the schedule sits
+  // in the response: this reads `res.data.relationships`, i.e. the schedule
+  // as the PRIMARY resource. Move the schedule into `included[]` — which is
+  // what side-loading it off the IAP detail read would do — and JSON:API
+  // gives its relationships `links` only, no `data` ids (CLAUDE.md, the
+  // screenshot-set quirk). `data?.id` then goes undefined for every item and
+  // the old fallback answered "USA" for all of them, silently.
+  //
+  // `null` propagates instead, and each consumer says so in its own idiom.
   const baseTerritory =
     ((res.data.relationships as
       | { baseTerritory?: { data?: { id?: string } } }
-      | undefined)?.baseTerritory?.data?.id as string | undefined) ?? "USA";
+      | undefined)?.baseTerritory?.data?.id as string | undefined) ?? null;
 
   // IAP.p2.m — iterate priceBucket directly instead of Stage 1's
   // `manualPrices.data` enumeration. Manager UAT MV30 Railway logs proved
@@ -266,10 +292,19 @@ export function unpackPriceSchedule(
   // alongside the other manualPrices, NOT in a separate automaticPrices
   // bucket. Effective-now base only: a future-dated base entry would
   // belong in the upcoming-changes table, not the header.
+  //
+  // ⚠ AND IT SHORT-CIRCUITS WHEN THE BASE IS UNKNOWN. `e.territory ===
+  // baseTerritory` against `null` can never match, so the `find` would
+  // already return undefined — but relying on that would leave the guard
+  // implicit and one refactor away from `?? "USA"` sneaking back in and
+  // matching the USA row by accident. An unknown base has no base price;
+  // that is stated, not inferred from a comparison happening to fail.
   const basePrice =
-    entries.find(
-      (e) => e.territory === baseTerritory && e.startDate === null,
-    ) ?? null;
+    baseTerritory === null
+      ? null
+      : entries.find(
+          (e) => e.territory === baseTerritory && e.startDate === null,
+        ) ?? null;
 
   return { baseTerritory, basePrice, entries };
 }

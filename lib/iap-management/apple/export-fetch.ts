@@ -222,6 +222,28 @@ export async function fetchExportSources(
                 : `collected ${short.collected} prices; more remained`,
           };
         }
+        // ⚠ AN UNREADABLE BASE TERRITORY MAKES THE ROW PARTIAL, NOT FAILED.
+        // Every price, territory and date in this row read fine; one pointer
+        // did not. Before F2 there was nothing to report here at all —
+        // `unpackPriceSchedule` substituted `"USA"` and the row exported
+        // looking complete and correct.
+        //
+        // ⚠ LAST, AND ONLY IF THE SLOT IS FREE. `priceReadFailure` holds one
+        // reason, and truncated prices are the larger data loss, so
+        // INCOMPLETE_PRICES above keeps the slot when both conditions fire.
+        // Ordering is the precedence — there is no separate rule to keep in
+        // sync.
+        //
+        // ⚠ Like INCOMPLETE_PRICES, this does NOT stop the pool: Apple
+        // answered, and an unreadable field says nothing about the budget.
+        // The latch stays keyed on RATE_LIMITED only.
+        if (!priceReadFailure && priceSchedule?.baseTerritory === null) {
+          priceReadFailure = {
+            kind: "UNKNOWN_BASE_TERRITORY",
+            message:
+              "Schedule read OK; the `baseTerritory` relationship carried no id.",
+          };
+        }
       } catch (err) {
         const c = classifyAppleError(err);
         // ⚠ NO-SCHEDULE IS A TYPE, NOT A STATUS. This check used to be

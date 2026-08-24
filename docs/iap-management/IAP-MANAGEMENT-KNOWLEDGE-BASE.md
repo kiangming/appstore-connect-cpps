@@ -373,21 +373,41 @@ Format is semicolon-delimited key/value pairs. Two documented fields:
 | `user-hour-lim` | Hourly request budget for the ASC token (typically 3600) |
 | `user-hour-rem` | Remaining requests in the current hour window |
 
-**Parser discipline.** `parseRateLimit` in
-`lib/iap-management/apple/fetch.ts` is *defensive*: returns null when
-the header is absent, when only one of the two fields is present, or
-when values are non-numeric. The parser MUST NOT throw out of a
-successful Apple response just because the header changed shape — this
-is a read-only observability surface.
+**Parser discipline.** `parseRateLimit` now lives in
+`lib/shared/apple-fetch.ts` (re-exported unchanged from
+`lib/iap-management/apple/fetch.ts`). It is *defensive*: returns null
+when the header is absent, when only one of the two fields is present,
+or when a value is anything other than a run of digits. The parser MUST
+NOT throw out of a successful Apple response just because the header
+changed shape — this is a read-only observability surface.
+
+⚠ **"Unreadable" and "zero" are different answers** (pre-E2 hardening,
+Aug 2026). The guard used to be `Number.isFinite(Number(value))`, and
+`Number("")` is **0**, not NaN — so an empty component
+(`user-hour-rem:;`) parsed as `remaining: 0`, i.e. "budget exhausted",
+when the truth was "could not read it". Same for `-5` (finite, and
+meaningless as a budget). The guard is now `/^\d+$/`, so every shape
+that cannot be a reading stays a non-reading. A **real** `0` still
+parses — swallowing it would trade a false "exhausted" for a false
+"unknown" and be equally wrong.
+
+This mattered ahead of any consumer: today `remaining` only reaches a
+log line, but the moment a pacing layer reads it to decide whether to
+keep dispatching, the same confusion freezes a job for no reason. Fixed
+before that consumer exists, not after.
 
 **Phase A surface.** `iapFetch` emits a structured Railway log line on
 every response that carries the header:
 
 ```
-[asc-client] GET /v2/inAppPurchases/abc → 200 budget=1234/3600 duration=180ms
+[asc-client] GET /v2/inAppPurchases/abc → 200 budget=1234/3600 duration=180ms key=2X9R4HXF34
 ```
 
-Grep-friendly tag: `[asc-client] budget=`. Manager can audit budget
+Grep-friendly tag: `[asc-client] budget=`. The trailing `key=` field
+(pre-E2 hardening, Aug 2026) names **which** ASC key spent the budget —
+required to attribute consumption once more than one key is in play, and
+**appended** rather than inserted so the pre-existing
+`[asc-client] … budget=` grep keeps matching unchanged. Manager can audit budget
 consumption across a workflow by tailing Railway logs and filtering on
 this prefix. Endpoints that omit the header produce no `[asc-client]`
 line — the existing `[iap-apple]` line still records status + endpoint.

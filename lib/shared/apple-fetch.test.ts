@@ -147,6 +147,39 @@ describe("appleFetch", () => {
     expect(budgetCall![1]).toContain("budget=1234/3600");
   });
 
+  // ─── F3 — the budget line names WHICH key spent it ───────────────────────
+
+  it("the budget line carries key=<keyId>, and the legacy grep still matches", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        mockResponse(200, { data: { id: "x" } }, {
+          "x-rate-limit": "user-hour-lim:3600;user-hour-rem:1234;",
+        }),
+      ),
+    );
+    await appleFetch(creds, "GET", "/v1/apps/x");
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("[asc-client]"))!;
+
+    // The new field.
+    expect(line).toContain("key=TESTKEY12");
+
+    // ⚠ AND THE OLD PATTERN STILL MATCHES. The Manager's audit grep
+    // (`[asc-client] … budget=`) predates this field; appending must not
+    // redefine it. Asserted as the actual regex, not as a substring, so a
+    // future edit that reorders the line fails here.
+    expect(line).toMatch(/\[asc-client\] .* budget=/);
+
+    // Field order is part of the contract for anyone parsing with awk.
+    expect(line).toMatch(
+      /^\[asc-client\] GET \/v1\/apps\/x → 200 budget=1234\/3600 duration=\d+ms key=TESTKEY12$/,
+    );
+  });
+
   it("defaults logTag to 'apple-fetch' when omitted", async () => {
     const { log } = await import("@/lib/logger");
     (log as ReturnType<typeof vi.fn>).mockClear();
@@ -185,5 +218,87 @@ describe("parseRateLimit (re-exported unchanged)", () => {
 
   it("returns null when header absent", () => {
     expect(parseRateLimit(new Headers())).toBeNull();
+  });
+});
+
+// ─── F1 — an unreadable component is NOT a reading of zero ─────────────────
+
+/**
+ * ⚠ THE BUG THIS PINS IS `Number("")` === 0, NOT NaN.
+ *
+ * The old guard was `if (!Number.isFinite(Number(value))) continue;`, which
+ * lets an EMPTY value through as the number 0. So `user-hour-rem:;` parsed
+ * as `remaining: 0` — indistinguishable from a genuinely exhausted budget.
+ *
+ * Two different facts, and only one of them is a reason to stop working:
+ *   "0"  → Apple says the budget is gone.
+ *   ""   → we could not read the budget at all.
+ *
+ * Right now the only consumer is a Railway log line, so the cost is one
+ * wrong log. The moment anything reads `remaining` to decide whether to keep
+ * dispatching, the same confusion freezes a job for no reason. Hence the fix
+ * lands before that consumer exists, not after.
+ *
+ * ⚠ Header FORMAT below is Apple's, sourced from the "Identifying Rate
+ * Limits" docs page (a single `X-Rate-Limit` header whose value is a
+ * `;`-delimited list of `key:value` components):
+ *     X-Rate-Limit: user-hour-lim:3600; user-hour-rem:500;
+ * These fixtures are hand-written to that spec — they prove the parser is
+ * self-consistent with the documented shape, NOT that the header is named
+ * this on the wire. That is only knowable from a live response.
+ */
+describe("parseRateLimit — unreadable ≠ zero (F1)", () => {
+  const rl = (v: string) => parseRateLimit(new Headers({ "x-rate-limit": v }));
+
+  it("⚠ an EMPTY value must not parse as zero — it is not a reading", () => {
+    // Number("") === 0 is the whole bug. This is the regression anchor.
+    expect(rl("user-hour-lim:3600;user-hour-rem:;")).toBeNull();
+  });
+
+  it("a whitespace-only value is empty too (value is trimmed first)", () => {
+    expect(rl("user-hour-lim:3600;user-hour-rem:   ;")).toBeNull();
+  });
+
+  it("an empty LIMIT is equally unreadable — the rule is not rem-specific", () => {
+    expect(rl("user-hour-lim:;user-hour-rem:500;")).toBeNull();
+  });
+
+  it("a non-numeric value stays unreadable", () => {
+    expect(rl("user-hour-lim:3600;user-hour-rem:abc;")).toBeNull();
+  });
+
+  it("a NEGATIVE value is rejected — a negative budget is not a thing", () => {
+    // Number("-5") is finite, so the old guard accepted it and reported a
+    // remaining of -5. Nothing Apple can mean by that.
+    expect(rl("user-hour-lim:3600;user-hour-rem:-5;")).toBeNull();
+  });
+
+  it("exponent / hex notation is rejected — finite, but not what Apple sends", () => {
+    expect(rl("user-hour-lim:3600;user-hour-rem:1e3;")).toBeNull();
+    expect(rl("user-hour-lim:3600;user-hour-rem:0x10;")).toBeNull();
+  });
+
+  it("a REAL zero still parses — exhausted is a reading, and must survive", () => {
+    // ⚠ The mirror of the headline case. A fix that swallowed "0" would
+    // trade a false "exhausted" for a false "unknown" and be just as wrong.
+    expect(rl("user-hour-lim:3600;user-hour-rem:0;")).toEqual({
+      limit: 3600,
+      remaining: 0,
+    });
+  });
+
+  it("one bad component does not poison a good one — the OTHER key still reads", () => {
+    // rem is unreadable, so the whole result is null (both fields required),
+    // but the loop must not abort early: lim is still parsed on the way past.
+    // Proven by flipping which key is broken and getting null both ways.
+    expect(rl("user-hour-rem:;user-hour-lim:3600;")).toBeNull();
+    expect(rl("user-hour-lim:;user-hour-rem:500;")).toBeNull();
+  });
+
+  it("the documented format with a space after ';' still parses (docs verbatim)", () => {
+    expect(rl("user-hour-lim:3600; user-hour-rem:500;")).toEqual({
+      limit: 3600,
+      remaining: 500,
+    });
   });
 });

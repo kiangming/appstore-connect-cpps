@@ -64,7 +64,23 @@ export type ExportFailureKind =
   | "APPLE_ERROR"
   | "UNKNOWN"
   | "INCOMPLETE_PRICES"
+  | "UNKNOWN_BASE_TERRITORY"
   | "NOT_ATTEMPTED";
+
+/**
+ * ⚠ UNKNOWN_BASE_TERRITORY IS ITS OWN KIND TOO, for the same reason
+ * INCOMPLETE_PRICES is. The read SUCCEEDED and the prices are COMPLETE —
+ * only the schedule's base-territory pointer was unreadable. It is not
+ * APPLE_ERROR (nothing was refused), not RATE_LIMITED (nothing was
+ * throttled), not UNKNOWN (we can explain it precisely), and not
+ * INCOMPLETE_PRICES (no price is missing).
+ *
+ * Before this kind existed the condition had no way to be reported at all:
+ * `unpackPriceSchedule` substituted `"USA"` and the row exported looking
+ * correct. The Manager action is also distinct from all four — the prices in
+ * this row are trustworthy, so re-reading buys nothing; what needs checking
+ * is which territory Apple considers the base.
+ */
 
 /**
  * ⚠ INCOMPLETE_PRICES IS ITS OWN KIND, not a flavour of the others. The read
@@ -203,7 +219,15 @@ function toExportRow(source: ExportSource): ExportRow {
     productId: source.productId,
     skuName: source.skuName,
     status: source.status,
-    baseTerritory: schedule ? toAlpha2(schedule.baseTerritory) : null,
+    // ⚠ TWO different nulls collapse into this one cell, and that is fine
+    // *because the failure sheet separates them*: no schedule at all vs. a
+    // schedule whose base was unreadable. The cell is blank either way — a
+    // blank is honest — but only one of the two gets an
+    // UNKNOWN_BASE_TERRITORY row naming it. Before F2 the second case wrote
+    // a confident `US` here instead.
+    baseTerritory: schedule?.baseTerritory
+      ? toAlpha2(schedule.baseTerritory)
+      : null,
     prices,
     localizations: source.localizations,
     priceReadFailure: source.priceReadFailure,
@@ -269,6 +293,7 @@ const KIND_LABEL: Record<ExportFailureKind, string> = {
   APPLE_ERROR: "Apple refused",
   UNKNOWN: "Unknown error",
   INCOMPLETE_PRICES: "Incomplete prices",
+  UNKNOWN_BASE_TERRITORY: "Base territory unreadable",
   NOT_ATTEMPTED: "Not attempted",
 };
 
@@ -331,6 +356,15 @@ function detailFor(
   }
   if (kind === "RATE_LIMITED") {
     return `Apple rate-limited the read after retries were exhausted. ${message}`.trim();
+  }
+  if (kind === "UNKNOWN_BASE_TERRITORY") {
+    // ⚠ Says what IS trustworthy as well as what is not. A reader who only
+    // sees "unreadable" re-runs the export; the prices did not need it.
+    return (
+      "Apple returned the price schedule without a readable base territory. " +
+      "Prices in this row are complete; only the Base Territory cell is blank. " +
+      message
+    ).trim();
   }
   if (kind === "APPLE_ERROR") {
     return status !== undefined

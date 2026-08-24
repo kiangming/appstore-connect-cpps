@@ -24,7 +24,13 @@ import type { PriceScheduleEntry } from "@/lib/iap-management/queries/iap-detail
 export interface PricesTableExpandableProps {
   /** Effective-now entries (already filtered by parent). */
   entries: readonly PriceScheduleEntry[];
-  baseTerritory: string;
+  /**
+   * `null` when Apple's schedule carried no readable base territory — no row
+   * is then marked "(base)". ⚠ Marking one anyway is the failure mode this
+   * guards: the old `?? "USA"` upstream made the USA row wear a "(base)" tag
+   * it had not earned, on any app whose real base is elsewhere.
+   */
+  baseTerritory: string | null;
 }
 
 interface SummaryRow {
@@ -79,12 +85,12 @@ function buildSummaryRows(entries: readonly PriceScheduleEntry[]): SummaryRow[] 
 
 function buildFullRows(
   entries: readonly PriceScheduleEntry[],
-  baseTerritory: string,
+  baseTerritory: string | null,
 ): FullRow[] {
   return entries.map((e) => ({
     key: e.priceId,
     territory: `${territoryName(e.territory)}${
-      e.territory === baseTerritory ? " (base)" : ""
+      baseTerritory !== null && e.territory === baseTerritory ? " (base)" : ""
     }`,
     price: e.currency
       ? `${e.customerPrice} ${e.currency}`
