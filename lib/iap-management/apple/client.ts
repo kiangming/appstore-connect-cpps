@@ -87,9 +87,28 @@ export async function listAllInAppPurchases(
 
 /**
  * Extract the path-and-query portion of an Apple `links.next` URL so it can
- * be fed back to `iapFetch` (which prepends ASC_BASE_URL). Apple returns a
- * fully-qualified URL; we strip the origin defensively in case Apple ever
- * changes the host.
+ * be fed back to `iapFetch` (which prepends ASC_BASE_URL). We strip the
+ * origin defensively in case Apple ever changes the host.
+ *
+ * ⚠ "APPLE RETURNS AN ABSOLUTE URL" IS MEASURED, NOT ASSUMED. It used to be
+ * asserted here with no source, which mattered because this function THROWS
+ * on anything it cannot parse — an unsourced assumption guarding a hard
+ * failure. Two independent pieces of evidence:
+ *
+ *   • This endpoint, in production: the throw below has been live on every
+ *     `listAllInAppPurchases` enumeration and has never fired a false alarm.
+ *     A relative `links.next` would have surfaced immediately and loudly.
+ *   • The sibling `manualPrices` endpoint, live GET 2026-08-24:
+ *     `links.next` = "https://api.appstoreconnect.apple.com/v1/
+ *     inAppPurchasePriceSchedules/{id}/manualPrices?include=…&cursor=AQ&limit=1",
+ *     alongside `meta.paging = {total, nextCursor, limit}`.
+ *
+ * ⚠ ITS TWIN DISAGREES, ON PURPOSE. `nextPathFromLink`
+ * (apple/price-schedules.ts) handles the same Apple field and GUESSES a path
+ * instead of throwing, because it carries a tested relative-URL fallback from
+ * Manager UAT MV30. Read that docstring before changing either: the two
+ * encode different risk trades over one field, and the difference is
+ * deliberate, not drift.
  *
  * COMPLETENESS DETECTION (submit-guard false-NOT_FOUND fix): distinguish two
  * cases that used to be conflated into a silent `undefined`:

@@ -229,8 +229,37 @@ type ManualPricesPage = AscApiResponse<InAppPurchasePrice[]> & {
   meta?: { paging?: { total?: number; limit?: number } };
 };
 
-/** Convert Apple's `links.next` (absolute URL) to the relative endpoint
- *  shape iapFetch expects. Tolerant of both absolute and relative inputs. */
+/**
+ * Convert Apple's `links.next` to the relative endpoint shape iapFetch
+ * expects.
+ *
+ * ⚠ ABSOLUTE IS THE PRODUCTION PATH, and it is measured, not assumed. Live
+ * GET 2026-08-24 against this exact endpoint returned
+ * `links.next` = "https://api.appstoreconnect.apple.com/v1/
+ * inAppPurchasePriceSchedules/{id}/manualPrices?include=…&cursor=AQ&limit=1"
+ * (with `meta.paging = {total:175, nextCursor, limit}`), so `new URL()`
+ * parses and the catch below never runs.
+ *
+ * ⚠ THE RELATIVE FALLBACK IS NOT DEAD CODE — it is pinned as a feature by
+ * `api-schemas.integration.test.ts` ("…paginates — relative URL"), added
+ * after Manager UAT MV30 where an 11-row schedule lost its alphabetically
+ * last entry to a brittle links.next follow. It has never been observed to
+ * fire against production. Do NOT "clean it up" into a throw: that would
+ * delete a tested recovery path to satisfy a symmetry argument.
+ *
+ * ⚠ AND GUESSING IS NO LONGER SILENT (a4d52e2). If the fallback ever guesses
+ * wrong, the guessed path 404s, and a Stage-2 404 is deliberately left as a
+ * plain `AppleApiError` — never `NoPriceScheduleError` — so it surfaces as a
+ * real failure in the export's failure sheet instead of being reported as
+ * "this IAP has no prices".
+ *
+ * ⚠ ITS TWIN DISAGREES, ON PURPOSE. `extractNextPagePath`
+ * (apple/client.ts) handles the same Apple field and THROWS rather than
+ * guessing, because its caller's contract is all-or-nothing enumeration: a
+ * partial IAP list there produces false "Apple removed this IAP" verdicts.
+ * Same field, different cost of being wrong — read both before changing
+ * either.
+ */
 function nextPathFromLink(nextLink: string): string {
   try {
     const url = new URL(nextLink);
