@@ -25,8 +25,8 @@ this would be P1 twin-path.
 | Does the §4.9 cap conflict matter? | **No.** At 250/h the hour is blown at **~83 items**; at 3,600/h at **~1,198**. Both say the same thing: an app of 500+ IAPs cannot be exported safely without selection. **The recommendation does not depend on resolving §4.9.** |
 | Export vs. the modal | Export is **more** expensive per item (3 vs 2) and has *always* run unconditionally over the full catalogue — the exact shape A′ just removed from `set-territories`. |
 | **G2** — cheaper source for the Available/Removed filter? | **A cheap source exists and it is NOT SOUND.** `include=inAppPurchaseAvailability` on the list endpoint is OAS-valid and would cost 0 extra requests — but it cannot classify, because "Remove from Sales" is a *present* availability resource with an *empty* territory list (KB §4.12), and the included resource carries no territory count. Classifying on presence would label every removed item **Available** — the inverse of the truth, on exactly the items the filter is for. |
-| G2 recommendation | **Ship the free filters (Type + Apple Status + search, 0 requests) now. Do NOT put an availability filter in the picker.** Offer Available/Removed as an opt-in filter *after* selection, on the selected set only, with its cost on the button. Never absorb 2N silently. |
-| G2 bonus (UNCERTAIN) | The same include would hand us `availabilityId` for free, cutting the availability read from **2 requests to 1** — for the lazy filter *and* for A′'s existing read phase. Needs one live probe. |
+| G2 recommendation | **Ship the free filters (Type + Apple Status + search, 0 requests). Do NOT build the paid availability filter.** ⭐ **U3 measured live and settled it** — `state` and availability agreed on **35/35 real items across 6 apps and 4 ASC teams, zero counterexamples** (PART 1.5). The free Apple-status filter *is* a working availability proxy for the data as it exists. The paid filter goes to backlog with one named residual risk. |
+| **U2 measured live** | `include=inAppPurchaseAvailability` **does** populate `data[].relationships…data.id` ✅ (halves a future availability read, 2 → 1) — and the `included[]` resource's `availableTerritories` has **no `data`** ✅, confirming G2(d)'s rejection empirically, not just by reasoning. |
 | **G3** — `export:69` double-wrap | **CONFIRMED REAL.** `withRetry(() => listAllInAppPurchases(...))` over a function that already retries every page. 4×4 = **16 attempts** single-page; up to **32** on a 5-page app, because the outer retry restarts pagination from page 1. ~17.5 s of stacked backoff. The codebase already names this defect in a comment — and names only the sync-states twin. |
 | **G4** — partial file | **Trivially possible.** The workbook is built in memory *after* the fetch loop returns (`XLSX.write`, no streaming), and a second sheet is a 3-line addition to `book_new` + `book_append_sheet`. **The Manager's chosen shape is buildable exactly as specified** — no CSV compromise. |
 | G4 defect found | A rate-limited price-schedule read **degrades to `priceSchedule: null` silently** and the row exports with blank prices — indistinguishable from "Apple has no schedule". Worse: a territory priced only on throttled rows **disappears from the column set entirely**. |
@@ -199,15 +199,23 @@ exact inverse of the truth, on precisely the rows the filter exists to find.
 **Rejected on correctness, not on cost.** Record it in the KB so the next
 session does not rediscover the cheap half and ship it.
 
-**🟡 The genuinely useful half (UNCERTAIN).** `data[]` resources *do* carry
-`relationships.{rel}.data` (CLAUDE.md), so the include should hand us each
-item's **`availabilityId` for free** — which is exactly what
-`getAvailabilityForIap`'s Step A exists to fetch
-([availabilities.ts:234-246](../../lib/iap-management/apple/availabilities.ts#L234-L246)).
-Skipping Step A cuts the availability read from **2 requests to 1**, for the
-lazy filter here *and* for A′'s existing read phase. **UNCERTAIN** — Apple
-spec ≠ Apple behavior is this module's crystallized pattern (KB §4.1). One
-live probe settles it (see U2).
+**🟢 The genuinely useful half — MEASURED LIVE, both halves confirmed (PART 1.5).**
+`data[]` resources *do* carry `relationships.inAppPurchaseAvailability.data.id`
+— observed on 9/9 items. That is exactly what `getAvailabilityForIap`'s Step A
+exists to fetch
+([availabilities.ts:234-246](../../lib/iap-management/apple/availabilities.ts#L234-L246)),
+so skipping Step A **cuts any availability read from 2 requests to 1** — for a
+future filter here *and* for A′'s existing read phase.
+
+And the rejection above is confirmed empirically, not merely reasoned: every
+`included[]` availability resource came back as
+`attributes:{availableInNewTerritories}` with `relationships.availableTerritories`
+carrying **`links` only, no `data`**. No territory count. G2(d) stands.
+
+⚠ One idea that did **not** survive contact: "items with no availability
+resource classify as removed for free." **Every** IAP that exists on Apple had
+an availability relationship populated (0/29 missing), so there is no free
+subset to split off. The read is 1 request per item, never 0.
 
 ### (e) `state` — free, but it is a different concept
 
@@ -217,35 +225,43 @@ as its **Status** column
 and the OAS enum includes `REMOVED_FROM_SALE` / `DEVELOPER_REMOVED_FROM_SALE`.
 **0 extra requests.**
 
-⚠ **But `state` is the review/lifecycle status, not territory reach.** Treating
-them as one is the status-principle trap (KB §9 P5) — the module's own code
-keeps them apart: `submit-batch/bucket.ts:178-180` reads
-`REMOVED_FROM_SALE` as a *submission* blocker, while `AvailabilityCell`
-derives "Remove from Sales" from territory count alone. An `APPROVED` IAP with
-zero territories reads **Removed** in the tool and **APPROVED** in `state`.
-Whether Apple flips `state` when the territory list empties is **UNCERTAIN**
-(see U3).
+⚠ **In principle `state` is the review/lifecycle status, not territory reach**,
+and treating them as one is the status-principle trap (KB §9 P5). The module's
+own code keeps them apart on purpose: `submit-batch/bucket.ts:178-180` reads
+`REMOVED_FROM_SALE` as a *submission* blocker, while `AvailabilityCell` derives
+"Remove from Sales" from territory count alone
+([availability-classify.ts:20-32](../../lib/iap-management/apple/availability-classify.ts#L20-L32)),
+and `classifySyncStates` copies Apple's `state` verbatim without ever consulting
+availability ([classify.ts:46-83](../../lib/iap-management/sync-states/classify.ts#L46-L83)).
+**The two are computed from completely disjoint inputs in this codebase**, so
+the code proves nothing either way — it only proves the cached `state` is a
+faithful mirror of Apple's own value, which is what makes it a valid probe.
 
-### 🎯 G2 RECOMMENDATION
+🟢 **In practice, measured against live Apple data, they agree — 35/35.**
+See **PART 1.5**. `state` is adopted as the availability proxy, with the
+residual risk named there.
 
-**Do not put an availability filter in the item picker.** Three parts:
+### 🎯 G2 RECOMMENDATION (revised after the PART 1.5 probe)
 
-1. **Ship the free filters now.** The picker gets **search** (productId + name)
-   + **Type** + **Apple Status** — all served from `iaps` the page already
-   holds, **0 Apple requests**. The Status control is labelled *Apple review
-   status* and lists `REMOVED_FROM_SALE` / `DEVELOPER_REMOVED_FROM_SALE` among
-   its values, **never** as "Available/Removed" — two concepts, two labels.
-2. **Available / Removed becomes an opt-in filter on the SELECTED set only.**
-   It appears *after* selection, reuses `runAvailabilityReadPhase` verbatim,
-   and its control carries its own price:
-   `Filter by availability — 40 items, ~40 more Apple requests`
-   (`~80` if U2 comes back negative). Off by default, so the ordinary export
-   path pays **zero** extra.
-3. **Reject (d)** in code review and in the KB.
+**Ship the free filters. Do not build the paid one.**
 
-If the Manager wants availability filtering *before* selection anyway, the
-cost is **+2N on top of the export's own 3N** and there is no way around it —
-that number goes on screen, it does not get absorbed.
+1. **The picker gets search + Type + Apple status — 0 Apple requests.** All
+   three are served from `iaps` the page already holds.
+2. **The Apple-status filter doubles as the availability filter.** PART 1.5
+   measured `state` against live availability on 35 real items across 6 apps
+   and 4 ASC teams and found **zero disagreement**. A Manager filtering to
+   `DEVELOPER_REMOVED_FROM_SALE` gets exactly the removed-from-sales items, for
+   free.
+3. ⚠ **Label it for what it is.** The control says *Apple status* and lists the
+   raw states. It does **not** say "Available / Removed" — because the value it
+   filters on is the review state, and one day those could diverge (PART 1.5,
+   residual risk). Naming it after the thing it actually reads is what keeps a
+   future divergence a visible surprise instead of a silent wrong answer.
+4. **The paid Available/Removed filter → backlog, not built.**
+   `[EXPORT-availability-filter]` in `TODO.md`, with the one observation that
+   would resurrect it.
+
+⇒ **U4 closes.** Nothing pays 2N, and nothing pays 1N either.
 
 ---
 
@@ -450,6 +466,131 @@ start at `IapListClient`. See PART 2.I.
 Export is untracked. **Out of scope** — noted, not fixed. (If it is ever added,
 read the parameterization gap first: the tag is a hardcoded constant, not a
 parameter, on the Apple side.)
+
+---
+
+# PART 1.5 — U2 + U3 SETTLED BY LIVE MEASUREMENT
+
+Both were marked UNCERTAIN in the first draft. Both were probed against the
+production Supabase mirror and against live Apple, **read-only**.
+**Total cost: 93 Apple GET requests** across five probe runs — well inside
+either §4.9 cap scenario, and the reason this was worth doing before designing
+a feature whose whole purpose is to spend fewer of them.
+
+## The cached mirror — what the local data alone says
+
+`iap_mgmt.iaps`, **6,954 rows**, every one carrying an Apple id:
+
+| state | rows |
+|---|---|
+| APPROVED | 4,922 |
+| MISSING_METADATA | 931 |
+| **DEVELOPER_REMOVED_FROM_SALE** | **631** |
+| READY_TO_SUBMIT | 425 |
+| WAITING_FOR_REVIEW | 42 |
+| IN_REVIEW | 3 |
+| **REMOVED_FROM_SALE** | **0** |
+
+⚠ **First honest limit: `REMOVED_FROM_SALE` — the Apple-initiated variant —
+has never been observed.** All 631 removals are `DEVELOPER_REMOVED_FROM_SALE`.
+Anything below covers the developer-initiated state only.
+
+⚠ **Second honest limit: the tool has never audited a removal.**
+`actions_log` holds 124 `AVAILABILITY_SET_ALL_TERRITORIES` + 8
+`AVAILABILITY_SET_TERRITORIES` and **0 `AVAILABILITY_REMOVE_FROM_SALES`** —
+consistent with `20260811000000`'s note that the CHECK constraint silently
+rejected those inserts until it was widened. So **every removed item in this
+dataset was removed by some path other than this tool's API write.**
+
+`classifySyncStates` copies Apple's `state` verbatim and never consults
+availability ([classify.ts:46-83](../../lib/iap-management/sync-states/classify.ts#L46-L83)),
+so the cached `state` is a faithful mirror — which is what makes it usable as a
+probe rather than a circular one.
+
+## U2 — the list include: **populated, and still cannot count**
+
+`GET /v1/apps/{id}/inAppPurchasesV2?include=inAppPurchaseAvailability` → 200.
+
+| Observation | Result |
+|---|---|
+| `data[].relationships.inAppPurchaseAvailability.data.id` | ✅ **populated**, 9/9 items |
+| `included[]` carries the availability resources | ✅ `{"availableInNewTerritories": false\|true}` |
+| `included[].relationships.availableTerritories.data` | ❌ **absent — `links` only**, 9/9 |
+| Items with **no** availability relationship at all | **0/29** — no free "removed" subset exists |
+
+⇒ **G2(d)'s rejection is confirmed empirically.** The include cannot classify;
+it has no territory count and Apple never omits the relationship.
+⇒ **The salvage is real**: `availabilityId` arrives free, so any availability
+read drops from **2 requests to 1** (Step A becomes unnecessary). Worth applying
+to A′'s existing read phase independently of this design.
+
+## U3 — does `state` track availability? **Yes. 35/35, no counterexample.**
+
+Every row below is **live Apple state vs live Apple territory count**, taken
+from Apple's own `filter[state]`, not from the cache.
+
+**Deep pass — one app (Lineage W), all four populated states:**
+
+| live state | n | territories | bucket |
+|---|---|---|---|
+| `DEVELOPER_REMOVED_FROM_SALE` | 3 | **0** | REMOVED |
+| `APPROVED` | 4 | 175 | AVAILABLE |
+| `READY_TO_SUBMIT` | 4 | 175 | AVAILABLE |
+| `MISSING_METADATA` | 4 | 175 | AVAILABLE |
+
+**Wide pass — 6 apps, 4 different ASC teams:** Play Together VNG, Lineage W,
+Ngôi Sao Hoàng Cung 360mobi, Chơi Ngay Game Vui Vẻ VNG, DEAD TARGET, 劍俠世界:起源.
+**20/20 agreement**: every `DEVELOPER_REMOVED_FROM_SALE` item had 0 territories,
+every `APPROVED` item had 175.
+
+**Combined: 35 observations, 0 disagreements, in both directions.**
+
+### ⚠ A false counterexample that had to be thrown out
+
+An early pass appeared to find three `READY_TO_SUBMIT` items with no
+availability — which would have killed the proxy. It was an artifact:
+`GET /v2/inAppPurchases/{id}` returned **404 for the IAP itself**. Those items
+are **deleted from Apple** and only survive in the local cache (`vn.lw.gg.120`,
+`.121`, `.123`, cached `READY_TO_SUBMIT`). The 404 was the item being gone, not
+its availability being absent.
+
+Two things follow, and the second is a real finding worth its own line:
+
+1. Never read a 404 on a sub-resource as a fact about the sub-resource until
+   the parent is confirmed to exist. Same family as KB §4.1's *spec ≠ behavior*.
+2. **The local mirror carries deleted-on-Apple rows and nothing detects them.**
+   `classifySyncStates` only INSERTs and UPDATEs from Apple's list — it has no
+   "present locally, absent from Apple" branch
+   ([classify.ts:46-83](../../lib/iap-management/sync-states/classify.ts#L46-L83)).
+   Out of scope here; logged as `[SYNC-orphan-rows]`.
+
+### What is proven, and what is not
+
+**Proven** — across 6 apps and 4 teams, `DEVELOPER_REMOVED_FROM_SALE` ⟺ empty
+availability, and every non-removed state ⟺ full availability. Good enough to
+adopt `state` as the filter.
+
+**NOT proven, and named rather than buried:**
+
+| # | Untested | Why it matters |
+|---|---|---|
+| 1 | ⚠ **The tool's own write path.** No `AVAILABILITY_REMOVE_FROM_SALES` row has ever existed, so nothing here shows whether `POST /v1/inAppPurchaseAvailabilities` with an empty list *also* flips `state`. **This is precisely the path the feature exercises.** Settling it needs a WRITE to Apple — deliberately not done. | If Apple does **not** flip `state` on an API-driven removal, the proxy breaks for exactly the items this tool removed. |
+| 2 | `REMOVED_FROM_SALE` (Apple-initiated) — 0 rows anywhere | Unknown whether it behaves like its developer-initiated sibling. |
+| 3 | Partial subsets. Every available item had exactly **175** — the full catalogue. The tool's own `set-territories` mode can now produce e.g. 42. | Doesn't break the proxy (42 > 0 ⇒ AVAILABLE), but that population is unrepresented, and a 2-state filter cannot see it either way. |
+| 4 | Sampling took the **first 2** items per state per app, not a random draw. Items inside one app are often bulk-created together. | Within-app independence is weak; the cross-app / cross-team spread is what carries the weight. |
+
+### 🎯 The one observation that closes risk #1 — free, during normal UAT
+
+The next time the Manager uses **Remove from Sales** in this tool, then clicks
+**Refresh from Apple**: does the row's Status column change to
+`DEVELOPER_REMOVED_FROM_SALE`?
+
+- **Yes** → the proxy is sound on the tool's own path. `[EXPORT-availability-filter]`
+  can be closed as *won't build*.
+- **No** → the proxy has a blind spot on exactly the items the Manager just
+  touched, and the backlog item becomes real work.
+
+Costs nothing, needs no probe, and answers the only question left.
 
 ---
 
@@ -822,9 +963,10 @@ sent. FAILED items are **not** pre-ticked; a human reads the reason first
 | # | Item | What settles it | Blocks? |
 |---|---|---|---|
 | **U1** | §4.9 still unresolved — 250 vs 3,600/h | `[asc-client] … budget=R/L` lines in Railway (the `user-hour-lim` value) | **No.** Both give the same verdict (G1). It only sets the warning threshold in 2.E. |
-| **U2** | Does Apple actually populate `include=inAppPurchaseAvailability` on the list, and does `data[].relationships.inAppPurchaseAvailability.data.id` come through? | One live probe against a real app. **Spec ≠ behavior is this module's crystallized pattern (KB §4.1)** | **No.** Would cut the optional filter's cost from 2/item to 1/item — a refinement, not a dependency. |
-| **U3** | Does Apple flip `state` to `*_REMOVED_FROM_SALE` when the territory list empties? | Remove one item from sales via the tool, re-read `state` | **No.** If yes, the **free** Status filter is already an availability proxy and the paid filter (G2 part 2) may never be needed. Worth probing before building it. |
-| **U4** | Does the Manager want the paid Available/Removed filter at all, given Type + Apple Status + search are free? | Manager decision | ⚠ **Yes, for that sub-feature only.** Recommend shipping the free filters first and adding the paid one only if asked. |
+| ~~**U2**~~ | ✅ **SETTLED — PART 1.5.** The include populates `data[].relationships…data.id` (9/9) but carries **no** territory data (9/9), and Apple never omits the relationship (0/29). G2(d) rejection confirmed; the 2 → 1 read saving is real. | done | — |
+| ~~**U3**~~ | ✅ **SETTLED — PART 1.5.** `state` tracks availability on **35/35** live items across 6 apps and 4 ASC teams, zero counterexamples. The free Apple-status filter is adopted as the proxy. | done | — |
+| **U3-residual** | ⚠ Does an **API-driven** removal (this tool's `POST` with an empty territory list) also flip `state`? Untested — no such audit row has ever existed, and settling it needs a write to Apple. | **One free UAT observation**: Manager clicks Remove from Sales, then Refresh from Apple, and checks whether Status flips (PART 1.5) | **No.** Decides whether `[EXPORT-availability-filter]` is closed as won't-build or becomes real. |
+| ~~**U4**~~ | ✅ **CLOSED by U3.** The free Apple-status filter is the availability filter. Nothing pays 2N, and nothing pays 1N either. Paid filter recorded as `[EXPORT-availability-filter]` backlog, **not built**. | done | — |
 | **U5** | Should "Select all" on a 1,000-item app be allowed, or capped? | Manager decision | **No.** Design allows it, warns, never blocks — consistent with 2.E. |
 | **U6** | Actual N on the app the Manager exports | Manager | **No.** Sharpens 2.B's numbers only. |
 | **U7** | Under `PARTIAL`, is a header note enough for column completeness, or should the column union be taken over attempted rows? | Manager preference | **No.** Recommend the header note (2.C) — it cannot invent an empty column. |
@@ -868,8 +1010,9 @@ shipping ahead of the redesign.
    renders it (proving parity) before the wizard does.
 7. **Wire the wizard** — step 1 → step 2 → export, with the scale line.
 8. **Second sheet + headers + the stopped-run summary view.**
-9. **Optional availability filter** — only if U3 says `state` is not already a
-   proxy, and only if the Manager asks (U4).
+9. ~~Optional availability filter~~ — **dropped.** U3 settled it (PART 1.5): the
+   free Apple-status filter is the proxy. Backlog only
+   (`[EXPORT-availability-filter]`), gated on the U3-residual UAT observation.
 
 ⚠ **Test at the layer this arc keeps missing.** At least one test must start at
 `IapListClient`, open the wizard, and assert **zero** `fetch` calls
