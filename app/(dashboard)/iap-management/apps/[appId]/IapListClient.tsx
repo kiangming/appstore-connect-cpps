@@ -35,7 +35,7 @@ import {
   type BulkMode,
 } from "@/components/iap-management/AvailabilitiesBulkModal";
 import { AvailabilityCell } from "@/components/iap-management/AvailabilityCell";
-import { ExportOptionsDialog } from "@/components/iap-management/ExportOptionsDialog";
+import { ExportItemWizard } from "@/components/iap-management/export-wizard/ExportItemWizard";
 
 const PAGE_SIZE = 100;
 
@@ -147,7 +147,7 @@ export function IapListClient({
   const [modalOpen, setModalOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportWizardOpen, setExportWizardOpen] = useState(false);
   const [page, setPage] = useState(1);
   // Cycle 39 Phase 2 — bulk modal state. Null = closed.
   // Hotfix 25: the modal now fetches availability on open via the
@@ -317,8 +317,12 @@ export function IapListClient({
   // Generous client-side ceiling so it doesn't look hung mid-way.
   const EXPORT_TIMEOUT_MS = 10 * 60 * 1000;
 
-  async function handleConfirmExport(selectedTerritories: string[] | null) {
-    setExportDialogOpen(false);
+  async function handleConfirmExport(args: {
+    selectedIds: string[];
+    territories: string[] | null;
+  }) {
+    const { selectedIds, territories: selectedTerritories } = args;
+    setExportWizardOpen(false);
     setExporting(true);
     const toastId = toast.loading("Generating export… this can take a few minutes for large apps.");
     const controller = new AbortController();
@@ -327,7 +331,12 @@ export function IapListClient({
       const res = await fetch(`/api/iap-management/apps/${appId}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ territories: selectedTerritories }),
+        // ⚠ `selectedIds` is sent from this commit on, but the route does
+        //    NOT read it yet — chunk 2e adds that, together with the
+        //    per-id honesty guarantees (dead ids surface in the failure
+        //    sheet rather than being filtered away). Until then the export
+        //    is still whole-app; the two commits ship together.
+        body: JSON.stringify({ territories: selectedTerritories, selectedIds }),
         signal: controller.signal,
       });
       if (!res.ok) {
@@ -460,7 +469,7 @@ export function IapListClient({
         </Link>
         <button
           type="button"
-          onClick={() => setExportDialogOpen(true)}
+          onClick={() => setExportWizardOpen(true)}
           disabled={exporting}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition disabled:opacity-50"
           title="Export all IAPs (live from Apple) to xlsx"
@@ -836,9 +845,21 @@ export function IapListClient({
         />
       )}
 
-      <ExportOptionsDialog
-        open={exportDialogOpen}
-        onCancel={() => setExportDialogOpen(false)}
+      {/* ⚠ Two steps, both free. The wizard renders the SHARED
+          `ExportOptionsDialog` itself as step 2 — unmodified, three props —
+          rather than this page rendering it directly (P8: that dialog is
+          Google's too). */}
+      <ExportItemWizard
+        open={exportWizardOpen}
+        iaps={iaps}
+        drafts={drafts.map((d) => ({
+          id: d.id,
+          product_id: d.product_id,
+          reference_name: d.reference_name,
+        }))}
+        appleToInternal={appleToInternal}
+        exporting={exporting}
+        onCancel={() => setExportWizardOpen(false)}
         onExport={handleConfirmExport}
       />
     </div>
