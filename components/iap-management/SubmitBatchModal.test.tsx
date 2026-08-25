@@ -282,3 +282,112 @@ describe("SubmitBatchModal — Hub-tracking three-state cancel guard", () => {
     expect(beaconBlob).toBeInstanceOf(Blob);
   });
 });
+
+// ─── C1 — a stopped batch must not read as a clean one ─────────────────────
+
+/**
+ * ⚠ THE BUG THIS PINS IS IN THE SUMMARY, NOT THE LIST.
+ *
+ * `ResultView` always mapped over every row, so a NOT_ATTEMPTED row was never
+ * invisible. What lied was the banner above it: `allClean` was
+ * `failed === 0 && skipped === 0`, so a batch that stopped at row 1 of 3 with
+ * zero failures rendered the green box and the sentence "All eligible IAPs
+ * are now waiting for Apple Review" — while two rows had never been sent.
+ * The summary is what a Manager reads before closing the modal, so that is
+ * the surface that had to stop lying.
+ */
+describe("SubmitBatchModal — C1 not-attempted rows in the result view", () => {
+  function stoppedExecuteResponse() {
+    return {
+      phase: "execute",
+      submitted: 1,
+      failed: 0,
+      skipped: 0,
+      not_attempted: 2,
+      results: [
+        { iap_id: "iap-1", apple_iap_id: "apple-1", status: "SUCCESS", state: "WAITING_FOR_REVIEW" },
+        {
+          iap_id: "iap-2",
+          apple_iap_id: "apple-2",
+          status: "NOT_ATTEMPTED",
+          error: "Batch stopped before this item — Apple rate limit reached. Nothing was sent; safe to submit again.",
+        },
+        {
+          iap_id: "iap-3",
+          apple_iap_id: "apple-3",
+          status: "NOT_ATTEMPTED",
+          error: "Batch stopped before this item — Apple rate limit reached. Nothing was sent; safe to submit again.",
+        },
+      ],
+      hub_run_id: null,
+    };
+  }
+
+  async function renderStoppedResult() {
+    mockFetchSequence(({ body }) =>
+      body?.execute ? stoppedExecuteResponse() : preflightResponse(),
+    );
+    renderModal();
+    await waitFor(() => screen.getByRole("button", { name: /Submit 1 ready/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Submit 1 ready/i }));
+    // ⚠ Anchor on the ROW label, not on the banner. The row list was never
+    // the broken part, so it is stable under the mutation that breaks the
+    // banner — which means each test below fails on its OWN assertion rather
+    // than on this shared setup. A helper that waits for the thing under test
+    // proves nothing when that thing regresses.
+    await waitFor(() => expect(screen.getAllByText("NOT SENT")).toHaveLength(2));
+  }
+
+  it("⚠ does NOT claim everything is waiting for review when rows were never sent", async () => {
+    await renderStoppedResult();
+    expect(
+      screen.queryByText(/All eligible IAPs are now waiting for Apple Review/i),
+    ).toBeNull();
+  });
+
+  it("the summary line counts the un-sent rows", async () => {
+    await renderStoppedResult();
+    expect(screen.getByText(/2 not sent/i)).toBeTruthy();
+  });
+
+  it("says the batch stopped, and that re-submitting is safe", async () => {
+    await renderStoppedResult();
+    expect(screen.getByText(/rate limit was reached/i)).toBeTruthy();
+    expect(screen.getByText(/submit them again/i)).toBeTruthy();
+  });
+
+  it("every un-sent row is listed individually, labelled NOT SENT", async () => {
+    await renderStoppedResult();
+    // ⚠ The row list was never the broken part — this asserts it STAYS
+    // correct while the banner is being changed around it.
+    expect(screen.getAllByText("NOT SENT")).toHaveLength(2);
+    expect(screen.getByText("apple-2")).toBeTruthy();
+    expect(screen.getByText("apple-3")).toBeTruthy();
+  });
+
+  it("a clean batch still reads clean — the new branch must not fire on every result", async () => {
+    mockFetchSequence(({ body }) =>
+      body?.execute
+        ? {
+            phase: "execute",
+            submitted: 1,
+            failed: 0,
+            skipped: 0,
+            not_attempted: 0,
+            results: [
+              { iap_id: "iap-1", apple_iap_id: "apple-1", status: "SUCCESS", state: "WAITING_FOR_REVIEW" },
+            ],
+            hub_run_id: null,
+          }
+        : preflightResponse(),
+    );
+    renderModal();
+    await waitFor(() => screen.getByRole("button", { name: /Submit 1 ready/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Submit 1 ready/i }));
+    await waitFor(() =>
+      screen.getByText(/All eligible IAPs are now waiting for Apple Review/i),
+    );
+    expect(screen.queryByText(/2 not sent/i)).toBeNull();
+    expect(screen.queryAllByText("NOT SENT")).toHaveLength(0);
+  });
+});

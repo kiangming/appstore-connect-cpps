@@ -41,7 +41,7 @@ interface ExecuteResultRow {
   apple_iap_id: string;
   /** IAP.q.1.IV: `SKIPPED_BY_STATE_GUARD` added — server-side state guard
    *  blocked a row whose Apple state was not `READY_TO_SUBMIT`. */
-  status: "SUCCESS" | "ERROR" | "SKIPPED_BY_STATE_GUARD";
+  status: "SUCCESS" | "ERROR" | "SKIPPED_BY_STATE_GUARD" | "NOT_ATTEMPTED";
   state?: string;
   error?: string;
 }
@@ -52,6 +52,9 @@ interface ExecuteResponse {
   failed: number;
   /** IAP.q.1.IV — count of rows blocked by the server-side state guard. */
   skipped?: number;
+  /** C1 — rows the batch never sent anything for (rate limit reached).
+   *  Optional so an older server response still parses. */
+  not_attempted?: number;
   results: ExecuteResultRow[];
   /** Hub-tracking run id — always null here (this phase is always
    *  terminal; the run has already been finalized server-side). */
@@ -279,12 +282,17 @@ export function SubmitBatchModal({
     executeCommittedRef.current = true;
     setStage({ kind: "result", data });
     const skipped = data.skipped ?? 0;
-    if (data.failed === 0 && skipped === 0) {
+    // ⚠ The toast is the only summary a Manager who closes the modal will
+    // see, so a stopped batch has to reach it too — same reason `allClean`
+    // in ResultView had to stop ignoring it.
+    const notAttempted = data.not_attempted ?? 0;
+    if (data.failed === 0 && skipped === 0 && notAttempted === 0) {
       toast.success(`Submitted ${data.submitted} IAP${data.submitted === 1 ? "" : "s"} for review.`);
     } else {
       const parts = [`Submitted ${data.submitted}`];
       if (data.failed > 0) parts.push(`${data.failed} failed`);
       if (skipped > 0) parts.push(`${skipped} blocked by state guard`);
+      if (notAttempted > 0) parts.push(`${notAttempted} not sent (rate limit)`);
       toast.warning(`${parts.join(" · ")} — see details.`);
     }
   }
@@ -727,7 +735,14 @@ function Bucket({ icon, tone, title, rows }: BucketProps) {
 
 function ResultView({ data }: { data: ExecuteResponse }) {
   const skipped = data.skipped ?? 0;
-  const allClean = data.failed === 0 && skipped === 0;
+  // ⚠ NOT_ATTEMPTED MUST BREAK `allClean`. Before C1 this read
+  // `failed === 0 && skipped === 0`, so a batch that stopped at row 40 of 100
+  // with zero failures rendered the green banner and the sentence "All
+  // eligible IAPs are now waiting for Apple Review" — while 60 rows had never
+  // been sent. The rows themselves were always listed; it was the SUMMARY
+  // that lied, which is worse, because the summary is what a Manager reads.
+  const notAttempted = data.not_attempted ?? 0;
+  const allClean = data.failed === 0 && skipped === 0 && notAttempted === 0;
   return (
     <div className="space-y-4">
       <div
@@ -740,10 +755,26 @@ function ResultView({ data }: { data: ExecuteResponse }) {
         <p className="font-semibold">
           {data.submitted} submitted · {data.failed} failed
           {skipped > 0 ? ` · ${skipped} blocked by state guard` : ""}
+          {notAttempted > 0 ? ` · ${notAttempted} not sent` : ""}
         </p>
         {allClean ? (
           <p className="mt-1 text-xs">
             All eligible IAPs are now waiting for Apple Review.
+          </p>
+        ) : notAttempted > 0 ? (
+          // ⚠ Checked BEFORE the state-guard branch: a stopped batch is the
+          // more urgent thing to say, and it carries the one instruction that
+          // is safe to give without any further checking — just run it again.
+          <p className="mt-1 text-xs">
+            Apple&apos;s rate limit was reached, so the batch stopped after{" "}
+            {data.submitted + data.failed} row
+            {data.submitted + data.failed === 1 ? "" : "s"}.{" "}
+            <strong>
+              Nothing was sent for the {notAttempted} row
+              {notAttempted === 1 ? "" : "s"} marked NOT SENT
+            </strong>{" "}
+            — wait a few minutes and submit them again. Rows already submitted
+            are unaffected.
           </p>
         ) : skipped > 0 && data.failed === 0 ? (
           <p className="mt-1 text-xs">
@@ -771,10 +802,19 @@ function ResultView({ data }: { data: ExecuteResponse }) {
                     ? "text-emerald-700 dark:text-emerald-400"
                     : row.status === "SKIPPED_BY_STATE_GUARD"
                       ? "text-amber-700 dark:text-amber-400"
-                      : "text-red-700 dark:text-red-400"
+                      : // ⚠ NOT red. Nothing failed for this row — nothing was
+                        // even sent. Painting it with the error colour would
+                        // tell a Manager to go investigate a row that is fine.
+                        row.status === "NOT_ATTEMPTED"
+                        ? "text-slate-500 dark:text-slate-400"
+                        : "text-red-700 dark:text-red-400"
                 }`}
               >
-                {row.status === "SKIPPED_BY_STATE_GUARD" ? "SKIPPED" : row.status}
+                {row.status === "SKIPPED_BY_STATE_GUARD"
+                  ? "SKIPPED"
+                  : row.status === "NOT_ATTEMPTED"
+                    ? "NOT SENT"
+                    : row.status}
               </span>
             </div>
             {row.state && (
@@ -787,7 +827,9 @@ function ResultView({ data }: { data: ExecuteResponse }) {
                 className={`mt-0.5 text-[11px] ${
                   row.status === "SKIPPED_BY_STATE_GUARD"
                     ? "text-amber-700 dark:text-amber-400"
-                    : "text-red-600 dark:text-red-400"
+                    : row.status === "NOT_ATTEMPTED"
+                      ? "text-slate-500 dark:text-slate-400"
+                      : "text-red-600 dark:text-red-400"
                 }`}
               >
                 {row.error}

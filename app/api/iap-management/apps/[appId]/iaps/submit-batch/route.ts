@@ -54,8 +54,9 @@ import {
 import {
   withRetry,
   AppleApiError,
+  AppleRateLimitError,
 } from "@/lib/iap-management/apple/fetch";
-import { withConcurrency } from "@/lib/iap-management/concurrency";
+import { runStoppablePool } from "@/lib/iap-management/stoppable-pool";
 import {
   bucketSelection,
   partitionByStateGuard,
@@ -147,11 +148,34 @@ interface PreflightResponse {
 interface ExecuteResultRow {
   iap_id: string;
   apple_iap_id: string;
-  /** IAP.q.1.IV: `SKIPPED_BY_STATE_GUARD` added — server-side state recheck
-   *  blocked a row whose Apple state was not `READY_TO_SUBMIT`. The UI
-   *  renders these distinctly from `ERROR`s (which represent real Apple
-   *  submission failures). */
-  status: "SUCCESS" | "ERROR" | "SKIPPED_BY_STATE_GUARD";
+  /**
+   * IAP.q.1.IV: `SKIPPED_BY_STATE_GUARD` — server-side state recheck blocked
+   * a row whose Apple state was not `READY_TO_SUBMIT`. The UI renders these
+   * distinctly from `ERROR`s (which represent real Apple submission
+   * failures).
+   *
+   * C1: `NOT_ATTEMPTED` — the batch stopped before this row and **nothing
+   * was sent for it**.
+   *
+   * ⚠ THESE TWO ARE NOT THE SAME "SKIP" AND MUST NEVER BE MERGED.
+   *   SKIPPED_BY_STATE_GUARD — Apple WAS asked (the state recheck read it)
+   *                            and its answer disqualified the row. Re-
+   *                            submitting now changes nothing; the Manager
+   *                            has to fix state first.
+   *   NOT_ATTEMPTED          — Apple was NOT asked. No submit call, no
+   *                            `actions_log` row, no state change anywhere.
+   *                            **Safe to re-submit blindly.**
+   * Collapsing them would tell a Manager to go fix 60 rows that have nothing
+   * wrong with them.
+   *
+   * ⚠ Why "safe to re-submit blindly" is a true claim HERE and would not be
+   * in Bulk Import: a submit row costs exactly ONE Apple write, so the row
+   * boundary IS the guarantee boundary. There is no half-written row to land
+   * between stages. (Bulk Import's row is create + N localizations +
+   * screenshot + pricing + availability + submit — the same word would be a
+   * lie there. That is C2/C3, deliberately not this commit.)
+   */
+  status: "SUCCESS" | "ERROR" | "SKIPPED_BY_STATE_GUARD" | "NOT_ATTEMPTED";
   state?: string;
   error?: string;
 }
@@ -164,6 +188,10 @@ interface ExecuteResponse {
    *  before Apple was called. Modal preflight normally filters these
    *  client-side; this counter > 0 means a race or direct-API call landed. */
   skipped: number;
+  /** C1 — rows the run never sent anything for, because a 429 that survived
+   *  `withRetry` proved the remaining budget was gone. Counted separately
+   *  from `failed`: nothing was attempted, so nothing failed. */
+  not_attempted: number;
   results: ExecuteResultRow[];
   /** Hub-tracking run id, always null here — this phase is always terminal
    *  (the run has already been finalized server-side by the time this
@@ -535,12 +563,75 @@ async function runExecuteLegacyInner(
   }
   const { eligible, skippedResults } = guard;
 
-  const submitResults: ExecuteResultRow[] = await withConcurrency(
-    eligible,
-    SUBMIT_CONCURRENCY,
-    async (row) => {
+  // ⚠ C1 — STOP DISPATCHING once a 429 proves the remaining work cannot
+  // succeed, instead of firing the rest of the batch at an API that is
+  // already refusing. Same primitive, same three rules, as Bulk Availability
+  // and the xlsx export (`lib/iap-management/stoppable-pool.ts`).
+  //
+  // The fit here is 1:1 and that is not an accident — a submit row is ONE
+  // Apple write inside ONE try/catch, so `run` genuinely throws and
+  // `shouldStop` sees the error directly. No `shouldStopOnResult` is needed
+  // (the export needs one only because its price read deliberately swallows
+  // its own failure to keep the row usable).
+  //
+  // ⚠ `partitionByStateGuard` is untouched and stays where it is. It runs in
+  // PREFLIGHT, before Apple is written to at all, and produces `skipped`
+  // from Apple's own state answer. The latch only ever governs `eligible`.
+  // Two orthogonal mechanisms — see the ExecuteResultRow docstring for why
+  // their two "skips" must not be merged.
+  const { results: submitResults } = await runStoppablePool<
+    (typeof eligible)[number],
+    ExecuteResultRow
+  >({
+    items: eligible,
+    concurrency: SUBMIT_CONCURRENCY,
+
+    // ⚠ ONLY a rate limit that already burned the full backoff curve. By the
+    // time an AppleRateLimitError reaches here it has been attempted 1 + 3
+    // times (`withRetry` wraps the submit call below), so it is evidence
+    // about the BUDGET, not about this row. Every other error — a 409, a
+    // state flip, a transport blip — says nothing about the next row and
+    // stays fail-soft.
+    shouldStop: (err) => err instanceof AppleRateLimitError,
+
+    // Rule 1: the pool checks the latch BEFORE calling `run`, so a row that
+    // lands here had ZERO Apple calls and ZERO `actions_log` writes. That is
+    // exactly what makes it safe to re-submit blindly, and why no audit row
+    // is written for it (same choice bulk-availability made).
+    skipped: (row) => ({
+      iap_id: row.id,
+      // `!` for the same reason as :475 — `onApple` is already filtered on
+      // `apple_iap_id`, but TS does not narrow through a truthiness filter.
+      apple_iap_id: row.apple_iap_id!,
+      status: "NOT_ATTEMPTED" as const,
+      error:
+        "Batch stopped before this item — Apple rate limit reached. Nothing was sent; safe to submit again.",
+    }),
+
+    onError: async (row, err) => {
       const appleIapId = row.apple_iap_id!;
-      try {
+      await db.from("actions_log").insert({
+        iap_id: row.id,
+        actor,
+        action_type: "SUBMIT_APPLE_REVIEW",
+        payload: {
+          apple_iap_id: appleIapId,
+          result: "ERROR",
+          error: errMsg(err),
+          via: "batch",
+        },
+      });
+      return {
+        iap_id: row.id,
+        apple_iap_id: appleIapId,
+        status: "ERROR" as const,
+        error: errMsg(err),
+      };
+    },
+
+    run: async (row) => {
+      const appleIapId = row.apple_iap_id!;
+      {
         await withRetry(() => submitInAppPurchase(creds, appleIapId));
         // Fetch post-submit authoritative state.
         let finalState = "WAITING_FOR_REVIEW";
@@ -577,27 +668,9 @@ async function runExecuteLegacyInner(
           status: "SUCCESS" as const,
           state: finalState,
         };
-      } catch (err) {
-        await db.from("actions_log").insert({
-          iap_id: row.id,
-          actor,
-          action_type: "SUBMIT_APPLE_REVIEW",
-          payload: {
-            apple_iap_id: appleIapId,
-            result: "ERROR",
-            error: errMsg(err),
-            via: "batch",
-          },
-        });
-        return {
-          iap_id: row.id,
-          apple_iap_id: appleIapId,
-          status: "ERROR" as const,
-          error: errMsg(err),
-        };
       }
     },
-  );
+  });
 
   const results: ExecuteResultRow[] = [...submitResults, ...skippedResults];
   const submitted = results.filter((r) => r.status === "SUCCESS").length;
@@ -605,11 +678,21 @@ async function runExecuteLegacyInner(
   const skipped = results.filter(
     (r) => r.status === "SKIPPED_BY_STATE_GUARD",
   ).length;
+  const notAttempted = results.filter(
+    (r) => r.status === "NOT_ATTEMPTED",
+  ).length;
 
   // Hub-tracking status: SKIPPED_BY_STATE_GUARD rows are excluded from both
   // succeeded/failed (design doc §C, same principle as Bulk Import's
   // all-skipped-batch fix) — an entirely-skipped batch reads as SUCCESS
   // (failed===0), not FAIL.
+  //
+  // ⚠ NOT_ATTEMPTED is excluded on the SAME grounds, and the grounds matter:
+  // it is not that these rows are unimportant, it is that they were never
+  // attempted, so they can be neither a success nor a failure. Counting them
+  // as failures would report a batch that stopped cleanly as a broken one.
+  // (What they DO deserve is to be visible — that is the response counter
+  // and the modal's own line, not this status.)
   const terminal = computeBulkImportTerminalStatus({
     total: submitted + failed,
     succeeded: submitted,
@@ -622,6 +705,7 @@ async function runExecuteLegacyInner(
     submitted,
     failed,
     skipped,
+    not_attempted: notAttempted,
     results,
     hub_run_id: null,
   };
@@ -701,6 +785,9 @@ async function runExecuteV2Inner(
       submitted: 0,
       failed: 0,
       skipped: skippedResults.length,
+      // Zero by construction: `eligible` is empty, so the pool never ran and
+      // there was nothing to leave unattempted.
+      not_attempted: 0,
       results: skippedResults,
       hub_run_id: null,
     };
@@ -868,6 +955,16 @@ async function runExecuteV2Inner(
     submitted: results.length,
     failed: 0,
     skipped: skippedResults.length,
+    // ⚠ ALWAYS 0 ON THE v2 PATH, and that is a gap rather than a fact.
+    // `executeSubmitV2` (lib/iap-management/apple/submit-v2.ts:183-193) walks
+    // its items in a plain `for` loop with per-item `withRetry` and no latch,
+    // so a 429 there still marches through the remaining items. v2 is a
+    // different shape — one shared reviewSubmission, multi-phase, client-
+    // orchestrated — so it needs its own design, not this one copy-pasted.
+    // Tracked; deliberately out of C1's scope. v2 is OFF by default
+    // (`IAP_SUBMIT_V2_APPS` unset ⇒ legacy everywhere), so the live path is
+    // the one C1 hardens.
+    not_attempted: 0,
     results: [...results, ...skippedResults],
     hub_run_id: null,
   };
