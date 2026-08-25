@@ -1229,8 +1229,20 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
       skippedByStop: localesStoppedByStop,
     },
     pricing: {
-      state:
-        pricing.kind === "set"
+      // ⚠ THE STOP IS CHECKED FIRST, AND THE ORDER IS THE WHOLE FIX.
+      //
+      // When the budget is spent this stage never runs and the code above
+      // synthesises `skipped-not-ready` (reusing the kind the orchestrator
+      // already has for "did not run"). But `startsWith("skipped-")` used to
+      // be tested BEFORE the stop, so that synthetic value was classified
+      // NOT_APPLICABLE — "we did not need to price this" — when the truth was
+      // "the budget ran out before we could". Those lead a Manager to
+      // opposite actions: ignore it, versus re-run the row. The synthesised
+      // case is known locally, so it is read from the flag that caused it
+      // rather than re-derived from the kind it borrowed.
+      state: pricingSkippedByStop
+        ? "SKIPPED_BY_STOP"
+        : pricing.kind === "set"
           ? "OK"
           : pricing.kind.startsWith("skipped-")
             ? "NOT_APPLICABLE"

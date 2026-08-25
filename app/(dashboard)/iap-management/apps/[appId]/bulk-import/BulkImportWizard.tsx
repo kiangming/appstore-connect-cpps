@@ -10,6 +10,7 @@ import {
   CheckCircle,
   AlertCircle,
   HelpCircle,
+  AlertTriangle,
   XCircle,
   Loader2,
   ArrowRight,
@@ -32,6 +33,11 @@ import { bulkSurfaceDefaultSelection } from "@/lib/iap-management/apple/availabi
 import type { TerritorySelection } from "@/lib/iap-management/apple/territory-selection";
 import type { TerritoriesRouteResponse } from "@/app/api/iap-management/territories/route";
 import { ExpandableErrorCell } from "@/components/ui/shared/ExpandableErrorCell";
+import {
+  stageMapHasFindings,
+  formatStageMap,
+} from "@/lib/iap-management/bulk-import/stage-map-view";
+import type { RowStages } from "@/lib/iap-management/bulk-import/row-outcome";
 import {
   matchScreenshotToProductId,
   type ScreenshotMatchResult,
@@ -57,7 +63,10 @@ import {
   defaultPricingSource,
 } from "@/components/iap-management/iap-form/PricingSourceSelector";
 import type { PricingOutcome } from "@/lib/iap-management/apple/pricing-orchestration";
-import type { PerIapResult } from "@/app/api/iap-management/apps/[appId]/bulk-import/execute/route";
+import type {
+  PerIapResult,
+  ExecuteSummary,
+} from "@/app/api/iap-management/apps/[appId]/bulk-import/execute/route";
 import type { PricingSourceKind } from "@/lib/iap-management/validation";
 
 interface Props {
@@ -101,6 +110,12 @@ interface ExecuteResult {
   /** C2 — rows the batch never dispatched (Apple 429 survived retry).
    *  Optional so an older server response still renders. */
   not_attempted?: number;
+  /** C3 — rows written to Apple with at least one stage missing. Optional
+   *  for the same reason as `not_attempted`: a server predating C3 omits it.
+   *  ⚠ Typed from the server's own summary rather than hand-written
+   *  `number` — this file has already been bitten twice by a client type
+   *  drifting from the route it mirrors. */
+  partial?: ExecuteSummary["partial"];
   results: Array<{
     product_id: string;
     /**
@@ -990,6 +1005,14 @@ function Step2Screenshots({
   );
 }
 
+/**
+ * ⚠ THE TILES MUST SUM TO `result.total`, so the grid has to widen as new
+ * statuses earn tiles rather than the tiles competing for three slots. Keyed
+ * by how many conditional tiles are showing; Tailwind needs the class names
+ * present as literals, so this is a lookup and not a template string.
+ */
+const TILE_COLS = ["grid-cols-3", "grid-cols-4", "grid-cols-5"] as const;
+
 function Tally({
   label,
   value,
@@ -1316,7 +1339,13 @@ function DispositionBadge({ disposition }: { disposition: string }) {
 
 // ─── Step 4: Result ─────────────────────────────────────────────────────────
 
-function Step4Result({
+/**
+ * ⚠ Exported for tests only — the wizard renders it internally. The tile
+ * arithmetic ("the tiles sum to total") and the stage-map disclosure are
+ * properties of THIS component, not of the badges it contains, and there is
+ * no other seam to assert them through.
+ */
+export function Step4Result({
   result,
   appId,
   appName,
@@ -1338,6 +1367,10 @@ function Step4Result({
   // ⚠ `?? 0` so a response predating C2 renders exactly as it does today
   // (three tiles, no banner) instead of "undefined not sent".
   const notAttempted = result.not_attempted ?? 0;
+  // ⚠ Same `?? 0` reasoning as above, one release later: a response predating
+  // C3 has no `partial`, and must render as the run it describes rather than
+  // growing an empty tile.
+  const partial = result.partial ?? 0;
 
   const firstErrorRef = useRef<HTMLTableRowElement | null>(null);
   useEffect(() => {
@@ -1454,10 +1487,18 @@ function Step4Result({
           familiar three-up layout. */}
       <div
         className={`grid gap-3 mb-4 ${
-          notAttempted > 0 ? "grid-cols-4" : "grid-cols-3"
+          TILE_COLS[(notAttempted > 0 ? 1 : 0) + (partial > 0 ? 1 : 0)]
         }`}
       >
         <Tally label="Succeeded" value={result.succeeded} color="emerald" />
+        {/* ⚠ C3 — ITS OWN TILE, for the reason "Not sent" got one. A PARTIAL
+            row is not a success (a stage is missing) and not a failure (the
+            IAP is on Apple); folding it into either makes the tile a lie and
+            costs the Manager the one number that says "these need a second
+            look". Conditional, so a clean run keeps the familiar layout. */}
+        {partial > 0 && (
+          <Tally label="Partial" value={partial} color="amber" />
+        )}
         <Tally label="Skipped" value={result.skipped} color="slate" />
         <Tally label="Failed" value={result.failed} color="amber" />
         {notAttempted > 0 && (
@@ -1545,7 +1586,20 @@ function Step4Result({
                     <PriceBadge result={r} />
                   </td>
                   <td className="px-3 py-2 text-[11px] text-slate-500 align-top">
-                    {r.error ? (
+                    {/* ⚠ C3 (B3/B4) — GATED ON THE MAP, NOT ON `r.status`.
+                        `stageMapHasFindings` asks whether any stage actually
+                        failed or went unsent; that is the same population as
+                        PARTIAL but arrived at from the evidence, so the cell
+                        cannot drift out of agreement with the badge beside
+                        it. A clean row falls through to its existing note.
+                        The disclosure is the table's own ExpandableErrorCell
+                        — same gesture, same per-row state, no new frame. */}
+                    {r.stages && stageMapHasFindings(r.stages) ? (
+                      <ExpandableErrorCell
+                        summary={r.summary ?? "Partially completed."}
+                        detail={formatStageMap(r.stages)}
+                      />
+                    ) : r.error ? (
                       <ExpandableErrorCell
                         summary={
                           summarizeAppleError({
@@ -1601,20 +1655,42 @@ function Step4Result({
   );
 }
 
+/**
+ * The stages a CREATE row can be cut off at. `create` is excluded on purpose:
+ * a row that never got created is ERROR, not a stopped success, so a stop
+ * recorded there would be a contradiction rather than a fact to render.
+ */
+const CREATE_STOP_STAGES = [
+  "localizations",
+  "pricing",
+  "screenshot",
+  "availability",
+  "submit",
+] as const satisfies readonly (keyof RowStages)[];
+
 export function OutcomeBadge({
   result,
 }: {
   result: ExecuteResult["results"][number];
 }) {
-  if (result.status !== "SUCCESS") {
+  // ⚠ PARTIAL EARNS AN OUTCOME. Chunk A shipped with this returning "—" for
+  // every row that was not SUCCESS, which meant a row that had been created
+  // on Apple, localized and priced showed a dash — under-reporting, but still
+  // a lie of omission in the one column a Manager scans. ERROR and the two
+  // skips keep the dash: for them nothing landed, so there is nothing to say.
+  if (result.status !== "SUCCESS" && result.status !== "PARTIAL") {
     return <span className="text-[10px] text-slate-300">—</span>;
   }
+  const stages = result.stages;
   // For overwrite path: no submission, but localizations replaced.
   if (result.disposition === "OVERWRITE") {
     // IAP.o.8a — Manager MV30 Issue 1: silent screenshot deferral was the
     // critical loss. The badge now suffixes the screenshot outcome so the
     // happy and locked/failed paths can't be mistaken for each other.
-    const note = result.screenshot_note;
+    // ⚠ The map first, the flat field second. `stages.screenshot.note` and
+    // `result.screenshot_note` agree today; reading the map means a future
+    // stage-only fact cannot go unrendered here.
+    const note = stages?.screenshot.note ?? result.screenshot_note;
     let suffix = "";
     let cls = "bg-amber-50 text-amber-700 border-amber-200";
     if (note === "replaced" || note === "uploaded-new") {
@@ -1669,6 +1745,22 @@ export function OutcomeBadge({
       </span>
     );
   }
+  // ⚠ C3 — "Created only" is the wrong word when the budget cut the row off
+  // mid-way: it reads as "nothing more was wanted", not "we stopped". Asked
+  // of the MAP, not of `status`, so the branch cannot drift back to guessing.
+  if (
+    stages &&
+    CREATE_STOP_STAGES.some((k) => stages[k].state === "SKIPPED_BY_STOP")
+  ) {
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-amber-50 text-amber-800 border-amber-300"
+        title="Apple's rate-limit budget ran out part-way through this row. Everything marked 'not sent' in Notes was never sent — re-run the row to finish it."
+      >
+        Created — stopped by rate limit
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-slate-100 text-slate-600 border-slate-200">
       Created only
@@ -1687,10 +1779,31 @@ export function PriceBadge({
 }: {
   result: ExecuteResult["results"][number];
 }) {
-  if (result.status !== "SUCCESS") {
+  if (result.status !== "SUCCESS" && result.status !== "PARTIAL") {
     return <span className="text-[10px] text-slate-300">—</span>;
   }
-  const outcome = result.pricing_outcome;
+  const stages = result.stages;
+  // ⚠ THE BUDGET STOP GETS ITS OWN PILL, BEFORE ANY KIND-BASED BRANCH.
+  //
+  // When the budget runs out the route synthesises `skipped-not-ready` —
+  // reusing the orchestrator's existing "did not run" kind. Routed through
+  // the branches below, that renders red "Not ready" with a tooltip blaming
+  // Apple's poll window, which never happened. The kind is borrowed; the
+  // stage STATE is the fact, so the state is what is asked.
+  if (stages?.pricing.state === "SKIPPED_BY_STOP") {
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border bg-amber-50 text-amber-800 border-amber-300 border-dashed"
+        title="Apple's rate-limit budget ran out before pricing was attempted — nothing was sent. Re-run the row to price it."
+      >
+        Not sent
+      </span>
+    );
+  }
+  // ⚠ The map is authoritative when present. A PARTIAL row whose price DID
+  // land must still show "Price set" — that stage succeeded, and hiding it
+  // because a LATER stage failed is the under-report chunk A shipped with.
+  const outcome = stages?.pricing.outcome ?? result.pricing_outcome;
   if (!outcome) {
     return (
       <span
@@ -1808,6 +1921,19 @@ export function StatusBadge({ status }: { status: string }) {
     ERROR: {
       cls: "bg-red-50 text-red-700 border-red-200",
       icon: XCircle,
+    },
+    // ⚠ C3 — PARTIAL IS NEITHER, AND MUST LOOK LIKE NEITHER. The IAP exists
+    // on Apple (so not red) but a stage is missing (so not emerald). Amber is
+    // not a new colour invented here: this module already uses it for exactly
+    // this meaning — "created, but something did not land" — on `Created —
+    // submit deferred` and on pricing's `partial-template-fail`. Orange is
+    // taken (a specific sub-failure), slate means nothing happened, fuchsia
+    // is the loud unknown. A triangle rather than SUCCESS's circle-check or
+    // ERROR's circle-x, so the two are distinguishable without colour — the
+    // badge is 10px and some Managers read it on a projector.
+    PARTIAL: {
+      cls: "bg-amber-50 text-amber-800 border-amber-300",
+      icon: AlertTriangle,
     },
     // C2 — nothing was sent for this row. Slate like SKIPPED because neither
     // is a failure, but its own entry: the label below prints "not sent", and

@@ -92,6 +92,31 @@ describe("stages after the stop are skipped, not attempted-and-failed", () => {
     expect(src).toContain("const pricingSkippedByStop = args.rateCounters.exhausted");
   });
 
+  /**
+   * C3 chunk B found this while building the UI that renders the map: the
+   * stage was recording the WRONG state, so nothing downstream could have
+   * rendered it correctly. Added here rather than in a chunk-B file because
+   * the claim is about this route's source.
+   */
+  it("⚠ the pricing stage asks the STOP FLAG before the borrowed kind", () => {
+    // When the budget is spent the route synthesises `skipped-not-ready` —
+    // reusing the orchestrator's existing "did not run" kind. The ternary
+    // tested `kind.startsWith("skipped-")` first, so that synthetic value
+    // was classified NOT_APPLICABLE ("we did not need to price this")
+    // instead of SKIPPED_BY_STOP ("the budget ran out first"). Those tell a
+    // Manager to do opposite things: ignore it, or re-run the row. Order is
+    // the entire fix, so order is what is pinned.
+    const map = src.slice(
+      src.indexOf("const stages: RowStages = {"),
+      src.indexOf("screenshot: {", src.indexOf("const stages: RowStages = {")),
+    );
+    const stopFirst = map.indexOf("pricingSkippedByStop");
+    const kindBranch = map.indexOf('pricing.kind.startsWith("skipped-")');
+    expect(stopFirst).toBeGreaterThan(-1);
+    expect(kindBranch).toBeGreaterThan(-1);
+    expect(stopFirst).toBeLessThan(kindBranch);
+  });
+
   it("⚠ neither CREATE nor OVERWRITE returns a hard-coded SUCCESS any more", () => {
     // The headline defect: five stages swallowed their errors and the row
     // asserted success regardless. Both dispositions now derive it.
