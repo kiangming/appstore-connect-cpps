@@ -22,7 +22,7 @@ this would be P1 twin-path.
 | Gate | Answer |
 |---|---|
 | **G1** — what does export cost? | **3 Apple requests per IAP** (detail + price-schedule stage 1 + stage 2), plus `ceil(N/200)` for the list. **N=100 → 301. N=500 → 1,503. N=1000 → 3,005.** No pagination, no filter, no cap — it always sweeps the whole app. |
-| Does the §4.9 cap conflict matter? | **No.** At 250/h the hour is blown at **~83 items**; at 3,600/h at **~1,198**. Both say the same thing: an app of 500+ IAPs cannot be exported safely without selection. **The recommendation does not depend on resolving §4.9.** |
+| Does the §4.9 cap conflict matter? | **No** — and the measurement since taken (2026-08-25: `user-hour-lim` = **3,600**, §4.9) *vindicated* that call rather than overturning it. At the now-obsolete 250/h the hour blew at **~83 items**; at the real 3,600/h it blows at **~1,198**. Both said the same thing: an app of 500+ IAPs cannot be exported safely without selection. **The recommendation never depended on resolving §4.9, and still does not.** |
 | Export vs. the modal | Export is **more** expensive per item (3 vs 2) and has *always* run unconditionally over the full catalogue — the exact shape A′ just removed from `set-territories`. |
 | **G2** — cheaper source for the Available/Removed filter? | **A cheap source exists and it is NOT SOUND.** `include=inAppPurchaseAvailability` on the list endpoint is OAS-valid and would cost 0 extra requests — but it cannot classify, because "Remove from Sales" is a *present* availability resource with an *empty* territory list (KB §4.12), and the included resource carries no territory count. Classifying on presence would label every removed item **Available** — the inverse of the truth, on exactly the items the filter is for. |
 | G2 recommendation | **Ship the free filters (Type + Apple Status + search, 0 requests). Do NOT build the paid availability filter.** ⭐ **U3 measured live and settled it** — `state` and availability agreed on **35/35 real items across 6 apps and 4 ASC teams, zero counterexamples** (PART 1.5). The free Apple-status filter *is* a working availability proxy for the data as it exists. The paid filter goes to backlog with one named residual risk. |
@@ -100,8 +100,8 @@ Solving `3N + ceil(N/200) ≤ cap`:
 
 | Cap (KB §4.9) | Export blows the hour at | N=500 | N=1000 |
 |---|---|---|---|
-| **250/h** (Hotfix 25) | **~83 items** | 6× over | 12× over |
-| **3,600/h** (Hotfix 26) | **~1,198 items** | 42% of the hour | **83% of the hour** — a second export in the same hour fails |
+| ~~**250/h** (Hotfix 25)~~ ⚠ **OBSOLETE — figure disproven 2026-08-25** | ~~**~83 items**~~ | ~~6× over~~ | ~~12× over~~ |
+| ✅ **3,600/h** (Hotfix 26) — **MEASURED, this is the real cap** | **~1,198 items** | 42% of the hour | **83% of the hour** — a second export in the same hour fails |
 
 **Both scenarios give the same verdict.** At N=500–1000 the unconditional
 full-catalogue export is not viable, exactly as A′ concluded for the modal's
@@ -962,7 +962,7 @@ sent. FAILED items are **not** pre-ticked; a human reads the reason first
 
 | # | Item | What settles it | Blocks? |
 |---|---|---|---|
-| **U1** | §4.9 still unresolved — 250 vs 3,600/h | `[asc-client] … budget=R/L` lines in Railway (the `user-hour-lim` value) | **No.** Both give the same verdict (G1). It only sets the warning threshold in 2.E. |
+| ~~**U1**~~ | ✅ **SETTLED 2026-08-25 — `user-hour-lim` = 3,600.** Measured live off Apple, not inferred from Railway logs (§4.9 carries the repeatable method). Hotfix 26's figure was right; Hotfix 25's 250/h is disproven. As predicted, G1's verdict is unchanged — the number only sets the warning threshold in 2.E. | done | — |
 | ~~**U2**~~ | ✅ **SETTLED — PART 1.5.** The include populates `data[].relationships…data.id` (9/9) but carries **no** territory data (9/9), and Apple never omits the relationship (0/29). G2(d) rejection confirmed; the 2 → 1 read saving is real. | done | — |
 | ~~**U3**~~ | ✅ **SETTLED — PART 1.5.** `state` tracks availability on **35/35** live items across 6 apps and 4 ASC teams, zero counterexamples. The free Apple-status filter is adopted as the proxy. | done | — |
 | **U3-residual** | ⚠ Does an **API-driven** removal (this tool's `POST` with an empty territory list) also flip `state`? Untested — no such audit row has ever existed, and settling it needs a write to Apple. | **One free UAT observation**: Manager clicks Remove from Sales, then Refresh from Apple, and checks whether Status flips (PART 1.5) | **No.** Decides whether `[EXPORT-availability-filter]` is closed as won't-build or becomes real. |

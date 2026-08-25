@@ -190,10 +190,10 @@ promise is stated honestly in §C below.
 **Apple's documented limit — UNCERTAIN, and the KB says so.** The KB carries
 two irreconcilable figures and refuses to pick:
 
-| Source | Claim |
-|---|---|
-| Hotfix 25 | 250 req/hour |
-| Hotfix 26 | ~1 req/sec/token (≈3,600/hour) |
+| Source | Claim | Verdict (measured 2026-08-25) |
+|---|---|---|
+| Hotfix 25 | 250 req/hour | ❌ **disproven** |
+| Hotfix 26 | ~1 req/sec/token (≈3,600/hour) | ✅ **confirmed — `user-hour-lim` = 3,600** (KB §4.9) |
 
 [KB §4.9:395-415](IAP-MANAGEMENT-KNOWLEDGE-BASE.md) + footnote
 [KB:1289-1297](IAP-MANAGEMENT-KNOWLEDGE-BASE.md). Resolution is **empirical**:
@@ -600,7 +600,7 @@ records the batch-wide selection once.
 
 1. **G6 — custom price in an excluded territory: UNCERTAIN.** Spec is silent. Settled by the staging experiment in §G6. Until then the picker warns and does not block.
 2. **`baseTerritory` defaults to USA** ([price-schedules.ts:105](../../lib/iap-management/apple/price-schedules.ts#L105)) — a USA-excluding selection is incoherent even if Apple accepts it. Should the base territory follow the selection? **Manager decision**, out of this feature's write path.
-3. **Rate-limit figure unresolved** (250/hr vs 3,600/hr, KB §4.9). Design assumes neither. If telemetry lands on 250, surface A's pre-read (2 calls/item) becomes the dominant consumer and may need its own reconsideration — *not* by touching the Hotfix-26 throttle.
+3. ~~**Rate-limit figure unresolved**~~ ✅ **RESOLVED 2026-08-25 — `user-hour-lim` = 3,600** (KB §4.9 carries the method). This design deliberately assumed neither figure, so nothing here changes. The contingency written here — *"if telemetry lands on 250, surface A's pre-read (2 calls/item) becomes the dominant consumer"* — **does not fire**: at 3,600 a 500-item pre-read (~1,000 calls) is 28% of the hour, heavy but not fatal. The pre-read was hardened anyway by the A′ read phase, on scoping grounds rather than budget ones.
 4. **Surface A's mode filter stops making sense.** The modal today shows only currently-removed items in `set-all` mode and only currently-available in `remove` mode ([AvailabilitiesBulkModal.tsx:14-17](../../components/iap-management/AvailabilitiesBulkModal.tsx#L14-L17)). With arbitrary targets every item is a candidate. Proposal: keep the two existing one-click modes as presets, and add a third "Choose territories" mode with **no** pre-filter. Needs Manager confirmation.
 5. **Remainder is client-held, not durable** (§D) — a browser close loses it. Stated in the UI. Durable queueing is a follow-on if Manager wants it.
 6. **`AvailabilityCell`'s six terminal states** ([AvailabilityCell.tsx:15](../../components/iap-management/AvailabilityCell.tsx#L15)) — confirm a subset renders as a distinct state and does not fall into an "Available"/"Removed" bucket that misreports it (P8 twin-structure check).

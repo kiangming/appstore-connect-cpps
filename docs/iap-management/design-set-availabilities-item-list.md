@@ -25,7 +25,7 @@ Where a number could not be established from the repo it is marked
 | Then what did the Manager see? | Two candidates, both real, neither is a mode-3 filter defect: **(1)** they clicked **Set Availabilities** (mode `set-all`), whose designed copy is verbatim the reported symptom; **(2)** the on-open pre-read 429'd and every throttled item was **silently dropped** by the read-error guard, in *any* mode. |
 | **H2** — modal-open cost | **2 Apple requests per item**, ×N, unconditional, before Manager picks anything. Not batchable, not cached, ×4 more under 429 retry. |
 | N = 500 / N = 1000 | **~1,000 / ~2,000** requests typical; **4,000 / 8,000** worst case. |
-| Verdict at 250/h cap | Blown at **~125 items**. N=500 is 4× over, N=1000 is 8× over. |
+| ~~Verdict at 250/h cap~~ ⚠ **OBSOLETE** — 250/h disproven 2026-08-25 (`user-hour-lim` = **3,600**, KB §4.9). Kept because the design was written to hold at *either* figure. | ~~Blown at **~125 items**. N=500 is 4× over, N=1000 is 8× over.~~ |
 | Verdict at 3,600/h cap | N=500 survives **one** open (28% of budget); N=1000 is **56%** in one open and fails on the second, or on the first 429 cascade (222%). |
 | **Does the cap conflict change the answer?** | **No.** Both scenarios say the same thing at N=500–1000: the pre-read is not viable. **The recommendation does not depend on resolving KB §4.9.** |
 | New bug or pre-existing? | **PRE-EXISTING.** Hotfix 25 vintage. `set-territories` added **zero** per-item reads. The Manager's request only made an old cost visible. |
@@ -242,21 +242,28 @@ shared. On a scrolled page of 100 rows that is ~200 requests paid twice.
 Add per page visit: ~204 (N=500) / ~206 (N=1000) if the Manager scrolled a full
 page before opening the modal.
 
-**Scenario 1 — cap = 250/hour (Hotfix 25's figure):**
+**Scenario 1 — cap = 250/hour (Hotfix 25's figure).** ⚠ **This scenario is
+now known not to exist** — measured 2026-08-25, `user-hour-lim` = **3,600**
+(KB §4.9). The table is kept, struck through, because the design's conclusion
+was explicitly built to hold under *both* scenarios and the surviving one
+(Scenario 2) is what governs. Do not carry these numbers into new work.
 
 | N | Typical cost | % of budget | Breaks at item # |
 |---|---|---|---|
-| 500 | 1,000 | **400%** | ~125 |
-| 1000 | 2,000 | **800%** | ~125 |
+| ~~500~~ | ~~1,000~~ | ~~**400%**~~ | ~~~125~~ |
+| ~~1000~~ | ~~2,000~~ | ~~**800%**~~ | ~~~125~~ |
 
-The modal exhausts the hour's entire budget at **~125 items** and cannot finish
+*(Everything from here to "Scenario 2" describes the disproven 250/h world.)*
+
+~~The modal exhausts the hour's entire budget at **~125 items** and cannot finish
 either list. Counting the page-load overhead the effective headroom is **~23
-items**. Beyond that every remaining item returns `rate_limited`, lands in
+items**.~~ Beyond that every remaining item returns `rate_limited`, lands in
 `errors`, and is **silently dropped from the list** (PART 1, candidate 2).
 **Under this cap the reported symptom is fully explained by the pre-read
 alone.**
 
-**Scenario 2 — cap = 3,600/hour (Hotfix 26's figure):**
+**Scenario 2 — cap = 3,600/hour (Hotfix 26's figure).** ✅ **This is the real
+cap** — measured 2026-08-25 (KB §4.9). Everything below governs.
 
 | N | Typical cost | % of budget | Verdict |
 |---|---|---|---|
@@ -273,8 +280,10 @@ optimistic one.
 **⚠ Burst rate, separately from volume.** The client queue caps *parallelism*
 at 3 ([client-fetch-queue.ts:25](../../lib/iap-management/client-fetch-queue.ts#L25)),
 not volume. 1,000 requests at concurrency 3 and ~250 ms each complete in ~83
-seconds — a sustained **~12 req/s**. Against Hotfix 26's ~1 req/s figure that
-is **12× the sustainable rate**; against 250/h (~0.07 req/s) it is **~170×**.
+seconds — a sustained **~12 req/s**. Against the **measured** ~1 req/s figure
+(3,600/h, confirmed 2026-08-25) that is **12× the sustainable rate**. (The
+~170× figure previously quoted here came from the 250/h scenario, since
+disproven — the real multiple is 12×, and it is still the point.)
 The queue's own comment says what it was sized for: *"the client fires whenever
 IntersectionObserver detects visibility, which can spike on fast scrolls of
 long lists"* ([:8-16](../../lib/iap-management/client-fetch-queue.ts#L8-L16)).
@@ -282,11 +291,14 @@ long lists"* ([:8-16](../../lib/iap-management/client-fetch-queue.ts#L8-L16)).
 sweep.** Concurrency 3 does not make this safe and lowering it would not
 either — it would only make the modal slower while spending the same budget.
 
-> **⇒ CONCLUSION FOR BOTH SCENARIOS.** At N=500–1000 the on-open pre-read is
-> not viable. Under 250/h it fails outright and explains the UAT report on its
-> own. Under 3,600/h it survives the first open and fails on the second, or on
-> the first 429 cascade. **KB §4.9's unresolved cap does not need resolving to
-> decide this.** It only changes *how bad*, never *whether*.
+> **⇒ CONCLUSION.** At N=500–1000 the on-open pre-read is not viable.
+> ✅ **§4.9 has since been resolved: the cap is 3,600/h** (measured
+> 2026-08-25). Under that figure the pre-read survives the first open and
+> fails on the second, or on the first 429 cascade — which is the branch that
+> governs. The now-disproven 250/h branch would have failed outright.
+> **The design did not need the cap resolved, and the resolution did not
+> change its verdict** — exactly as claimed here. The cap only ever changed
+> *how bad*, never *whether*.
 
 ### (e) NEW bug, or PRE-EXISTING and newly exposed? — **PRE-EXISTING**
 
@@ -681,7 +693,7 @@ Stated explicitly because the brief asked:
 | # | Open item | What would settle it |
 |---|---|---|
 | U1 | Which of the three toolbar buttons the Manager clicked during UAT, and whether `6795583` (the "Choose territories" entry point) was deployed at that moment | Manager confirms the button label + the deployed SHA. Decides whether the report is candidate 1 (not a bug) or candidate 2 (a bug). **Candidate 2 must be fixed either way.** |
-| U2 | Apple's real hourly cap — KB §4.9 still unresolved (250 vs 3,600) | `[asc-client] … budget=R/L` lines in Railway (the `user-hour-lim` value). **This design does not depend on it** — both scenarios give the same verdict — but it decides whether a full-catalogue selection under A′ is merely slow or impossible. |
+| ~~U2~~ | ✅ **SETTLED 2026-08-25 — `user-hour-lim` = 3,600** (KB §4.9, measured live). As stated, this design did not depend on it. The question it *did* decide is now answered: a full-catalogue selection under A′ (~2,000 reads at N=1000) is **slow, not impossible** — 56% of one rolling hour. |
 | U3 | Whether the UAT run left `rate_limited` traces | Railway logs at the UAT timestamp: `[iap-apple] … → 429` and the route returning `error: "rate_limited"`. Their presence proves candidate 2 fired. |
 | U4 | Actual N for the app the Manager tested | changes nothing in the design; sharpens the numbers in PART 2(d). |
 | U5 | Manager sign-off on the **decision 5** change (PART 3) | required before implementation. Fallback if declined: **(B′)** — keep the open-time pre-read + filter, but hard-cap it (e.g. 100 items) and, above the cap, degrade to A′ behaviour **with an explicit banner saying the filter was skipped and why**. Costs the Manager a split behaviour and still cannot filter a large catalogue — which is why it is the fallback and not the recommendation. |

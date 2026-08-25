@@ -418,23 +418,52 @@ data shows persistent low budget remaining or 429 cascades that
 `withRetry` can't recover from. The X-Rate-Limit visibility added in
 Phase A is the gate that decides Phase B's go/no-go.
 
-**Pre-Cycle-40 cap-figure conflict (resolution-pending).** KB §10.8
-carries two inconsistent claims about Apple's hourly request budget:
+**Cap-figure conflict — ✅ RESOLVED BY MEASUREMENT (2026-08-25).**
 
-| Source | Claim |
-|---|---|
-| Hotfix 25 | "Apple's 250 req/hour cap" |
-| Hotfix 26 | "Apple's documented ~1 req/sec/token cap" (≈ 3,600/hour) |
+KB §10.8 carried two inconsistent claims about Apple's hourly request
+budget, differing by an order of magnitude:
 
-These can't both be correct; the figures differ by an order of magnitude
-and would justify very different Phase B designs (250 → token bucket
-essential; 3,600 → bursts more tolerable). The conflict is documented
-honestly rather than papered over because **resolution is empirical** —
-the `user-hour-lim` value Apple sends in `X-Rate-Limit` (now logged via
-`[asc-client] budget=R/L` post-Phase A) is the authoritative source.
-Manager telemetry observation over 1–2 days post-deploy will surface the
-true cap and resolve which figure to treat as load-bearing. The Phase B
-subset trigger criteria (B2/B3/B4) explicitly depend on this resolution.
+| Source | Claim | Verdict |
+|---|---|---|
+| Hotfix 25 | "Apple's 250 req/hour cap" | ❌ **WRONG** |
+| Hotfix 26 | "~1 req/sec/token" (≈ 3,600/hour) | ✅ **CORRECT** |
+
+**`user-hour-lim` = 3,600.** Read straight off a live Apple response:
+
+```
+x-rate-limit: user-hour-lim:3600;user-hour-rem:3599;
+```
+
+Three facts land at once, and all three had been open:
+
+1. **The header exists on the wire, under exactly this name and shape.**
+   Until this measurement, every `X-Rate-Limit` fixture in the repo was
+   hand-written from Apple's docs and asserted against our own parser —
+   a tautology that could not tell a correct parser from one reading a
+   header that does not exist. It reads a real one. Every historical
+   `[asc-client] … budget=` line was genuine.
+2. **The cap is 3,600/hour, not 250.** Every calculation in this repo
+   built on 250 is obsolete — see the "obsolete" annotations in §10.8
+   and in the three design docs that modelled both scenarios.
+3. **The window really is rolling.** `rem` opened at 3,599 = `lim − 1`
+   on a key that had been idle ~60 min, and moved 3,599 → 3,598 across
+   two requests 5 s apart (delta exactly −1). A fixed window would not
+   have been full mid-hour.
+
+**Method — repeat this if you ever doubt the number.** Two read-only
+`GET /v1/territories?limit=200`, ~5 s apart, signed with the **production
+signing path** (`lib/asc-jwt.ts` — jose, ES256, `kid`, `exp = +20 min`)
+and parsed with the **production parser** (`parseRateLimit`,
+`lib/shared/apple-fetch.ts`). Using the real code on both ends is the
+point: a hand-rolled probe would only prove that a hand-rolled probe
+works. `/v1/territories` is the cheapest idempotent GET in the API —
+no app, no IAP, no write. Total cost: 2 requests out of 3,600.
+
+⚠ Measured on the **first** account in `ASC_ACCOUNTS`. Whether 3,600 is
+per-key or per-team is a **separate, still-unmeasured** question — it
+needs a second key on the same team (see `[RATELIMIT-keypool-if-demand]`
+in TODO.md). Do not read this number as "3,600 per key" until that is
+measured.
 
 ### 4.10 LANDMARK — CPP and IAP share ONE items-only reviewSubmission slot per (app, platform)
 
@@ -1418,18 +1447,25 @@ pivot. No backwards-compat shims (per project Don'ts).
 
 **Apple ASC institutional trap class — NEW.** Strategy A's "bulk
 prefetch on render" pattern is now documented as an anti-pattern for
-Apple-rate-limited integrations. Apple's 250 req/hour cap [^h25cap] is
+Apple-rate-limited integrations. Apple's per-hour cap [^h25cap] is
 shared across all API surfaces under a single ASC key; any pattern that
 fans out N requests per page render compounds across pages, apps, and
 manager tabs. Lazy-load + per-cell observers + client-side concurrency
 ceiling is the institutional answer.
 
-[^h25cap]: **Cap figure conflicts with Hotfix 26's "~1 req/sec/token"
-    (= 3,600/hour) claim.** See §4.9 — both figures pre-date Cycle 40
-    Phase A's `[asc-client] budget=` Railway log. Authoritative
-    `user-hour-lim` value will be revealed empirically from production
-    telemetry; Phase B subset selection (B2/B3/B4) depends on the
-    resolution.
+[^h25cap]: ⚠ **OBSOLETE FIGURE — Hotfix 25's "250 req/hour" was WRONG.**
+    Measured 2026-08-25: `user-hour-lim` = **3,600** (§4.9). The
+    sentence above is corrected to "per-hour cap"; the surrounding
+    Hotfix 25 reasoning still stands, because lazy-load + per-cell
+    observers + a client concurrency ceiling are right at either figure
+    — only the urgency was overstated.
+    <br>*Superseded original, kept for the trail:* "Cap figure conflicts
+    with Hotfix 26's '~1 req/sec/token' (= 3,600/hour) claim. See §4.9 —
+    both figures pre-date Cycle 40 Phase A's `[asc-client] budget=`
+    Railway log. Authoritative `user-hour-lim` value will be revealed
+    empirically from production telemetry; Phase B subset selection
+    (B2/B3/B4) depends on the resolution." — that resolution has since
+    happened; it is 3,600.
 
 Cumulative Apple ASC rate-limit pattern stack (Hotfix-derived):
 - Hotfix 20 — cursor pagination over hardcoded limit=50.
@@ -1459,12 +1495,12 @@ Each row generates ~6 sequential Apple calls (create → state → locales →
 screenshot → pricing → availability); with `CONCURRENCY_LIMIT = 5` the
 peak in-flight rate burst past Apple's documented ~1 req/sec/token cap [^h26cap].
 
-[^h26cap]: **Cap figure conflicts with Hotfix 25's "250 req/hour" claim
-    (above).** Hotfix 26's "~1 req/sec" ≈ 3,600/hour, an order of
-    magnitude higher. See §4.9 — both figures pre-date Cycle 40 Phase A's
-    `[asc-client] budget=` Railway log. Authoritative `user-hour-lim`
-    value will be revealed empirically from production telemetry; Phase
-    B subset selection (B2/B3/B4) depends on the resolution.
+[^h26cap]: ✅ **CONFIRMED BY MEASUREMENT (2026-08-25).** Hotfix 26's
+    "~1 req/sec/token" ≈ 3,600/hour is the **correct** figure —
+    `user-hour-lim` read live off Apple = **3,600** (§4.9 carries the
+    method). Hotfix 25's competing "250 req/hour" is obsolete. The
+    conflict that stood here since Cycle 40 is closed; nothing in this
+    hotfix needs revisiting.
 Items pushed to Apple incomplete (availability not set, pricing schedule
 silently failed).
 
@@ -1784,12 +1820,19 @@ and ready, but Phase B's go/no-go for each subset depends on what the
 `[asc-client] budget=` logs and `actions_log.payload.rate_limit` rows
 actually show in production.
 
-**Cap-figure conflict.** §10.8's two pre-Phase-A figures (Hotfix 25 →
-250/hour, Hotfix 26 → ~3,600/hour) are now explicitly annotated as
-resolution-pending in §4.9. The empirical `user-hour-lim` value Manager
-observes during telemetry decides which figure was load-bearing —
-critical input for Phase B subset selection because B3's design depends
-on the true cap.
+**Cap-figure conflict — ✅ CLOSED (2026-08-25).** §10.8's two
+pre-Phase-A figures are resolved: `user-hour-lim` = **3,600** measured
+live (§4.9 carries the number and the repeatable method). Hotfix 26 was
+right, Hotfix 25 wrong.
+
+**What that does to Phase B.** B3 (token-bucket throttler) was sized on
+the possibility of a 250/hour cap, where a bucket is essential. At 3,600
+it is not: a 500-item export costs 1,503 requests — 42% of one rolling
+hour — so two full exports per hour fit comfortably and the third is
+what needs handling. B3 accordingly demotes from "essential if 250" to
+"pacing + protect the budget reserved for a Manager's interactive
+clicks". Its trigger (`budget=` regularly < 500 remaining) is unchanged
+and still unmet.
 
 **Cycle 37 Phase 2 deferral closure status (post Cycle 39):**
 
