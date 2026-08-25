@@ -39,6 +39,10 @@ import {
 } from "@/lib/iap-management/bulk-import/stage-map-view";
 import type { RowStages } from "@/lib/iap-management/bulk-import/row-outcome";
 import {
+  conflictRowNote,
+  type LastImportByProductId,
+} from "@/lib/iap-management/queries/last-import";
+import {
   matchScreenshotToProductId,
   type ScreenshotMatchResult,
 } from "@/lib/iap-management/parsers/screenshot-matcher";
@@ -73,6 +77,10 @@ interface Props {
   appId: string;
   appName: string;
   existingProductIds: string[];
+  /** C-3 — last bulk-import verdict per product. ⚠ A product ABSENT from this
+   *  map has never come through bulk import, which is NOT the same as "it
+   *  went fine". Optional so callers predating C-3 still compile. */
+  lastImportByProductId?: LastImportByProductId;
   /** Cycle 43: per-source USA/USD tier lists. The active list is selected by
    *  `pricingSource` so preview tier-resolution reads the SAME source the
    *  matrix + /execute read (template tables for the template sources, the
@@ -190,6 +198,7 @@ export function BulkImportWizard({
   appId,
   appName,
   existingProductIds,
+  lastImportByProductId,
   usdTiersBySource,
   defaultTemplateAvailable = false,
   appTemplateAvailable = false,
@@ -588,6 +597,7 @@ export function BulkImportWizard({
           onToggleOverride={toggleOverride}
           overrides={overrides}
           existingSet={existingSet}
+          lastImportByProductId={lastImportByProductId ?? {}}
           screenshots={screenshots}
           submitOnCreate={submitOnCreate}
           onSubmitOnCreateChange={setSubmitOnCreate}
@@ -1038,7 +1048,13 @@ function Tally({
 
 // ─── Step 3: Preview ────────────────────────────────────────────────────────
 
-function Step3Preview({
+/**
+ * ⚠ Exported for tests only, same reason as `Step4Result`: the rule under
+ * test — which conflict rows carry a prior-run note — is a property of THIS
+ * component, and reaching it through the wizard's four-step navigation would
+ * test the navigation instead.
+ */
+export function Step3Preview({
   decisions,
   counts,
   conflictMode,
@@ -1046,6 +1062,7 @@ function Step3Preview({
   onToggleOverride,
   overrides,
   existingSet,
+  lastImportByProductId,
   screenshots,
   submitOnCreate,
   onSubmitOnCreateChange,
@@ -1067,6 +1084,7 @@ function Step3Preview({
   onToggleOverride: (productId: string) => void;
   overrides: Record<string, ConflictMode>;
   existingSet: Set<string>;
+  lastImportByProductId: LastImportByProductId;
   screenshots: ScreenshotEntry[];
   submitOnCreate: boolean;
   onSubmitOnCreateChange: (v: boolean) => void;
@@ -1191,12 +1209,32 @@ function Step3Preview({
               const screenshotPresent = matchedProductIds.has(d.product_id);
               const isConflict = existingSet.has(d.product_id);
               const overridden = overrides[d.product_id];
+              // ⚠ C-3 — WHY THIS PRODUCT ALREADY EXISTS, not just that it
+              // does. A product left half-built by a rate-limited batch and a
+              // product that finished cleanly present as the SAME conflict
+              // row, and the Manager picks a ConflictMode from that row. The
+              // rule lives in `conflictRowNote` rather than in this ternary
+              // because it has exactly one way to go wrong — reading "no
+              // record" as "it went fine" — and that deserves a test, not a
+              // reader's care.
+              const priorNote = isConflict
+                ? conflictRowNote(lastImportByProductId[d.product_id])
+                : null;
               return (
                 <tr key={d.product_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                  <td className="px-3 py-2 font-mono text-[11px] text-slate-700">
+                  <td className="px-3 py-2 font-mono text-[11px] text-slate-700 align-top">
                     {d.product_id}
+                    {priorNote && (
+                      <span
+                        className="mt-1 flex items-start gap-1 font-sans text-[10px] leading-snug text-amber-800 dark:text-amber-300"
+                        title="From the most recent bulk import of this product. The full per-stage detail is in the audit log."
+                      >
+                        <AlertTriangle className="h-3 w-3 shrink-0 mt-px" />
+                        <span>{priorNote}</span>
+                      </span>
+                    )}
                   </td>
-                  <td className="px-3 py-2 truncate max-w-[200px]">
+                  <td className="px-3 py-2 truncate max-w-[200px] align-top">
                     {d.source.reference_name}
                   </td>
                   <td className="px-3 py-2 text-[11px]">

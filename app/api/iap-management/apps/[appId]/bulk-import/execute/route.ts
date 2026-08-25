@@ -1713,6 +1713,24 @@ async function persistResult(
             state: result.submitted
               ? "WAITING_FOR_REVIEW"
               : (result.submit_deferred_state ?? "READY_TO_SUBMIT"),
+            // ⚠ C-3 [Q-C3.conflict-read-B] — READ CACHE for Step 3's conflict
+            // screen, written on the statement that was already running.
+            //
+            // The full record stays in `actions_log` (BULK_IMPORT_CREATE
+            // carries the whole stage map); these two carry only the latest
+            // verdict, because the conflict screen looks products up by
+            // (app_id, product_id) — already UNIQUE and indexed here —
+            // whereas actions_log would need a JSONB-path filter with no
+            // index behind it, on every page render.
+            //
+            // ⚠ THE GUARD ABOVE IS THE BOUNDARY, AND IT IS THE POINT. Only
+            // SUCCESS and PARTIAL reach this statement. An ERRORed row and a
+            // row the latch never attempted have no verdict to cache —
+            // nothing of theirs reached Apple — and writing one would tell
+            // the next batch's conflict screen a story about a product this
+            // batch never touched.
+            last_import_status: result.status,
+            last_import_summary: result.summary ?? null,
             synced_at: new Date().toISOString(),
           },
           { onConflict: "app_id,product_id" },

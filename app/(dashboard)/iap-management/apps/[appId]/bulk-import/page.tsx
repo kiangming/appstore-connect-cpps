@@ -9,6 +9,10 @@ import {
   listUsdTiersForSource,
 } from "@/lib/iap-management/queries/templates";
 import type { PricingSourceKind } from "@/lib/iap-management/validation";
+import {
+  getLastImportByProductId,
+  type LastImportByProductId,
+} from "@/lib/iap-management/queries/last-import";
 import { BulkImportWizard } from "./BulkImportWizard";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +27,10 @@ export default async function BulkImportPage({ params }: PageProps) {
 
   let appName = "";
   let existingProductIds: string[] = [];
+  // C-3 [Q-C3.conflict-read-B] — what the previous bulk import left behind,
+  // per product. ⚠ Absent = never came through bulk import, which is NOT the
+  // same as "it went fine"; Step 3 must not collapse the two.
+  let lastImportByProductId: LastImportByProductId = {};
   // Cycle 43: per-source USA/USD tier lists. The wizard selects the active
   // list by the chosen pricing source so preview tier-resolution reads the
   // SAME source the matrix + /execute read (template tables), not the legacy
@@ -51,6 +59,9 @@ export default async function BulkImportPage({ params }: PageProps) {
     // IAP.p1.g: feed pricing-source availability into the wizard so the
     // Step 3 selector can gray-out unavailable options + pick Q-D default.
     const internalAppId = await findAppByAppleId(params.appId);
+    if (internalAppId) {
+      lastImportByProductId = await getLastImportByProductId(internalAppId);
+    }
     const [appleTiers, defaultTiers, appTiers, def, appTpl] = await Promise.all([
       listUsdTiersForSource({ kind: "APPLE" }),
       listUsdTiersForSource({ kind: "DEFAULT_TEMPLATE" }),
@@ -93,6 +104,7 @@ export default async function BulkImportPage({ params }: PageProps) {
         appId={params.appId}
         appName={appName}
         existingProductIds={existingProductIds}
+        lastImportByProductId={lastImportByProductId}
         usdTiersBySource={usdTiersBySource}
         defaultTemplateAvailable={defaultTemplateAvailable}
         appTemplateAvailable={appTemplateAvailable}
