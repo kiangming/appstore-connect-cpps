@@ -34,6 +34,8 @@
 12. [Glossary](#12-glossary)
 13. [References](#13-references)
 14. [Sign-off](#14-sign-off)
+15. [Apple ASC key pool — SHIPPED DARK](#15-apple-asc-key-pool--shipped-dark-2026-08-25)
+16. [C3 — PARTIAL at the row level](#16-c3--partial-at-the-row-level-2026-08-25)
 
 ---
 
@@ -3290,6 +3292,19 @@ there and both read better next to the code that produced them:
   worse than no stub: a missing method fails loudly, but a missing method plus
   a broad guard produces a green test that proves nothing. Sibling of P23.
 
+**P26–P29 live in §16** (C3 PARTIAL row-level). All four crossed the
+frequency bar during the C1→C2→PRICING-429→C3 latch arc:
+- **P26** — a mutation that catches NOTHING means the tests prove the
+  PATTERN and not the WIRING. Add a structural guard; never lower the
+  mutation. 4 instances.
+- **P27** — a hand-written fixture is a CLAIM about the route, not evidence
+  of it. 2 instances, both where the fixture was right and the route was
+  wrong.
+- **P28** — P15 pushed down a layer: the SLICER underneath an assertion must
+  strip comments and strings too, or the guard fails OPEN.
+- **P29** — the `fetch` boundary is where `tsc` is blind. Derive client types
+  from the server's; do not trust the compiler to notice drift. 4 instances.
+
 ---
 
 #### 10.13.K — Google single-item base-price cycle (2026-08-13, `f6b9b22` → `c0a9715`)
@@ -4325,6 +4340,228 @@ different door.
 - The ⏳ open question in §4.9 (does a 429 carry `Retry-After` when
   `x-rate-limit` is absent) is answered by the `[key-pool] 429-headers` log
   line the first time a real 429 happens. No action until then.
+
+---
+
+## 16. C3 — PARTIAL at the row level (2026-08-25)
+
+A Bulk Import row returned a hard-coded `status: "SUCCESS"` while five of its
+six stages swallowed their own errors. An IAP created on Apple with no
+localizations, no price and no screenshot reported clean. KB §10.8 recorded
+that symptom under Hotfix 26; the cause was one line.
+
+The row's status is now DERIVED from a per-stage map, so the two cannot
+disagree — `rollUpRowOutcome` is the only thing that decides SUCCESS vs
+PARTIAL, and there is no longer a path to SUCCESS with a stage missing.
+
+### 16.1 The shape, and the one field deliberately NOT ported
+
+`RowStages` ports `update-orchestration.ts`'s `UpdateIapOutcome` — a sibling
+already running this shape in production — but **not wholesale**. Its
+per-stage `changed: boolean` is dropped: that module diffs an EXISTING IAP,
+where "changed nothing" is a real outcome, whereas on CREATE every stage
+changes something and the field would ship always-true. **P9 is exactly this
+— the risk is highest where a feature LOOKS like a proven pattern.**
+
+Two things were added that the sibling has no need for:
+- `localizations.total` — the row already carried `failed_locales` (WHICH
+  broke) but never the denominator, so "12 of 39" could not be rendered.
+- `SKIPPED_BY_STOP` — a state of its own. *"We asked and Apple refused"* and
+  *"we never asked"* lead a Manager to different actions: investigate, versus
+  run it again.
+
+### 16.2 [Q-C3.tracking-frozen] — the batch status does not move
+
+Manager froze every tracking/batch-level status for C3. A batch containing
+PARTIAL rows still reports on the Hub exactly what it reported before C3
+existed. **The COUNTER (`import_batches.partial_count`) is the channel; the
+status deliberately says nothing new.** This is a decision, not a loose end —
+do not "finish the job" later by teaching `status` about PARTIAL.
+
+⚠ **Freezing it took more than deleting the override, and that is the part
+worth remembering.** Before C3 both terminal returns were an unconditional
+`status: "SUCCESS"`, so `succeeded` meant "rows that reached the end of the
+pipeline" — a population C3 splits in two. Passing the NARROWED `succeeded`
+to `computeBulkImportTerminalStatus` would silently move its OUTPUT while
+looking exactly like a revert:
+
+| batch | pre-C3 | naive revert | correct |
+|---|---|---|---|
+| 1 now-PARTIAL row + 1 ERROR row | (1,1) → PARTIAL | (0,1) → **FAILED** | (1,1) → PARTIAL |
+
+The input is re-widened to `succeeded + partial`. The same narrowing had
+already leaked into `created_count`, whose twin `overwritten_count` was fixed
+while it was left alone. `tracking-frozen.test.ts` pins both halves — a
+fixture table (semantic) plus structural guards on the route (the half with
+teeth; the semantic half is an identity by construction).
+
+### 16.3 [Q-C3.conflict-read-B] — a read cache, and a third state
+
+Step 3 asked "is this product_id already on Apple?" and both answers looked
+identical: a product that finished cleanly and one left half-built by a
+rate-limited batch produced the SAME conflict row, and the Manager picked a
+ConflictMode from that row.
+
+`iaps.last_import_status` + `last_import_summary` are a **read cache**, not
+the record. `actions_log` (BULK_IMPORT_CREATE) keeps the full per-stage map
+and the whole history and **wins on any disagreement**. The cache exists
+because the screen resolves products by `(app_id, product_id)` — already
+UNIQUE and indexed — while actions_log would need a JSONB-path filter with no
+index, scanned on every page render of an append-only table.
+
+⚠ **NULL is a third state and must stay one.** A product created in the
+single-IAP form, synced from Apple, or predating the migration has NO
+verdict. Reading that as "it went fine" is the single way this feature fails
+— in the exact screen added to catch a half-built row — so the rule lives in
+a pure `conflictRowNote()` and absence is asserted SEPARATELY from SUCCESS
+even though both render nothing.
+
+The write sits INSIDE the `SUCCESS || PARTIAL` guard, not beside it. A cache
+that fails to write is loud (the row goes quiet); a cache written for a row
+that never reached Apple is silent and worse — the next batch's conflict
+screen would describe a product this batch never touched.
+
+### 16.4 PARTIAL counts as a write that HAPPENED
+
+The `iaps` upsert and the submit audit row were gated on SUCCESS. A PARTIAL
+row's IAP exists on Apple — that is what PARTIAL means — so gating them out
+would leave a row present on Apple and absent from `iap_mgmt.iaps`:
+**`[SYNC-orphan-rows]` pointing the other way, created by the very change
+meant to make the row honest.** Same for `overwritten_count`.
+
+### 16.5 W2 — a twin CONVERGENCE, not a new rule
+
+A screenshot Apple refuses to swap (`delete-locked`, IAP in review) now fails
+its stage and the row rolls up PARTIAL. It used to report SUCCESS while the
+orange "screenshot locked" pill sat beside it saying the opposite — the badge
+and the status contradicting each other on one row.
+
+⚠ The spread audit found that **`update-orchestration.ts` has ALWAYS treated
+any `!result.ok`, `delete-locked` included, as a failed stage rolling up to
+PARTIAL**, pinned in its own test. **Bulk import was the single path
+disagreeing.** The twin-path rule usually says "you fixed one sibling, go fix
+the other"; here it said "the other sibling was already right."
+
+The audit also caught a regression W2 would have caused: making the row
+PARTIAL makes `stageMapHasFindings` true, so the Notes cell takes the
+stage-map branch and the one genuinely actionable sentence — *"Apple wouldn't
+let us swap the screenshot … Swap manually in App Store Connect"* — becomes
+UNREACHABLE. The instruction the Manager needs, deleted as a side effect of
+making the row more honest. It moved into the map, and the summary now names
+the reason (`screenshot locked by Apple review`) rather than the useless
+generic `missing screenshot` — nobody can act on "missing" when the file was
+fine and the upload was attempted.
+
+### 16.6 ⚠ P26 — a mutation that catches nothing means the tests prove the pattern, not the wiring
+
+Four times in this arc a fix was written, its behaviour tested, and the
+mutation that removed the fix **passed every test**:
+
+| # | Fix | Mutation result |
+|---|---|---|
+| PRICING-429 #2 | route wiring of the pricing marker | 103 tests passed |
+| chunk B (e) | pricing stage checks the stop BEFORE the borrowed kind | 151 tests passed |
+| W2-a | OVERWRITE counts `delete-locked` as FAILED | 156 tests passed |
+| C-3 b1 | conflict note only for PARTIAL | UI test passed (rule tests caught it) |
+
+The shape is always the same: the behavioural test **reproduces the rule
+locally** — building a fixture that exercises `rollUpRowOutcome`, or asserting
+a marker line the test itself constructs — so it proves the PATTERN is right
+while saying nothing about whether the ROUTE uses it.
+
+**The response is a structural guard, never a weaker mutation.** In a
+harness-less route the call site is the claim, so the assertion has to look at
+the call site. And the guard must be verified by RE-RUNNING the mutation
+after adding it — P17's rule applied to the fix for P26.
+
+⚠ C-3 b1 adds a corollary: the mutation can also expose **a test of your own
+that is too weak**. The UI assertion checked the clean row for
+`/missing|locales/` — words that happen not to occur in "all stages OK" — so
+a mutation showing EVERY prior run's sentence sailed through. Replaced with a
+sentinel in the clean row's own text. **A negative assertion built from a
+vocabulary list is only as strong as the vocabulary.**
+
+### 16.7 ⚠ P27 — a hand-written fixture is a CLAIM about the route, not evidence of it
+
+Twice, a fixture asserted a value the route could not actually produce — and
+both times **the fixture was right and the route was wrong**:
+
+- `partial-vs-latch.test.ts` set `pricing: { state: "SKIPPED_BY_STOP" }` for a
+  budget-stopped row. The route classified it `NOT_APPLICABLE`, because the
+  synthesised `skipped-not-ready` hit `startsWith("skipped-")` before the stop
+  check. Nothing compared the two.
+- The B4 wording-table generator built `screenshot: { state: "OK", note:
+  "delete-locked" }`, a combination that stopped existing the moment W2
+  landed. The table printed SUCCESS for a case the code called PARTIAL.
+
+A fixture written to the INTENDED behaviour and a route that implements
+something else will both pass forever, because nothing checks that they agree.
+Sibling of P23 and P25: all three are "the test setup is the bug", which is
+the class hardest to see by reading the test. **When a fixture encodes a
+route's output shape, something must pin the route to it** — a structural
+guard on the branch order, or a test that builds the fixture BY CALLING the
+route's own construction path.
+
+### 16.8 ⚠ P28 — the analyzer under an assertion must strip comments too (P15, one layer down)
+
+P15 says structural tests that grep source must strip comments. C3 found the
+same bug one layer lower, in the **slicer that feeds** the assertions.
+
+`batch-close-guard.structural.test.ts` sliced each statement by walking to the
+next `;` in raw source. A **prose semicolon inside a comment** ends the slice
+early — and this route is heavily commented. A comment added during the chunk
+A revert (*"…just not completely; excluding it…"*) truncated the close
+statement **above its counters**, so every assertion in that file inspecting
+those lines silently stopped seeing them and passed vacuously. Discovered only
+by printing what the slicer actually returned.
+
+**P15 protects the test from the prose; P28 protects the TOOL from the prose.**
+And the failure directions differ, which is why this is worth its own rule:
+P15's version fails LOUD (an assertion fires on a comment), P28's fails
+**OPEN** — the guard keeps passing while checking nothing. Verified
+load-bearing by reintroducing the exact semicolon AND deleting the column: both
+guards still fire, where before the semicolon alone would have hidden it.
+
+### 16.9 ⚠ P29 — the `fetch` boundary is where `tsc` is blind
+
+A server type widens; the client hand-declares its own narrower copy; the
+value crosses as JSON and TypeScript never complains, because nothing connects
+the two declarations. The client then holds a value its own type calls
+impossible.
+
+Four instances this arc:
+
+| Site | Drift |
+|---|---|
+| `create-on-apple/route.ts` | hand-copied `PricingOutcome["kind"]` union |
+| `BulkImportWizard.tsx` (pricing) | same union, third copy |
+| `IapForm.tsx` | same union, fourth copy |
+| `BulkImportWizard.tsx` (`status`) | **already drifted** — missing `NOT_ATTEMPTED` since C2 |
+
+The last one is the instructive one: it had been wrong for a whole cycle, in a
+file under active development, with a green typecheck the entire time.
+
+**Derive from the source type** (`PerIapResult["status"]`,
+`ExecuteSummary["partial"]`) — the route now exports both for this reason —
+**and grep for copies rather than trusting the compiler to find them.** The
+grep-before-adding-a-field step is what surfaced instance 4; it was not
+findable any other way.
+
+### 16.10 What C3 did NOT change
+
+- **Hub tracking** — zero-line diff across `lib/iap-management/hub-tracking/`,
+  `lib/cpp-hub-tracking/`, `lib/google-iap-management/hub-tracking/` and the
+  three tracking routes. That diff IS the evidence for §16.2.
+- **`computeBulkImportTerminalStatus`** — shared with submit-batch; widening
+  its signature would push a stages concept onto a flow that has no stages.
+- **ConflictMode mechanics** — [Q-C3.rerun-A] is information only. Pinned: the
+  Action control renders identically for a PARTIAL and a clean prior run.
+- **`import_batches.status`'s dead ternary** (`failed === 0 ? "COMPLETE" :
+  "COMPLETE"`) — left in place ON PURPOSE. See `[BULKIMPORT-dead-ternary]`:
+  with the status frozen and the counter carrying the truth, collapsing it
+  would invite the next reader to "fix" it into a status change.
+
+---
 
 ---
 
