@@ -28,6 +28,7 @@ import {
   type FormLocalization,
   type PricingSourceKind,
 } from "@/lib/iap-management/validation";
+import type { PricingOutcome } from "@/lib/iap-management/apple/pricing-orchestration";
 import type { TerritorySelection } from "@/lib/iap-management/apple/territory-selection";
 import {
   detectIapChanges,
@@ -413,17 +414,9 @@ export function IapForm({
             screenshot_uploaded: boolean;
             screenshot_error?: string;
             price_schedule_set?: boolean;
-            price_schedule_note?:
-              | "set"
-              | "partial-template-fail"
-              | "partial-custom-fail"
-              | "skipped-no-tier"
-              | "skipped-no-usd-price"
-              | "skipped-no-match"
-              | "skipped-not-ready"
-              | "failed-lookup"
-              | "failed-set"
-              | "failed-exception";
+            /** ⚠ Derived — third hand-written copy of this union, found by
+             *  grep rather than by the compiler. See PricingOutcome. */
+            price_schedule_note?: PricingOutcome["kind"];
             price_schedule_error?: string;
             price_usd?: number;
             failed_custom_territories?: Array<{

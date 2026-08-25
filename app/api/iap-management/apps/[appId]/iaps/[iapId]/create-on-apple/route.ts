@@ -21,6 +21,7 @@
  *   • screenshot  — File (optional, PNG/JPEG ≤ 8 MB).
  */
 
+import type { PricingOutcome } from "@/lib/iap-management/apple/pricing-orchestration";
 import { NextResponse } from "next/server";
 import {
   requireIapSession,
@@ -76,16 +77,13 @@ interface SuccessResponse {
   screenshot_error?: string;
   price_schedule_set: boolean;
   price_schedule_note?:
-    | "set"
-    | "partial-template-fail"
-    | "partial-custom-fail"
-    | "skipped-no-tier"
-    | "skipped-no-usd-price"
-    | "skipped-no-match"
-    | "skipped-not-ready"
-    | "failed-lookup"
-    | "failed-set"
-    | "failed-exception";
+    // ⚠ DERIVED, NOT COPIED. This was a hand-written list of all ten kinds,
+    // so adding an eleventh to `PricingOutcome` compiled cleanly here and
+    // silently produced a narrower type than the value it describes. The
+    // sibling copy in BulkImportWizard.tsx had ALREADY drifted — it was
+    // missing `partial-custom-fail`. A union that must track another union
+    // has to be derived from it.
+    PricingOutcome["kind"];
   price_schedule_error?: string;
   price_usd?: number;
   availability_set: boolean;

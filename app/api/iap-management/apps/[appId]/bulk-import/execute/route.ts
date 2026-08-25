@@ -68,6 +68,7 @@ import { planLocalizationSync } from "@/lib/iap-management/bulk-import/localizat
 import {
   applyPricingSchedule,
   type PricingSource,
+  pricingOutcomeHitRateLimit,
   type PricingOutcome,
 } from "@/lib/iap-management/apple/pricing-orchestration";
 import { pollIapReadyForPricing } from "@/lib/iap-management/apple/poll-iap-ready";
@@ -128,6 +129,29 @@ const CONCURRENCY_LIMIT = 2;
  * to dial down rate-limit pressure further.
  */
 const INTER_ROW_DELAY_MS = 1000;
+
+/**
+ * Route a pricing stage's rate limit into the row's counters.
+ *
+ * ⚠ ONE LINE, AND IT IS THE WHOLE POINT OF [PRICING-429-no-retry]. Every
+ * other Apple call in a row reaches `exhausted` through `trackedWithRetry`,
+ * which catches thrown `AppleRateLimitError`s. The pricing stage swallows its
+ * own errors by contract, so its 429s never reached that choke point and the
+ * stop latch stayed blind to an entire stage — including 429s that had
+ * already burned four retries on the price-point read.
+ *
+ * ⚠ Reads `failure_kind`, never the message. Classification happens at each
+ * catch where `instanceof` still works; parsing "429" back out of a string
+ * would match any error whose URL or body happened to contain it, which is
+ * exactly the `/404/.test(err.message)` bug the custom-prices baseline route
+ * had to remove.
+ */
+function markPricingRateLimit(
+  counters: RetryCounters,
+  outcome: PricingOutcome | null,
+): void {
+  if (pricingOutcomeHitRateLimit(outcome)) counters.exhausted = true;
+}
 
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -878,6 +902,14 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   console.log(
     `[bulk-execute] Stage 2 pricing starting product_id=${item.product_id} apple_iap_id=${appleIapId} tier_id=${resolvedTier ?? "<null>"} usd=${usdPrice}`,
   );
+  // ⚠ NOT WRAPPED IN `trackedWithRetry`, AND THAT IS CORRECT.
+  // `applyPricingSchedule` never throws — it catches everything so a pricing
+  // failure cannot cascade into a row whose IAP, localizations and screenshot
+  // all landed. So the choke point, which only sees throws, would see nothing
+  // here no matter how it were wired. The rate-limit fact rides back on the
+  // RESULT instead (`markPricingRateLimit` below) — the same shape the xlsx
+  // export uses for its price read, and the same one C2 needed because
+  // `orchestrateOne` does not throw either.
   const pricing = await applyPricingSchedule({
     creds,
     appleIapId,
@@ -905,6 +937,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   console.log(
     `[bulk-execute] Stage 2 pricing result product_id=${item.product_id} outcome=${pricing.kind}`,
   );
+  markPricingRateLimit(args.rateCounters, pricing);
 
   // 4. Screenshot 3-step (deferral 1 absorbed). Walk screenshot files;
   //    first filename matching productId (literal OR dots→underscores) wins.
@@ -1312,6 +1345,10 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     console.log(
       `[bulk-execute] OVERWRITE pricing result product_id=${item.product_id} outcome=${pricing.kind} tier_unchanged=${pricingDecision.tierUnchanged}`,
     );
+    // ⚠ BOTH dispositions, not just CREATE. An OVERWRITE row runs the same
+    // pricing stage against the same endpoint; hooking only one path would
+    // leave a whole disposition invisible to the latch — the twin-path rule.
+    markPricingRateLimit(args.rateCounters, pricing);
   }
 
   const overwriteResult: PerIapResult = {

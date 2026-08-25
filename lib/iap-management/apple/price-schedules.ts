@@ -16,7 +16,12 @@
  * ever send one price entry per request.
  */
 import type { AscCredentials } from "@/lib/asc-jwt";
-import { iapFetch, withRetry, AppleApiError } from "./fetch";
+import {
+  iapFetch,
+  withRetry,
+  AppleApiError,
+  AppleRateLimitError,
+} from "./fetch";
 import type {
   AscApiResponse,
   AscResource,
@@ -56,10 +61,58 @@ export interface SetPriceScheduleSuccess {
   attempts: number;
 }
 
+/**
+ * WHY the failure carries a classification and not just a message.
+ *
+ * ⚠ CLASSIFIED AT THE CATCH, WHERE `instanceof` STILL WORKS — never parsed
+ * back out of `error`. This is the third time this repo has needed the rule:
+ * `export-fetch.ts` states it for the export path, and the custom-prices
+ * baseline route had to drop a `/404/.test(err.message)` that matched any
+ * error whose text happened to contain "404" (including one whose URL did).
+ * A message is for a human; a type is for the code.
+ *
+ *   RATE_LIMITED — a 429. The one classification that means something about
+ *                  the NEXT call, not just this one, which is why the whole
+ *                  chain exists: it is what lets the shipped stop latch see
+ *                  that the batch should stop.
+ *   APPLE_5XX    — Apple's intermittent 500 (forum thread 728081). Already
+ *                  retried by the loop below; arriving here means the budget
+ *                  is spent.
+ *   APPLE_ERROR  — a 4xx that is not 429 (409, 422 — payload problems).
+ *                  Retrying changes nothing.
+ *   UNKNOWN      — transport/parse. Neither of the above may be claimed.
+ */
+export type SetPriceScheduleFailureKind =
+  | "RATE_LIMITED"
+  | "APPLE_5XX"
+  | "APPLE_ERROR"
+  | "UNKNOWN";
+
 export interface SetPriceScheduleFailure {
   ok: false;
+  kind: SetPriceScheduleFailureKind;
   error: string;
   attempts: number;
+}
+
+/**
+ * The one `instanceof` site for Apple failures on the pricing path.
+ *
+ * ⚠ EXPORTED so `pricing-orchestration.ts` classifies with the SAME function
+ * rather than a second copy. Two copies of a classifier drift, and the one
+ * that drifts is the one nobody is looking at — here that would mean a 429
+ * from the price-point READ being labelled differently from a 429 on the
+ * schedule WRITE, in a chain whose entire purpose is that a 429 anywhere on
+ * this path reaches the stop latch.
+ */
+export function classifyPricingFailure(
+  err: unknown,
+): SetPriceScheduleFailureKind {
+  if (err instanceof AppleRateLimitError) return "RATE_LIMITED";
+  if (err instanceof AppleApiError) {
+    return err.status >= 500 ? "APPLE_5XX" : "APPLE_ERROR";
+  }
+  return "UNKNOWN";
 }
 
 export type SetPriceScheduleResult =
@@ -153,6 +206,7 @@ export async function setPriceSchedule(
   const rng = args.retryConfig?.rng ?? Math.random;
   let attempts = 0;
   let lastError = "Apple price schedule POST failed";
+  let lastKind: SetPriceScheduleFailureKind = "UNKNOWN";
 
   console.log(
     `[set-price-schedule] start apple_iap_id=${args.appleIapId} price_point_id=${args.applePricePointId} max_attempts=${delays.length + 1}`,
@@ -172,12 +226,32 @@ export async function setPriceSchedule(
       return { ok: true, schedule_id: res.data.id, attempts };
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
-      const isRetriable = err instanceof AppleApiError && err.status >= 500;
+      lastKind = classifyPricingFailure(err);
+      // ⚠ 429 IS DELIBERATELY NOT RETRIED HERE, AND THAT IS NOT AN OVERSIGHT.
+      //
+      // The obvious "fix" is to widen this to `status >= 429`. Do not. Since
+      // C1/C2 every bulk flow has a stop latch: a 429 that survives retry is
+      // the signal that the whole BATCH should stop, because Apple's budget
+      // is gone. Retrying one row so it can slip through while the budget is
+      // exhausted works against that — it spends the little that is left on
+      // the row that already lost, and delays the stop.
+      //
+      // ⚠ It would also cost more than it looks. This loop's curve is tuned
+      // for Apple's intermittent 500 (500ms → 30s, six attempts ≈ 46s). A
+      // rate limit routed through it would park one row for three quarters
+      // of a minute and ignore `Retry-After` entirely.
+      //
+      // Whether a 429 retry is worth having AT ALL is a separate question,
+      // and it needs data this repo does not yet have: `x-rate-limit` is
+      // absent from these very endpoints (KB §4.9), so "how much budget is
+      // left" is not readable here. Make it VISIBLE first — which is what
+      // `kind` above does — then measure, then decide.
+      const isRetriable = lastKind === "APPLE_5XX";
       if (!isRetriable || attempt === delays.length) {
         console.error(
-          `[set-price-schedule] giving up apple_iap_id=${args.appleIapId} attempts=${attempts} retriable=${isRetriable}: ${lastError}`,
+          `[set-price-schedule] giving up apple_iap_id=${args.appleIapId} attempts=${attempts} kind=${lastKind} retriable=${isRetriable}: ${lastError}`,
         );
-        return { ok: false, error: lastError, attempts };
+        return { ok: false, kind: lastKind, error: lastError, attempts };
       }
       const delay = jittered(delays[attempt], jitterRatio, rng);
       console.warn(
@@ -187,7 +261,7 @@ export async function setPriceSchedule(
     }
   }
 
-  return { ok: false, error: lastError, attempts };
+  return { ok: false, kind: lastKind, error: lastError, attempts };
 }
 
 /**

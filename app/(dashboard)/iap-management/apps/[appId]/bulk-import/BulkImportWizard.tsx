@@ -56,6 +56,7 @@ import {
   PricingSourceSelector,
   defaultPricingSource,
 } from "@/components/iap-management/iap-form/PricingSourceSelector";
+import type { PricingOutcome } from "@/lib/iap-management/apple/pricing-orchestration";
 import type { PricingSourceKind } from "@/lib/iap-management/validation";
 
 interface Props {
@@ -123,16 +124,16 @@ interface ExecuteResult {
     /** IAP.o.9a + IAP.o.10a — pricing schedule outcome (CREATE always,
      *  OVERWRITE only when resolved tier differs from cached). */
     price_schedule_set?: boolean;
-    pricing_outcome?:
-      | "set"
-      | "partial-template-fail"
-      | "skipped-no-tier"
-      | "skipped-no-usd-price"
-      | "skipped-no-match"
-      | "skipped-not-ready"
-      | "failed-lookup"
-      | "failed-set"
-      | "failed-exception";
+    /**
+     * ⚠ DERIVED, AND IT HAD ALREADY DRIFTED. This was a hand-written list
+     * that omitted `partial-custom-fail` — a kind the server has been able
+     * to return since the custom-prices arc. Nothing failed: TypeScript is
+     * happy to narrow a wider server value into a narrower client type at a
+     * `fetch` boundary, so the row simply arrived with a value this union
+     * said was impossible. A union that must track another union has to be
+     * derived from it, or it tracks nothing.
+     */
+    pricing_outcome?: PricingOutcome["kind"];
     pricing_error?: string;
     /** Problem 2 fix: territories whose template override found no Apple
      *  price-point match on a `partial-template-fail` (base + matched

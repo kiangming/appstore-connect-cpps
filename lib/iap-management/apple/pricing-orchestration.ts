@@ -40,7 +40,11 @@ import {
   findPricePointByUsdPrice,
   type InAppPurchasePricePoint,
 } from "./price-points";
-import { setPriceSchedule } from "./price-schedules";
+import {
+  classifyPricingFailure,
+  setPriceSchedule,
+  type SetPriceScheduleFailureKind,
+} from "./price-schedules";
 import { AppleApiError } from "./fetch";
 import { iapDb } from "@/lib/iap-management/db";
 import {
@@ -128,7 +132,7 @@ export type PricingOutcome =
   | { kind: "skipped-no-usd-price"; tier_id: string }
   | { kind: "skipped-no-match"; tier_id: string; usd_price: number; sample_apple_prices: string[] }
   | { kind: "skipped-not-ready"; reason: string; poll_attempts: number; poll_total_ms: number }
-  | { kind: "failed-lookup"; error: string }
+  | { kind: "failed-lookup"; error: string; failure_kind: PricingFailureKind }
   | {
       kind: "failed-set";
       tier_id: string;
@@ -136,8 +140,49 @@ export type PricingOutcome =
       usd_price: number;
       error: string;
       attempts: number;
+      failure_kind: PricingFailureKind;
     }
-  | { kind: "failed-exception"; error: string };
+  | { kind: "failed-exception"; error: string; failure_kind: PricingFailureKind };
+
+/**
+ * ⚠ `kind` SAYS WHERE IT FAILED; `failure_kind` SAYS WHY, AND ONLY THE
+ * SECOND ONE TRAVELS.
+ *
+ * The ten `kind` values are stage labels — the UI colours rows by them and
+ * the Manager reads them as "the price wasn't set, here's roughly where".
+ * They cannot answer the one question the batch needs: *is Apple refusing
+ * everyone right now, or did this row simply have a bad payload?* Before
+ * this, a 429 anywhere on the pricing path was flattened into a string and
+ * that question had no answer at all — so the stop latch shipped in C1/C2
+ * never learned the run should stop.
+ *
+ * `failure_kind` is classified at each catch, where `instanceof` still
+ * works, and is the ONLY thing `pricingOutcomeHitRateLimit` reads.
+ */
+export type PricingFailureKind = SetPriceScheduleFailureKind;
+
+/**
+ * Did this outcome fail because Apple's rate limit survived retry?
+ *
+ * ⚠ THE SIGNAL RIDES BACK ON A RESULT, NOT ON A THROW, and that is forced by
+ * the contract above it: `applyPricingSchedule` catches everything so a
+ * pricing failure can never cascade into the row (update-orchestration.ts's
+ * "Stage failures NEVER cascade"). Since nothing is thrown, the choke point
+ * in `trackedWithRetry` — which only sees throws — cannot see this. The same
+ * shape the xlsx export already uses for its price read
+ * (`shouldStopOnResult`), and the same one C2 needed for `orchestrateOne`.
+ */
+export function pricingOutcomeHitRateLimit(
+  outcome: PricingOutcome | null | undefined,
+): boolean {
+  if (!outcome) return false;
+  return (
+    (outcome.kind === "failed-set" ||
+      outcome.kind === "failed-lookup" ||
+      outcome.kind === "failed-exception") &&
+    outcome.failure_kind === "RATE_LIMITED"
+  );
+}
 
 /** How each non-base territory in the POSTed schedule got its price (§H). */
 export interface ResolutionBreakdown {
@@ -213,10 +258,18 @@ export async function applyPricingSchedule(
         : err instanceof Error
           ? `${err.message}${err.stack ? `\n${err.stack}` : ""}`
           : String(err);
+    // ⚠ THE CATCH STAYS — "Stage failures NEVER cascade" is the contract
+    // (update-orchestration.ts) and a pricing problem must not destroy a row
+    // whose IAP, localizations and screenshot all landed. What changes is
+    // that it no longer forgets WHAT it caught. A 429 from the price-point
+    // read has already survived four retries by the time it reaches here;
+    // flattening it into a string was how the pricing stage stayed invisible
+    // to the batch's stop latch.
+    const failure_kind = classifyPricingFailure(err);
     console.error(
-      `[pricing] UNEXPECTED EXCEPTION apple_iap_id=${args.appleIapId}: ${errStr}`,
+      `[pricing] UNEXPECTED EXCEPTION apple_iap_id=${args.appleIapId} failure_kind=${failure_kind}: ${errStr}`,
     );
-    outcome = { kind: "failed-exception", error: errStr };
+    outcome = { kind: "failed-exception", error: errStr, failure_kind };
   }
 
   console.log(
@@ -290,10 +343,14 @@ async function runPricingFlow(
         : err instanceof Error
           ? err.message
           : String(err);
+    // ⚠ Classified HERE, while `err` is still an object. `listPricePointsForIap`
+    // already wraps its pages in `withRetry`, so a RATE_LIMITED arriving here
+    // has burned the full curve — exactly the fact the latch wants.
+    const failure_kind = classifyPricingFailure(err);
     console.error(
-      `[pricing] failed-lookup apple_iap_id=${args.appleIapId}: ${errStr}`,
+      `[pricing] failed-lookup apple_iap_id=${args.appleIapId} failure_kind=${failure_kind}: ${errStr}`,
     );
-    return { kind: "failed-lookup", error: errStr };
+    return { kind: "failed-lookup", error: errStr, failure_kind };
   }
   console.log(
     `[pricing] price points fetched apple_iap_id=${args.appleIapId} count=${pricePoints.length}`,
@@ -547,6 +604,8 @@ async function runPricingFlow(
       usd_price: args.usdPrice,
       error: setResult.error,
       attempts: setResult.attempts,
+      // Classified by `setPriceSchedule` at its own catch; carried, not re-derived.
+      failure_kind: setResult.kind,
     };
   }
   console.log(

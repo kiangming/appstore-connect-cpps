@@ -21,7 +21,15 @@ vi.mock("./price-points", async () => {
   };
 });
 
-vi.mock("./price-schedules", () => ({
+// ⚠ `setPriceSchedule` is faked (it performs the Apple POST); everything else
+// is the REAL module — notably `classifyPricingFailure`, which is a pure
+// function whose whole job is deciding whether an error is a rate limit.
+// Stubbing it would let the orchestrator's classification drift from the
+// classifier's, in a chain built specifically so a 429 anywhere on this path
+// reaches the stop latch. A fake that is incomplete in the direction the code
+// is defensive about is worse than no fake (P25).
+vi.mock("./price-schedules", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./price-schedules")>()),
   setPriceSchedule,
 }));
 
@@ -34,16 +42,16 @@ vi.mock("@/lib/iap-management/queries/templates", () => ({
   getAppTemplate,
 }));
 
-vi.mock("./fetch", () => ({
-  AppleApiError: class extends Error {
-    status: number;
-    body: string;
-    constructor(status: number, _m: string, _e: string, body: string) {
-      super(body);
-      this.status = status;
-      this.body = body;
-    }
-  },
+// ⚠ THE REAL ERROR CLASSES, not hand-rolled stand-ins.
+// This used to define its own `AppleApiError` and nothing else. That worked
+// only because the fake was consistent with itself — the module under test
+// and the test both resolved to the same fake — and it broke the moment the
+// module also needed `AppleRateLimitError`, which the fake did not have.
+// Classification is `instanceof`-based by design (a message is for a human,
+// a type is for the code), so the classes it tests against should be the ones
+// production throws. `iapFetch` stays absent: nothing here performs a fetch.
+vi.mock("./fetch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./fetch")>()),
 }));
 
 // IAP.o.11a: orchestrator now writes the SET_PRICE_SCHEDULE audit row itself.
