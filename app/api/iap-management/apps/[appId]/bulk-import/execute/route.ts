@@ -724,6 +724,12 @@ async function runExecute(
       skipped_count: skipped,
       failed_count: failed,
       not_attempted_count: notAttempted,
+      // ⚠ C3 — THE COUNTER IS THE ONLY CHANNEL. `status` above is frozen by
+      // [Q-C3.tracking-frozen], so this column is where "the batch left rows
+      // half-built" actually becomes queryable. Written on the SAME statement
+      // C2 already error-checks below rather than in a new write — a second
+      // statement would be a second thing that can fail silently.
+      partial_count: partial,
     })
     .eq("id", batchId);
 
@@ -735,8 +741,9 @@ async function runExecute(
     await log(
       "iap-bulk-execute",
       `audit batch close FAILED batch_id=${batchId}: ${batchClose.error.message} ` +
-        `(counts lost: created=${succeeded + partial} skipped=${skipped} failed=${failed} not_attempted=${notAttempted}). ` +
-        `If this mentions "not_attempted_count", migration 20260825000000 has not been applied.`,
+        `(counts lost: created=${succeeded + partial} partial=${partial} skipped=${skipped} failed=${failed} not_attempted=${notAttempted}). ` +
+        `If this mentions "not_attempted_count", migration 20260825000000 has not been applied; ` +
+        `if it mentions "partial_count", migration 20260826000000 has not been applied.`,
       "ERROR",
     );
   }
