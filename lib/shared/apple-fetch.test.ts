@@ -302,3 +302,176 @@ describe("parseRateLimit — unreadable ≠ zero (F1)", () => {
     });
   });
 });
+
+// ─── K2 — key pool: rotation lives INSIDE the retry curve ──────────────────
+
+/**
+ * ⚠ WHAT THESE PROVE, AND WHY THE PLACEMENT IS THE WHOLE DESIGN.
+ *
+ * The pool could have been wired in three places: inside `withRetry`
+ * (changes `fn`'s signature at ~37 call sites), in a wrapper around each
+ * orchestrator (five copies of the same state), or here — at the one point
+ * where a JWT is minted. Here wins because `withRetry` re-runs the entire
+ * `fn()` on every attempt, so selection is reached again per attempt and a
+ * retry naturally gets a different key. Nothing else changes: no signature,
+ * no call site, and no latch contract — "an AppleRateLimitError escaped
+ * withRetry" now means the budget ran out on up to four DIFFERENT keys,
+ * which is a stronger claim than the old one rather than a conflicting one.
+ *
+ * That property is invisible in the source, so it is asserted by watching
+ * which key signs each attempt.
+ */
+describe("appleFetch — key pool (K2)", () => {
+  const poolCreds = (keyId: string) => ({ ...creds, keyId, privateKey: `pk-${keyId}` });
+
+  /** Records the keyId used for each attempt, in order. */
+  function makePool(keys: string[]) {
+    const attempts: string[] = [];
+    const cooled = new Set<string>();
+    const pool = {
+      select: vi.fn(async (account: typeof creds) => {
+        const free = keys.filter((k) => !cooled.has(k));
+        if (free.length === 0) {
+          return { creds: account, fromPool: false, missReason: "exhausted" };
+        }
+        // ⚠ Always the first key not yet cooled down. An index derived from
+        // `attempts.length` looks equivalent and is not: `free` SHRINKS as
+        // keys cool, so the modulo walks past keys it has not used. That is a
+        // bug in the fake, not in the code under test — and it is the kind
+        // that makes a green suite meaningless, so the fake stays trivial.
+        const k = free[0];
+        attempts.push(k);
+        return { creds: poolCreds(k), fromPool: true };
+      }),
+      onRateLimited: vi.fn((_acct: string, keyId: string) => {
+        cooled.add(keyId);
+      }),
+    };
+    return { pool, attempts };
+  }
+
+  function rateLimitedResponse() {
+    return mockResponse(429, "too many", { "retry-after": "0" });
+  }
+
+  it("⚠ EACH RETRY ATTEMPT IS SIGNED BY A DIFFERENT KEY", async () => {
+    // The headline property. If selection were hoisted above withRetry, all
+    // four attempts would share one key and this fails.
+    const { pool, attempts } = makePool(["K1", "K2", "K3", "K4"]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rateLimitedResponse()));
+
+    await expect(
+      withRetry(
+        () => appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", { keyPool: pool }),
+        { sleep: vi.fn().mockResolvedValue(undefined) },
+      ),
+    ).rejects.toBeInstanceOf(AppleRateLimitError);
+
+    expect(attempts).toEqual(["K1", "K2", "K3", "K4"]);
+    expect(new Set(attempts).size).toBe(4);
+  });
+
+  it("⚠ the spent key is marked BEFORE the throw, so the retry skips it", async () => {
+    // Marking after the throw is too late by exactly one attempt: withRetry
+    // catches, sleeps, and calls back into selection immediately.
+    const { pool } = makePool(["K1", "K2"]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(rateLimitedResponse()));
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", { keyPool: pool }).catch(
+      () => {},
+    );
+
+    expect(pool.onRateLimited).toHaveBeenCalledWith(creds.id, "K1", 0);
+  });
+
+  it("a NON-429 failure does not cool the key down", async () => {
+    const { pool } = makePool(["K1"]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(409, "conflict")));
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", { keyPool: pool }).catch(
+      () => {},
+    );
+    expect(pool.onRateLimited).not.toHaveBeenCalled();
+  });
+
+  it("a successful call does not cool the key down", async () => {
+    const { pool } = makePool(["K1"]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200, { data: {} })));
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", { keyPool: pool });
+    expect(pool.onRateLimited).not.toHaveBeenCalled();
+  });
+
+  it("⚠ the budget log names the SELECTED key, not the account's own", async () => {
+    // Otherwise attribution per key becomes a lie exactly when the pool
+    // starts having more than one key — when it is needed most.
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const { pool } = makePool(["K7"]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        mockResponse(200, { data: {} }, { "x-rate-limit": "user-hour-lim:3600;user-hour-rem:12;" }),
+      ),
+    );
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", { keyPool: pool });
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("[asc-client]"))!;
+
+    expect(line).toContain("key=K7");
+    expect(line).not.toContain(`key=${creds.keyId}`);
+  });
+
+  it('an "exhausted" pool falls back AND says so — it is not silent', async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const pool = {
+      select: vi.fn(async (a: typeof creds) => ({
+        creds: a,
+        fromPool: false,
+        missReason: "exhausted" as const,
+      })),
+      onRateLimited: vi.fn(),
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200, { data: {} })));
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", { keyPool: pool });
+    const warned = (log as ReturnType<typeof vi.fn>).mock.calls.some(
+      (c) => typeof c[1] === "string" && c[1].includes("ALL POOL KEYS COOLING DOWN"),
+    );
+    expect(warned).toBe(true);
+  });
+
+  it('an "empty" pool falls back SILENTLY — most accounts are simply not pooled', async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const pool = {
+      select: vi.fn(async (a: typeof creds) => ({
+        creds: a,
+        fromPool: false,
+        missReason: "empty" as const,
+      })),
+      onRateLimited: vi.fn(),
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200, { data: {} })));
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", { keyPool: pool });
+    const warned = (log as ReturnType<typeof vi.fn>).mock.calls.some(
+      (c) => typeof c[1] === "string" && c[1].includes("ALL POOL KEYS COOLING DOWN"),
+    );
+    expect(warned).toBe(false);
+  });
+
+  it("⚠ WITHOUT a pool, the selector is never consulted — this is CPP's path", async () => {
+    // `ascFetch` calls appleFetch with no options object at all. The pool is
+    // a VALUE it does not import, so this cannot regress by someone flipping
+    // a flag; the assertion pins the behaviour anyway.
+    const { pool } = makePool(["K1"]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200, { data: {} })));
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "asc-client");
+
+    expect(pool.select).not.toHaveBeenCalled();
+    expect(pool.onRateLimited).not.toHaveBeenCalled();
+  });
+});

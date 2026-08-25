@@ -18,6 +18,7 @@
  */
 
 import { appleFetch } from "@/lib/shared/apple-fetch";
+import { iapKeyPool } from "@/lib/iap-management/key-pool/pool";
 import type { AscCredentials } from "@/lib/asc-jwt";
 
 export {
@@ -33,11 +34,28 @@ export type {
   RateLimitInfo,
 } from "@/lib/shared/apple-fetch";
 
+/**
+ * ⚠ THE KEY POOL IS OPTED INTO HERE, AND ONLY HERE.
+ *
+ * Every Apple call made by IAP Management routes through this function, so
+ * one argument turns pooling on for the whole module. CPP's `ascFetch` calls
+ * `appleFetch` without it and is unaffected — not by convention but because
+ * it does not import `iapKeyPool` and has nothing to pass
+ * (`[Q-RATELIMIT.pool-scope]`).
+ *
+ * ⚠ Passing the pool is not the same as using a pool key. `selectKey` falls
+ * back to the account's own credentials whenever the account has no pool
+ * keys, which is the normal state for an account nobody has seeded yet. An
+ * account gains pooling by having keys registered, never by a code change
+ * here.
+ */
 export async function iapFetch<T>(
   creds: AscCredentials,
   method: string,
   endpoint: string,
   body?: unknown,
 ): Promise<T> {
-  return appleFetch<T>(creds, method, endpoint, body, "iap-apple");
+  return appleFetch<T>(creds, method, endpoint, body, "iap-apple", {
+    keyPool: iapKeyPool,
+  });
 }

@@ -197,6 +197,38 @@ export function parseRateLimit(headers: Headers): RateLimitInfo | null {
 }
 
 /**
+ * An optional key pool, injected by the caller.
+ *
+ * ⚠ INJECTED RATHER THAN IMPORTED, AND RATHER THAN A BOOLEAN FLAG. The pool
+ * belongs to Apple IAP Management; this file is shared with CPP Manager. A
+ * `{ keyPool: true }` flag would mean `lib/shared` importing a feature
+ * module — inverting the dependency direction — and would leave the flag
+ * settable from anywhere, CPP included. Passing the pool as a value means
+ * CPP cannot enable it even by accident: `ascFetch` does not import a pool,
+ * so it has nothing to pass. `[Q-RATELIMIT.pool-scope]` is then enforced by
+ * the type system rather than by remembering.
+ */
+export interface AppleKeyPool {
+  /** Choose the credentials for ONE request. Must never reject for "no pool
+   *  keys" — falling back to the given credentials is the correct answer. */
+  select(account: AscCredentials): Promise<{
+    creds: AscCredentials;
+    fromPool: boolean;
+    missReason?: string;
+  }>;
+  /** Record that this key's budget is spent, so the next attempt skips it. */
+  onRateLimited(
+    accountId: string,
+    keyId: string,
+    retryAfterMs: number | null,
+  ): void;
+}
+
+export interface AppleFetchOptions {
+  keyPool?: AppleKeyPool;
+}
+
+/**
  * Thin fetch wrapper for Apple ASC API, shared by both CPP (`ascFetch`) and
  * IAP (`iapFetch`) call sites. Signs a fresh JWT, sets Authorization +
  * Content-Type, parses errors into typed exceptions, and returns parsed
@@ -211,12 +243,42 @@ export function parseRateLimit(headers: Headers): RateLimitInfo | null {
  * across every Apple API surface in this app.
  */
 export async function appleFetch<T>(
-  creds: AscCredentials,
+  account: AscCredentials,
   method: string,
   endpoint: string,
   body?: unknown,
   logTag = "apple-fetch",
+  opts?: AppleFetchOptions,
 ): Promise<T> {
+  // ⚠ SELECTED HERE, PER INVOCATION — this placement is the entire design.
+  // `withRetry` re-runs the whole `fn()` on every attempt, and `fn` calls
+  // this function, so each retry lands on this line again and can be handed
+  // a DIFFERENT key. Rotation therefore happens inside the retry curve with
+  // no signature change at any of the ~37 call sites, and `withRetry` never
+  // learns that keys exist.
+  //
+  // Hoisting this above `withRetry` — selecting once per operation — would
+  // freeze the key for all four attempts and make retrying a spent key
+  // pointless. `selector.test.ts` and `apple-fetch.test.ts` both pin it.
+  const selection = opts?.keyPool
+    ? await opts.keyPool.select(account)
+    : { creds: account, fromPool: false };
+  const creds = selection.creds;
+
+  if (opts?.keyPool && !selection.fromPool && selection.missReason === "exhausted") {
+    // ⚠ TRANSITIONAL, AND SAID OUT LOUD. Every pool key for this account is
+    // cooling down. Falling back to the account's own key is strictly better
+    // than failing — it has its own separate budget — but it hides a real
+    // signal about this team, so it is logged rather than passed over in
+    // silence. K3 replaces this branch with `ApplePoolExhaustedError` once
+    // exhaustion is durable across instances instead of per-process.
+    await log(
+      logTag,
+      `[key-pool] account=${account.id} ALL POOL KEYS COOLING DOWN — falling back to the account key (transitional; K3 will surface this as an error)`,
+      "WARN",
+    );
+  }
+
   const token = await generateAscToken(creds);
   // Accept either a path (`/v1/apps?...`) or a full URL (Apple's
   // `links.next` carries the full origin for some list endpoints).
@@ -267,11 +329,30 @@ export async function appleFetch<T>(
     const errBody = await res.text();
     if (res.status === 429) {
       const retryAfterMs = parseRetryAfter(res.headers);
+      // ⚠ MARKED BEFORE THE THROW, NOT AFTER. `withRetry` catches this error,
+      // sleeps, and calls straight back into selection — so a key marked
+      // after the throw is still eligible when the retry runs, and the retry
+      // re-picks the key Apple just refused. Too late by exactly one attempt,
+      // in the one situation rotation exists for.
+      if (opts?.keyPool && selection.fromPool) {
+        opts.keyPool.onRateLimited(account.id, creds.keyId, retryAfterMs);
+      }
       await log(
         logTag,
         `[${creds.keyId}] ${method} ${endpoint} rate-limited (retry-after=${retryAfterMs}ms)`,
         "WARN",
       );
+      // ⚠ THE BACKOFF SLEEP IS NOW ARGUABLY UNNECESSARY, AND STAYS ANYWAY.
+      // `withRetry`'s curve was tuned for same-key recovery: wait, then ask
+      // the SAME key again. With a pool the next attempt uses a DIFFERENT
+      // key, which has its own budget, so the wait buys nothing for that
+      // attempt. It is not removed, for two reasons. `withRetry` is shared
+      // with CPP and with every non-pooled IAP path, where the sleep is still
+      // load-bearing — a pool-shaped optimisation there would be a
+      // regression. And an unpaced burst across N keys reaches Apple N times
+      // faster, which is how you exhaust a whole pool instead of one key.
+      // Slightly-too-slow is the safe error here. Do not "fix" this by
+      // shortening the curve inside `withRetry`.
       throw new AppleRateLimitError(method, endpoint, errBody, retryAfterMs);
     }
     await log(
