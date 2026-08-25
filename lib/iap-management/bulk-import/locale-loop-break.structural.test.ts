@@ -1,6 +1,12 @@
 /**
- * C3 chunk A — the localization loop must stop on a spent budget, and ONLY on
- * a spent budget.
+ * C3 — structural pins on `execute/route.ts`.
+ *
+ * Started as chunk A's "the localization loop must stop on a spent budget,
+ * and ONLY on a spent budget", and has since collected the other claims that
+ * live inside the same harness-less function: the stage map's branch order,
+ * and which screenshot notes count as a failed stage. Grouped here rather
+ * than scattered because they share the one expensive thing — reading and
+ * slicing this route's source.
  *
  * ⚠ WHY STRUCTURAL. `execute/route.ts` has no orchestration harness (its own
  * test file says so and explains the cost: Supabase, the Apple client, the
@@ -115,6 +121,31 @@ describe("stages after the stop are skipped, not attempted-and-failed", () => {
     expect(stopFirst).toBeGreaterThan(-1);
     expect(kindBranch).toBeGreaterThan(-1);
     expect(stopFirst).toBeLessThan(kindBranch);
+  });
+
+  /**
+   * W2 (Manager) — a screenshot Apple refused to swap is a FAILED stage.
+   * Behavioural coverage of the resulting sentence lives in
+   * row-outcome.test.ts; what only source can show is that the OVERWRITE
+   * path actually feeds it that state.
+   */
+  it("⚠ OVERWRITE counts `delete-locked` as a failed screenshot stage", () => {
+    // It used to report OK, so the row was SUCCESS while the orange
+    // "screenshot locked" pill beside it said the swap had not happened —
+    // the badge and the status contradicting each other on one row. This
+    // also ends a twin divergence: update-orchestration.ts has always rolled
+    // any !result.ok, delete-locked included, up to PARTIAL.
+    const owMap = src.slice(
+      src.indexOf("const owStages: RowStages = {"),
+      src.indexOf("const owRollUp"),
+    );
+    const shot = owMap.slice(owMap.indexOf("screenshot: {"));
+    expect(shot).toContain('screenshotNote === "delete-locked"');
+    // …and on the FAILED side of the branch, not the OK side.
+    const failedIdx = shot.indexOf('"FAILED"');
+    const lockedIdx = shot.indexOf('screenshotNote === "delete-locked"');
+    expect(lockedIdx).toBeGreaterThan(-1);
+    expect(lockedIdx).toBeLessThan(failedIdx);
   });
 
   it("⚠ neither CREATE nor OVERWRITE returns a hard-coded SUCCESS any more", () => {

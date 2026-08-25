@@ -64,6 +64,21 @@ export function formatLocalizationCounts(
   return parts.join(" · ");
 }
 
+/**
+ * ⚠ THE ONE NOTE THAT HAS TO SPELL ITSELF OUT.
+ *
+ * The results table used to carry this sentence in the Notes column, but W2
+ * makes a `delete-locked` row PARTIAL, so the cell now takes the stage-map
+ * branch and that sentence would have become unreachable — losing the one
+ * instruction the Manager actually needs, as a side effect of making the row
+ * more honest. Moving it into the map keeps it exactly one click away.
+ */
+const NOTE_TEXT: Partial<Record<string, string>> = {
+  "delete-locked":
+    "Apple refused the swap — the IAP is in review or approved. Swap the screenshot manually in App Store Connect.",
+  failed: "upload failed — check the file and re-run this row",
+};
+
 /** The trailing note for one stage, or "" when the state says it all. */
 function stageDetail(key: keyof RowStages, stages: RowStages): string {
   if (key === "localizations") {
@@ -72,7 +87,9 @@ function stageDetail(key: keyof RowStages, stages: RowStages): string {
   const st = stages[key];
   const bits: string[] = [];
   if ("outcome" in st && st.outcome) bits.push(String(st.outcome));
-  if ("note" in st && st.note) bits.push(String(st.note));
+  if ("note" in st && st.note) {
+    bits.push(NOTE_TEXT[String(st.note)] ?? String(st.note));
+  }
   if ("error" in st && st.error) bits.push(String(st.error));
   return bits.join(" · ");
 }

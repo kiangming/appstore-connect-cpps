@@ -179,8 +179,11 @@ describe("uploadScreenshotToApple — failure modes", () => {
 // existing screenshot, DELETE it (when present), then run the 3-step. The
 // 409 path is the critical Manager-trust edge — Apple locks the screenshot
 // on IAPs in WAITING_FOR_REVIEW / IN_REVIEW; the orchestrator surfaces
-// `delete-locked` non-fatally so the import row stays SUCCESS with a hint
-// instead of failing the whole entry.
+// `delete-locked` non-fatally — the rest of the row still runs instead of
+// the whole entry aborting. ⚠ "Non-fatal" is about CONTROL FLOW, not about
+// the verdict: as of C3 W2 the row rolls up to PARTIAL, because the
+// screenshot the Manager supplied is not the one live on Apple. This
+// function's own contract is unchanged; only the caller's reading of it is.
 describe("replaceScreenshotOnApple", () => {
   function iapWithScreenshot(screenshotId: string | null) {
     return {

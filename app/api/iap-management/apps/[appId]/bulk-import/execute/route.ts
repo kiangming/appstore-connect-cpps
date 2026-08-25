@@ -1434,8 +1434,9 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
   // empty. New behavior: if the batch ships a companion file for this
   // productId, delete the existing screenshot (if any) then run the 3-step
   // upload. If Apple returns 409 (IAP locked in WAITING_FOR_REVIEW / IN_REVIEW),
-  // surface a non-fatal `delete-locked` note so the row remains SUCCESS but
-  // Manager sees the screenshot couldn't be swapped.
+  // surface a `delete-locked` note. ⚠ The rest of the row still runs — this
+  // does not abort the import — but as of W2 the row rolls up to PARTIAL,
+  // because the screenshot the Manager supplied is not the one on Apple.
   let screenshotOk = false;
   let screenshotNote: PerIapResult["screenshot_note"] = "no-file";
   let screenshotFile: File | undefined;
@@ -1584,12 +1585,23 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
         : {}),
     },
     screenshot: {
-      // `delete-locked` is a documented non-fatal outcome (Apple refuses to
-      // delete the last screenshot), so it is not a failure.
+      // ⚠ W2 — `delete-locked` IS A FAILED STAGE. Apple refused the swap
+      // because the IAP is in review, so the screenshot the Manager supplied
+      // is NOT the one live on Apple and somebody has to go swap it by hand.
+      // This used to report OK, which made the row SUCCESS while the orange
+      // "screenshot locked" pill beside it said otherwise — the badge and
+      // the status contradicting each other on the same row.
+      //
+      // ⚠ This also ENDS A TWIN DIVERGENCE rather than starting one:
+      // `update-orchestration.ts` — the sibling that runs the same replace
+      // against the same endpoint — has always treated any `!result.ok`,
+      // `delete-locked` included, as a failed stage rolling up to PARTIAL
+      // (its own test at update-orchestration.test.ts pins that). Bulk
+      // import was the one path disagreeing.
       state:
         screenshotNote === "no-file"
           ? "NOT_APPLICABLE"
-          : screenshotNote === "failed"
+          : screenshotNote === "failed" || screenshotNote === "delete-locked"
             ? "FAILED"
             : "OK",
       note: screenshotNote,

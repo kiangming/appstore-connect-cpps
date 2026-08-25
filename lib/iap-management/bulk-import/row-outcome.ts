@@ -113,12 +113,32 @@ const STAGE_LABEL: Record<keyof RowStages, string> = {
 export function rollUpRowOutcome(stages: RowStages): RowRollUp {
   const incomplete: string[] = [];
   const stopped: string[] = [];
+  /** Reasons that name themselves — rendered as their own clause. */
+  const blocked: string[] = [];
 
   for (const key of CREATE_STAGE_ORDER) {
     const st = stages[key];
     if (st.state === "SKIPPED_BY_STOP") {
+      // ⚠ localizations STAYS in this list even though the fraction is also
+      // rendered (Manager, ca #6). "12/39" says how far it got; "stopped by
+      // rate limit before localizations, pricing, …" says the run was cut
+      // off and where — different facts, and the long form was chosen over
+      // the short one deliberately.
       stopped.push(STAGE_LABEL[key]);
     } else if (st.state === "FAILED") {
+      // ⚠ W2 — APPLE REFUSING THE SWAP IS NOT "missing screenshot".
+      // The Manager cannot act on "missing": the file was fine and the
+      // upload was attempted; Apple declined because the IAP is in review.
+      // The fix is to swap it by hand in App Store Connect, which only a
+      // sentence naming the reason will prompt.
+      if (key === "screenshot" && stages.screenshot.note === "delete-locked") {
+        blocked.push("screenshot locked by Apple review");
+        continue;
+      }
+      // ⚠ W1 — NOT "missing localizations" WHEN THE FRACTION IS ALREADY
+      // THERE. "37/39 locales · missing localizations" says the same thing
+      // twice and reads as though a second, separate thing also broke.
+      if (key === "localizations" && stages.localizations.total > 0) continue;
       incomplete.push(STAGE_LABEL[key]);
     }
   }
@@ -131,7 +151,12 @@ export function rollUpRowOutcome(stages: RowStages): RowRollUp {
   // created — saying so would be a small lie in the one line a Manager reads.
   const lead = stages.create.state === "OK" ? "Created on Apple" : "Updated on Apple";
 
-  if (incomplete.length === 0 && stopped.length === 0 && !localesShort) {
+  if (
+    incomplete.length === 0 &&
+    stopped.length === 0 &&
+    blocked.length === 0 &&
+    !localesShort
+  ) {
     return { status: "SUCCESS", summary: `${lead} · all stages OK` };
   }
 
@@ -146,6 +171,7 @@ export function rollUpRowOutcome(stages: RowStages): RowRollUp {
     );
   }
   if (incomplete.length > 0) parts.push(`missing ${incomplete.join(", ")}`);
+  if (blocked.length > 0) parts.push(blocked.join(", "));
   if (stopped.length > 0) {
     parts.push(`stopped by rate limit before ${stopped.join(", ")}`);
   }

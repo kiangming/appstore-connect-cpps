@@ -128,7 +128,10 @@ export async function uploadScreenshotToApple(
  *   2. If one exists, DELETE it. If Apple returns 409 (IAP in review /
  *      waiting-for-review / approved-but-locked), surface a non-fatal
  *      `delete-locked` failure so the caller can mark the row with a hint
- *      instead of aborting the import.
+ *      instead of aborting the import. ⚠ Non-fatal means the import keeps
+ *      going, NOT that the row succeeded — both callers treat it as a failed
+ *      screenshot stage (bulk-import since C3 W2, update-orchestration
+ *      always).
  *   3. Run the standard 3-step upload via `uploadScreenshotToApple`.
  *
  * Returns the same `ScreenshotUploadResult` shape as the upload-only path,

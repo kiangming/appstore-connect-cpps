@@ -95,9 +95,65 @@ describe("the summary is the sentence [Q-C3.partial] asked for", () => {
       pricing: { state: "FAILED", outcome: "failed-set" },
     });
     const out = rollUpRowOutcome(s);
+    // ⚠ W1 (Manager) — no "missing localizations": the fraction beside it
+    // already says localizations are short, and naming it again reads as a
+    // SECOND, separate thing having broken. Note this now matches
+    // [Q-C3.partial]'s own canonical example, which never listed it either.
     expect(out.summary).toBe(
-      "Created on Apple · 12/39 locales · missing localizations, pricing, screenshot",
+      "Created on Apple · 12/39 locales · missing pricing, screenshot",
     );
+  });
+
+  it("⚠ W1 — the fraction alone carries a short locale set", () => {
+    const s = stages({
+      localizations: {
+        state: "FAILED", done: 37, total: 39, failed: ["de-DE", "fr-FR"], skippedByStop: 0,
+      },
+    });
+    const out = rollUpRowOutcome(s);
+    expect(out.status).toBe("PARTIAL");
+    expect(out.summary).toBe("Created on Apple · 37/39 locales");
+    expect(out.summary).not.toContain("missing");
+  });
+
+  it("⚠ W1 does NOT reach the stop clause — ca #6 keeps its four nouns", () => {
+    // "12/39" says how far it got; "stopped by rate limit before …" says the
+    // run was cut off and where. Different facts, and Manager chose the long
+    // form over the short one on purpose.
+    const s = stages({
+      localizations: {
+        state: "SKIPPED_BY_STOP", done: 12, total: 39, failed: [], skippedByStop: 27,
+      },
+      pricing: { state: "SKIPPED_BY_STOP", outcome: "skipped-not-ready" },
+      screenshot: { state: "SKIPPED_BY_STOP" },
+      availability: { state: "SKIPPED_BY_STOP" },
+    });
+    expect(rollUpRowOutcome(s).summary).toBe(
+      "Created on Apple · 12/39 locales · stopped by rate limit before localizations, pricing, screenshot, availability",
+    );
+  });
+
+  it("⚠ W2 — a locked screenshot names its reason, not 'missing screenshot'", () => {
+    // The Manager cannot act on "missing": the file was fine and the upload
+    // was attempted. Apple declined because the IAP is in review, and only a
+    // sentence saying so prompts the manual swap in App Store Connect.
+    const s = stages({
+      create: { state: "NOT_APPLICABLE" },
+      availability: { state: "NOT_APPLICABLE" },
+      screenshot: { state: "FAILED", note: "delete-locked" },
+    });
+    const out = rollUpRowOutcome(s);
+    expect(out.status).toBe("PARTIAL");
+    expect(out.summary).toBe(
+      "Updated on Apple · all 39 locales · screenshot locked by Apple review",
+    );
+    expect(out.summary).not.toContain("missing");
+  });
+
+  it("⚠ W2 — a plain screenshot failure still reads 'missing screenshot'", () => {
+    // The two are different actions: re-run the row versus go to ASC.
+    const s = stages({ screenshot: { state: "FAILED", note: "failed" } });
+    expect(rollUpRowOutcome(s).summary).toContain("missing screenshot");
   });
 
   it("names a rate-limit stop separately from a failure — different advice", () => {
