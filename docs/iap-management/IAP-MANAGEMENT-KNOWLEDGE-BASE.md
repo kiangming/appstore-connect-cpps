@@ -450,6 +450,41 @@ Three facts land at once, and all three had been open:
    two requests 5 s apart (delta exactly −1). A fixed window would not
    have been full mid-hour.
 
+⚠ **AND THE HEADER IS ABSENT FROM THE ENDPOINTS THAT ACTUALLY SPEND THE
+BUDGET** (measured 2026-08-25, same session). This section used to say Apple
+emits it "on most (not all) responses". The real distribution is worse than
+that phrasing suggests:
+
+| Endpoint | `x-rate-limit` |
+|---|---|
+| `GET /v1/territories` | ✅ present |
+| `GET /v2/inAppPurchases/{id}` | ❌ **absent** |
+| `GET /v1/inAppPurchasePriceSchedules/{id}/manualPrices` | ❌ **absent** |
+
+Verified by dumping the full response header list, not by a parser returning
+null — the other 18 headers arrive normally on all three; `x-rate-limit` is
+simply not among them on the V2 IAP read or the price-schedule read.
+
+Those two are **2 of the 3 requests every exported item costs**. So the
+endpoints whose volume creates the problem are exactly the ones that report
+nothing. Three consequences, all of which contradict earlier assumptions in
+this file:
+
+1. **The `[asc-client] budget=` production log is far sparser than assumed.**
+   It fires on territory/app reads, essentially never during a large export
+   or a bulk import. A quiet log does NOT mean a quiet budget.
+2. **Budget-aware pacing (Phase B / E2) is weakened at its root.** It would
+   be pacing off a `remaining` value last refreshed by an unrelated endpoint
+   minutes earlier. Not useless — the value is still Apple's own count, not
+   ours — but it cannot be treated as live during the jobs that matter.
+3. **Budget-aware KEY SELECTION has the same problem**, and it is why the
+   pool design should not assume it can pick "the key with the most budget
+   left" (see `[RATELIMIT-keypool-design]`).
+
+This also *strengthens* the case for the key pool over pacing: you cannot
+pace precisely against a number you cannot read, but you can add headroom
+without reading anything.
+
 **Method — repeat this if you ever doubt the number.** Two read-only
 `GET /v1/territories?limit=200`, ~5 s apart, signed with the **production
 signing path** (`lib/asc-jwt.ts` — jose, ES256, `kid`, `exp = +20 min`)

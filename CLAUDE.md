@@ -480,6 +480,29 @@ Before pushing to `origin/main`, run in order:
 
 If any step fails, fix the root cause — never `--no-verify` past a hook or skip a check.
 
+### Migration checkpoint — blocks PUSH, not code
+
+When a change needs a schema migration applied by hand (Path G — Manager runs
+the SQL in the Supabase SQL Editor), the checkpoint sits at **push**, not at
+the keyboard:
+
+- **Keep coding.** Write the migration, the code that uses it, the tests and
+  the UI in one pass. Nothing is deployed by writing it.
+- **Do not push** until the Manager confirms the SQL ran *and* the verify
+  queries pass.
+- Ship the migration SQL + its verify queries in the report **before** the
+  code is finished, so the Manager can apply it in parallel.
+
+Why the checkpoint is at push and not earlier: the failure this prevents is
+**code live against a schema that does not have the column yet**, and only a
+deploy can cause that. Stopping work at the migration would cost a round-trip
+per migration and buy nothing.
+
+Why it must not be skipped: a write to a missing column — or to a value
+outside a `CHECK` — is rejected by Postgres, and if the calling code does not
+inspect the result it is rejected **silently** (KB §9 P2). Any code added
+under this checkpoint must check the write's `error`.
+
 ## Slash commands
 
 Custom commands trong `.claude/commands/`:
