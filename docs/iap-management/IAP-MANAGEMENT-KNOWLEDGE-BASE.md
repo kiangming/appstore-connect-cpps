@@ -3281,6 +3281,15 @@ Rules:
    all failed). The catch converts a fixture bug into a plausible-looking
    domain outcome, which is why it reads as a logic bug in the code under test.
 
+**P24 and P25 live in §15** (Apple ASC key pool), because both were earned
+there and both read better next to the code that produced them:
+- **P24** — a poor test environment is a single-point-of-failure detector. A
+  missing env var is the cheapest simulation of a new dependency being down.
+  Run the suite BEFORE mocking anything.
+- **P25** — a stub incomplete in the direction the code is defensive about is
+  worse than no stub: a missing method fails loudly, but a missing method plus
+  a broad guard produces a green test that proves nothing. Sibling of P23.
+
 ---
 
 #### 10.13.K — Google single-item base-price cycle (2026-08-13, `f6b9b22` → `c0a9715`)
@@ -4198,6 +4207,124 @@ dialog does for an existing IAP.
 New meta-rules from this cycle: **P14** (LAYER-GAP 3rd instance), **P15**
 (structural tests must strip comments), **P16** (two fake-test shapes). Tests
 3356, gauntlet 4/4.
+
+---
+
+## 15. Apple ASC key pool — SHIPPED DARK (2026-08-25)
+
+Apple counts its hourly request budget per KEY, so N keys on one team give
+N × the headroom. The pool is on `main` and inert: `iap_mgmt.asc_account_keys`
+holds zero rows, so every account takes the `empty` fallback and signs with
+its own key exactly as before. Activating it means seeding a key, not
+deploying anything.
+
+**Activation is gated on measurement, not on confidence.** The Manager
+confirmed per-key counting from operating a pool on a different tool — strong
+evidence, and not a measurement of THIS system. Census D1 (11 read-only
+requests, one extra key on the same team) is the confirmation, and §4.9's own
+history is why it is not skipped: Apple's docs said 3,600 and Hotfix 25
+shipped 250 for months because nobody read it off the wire. If D1 returns
+PER-TEAM, the pool stays dark permanently and is NOT ripped out — the
+fallback path costs nothing when the table is empty.
+
+### 15.1 The three pieces
+
+| | What it is | The load-bearing choice |
+|---|---|---|
+| **K1** storage | `iap_mgmt.asc_account_keys` + repository | Soft ref to `public.asc_accounts` (no cross-schema FK — `iap_mgmt.apps` set that precedent). **Explicit `REVOKE ALL … FROM authenticated, anon`**, diverging from this schema's own default grants |
+| **K2** selection | Round-robin, chosen inside `appleFetch` | Selection sits at the JWT-minting line, so `withRetry` re-entering `fn()` lands on it again and **rotation happens inside the retry curve** |
+| **K3** cooldown | Durable `cooldown_until` + `ApplePoolExhaustedError` | The error **extends `AppleRateLimitError`** so four shipped latches match it unchanged, and carries **`retryAfterMs: 0`** as a fast exit |
+
+**K1 — the grant divergence is deliberate and is the interesting part.**
+Migration `20260515020000` set `ALTER DEFAULT PRIVILEGES IN SCHEMA iap_mgmt
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO authenticated` as a safety
+net so no future table would repeat the IAP.c missing-grant blunder. That
+default is right for product tables and wrong for a table of encrypted ASC
+private keys. `public.asc_accounts` guards the same data with RLS-and-no-
+policies; `iap_mgmt` uses no RLS at all (Q-IAP.8 — auth at the Next.js
+layer), so the equivalent is an explicit REVOKE. **A schema-wide safety net
+is not a policy for every table in the schema.**
+
+**K2 — placement bought three things at once.** Selecting once per operation
+(above `withRetry`) would have frozen the key for all four attempts. Selecting
+per request means: no call-site signature changes anywhere; no latch contract
+changes — *"an `AppleRateLimitError` escaped `withRetry`"* now means the budget
+ran out on up to four DIFFERENT keys, a STRONGER claim than the old one rather
+than a conflicting one; and the property is machine-checkable by watching
+which key signs each attempt. Hoisting the selection makes that test report
+`['K1']` instead of `['K1','K2','K3','K4']`.
+
+The opt-in is an **injected value, not a boolean**. A `{ keyPool: true }` flag
+would mean `lib/shared` importing a feature module — inverting the dependency
+direction — and would leave the flag settable from anywhere, CPP included.
+`appleFetch` takes an `AppleKeyPool`; `iapFetch` passes one, `ascFetch`
+imports none and therefore has nothing to pass. `[Q-RATELIMIT.pool-scope]` is
+held by the module graph rather than by remembering.
+
+**K3 — the fast exit reuses a mechanism `withRetry` already has.** Because
+`ApplePoolExhaustedError` IS an `AppleRateLimitError`, `withRetry` retries it,
+and each attempt re-enters selection, finds the pool still cooling and throws
+again — correct, but the default curve would sleep 3.5 s to re-learn a known
+fact. `withRetry` computes `Math.min(err.retryAfterMs ?? backoff[attempt],
+CEILING)`, and `??` only falls through for null/undefined, so a literal `0`
+wins and every sleep becomes `sleep(0)`. Chosen over adding a field for
+`withRetry` to inspect **because `withRetry` is shared with CPP and every
+non-pooled IAP path** — teaching it about key pools would put pool-shaped
+behaviour on flows that have none.
+
+### 15.2 ⚠ P24 — a poor test environment is a single-point-of-failure detector
+
+**Both times an enhancement quietly became a new way for the critical path to
+fail, the test suite found it — by being poorer than production.**
+
+| | What was added | What the suite did | What it was in production |
+|---|---|---|---|
+| K2 | Pool read on the `iapFetch` path | 9 IAP tests failed: `Missing SUPABASE_URL` | A Supabase blip, a rotated `ENCRYPTION_KEY` or one corrupt row taking down EVERY Apple request in the module |
+| K3 | Cooldown write in the 429 branch | Unhandled rejections | `iapDb()` throwing SYNCHRONOUSLY, escaping the 429 branch and REPLACING the `AppleRateLimitError` with a config error — after which no latch can tell "Apple refused" from "we are misconfigured" |
+
+The tempting read both times was *"the tests need mocks"*. The correct read
+was *"the code needs to not depend on this"*. **An optimisation that adds a
+single point of failure to the thing it optimises is a bad trade at any
+speed** — so `selectKey` degrades to the account key with a WARN, and
+`persistCooldown` wraps its whole body rather than only inspecting the
+returned `{ error }`.
+
+Generalisation: when adding a dependency (DB, cache, network) to a path that
+did not have one, **run the suite before mocking anything**. A missing env var
+is the cheapest available simulation of that dependency being down, and it
+arrives before the deploy rather than after.
+
+⚠ The second instance also shows the first fix was incomplete in a way review
+did not catch: `persistCooldown`'s docstring already SAID "never throws" while
+the code still could, because `iapDb()` throws before any `{ error }` exists
+to check. **Checking a returned error is not the same as guarding a call.**
+
+### 15.3 ⚠ P25 — a stub that is incomplete in the direction the code is defensive about
+
+`repository.test.ts`'s chainable Supabase stub defined `select`, `eq` and
+`order` but not `update`. When K3 added a writer, `.update()` threw a
+TypeError — which `persistCooldown`'s new guard caught and reported as a write
+failure. The test therefore observed **the right SHAPE (an error, logged, not
+thrown) for entirely the wrong reason**, and only failed because a sibling
+assertion checked the message text.
+
+**A stub that is incomplete in exactly the direction the code is defensive
+about is worse than no stub at all**: a missing method fails loudly, but a
+missing method plus a broad guard produces a green test that proves nothing.
+Extend the stub when you extend the surface, and prefer at least one assertion
+on the *content* of a defensive path, not just its shape — the content is what
+distinguishes "the guard worked" from "the fixture is broken".
+
+Related: P23 (fixture bug wearing a domain outcome's clothes). Same family,
+different door.
+
+### 15.4 What is left
+
+- **K4** — seed a second key, run census D1, record the verdict in §4.9.
+  Blocked on the Manager creating the key.
+- The ⏳ open question in §4.9 (does a 429 carry `Retry-After` when
+  `x-rate-limit` is absent) is answered by the `[key-pool] 429-headers` log
+  line the first time a real 429 happens. No action until then.
 
 ---
 
