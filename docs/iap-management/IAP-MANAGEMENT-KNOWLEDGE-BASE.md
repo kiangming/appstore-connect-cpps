@@ -485,6 +485,40 @@ This also *strengthens* the case for the key pool over pacing: you cannot
 pace precisely against a number you cannot read, but you can add headroom
 without reading anything.
 
+### ⏳ OPEN — does a 429 carry `Retry-After` when `x-rate-limit` is absent?
+
+**Status: awaiting the first natural 429. Nothing to decide until then.**
+
+The key-pool cooldown (K3) has to choose how long a spent key stays out of
+rotation. It currently uses a conservative **rolling hour**, derived from the
+`user-hour-rem` definition measured above. Apple's `Retry-After` would be
+better — it is Apple's own number — but the endpoints the pool actually
+serves are the ones proven above NOT to send `x-rate-limit`, and assuming
+they send a *different* optional header would be the Hotfix 25 mistake with
+the serial numbers filed off.
+
+**Why this is not being measured on demand.** Provoking a 429 means
+deliberately burning an hour of a real key's budget on a live team, to learn
+something that will arrive for free the first time a large export or bulk
+import runs into a real limit.
+
+**How the answer arrives.** `appleFetch`'s 429 branch prints the complete
+header list. Grep Railway for:
+
+```
+[key-pool] 429-headers
+```
+
+The line carries `retry-after=<value|ABSENT>`, `x-rate-limit=<value|ABSENT>`
+and every header name on the response.
+
+**What to do with it.** Record the observation here. Then:
+- `Retry-After` **present** → it already shortens the cooldown automatically
+  (`cooldownDurationMs` prefers it, clamped to one hour). Nothing to change;
+  just delete the now-answered question and the DEBUG line.
+- `Retry-After` **absent** → the hour is the only signal there is. Say so
+  here, so nobody re-opens this as a possible optimisation later.
+
 **Method — repeat this if you ever doubt the number.** Two read-only
 `GET /v1/territories?limit=200`, ~5 s apart, signed with the **production
 signing path** (`lib/asc-jwt.ts` — jose, ES256, `kid`, `exp = +20 min`)

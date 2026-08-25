@@ -13,6 +13,7 @@ import {
   parseRateLimit,
   AppleApiError,
   AppleRateLimitError,
+  ApplePoolExhaustedError,
 } from "./apple-fetch";
 import type { AscCredentials } from "@/lib/asc-jwt";
 
@@ -343,7 +344,7 @@ describe("appleFetch — key pool (K2)", () => {
         attempts.push(k);
         return { creds: poolCreds(k), fromPool: true };
       }),
-      onRateLimited: vi.fn((_acct: string, keyId: string) => {
+      onRateLimited: vi.fn(async (_acct: string, keyId: string) => {
         cooled.add(keyId);
       }),
     };
@@ -422,24 +423,119 @@ describe("appleFetch — key pool (K2)", () => {
     expect(line).not.toContain(`key=${creds.keyId}`);
   });
 
-  it('an "exhausted" pool falls back AND says so — it is not silent', async () => {
+  /**
+   * ⚠ REWRITTEN AT K3. This used to assert that an exhausted pool fell back
+   * to the account key and merely warned — K2's own comment called that a
+   * stopgap, kept only because cooldowns were per-process and could not be
+   * trusted. Now that they are durable, "every pool key is spent" is a fact
+   * worth acting on: falling back would spend the account key's separate
+   * budget propping up a doomed batch, and the shipped stop latches would
+   * never learn the run should stop.
+   */
+  const exhaustedPool = () => ({
+    select: vi.fn(async (a: typeof creds) => ({
+      creds: a,
+      fromPool: false,
+      missReason: "exhausted" as const,
+    })),
+    onRateLimited: vi.fn(async () => {}),
+  });
+
+  it('⚠ an "exhausted" pool THROWS, and sends nothing', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(mockResponse(200, { data: {} }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", {
+        keyPool: exhaustedPool(),
+      }),
+    ).rejects.toBeInstanceOf(ApplePoolExhaustedError);
+
+    // Refused before the request, not after it failed.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("⚠ and it IS an AppleRateLimitError — every shipped latch matches it unchanged", async () => {
+    // export-fetch, bulk-availability, submit-batch and retry-counters all
+    // decide "stop dispatching" with `instanceof AppleRateLimitError`. A pool
+    // with nothing left is the same fact they exist to catch, so it must
+    // satisfy them without a single predicate being edited.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200, { data: {} })));
+    const err = (await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", {
+      keyPool: exhaustedPool(),
+    }).catch((e) => e)) as ApplePoolExhaustedError;
+
+    expect(err).toBeInstanceOf(AppleRateLimitError);
+    expect(err).toBeInstanceOf(AppleApiError);
+    expect(err.status).toBe(429);
+    expect(err.accountId).toBe(creds.id);
+  });
+
+  it("⚠ THE FAST EXIT: retrying it burns no sleep and no Apple request", async () => {
+    // Because it IS an AppleRateLimitError, withRetry retries it — correct,
+    // but pointless work if each attempt waited out the backoff curve.
+    // `retryAfterMs: 0` makes withRetry compute sleep(0), so the remaining
+    // attempts run back-to-back. No change to withRetry, which is shared
+    // with CPP and every non-pooled path.
+    const sleep = vi.fn().mockResolvedValue(undefined);
+    const fetchSpy = vi.fn().mockResolvedValue(mockResponse(200, { data: {} }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      withRetry(
+        () =>
+          appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", {
+            keyPool: exhaustedPool(),
+          }),
+        { sleep },
+      ),
+    ).rejects.toBeInstanceOf(ApplePoolExhaustedError);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // Retried the full curve, but every wait was zero.
+    expect(sleep).toHaveBeenCalledTimes(3);
+    expect(sleep.mock.calls.every(([ms]) => ms === 0)).toBe(true);
+  });
+
+  it("it says so in the log before refusing", async () => {
     const { log } = await import("@/lib/logger");
     (log as ReturnType<typeof vi.fn>).mockClear();
-    const pool = {
-      select: vi.fn(async (a: typeof creds) => ({
-        creds: a,
-        fromPool: false,
-        missReason: "exhausted" as const,
-      })),
-      onRateLimited: vi.fn(),
-    };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200, { data: {} })));
 
-    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", { keyPool: pool });
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", {
+      keyPool: exhaustedPool(),
+    }).catch(() => {});
+
     const warned = (log as ReturnType<typeof vi.fn>).mock.calls.some(
       (c) => typeof c[1] === "string" && c[1].includes("ALL POOL KEYS COOLING DOWN"),
     );
     expect(warned).toBe(true);
+  });
+
+  it("⚠ K3.4 — a real 429 dumps its header list, so Retry-After can be settled for free", async () => {
+    // The cooldown policy falls back to a conservative hour because nobody
+    // has seen whether Apple sends Retry-After on a 429 from the IAP
+    // endpoints — which are known NOT to send x-rate-limit at all. Forcing a
+    // 429 would burn an hour of a real key's budget; this captures the answer
+    // the first time one happens naturally.
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const { pool } = makePool(["K1"]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(mockResponse(429, "slow down", { "retry-after": "7" })),
+    );
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", {
+      keyPool: pool,
+    }).catch(() => {});
+
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("[key-pool] 429-headers"));
+    expect(line).toBeDefined();
+    expect(line).toContain("retry-after=7");
+    expect(line).toContain("x-rate-limit=ABSENT");
   });
 
   it('an "empty" pool falls back SILENTLY — most accounts are simply not pooled', async () => {
@@ -451,7 +547,7 @@ describe("appleFetch — key pool (K2)", () => {
         fromPool: false,
         missReason: "empty" as const,
       })),
-      onRateLimited: vi.fn(),
+      onRateLimited: vi.fn(async () => {}),
     };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200, { data: {} })));
 

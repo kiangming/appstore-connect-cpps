@@ -63,6 +63,51 @@ export class AppleRateLimitError extends AppleApiError {
   }
 }
 
+/**
+ * Thrown when every key in an account's pool is cooling down.
+ *
+ * ⚠ IT EXTENDS `AppleRateLimitError` SO THE SHIPPED LATCHES KEEP WORKING.
+ * `export-fetch`, `bulk-availability`, `submit-batch` and `retry-counters`
+ * all decide "stop dispatching" with `err instanceof AppleRateLimitError`.
+ * A pool with nothing left to hand out is the same fact those predicates
+ * exist to catch — the budget is gone — so it must satisfy them. Not one
+ * predicate changes, and none of their tests do either.
+ *
+ * ⚠ AND `retryAfterMs` IS 0 ON PURPOSE. THIS IS THE FAST EXIT.
+ * Because it IS an `AppleRateLimitError`, `withRetry` retries it. Each of
+ * those attempts re-enters selection, finds the pool still cooling, and
+ * throws again — correct, but with the default curve it would burn
+ * 500 + 1000 + 2000 ms of sleeping to learn something already known.
+ *
+ * `withRetry` computes its delay as
+ *     Math.min(err.retryAfterMs ?? backoff[attempt], CEILING)
+ * and `??` only falls through for null/undefined — so a literal 0 wins and
+ * every sleep becomes `sleep(0)`. The remaining attempts run back-to-back
+ * and cost nothing: selection throws BEFORE any fetch, so no Apple request
+ * is made on any of them.
+ *
+ * ⚠ Chosen over adding a field for `withRetry` to inspect because
+ * `withRetry` is shared with CPP Manager and with every non-pooled IAP path.
+ * Teaching it about key pools would put pool-shaped behaviour on flows that
+ * have no pool. This uses a mechanism it already has.
+ */
+export class ApplePoolExhaustedError extends AppleRateLimitError {
+  readonly accountId: string;
+
+  constructor(accountId: string, method: string, endpoint: string) {
+    super(
+      method,
+      endpoint,
+      `All ASC pool keys for account "${accountId}" are cooling down.`,
+      // ⚠ 0, not null. See the note above — this is the fast exit, not a
+      // claim that Apple told us to retry immediately.
+      0,
+    );
+    this.name = "ApplePoolExhaustedError";
+    this.accountId = accountId;
+  }
+}
+
 // ─── Retry wrapper ───────────────────────────────────────────────────────────
 
 export type Sleeper = (ms: number) => Promise<void>;
@@ -216,12 +261,20 @@ export interface AppleKeyPool {
     fromPool: boolean;
     missReason?: string;
   }>;
-  /** Record that this key's budget is spent, so the next attempt skips it. */
+  /**
+   * Record that this key's budget is spent, so the next attempt skips it.
+   *
+   * ⚠ Awaited by `appleFetch` before it throws. The durable half of this
+   * write is what lets a sibling instance see the cooldown, and C2's
+   * batch-close lesson applies: a write whose error nobody inspects fails
+   * silently. One DB round-trip on a path that is already sleeping for
+   * hundreds of milliseconds is not a latency concern.
+   */
   onRateLimited(
     accountId: string,
     keyId: string,
     retryAfterMs: number | null,
-  ): void;
+  ): Promise<void>;
 }
 
 export interface AppleFetchOptions {
@@ -266,17 +319,21 @@ export async function appleFetch<T>(
   const creds = selection.creds;
 
   if (opts?.keyPool && !selection.fromPool && selection.missReason === "exhausted") {
-    // ⚠ TRANSITIONAL, AND SAID OUT LOUD. Every pool key for this account is
-    // cooling down. Falling back to the account's own key is strictly better
-    // than failing — it has its own separate budget — but it hides a real
-    // signal about this team, so it is logged rather than passed over in
-    // silence. K3 replaces this branch with `ApplePoolExhaustedError` once
-    // exhaustion is durable across instances instead of per-process.
+    // ⚠ THROWN BEFORE ANY REQUEST IS SENT. K2 fell back to the account key
+    // here and logged a warning, explicitly as a stopgap. Now that cooldowns
+    // are durable, "every pool key is spent" is a fact worth acting on
+    // rather than papering over: falling back would spend the account key's
+    // own budget to keep a doomed batch moving, and the shipped stop latches
+    // would never learn the run should stop.
+    //
+    // ⚠ "empty" does NOT come here. An account with no pool keys is normal —
+    // the pool is opt-in — and still falls through to its own key silently.
     await log(
       logTag,
-      `[key-pool] account=${account.id} ALL POOL KEYS COOLING DOWN — falling back to the account key (transitional; K3 will surface this as an error)`,
+      `[key-pool] account=${account.id} ALL POOL KEYS COOLING DOWN — refusing ${method} ${endpoint} without sending it`,
       "WARN",
     );
+    throw new ApplePoolExhaustedError(account.id, method, endpoint);
   }
 
   const token = await generateAscToken(creds);
@@ -335,11 +392,34 @@ export async function appleFetch<T>(
       // re-picks the key Apple just refused. Too late by exactly one attempt,
       // in the one situation rotation exists for.
       if (opts?.keyPool && selection.fromPool) {
-        opts.keyPool.onRateLimited(account.id, creds.keyId, retryAfterMs);
+        await opts.keyPool.onRateLimited(account.id, creds.keyId, retryAfterMs);
       }
       await log(
         logTag,
         `[${creds.keyId}] ${method} ${endpoint} rate-limited (retry-after=${retryAfterMs}ms)`,
+        "WARN",
+      );
+      // ⚠ K3.4 — A MEASUREMENT WAITING FOR ITS EVENT, not decoration.
+      // The cooldown policy falls back to a conservative rolling hour
+      // because nobody has yet seen whether Apple sends `Retry-After` on a
+      // 429 from the IAP endpoints. Those endpoints are known NOT to send
+      // `x-rate-limit` at all (KB §4.9, measured), so assuming they send the
+      // other header would be exactly the Hotfix-25 mistake again.
+      //
+      // Forcing a 429 to find out means deliberately burning an hour of a
+      // real key's budget. Instead this prints the full header list the
+      // first time a 429 happens naturally, and the answer arrives free.
+      // Grep Railway for `[key-pool] 429-headers`. Once it has appeared:
+      // record it in KB §4.9 and this line can go.
+      await log(
+        logTag,
+        `[key-pool] 429-headers ${method} ${endpoint} retry-after=${
+          res.headers.get("retry-after") ?? "ABSENT"
+        } x-rate-limit=${res.headers.get("x-rate-limit") ?? "ABSENT"} all=[${[
+          ...res.headers.keys(),
+        ]
+          .sort()
+          .join(",")}]`,
         "WARN",
       );
       // ⚠ THE BACKOFF SLEEP IS NOW ARGUABLY UNNECESSARY, AND STAYS ANYWAY.

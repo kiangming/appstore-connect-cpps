@@ -17,6 +17,7 @@
  */
 import {
   listPoolKeys,
+  persistCooldown,
   poolKeyToCredentials,
   type PoolKey,
 } from "./repository";
@@ -69,13 +70,54 @@ function cooldownKey(accountId: string, keyId: string): string {
  * verified (KB §4.9 — the IAP endpoints omit the budget header entirely), so
  * the fallback is the load-bearing path and the header is an optimisation.
  */
-export function markKeyRateLimited(
+export async function markKeyRateLimited(
   accountId: string,
   keyId: string,
   retryAfterMs?: number | null,
-): void {
-  const ms = retryAfterMs && retryAfterMs > 0 ? retryAfterMs : DEFAULT_COOLDOWN_MS;
-  cooldowns.set(cooldownKey(accountId, keyId), Date.now() + ms);
+): Promise<void> {
+  const ms = cooldownDurationMs(retryAfterMs);
+  const until = new Date(Date.now() + ms);
+
+  // ⚠ IN-MEMORY FIRST, AND SYNCHRONOUSLY. The retry attempt this exists to
+  // protect runs microseconds from now in THIS process; it must not depend
+  // on a database round-trip having completed, nor on it having succeeded.
+  cooldowns.set(cooldownKey(accountId, keyId), until.getTime());
+
+  // Then durably, so sibling instances stop handing the key out too.
+  // `persistCooldown` logs its own failure and never throws — a failed audit
+  // write must not become a second, different error on a path that is
+  // already reporting a rate limit.
+  await persistCooldown(accountId, keyId, until);
+}
+
+/**
+ * How long a spent key stays out of rotation.
+ *
+ * ⚠ THE FALLBACK IS THE LOAD-BEARING PATH, NOT THE EXCEPTION.
+ * Apple's window is a rolling hour: §4.9 measured `rem` as the limit minus
+ * everything spent in the previous 60 minutes. A key that just exhausted its
+ * budget is therefore fully recovered one hour after the burst that drained
+ * it, and anything shorter puts a still-refusing key back into rotation.
+ *
+ * ⚠ Deliberately an upper bound. A key that spent only part of its budget
+ * recovers sooner, so an hour can idle a usable key. With two or more keys
+ * that costs nothing; with one it is identical to the pre-pool behaviour.
+ * Tightening it would need per-endpoint budget data Apple does not send —
+ * §4.9 found `x-rate-limit` absent from the IAP endpoints entirely.
+ *
+ * ⚠ `Retry-After` is an OPTIMISATION ON AN UNVERIFIED ASSUMPTION. Whether
+ * Apple attaches it to a 429 whose response carries no `x-rate-limit` has
+ * never been observed on this system (KB §4.9 — awaiting the first natural
+ * 429, which the DEBUG line in `appleFetch` will capture). Until then the
+ * hour is what actually runs, and the header only ever shortens it.
+ */
+export function cooldownDurationMs(retryAfterMs?: number | null): number {
+  if (retryAfterMs !== null && retryAfterMs !== undefined && retryAfterMs > 0) {
+    // ⚠ Never longer than the rolling window. A malformed or absurd
+    // `Retry-After` should not park a key for a day.
+    return Math.min(retryAfterMs, DEFAULT_COOLDOWN_MS);
+  }
+  return DEFAULT_COOLDOWN_MS;
 }
 
 function isCoolingDown(accountId: string, key: PoolKey, now: number): boolean {

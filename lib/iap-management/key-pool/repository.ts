@@ -181,3 +181,65 @@ export function poolKeyToCredentials(
 export function __resetPoolKeyCacheForTests(): void {
   cache.clear();
 }
+
+// ─── Write (K3) ───────────────────────────────────────────────────────────
+
+/**
+ * Persist a cooldown so sibling instances stop handing this key out.
+ *
+ * ⚠ THE ERROR IS INSPECTED, NOT DISCARDED — C2's batch-close lesson, applied
+ * before it can bite again. That UPDATE was fire-and-forget, nothing in the
+ * app SELECTs the table it wrote, and a rejected write therefore vanished
+ * without trace. This table has the same property: only the pool reads it,
+ * and only every 30 seconds. A silent failure here means every instance
+ * keeps rotating onto a key Apple is refusing, and the logs say nothing.
+ *
+ * ⚠ AND IT NEVER THROWS. The caller is already handling a 429 and is about
+ * to throw a rate-limit error of its own; turning a failed audit write into
+ * a second, different failure would replace a diagnosable problem with a
+ * confusing one. The in-memory cooldown (selector.ts) is set regardless, so
+ * THIS process stays correct even when the write fails — only sibling
+ * instances lose the signal, which is exactly what the log line says.
+ */
+export async function persistCooldown(
+  accountId: string,
+  keyId: string,
+  until: Date,
+): Promise<void> {
+  // ⚠ THE WHOLE BODY IS GUARDED, NOT JUST THE QUERY RESULT.
+  // `iapDb()` THROWS — synchronously — when Supabase env vars are missing,
+  // so checking only the returned `{ error }` leaves a live escape route:
+  // the throw would travel out of `markKeyRateLimited`, out of `appleFetch`'s
+  // 429 branch, and REPLACE the `AppleRateLimitError` with a configuration
+  // error. Every stop latch keys on `instanceof AppleRateLimitError`, so the
+  // batch would stop being able to tell "Apple refused" from "we are
+  // misconfigured", and would keep dispatching.
+  //
+  // This is the same class of defect the `selectKey` read path already had —
+  // an enhancement quietly becoming a new way for the critical path to fail.
+  // Found the same way, too: the test suite, running without env vars.
+  let error: { message: string } | null = null;
+  try {
+    ({ error } = await iapDb()
+      .from("asc_account_keys")
+      .update({ cooldown_until: until.toISOString() })
+      .eq("account_id", accountId)
+      .eq("key_id", keyId));
+  } catch (err) {
+    error = { message: err instanceof Error ? err.message : String(err) };
+  }
+
+  if (error) {
+    console.error(
+      `[key-pool] FAILED to persist cooldown account=${accountId} key=${keyId} ` +
+        `until=${until.toISOString()}: ${error.message} — this process still ` +
+        `skips the key, but other instances will keep using it until it recovers.`,
+    );
+    return;
+  }
+
+  // The cached list carries `cooldownUntil`; leaving it stale would hide the
+  // cooldown from this process for up to the TTL, which is the one thing the
+  // in-memory marker is compensating for.
+  invalidatePoolKeyCache(accountId);
+}

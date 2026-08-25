@@ -33,6 +33,13 @@ function chain(result: { data: unknown; error: unknown }) {
   b.select = self;
   b.eq = self;
   b.order = self;
+  // ⚠ `update` was missing until K3 added a writer. Its absence did not fail
+  // loudly — `.update()` threw a TypeError that `persistCooldown`'s guard
+  // caught and reported as a write failure, so the test saw the right SHAPE
+  // (an error, logged, not thrown) for entirely the wrong reason. A stub that
+  // is incomplete in the direction the code is defensive about is worse than
+  // no stub at all.
+  b.update = self;
   b.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
     Promise.resolve(result).then(res, rej);
   return b;
@@ -208,5 +215,66 @@ describe("poolKeyToCredentials", () => {
     const [key] = await listPoolKeys("acct-a");
     poolKeyToCredentials(account, key);
     expect(account.keyId).toBe("ACCOUNT_DEFAULT_KEY");
+  });
+});
+
+describe("persistCooldown — C2's batch-close lesson, applied before it bites", () => {
+  it("writes the deadline to the row", async () => {
+    const { persistCooldown } = await import("./repository");
+    const until = new Date("2030-01-01T00:00:00.000Z");
+    await persistCooldown("acct-a", "K1", until);
+    expect(fromSpy).toHaveBeenCalledWith("asc_account_keys");
+  });
+
+  it("⚠ INSPECTS the error instead of firing and forgetting", async () => {
+    // C2 found the batch-close UPDATE discarding its result, on a table
+    // nothing SELECTs — so a rejected write vanished. This table has the
+    // same property: only the pool reads it, every 30 seconds. A silent
+    // failure means every instance keeps rotating onto a refusing key with
+    // nothing in the logs.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    queryResult = { data: null, error: { message: "permission denied" } };
+    const { persistCooldown } = await import("./repository");
+
+    await persistCooldown("acct-a", "K1", new Date());
+
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("permission denied"));
+    expect(err).toHaveBeenCalledWith(expect.stringContaining("acct-a"));
+    err.mockRestore();
+  });
+
+  it("⚠ but NEVER THROWS — a failed audit write must not become a second error", async () => {
+    // The caller is mid-429 and about to throw a rate-limit error. Replacing
+    // that with a DB error would swap a diagnosable problem for a confusing
+    // one, and every stop latch keys on `instanceof AppleRateLimitError`.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    queryResult = { data: null, error: { message: "nope" } };
+    const { persistCooldown } = await import("./repository");
+    await expect(persistCooldown("acct-a", "K1", new Date())).resolves.toBeUndefined();
+  });
+
+  it("⚠ survives iapDb() THROWING, not just returning an error", async () => {
+    // `iapDb()` throws synchronously when Supabase env vars are missing.
+    // Guarding only the returned `{ error }` leaves that escape route open —
+    // and the throw would travel out through appleFetch's 429 branch and
+    // REPLACE the AppleRateLimitError with a configuration error.
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    iapDb.mockImplementation(() => {
+      throw new Error("Missing SUPABASE_URL");
+    });
+    const { persistCooldown } = await import("./repository");
+    await expect(persistCooldown("acct-a", "K1", new Date())).resolves.toBeUndefined();
+  });
+
+  it("invalidates the cache so this process stops handing the key out too", async () => {
+    queryResult = { data: [row()], error: null };
+    const { listPoolKeys, persistCooldown } = await import("./repository");
+    await listPoolKeys("acct-a");
+    queryResult = { data: null, error: null };
+    await persistCooldown("acct-a", "K1", new Date());
+    queryResult = { data: [row()], error: null };
+    await listPoolKeys("acct-a");
+    // 1 initial read + 1 update + 1 re-read = the cache was dropped.
+    expect(fromSpy).toHaveBeenCalledTimes(3);
   });
 });
