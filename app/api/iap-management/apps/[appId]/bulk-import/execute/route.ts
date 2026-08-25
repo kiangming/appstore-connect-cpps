@@ -72,7 +72,6 @@ import {
 } from "@/lib/iap-management/apple/pricing-orchestration";
 import { pollIapReadyForPricing } from "@/lib/iap-management/apple/poll-iap-ready";
 import { checkSubmitEligibility } from "@/lib/iap-management/apple/submit-eligibility";
-import { withRetry } from "@/lib/iap-management/apple/fetch";
 import { describeAppleError } from "@/lib/iap-management/bulk-import/apple-error-descriptor";
 import { iapDb } from "@/lib/iap-management/db";
 import {
@@ -88,7 +87,13 @@ import {
 } from "@/lib/iap-management/bulk-import/conflict-resolution";
 import type { UsdTierEntry } from "@/lib/iap-management/queries/price-tiers";
 import { listUsdTiersForSource } from "@/lib/iap-management/queries/templates";
-import { withConcurrency } from "@/lib/iap-management/concurrency";
+import { runStoppablePool } from "@/lib/iap-management/stoppable-pool";
+import {
+  createRetryCounters,
+  trackedWithRetry,
+  rowExhaustedRateLimitBudget,
+  type RetryCounters,
+} from "@/lib/iap-management/bulk-import/retry-counters";
 import {
   createBatchPricePointCatalog,
   type BatchPricePointCatalog,
@@ -124,58 +129,23 @@ const CONCURRENCY_LIMIT = 2;
  */
 const INTER_ROW_DELAY_MS = 1000;
 
-/**
- * Per-row 429-aware retry telemetry. Mutated by `trackedWithRetry` and
- * persisted to `actions_log.payload` for each row so Manager can audit
- * rate-limit impact after a batch completes (and so future Cycle 40
- * telemetry can roll up batch-level statistics).
- */
-interface RetryCounters {
-  rate429_count: number;
-  retry_attempts: number;
-  backoff_total_ms: number;
-  longest_backoff_ms: number;
-}
-
-function createRetryCounters(): RetryCounters {
-  return {
-    rate429_count: 0,
-    retry_attempts: 0,
-    backoff_total_ms: 0,
-    longest_backoff_ms: 0,
-  };
-}
-
-/**
- * Thin wrapper around `withRetry` that mutates a counters bag in place
- * each time the 429 backoff path fires. Pass the SAME counters instance
- * through every Apple call in a single row's orchestration so the
- * per-row audit captures cumulative retry impact across all stages
- * (create + state + locales + screenshot + pricing + availability).
- */
-function trackedWithRetry<T>(
-  counters: RetryCounters,
-  fn: () => Promise<T>,
-): Promise<T> {
-  return withRetry(fn, {
-    onRetry: ({ delayMs }) => {
-      counters.rate429_count += 1;
-      counters.retry_attempts += 1;
-      counters.backoff_total_ms += delayMs;
-      if (delayMs > counters.longest_backoff_ms) {
-        counters.longest_backoff_ms = delayMs;
-      }
-    },
-  });
-}
-
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 interface PerIapResult {
   product_id: string;
   disposition: "CREATE" | "OVERWRITE" | "SKIP" | "ERROR";
-  status: "SUCCESS" | "ERROR" | "SKIPPED";
+  /**
+   * ⚠ `SKIPPED` and `NOT_ATTEMPTED` ARE NOT THE SAME SKIP.
+   *   SKIPPED       — the Manager chose SKIP for this product at conflict
+   *                   resolution. A decision, made before the run started.
+   *   NOT_ATTEMPTED — the batch stopped before this row because an Apple 429
+   *                   survived retry. **Nothing was sent for it**, so it is
+   *                   the bucket safe to re-run.
+   * `conflict-resolution.test.ts` (22 tests) pins the first meaning; nothing
+   * may borrow it for the second.
+   */
+  status: "SUCCESS" | "ERROR" | "SKIPPED" | "NOT_ATTEMPTED";
   apple_iap_id?: string;
   failed_locales?: string[];
   screenshot_uploaded?: boolean;
@@ -249,6 +219,11 @@ interface ExecuteSummary {
   succeeded: number;
   failed: number;
   skipped: number;
+  /** C2 — rows the batch never dispatched because an Apple 429 survived
+   *  retry. Counted apart from `failed`: nothing was attempted, so nothing
+   *  failed. Apart from `skipped` too — that one is the Manager's own
+   *  conflict-resolution choice, made before the run started. */
+  not_attempted: number;
   results: PerIapResult[];
   /** Hotfix 26 — batch-level Apple 429 telemetry roll-up. Sums per-row
    *  counters so the UI can render a single chip "X retries, Yms backoff
@@ -542,10 +517,71 @@ async function runExecute(
     territoryCatalogue,
   );
 
-  const results: PerIapResult[] = await withConcurrency(
-    resolved.decisions,
-    CONCURRENCY_LIMIT,
-    async (decision, index) => {
+  // ⚠ C2 — STOP DISPATCHING once a 429 proves the remaining budget is gone.
+  //
+  // ⚠ THE SIGNAL ARRIVES ON A RESULT, NEVER AS A THROW. `orchestrateOne` has
+  // no path that throws: every exit is `return await persistResult(...)`,
+  // including the fatal create failure. So `shouldStop` — which only sees
+  // thrown errors — would be deaf to 100% of this row's Apple traffic. The
+  // whole signal rides back on `PerIapResult.rate_limit.exhausted`, set at
+  // the `trackedWithRetry` choke point. (The xlsx export needs both
+  // predicates because its detail read throws and its price read does not;
+  // here only the second shape exists.)
+  //
+  // ⚠ WHAT THIS DOES **NOT** DO. A row already in flight runs to completion,
+  // and a Bulk Import row is not one request — it is create + N localizations
+  // + screenshot + pricing + availability + submit, each retried up to 4
+  // times, and the localization loop keeps going after a failure. So one
+  // in-flight row can still spend ~150 requests after the latch falls, and
+  // with CONCURRENCY_LIMIT=2 the ceiling is roughly twice that. C2 stops the
+  // spread BETWEEN rows; stopping it WITHIN a row is C3 and is deliberately
+  // not attempted here.
+  // ⚠ Items carry their own index. `runStoppablePool`'s callbacks receive only
+  // the item, and the trailing-sleep skip below needs to know whether this is
+  // the last decision. Pairing up front beats `indexOf` inside `run` (O(n²),
+  // and reference-identity-dependent for no reason).
+  const indexedDecisions = resolved.decisions.map((decision, index) => ({
+    decision,
+    index,
+  }));
+
+  const { results } = await runStoppablePool<
+    (typeof indexedDecisions)[number],
+    PerIapResult
+  >({
+    items: indexedDecisions,
+    concurrency: CONCURRENCY_LIMIT,
+
+    // ⚠ Rule 2 is satisfied by omission: `shouldStop` can never fire because
+    // `run` never throws. Kept explicit rather than absent so a future reader
+    // does not "fix" it by wiring the wrong signal in.
+    shouldStop: () => false,
+
+    shouldStopOnResult: rowExhaustedRateLimitBudget,
+
+    // ⚠ Rule 1: checked before `run`, so these rows made ZERO Apple calls and
+    // wrote ZERO audit rows. That is what makes them safe to re-run — and why
+    // `persistResult` is deliberately NOT called for them.
+    skipped: ({ decision }) => ({
+      product_id: decision.source.product_id,
+      // The disposition the Manager resolved to — reported unchanged, because
+      // it is still what WOULD have happened. Only the status says it didn't.
+      disposition: decision.disposition,
+      status: "NOT_ATTEMPTED" as const,
+      error:
+        "Batch stopped before this row — Apple rate limit reached. Nothing was sent; safe to re-run.",
+    }),
+
+    // Unreachable in practice (see `shouldStop` above), but the pool requires
+    // it and a silent `undefined` here would be worse than an honest row.
+    onError: async ({ decision }, err) => ({
+      product_id: decision.source.product_id,
+      disposition: "ERROR" as const,
+      status: "ERROR" as const,
+      error: err instanceof Error ? err.message : String(err),
+    }),
+
+    run: async ({ decision, index }) => {
       const result = await orchestrateOne({
         creds,
         decision,
@@ -577,12 +613,15 @@ async function runExecute(
       }
       return result;
     },
-  );
+  });
 
   // ── Tally + close audit batch ───────────────────────────────────────────
   const succeeded = results.filter((r) => r.status === "SUCCESS").length;
   const skipped = results.filter((r) => r.status === "SKIPPED").length;
   const failed = results.filter((r) => r.status === "ERROR").length;
+  const notAttempted = results.filter(
+    (r) => r.status === "NOT_ATTEMPTED",
+  ).length;
 
   // Hotfix 26 — batch-level rate-limit roll-up. Aggregates per-row 429
   // telemetry so the wizard summary + the batch audit row both surface
@@ -606,7 +645,20 @@ async function runExecute(
     } as RetryCounters & { rows_throttled: number },
   );
 
-  await db
+  // ⚠ THIS UPDATE USED TO BE FIRE-AND-FORGET, and that is the trap C2 has to
+  // close before it can trust a new column.
+  //
+  // The INSERT that opens the batch checks its error and aborts the request.
+  // This one did not, and NOTHING IN THE APP READS `import_batches` — it is a
+  // hand-queried audit trail. So a rejected write left the row stuck at
+  // IN_PROGRESS with every counter at zero, permanently, with no error and no
+  // log. That is the KB §9 P2 shape ("the CHECK constraint fails silently"),
+  // and it is exactly how a code-before-migration deploy would look: silent.
+  //
+  // `not_attempted_count` needs migration 20260825000000 to exist. If that
+  // migration has not been applied, this write now SAYS SO instead of
+  // vanishing.
+  const batchClose = await db
     .from("import_batches")
     .update({
       status: failed === 0 ? "COMPLETE" : "COMPLETE", // COMPLETE captures partial too
@@ -616,8 +668,23 @@ async function runExecute(
       ).length,
       skipped_count: skipped,
       failed_count: failed,
+      not_attempted_count: notAttempted,
     })
     .eq("id", batchId);
+
+  if (batchClose.error) {
+    // ⚠ LOGGED, NOT THROWN. Every row's real work is already done and already
+    // persisted to `iaps` / `actions_log`; failing the request here would
+    // report a batch that actually landed as a batch that failed, which is a
+    // worse lie than a missing audit row. The Manager still gets the results.
+    await log(
+      "iap-bulk-execute",
+      `audit batch close FAILED batch_id=${batchId}: ${batchClose.error.message} ` +
+        `(counts lost: created=${succeeded} skipped=${skipped} failed=${failed} not_attempted=${notAttempted}). ` +
+        `If this mentions "not_attempted_count", migration 20260825000000 has not been applied.`,
+      "ERROR",
+    );
+  }
 
   await db.from("actions_log").insert({
     batch_id: batchId,
@@ -626,7 +693,7 @@ async function runExecute(
     payload: {
       app_id: ctx.params.appId,
       total: parsed.items.length,
-      counts: { succeeded, skipped, failed },
+      counts: { succeeded, skipped, failed, not_attempted: notAttempted },
       conflict_counts: resolved.counts,
       // Hotfix 26 — batch-level 429 telemetry for post-run audit.
       rate_limit: rate_limit_total,
@@ -652,6 +719,7 @@ async function runExecute(
     succeeded,
     failed,
     skipped,
+    not_attempted: notAttempted,
     results,
     rate_limit_total,
   };

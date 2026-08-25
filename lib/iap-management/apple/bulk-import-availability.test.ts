@@ -205,7 +205,7 @@ describe("STRUCTURAL — getAllTerritoryIds is not reachable from the row body",
     expect(hits).toHaveLength(2);
   });
 
-  it("⚠ there is EXACTLY ONE call, and it sits before withConcurrency", () => {
+  it("⚠ there is EXACTLY ONE call, and it sits before the row loop", () => {
     const src = stripComments(readFileSync(routePath, "utf8"));
 
     // ⚠ COUNT FIRST. An earlier version of this test used indexOf alone, and
@@ -217,7 +217,22 @@ describe("STRUCTURAL — getAllTerritoryIds is not reachable from the row body",
     expect(calls).toHaveLength(1);
 
     const callIdx = src.indexOf("await getAllTerritoryIds(");
-    const loopIdx = src.indexOf("await withConcurrency(");
+    // ⚠ ANCHORED ON WHICHEVER BOUNDED-CONCURRENCY PRIMITIVE THE ROUTE USES.
+    // This read `indexOf("await withConcurrency(")` until C2 swapped the row
+    // loop to `runStoppablePool` (to gain a rate-limit stop latch). The
+    // invariant being guarded never changed — the territory catalogue is
+    // resolved ONCE, before any row dispatches — but the assertion had
+    // hard-coded the loop's NAME, so a rename read as a violation. Matching
+    // either primitive keeps the guard pointed at the rule instead of at the
+    // spelling; if a future refactor introduces a third, this fails loudly
+    // (loopIdx === -1) rather than silently passing.
+    const loopIdx = [
+      "await runStoppablePool<",
+      "await withConcurrency(",
+    ]
+      .map((needle) => src.indexOf(needle))
+      .filter((i) => i > -1)
+      .sort((a, b) => a - b)[0] ?? -1;
     const rowFnIdx = src.indexOf("async function orchestrateOne");
 
     expect(callIdx).toBeGreaterThan(-1);

@@ -9,6 +9,7 @@ import {
   FileSpreadsheet,
   CheckCircle,
   AlertCircle,
+  HelpCircle,
   XCircle,
   Loader2,
   ArrowRight,
@@ -95,6 +96,9 @@ interface ExecuteResult {
   succeeded: number;
   failed: number;
   skipped: number;
+  /** C2 — rows the batch never dispatched (Apple 429 survived retry).
+   *  Optional so an older server response still renders. */
+  not_attempted?: number;
   results: Array<{
     product_id: string;
     status: "SUCCESS" | "ERROR" | "SKIPPED";
@@ -1317,6 +1321,10 @@ function Step4Result({
   // failures past the fold went unnoticed. Scroll-into-view of the first
   // failure row + the escalated error toast together make failures
   // unmissable.
+  // ⚠ `?? 0` so a response predating C2 renders exactly as it does today
+  // (three tiles, no banner) instead of "undefined not sent".
+  const notAttempted = result.not_attempted ?? 0;
+
   const firstErrorRef = useRef<HTMLTableRowElement | null>(null);
   useEffect(() => {
     if (result.failed > 0 && firstErrorRef.current) {
@@ -1422,11 +1430,41 @@ function Step4Result({
         </div>
       )}
 
-      <div className="grid grid-cols-3 gap-3 mb-4">
+      {/* ⚠ THE TILES MUST SUM TO `result.total`, and before C2 a stopped
+          batch broke that silently: every tile reads a server counter rather
+          than deriving from `results`, so rows in a status no tile knew about
+          simply vanished from the arithmetic. A fourth tile is used rather
+          than folding into "Skipped" — those are two different facts and the
+          server type keeps them apart for the same reason (see
+          PerIapResult.status). The tile is conditional so clean runs keep the
+          familiar three-up layout. */}
+      <div
+        className={`grid gap-3 mb-4 ${
+          notAttempted > 0 ? "grid-cols-4" : "grid-cols-3"
+        }`}
+      >
         <Tally label="Succeeded" value={result.succeeded} color="emerald" />
         <Tally label="Skipped" value={result.skipped} color="slate" />
         <Tally label="Failed" value={result.failed} color="amber" />
+        {notAttempted > 0 && (
+          <Tally label="Not sent" value={notAttempted} color="slate" />
+        )}
       </div>
+
+      {notAttempted > 0 && (
+        <div className="mb-4 rounded-lg border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+          <p className="font-medium">
+            Apple&apos;s rate limit stopped this batch early.
+          </p>
+          <p className="text-[11px] mt-0.5 text-amber-700 dark:text-amber-300/80">
+            Nothing was sent to Apple for the {notAttempted} row
+            {notAttempted === 1 ? "" : "s"} marked{" "}
+            <span className="font-medium">not sent</span> — no IAP was created
+            or changed for them. Wait a few minutes and re-run the import with
+            those rows; the rows above are unaffected.
+          </p>
+        </div>
+      )}
 
       {/* Hotfix 26 — Apple rate-limit chip. Renders only when Apple
           actually throttled this batch; suppressed for clean runs so
@@ -1434,9 +1472,15 @@ function Step4Result({
       {result.rate_limit_total &&
         result.rate_limit_total.rate429_count > 0 && (
           <div className="mb-4 rounded-lg border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+            {/* ⚠ "every row recovered" WAS A HARD CLAIM, and it stopped being
+                true the moment a 429 could survive the retry curve. Hotfix 26
+                wrote it when exhaustion had nowhere to be recorded; C2 records
+                it, so the sentence has to branch on the data instead of
+                asserting the happy case. */}
             <p className="font-medium">
-              Apple ASC throttled this batch — every row recovered via
-              exponential backoff.
+              {notAttempted > 0
+                ? "Apple ASC throttled this batch — and the retry budget ran out before it finished."
+                : "Apple ASC throttled this batch — every row recovered via exponential backoff."}
             </p>
             <p className="text-[11px] mt-0.5 text-amber-700 dark:text-amber-300/80">
               {result.rate_limit_total.rows_throttled} of {result.total} rows
@@ -1725,7 +1769,19 @@ export function PriceBadge({
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
+/**
+ * ⚠ THE FALLBACK IS LOUD ON PURPOSE. A status the UI has never heard of means
+ * the server shipped ahead of this component — a real deployment fact a
+ * Manager should be able to see and report, not something to paper over by
+ * borrowing another status's colour. Fuchsia + a question mark is chosen to
+ * be obviously wrong on sight; it can never be mistaken for a normal outcome.
+ */
+const UNKNOWN_STATUS_STYLE = {
+  cls: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-300 border-dashed",
+  icon: HelpCircle,
+};
+
+export function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { cls: string; icon: typeof CheckCircle }> = {
     SUCCESS: {
       cls: "bg-emerald-50 text-emerald-700 border-emerald-200",
@@ -1739,15 +1795,30 @@ function StatusBadge({ status }: { status: string }) {
       cls: "bg-red-50 text-red-700 border-red-200",
       icon: XCircle,
     },
+    // C2 — nothing was sent for this row. Slate like SKIPPED because neither
+    // is a failure, but its own entry: the label below prints "not sent", and
+    // the banner above the table explains that it is safe to re-run.
+    NOT_ATTEMPTED: {
+      cls: "bg-slate-100 text-slate-600 border-slate-200 border-dashed",
+      icon: AlertCircle,
+    },
   };
-  const conf = map[status] ?? map.SKIPPED;
+  // ⚠ NO `?? map.SKIPPED`. That fallback made every status the UI did not
+  // know about wear SKIPPED's slate badge — so a NOT_ATTEMPTED row (nothing
+  // sent, safe to re-run) rendered identically to a row the Manager had
+  // deliberately skipped. The server type keeps those two apart on purpose;
+  // borrowing another status's styling undoes that in the one place a person
+  // actually looks. An unknown status now looks unknown.
+  const conf = map[status] ?? UNKNOWN_STATUS_STYLE;
   const Icon = conf.icon;
+  // "NOT_ATTEMPTED" reads as jargon in a 10px badge; "not sent" is the fact.
+  const label = status === "NOT_ATTEMPTED" ? "not sent" : status.toLowerCase();
   return (
     <span
       className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${conf.cls}`}
     >
       <Icon className="h-3 w-3" />
-      {status.toLowerCase()}
+      {label}
     </span>
   );
 }
