@@ -90,6 +90,11 @@ import type { UsdTierEntry } from "@/lib/iap-management/queries/price-tiers";
 import { listUsdTiersForSource } from "@/lib/iap-management/queries/templates";
 import { runStoppablePool } from "@/lib/iap-management/stoppable-pool";
 import {
+  rollUpRowOutcome,
+  type RowStages,
+  type StageState,
+} from "@/lib/iap-management/bulk-import/row-outcome";
+import {
   createRetryCounters,
   trackedWithRetry,
   rowExhaustedRateLimitBudget,
@@ -156,7 +161,7 @@ function markPricingRateLimit(
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-interface PerIapResult {
+export interface PerIapResult {
   product_id: string;
   disposition: "CREATE" | "OVERWRITE" | "SKIP" | "ERROR";
   /**
@@ -169,7 +174,17 @@ interface PerIapResult {
    * `conflict-resolution.test.ts` (22 tests) pins the first meaning; nothing
    * may borrow it for the second.
    */
-  status: "SUCCESS" | "ERROR" | "SKIPPED" | "NOT_ATTEMPTED";
+  status: "SUCCESS" | "PARTIAL" | "ERROR" | "SKIPPED" | "NOT_ATTEMPTED";
+  /**
+   * C3 — what happened at each stage. ⚠ THE ROW'S STATUS IS DERIVED FROM
+   * THIS, never asserted alongside it: `rollUpRowOutcome` is the only thing
+   * that decides SUCCESS vs PARTIAL, so the map and the status cannot
+   * disagree. Absent on rows that never reached the stages (ERROR at create,
+   * SKIPPED by the Manager, NOT_ATTEMPTED by the latch).
+   */
+  stages?: RowStages;
+  /** One readable sentence built from `stages` — [Q-C3.partial]. */
+  summary?: string;
   apple_iap_id?: string;
   failed_locales?: string[];
   screenshot_uploaded?: boolean;
@@ -237,12 +252,15 @@ interface PerIapResult {
   rate_limit?: RetryCounters;
 }
 
-interface ExecuteSummary {
+export interface ExecuteSummary {
   batch_id: string;
   total: number;
   succeeded: number;
   failed: number;
   skipped: number;
+  /** C3 — rows created/updated on Apple but missing at least one stage.
+   *  Neither success nor failure; the stage map on each row says what. */
+  partial: number;
   /** C2 — rows the batch never dispatched because an Apple 429 survived
    *  retry. Counted apart from `failed`: nothing was attempted, so nothing
    *  failed. Apart from `skipped` too — that one is the Manager's own
@@ -641,6 +659,10 @@ async function runExecute(
 
   // ── Tally + close audit batch ───────────────────────────────────────────
   const succeeded = results.filter((r) => r.status === "SUCCESS").length;
+  // ⚠ Counted apart from BOTH. A PARTIAL row is not a success (something is
+  // missing) and not a failure (the IAP exists on Apple and most stages
+  // landed). Folding it either way loses the one fact the Manager needs.
+  const partial = results.filter((r) => r.status === "PARTIAL").length;
   const skipped = results.filter((r) => r.status === "SKIPPED").length;
   const failed = results.filter((r) => r.status === "ERROR").length;
   const notAttempted = results.filter(
@@ -686,9 +708,18 @@ async function runExecute(
     .from("import_batches")
     .update({
       status: failed === 0 ? "COMPLETE" : "COMPLETE", // COMPLETE captures partial too
-      created_count: succeeded,
+      // ⚠ PARTIAL included in BOTH counters below. The row DID write to
+      // Apple, just not completely; excluding it would make the audit
+      // under-report writes that really happened — the same reason the
+      // `iaps` upsert counts it. `created_count` needs `+ partial` for the
+      // extra reason that it reads the narrowed `succeeded`: before C3 that
+      // variable meant "reached the end of the pipeline", so leaving it bare
+      // would quietly shrink a counter C3 was never meant to touch.
+      created_count: succeeded + partial,
       overwritten_count: results.filter(
-        (r) => r.status === "SUCCESS" && r.disposition === "OVERWRITE",
+        (r) =>
+          (r.status === "SUCCESS" || r.status === "PARTIAL") &&
+          r.disposition === "OVERWRITE",
       ).length,
       skipped_count: skipped,
       failed_count: failed,
@@ -704,7 +735,7 @@ async function runExecute(
     await log(
       "iap-bulk-execute",
       `audit batch close FAILED batch_id=${batchId}: ${batchClose.error.message} ` +
-        `(counts lost: created=${succeeded} skipped=${skipped} failed=${failed} not_attempted=${notAttempted}). ` +
+        `(counts lost: created=${succeeded + partial} skipped=${skipped} failed=${failed} not_attempted=${notAttempted}). ` +
         `If this mentions "not_attempted_count", migration 20260825000000 has not been applied.`,
       "ERROR",
     );
@@ -717,7 +748,7 @@ async function runExecute(
     payload: {
       app_id: ctx.params.appId,
       total: parsed.items.length,
-      counts: { succeeded, skipped, failed, not_attempted: notAttempted },
+      counts: { succeeded, partial, skipped, failed, not_attempted: notAttempted },
       conflict_counts: resolved.counts,
       // Hotfix 26 — batch-level 429 telemetry for post-run audit.
       rate_limit: rate_limit_total,
@@ -732,8 +763,32 @@ async function runExecute(
   });
 
   // ── Hub-tracking terminal status (SUCCESS/FAILED/PARTIAL) ──────────────
+  //
+  // ⚠ [Q-C3.tracking-frozen] — DO NOT MAKE THIS READ `partial`. HUB TRACKING
+  // IS DELIBERATELY BLIND TO C3.
+  //
+  // Manager froze every tracking/batch-level status for C3: the row-level
+  // stage map is the whole deliverable, and the Hub keeps saying exactly
+  // what it said before. This is not an oversight to be "fixed" later by
+  // whoever notices that a batch with half-built IAPs still reads SUCCESS —
+  // it is the decision. Reopen it with the Manager, not in code.
+  //
+  // ⚠ WHY `succeeded + partial` AND NOT `succeeded`. This is the part that
+  // is easy to get wrong, and deleting a line does not achieve it. Before
+  // C3 both terminal returns in `runCreate`/`runOverwrite` were an
+  // unconditional `status: "SUCCESS"`, so the old `succeeded` meant "rows
+  // that reached the end of the pipeline" — which C3 split in two. Passing
+  // the narrowed `succeeded` would silently change the mapping's OUTPUT: a
+  // batch of one now-PARTIAL row plus one ERROR row used to be
+  // (succeeded=1, failed=1) → PARTIAL and would become (0, 1) → FAILED.
+  // Re-widening the input is what actually holds the status still.
+  // `partial-vs-latch.test.ts` pins this against a pre-C3 fixture table.
   const total = parsed.items.length;
-  const terminal = computeBulkImportTerminalStatus({ total, succeeded, failed });
+  const terminal = computeBulkImportTerminalStatus({
+    total,
+    succeeded: succeeded + partial,
+    failed,
+  });
   tracking.status = terminal.status;
   tracking.errorMessage = terminal.errorMessage;
 
@@ -741,6 +796,7 @@ async function runExecute(
     batch_id: batchId,
     total,
     succeeded,
+    partial,
     failed,
     skipped,
     not_attempted: notAttempted,
@@ -866,7 +922,38 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
 
   // 2. Localizations
   const failedLocales: string[] = [];
-  for (const loc of item.localizations) {
+  let localesDone = 0;
+  let localesStoppedByStop = 0;
+  for (const [locIndex, loc] of item.localizations.entries()) {
+    // ⚠ THE LOOP STOPS ON AN EXHAUSTED BUDGET, AND ONLY ON THAT.
+    //
+    // Until C3 this loop had one `catch` for every kind of failure and always
+    // `continue`d. A 429 that had already burned four retries on locale #k
+    // therefore marched on through #k+1…#39, each costing four more attempts
+    // — roughly 156 requests fired at an API that had just refused, for one
+    // row. C2's latch could not help: it acts between rows, and this is
+    // inside one.
+    //
+    // ⚠ THE FLAG IS ALREADY SET; nothing new is wired here. `trackedWithRetry`
+    // records `exhausted` at the choke point and re-throws, the catch below
+    // runs, and `args.rateCounters` has been in scope all along. What was
+    // missing was somebody reading it.
+    //
+    // ⚠ AND THIS IS THE BOUNDARY THAT MATTERS: only a spent budget stops the
+    // loop. A single locale failing validation — a description too long, an
+    // unsupported locale, a duplicate — says nothing about the NEXT locale and
+    // still `continue`s, exactly as before. Stopping the row for one bad
+    // locale would turn one bad line into a broken row (stoppable-pool Rule 2,
+    // one layer down).
+    if (args.rateCounters.exhausted) {
+      localesStoppedByStop = item.localizations.length - locIndex;
+      await log(
+        "iap-bulk-execute",
+        `locale loop STOPPED product=${item.product_id} after ${localesDone}/${item.localizations.length}; ${localesStoppedByStop} not sent (Apple rate limit)`,
+        "WARN",
+      );
+      break;
+    }
     try {
       await trackedWithRetry(args.rateCounters, () =>
         createInAppPurchaseLocalization(creds, {
@@ -876,6 +963,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
           description: loc.description,
         }),
       );
+      localesDone += 1;
     } catch (err) {
       failedLocales.push(loc.locale);
       await log(
@@ -910,7 +998,14 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   // RESULT instead (`markPricingRateLimit` below) — the same shape the xlsx
   // export uses for its price read, and the same one C2 needed because
   // `orchestrateOne` does not throw either.
-  const pricing = await applyPricingSchedule({
+  // ⚠ Skipped once the budget is spent, for the same reason as the stages
+  // below it. `skipped-not-ready` is reused rather than inventing a kind:
+  // the orchestrator already treats an unready IAP as "did not run", which is
+  // exactly what this is, and the stage map records the real reason.
+  const pricingSkippedByStop = args.rateCounters.exhausted;
+  const pricing: PricingOutcome = pricingSkippedByStop
+    ? { kind: "skipped-not-ready", reason: "apple-rate-limit-budget-spent", poll_attempts: 0, poll_total_ms: 0 }
+    : await applyPricingSchedule({
     creds,
     appleIapId,
     localTierId: resolvedTier,
@@ -950,7 +1045,14 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
       break;
     }
   }
-  if (screenshotFile) {
+  // ⚠ Every stage from here on is skipped once the budget is spent. They
+  // would each fire at an API that has already refused, and their failures
+  // would then be indistinguishable from real ones — "we asked and Apple said
+  // no" vs "we never asked". The row records the difference instead.
+  let screenshotAttempted = false;
+  let screenshotErr: string | undefined;
+  if (screenshotFile && !args.rateCounters.exhausted) {
+    screenshotAttempted = true;
     try {
       const reserved = await trackedWithRetry(args.rateCounters, () =>
         reserveInAppPurchaseScreenshot(
@@ -972,9 +1074,10 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
       );
       screenshotOk = true;
     } catch (err) {
+      screenshotErr = errMsg(err);
       await log(
         "iap-bulk-execute",
-        `screenshot fail on product=${item.product_id}: ${errMsg(err)}`,
+        `screenshot fail on product=${item.product_id}: ${screenshotErr}`,
         "WARN",
       );
     }
@@ -989,19 +1092,24 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   const { selection, catalogue } = args.availability;
   let availabilitySet = false;
   let availabilityErr: string | undefined;
-  try {
-    // ⚠ THE SINGLE WRITE PATH (SC1). Not a fifth POST site.
-    await trackedWithRetry(args.rateCounters, () =>
-      setAvailabilityTerritories(creds, appleIapId, selection),
-    );
-    availabilitySet = true;
-  } catch (err) {
-    availabilityErr = errMsg(err);
-    await log(
-      "iap-bulk-execute",
-      `availability set failed on product=${item.product_id}: ${availabilityErr}`,
-      "WARN",
-    );
+  // ⚠ A plain guard, not a throw-to-skip. Skipping is not an error and must
+  // not travel through the catch that reports errors.
+  const availabilityAttempted = !args.rateCounters.exhausted;
+  if (availabilityAttempted) {
+    try {
+      // ⚠ THE SINGLE WRITE PATH (SC1). Not a fifth POST site.
+      await trackedWithRetry(args.rateCounters, () =>
+        setAvailabilityTerritories(creds, appleIapId, selection),
+      );
+      availabilitySet = true;
+    } catch (err) {
+      availabilityErr = errMsg(err);
+      await log(
+        "iap-bulk-execute",
+        `availability set failed on product=${item.product_id}: ${availabilityErr}`,
+        "WARN",
+      );
+    }
   }
   // ⚠ Action type from WHAT WAS SENT, never from the surface or the button
   // (SC2, the status principle). Derived by the SHARED helper, which also
@@ -1090,10 +1198,82 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     }
   }
 
+  // ⚠ THE STAGE MAP IS ASSEMBLED FROM WHAT EACH STAGE ACTUALLY RECORDED, and
+  // the row's status is then DERIVED from it. Before C3 this call passed a
+  // hard-coded `status: "SUCCESS"` while five of the six stages swallowed
+  // their own errors — so an IAP created on Apple with no localizations, no
+  // price and no screenshot reported as a clean success. That is the symptom
+  // KB §10.8 recorded under Hotfix 26; the cause was here.
+  //
+  // ⚠ SKIPPED_BY_STOP vs FAILED is decided by `exhausted`, not by whether a
+  // value is missing. A stage that never ran because the budget was spent is
+  // safe to re-run; a stage that ran and was refused is not the same fact.
+  const stoppedByBudget = args.rateCounters.exhausted;
+  const afterStop = (ok: boolean, ran: boolean): StageState =>
+    ran ? (ok ? "OK" : "FAILED") : stoppedByBudget ? "SKIPPED_BY_STOP" : "FAILED";
+
+  const stages: RowStages = {
+    create: { state: "OK" }, // a create failure returned ERROR far above
+    localizations: {
+      state:
+        item.localizations.length === 0
+          ? "NOT_APPLICABLE"
+          : localesStoppedByStop > 0
+            ? "SKIPPED_BY_STOP"
+            : failedLocales.length > 0
+              ? "FAILED"
+              : "OK",
+      done: localesDone,
+      total: item.localizations.length,
+      failed: failedLocales,
+      skippedByStop: localesStoppedByStop,
+    },
+    pricing: {
+      state:
+        pricing.kind === "set"
+          ? "OK"
+          : pricing.kind.startsWith("skipped-")
+            ? "NOT_APPLICABLE"
+            : stoppedByBudget && pricingOutcomeHitRateLimit(pricing)
+              ? "SKIPPED_BY_STOP"
+              : "FAILED",
+      outcome: pricing.kind,
+      ...("error" in pricing && pricing.error ? { error: pricing.error } : {}),
+    },
+    screenshot: {
+      // ⚠ `screenshotOk === false` used to mean two different things —
+      // "there was no file for this product" and "the upload broke" — and the
+      // row reported them identically. `screenshotFile` is what separates them.
+      state: !screenshotFile
+        ? "NOT_APPLICABLE"
+        : afterStop(screenshotOk, screenshotAttempted),
+      note: !screenshotFile ? "no-file" : screenshotOk ? "uploaded-new" : "failed",
+      ...(screenshotErr ? { error: screenshotErr } : {}),
+    },
+    availability: {
+      state: availabilitySet ? "OK" : afterStop(false, availabilityAttempted),
+      ...(availabilityErr ? { error: availabilityErr } : {}),
+    },
+    submit: {
+      state: !submitOutcome
+        ? "NOT_APPLICABLE"
+        : submitOutcome === "submitted"
+          ? "OK"
+          : submitOutcome === "deferred"
+            ? "NOT_APPLICABLE" // a state-guard deferral is not a failure
+            : "FAILED",
+      ...(submitOutcome ? { outcome: submitOutcome } : {}),
+      ...(submitError ? { error: submitError } : {}),
+    },
+  };
+  const rollUp = rollUpRowOutcome(stages);
+
   return await persistResult(args, {
     product_id: item.product_id,
     disposition: "CREATE",
-    status: "SUCCESS",
+    status: rollUp.status,
+    stages,
+    summary: rollUp.summary,
     apple_iap_id: appleIapId,
     failed_locales: failedLocales,
     screenshot_uploaded: screenshotOk,
@@ -1351,10 +1531,68 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     markPricingRateLimit(args.rateCounters, pricing);
   }
 
+  // ⚠ THE TWIN PATH GETS THE SAME TREATMENT, and it is not optional.
+  // OVERWRITE returned a hard-coded SUCCESS for exactly the same reason
+  // CREATE did, so a row whose localizations half-applied and whose pricing
+  // was refused reported clean. CLAUDE.md's twin-path rule exists because
+  // this project has repeatedly hardened one sibling and left the other.
+  //
+  // ⚠ THE MAP IS NOT IDENTICAL, BECAUSE THE PATH IS NOT. There is no create
+  // stage (the IAP already exists) and no availability/submit stage (Q5.A
+  // leaves existing IAPs alone) — those are NOT_APPLICABLE rather than
+  // silently absent, so "we did not do this" stays distinguishable from "this
+  // field is missing". Copying CREATE's map wholesale would be the
+  // twin-STRUCTURE mistake the same rule warns about.
+  const owTotalLocales = item.localizations.length;
+  const owStages: RowStages = {
+    create: { state: "NOT_APPLICABLE" },
+    localizations: {
+      state:
+        owTotalLocales === 0
+          ? "NOT_APPLICABLE"
+          : failedLocales.length > 0
+            ? "FAILED"
+            : "OK",
+      done: Math.max(0, owTotalLocales - failedLocales.length),
+      total: owTotalLocales,
+      failed: failedLocales,
+      skippedByStop: 0,
+    },
+    pricing: {
+      state: !pricing
+        ? "NOT_APPLICABLE"
+        : pricing.kind === "set"
+          ? "OK"
+          : pricing.kind.startsWith("skipped-")
+            ? "NOT_APPLICABLE"
+            : "FAILED",
+      ...(pricing ? { outcome: pricing.kind } : {}),
+      ...(pricing && "error" in pricing && pricing.error
+        ? { error: pricing.error }
+        : {}),
+    },
+    screenshot: {
+      // `delete-locked` is a documented non-fatal outcome (Apple refuses to
+      // delete the last screenshot), so it is not a failure.
+      state:
+        screenshotNote === "no-file"
+          ? "NOT_APPLICABLE"
+          : screenshotNote === "failed"
+            ? "FAILED"
+            : "OK",
+      note: screenshotNote,
+    },
+    availability: { state: "NOT_APPLICABLE" },
+    submit: { state: "NOT_APPLICABLE" },
+  };
+  const owRollUp = rollUpRowOutcome(owStages);
+
   const overwriteResult: PerIapResult = {
     product_id: item.product_id,
     disposition: "OVERWRITE",
-    status: "SUCCESS",
+    status: owRollUp.status,
+    stages: owStages,
+    summary: owRollUp.summary,
     apple_iap_id: appleIapId,
     failed_locales: failedLocales,
     screenshot_uploaded: screenshotOk,
@@ -1416,7 +1654,15 @@ async function persistResult(
   // actions_log payload (spread below) carry the counters.
   result = { ...result, rate_limit: { ...args.rateCounters } };
 
-  if (result.status === "SUCCESS" && result.apple_iap_id) {
+  // ⚠ PARTIAL COUNTS HERE. The IAP exists on Apple — that is what PARTIAL
+  // MEANS — so the local mirror has to learn about it. Gating the upsert on
+  // SUCCESS alone would leave a row that exists on Apple and not in
+  // `iap_mgmt.iaps`: the [SYNC-orphan-rows] problem pointing the other way,
+  // and created by the very change meant to make the row honest.
+  if (
+    (result.status === "SUCCESS" || result.status === "PARTIAL") &&
+    result.apple_iap_id
+  ) {
     // Upsert into iaps table — best-effort, surface only via log on conflict.
     try {
       await db
@@ -1469,7 +1715,11 @@ async function persistResult(
   // Separate audit row when the row also reached the SUBMIT stage. Keeps
   // bulk-wizard submit signals queryable independently of the per-row
   // create entry (Manager IAP.o.6c audit log discipline).
-  if (result.status === "SUCCESS" && result.submitted) {
+  // Same reasoning: a PARTIAL row can still have reached the submit stage.
+  if (
+    (result.status === "SUCCESS" || result.status === "PARTIAL") &&
+    result.submitted
+  ) {
     await db.from("actions_log").insert({
       batch_id: args.batchId,
       actor: args.actor,

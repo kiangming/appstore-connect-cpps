@@ -57,6 +57,7 @@ import {
   defaultPricingSource,
 } from "@/components/iap-management/iap-form/PricingSourceSelector";
 import type { PricingOutcome } from "@/lib/iap-management/apple/pricing-orchestration";
+import type { PerIapResult } from "@/app/api/iap-management/apps/[appId]/bulk-import/execute/route";
 import type { PricingSourceKind } from "@/lib/iap-management/validation";
 
 interface Props {
@@ -102,7 +103,19 @@ interface ExecuteResult {
   not_attempted?: number;
   results: Array<{
     product_id: string;
-    status: "SUCCESS" | "ERROR" | "SKIPPED";
+    /**
+     * ⚠ DERIVED, AND IT HAD ALREADY DRIFTED. This was hand-written as
+     * `"SUCCESS" | "ERROR" | "SKIPPED"` and was never updated when C2 added
+     * `NOT_ATTEMPTED` — TypeScript narrows a wider server value into a
+     * narrower client type across a `fetch` boundary without complaint, so
+     * the row simply arrived carrying a value this union said was
+     * impossible. Third instance of this bug in the arc ([PRICING-429] found
+     * three copies of `PricingOutcome["kind"]`), hence the derivation.
+     */
+    status: PerIapResult["status"];
+    /** C3 — per-stage map + one readable sentence. Rendered in chunk B. */
+    stages?: PerIapResult["stages"];
+    summary?: PerIapResult["summary"];
     disposition: string;
     apple_iap_id?: string;
     error?: string;
