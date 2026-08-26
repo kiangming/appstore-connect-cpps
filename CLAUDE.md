@@ -513,6 +513,32 @@ Push from HEAD; leave the local `main` alone.
 pushed — that is the guard working. Stop and report the output; do not rebase
 on a hunch.
 
+### Branch convention — one arc, one branch (Manager decision, 2026-08-26)
+
+```
+git checkout -b <arc-name>          # at the start of an arc
+…                                   # work, commit
+git push origin HEAD:main           # ship
+git checkout -b <next-arc-name>     # next arc starts from here
+git branch -d <arc-name>            # or delete the finished one
+```
+
+**Why a naming convention and not just the check above.** A branch whose name
+matches its contents is a **structural guard**, not documentation:
+`git log --oneline origin/main..HEAD` then reads as exactly the arc, and the
+mismatch that nearly shipped nothing on 2026-08-26 becomes visible the moment
+it appears rather than at the push. The destination check is the safety net —
+**it stops the consequence, it does not stop the mistake.** A long-lived branch
+carrying five arcs under the first arc's name is a name that lies a little more
+with every commit, and eventually somebody trusts it.
+
+⚠ **Do not rename mid-arc.** The name is set when the arc opens; if it turns
+out to be wrong, that is worth noticing rather than papering over.
+
+⚠ **Deleting the branch is part of finishing.** A local branch left behind
+after its arc shipped is the raw material for exactly this problem — it is the
+one lying around when the next arc needs somewhere to start.
+
 ### Migration checkpoint — blocks PUSH, not code
 
 When a change needs a schema migration applied by hand (Path G — Manager runs
