@@ -480,6 +480,39 @@ Before pushing to `origin/main`, run in order:
 
 If any step fails, fix the root cause — never `--no-verify` past a hook or skip a check.
 
+### Check the DESTINATION before every push, not just the code
+
+Two commands, before any push:
+
+```
+git branch --show-current
+git merge-base origin/main HEAD      # must equal origin/main for a clean FF
+```
+
+**The default destination is `origin/main`, and the way to reach it is:**
+
+```
+git push origin HEAD:main
+```
+
+⚠ **Do NOT `git push -u <working-branch> origin`.** The working branch in this
+repo is long-lived and its NAME GOES STALE: it is named after whichever arc
+created it, and several later arcs ride the same branch. Pushing it creates a
+remote branch named after a closed, unrelated arc — and, far worse, **the code
+never reaches `main`, so Railway never deploys it.** A green checklist plus a
+successful push would then read as "shipped" when nothing is live. This was
+caught once, at the push itself, by noticing the branch name did not match the
+arc (2026-08-26, availability mirror on `c3a-partial-stage-map`).
+
+⚠ **Do NOT `git checkout main && git merge`.** The local `main` in this repo
+drifts far behind `origin/main` (14 commits behind at the time of writing)
+because nothing uses it. Switching to it and merging drags that drift along.
+Push from HEAD; leave the local `main` alone.
+
+⚠ **Never `--force`.** A rejected non-fast-forward push means someone else
+pushed — that is the guard working. Stop and report the output; do not rebase
+on a hunch.
+
 ### Migration checkpoint — blocks PUSH, not code
 
 When a change needs a schema migration applied by hand (Path G — Manager runs
