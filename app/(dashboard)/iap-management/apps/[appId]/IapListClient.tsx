@@ -518,7 +518,7 @@ export function IapListClient({
           onClick={() => setExportWizardOpen(true)}
           disabled={exporting}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition disabled:opacity-50"
-          title="Export all IAPs (live from Apple) to xlsx"
+          title="Choose items, then countries, then export to xlsx"
         >
           {exporting ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />

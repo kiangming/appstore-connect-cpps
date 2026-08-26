@@ -1039,7 +1039,7 @@
           <a class="nav-item" data-page="apple-apps" data-keywords="apple apps danh sách applications">
             <span class="nav-item-label">Danh sách apps</span>
           </a>
-          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách export xlsx excel xuất file">
+          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách danh sach export xlsx excel xuất file xuat file export failures failure sheet reason rate limit not attempted partial giới hạn gioi han">
             <span class="nav-item-label">Danh sách IAPs</span>
           </a>
           <a class="nav-item" data-page="apple-new-iap" data-keywords="apple new iap tạo mới create">
@@ -1051,7 +1051,7 @@
           <a class="nav-item" data-page="apple-view-iap" data-keywords="apple view iap detail xem chi tiết">
             <span class="nav-item-label">Xem chi tiết IAP</span>
           </a>
-          <a class="nav-item" data-page="apple-bulk-import" data-keywords="apple bulk import wizard nhập hàng loạt excel csv">
+          <a class="nav-item" data-page="apple-bulk-import" data-keywords="apple bulk import wizard nhập hàng loạt nhap hang loat excel csv partial not sent chưa gửi chua gui rate limit giới hạn gioi han screenshot locked stage conflict dở dang do dang">
             <span class="nav-item-label">Bulk Import wizard</span>
             <span class="nav-badge">Chi tiết</span>
           </a>
@@ -1065,7 +1065,7 @@
           <a class="nav-item" data-page="apple-bulk-availabilities" data-keywords="apple bulk availabilities territories khu vực hàng loạt">
             <span class="nav-item-label">Bulk Availabilities</span>
           </a>
-          <a class="nav-item" data-page="apple-submit-batch" data-keywords="apple submit batch gửi duyệt review">
+          <a class="nav-item" data-page="apple-submit-batch" data-keywords="apple submit batch gửi duyệt gui duyet review not sent chưa gửi chua gui skipped rate limit giới hạn gioi han">
             <span class="nav-item-label">Submit batch</span>
           </a>
         </div>
@@ -1369,6 +1369,14 @@
                 <li><strong>Row warning</strong>: vàng, vẫn commit được nhưng cần xem lại.</li>
               </ul>
               <p>Chọn <strong>pricing source</strong> cho cả batch và toggle <strong>Submit to Apple Review after create</strong> ở bước này. Nút <strong>Execute</strong> hiển thị đúng số IAP sẽ tạo.</p>
+              <p><strong>Dòng conflict có ghi chú lần import trước.</strong> Nếu một Product ID đã tồn tại và
+              lần import gần nhất để nó dở dang, ngay dưới Product ID sẽ có một dòng vàng kèm dấu ⚠ với đúng
+              câu tóm tắt của lần đó — ví dụ
+              <code class="inline">Created on Apple · 12/39 locales · missing screenshot</code>. Đây là chỗ phân
+              biệt <em>"đã tồn tại vì làm xong rồi"</em> với <em>"đã tồn tại vì lần trước dừng giữa chừng"</em>:
+              dòng có ghi chú thường nên chọn <strong>Overwrite</strong> để làm nốt, dòng không có ghi chú thì
+              <strong>Skip</strong> là an toàn. Product ID chưa từng qua Bulk Import sẽ <strong>không</strong> có
+              dòng này — không ghi chú nghĩa là <em>không có thông tin</em>, không phải là "chắc chắn ổn".</p>
             </div>
           </li>
           <li class="step">
@@ -1406,14 +1414,117 @@
           <li class="step">
             <div class="step-title">Execute và đọc kết quả (Step 5 — Result)</div>
             <div class="step-body">
-              <p>Tool tạo IAP lên App Store Connect với concurrency có kiểm soát + auto-retry khi gặp 429 rate-limit (Hotfix 26 telemetry). Kết quả per-row:</p>
+              <p>Tool tạo IAP lên App Store Connect với concurrency có kiểm soát và tự thử lại khi Apple
+              chặn tạm thời. Đầu màn kết quả là dãy ô đếm — <strong>tổng các ô luôn bằng tổng số dòng</strong>,
+              nên không dòng nào biến mất khỏi phép cộng:</p>
               <ul>
-                <li>✅ <strong>Success</strong>: IAP đã tạo, hiển thị Apple ID</li>
-                <li>❌ <strong>Failed</strong>: cột Notes tóm tắt lỗi + nút <strong>Detail</strong> mở full error từ Apple</li>
+                <li><code class="inline">Succeeded</code> — làm xong trọn vẹn</li>
+                <li><code class="inline">Partial</code> — <em>chỉ hiện khi có</em></li>
+                <li><code class="inline">Skipped</code> — bạn chọn bỏ qua ở Step 3</li>
+                <li><code class="inline">Failed</code></li>
+                <li><code class="inline">Not sent</code> — <em>chỉ hiện khi có</em></li>
               </ul>
+              <p>Mỗi dòng trong bảng có một nhãn trạng thái. Bốn nhãn, bốn hành động khác nhau:</p>
+              <table class="docs-table">
+                <thead><tr><th>Thấy gì</th><th>Nghĩa là gì</th><th>Làm gì</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td>nhãn xanh <code class="inline">success</code></td>
+                    <td>IAP đã tạo trên Apple, <strong>mọi phần</strong> đều xong.</td>
+                    <td>Không cần làm gì.</td>
+                  </tr>
+                  <tr>
+                    <td>nhãn vàng ⚠ <code class="inline">partial</code></td>
+                    <td><strong>IAP ĐÃ được tạo trên Apple</strong>, nhưng thiếu ít nhất một phần
+                    (locale, giá, ảnh, availability…).</td>
+                    <td>Đọc câu tóm tắt ở cột Notes, bấm <strong>Detail</strong> để xem thiếu đúng chỗ nào —
+                    mục <em>Đọc một dòng Partial</em> ngay dưới.</td>
+                  </tr>
+                  <tr>
+                    <td>nhãn đỏ <code class="inline">error</code></td>
+                    <td>Dòng này hỏng, <strong>không có IAP nào được tạo</strong>.</td>
+                    <td>Cột Notes tóm tắt lỗi, bấm <strong>Detail</strong> xem nguyên văn lỗi Apple. Sửa file rồi
+                    import lại riêng dòng đó.</td>
+                  </tr>
+                  <tr>
+                    <td>nhãn xám nét đứt <code class="inline">not sent</code></td>
+                    <td><strong>Apple chưa hề được hỏi về dòng này.</strong> Batch đã tự dừng trước khi tới nó.</td>
+                    <td><strong>An toàn chạy lại</strong> — không có gì để trùng lặp. Xem
+                    <em>Khi batch tự dừng</em> bên dưới.</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p>Dòng <code class="inline">skipped</code> là lựa chọn của chính bạn ở Step 3, không phải sự cố.</p>
             </div>
           </li>
         </ol>
+
+        <h2 class="section-title">Đọc một dòng Partial</h2>
+        <p><code class="inline">partial</code> nghĩa là <strong>IAP đã có thật trên App Store Connect</strong>
+        nhưng chưa đủ. Không xoá nó đi và làm lại từ đầu — chỉ cần biết thiếu gì. Cột <strong>Notes</strong>
+        có sẵn một câu tóm tắt, ví dụ:</p>
+        <p><code class="inline">Created on Apple · 12/39 locales · missing screenshot</code></p>
+        <p>Đọc câu đó từ trái sang: đã <em>tạo</em> (hay <em>cập nhật</em>) trên Apple · làm được bao nhiêu
+        locale trên tổng số · rồi thiếu những gì. Bấm nút <strong>Detail</strong> để mở bảng đầy đủ
+        <strong>6 công đoạn</strong> của dòng đó:</p>
+        <table class="docs-table">
+          <thead><tr><th>Thấy gì</th><th>Nghĩa là gì</th><th>Làm gì</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code class="inline">ok</code></td>
+              <td>Công đoạn đó xong.</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td><code class="inline">failed</code></td>
+              <td>Đã thử và <strong>hỏng</strong>. Bên cạnh có lý do.</td>
+              <td>Xem lý do rồi sửa — file ảnh sai, giá không khớp tier, locale không hợp lệ…</td>
+            </tr>
+            <tr>
+              <td><code class="inline">not sent — rate limit</code></td>
+              <td>Công đoạn này <strong>chưa từng chạy</strong>. Batch hết lượt gọi Apple trước khi tới nó.</td>
+              <td>Chạy lại import sau khoảng 1 tiếng — phần chưa gửi sẽ được làm nốt.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">n/a</code></td>
+              <td>Dòng này <strong>không cần</strong> công đoạn đó (vd: không đính kèm ảnh nên không có gì để up).</td>
+              <td>Không phải lỗi. Bỏ qua.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>Riêng dòng <strong>Localizations</strong> có kèm mẫu số, ví dụ
+        <code class="inline">12/39 done · 27 not sent</code> hoặc <code class="inline">37/39 done · 2 failed: de-DE, fr-FR</code>
+        — nên biết ngay còn thiếu bao nhiêu và thiếu locale nào.</p>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Lưu ý — "screenshot locked by Apple review" phải sửa tay trên App Store Connect</div>
+          <p>
+            Nếu câu tóm tắt ghi <code class="inline">screenshot locked by Apple review</code>, nghĩa là IAP đó
+            đang ở trạng thái chờ duyệt / đã duyệt và <strong>Apple từ chối cho đổi ảnh</strong>. File ảnh của
+            bạn không sai, tool cũng không sai — <strong>chạy lại import bao nhiêu lần cũng không đổi được</strong>.
+            Cách duy nhất là vào App Store Connect đổi ảnh thủ công cho IAP đó, hoặc chờ IAP ra khỏi trạng thái
+            review rồi import lại.
+          </p>
+        </div>
+
+        <h2 class="section-title">Khi batch tự dừng</h2>
+        <p>Apple giới hạn số lần một tài khoản được gọi API trong mỗi giờ (cửa sổ trượt — không phải reset đúng
+        đầu giờ). Batch lớn có thể chạm trần giữa chừng. Khi điều đó xảy ra, tool <strong>chủ động dừng gửi</strong>
+        thay vì tiếp tục đâm vào một API đang từ chối, và hiện băng vàng:</p>
+        <p><em>"Apple's rate limit stopped this batch early."</em></p>
+        <p>Cần hiểu đúng 3 điều:</p>
+        <ul>
+          <li>Những dòng đã <code class="inline">success</code> <strong>vẫn còn nguyên</strong> trên Apple. Dừng
+          không hoàn tác gì cả.</li>
+          <li>Những dòng <code class="inline">not sent</code> <strong>chưa hề được gửi</strong> — không có IAP
+          nào được tạo cho chúng, nên chạy lại <strong>không tạo trùng</strong>.</li>
+          <li>Dòng đang làm dở lúc dừng sẽ thành <code class="inline">partial</code>, và bảng
+          <strong>Detail</strong> của nó ghi rõ công đoạn nào <code class="inline">not sent — rate limit</code>.</li>
+        </ul>
+        <p><strong>Việc cần làm:</strong> chờ khoảng 1 tiếng cho hạn mức hồi lại, rồi import lại chính file đó.
+        Ở Step 3 những IAP đã tạo xong sẽ hiện thành dòng conflict — chọn <strong>Skip</strong> cho chúng nếu
+        không muốn đụng lại, hoặc <strong>Overwrite</strong> để tool làm nốt phần còn thiếu.</p>
+        <p>Muốn tránh ngay từ đầu: chia file nhỏ hơn (xem Tips bên dưới).</p>
 
         <h2 class="section-title">Hình ảnh minh họa</h2>
 
@@ -1426,20 +1537,23 @@
               <!-- header download button (visible at every step) -->
               <rect class="wf-primary" x="470" y="28" width="134" height="24" rx="4"/>
               <text x="537" y="44" fill="#fff" text-anchor="middle" font-size="10" font-weight="600">⬇ Download template</text>
-              <!-- step indicator: Excel → Screenshots → Preview → Result -->
-              <g transform="translate(30, 80)">
-                <circle class="wf-primary" cx="14" cy="14" r="14"/>
-                <text x="14" y="18" fill="#fff" text-anchor="middle" font-size="11" font-weight="600">1</text>
-                <text class="wf-text" x="36" y="18" font-size="11">Excel</text>
-                <rect class="wf-soft" x="85" y="13" width="70" height="2"/>
-                <circle class="wf-soft" cx="170" cy="14" r="14"/>
-                <text class="wf-text" x="192" y="18" font-size="11">Screenshots</text>
-                <rect class="wf-soft" x="280" y="13" width="70" height="2"/>
-                <circle class="wf-soft" cx="365" cy="14" r="14"/>
-                <text class="wf-text" x="387" y="18" font-size="11">Preview</text>
-                <rect class="wf-soft" x="450" y="13" width="70" height="2"/>
-                <circle class="wf-soft" cx="535" cy="14" r="14"/>
-                <text class="wf-text" x="557" y="18" font-size="11">Result</text>
+              <!-- step indicator: Excel → Screenshots → Preview → Territories → Result -->
+              <g transform="translate(24, 80)">
+                <circle class="wf-primary" cx="12" cy="14" r="12"/>
+                <text x="12" y="18" fill="#fff" text-anchor="middle" font-size="10" font-weight="600">1</text>
+                <text class="wf-text" x="30" y="18" font-size="10">Excel</text>
+                <rect class="wf-soft" x="66" y="13" width="34" height="2"/>
+                <circle class="wf-soft" cx="112" cy="14" r="12"/>
+                <text class="wf-text" x="130" y="18" font-size="10">Screenshots</text>
+                <rect class="wf-soft" x="196" y="13" width="34" height="2"/>
+                <circle class="wf-soft" cx="242" cy="14" r="12"/>
+                <text class="wf-text" x="260" y="18" font-size="10">Preview</text>
+                <rect class="wf-soft" x="318" y="13" width="34" height="2"/>
+                <circle class="wf-soft" cx="364" cy="14" r="12"/>
+                <text class="wf-text" x="382" y="18" font-size="10">Territories</text>
+                <rect class="wf-soft" x="454" y="13" width="34" height="2"/>
+                <circle class="wf-soft" cx="500" cy="14" r="12"/>
+                <text class="wf-text" x="518" y="18" font-size="10">Result</text>
               </g>
               <!-- dropzone -->
               <rect class="wf-card" x="60" y="130" width="520" height="180" rx="8" stroke-dasharray="4 4"/>
@@ -1589,6 +1703,79 @@
           </div>
         </div>
 
+        <div class="screenshot" data-lightbox data-caption="Bulk Import wizard — Step 5 (Result): 5 ô đếm · dòng partial kèm nút Detail · dòng not sent">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <text class="wf-text" x="30" y="34" font-size="13" font-weight="700">Kết quả import</text>
+              <!-- 5 tally tiles -->
+              <g transform="translate(30,48)">
+                <rect class="wf-card" x="0" y="0" width="110" height="44" rx="6" stroke="var(--success)"/>
+                <text class="wf-muted" x="10" y="16" font-size="8">SUCCEEDED</text>
+                <text class="wf-text" x="10" y="34" font-size="15" font-weight="700">6</text>
+                <rect class="wf-card" x="118" y="0" width="110" height="44" rx="6" stroke="#d97706"/>
+                <text class="wf-muted" x="128" y="16" font-size="8">PARTIAL</text>
+                <text class="wf-text" x="128" y="34" font-size="15" font-weight="700">2</text>
+                <rect class="wf-card" x="236" y="0" width="110" height="44" rx="6"/>
+                <text class="wf-muted" x="246" y="16" font-size="8">SKIPPED</text>
+                <text class="wf-text" x="246" y="34" font-size="15" font-weight="700">1</text>
+                <rect class="wf-card" x="354" y="0" width="110" height="44" rx="6"/>
+                <text class="wf-muted" x="364" y="16" font-size="8">FAILED</text>
+                <text class="wf-text" x="364" y="34" font-size="15" font-weight="700">1</text>
+                <rect class="wf-card" x="472" y="0" width="110" height="44" rx="6" stroke-dasharray="3 3"/>
+                <text class="wf-muted" x="482" y="16" font-size="8">NOT SENT</text>
+                <text class="wf-text" x="482" y="34" font-size="15" font-weight="700">3</text>
+              </g>
+              <text class="wf-muted" x="30" y="112" font-size="8">Tổng 5 ô = 13 dòng — không dòng nào biến mất khỏi phép cộng</text>
+              <!-- banner -->
+              <rect x="30" y="120" width="580" height="30" rx="5" fill="#fef3c7" stroke="#fcd34d"/>
+              <text x="42" y="139" font-size="9" font-weight="600" fill="#78350f">Apple&#39;s rate limit stopped this batch early.</text>
+              <!-- table header -->
+              <g transform="translate(30,164)">
+                <rect class="wf-soft" x="0" y="0" width="580" height="18"/>
+                <text class="wf-muted" x="8" y="12" font-size="8">PRODUCT ID</text>
+                <text class="wf-muted" x="170" y="12" font-size="8">STATUS</text>
+                <text class="wf-muted" x="250" y="12" font-size="8">OUTCOME</text>
+                <text class="wf-muted" x="370" y="12" font-size="8">PRICE</text>
+                <text class="wf-muted" x="450" y="12" font-size="8">NOTES</text>
+                <!-- success row -->
+                <text class="wf-text" x="8" y="34" font-size="9">com.ck.coin100</text>
+                <rect x="170" y="25" width="46" height="13" rx="6" fill="#ecfdf5" stroke="#a7f3d0"/>
+                <text x="193" y="34" font-size="7" text-anchor="middle" fill="#047857">success</text>
+                <text class="wf-muted" x="250" y="34" font-size="8">Created + submitted</text>
+                <text class="wf-muted" x="370" y="34" font-size="8">Price set</text>
+                <!-- partial row -->
+                <text class="wf-text" x="8" y="56" font-size="9">com.ck.coin500</text>
+                <rect x="170" y="47" width="46" height="13" rx="6" fill="#fffbeb" stroke="#fcd34d"/>
+                <text x="193" y="56" font-size="7" text-anchor="middle" fill="#92400e">⚠ partial</text>
+                <text class="wf-muted" x="250" y="56" font-size="8">Created only</text>
+                <text class="wf-muted" x="370" y="56" font-size="8">Price set</text>
+                <text x="450" y="53" font-size="7" fill="#334155">Created on Apple · 12/39</text>
+                <text x="450" y="62" font-size="7" fill="#334155">locales · missing screenshot</text>
+                <text x="450" y="72" font-size="7" font-weight="600" fill="#0071E3">Detail</text>
+                <!-- not sent rows -->
+                <text class="wf-text" x="8" y="90" font-size="9">com.ck.bundle</text>
+                <rect x="170" y="81" width="50" height="13" rx="6" fill="#f1f5f9" stroke="#cbd5e1" stroke-dasharray="2 2"/>
+                <text x="195" y="90" font-size="7" text-anchor="middle" fill="#64748b">not sent</text>
+                <text class="wf-muted" x="250" y="90" font-size="8">—</text>
+                <text class="wf-muted" x="370" y="90" font-size="8">—</text>
+                <text class="wf-muted" x="450" y="90" font-size="7">Chưa gửi — an toàn chạy lại</text>
+                <text class="wf-text" x="8" y="112" font-size="9">com.ck.starter</text>
+                <rect x="170" y="103" width="50" height="13" rx="6" fill="#f1f5f9" stroke="#cbd5e1" stroke-dasharray="2 2"/>
+                <text x="195" y="112" font-size="7" text-anchor="middle" fill="#64748b">not sent</text>
+                <text class="wf-muted" x="250" y="112" font-size="8">—</text>
+                <text class="wf-muted" x="370" y="112" font-size="8">—</text>
+              </g>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span>Step 5 · dòng <strong>partial</strong> vẫn hiện Outcome và Price (nó ĐÃ làm được việc) · dòng <strong>not sent</strong> chưa hề gửi</span>
+          </div>
+          <div class="screenshot-zoom-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </div>
+        </div>
+
         <h2 class="section-title">Excel template ví dụ</h2>
 
         <div class="code-block">
@@ -1614,8 +1801,10 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <div class="callout-title">💡 Tip — Chia batch lớn</div>
           <p>
             Nếu file có hơn <strong>50 IAP</strong>, nên chia thành nhiều file nhỏ (mỗi file 30–40 row).
-            Wizard vẫn xử lý được file lớn nhờ auto-retry (Hotfix 26), nhưng split giúp dễ debug
-            và rollback từng batch nếu cần.
+            Wizard vẫn xử lý được file lớn — gặp Apple chặn tạm thời thì tự thử lại — nhưng
+            <strong>số lần thử lại là hữu hạn</strong>: chạm trần giờ của Apple thì batch tự dừng và phần còn lại
+            được đánh <code class="inline">not sent</code> (xem <em>Khi batch tự dừng</em>). File nhỏ vừa ít
+            chạm trần, vừa dễ debug và làm lại từng batch.
           </p>
         </div>
 
@@ -2291,19 +2480,196 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             </div>
           </li>
           <li class="step">
-            <div class="step-title">Export danh sách IAPs (xlsx) — Cycle 44</div>
+            <div class="step-title">Export list — chọn item rồi chọn nước</div>
             <div class="step-body">
-              <p>Nút <strong>"Export list"</strong> trên toolbar (cạnh Refresh from Apple / Bulk Import) tải về file
-              Excel chứa <strong>toàn bộ IAPs của app</strong> (mọi state, không chỉ phần đang filter/hiển thị trên
-              màn hình). Mỗi IAP là 1 dòng, gồm: Product ID, SKU Name, Status, Base Country, 1 cột giá + tiền tệ
-              cho mỗi territory app đang bán, và các nhóm localization (Locale · Display Name · Description).</p>
-              <p>Click xong tool hiện chỉ báo <em>"Generating…"</em> — chờ tải xong rồi trình duyệt tự tải file
-              <code class="inline">Apple-IAP-export-&lt;appId&gt;-YYYYMMDD.xlsx</code> về máy.</p>
+              <p>Nút <strong>Export list</strong> trên toolbar (cạnh <strong>Refresh from Apple</strong> và
+              <strong>Bulk Import</strong>) mở một wizard <strong>2 bước</strong>. File Excel tải về gồm những
+              item <em>bạn chọn</em> — không phải mặc định cả app.</p>
+
+              <p><strong>Bước 1 — chọn item.</strong> Cửa sổ mở ra với tiêu đề
+              <em>"Export list — choose items"</em> và dòng phụ
+              <em>"Step 1 of 2. Nothing is read from Apple until you export."</em> Câu đó đúng theo nghĩa đen:
+              lọc, tìm, tick chọn ở bước này <strong>không tốn một lần gọi Apple nào</strong>. Có 3 cách thu hẹp
+              danh sách, cả 3 chạy tại chỗ:</p>
+              <ul>
+                <li>Dropdown <strong>Type</strong> — <code class="inline">All types</code> ·
+                Consumable · Non-Consumable · Non-Renewing Subscription</li>
+                <li>Dropdown <strong>Apple status</strong> — <code class="inline">All Apple statuses</code> ·
+                <code class="inline">Available</code> · <code class="inline">Removed</code> ·
+                <code class="inline">Developer Removed From Sale</code>…</li>
+                <li>Ô <strong>search</strong> theo Product ID / tên</li>
+              </ul>
+              <p>Tick từng dòng, hoặc dùng nút chọn tất cả — nút này <strong>chỉ áp cho danh sách đang lọc</strong>.
+              Nếu bạn đã chọn item rồi mới đổi filter, tool hiện dòng nhắc
+              <em>"+ N more selected items are hidden by the Type / Apple status filter — still selected, and
+              still part of the export."</em> — nghĩa là item đó <strong>vẫn nằm trong file</strong>, chỉ đang bị
+              ẩn khỏi tầm nhìn. Chưa chọn gì thì nút bị khoá với nhãn
+              <code class="inline">Select at least 1 item</code>.</p>
+
+              <p><strong>Bước 2 — chọn nước.</strong> Cùng dialog chọn territory bạn đã gặp ở
+              <a class="inline-link" data-goto="apple-bulk-availabilities">Bulk Availabilities</a>. Mỗi nước chọn
+              ở đây thành 1 cột giá + tiền tệ trong file.</p>
+
+              <p>Bấm export xong tool mới bắt đầu gọi Apple. Trình duyệt tự tải file
+              <code class="inline">Apple-IAP-export-&lt;appId&gt;-YYYYMMDD.xlsx</code>. Sheet chính tên
+              <code class="inline">Apple IAP Export</code>: mỗi item 1 dòng gồm Product ID, SKU Name, Status,
+              Base Country, các cột giá theo nước đã chọn, và các nhóm localization
+              (Locale · Display Name · Description).</p>
             </div>
           </li>
         </ol>
 
+        <h2 class="section-title">Đọc kết quả export</h2>
+        <p>Export xong, tool hiện một bảng tổng kết. Câu tiêu đề nói ngay chuyện gì đã xảy ra:</p>
+        <table class="docs-table">
+          <thead><tr><th>Thấy gì</th><th>Nghĩa là gì</th><th>Làm gì</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code class="inline">Export finished</code></td>
+              <td>Mọi item bạn chọn đều vào file đầy đủ.</td>
+              <td>Không cần làm gì.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">Export finished, with some items missing</code></td>
+              <td>Có item Apple từ chối đọc. Chúng <strong>không</strong> nằm trong sheet chính.</td>
+              <td>Mở sheet <code class="inline">Export Failures</code>, xem cột <strong>Reason</strong> ở bảng dưới.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">Export stopped — Apple's rate limit ran out after N of M items</code></td>
+              <td>Đã chạm giới hạn gọi Apple theo giờ. Tool <strong>chủ động dừng</strong>; phần còn lại
+              <strong>chưa hề được gửi</strong>. Tool nói rõ <em>"This is not a failure"</em>.</td>
+              <td>N item đầu đã có trong file. Chờ khoảng 1 tiếng rồi export lại phần còn lại
+              (xem <a class="inline-link" data-goto="apple-bulk-import">Khi batch tự dừng</a>).</td>
+            </tr>
+            <tr>
+              <td><code class="inline">N of those partially exported — prices missing</code></td>
+              <td>Item <strong>CÓ</strong> trong sheet chính, nhưng các ô giá trống vì đọc giá thất bại.</td>
+              <td>Đối chiếu sheet <code class="inline">Export Failures</code> để biết vì sao.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Lưu ý — ô giá trống KHÔNG có nghĩa là "không có giá"</div>
+          <p>
+            Một dòng trong sheet chính có thể có đủ Product ID, tên, status mà các ô giá vẫn trống. Đó là vì
+            <strong>lần đọc giá thất bại</strong>, không phải vì item không có giá. Sheet chính không thể hiện
+            sự khác nhau này — chỉ sheet <code class="inline">Export Failures</code> nói được. Nếu file có 2
+            sheet, luôn mở sheet thứ 2 trước khi kết luận về giá.
+          </p>
+        </div>
+
+        <h2 class="section-title">Sheet "Export Failures" — cột Reason</h2>
+        <p>Sheet thứ 2 chỉ xuất hiện khi có chuyện cần nói. Mỗi dòng là 1 item, với 5 cột:
+        <strong>Product ID · Apple IAP ID · Status · Reason · Detail</strong>. Cột <strong>Reason</strong>
+        là thứ quyết định bạn phải làm gì:</p>
+        <table class="docs-table">
+          <thead><tr><th>Reason</th><th>Nghĩa là gì</th><th>Làm gì</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code class="inline">Not attempted</code></td>
+              <td>Tool dừng <em>trước khi</em> đến item này. Apple chưa được hỏi về nó.</td>
+              <td><strong>An toàn export lại</strong> — không rủi ro trùng lặp. Cách làm:
+              lọc cột này ra khỏi sheet <code class="inline">Export Failures</code> để có danh sách
+              Product ID, mở lại <strong>Export list</strong>, tick <em>đúng những item đó</em> rồi export.
+              Nếu vừa dừng vì rate limit thì chờ khoảng 1 tiếng trước khi chạy.
+              ⚠ Kết quả là <strong>một file MỚI</strong> — tool không gộp vào file cũ, xem ghi chú dưới bảng.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">Rate limited</code></td>
+              <td>Apple đã được hỏi, đã thử lại nhiều lần, vẫn bị chặn.</td>
+              <td>Chờ rồi export lại riêng những item này.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">Apple refused</code></td>
+              <td>Apple trả lỗi thật (cột Detail có mã lỗi).</td>
+              <td><strong>Export lại không đổi gì.</strong> Đọc Detail; thường là item có vấn đề trên
+              App Store Connect.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">Incomplete prices</code></td>
+              <td>Đọc được một phần bảng giá rồi đứt (Detail ghi <code class="inline">PAGE_CAP</code> hoặc
+              <code class="inline">COUNT_MISMATCH</code>).</td>
+              <td>Giá trong dòng đó <strong>không đủ tin</strong> — đừng dùng để đối soát. Export lại item đó.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">Base territory unreadable</code></td>
+              <td>⚠ <strong>Giá vẫn ĐÚNG và đủ.</strong> Chỉ riêng ô <strong>Base Country</strong> trống.</td>
+              <td><strong>Không cần export lại.</strong> Chỉ cột Base Country thiếu.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">Unknown error</code></td>
+              <td>Lỗi không xếp được vào nhóm nào.</td>
+              <td>Đọc cột Detail; nếu lặp lại, báo team dev kèm Product ID.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — Export lại phần còn thiếu: bạn tự ghép file</div>
+          <p>
+            Tool <strong>chưa</strong> có nút "export tiếp phần còn lại". Mỗi lần export là một file độc lập và
+            tool <strong>không gộp</strong> chúng lại. Nên khi export bị dừng giữa chừng, quy trình là:
+          </p>
+          <ol>
+            <li>Mở sheet <code class="inline">Export Failures</code>, lọc các dòng
+            <code class="inline">Not attempted</code> → được danh sách Product ID còn thiếu.</li>
+            <li>Chờ khoảng 1 tiếng cho hạn mức Apple hồi lại.</li>
+            <li>Mở <strong>Export list</strong>, dùng ô search theo từng Product ID để tick đúng những item đó,
+            rồi export.</li>
+            <li>Ghép 2 file bằng Excel — sheet chính của file sau nối vào file trước.</li>
+          </ol>
+          <p>
+            ⚠ <strong>Cẩn thận khi đặt tên file.</strong> Tên file chỉ có <em>ngày</em>, không có giờ
+            (<code class="inline">Apple-IAP-export-&lt;appId&gt;-YYYYMMDD.xlsx</code>), nên export lần 2 trong
+            cùng ngày sẽ tải về <strong>trùng tên</strong> — trình duyệt thường tự thêm hậu tố
+            <code class="inline">(1)</code>. Đổi tên ngay sau khi tải để khỏi lẫn file nào là phần nào.
+          </p>
+        </div>
+
         <h2 class="section-title">Hình ảnh minh họa</h2>
+        <div class="screenshot" data-lightbox data-caption="Export list — Step 1: chọn item · filter Type + Apple status + search · không gọi Apple">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="360"/>
+              <rect class="wf-card" x="60" y="24" width="520" height="312" rx="8"/>
+              <text class="wf-text" x="80" y="50" font-size="13" font-weight="700">Export list — choose items</text>
+              <text class="wf-muted" x="80" y="68" font-size="10">Step 1 of 2. Nothing is read from Apple until you export.</text>
+              <text class="wf-muted" x="556" y="52" font-size="13" text-anchor="end">✕</text>
+              <rect class="wf-soft" x="80" y="82" width="480" height="1"/>
+              <!-- facets -->
+              <rect class="wf-input" x="80" y="96" width="110" height="24" rx="4"/>
+              <text class="wf-text" x="90" y="112" font-size="9">All types ▾</text>
+              <rect class="wf-input" x="198" y="96" width="140" height="24" rx="4"/>
+              <text class="wf-text" x="208" y="112" font-size="9">All Apple statuses ▾</text>
+              <text class="wf-muted" x="348" y="112" font-size="8">🔍 Filters are local — they cost no Apple requests.</text>
+              <!-- hidden-selection notice -->
+              <text x="80" y="136" font-size="8" fill="#b45309">+ 2 more selected items are hidden by the Type / Apple status filter — still selected.</text>
+              <!-- rows -->
+              <g transform="translate(80,148)">
+                <rect class="wf-soft" x="0" y="0" width="480" height="20"/>
+                <rect class="wf-primary" x="8" y="5" width="10" height="10" rx="2"/>
+                <text class="wf-text" x="28" y="14" font-size="9">com.ck.coin100</text>
+                <text class="wf-muted" x="400" y="14" font-size="8">AVAILABLE</text>
+                <rect class="wf-primary" x="8" y="29" width="10" height="10" rx="2"/>
+                <text class="wf-text" x="28" y="38" font-size="9">com.ck.coin500</text>
+                <text class="wf-muted" x="400" y="38" font-size="8">AVAILABLE</text>
+                <rect class="wf-soft" x="8" y="53" width="10" height="10" rx="2"/>
+                <text class="wf-text" x="28" y="62" font-size="9">com.ck.bundle</text>
+                <text class="wf-muted" x="360" y="62" font-size="8">DEVELOPER_REMOVED_FROM_SALE</text>
+                <rect class="wf-primary" x="8" y="77" width="10" height="10" rx="2"/>
+                <text class="wf-text" x="28" y="86" font-size="9">com.ck.starter</text>
+                <text class="wf-muted" x="400" y="86" font-size="8">AVAILABLE</text>
+              </g>
+              <rect class="wf-soft" x="80" y="290" width="480" height="1"/>
+              <rect class="wf-primary" x="440" y="302" width="120" height="24" rx="4"/>
+              <text x="500" y="318" fill="#fff" text-anchor="middle" font-size="9" font-weight="600">Next — choose countries</text>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span>Step 1 · 3 item được tick · filter Type + Apple status chạy tại chỗ · chưa gọi Apple lần nào</span>
+          </div>
+        </div>
         <div class="screenshot" data-lightbox data-caption="IAPs list · CashKnight · filter + multi-select bulk actions">
           <div class="screenshot-frame">
             <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
@@ -3328,7 +3694,41 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </li>
           <li class="step">
             <div class="step-title">Theo dõi progress Execute</div>
-            <div class="step-body"><p>Sequential per IAP — không parallel (Apple rate-limit nghiêm). Progress bar realtime, per-row outcome. Toast success cuối flow.</p></div>
+            <div class="step-body">
+              <p>Sequential per IAP — không parallel (Apple rate-limit nghiêm). Progress bar realtime,
+              per-row outcome. Toast success cuối flow.</p>
+              <p>Mỗi dòng kết quả mang một trong bốn nhãn:</p>
+              <table class="docs-table">
+                <thead><tr><th>Thấy gì</th><th>Nghĩa là gì</th><th>Làm gì</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><code class="inline">SUCCESS</code></td>
+                    <td>Đã gửi lên Apple Review.</td>
+                    <td>Không cần làm gì.</td>
+                  </tr>
+                  <tr>
+                    <td><code class="inline">SKIPPED</code> (vàng)</td>
+                    <td>Không đủ điều kiện gửi — <strong>tool đã kiểm và quyết định bỏ qua</strong>
+                    (vd: đang trong review, thiếu field bắt buộc). Dòng <em>State</em> ngay dưới nói rõ.</td>
+                    <td>Sửa nguyên nhân trên IAP đó rồi submit lại.</td>
+                  </tr>
+                  <tr>
+                    <td><code class="inline">NOT SENT</code> (xám)</td>
+                    <td><strong>Apple chưa hề được hỏi về dòng này.</strong> Đã chạm giới hạn gọi Apple theo giờ
+                    nên tool dừng gửi. Khác hẳn <code class="inline">SKIPPED</code>: ở đây tool
+                    <em>không kịp xét</em>, chứ không phải xét rồi loại.</td>
+                    <td><strong>An toàn submit lại</strong> sau khoảng 1 tiếng — không có gì để trùng lặp.</td>
+                  </tr>
+                  <tr>
+                    <td><code class="inline">ERROR</code> (đỏ)</td>
+                    <td>Đã gửi và Apple từ chối. Có message lỗi kèm theo.</td>
+                    <td>Đọc message, sửa rồi submit lại.</td>
+                  </tr>
+                </tbody>
+              </table>
+              <p>Dòng tổng kết phía trên đếm riêng phần chưa gửi, ví dụ
+              <code class="inline">3 not sent (rate limit)</code>.</p>
+            </div>
           </li>
         </ol>
 
@@ -3373,6 +3773,11 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
                 <rect fill="var(--danger-bg)" x="275" y="252" width="60" height="14" rx="7"/>
                 <text fill="var(--danger)" x="305" y="262" text-anchor="middle" font-size="9" font-weight="600">Ineligible</text>
                 <text fill="var(--danger)" x="380" y="262" font-size="9">Missing screenshot</text>
+                <line stroke="var(--border)" x1="80" y1="270" x2="560" y2="270"/>
+                <text class="wf-text" x="96" y="290">com.ck.starter</text>
+                <rect fill="var(--surface-3)" x="275" y="280" width="70" height="14" rx="7" stroke-dasharray="2 2"/>
+                <text class="wf-muted" x="310" y="290" text-anchor="middle" font-size="9" font-weight="600">NOT SENT</text>
+                <text class="wf-muted" x="380" y="290" font-size="9">Chưa gửi — rate limit · an toàn submit lại</text>
               </g>
               <rect fill="var(--surface-2)" x="60" y="282" width="520" height="48"/>
               <rect class="wf-card" x="380" y="296" width="70" height="22" rx="4"/>
