@@ -548,6 +548,37 @@ disproven 250/h.
   - ⚠ **IF D1 RETURNS PER-TEAM: stop, and leave the pool dark PERMANENTLY — do not rip the code out.** With an empty table the fallback path is the pre-pool path, so dark costs nothing to keep and the removal would be pure risk. `[Q-RATELIMIT.per-key-confirmed]` is the Manager's operating experience on a *different* tool: strong evidence, not a measurement of this system. §4.9 exists because Apple's docs said 3,600 and Hotfix 25 shipped 250 for months on an unread number — measurement beats confidence, including the Manager's, and that is the agreed rule rather than a hedge.
   - **`[Q-RATELIMIT.pool-scope]` — LOCKED and now structurally enforced:** the pool serves Apple IAP Management only. `appleFetch` takes an injected `AppleKeyPool` value; `iapFetch` passes one, `ascFetch` imports none and has nothing to pass. `lib/asc-client.ts` has a zero-line diff across all three commits. CPP Manager cannot enable pooling even by mistake.
   - Design census: `scratchpad/CENSUS-pool-P0.md`.
+> ### 🧾 Registry sweep — TODO.md is the complete backlog registry as of **2026-08-26**
+>
+> Every `[TAG-name]` appearing anywhere in `docs/`, `lib/`, `app/`, `components/`,
+> `supabase/` was grepped and checked against this file. Two items were found
+> living **only** in a design doc / a component docstring and are now registered
+> below: `[POOL-unify-availabilityReadPhase]` and `[EXPORT-resume-not-attempted]`.
+> One dangling reference was corrected: KB §4.9 pointed at
+> `[RATELIMIT-keypool-if-demand]` "in TODO.md", a tag that was **never registered
+> anywhere** — that work is K4, under `[RATELIMIT-keypool-design]`. A duplicate
+> entry was deliberately NOT created.
+>
+> Two tags remain outside this file **on purpose**, and are not backlog items:
+> `[PRICING-429]` — shorthand citation of shipped work in two code comments; the
+> item itself is registered as `[PRICING-429-no-retry]` (closed). And
+> `[RATELIMIT-keypool-if-demand]` — now appears only inside the KB correction
+> note that explains it was never real.
+>
+> ⚠ **Reproduce this sweep before trusting the registry again** (one line):
+> ```
+> grep -rhoE '\[[A-Z][A-Z0-9]+-[a-zA-Z0-9-]+\]' docs/ lib/ app/ components/ supabase/ \
+>   | sort -u | while read t; do grep -qF "$t" TODO.md || echo "UNREGISTERED $t"; done
+> ```
+> `[PR-*]`, `[CPP-*]`, `[AIP-*]` are milestone/spec labels, not backlog tags — skip them.
+> **The rule this enforces:** a backlog item only one surface knows about is a
+> backlog item that will be missed. `SESSION-ARC-export-list-item-summary.md`
+> predicted exactly that for both items registered today.
+
+- [ ] **[POOL-unify-availabilityReadPhase] — merge `runAvailabilityReadPhase` into `runStoppablePool`.** Two pools solve the same three-state problem (done / errored / never-attempted) under **different constraints**, and the difference is the whole reason they are still separate: `runAvailabilityReadPhase` must hold a slot from a shared *client* fetch queue, so it checks the latch **BEFORE claiming an index** (`lib/iap-management/apple/availability-read-phase.ts:118-122`) — that pre-claim check is what leaves its remainder genuinely unclaimed. `runStoppablePool` wraps `withConcurrency`, which **claims first** and lets the callback emit `skipped(item)`. Unifying means giving the pool a pre-claim hook. ⚠ **Real work, ZERO user-visible change, and it touches a shipped path** (`bulk-availability`) — which is why it is not scheduled. **Natural trigger: the next time anyone has to modify `availability-read-phase.ts`, do this instead of patching in place** — a second patch on the divergent copy is what makes the merge expensive later. Parity gate when it happens: `availability-read-phase.test.ts` must stay green unchanged. ⚠ **It has 12 tests, not ~60** — small enough that the parity gate is cheap, and worth knowing before anyone budgets the task off a remembered number. Design rationale + the constraint table: `docs/iap-management/design-export-list-item-selection.md` PART 5 (and the trade-off is written at `lib/iap-management/stoppable-pool.ts:41-48`). ⚠ **Registered here for the first time** — it previously lived in that design doc ONLY, which `SESSION-ARC-export-list-item-summary.md` had already flagged as un-greppable.
+
+- [ ] **[EXPORT-filename-collision] — the resume export overwrites the run it is completing.** `lib/iap-management/xlsx-export.ts:509-512` stamps the filename with the DATE only, no time: `Apple-IAP-export-<appRef>-YYYYMMDD.xlsx`. So the second export of the same app on the same day downloads under an **identical name**, and the browser silently appends `(1)`. ⚠ **Why this is worse than untidy:** it lands exactly in the middle of `[EXPORT-resume-not-attempted]`'s workaround — a Manager exports, gets rate-limited, re-exports the remainder, and now holds two same-named files they must merge in the right order. Getting that pair backwards produces a plausible-looking workbook that is missing rows. **Fix: add `HHmmss` to the stamp.** Scope ~XS: one line, plus any test pinning the filename shape (`grep -rn "Apple-IAP-export" lib/ --include=*.test.ts` before editing). ⚠ **When this ships, DELETE the temporary warning it makes obsolete** — `docs/user-docs/index.html`, `apple-iaps` page, the tip *"Export lại phần còn thiếu: bạn tự ghép file"*, final paragraph beginning *"⚠ Cẩn thận khi đặt tên file"*. A stale warning about a fixed bug teaches users to distrust the guide. Found while writing that guide section (`6ffbe1a`), not by a user report.
+
 - [ ] **[EXPORT-resume-not-attempted] — "export the rest" button.** When an export stops on Apple's rate limit, the remainder is listed in the `Export Failures` sheet as `Not attempted` but there is no one-click way to fetch just those. ⚠ **Registered here for the first time** — it previously lived ONLY in the `ExportResultSummary` docstring, which `SESSION-ARC-export-list-item-summary.md` had already flagged as un-greppable from TODO.md. Blocked on the remainder's ids not being on the wire at the point the summary renders. **v1 workaround documented in User Guide (`apple-iaps` → A4 `Not attempted` row + the "Export lại phần còn thiếu" tip):** filter the sheet for `Not attempted` → wait ~1h → re-tick exactly those in the Export list wizard → export → merge the two files by hand. ⚠ The guide also warns that the filename carries the DATE only, so a same-day resume downloads under a colliding name. Anyone building the real button should read that tip first — it is the behaviour users will have learned.
 
 - [ ] **[EXPORT-merge-stage1-into-detail] (E3) — VERIFIED BROKEN AS DESIGNED · DEFERRED.** Proposal was to drop the price-schedule Stage 1 by side-loading `?include=iapPriceSchedule` off the IAP detail read (3 → 2 Apple requests per exported item, −33%). **Measured live 2026-08-25** against `6804564022` (account `vnggames-co-ltd`), 2 read-only GETs, script in `scratchpad/P1-P3-audit-spec.md` PART P3:

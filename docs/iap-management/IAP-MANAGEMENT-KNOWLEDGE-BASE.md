@@ -532,9 +532,12 @@ no app, no IAP, no write. Total cost: 2 requests out of 3,600.
 
 ⚠ Measured on the **first** account in `ASC_ACCOUNTS`. Whether 3,600 is
 per-key or per-team is a **separate, still-unmeasured** question — it
-needs a second key on the same team (see `[RATELIMIT-keypool-if-demand]`
-in TODO.md). Do not read this number as "3,600 per key" until that is
-measured.
+needs a second key on the same team — that is **K4**, tracked under
+`[RATELIMIT-keypool-design]` in TODO.md. (⚠ This paragraph used to cite
+`[RATELIMIT-keypool-if-demand]`, a tag that was never registered anywhere;
+the work was folded into the keypool-design item when the pool was designed.
+Corrected 2026-08-26 by the registry sweep.) Do not read this number as
+"3,600 per key" until that is measured.
 
 ### 4.10 LANDMARK — CPP and IAP share ONE items-only reviewSubmission slot per (app, platform)
 
