@@ -527,7 +527,7 @@ export function BulkImportWizard({
                   href="/iap-management/settings/pricing-tiers"
                   className="underline hover:text-amber-700 dark:hover:text-amber-100"
                 >
-                  Settings → Pricing Tiers
+                  Settings → Pricing Templates
                 </a>
               </>
             ) : pricingSource === "DEFAULT_TEMPLATE" ? (

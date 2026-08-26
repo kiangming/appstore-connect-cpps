@@ -46,7 +46,7 @@ describe('getSettingsHref', () => {
     );
   });
 
-  it('routes to IAP Management Pricing Tiers when inside /iap-management/*', () => {
+  it('routes to IAP Management Pricing Templates when inside /iap-management/*', () => {
     expect(getSettingsHref('/iap-management/apps')).toBe(
       '/iap-management/settings/pricing-tiers',
     );

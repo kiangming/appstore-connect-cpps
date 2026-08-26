@@ -11,7 +11,7 @@
  * just a shortcut that follows the user's module context:
  *   - Inside `/store-submissions/*`      → Store Management settings page.
  *   - Inside `/google-iap-management/*`  → Google IAP Mgmt accounts page.
- *   - Inside `/iap-management/*`         → IAP Management Pricing Tiers page
+ *   - Inside `/iap-management/*`         → IAP Management Pricing Templates page
  *                                          (the only Settings surface in MVP).
  *   - Anywhere else → global ASC admin settings (admin-only; non-admins
  *     hit the pre-existing redirect in app/(dashboard)/settings/page.tsx).

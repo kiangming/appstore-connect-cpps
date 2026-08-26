@@ -23,7 +23,7 @@ export default async function DefaultMatrixPage() {
           className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 transition mb-3"
         >
           <ArrowLeft className="h-3 w-3" />
-          Pricing Tiers
+          Pricing Templates
         </Link>
         <h1 className="text-2xl font-semibold text-slate-900 mb-1">
           Default Pricing Template

@@ -787,7 +787,7 @@ export function IapForm({
                       href="/iap-management/settings/pricing-tiers"
                       className="text-[#0071E3] hover:underline"
                     >
-                      Settings → Pricing Tiers
+                      Settings → Pricing Templates
                     </a>
                     .
                   </>

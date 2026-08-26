@@ -77,7 +77,7 @@ export function DefaultMatrixView({
         trail={[
           { label: "Settings", href: "/iap-management/settings" },
           {
-            label: "Pricing Tiers",
+            label: "Pricing Templates",
             href: "/iap-management/settings/pricing-tiers",
           },
           { label: "Default Template" },

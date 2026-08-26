@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { toast } from "sonner";
 import { CheckCircle2, Lock, RefreshCw, ShieldAlert } from "lucide-react";
+import { SettingsTabs } from "@/components/iap-management/settings/SettingsTabs";
 import type { HubTrackingConfigPublic } from "@/lib/iap-management/hub-tracking/config";
 
 interface Props {
@@ -80,31 +80,17 @@ export function HubTrackingClient({ initialConfig, isAdmin }: Props) {
 
   return (
     <div className="p-8 max-w-3xl mx-auto">
-      <div className="mb-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
-            Hub Tracking
-          </h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-            Tracks each Bulk Import run on the VNGGames Hub dashboard —
-            started when Step 1 (Excel upload) completes, closed once the
-            Apple import finishes.
-          </p>
-        </div>
-        <div className="flex items-center gap-4 shrink-0">
-          <Link
-            href="/iap-management/settings/pricing-tiers"
-            className="text-sm text-slate-500 hover:text-[#0071E3] transition"
-          >
-            ← Pricing Templates
-          </Link>
-          <Link
-            href="/iap-management/settings/key-pool"
-            className="text-sm text-slate-500 hover:text-[#0071E3] transition"
-          >
-            API Key Pool →
-          </Link>
-        </div>
+      <SettingsTabs />
+
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
+          Hub Tracking
+        </h1>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+          Tracks each Bulk Import run on the VNGGames Hub dashboard —
+          started when Step 1 (Excel upload) completes, closed once the
+          Apple import finishes.
+        </p>
       </div>
 
       <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-6 space-y-5">

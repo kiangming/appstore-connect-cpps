@@ -21,6 +21,7 @@ import {
   ShieldAlert,
   X,
 } from "lucide-react";
+import { SettingsTabs } from "@/components/iap-management/settings/SettingsTabs";
 import type {
   PoolAccountOption,
   PoolKeyAdminRow,
@@ -262,14 +263,11 @@ export function KeyPoolClient({ isAdmin }: Props) {
   if (!isAdmin) {
     return (
       <div className="p-8 max-w-5xl mx-auto">
-        <div className="mb-3">
-          <a
-            href="/iap-management/settings/hub-tracking"
-            className="text-sm text-slate-500 hover:text-[#0071E3] transition"
-          >
-            ← Hub Tracking
-          </a>
-        </div>
+        {/* ⚠ The strip renders here TOO. A member who lands on this screen is
+            the person most in need of a way back to the other two settings
+            pages — leaving the old link on exactly this branch would have kept
+            the discarded idiom alive where it is most visible. */}
+        <SettingsTabs />
         <div
           data-testid="not-admin"
           className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
@@ -289,19 +287,11 @@ export function KeyPoolClient({ isAdmin }: Props) {
 
   return (
     <div className="p-8 max-w-5xl mx-auto">
-      {/* ⚠ Header link chain, NOT a tab strip. The approved mockup drew tabs
-          across the three settings pages, but no such component exists: each
-          settings page is a standalone route and they link to each other from
-          the header (`Pricing Templates → Hub Tracking`). Building a tab bar
-          here would have been a fourth navigation idiom in one module. */}
-      <div className="flex items-center justify-between mb-1">
-        <a
-          href="/iap-management/settings/hub-tracking"
-          className="text-sm text-slate-500 hover:text-[#0071E3] transition"
-        >
-          ← Hub Tracking
-        </a>
-      </div>
+      {/* The tab strip the mockup always specified. The comment that used to
+          sit here argued the chain of header links was right because "no such
+          component exists" — true while one page was being built, and the
+          reason three pages ended up with three different header shapes. */}
+      <SettingsTabs />
       <div className="flex items-start justify-between mb-4">
         <div>
           <h1 className="text-lg font-semibold text-slate-900">API Key Pool</h1>
