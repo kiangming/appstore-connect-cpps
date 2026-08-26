@@ -86,7 +86,16 @@ describe("listPoolKeys", () => {
     expect(decryptPrivateKey).toHaveBeenCalledWith("enc:KEY1");
   });
 
-  it("queries the pool table for enabled keys of that account only", async () => {
+  // ⚠ NAME NARROWED TO MATCH THE ASSERTION. This used to read "...enabled
+  // keys of that account only", which claimed the account filter — but the
+  // stub's `.eq` returns itself and records nothing, so the assertion could
+  // only ever see the table name. Deleting `.eq("account_id", accountId)`
+  // from the source left this test green. A test whose NAME is stronger than
+  // its assertion is worse than a missing test: it reports coverage that is
+  // not there, and it is what let that mutation survive to be found during a
+  // Manager UAT rather than here. The account-scoping claim now lives in
+  // `isolation.test.ts`, against a fake DB that actually applies the filter.
+  it("reads from the pool table", async () => {
     await listPoolKeys("acct-a");
     expect(fromSpy).toHaveBeenCalledWith("asc_account_keys");
   });
