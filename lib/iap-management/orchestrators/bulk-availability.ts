@@ -73,6 +73,7 @@ import {
   withRetry,
   AppleRateLimitError,
 } from "@/lib/iap-management/apple/fetch";
+import { recordAvailabilityMirrorFromAcceptedWrite } from "@/lib/iap-management/queries/availability-mirror";
 import type { IapActionType } from "@/lib/iap-management/action-types";
 
 /**
@@ -398,6 +399,23 @@ export async function executeBulkAvailability(
           ...(apple_availability_id ? { apple_availability_id } : {}),
           source: "bulk",
           rate_limit: counters,
+        });
+        // ── [EXPORT-availability-filter] C3 — WRITE-THROUGH.
+        //    Census M3: before this line the orchestrator wrote `actions_log`
+        //    and NOTHING else, so a Remove from Sales here left the list's
+        //    Availabilities column saying "Available" until a hard reload —
+        //    the Manager saw the opposite of what they had just done.
+        //    ⚠ Reached only after `trackedWithRetry` returned, i.e. Apple
+        //    answered 2xx. The FAILED and NOT_ATTEMPTED paths never come
+        //    here, and must not: nothing was accepted, so there is no verdict
+        //    to store and the item keeps its previous timestamp.
+        //    ⚠ Fail-soft, like the audit row above it — a mirror write that
+        //    does not land is logged inside the helper and never turns a
+        //    successful Apple write into a failed row.
+        await recordAvailabilityMirrorFromAcceptedWrite({
+          iapId,
+          territoryIds: selection.territoryIds,
+          availableInNewTerritories: selection.availableInNewTerritories,
         });
         return {
           iapId,

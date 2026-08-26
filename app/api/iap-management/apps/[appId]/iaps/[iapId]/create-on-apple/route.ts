@@ -43,7 +43,11 @@ import {
   AppleApiError,
 } from "@/lib/iap-management/apple/fetch";
 import { uploadScreenshotToApple } from "@/lib/iap-management/apple/screenshot-upload";
-import { setAvailabilityToAllTerritories } from "@/lib/iap-management/apple/availabilities";
+import {
+  getAllTerritoryIds,
+  setAvailabilityToAllTerritories,
+} from "@/lib/iap-management/apple/availabilities";
+import { recordAvailabilityMirrorFromAcceptedWrite } from "@/lib/iap-management/queries/availability-mirror";
 import {
   applyPricingSchedule,
   type PricingSource,
@@ -427,6 +431,42 @@ export async function POST(
       `availability set-all failed iap=${iapId}: ${availabilityError}`,
       "WARN",
     );
+  }
+
+  // ⚠ [EXPORT-availability-filter] C3 — mirror the accepted write, and
+  // DELIBERATELY OUTSIDE THE TRY ABOVE.
+  //
+  // Putting it inside would let a throw from `getAllTerritoryIds` (its 1-hour
+  // cache can expire between the two calls, and a refill is a real Apple
+  // request that can 429) land in that catch — which would set
+  // `availabilityError` and report "availability set-all failed" for a write
+  // Apple had already accepted. That is the status principle (KB §9 P5): the
+  // reported outcome must be the real one, not whatever the last statement in
+  // the block happened to do.
+  //
+  // In the ordinary case this is a map lookup, not a request: the call above
+  // just populated the same cache to build its own body
+  // (availabilities.ts:80-95). Reading the count from the catalogue rather
+  // than hardcoding 175 keeps it right the day Apple launches a market.
+  if (availabilitySet) {
+    try {
+      await recordAvailabilityMirrorFromAcceptedWrite({
+        iapId,
+        territoryIds: await getAllTerritoryIds(creds),
+        // Matches what `setAvailabilityToAllTerritories` sends. The flag is
+        // NOT derivable from the list (KB §4.13), so it is stated, not
+        // inferred.
+        availableInNewTerritories: true,
+      });
+    } catch (err) {
+      // The mirror is a cache; failing to fill it changes nothing about what
+      // is on Apple, and must not change what this route reports.
+      await log(
+        "iap-create-on-apple",
+        `availability mirror write skipped iap=${iapId}: ${err instanceof Error ? err.message : String(err)}`,
+        "WARN",
+      );
+    }
   }
   await db.from("actions_log").insert({
     iap_id: iapId,

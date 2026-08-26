@@ -32,6 +32,26 @@
  *
  * 200 wraps the error cases (instead of 5xx) so the client can render a
  * graceful em-dash cell + retry affordance without `fetch` rejecting.
+ *
+ * ─── [EXPORT-availability-filter] C2 — READ-THROUGH ────────────────────────
+ *
+ * A successful read now also lands in the availability mirror
+ * (`iap_mgmt.iaps.availability_*`). This costs ZERO extra Apple requests: it
+ * stores an answer this route already paid for and, before C2, threw away.
+ * That is what lets the export wizard filter Available/Removed/Unknown for
+ * free, and what lets the list column stop re-reading Apple on every mount.
+ *
+ * ⚠ ONLY A REAL ANSWER IS WRITTEN. `state` here is `AvailabilityForIap | null`
+ * and both are answers — an object is Apple's territory list, `null` is Apple
+ * having no availability resource at all (the "Removed from Sale" surface).
+ * The `rate_limited` and `fetch_failed` branches return BEFORE the write and
+ * must keep doing so: persisting REMOVED because Apple was busy would be the
+ * U3 defect with the sign flipped, and unlike U3 it would survive a reload.
+ *
+ * ⚠ THE WRITE CANNOT FAIL THE READ. `recordAvailabilityMirror` never throws
+ * and checks its own `error`; its result is reported to the client as
+ * `mirrored` and nothing else depends on it. The Manager's cell renders from
+ * `state`, exactly as before.
  */
 
 import { NextResponse } from "next/server";
@@ -49,6 +69,7 @@ import {
   withRetry,
   AppleRateLimitError,
 } from "@/lib/iap-management/apple/fetch";
+import { recordAvailabilityMirror } from "@/lib/iap-management/queries/availability-mirror";
 
 export const runtime = "nodejs";
 
@@ -56,6 +77,10 @@ interface RouteResponse {
   state: AvailabilityForIap | null;
   error?: "rate_limited" | "fetch_failed";
   reason?: string;
+  /** C2 — when the read succeeded, the instant it was stamped into the
+   *  mirror, so the client can date the cell without a round-trip. Absent
+   *  when the mirror write did not land; the cell still renders `state`. */
+  syncedAt?: string;
 }
 
 export async function GET(
@@ -111,6 +136,16 @@ export async function GET(
     return NextResponse.json(payload);
   }
 
-  const ok: RouteResponse = { state };
+  // ── C2. Read-through. Reached ONLY on a real answer — both error branches
+  //    above returned already. `state === null` is Apple saying "no
+  //    availability resource", which is a verdict, not a failure.
+  const observedAt = new Date().toISOString();
+  const mirrored = await recordAvailabilityMirror({
+    iapId,
+    observed: state,
+    observedAt,
+  });
+
+  const ok: RouteResponse = mirrored ? { state, syncedAt: observedAt } : { state };
   return NextResponse.json(ok);
 }

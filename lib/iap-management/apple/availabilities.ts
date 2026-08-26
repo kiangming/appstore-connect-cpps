@@ -274,6 +274,123 @@ export async function getAvailabilityForIap(
   };
 }
 
+/**
+ * ─── [EXPORT-avail-read-halving] — 2 Apple requests per item become 1 ──────
+ *
+ * `getAvailabilityForIap` above pays Step A purely to learn the availability
+ * resource's id and its `availableInNewTerritories` flag. A caller that is
+ * ALREADY listing the app can have both for free:
+ *
+ *   GET /v1/apps/{id}/inAppPurchasesV2?include=inAppPurchaseAvailability
+ *     data[].relationships.inAppPurchaseAvailability.data.id  → the id
+ *     included[].attributes.availableInNewTerritories         → the flag
+ *
+ * Both halves were measured live against production Apple, 9/9 items
+ * (design-export-list-item-selection.md PART 1.5 / U2). With them in hand only
+ * Step B remains, so a full-catalogue sweep costs `ceil(N/200) + N` instead of
+ * `2N`.
+ *
+ * ⚠⚠ THE INCLUDE SUPPLIES AN ID. IT DOES NOT CLASSIFY. ⚠⚠
+ * This is the U3 trap and it is one careless line away at all times. The
+ * included resource carries `relationships.availableTerritories` with `links`
+ * ONLY — no `data`, no count (measured 9/9) — and Apple populates the
+ * relationship for EVERY IAP that exists (measured 0/29 missing). So:
+ *
+ *   "it has an availability relationship"  ⇒  NOTHING about availability.
+ *
+ * Reading presence as "available" would mark every removed item Available,
+ * which is precisely the defect the census was sent to look for. The verdict
+ * comes from Step B's territory count, through `classifyAvailability`, and
+ * from nowhere else. An item whose Step B fails is UNKNOWN — not available,
+ * not removed, and not written to the mirror.
+ */
+
+/**
+ * Pull the availability resource id off a listed IAP. PURE, defensive, and
+ * returns null rather than guessing — Apple's `relationships` is typed
+ * `Record<string, unknown>`, so every hop is checked.
+ *
+ * ⚠ A null return means "we could not get the id cheaply", NOT "no
+ * availability". The caller falls back to the 2-request read; it must never
+ * fall back to a verdict.
+ */
+export function availabilityIdFromListedIap(iap: {
+  relationships?: Record<string, unknown>;
+}): string | null {
+  const rel = iap.relationships?.["inAppPurchaseAvailability"];
+  if (!rel || typeof rel !== "object") return null;
+  const data = (rel as { data?: unknown }).data;
+  if (!data || typeof data !== "object") return null;
+  const id = (data as { id?: unknown }).id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
+/**
+ * Map availability-resource id → `availableInNewTerritories`, from the
+ * `included[]` of a list response that asked for the include.
+ *
+ * ⚠ The flag is NOT derivable from the territory list (KB §4.13): a Manager
+ * ticking all ~175 boxes by hand and a Manager choosing "All countries or
+ * regions" send the same ids with a different flag. That is why it is carried
+ * through here instead of being reconstructed from the count downstream.
+ */
+export function availabilityFlagsFromIncluded(
+  included: ReadonlyArray<{ type?: string; id?: string; attributes?: unknown }> | undefined,
+): Map<string, boolean> {
+  const out = new Map<string, boolean>();
+  for (const res of included ?? []) {
+    if (res?.type !== "inAppPurchaseAvailabilities" || typeof res.id !== "string") {
+      continue;
+    }
+    const attrs = res.attributes;
+    const flag =
+      attrs && typeof attrs === "object"
+        ? (attrs as { availableInNewTerritories?: unknown }).availableInNewTerritories
+        : undefined;
+    out.set(res.id, flag === true);
+  }
+  return out;
+}
+
+/**
+ * Step B on its own: the full territory list for a KNOWN availability id.
+ *
+ * ⚠ THROWS on failure, unlike `getAvailabilityForIap`'s best-effort Step B.
+ * The difference is deliberate and it is the whole point. There, Step A had
+ * already proved the resource exists, so an empty list degrades to a visible
+ * "0 of M" in a detail view a human is reading. Here the result is written to
+ * a mirror and later filtered on, so a swallowed failure would persist as
+ * REMOVED — a wrong answer with a timestamp on it, which outlives and outranks
+ * an honest blank. Callers catch this and record the item as unread.
+ */
+export async function getAvailabilityByIdForIap(
+  creds: AscCredentials,
+  availabilityId: string,
+  availableInNewTerritories: boolean,
+): Promise<AvailabilityForIap> {
+  const territoryIds: string[] = [];
+  let cursor: string | null =
+    `/v1/inAppPurchaseAvailabilities/${availabilityId}/availableTerritories?limit=200`;
+  while (cursor) {
+    const page: TerritoryListResponse = await iapFetch<TerritoryListResponse>(
+      creds,
+      "GET",
+      cursor,
+    );
+    for (const t of page.data ?? []) {
+      if (t && t.type === "territories" && typeof t.id === "string") {
+        territoryIds.push(t.id);
+      }
+    }
+    cursor = nextCursorFrom(page);
+  }
+  return {
+    availableInNewTerritories,
+    territoryCount: territoryIds.length,
+    territoryIds,
+  };
+}
+
 interface TerritoryListResponse {
   data: Array<{ type?: string; id?: string }>;
   links?: { next?: string | null };

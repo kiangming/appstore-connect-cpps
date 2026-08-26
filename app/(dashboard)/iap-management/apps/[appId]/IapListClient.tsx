@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -35,6 +35,12 @@ import {
   type BulkMode,
 } from "@/components/iap-management/AvailabilitiesBulkModal";
 import { AvailabilityCell } from "@/components/iap-management/AvailabilityCell";
+import {
+  asOfLabel,
+  asOfSummary,
+  type AvailabilityMirrorByAppleId,
+  type AvailabilityMirrorRecord,
+} from "@/lib/iap-management/apple/availability-as-of";
 import { ExportItemWizard } from "@/components/iap-management/export-wizard/ExportItemWizard";
 import { ExportResultSummary } from "@/components/iap-management/export-wizard/ExportResultSummary";
 
@@ -62,6 +68,13 @@ interface Props {
   /** SC6 — Apple IAP id → that item's own base_territory, for the
    *  Set Availabilities confirm advisory. Bases differ across a batch. */
   baseTerritoryByAppleId?: Record<string, string>;
+  /**
+   * C5 — the availability mirror, read from the local DB by the server
+   * component. Items ABSENT from this map have never been synced: their cell
+   * falls back to the original lazy fetch, and they are counted as Unknown in
+   * the as-of line. Absence is never rendered as a verdict.
+   */
+  availabilityByAppleId?: AvailabilityMirrorByAppleId;
 }
 
 const TYPE_LABEL: Record<InAppPurchaseType, string> = {
@@ -139,6 +152,7 @@ export function IapListClient({
   drafts = [],
   appleToInternal,
   baseTerritoryByAppleId = {},
+  availabilityByAppleId = {},
 }: Props) {
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -162,6 +176,55 @@ export function IapListClient({
   // Hotfix 25: the modal now fetches availability on open via the
   // per-IAP API route — no prop drilling of pre-fetched state.
   const [bulkMode, setBulkMode] = useState<BulkMode | null>(null);
+
+  /**
+   * C6 — verdicts learned by cells DURING this page's life, on top of what the
+   * server render knew.
+   *
+   * ⚠ Without this the as-of line would be a lie the moment a cell resolved:
+   * the server said "40 never synced", ten cells then read Apple and filled
+   * the mirror, and the line would still say 40 until a reload. The count on
+   * screen has to mean the items on screen, now.
+   */
+  const [resolvedAvailability, setResolvedAvailability] = useState<
+    Record<string, AvailabilityMirrorRecord>
+  >({});
+
+  const handleAvailabilityResolved = useCallback(
+    (appleIapId: string, record: AvailabilityMirrorRecord) => {
+      setResolvedAvailability((prev) => {
+        const existing = prev[appleIapId];
+        // ⚠ Newer only. A slow response landing after a fresher one must not
+        //   push the older answer back — same rule the cell itself applies.
+        if (existing && existing.syncedAt >= record.syncedAt) return prev;
+        return { ...prev, [appleIapId]: record };
+      });
+    },
+    [],
+  );
+
+  /**
+   * ⚠ SERVER FIRST, CLIENT OVERLAY SECOND — and that order matters after a
+   * `router.refresh()`. Refresh from Apple sweeps availability server-side and
+   * re-renders with a fresher `availabilityByAppleId`; if the client overlay
+   * won, every item a cell had read earlier would be pinned to its stale
+   * pre-refresh verdict and the column would look frozen — the exact M3
+   * symptom this arc exists to remove. The overlay only fills gaps the server
+   * render did not know about, and the per-record `syncedAt` comparison in the
+   * cell settles the rest.
+   */
+  const availabilityMirror = useMemo(() => {
+    const merged: Record<string, AvailabilityMirrorRecord> = {
+      ...resolvedAvailability,
+    };
+    for (const [appleId, record] of Object.entries(availabilityByAppleId)) {
+      const overlay = merged[appleId];
+      if (!overlay || record.syncedAt >= overlay.syncedAt) {
+        merged[appleId] = record;
+      }
+    }
+    return merged;
+  }, [availabilityByAppleId, resolvedAvailability]);
 
   const allStates = useMemo(() => {
     const s = new Set<string>();
@@ -292,6 +355,12 @@ export function IapListClient({
         inserted_count?: number;
         updated_count?: number;
         errors: string[];
+        // C4 — the availability sweep's own counters, reported separately
+        // because they answer a different question than the state counters.
+        availability_read_count?: number;
+        availability_failed_count?: number;
+        availability_not_attempted_count?: number;
+        availability_stopped?: boolean;
       };
       // IAP.o.8b — Manager MV30 Issue 2 fix surfaces inserted vs updated
       // separately so the first-sync "discovered N new IAPs" path is
@@ -308,10 +377,32 @@ export function IapListClient({
         parts.length > 0
           ? parts.join(" · ")
           : `${data.synced_count} refreshed`;
-      if (data.errors && data.errors.length > 0) {
-        toast.warning(`${summary} · ${data.errors.length} error(s).`);
+      // ⚠ [EXPORT-availability-filter] C4 — A STOPPED SWEEP MUST BE VISIBLE.
+      //    Refresh now also reads availability for every item, and that half
+      //    can stop early on Apple's rate limit while the state half succeeded
+      //    completely. Reporting only "N refreshed" would leave the Manager
+      //    believing the Availabilities column is current when part of it is
+      //    still yesterday's answer — the same class of quiet staleness this
+      //    whole arc was opened over. The untouched items keep their old
+      //    as-of timestamp, and the as-of line under the filters shows it.
+      const availabilityRead = data.availability_read_count ?? 0;
+      const notAttempted = data.availability_not_attempted_count ?? 0;
+      const availabilityFailed = data.availability_failed_count ?? 0;
+      const availabilityNote =
+        availabilityRead > 0 || notAttempted > 0 || availabilityFailed > 0
+          ? ` · availability: ${availabilityRead} read${
+              availabilityFailed > 0 ? `, ${availabilityFailed} failed` : ""
+            }${notAttempted > 0 ? `, ${notAttempted} not read` : ""}`
+          : "";
+
+      if (data.availability_stopped) {
+        toast.warning(
+          `${summary}${availabilityNote} — availability stopped on Apple's rate limit. Items not read keep their previous "as of" time.`,
+        );
+      } else if (data.errors && data.errors.length > 0) {
+        toast.warning(`${summary}${availabilityNote} · ${data.errors.length} error(s).`);
       } else {
-        toast.success(summary);
+        toast.success(`${summary}${availabilityNote}`);
       }
       router.refresh();
     } catch (err) {
@@ -651,6 +742,21 @@ export function IapListClient({
         </select>
       </div>
 
+      {/* C6 — how old the Availabilities column is, in the same words the
+          export wizard uses (one shared `asOfLabel`, so the two surfaces can
+          never tell the Manager different things about the same data).
+          ⚠ Scoped to the CURRENT PAGE's rows, not the whole app: those are the
+          cells actually on screen, and dating them by items the Manager cannot
+          see would be the same lie in the other direction. */}
+      {paginated.length > 0 && (
+        <p
+          data-testid="list-availability-as-of"
+          className="text-[11px] text-slate-400 -mt-3"
+        >
+          {asOfLabel(asOfSummary(paginated.map((iap) => iap.id), availabilityMirror))}
+        </p>
+      )}
+
       {/* List */}
       {filtered.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white p-10 text-center">
@@ -776,7 +882,13 @@ export function IapListClient({
                         Hotfix 25: lazy-loaded per-row via
                         IntersectionObserver + client concurrency queue. */}
                     <td className="px-4 py-2.5">
-                      <AvailabilityCell internalIapId={appleToInternal[iap.id] ?? null} />
+                      <AvailabilityCell
+                        internalIapId={appleToInternal[iap.id] ?? null}
+                        mirror={availabilityMirror[iap.id] ?? null}
+                        onResolved={(record) =>
+                          handleAvailabilityResolved(iap.id, record)
+                        }
+                      />
                     </td>
                     <td
                       className="px-4 py-2.5 text-right"
@@ -904,6 +1016,11 @@ export function IapListClient({
           reference_name: d.reference_name,
         }))}
         appleToInternal={appleToInternal}
+        /* ⚠ The MERGED map, not the raw server prop — so an item a cell read
+           moments ago is already Available/Removed in the picker instead of
+           Unknown. The wizard still issues zero requests; it reads what the
+           page already has. */
+        availabilityByAppleId={availabilityMirror}
         exporting={exporting}
         onCancel={() => setExportWizardOpen(false)}
         onExport={handleConfirmExport}

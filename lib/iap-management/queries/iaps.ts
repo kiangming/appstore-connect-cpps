@@ -7,6 +7,11 @@
  */
 
 import { iapDb } from "../db";
+import {
+  buildAvailabilityMirrorMap,
+  type AvailabilityMirrorByAppleId,
+  type AvailabilityMirrorRow,
+} from "./availability-mirror";
 import type {
   IapFormState,
   FormLocalization,
@@ -353,6 +358,14 @@ export async function listSyncedAppleIapMap(
  * (migration 20260515000000:94) — across a bulk batch the bases genuinely
  * differ, so a single "USA" assumption would mislabel every item based
  * elsewhere. Selecting it alongside the id map costs no extra query.
+ *
+ * ⚠ [EXPORT-availability-filter] C5 — the availability mirror rides here too,
+ * for the same reason and with the same justification: the IAP list page and
+ * the export wizard both need it on every render, this query already reads
+ * every row of the app, and three more columns on an existing SELECT is free
+ * where a second query would not be. The row → record rule is NOT
+ * reimplemented here — `buildAvailabilityMirrorMap` owns it, so a row with a
+ * verdict but no timestamp reads as unknown on every surface identically.
  */
 export async function listSyncedAppleIapDetail(
   internalAppId: string,
@@ -360,11 +373,16 @@ export async function listSyncedAppleIapDetail(
   appleToInternal: Record<string, string>;
   /** Apple IAP id → that item's own base territory. */
   baseTerritoryByAppleId: Record<string, string>;
+  /** Apple IAP id → cached availability verdict. ABSENT = never synced,
+   *  which is UNKNOWN and must never be read as available. */
+  availabilityByAppleId: AvailabilityMirrorByAppleId;
 }> {
   const db = iapDb();
   const res = await db
     .from("iaps")
-    .select("id, apple_iap_id, base_territory")
+    .select(
+      "id, apple_iap_id, base_territory, availability_state, availability_territory_count, availability_synced_at",
+    )
     .eq("app_id", internalAppId)
     .not("apple_iap_id", "is", null);
   if (res.error) {
@@ -385,7 +403,10 @@ export async function listSyncedAppleIapDetail(
       baseTerritoryByAppleId[row.apple_iap_id] = row.base_territory;
     }
   }
-  return { appleToInternal, baseTerritoryByAppleId };
+  const availabilityByAppleId = buildAvailabilityMirrorMap(
+    (res.data ?? []) as AvailabilityMirrorRow[],
+  );
+  return { appleToInternal, baseTerritoryByAppleId, availabilityByAppleId };
 }
 
 /** Hotfix 13: pure partition step used by `seedMissingIapStubs`. Returns

@@ -339,9 +339,18 @@ describe("fetchExportSources — exactly one wrapper on the naive dep, none on t
 // ─── P16 shape 2 — bare-identifier pin at the two fixed sites ───────────────
 
 describe("bare-identifier pin — the two fixed sites read as bare calls in source", () => {
+  /**
+   * ⚠ THE PIN IS ON THE CALL'S OPENING, NOT ON A FULL LITERAL WITH ITS CLOSING
+   * PAREN. sync-states now passes a third argument —
+   * `{ includeAvailability: true }`, [EXPORT-avail-read-halving] — and a pin
+   * that demanded `…appleAppId)` would have failed for a change that has
+   * nothing to do with retry composition. What this guard actually protects is
+   * that NO RETRY WRAPPER OPENS IN FRONT OF THE CALL, which the negative
+   * assertion below states directly and which the extra argument cannot affect.
+   */
   it.each([
-    ["app/api/iap-management/apps/[appId]/export/route.ts", "listAllInAppPurchases(creds, appleAppId)"],
-    ["app/api/iap-management/apps/[appId]/iaps/sync-states/route.ts", "listAllInAppPurchases(creds, appleAppId)"],
+    ["app/api/iap-management/apps/[appId]/export/route.ts", "listAllInAppPurchases(creds, appleAppId"],
+    ["app/api/iap-management/apps/[appId]/iaps/sync-states/route.ts", "listAllInAppPurchases(creds, appleAppId"],
   ])("%s calls it bare", (file, call) => {
     const code = stripComments(read(file));
     expect(code).toContain(call);

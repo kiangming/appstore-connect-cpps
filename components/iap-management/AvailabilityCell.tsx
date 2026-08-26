@@ -27,12 +27,41 @@
  * Rows without an internal UUID (unsynced Apple-only rows, prior to
  * Refresh from Apple seeding the local cache) render the gray em-dash
  * stand-in directly — no fetch, no observer.
+ *
+ * ─── [EXPORT-availability-filter] C5 — MIRROR-FIRST ────────────────────────
+ *
+ * Census M2/M3 found two defects that share one cause — nothing was ever kept:
+ *
+ *   • Every mount re-read Apple. 100 rows scrolled = 200 Apple requests, every
+ *     visit, for an answer the tool had already bought minutes earlier.
+ *   • Nothing could refresh the cell. After a Remove from Sales in this tool
+ *     the column kept saying "Available" — `router.refresh()` re-renders the
+ *     server tree but this component never unmounts, so the early return at
+ *     `cellState !== "pending"` blocked any re-read. Only a hard reload fixed
+ *     it, and a Manager watching the column had every reason to believe their
+ *     removal had failed.
+ *
+ * So the cell now takes a `mirror` prop:
+ *
+ *   mirror present  → render it. No fetch, no observer. (~0 requests from the
+ *                     second visit onward.)
+ *   mirror absent   → the ORIGINAL path, unchanged: observer → queue → fetch.
+ *                     Lazy-load is not replaced, it is what fills the mirror.
+ *   mirror CHANGES  → adopt the newer answer, even mid-life. This is what makes
+ *                     Refresh from Apple and Remove from Sales update the
+ *                     column without a reload.
+ *
+ * ⚠ THE CLASSIFICATION LOGIC BELOW IS UNTOUCHED. `classifyAvailability` is
+ * still the only thing that decides available-vs-removed for a fetched answer,
+ * and the four terminal/error states render exactly as before. The mirror
+ * supplies an answer earlier; it does not supply a different rule.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Globe, MinusCircle, AlertTriangle } from "lucide-react";
 import type { AvailabilityForIap } from "@/lib/iap-management/apple/availabilities";
 import { classifyAvailability } from "@/lib/iap-management/apple/availability-classify";
+import type { AvailabilityMirrorRecord } from "@/lib/iap-management/apple/availability-as-of";
 import {
   acquireSlot,
   releaseSlot,
@@ -51,18 +80,65 @@ export interface AvailabilityCellProps {
    *  haven't been seeded locally yet — cell renders an em-dash without
    *  attempting a fetch. */
   internalIapId: string | null;
+  /**
+   * C5 — what the mirror already knows about this item, from the server
+   * render. `undefined`/`null` means never synced, and that is the ONLY
+   * condition under which this cell reads Apple.
+   *
+   * ⚠ Absence is not a verdict. A cell with no mirror record fetches; it does
+   * not render "Available" or "Removed" on the strength of having nothing.
+   */
+  mirror?: AvailabilityMirrorRecord | null;
+  /**
+   * C6 — called whenever this cell learns a verdict Apple confirmed, so the
+   * page's "as of last sync" line and its Unknown count stay true without a
+   * reload. Fired only for real answers: a rate-limited or failed cell reports
+   * nothing, because nothing was learned.
+   */
+  onResolved?: (record: AvailabilityMirrorRecord) => void;
 }
 
 interface ApiResponse {
   state: AvailabilityForIap | null;
   error?: "rate_limited" | "fetch_failed" | "iap_not_found" | "not_synced";
   reason?: string;
+  /** C2 — when the read landed in the mirror, the instant it was stamped. */
+  syncedAt?: string;
 }
 
-export function AvailabilityCell({ internalIapId }: AvailabilityCellProps) {
-  const [cellState, setCellState] = useState<AvailabilityCellState>("pending");
+/** The mirror verdict as this component's own state vocabulary. */
+function stateFromMirror(
+  record: AvailabilityMirrorRecord,
+): AvailabilityCellState {
+  return record.state === "AVAILABLE" ? "available" : "removed";
+}
+
+export function AvailabilityCell({
+  internalIapId,
+  mirror,
+  onResolved,
+}: AvailabilityCellProps) {
+  // ⚠ Seeded from the mirror so a known item renders instantly and never
+  //   mounts an observer. Unknown items start "pending" exactly as before.
+  const [cellState, setCellState] = useState<AvailabilityCellState>(() =>
+    mirror ? stateFromMirror(mirror) : "pending",
+  );
   const containerRef = useRef<HTMLSpanElement>(null);
   const mountedRef = useRef(true);
+  /**
+   * The vintage of whatever this cell is currently showing.
+   *
+   * ⚠ THIS IS WHAT FIXES M3. Without it, a cell that has already resolved can
+   * never change: the observer effect returns early on any non-pending state,
+   * so a fresh mirror arriving via `router.refresh()` — after Refresh from
+   * Apple, or after a Remove from Sales — would be ignored and the column
+   * would keep showing the pre-change answer until a hard reload.
+   *
+   * ⚠ And it is a comparison, not a blanket overwrite. Adopting any incoming
+   * mirror unconditionally would let a server render that raced this cell's
+   * own just-completed fetch push the OLDER answer back on screen.
+   */
+  const shownSyncedAtRef = useRef<string | null>(mirror?.syncedAt ?? null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -70,6 +146,15 @@ export function AvailabilityCell({ internalIapId }: AvailabilityCellProps) {
       mountedRef.current = false;
     };
   }, []);
+
+  // ── Adopt a newer mirror answer whenever the server sends one. ───────────
+  useEffect(() => {
+    if (!mirror) return;
+    const shown = shownSyncedAtRef.current;
+    if (shown !== null && mirror.syncedAt <= shown) return;
+    shownSyncedAtRef.current = mirror.syncedAt;
+    setCellState(stateFromMirror(mirror));
+  }, [mirror]);
 
   const runFetch = useCallback(async () => {
     if (!internalIapId) return;
@@ -101,14 +186,29 @@ export function AvailabilityCell({ internalIapId }: AvailabilityCellProps) {
         setCellState("failed");
         return;
       }
+      // ⚠ UNCHANGED — the classifier is still the only thing that turns
+      //   Apple's answer into a verdict here.
       const bucket = classifyAvailability(data.state ?? null, false);
       setCellState(bucket === "available" ? "available" : "removed");
+      // C6 — tell the page what we learned, so its as-of line and Unknown
+      // count reflect this cell without waiting for a server round-trip.
+      // `syncedAt` is absent only when the mirror write itself failed; the
+      // cell still renders, and the page simply keeps counting this item as
+      // unknown rather than inventing a timestamp for it.
+      if (data.syncedAt) {
+        shownSyncedAtRef.current = data.syncedAt;
+        onResolved?.({
+          state: bucket === "available" ? "AVAILABLE" : "REMOVED",
+          territoryCount: data.state?.territoryCount ?? 0,
+          syncedAt: data.syncedAt,
+        });
+      }
     } catch {
       if (mountedRef.current) setCellState("failed");
     } finally {
       releaseSlot();
     }
-  }, [internalIapId]);
+  }, [internalIapId, onResolved]);
 
   // IntersectionObserver — only fire fetch when the cell is in / near the
   // viewport, AND only when state is "pending". Re-attaches every time

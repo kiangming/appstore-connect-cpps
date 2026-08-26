@@ -53,16 +53,35 @@ import type {
  * page N retries that page only, not the whole iteration. Callers MUST NOT
  * wrap this in their own `withRetry`.
  *
- * Returns an `AscApiResponse<InAppPurchase[]>` with `data` accumulated across
- * pages; `links` and `meta` are intentionally dropped because they describe a
- * specific page, not the aggregate.
+ * Returns an `AscApiResponse<InAppPurchase[]>` with `data` (and, when asked
+ * for, `included`) accumulated across pages; `links` and `meta` are
+ * intentionally dropped because they describe a specific page, not the
+ * aggregate.
+ *
+ * ⚠ `includeAvailability` IS OPT-IN, AND STAYS OPT-IN.
+ * [EXPORT-avail-read-halving] needs `?include=inAppPurchaseAvailability` so an
+ * availability sweep gets the resource id + `availableInNewTerritories` free
+ * and pays 1 request per item instead of 2. Every other caller — the list
+ * page, the export route, submit-batch — wants the smaller payload and asks
+ * for nothing extra. Turning it on by default would enlarge every list
+ * response in the module to serve one caller.
+ *
+ * ⚠ AND IT DOES NOT MAKE THE LIST ABLE TO CLASSIFY AVAILABILITY. The include
+ * carries no territory count and Apple populates it for every IAP; see
+ * `availabilityIdFromListedIap` for why presence must never be read as a
+ * verdict.
  */
 export async function listAllInAppPurchases(
   creds: AscCredentials,
   appAppleId: string,
+  opts?: { includeAvailability?: boolean },
 ): Promise<AscApiResponse<InAppPurchase[]>> {
   const accumulated: InAppPurchase[] = [];
-  let next: string | undefined = `/v1/apps/${appAppleId}/inAppPurchasesV2?limit=200`;
+  const included: NonNullable<AscApiResponse<InAppPurchase[]>["included"]> = [];
+  const query = opts?.includeAvailability
+    ? "?limit=200&include=inAppPurchaseAvailability"
+    : "?limit=200";
+  let next: string | undefined = `/v1/apps/${appAppleId}/inAppPurchasesV2${query}`;
   let pageCount = 0;
 
   while (next) {
@@ -74,6 +93,9 @@ export async function listAllInAppPurchases(
     if (page.data && page.data.length > 0) {
       accumulated.push(...page.data);
     }
+    if (page.included && page.included.length > 0) {
+      included.push(...page.included);
+    }
     next = extractNextPagePath(page.links?.next);
   }
 
@@ -82,7 +104,9 @@ export async function listAllInAppPurchases(
     `listAllInAppPurchases app=${appAppleId} pages=${pageCount} total=${accumulated.length}`,
   );
 
-  return { data: accumulated };
+  return included.length > 0
+    ? { data: accumulated, included }
+    : { data: accumulated };
 }
 
 /**

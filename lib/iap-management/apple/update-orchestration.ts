@@ -40,6 +40,7 @@ import {
   type PricingSource,
 } from "./pricing-orchestration";
 import { setAvailabilityTerritories } from "./availabilities";
+import { recordAvailabilityMirrorFromAcceptedWrite } from "../queries/availability-mirror";
 import {
   classifySelection,
   type SelectionKind,
@@ -650,6 +651,18 @@ async function runAvailabilityStage(
       ...basePayload,
       result: "SUCCESS",
       ...(apple_availability_id ? { apple_availability_id } : {}),
+    });
+    // ⚠ [EXPORT-availability-filter] C3 — mirror the accepted write. The
+    // fourth and last of the emitters through `setAvailabilityTerritories`;
+    // leaving this one out would make the Edit form the single surface whose
+    // availability change the list column and the export wizard could not see.
+    // Inside the try on purpose, unlike create-on-apple: everything it needs
+    // is already in hand (no catalogue lookup that could throw), and the
+    // helper itself never throws.
+    await recordAvailabilityMirrorFromAcceptedWrite({
+      iapId: audit.iapId,
+      territoryIds: new_selection.territoryIds,
+      availableInNewTerritories: new_selection.availableInNewTerritories,
     });
     return {
       changed: true,

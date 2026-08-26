@@ -31,6 +31,32 @@
  * module (P8) and has exactly three props; the wizard composes around it from
  * the OUTSIDE, mapping its `onCancel` to "back to step 1, selection intact"
  * because a wizard step's cancel is a wizard decision, not the dialog's.
+ *
+ * ─── [EXPORT-availability-filter] C6 — the availability axis ───────────────
+ *
+ * A THIRD facet, "Availability", reading the local mirror
+ * (`iap_mgmt.iaps.availability_*`) — still zero Apple requests, because the
+ * page already had the map before this dialog opened.
+ *
+ * ⚠ IT DOES NOT REPLACE THE APPLE STATUS FILTER, AND THAT IS THE POINT.
+ * Both facets stay, side by side, showing two different questions about the
+ * same item: Apple's review lifecycle (`state`, raw) and Apple's territory
+ * reach (availability). U3 measured them in agreement on 35/35 items and it
+ * remains an agreement MEASURED, not guaranteed — the tool's own API-driven
+ * removal is still untested. Collapsing them into one control would make the
+ * day they disagree invisible; keeping both means the Manager can SEE it.
+ *
+ * ⚠ THREE VALUES, AND "UNKNOWN" IS ONE OF THEM. An item the mirror has never
+ * synced is Unknown — never quietly counted as Available. That is the U3
+ * defect restated as a filter rule: the earlier "items with an availability
+ * relationship are available" idea would have marked every removed item
+ * Available, and "no record yet ⇒ available" is the same mistake wearing a
+ * different hat.
+ *
+ * ⚠ AND THE FILTER IS DATED. `asOfLabel` renders how old the mirror is for
+ * the items on screen, computed from the OLDEST record, plus how many have
+ * never synced at all. A filter over cached data that does not say how stale
+ * it is invites the Manager to act on a week-old answer as if it were live.
  */
 
 import { useMemo, useState } from "react";
@@ -45,6 +71,14 @@ import { ROW_WINDOW_STEP } from "@/lib/iap-management/apple/bulk-item-search";
 import type { DraftItemInput } from "@/lib/iap-management/apple/bulk-item-rows";
 import { BulkItemPicker } from "@/components/iap-management/item-picker/BulkItemPicker";
 import { ExportOptionsDialog } from "@/components/iap-management/ExportOptionsDialog";
+import {
+  asOfLabel,
+  asOfSummary,
+  matchesAvailabilityFilter,
+  mirrorBucket,
+  type AvailabilityFilterValue,
+  type AvailabilityMirrorByAppleId,
+} from "@/lib/iap-management/apple/availability-as-of";
 import type {
   InAppPurchase,
   InAppPurchaseType,
@@ -70,6 +104,15 @@ export interface ExportItemWizardProps {
   iaps: readonly InAppPurchase[];
   drafts?: readonly DraftItemInput[];
   appleToInternal?: Readonly<Record<string, string>>;
+  /**
+   * C6 — the availability mirror, keyed by Apple id. Items absent from it have
+   * never been synced and filter as UNKNOWN.
+   *
+   * ⚠ Optional, and an empty map is a valid state that must render honestly:
+   * every item Unknown, the label saying "never synced". It must NOT degrade
+   * to "everything is available".
+   */
+  availabilityByAppleId?: AvailabilityMirrorByAppleId;
   onCancel: () => void;
   /** ⚠ `selectedIds` are APPLE ids. Export never needs the internal UUID —
    *  that is the whole reason this picker's exclusion set differs from the
@@ -86,6 +129,7 @@ export function ExportItemWizard({
   iaps,
   drafts,
   appleToInternal,
+  availabilityByAppleId = {},
   onCancel,
   onExport,
   exporting = false,
@@ -96,6 +140,8 @@ export function ExportItemWizard({
   const [windowSize, setWindowSize] = useState(ROW_WINDOW_STEP);
   const [typeFilter, setTypeFilter] = useState<InAppPurchaseType | "ALL">("ALL");
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [availabilityFilter, setAvailabilityFilter] =
+    useState<AvailabilityFilterValue>("ALL");
 
   /** Apple's raw status values, as they actually occur in THIS app. Derived
    *  rather than hardcoded so a state Apple adds shows up without a release. */
@@ -128,7 +174,9 @@ export function ExportItemWizard({
     return m;
   }, [iaps]);
 
-  /** Type + Apple status. The picker's own search runs on top of this. */
+  /** Type + Apple status + Availability. The picker's own search runs on top
+   *  of this. ⚠ All three are pure predicates over data already in this
+   *  component — no fetch, on any of them, ever (§2.I.1). */
   const facetSelectable = useMemo(
     () =>
       selectable.filter((r) => {
@@ -138,9 +186,38 @@ export function ExportItemWizard({
         if (statusFilter !== "ALL" && statusById.get(r.appleIapId) !== statusFilter) {
           return false;
         }
+        // ⚠ Absence of a mirror record is UNKNOWN, decided inside
+        //   `matchesAvailabilityFilter` — not by a `?? "AVAILABLE"` here.
+        if (
+          !matchesAvailabilityFilter(
+            availabilityByAppleId[r.appleIapId],
+            availabilityFilter,
+          )
+        ) {
+          return false;
+        }
         return true;
       }),
-    [selectable, typeFilter, statusFilter, typeById, statusById],
+    [
+      selectable,
+      typeFilter,
+      statusFilter,
+      availabilityFilter,
+      typeById,
+      statusById,
+      availabilityByAppleId,
+    ],
+  );
+
+  /** C6 — how old the availability data behind the filter is, over the items
+   *  this picker can select. Shown beside the facets. */
+  const availabilityAsOf = useMemo(
+    () =>
+      asOfSummary(
+        selectable.map((r) => r.appleIapId),
+        availabilityByAppleId,
+      ),
+    [selectable, availabilityByAppleId],
   );
 
   /**
@@ -152,6 +229,13 @@ export function ExportItemWizard({
    * screen. The search axis solves this with `selectedHidden`; the facets need
    * their own count for exactly the same reason, or narrowing a filter looks
    * like the tool discarding picks.
+   *
+   * ⚠ C6 — THIS COVERS THE AVAILABILITY AXIS TOO, and it does so because it
+   * derives from `facetSelectable` rather than re-listing the facets. Adding a
+   * third dropdown did not need a line here, and a future fourth one will not
+   * either. Do NOT "fix" this by enumerating the filters: that is how one axis
+   * ends up uncounted and a Manager watching their selection number drop
+   * concludes the tool threw picks away.
    */
   const selectedHiddenByFacets = useMemo(() => {
     const visible = new Set(facetSelectable.map((r) => r.appleIapId));
@@ -204,6 +288,7 @@ export function ExportItemWizard({
     setWindowSize(ROW_WINDOW_STEP);
     setTypeFilter("ALL");
     setStatusFilter("ALL");
+    setAvailabilityFilter("ALL");
   }
 
   function handleCancel() {
@@ -289,10 +374,53 @@ export function ExportItemWizard({
               </option>
             ))}
           </select>
+          {/* ⚠ A SEPARATE CONTROL FROM "Apple status", permanently. The two
+              answer different questions and the header explains why collapsing
+              them would hide the day they disagree. */}
+          <select
+            value={availabilityFilter}
+            onChange={(e) =>
+              setAvailabilityFilter(e.target.value as AvailabilityFilterValue)
+            }
+            aria-label="Availability"
+            data-testid="wizard-availability-filter"
+            className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm px-3 py-2"
+          >
+            <option value="ALL">All availability</option>
+            <option value="AVAILABLE">Available</option>
+            <option value="REMOVED">Removed</option>
+            {/* ⚠ A FIRST-CLASS CHOICE, not a leftover bucket. Never synced is
+                a real thing to want to look at, and the only alternative to
+                offering it is silently folding those items somewhere they do
+                not belong. */}
+            <option value="UNKNOWN">Unknown</option>
+          </select>
           <span className="text-[11px] text-slate-400 dark:text-slate-500 inline-flex items-center gap-1">
             <Search className="h-3 w-3" />
             Filters are local — they cost no Apple requests.
           </span>
+        </div>
+
+        {/* ⚠ The availability facet filters CACHED data, so the age of that
+            cache is part of the answer. Same `asOfLabel` the IAP list renders
+            — one function, so the two surfaces cannot describe the same mirror
+            differently. */}
+        <div className="px-5 pb-2">
+          <p
+            data-testid="wizard-availability-as-of"
+            className="text-[11px] text-slate-400 dark:text-slate-500"
+          >
+            {asOfLabel(availabilityAsOf)}
+            {availabilityAsOf.unknownCount > 0 && (
+              <>
+                {" — "}
+                <span className="text-amber-700 dark:text-amber-300">
+                  Unknown items are excluded from Available and Removed. Use
+                  Refresh from Apple to sync them.
+                </span>
+              </>
+            )}
+          </p>
         </div>
 
         {/* Body */}
@@ -302,10 +430,14 @@ export function ExportItemWizard({
               data-testid="facet-hidden-notice"
               className="text-[11px] text-amber-700 dark:text-amber-300 mb-2"
             >
+              {/* ⚠ "the current filters", NOT a list of them. C6 added a third
+                  facet and this sentence named only two — a wording that goes
+                  stale silently, and reads as a claim about WHICH filter hid
+                  the pick. The count is the fact worth carrying. */}
               + {selectedHiddenByFacets} more selected{" "}
               {selectedHiddenByFacets === 1 ? "item is" : "items are"} hidden by
-              the Type / Apple status filter — still selected, and still part of
-              the export.
+              the current filters — still selected, and still part of the
+              export.
             </p>
           )}
 
@@ -324,13 +456,24 @@ export function ExportItemWizard({
             onToggleOne={toggleOne}
             onToggleAll={toggleAll}
             renderRowTrailing={(row) => (
-              // ⚠ Apple's raw status, per row, for the same reason the filter
-              // shows raw values.
-              <span
-                data-testid={`row-status-${row.appleIapId}`}
-                className="font-mono text-[10px] text-slate-400 dark:text-slate-500 truncate max-w-[13rem]"
-              >
-                {statusById.get(row.appleIapId) ?? ""}
+              // ⚠ BOTH AXES ON EVERY ROW, side by side and visibly distinct.
+              //   That is the whole reason the availability filter was allowed
+              //   to exist: a row where Apple's raw status and the mirror's
+              //   verdict disagree shows both, so the divergence is something
+              //   the Manager can see rather than something the tool resolves
+              //   on their behalf. `BulkItemPicker` is NOT modified for this —
+              //   `renderRowTrailing` was already its extension point.
+              <span className="inline-flex items-center gap-2">
+                <AvailabilityBadge
+                  appleIapId={row.appleIapId}
+                  bucket={mirrorBucket(availabilityByAppleId[row.appleIapId])}
+                />
+                <span
+                  data-testid={`row-status-${row.appleIapId}`}
+                  className="font-mono text-[10px] text-slate-400 dark:text-slate-500 truncate max-w-[10rem]"
+                >
+                  {statusById.get(row.appleIapId) ?? ""}
+                </span>
               </span>
             )}
             nothingSelectableSlot={
@@ -338,7 +481,7 @@ export function ExportItemWizard({
                 data-testid="wizard-nothing-selectable"
                 className="rounded-lg border border-slate-200 dark:border-slate-800 px-3 py-6 text-center text-xs text-slate-500"
               >
-                No item matches this Type / Apple status filter.
+                No item matches this Type / Apple status / Availability filter.
               </p>
             }
             renderExcluded={(excludedMatching) => (
@@ -408,5 +551,51 @@ export function ExportItemWizard({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * One row's availability, from the mirror.
+ *
+ * ⚠ THREE VISUALLY DISTINCT OUTCOMES, and Unknown is not styled as a lesser
+ * version of Available. It reads "Unknown" in muted type with a tooltip that
+ * says why — an item nobody has asked Apple about looks different from one
+ * Apple confirmed, at a glance, without reading the word.
+ */
+function AvailabilityBadge({
+  appleIapId,
+  bucket,
+}: {
+  appleIapId: string;
+  bucket: "AVAILABLE" | "REMOVED" | "UNKNOWN";
+}) {
+  if (bucket === "AVAILABLE") {
+    return (
+      <span
+        data-testid={`row-availability-${appleIapId}`}
+        className="text-[10px] font-medium text-emerald-700 dark:text-emerald-400"
+      >
+        Available
+      </span>
+    );
+  }
+  if (bucket === "REMOVED") {
+    return (
+      <span
+        data-testid={`row-availability-${appleIapId}`}
+        className="text-[10px] font-semibold text-red-600 dark:text-red-400"
+      >
+        Removed
+      </span>
+    );
+  }
+  return (
+    <span
+      data-testid={`row-availability-${appleIapId}`}
+      title="Never synced from Apple. Use Refresh from Apple on the list page to read it."
+      className="text-[10px] text-slate-400 dark:text-slate-500 italic"
+    >
+      Unknown
+    </span>
   );
 }

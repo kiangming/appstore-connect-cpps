@@ -14,6 +14,7 @@ import {
   getTemplateSummary,
   type TemplateHeader,
 } from "@/lib/iap-management/queries/templates";
+import type { AvailabilityMirrorByAppleId } from "@/lib/iap-management/apple/availability-as-of";
 import { IapListClient } from "./IapListClient";
 import { AppPricingTemplateSection } from "@/components/iap-management/pricing-tiers/AppPricingTemplateSection";
 import type {
@@ -67,6 +68,9 @@ async function IapListContent({ appId }: { appId: string }) {
   let appleToInternal: Record<string, string> = {};
   // SC6 — per-item base territory for surface A's confirm advisory.
   let baseTerritoryByAppleId: Record<string, string> = {};
+  // C5 — the availability mirror. Rides on `listSyncedAppleIapDetail`'s
+  // existing SELECT, so this costs no extra query and NO Apple request.
+  let availabilityByAppleId: AvailabilityMirrorByAppleId = {};
   let internalAppId: string | null = null;
   let ascAccountId: string | null = null;
 
@@ -111,6 +115,7 @@ async function IapListContent({ appId }: { appId: string }) {
       const synced = await listSyncedAppleIapDetail(internalAppId);
       appleToInternal = synced.appleToInternal;
       baseTerritoryByAppleId = synced.baseTerritoryByAppleId;
+      availabilityByAppleId = synced.availabilityByAppleId;
       const summary = await getTemplateSummary({ kind: "APP", app_id: internalAppId });
       if (summary) {
         appTemplate = summary.template;
@@ -140,6 +145,14 @@ async function IapListContent({ appId }: { appId: string }) {
   // column lazy-loads per row via IntersectionObserver + a client-side
   // concurrency queue (see components/iap-management/AvailabilityCell.tsx
   // + lib/iap-management/client-fetch-queue.ts).
+  //
+  // ⚠ C5 does NOT undo that pivot. `availabilityByAppleId` is read from the
+  // LOCAL mirror in the query above — zero Apple requests on this render, same
+  // as before. What changes is that a cell with a mirror record no longer
+  // needs to ask Apple at all, and the lazy path survives untouched for the
+  // items the mirror has never seen. The Apple-side sweep that fills the
+  // mirror lives behind the explicit "Refresh from Apple" button (C4), which
+  // is where a Manager can see they are spending budget.
   return (
     <>
       <AppPricingTemplateSection
@@ -157,6 +170,7 @@ async function IapListContent({ appId }: { appId: string }) {
         drafts={drafts}
         appleToInternal={appleToInternal}
         baseTerritoryByAppleId={baseTerritoryByAppleId}
+        availabilityByAppleId={availabilityByAppleId}
       />
     </>
   );

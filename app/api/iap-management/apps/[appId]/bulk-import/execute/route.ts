@@ -57,6 +57,7 @@ import {
   getAllTerritoryIds,
   setAvailabilityTerritories,
 } from "@/lib/iap-management/apple/availabilities";
+import { availabilityMirrorColumnsFromAcceptedWrite } from "@/lib/iap-management/queries/availability-mirror";
 import {
   classifySelection,
   type TerritorySelection,
@@ -1732,6 +1733,29 @@ async function persistResult(
             last_import_status: result.status,
             last_import_summary: result.summary ?? null,
             synced_at: new Date().toISOString(),
+            // ⚠ [EXPORT-availability-filter] C3 — the availability mirror,
+            // written on the statement that was already running. This row's
+            // availability stage just told Apple exactly which territories to
+            // sell in; without these columns the export wizard and the list
+            // column would call a freshly-imported item "Unknown" until
+            // someone happened to scroll past it.
+            //
+            // ⚠ GATED ON `availability_set === true`, NOT on the row's status.
+            // A PARTIAL row reaches this upsert precisely because some stage
+            // failed, and availability is one of the stages that can be the
+            // failed one. Riding on the row's status would record a territory
+            // list Apple never accepted.
+            //
+            // ⚠ Columns come from the shared builder, never hand-rolled here —
+            // see `availabilityMirrorColumns` for why this call site spreads
+            // the payload instead of issuing its own UPDATE.
+            ...(result.availability_set === true
+              ? (availabilityMirrorColumnsFromAcceptedWrite({
+                  territoryIds: args.availability.selection.territoryIds,
+                  availableInNewTerritories:
+                    args.availability.selection.availableInNewTerritories,
+                }) ?? {})
+              : {}),
           },
           { onConflict: "app_id,product_id" },
         );
