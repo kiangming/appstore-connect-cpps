@@ -520,12 +520,74 @@ Found while building A′; each deliberately NOT folded into it.
 - [ ] [SA2-upstream] `seedMissingIapStubs` failure is silent — `app/(dashboard)/iap-management/apps/[appId]/page.tsx:106` inside the `catch {}` at `:122` — a failed seed empties `appleToInternal`, which now surfaces honestly in the modal as "Not linked locally — run Refresh from Apple" (SA2) but still gives the Manager no signal on the PAGE, where the failure actually happened. The modal fix treats the symptom; the page swallowing the cause is the disease. Fix: surface a page-level warning banner when seeding threw, distinct from the "no IAPs" empty state. ⚠ Do not widen the `catch {}` scope while doing it — the other lookups in that block (drafts, templates) are genuinely non-essential to the read view and should keep degrading silently.
 - [ ] [SA-followup] Windowed rendering is a slice + "Show more", not virtualisation — `components/iap-management/AvailabilitiesBulkModal.tsx` (`ROW_WINDOW_STEP`) — a Manager who clicks Show-more repeatedly on a 1,000-item app still ends up with 1,000 mounted rows. Acceptable because search is the primary path and the counts stay honest at any window size, but if row-mount cost is ever measured as a real problem, swap the slice for a virtual list. ⚠ Whatever replaces it must keep "Select all = all matching, never the rendered set" (`toggleAllForQuery`) — that invariant is the one a virtualiser makes easy to break.
 
+## Availability mirror arc (C1-C6) ✅ SHIPPED 2026-08-26 (`ddf8dd6`)
+
+Census kickoff verified the Manager's own description of the tool against the
+code before anything was designed. Two of the three claims were wrong, and the
+one that was right is the reason the arc was cheap.
+
+- **M1 ✅ the Manager was right, and the U3 trap was NOT present.** The list
+  column showed real availability — `getAvailabilityForIap` (2-step read, Step
+  B counts territories), classified by `classifyAvailability`. It never read
+  `include=inAppPurchaseAvailability` presence as a verdict, which is the
+  defect the census was sent to look for.
+- **M2 ❌ nothing was cached, anywhere.** No DB column, no lifted state,
+  `cache: "no-store"` on the fetch, no cache on the route. Each cell held its
+  own `useState` and lost it on unmount. So there was no timestamp that could
+  survive a page visit, and therefore no honest "as of last sync" to render —
+  which is what made the mirror a prerequisite rather than an optimisation.
+- **M3 ❌ "Refresh from Apple" never asked Apple about availability.**
+  `sync-states` read the IAP list and wrote `state`; the column stayed frozen.
+  Worse on the write side: `bulk-availability` wrote `actions_log` and nothing
+  else, so after a Remove from Sales the column kept saying "Available" until a
+  hard reload.
+- **M4 📊 the cost that was already being paid**: 2 requests per item, 100 rows
+  per page ⇒ ~200 Apple requests per scroll, every visit. On the key pool with
+  retry, but with no latch shared across cells — registered as
+  `[AVAIL-cell-no-latch]` and deliberately not fixed here.
+
+⚠ **C3 was four emitters, not one.** The kickoff said "write-through in
+`bulk-availability`". Grepping `setAvailabilityTerritories` found FOUR call
+sites (bulk, Edit via `update-orchestration`, Bulk Import, Create on Apple);
+patching one would have left Edit and Bulk Import as the surfaces the mirror
+was blind to. Bulk Import cannot use the UPDATE helper — at the moment it knows
+the outcome it is building an UPSERT on `(app_id, product_id)` for a row that
+may not exist — hence **two delivery shapes, ONE column definition**
+(`availabilityMirrorColumns`). P1, applied before the twins existed.
+
+⚠ **A P5 near-miss worth remembering.** In `create-on-apple` the mirror write
+was first placed INSIDE the availability `try`. `getAllTerritoryIds`'s 1-hour
+cache can expire, and a refill is a real Apple call that can 429 — which would
+have landed in that `catch` and reported "availability set-all failed" for a
+write Apple had already accepted. Moved outside, guarded by `availabilitySet`.
+The status principle is not only about button-vs-outcome; it is also about
+which statement happens to throw last inside a block.
+
+- [x] ~~**U-availability write-side** (the observation left hanging by U3)~~ ✅
+  **CAUSE FIXED, not merely observed.** The original question was "Remove from
+  Sales in the tool → Refresh from Apple → does Status flip to
+  `DEVELOPER_REMOVED_FROM_SALE`?", and the census showed the observation as
+  written could not be trusted: the Availabilities column would NOT move on a
+  Refresh click (the cell never unmounts, and its observer effect returns early
+  on any non-pending state), so a Manager running it would have had to press F5
+  to see the truth and could have concluded the removal failed. C3 (write the
+  mirror on an accepted write) + C5 (adopt a newer mirror mid-life) remove the
+  cause. **How to run it now:** Remove from Sales → the Availabilities column
+  must change **without F5**. If F5 is still needed, that is a bug in C5's
+  mirror-adoption effect, not a fact about Apple. The separate `state`-flip
+  question is answered by verify query **V6**
+  (`docs/iap-management/queries/verify-availability-mirror.sql`), which joins
+  `actions_log` AVAILABILITY_* rows against the mirror's freshness — no UI
+  observation needed. ⚠ Still untested and still worth naming:
+  `REMOVED_FROM_SALE` (the Apple-initiated variant) has 0 rows anywhere.
+
 ## Export list — item selection design (design only, 2026-08-24, `c7e24ff`)
 
 Design: `docs/iap-management/design-export-list-item-selection.md`. Found while gating it; none folded in.
 
-- [ ] [EXPORT-availability-filter] **Paid Available/Removed filter — deliberately NOT built.** The design's G2 proposed an opt-in availability filter costing ~1-2 Apple requests per selected item. ⚠ **U3 measured live and made it unnecessary**: `state` and real availability agreed on **35/35 items across 6 apps and 4 ASC teams**, zero counterexamples (design PART 1.5), so the FREE Apple-status filter already is the availability filter. ⚠ ONE residual risk keeps this open rather than closed: **every removed item in the dataset was removed by a path other than this tool's API write** — `actions_log` holds 0 `AVAILABILITY_REMOVE_FROM_SALES` rows, because the CHECK constraint silently rejected them until `20260811000000`. So whether `POST /v1/inAppPurchaseAvailabilities` with an empty territory list ALSO flips `state` is untested, and that is exactly the path this feature exercises. **Closing observation, free, during normal UAT:** Manager clicks Remove from Sales in the tool → Refresh from Apple → does Status show `DEVELOPER_REMOVED_FROM_SALE`? Yes ⇒ close as won't-build. No ⇒ this becomes real work, and the machinery (`runAvailabilityReadPhase`) already exists. Also untested: `REMOVED_FROM_SALE` (Apple-initiated) has 0 rows anywhere.
-- [ ] [EXPORT-avail-read-halving] **Any availability read can drop from 2 Apple requests to 1** — `lib/iap-management/apple/availabilities.ts:230-275` (`getAvailabilityForIap` Step A). Measured live (design PART 1.5): `GET /v1/apps/{id}/inAppPurchasesV2?include=inAppPurchaseAvailability` populates `data[].relationships.inAppPurchaseAvailability.data.id` on 9/9 items, which is the only thing Step A fetches. A caller that already lists the app can pass the availabilityId straight to Step B. ⚠ Benefits A′'s existing read phase and `[SA2-scoped-out]` more than it benefits export, which does not read availability at all — so do it there, not here. ⚠ It does NOT enable a free filter: the included resource carries `links` only for `availableTerritories` (no count, 9/9) and Apple never omits the relationship (0/29 items lacked it), so there is no free "removed" subset to split off.
+- [x] ~~**[EXPORT-availability-filter]**~~ ✅ **SHIPPED 2026-08-26** (`ddf8dd6`, chunks C1-C6) — and it was built, not closed as won't-build. ⚠ **The census that preceded it reversed the premise.** The design assumed the paid filter would cost ~1-2 Apple requests per selected item; verifying the Manager's description of the tool line by line showed the list column was ALREADY paying 2 requests per item on every single mount and throwing the answer away (no DB column, no lifted state, `cache: "no-store"`, no route cache — census M2). So the feature is not new spend: `iap_mgmt.iaps.availability_{state,territory_count,synced_at}` (migration `20260828000000`) keeps what was already being bought, and the wizard's Available/Removed/**Unknown** facet reads it for **0 Apple requests** — the U4 lock intact, pinned by `IapListClient.availability-filter.test.tsx`. ⚠ **Unknown is a first-class third bucket and must stay one**: an item never synced is neither available nor removed, and folding it into Available is the U3 defect wearing a different hat. ⚠ The raw Apple-status control **stays** beside it, per row and per filter — U3's 35/35 agreement is measured, not guaranteed, so a divergence has to be visible rather than pre-resolved by the tool.
+- [x] ~~**[EXPORT-avail-read-halving]**~~ ✅ **APPLIED 2026-08-26** (`ddf8dd6`, C4) — closed **in full for the sweep path, which is the only path that reads at scale**. `listAllInAppPurchases(creds, appId, { includeAvailability: true })` (opt-in; every other caller keeps the smaller payload) yields `data[].relationships.inAppPurchaseAvailability.data.id` **and** `included[].attributes.availableInNewTerritories`, so `runAvailabilitySweep` skips Step A entirely: **1 request per item, not 2** (`getAvailabilityByIdForIap`). A 500-item Refresh costs ~503 instead of ~1,003. ⚠ **What is NOT converted, deliberately**: the per-item lazy route (`GET /iaps/{id}/availability`) still pays 2, because it is handed one internal id and has no list in hand to take the availabilityId from — and after C5 it fires only for items the mirror has never seen, so the remaining 2N is now an N-that-shrinks-to-zero rather than a per-mount cost. A′'s `runAvailabilityReadPhase` is likewise untouched: it reads a Manager-chosen SELECTION at confirm time, not a catalogue. ⚠ **The include supplies an ID AND NOTHING ELSE** — `availabilityIdFromListedIap` carries the warning: Apple populates the relationship for every IAP (0/29 missing) and the included resource has `links` only for `availableTerritories`, so presence cannot classify. Reading it as "available" IS U3.
+- [ ] [AVAIL-cell-no-latch] **The list's per-item availability reads share Apple's budget but not a stop latch** — `components/iap-management/AvailabilityCell.tsx` → `GET /api/iap-management/iaps/{id}/availability`. Each cell is its own route invocation with its own `withRetry` (4 attempts); `stoppable-pool`'s latch lives in the ORCHESTRATORS (`bulk-availability`, `export-fetch`, `pricing-orchestration`) and nothing joins the cells together, so a 429 on cell A does not stop cells B..Z. Worst case in one storm: 100 cells × 4 attempts. ⚠ **NOT a `[PRICING-429]` twin** — that one was "a 429 got swallowed so the latch never saw it"; this path *has* retry, *has* the key pool + its cooling (`iapFetch` → `appleFetch(..., { keyPool })`), and each cell does stop itself (renders `rate limited`, no auto-retry). What is missing is a shared latch across cells. ⚠ **C5 mirror-first (`ddf8dd6`) made this much smaller**: a cell with a mirror record never fetches, so scrolling a 100-row page went from ~200 Apple requests every visit to ~0 from the second visit onward. The storm is now only reachable on **the first read of an app, or on items still NULL** — which is also exactly the set "Refresh from Apple" (C4, latched, stop-and-preserve) is there to fill. Left open rather than fixed because the population that can still trigger it shrinks every time anyone uses the tool. If it is ever fixed: a per-tab latch in `client-fetch-queue.ts` that stops handing out slots once a cell reports `rate_limited` is the smaller move; do NOT reach for a shared server-side latch across independent requests.
 - [ ] [SYNC-orphan-rows] **The local mirror keeps rows that no longer exist on Apple, and nothing detects them** — `lib/iap-management/sync-states/classify.ts:46-83` only ever INSERTs or UPDATEs from Apple's list; there is no "present locally, absent from Apple" branch. Found while probing U3: `vn.lw.gg.120` / `.121` / `.123` are cached `READY_TO_SUBMIT` but `GET /v2/inAppPurchases/{id}` returns **404** — deleted on Apple, alive in `iap_mgmt.iaps`. They inflate list counts, and they nearly produced a false design conclusion (a 404 on a sub-resource read as "no availability" when the parent itself was gone). ⚠ Fix carefully: absence from ONE list response is only safe evidence if the enumeration was complete — `extractNextPagePath` (`lib/iap-management/apple/client.ts:106-117`) already throws rather than return a truncated set for exactly this reason, so a deletion-detection branch may lean on it, but must never mark rows from a partial fetch. Prefer a `missing_on_apple_since` timestamp over a hard delete.
 - [ ] [UPDATE-stage1-404-redundant-price-push] `update-on-apple/route.ts:279-293` has NO 404 branch on its `getPriceScheduleForIap` call — every throw, including a stage-1 404 that simply means "this IAP has no schedule yet", is logged WARN and then forces `customPricesDiverge`, i.e. a price push that may not be needed. ⚠ THIS IS DELIBERATE AND CORRECT TODAY (P7 inverted, and its comment says so: the pricing POST is replace-all and idempotent, so re-sending is harmless while skipping a needed push silently loses the Manager's customs). Now that `NoPriceScheduleError` exists, a stage-1 404 could be recognised and the redundant push skipped — but ONLY if someone first confirms that "Apple has no schedule" and "Apple has no CUSTOM prices" are the same claim for this code path. They may not be. Left untouched by the stage-label commit on purpose; do not fold into an unrelated change.
 - [ ] [VITEST-coldstart-flake-recurrence] The known vitest cold-start flake recurred, twice, during the stage-label work — and was proven PRE-EXISTING by reproducing it at `b171eeb` with the working tree stashed (1 failure in 8 baseline runs). ⚠ It is NOT a logic bug: the captured names are in unrelated modules that share nothing (`lib/iap-management/apple/submit-v2.test.ts` + `app/api/store-submissions/sync/gmail/route.test.ts`), and the root cause line is `[vitest-pool]: Failed to start forks worker … Timeout waiting for worker to respond` plus `Test timed out in 5000ms` — worker startup contention, not assertion failure. Observed rate ≈1 in 8 full-suite runs on this machine, ~3780 tests / 275 files. Prior investigation (see memory `feedback_vitest_flake_investigation.md`) closed this as capture-when-recurs; this IS the capture. Next step if it recurs again: raise `testTimeout` or cap `poolOptions.forks.maxForks` in `vitest.config`, and re-measure over 20 runs before/after. Do NOT chase individual test names — they vary by run.

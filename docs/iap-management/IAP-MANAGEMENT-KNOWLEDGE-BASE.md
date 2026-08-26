@@ -4664,6 +4664,144 @@ findable any other way.
 
 ---
 
+---
+
+## 17. The availability mirror (2026-08-26, `ddf8dd6`)
+
+### 17.1 The census that reversed the design's premise
+
+The Manager described the tool: *"pick an app → the list loads and lazy-loads
+Available/Removed per item → the tool caches it → Refresh from Apple re-fetches
+everything."* Each clause was checked against the code before anything was
+designed. One held, two did not, and the disagreement is what set the scope.
+
+| Claim | Verdict | What the code said |
+|---|---|---|
+| The list shows real Available/Removed, lazy-loaded per item | ✅ | `AvailabilityCell` → `GET /iaps/{id}/availability` → `getAvailabilityForIap` (2-step read, Step B counts territories) → `classifyAvailability`. Real availability, **not** derived from `inAppPurchaseState`, and **not** the U3 include-presence trap. |
+| The tool caches the result | ❌ | Nothing, at any layer. No DB column, no lifted state, `cache: "no-store"` on the fetch, no cache on the route. Each cell's answer lived in its own `useState` and died on unmount. |
+| Refresh from Apple re-fetches everything | ❌ | `sync-states` called `getApp` + `listAllInAppPurchases` and wrote `state`. **Zero** availability requests. The column did not move, on that click or any other. |
+
+⚠ **The reversal worth remembering.** The backlog item
+`[EXPORT-availability-filter]` had been deferred because a paid filter would
+cost "~1-2 Apple requests per selected item". The census found the list was
+ALREADY paying 2 requests per item on **every mount** and discarding the
+answer — ~200 requests per 100-row page scroll, every visit. The feature was
+therefore not new spend; it was keeping what was already bought. **A cost
+estimate written against a design is not a measurement of the running system.**
+
+### 17.2 The four availability emitters, and why there are two delivery shapes
+
+`setAvailabilityTerritories` is the single Apple write path (§4.12), and by the
+time the mirror needed filling it had **four** callers. A kickoff that named
+one would have shipped a mirror blind to three surfaces:
+
+| Emitter | Surface | Mirror write |
+|---|---|---|
+| `orchestrators/bulk-availability.ts` | bulk Set / Remove from Sales | `recordAvailabilityMirrorFromAcceptedWrite` |
+| `apple/update-orchestration.ts` | single Edit (stage 5) | same |
+| `bulk-import/execute/route.ts` | Bulk Import | **columns spread into its existing UPSERT** |
+| `iaps/[iapId]/create-on-apple/route.ts` | Create on Apple | `…FromAcceptedWrite`, outside the try |
+
+⚠ **Bulk Import is why `availabilityMirrorColumns` exists as a separate pure
+function.** At the moment it learns the availability outcome it is building an
+UPSERT keyed on `(app_id, product_id)` for a row that may not exist yet — it
+has no internal id to UPDATE. Making it issue a second statement would be a
+write it does not need; letting it hand-roll the columns would be P1 with extra
+steps. So: **two delivery shapes (UPDATE / UPSERT), one column definition.**
+Callers choose the statement; none of them classifies.
+
+⚠ **The territory count on a write comes from what was SENT, not a re-read.**
+Apple's POST response carries the availability resource but its attributes hold
+only `availableInNewTerritories` — the territory list is not echoed back. That
+is sound because the write is a REPLACE (§4.12, no PATCH, no DELETE), so a 2xx
+means the resource holds exactly that list. A confirming re-read would spend
+1-2 more requests to re-learn what Apple just confirmed.
+
+### 17.3 An error is not a verdict — the rule the whole mirror rests on
+
+`recordAvailabilityMirror` accepts `AvailabilityForIap | null` and **nothing
+else**. Both are real answers: an object is Apple's territory list, `null` is
+Apple having no availability resource (the Removed-from-Sale surface). There is
+deliberately no way to hand it a rate-limit or a failure.
+
+Three consequences, each enforced by a test that was proven RED by breaking the
+code:
+
+- `NULL` in the DB is a **third state** — never synced — and the export filter
+  renders it `Unknown`. Folding it into `AVAILABLE` is the U3 defect with a new
+  face: U3 would have marked every removed item available by reading a
+  relationship's presence as a verdict; `?? "AVAILABLE"` does the same thing
+  from absence.
+- A stopped sweep writes **nothing** for the items it never reached. They keep
+  their old timestamp, including none. Stamping "now" on an unasked item makes
+  the as-of label lie about precisely the data it exists to date.
+- The as-of label takes the **oldest** record on screen, never the newest.
+  `max()` dates a mixed screen by its freshest row — a one-word mutation that
+  leaves every other test green and produces a UI that looks entirely normal.
+
+### 17.4 `[EXPORT-avail-read-halving]`, applied — and what it still cannot do
+
+`listAllInAppPurchases(creds, appId, { includeAvailability: true })` — opt-in,
+so no other caller pays for the larger payload — yields
+`data[].relationships.inAppPurchaseAvailability.data.id` **and**
+`included[].attributes.availableInNewTerritories`. Both are exactly what Step A
+of `getAvailabilityForIap` exists to fetch, so the sweep skips it:
+**1 request per item, not 2** (~503 for a 500-item app).
+
+⚠ **The include supplies an ID AND NOTHING ELSE.** Apple populates the
+relationship for every IAP that exists (measured 0/29 missing) and the included
+resource carries `links` only for `availableTerritories` — no count. So
+presence cannot classify, and reading it as "available" IS U3. The verdict comes
+from a territory count, through `classifyAvailability`, and from nowhere else.
+`availabilityIdFromListedIap` carries this warning at the call site.
+
+### 17.5 Mirror-first, and the P5 near-miss
+
+The list cell now renders from the mirror when it has one, fetches when it does
+not, and **adopts a newer mirror mid-life**. The last clause is what fixes the
+census's M3: the cell never unmounts across `router.refresh()`, and its observer
+effect returns early on any non-pending state, so before this a resolved cell
+was frozen for the life of the page — a Manager who clicked Remove from Sales
+watched the column keep saying "Available" and had every reason to conclude the
+removal failed. Adoption is gated on `syncedAt` being **newer**, so a server
+render racing the cell's own fresh fetch cannot push the stale answer back.
+
+⚠ **P5 (the status principle), in a shape worth adding to the pattern.** In
+`create-on-apple` the mirror write was first placed inside the availability
+`try`. `getAllTerritoryIds`'s 1-hour cache can expire, and a refill is a real
+Apple call that can 429 — landing in that `catch`, setting `availabilityError`,
+and reporting *"availability set-all failed"* for a write Apple had already
+accepted. The status principle is not only "report the outcome, not the button
+clicked"; it is also **"a `catch` reports on the statement that threw, not on
+the block it happens to sit in"**. Any statement added to an existing try/catch
+inherits that block's error reporting — check what the catch will claim before
+putting a new call inside it.
+
+### 17.6 Lock — `[Q-EXPORT-avail.mirror]`
+
+**Filtering and displaying Available/Removed from the LAST SYNC is enough.
+Zero Apple requests when filtering or opening the export wizard (the U4 lock is
+untouched). The surface must be labelled "as of last sync".**
+
+Two obligations follow, and both are load-bearing:
+
+1. **The lock only stands because a refresh action exists.** Without
+   `Refresh from Apple` reading availability (C4), the as-of label could only
+   ever say "very old", and a mirror nobody can freshen is a stale cache with a
+   timestamp on it.
+2. **A consequence the UI must state, not hide.** The filter runs on the
+   mirror; the export reads live from Apple. An item removed *after* the last
+   sync still passes an `Available` filter and still lands in the file. That is
+   the price of a 0-request filter, and it is why the as-of line sits next to
+   the control rather than in a tooltip.
+
+⚠ The raw Apple `state` axis **stays** beside the availability axis, per filter
+and per row. U3's 35/35 agreement is measured, not guaranteed, and the tool's
+own API-driven removal was never part of that sample. Two axes that usually
+agree are exactly the pair a UI is tempted to collapse — and collapsing them
+means the day they disagree, nobody sees it.
+
+
 **Knowledge base preserved for future development continuity.**
 
 ---

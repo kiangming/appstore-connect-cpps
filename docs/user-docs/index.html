@@ -1039,7 +1039,7 @@
           <a class="nav-item" data-page="apple-apps" data-keywords="apple apps danh sách applications">
             <span class="nav-item-label">Danh sách apps</span>
           </a>
-          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách danh sach export xlsx excel xuất file xuat file export failures failure sheet reason rate limit not attempted partial giới hạn gioi han">
+          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách danh sach export xlsx excel xuất file xuat file export failures failure sheet reason rate limit not attempted partial giới hạn gioi han availability available removed unknown as of last sync đồng bộ dong bo refresh from apple làm mới lam moi cũ cu">
             <span class="nav-item-label">Danh sách IAPs</span>
           </a>
           <a class="nav-item" data-page="apple-new-iap" data-keywords="apple new iap tạo mới create">
@@ -2442,7 +2442,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <tr><td><code class="inline">Type</code></td><td>Consumable / Non-Consumable / Non-Renewing Subscription</td><td>Filter</td></tr>
             <tr><td><code class="inline">Price Tier</code></td><td>Tier giá (vd: USD_0_99)</td><td>Sort</td></tr>
             <tr><td><code class="inline">State</code></td><td>Trạng thái lifecycle (Draft, Waiting for Review, Approved, ...)</td><td>Filter</td></tr>
-            <tr><td><code class="inline">Availability</code></td><td>Số territories đang sale (vd: 175 / 175)</td><td>Sort · Cycle 39 added</td></tr>
+            <tr><td><code class="inline">Availability</code></td><td><strong>Available</strong> (đang bán ở ít nhất 1 nước) hoặc <strong>Remove from Sales</strong> (không bán ở đâu cả). Ô còn đang tải hiện thanh xám; đọc lỗi hiện <code class="inline">—</code> kèm <code class="inline">(fetch failed)</code> hoặc <code class="inline">(rate limited)</code> — bấm vào ô để thử lại.</td><td>Đọc từ Apple</td></tr>
           </tbody>
         </table>
 
@@ -2498,14 +2498,22 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <ul>
                 <li>Dropdown <strong>Type</strong> — <code class="inline">All types</code> ·
                 Consumable · Non-Consumable · Non-Renewing Subscription</li>
-                <li>Dropdown <strong>Apple status</strong> — <code class="inline">All Apple statuses</code> ·
+                <li>Dropdown <strong>Apple status</strong> — <code class="inline">All Apple statuses</code>
+                rồi <strong>đúng những giá trị thô của Apple</strong> có thật trong app này:
+                <code class="inline">APPROVED</code> · <code class="inline">READY_TO_SUBMIT</code> ·
+                <code class="inline">MISSING_METADATA</code> ·
+                <code class="inline">DEVELOPER_REMOVED_FROM_SALE</code>… Tool <strong>cố ý không dịch</strong>
+                các giá trị này sang tiếng Việt hay sang "Available / Removed" — xem callout "Hai cột, hai câu
+                hỏi khác nhau" bên dưới.</li>
+                <li>Dropdown <strong>Availability</strong> — <code class="inline">All availability</code> ·
                 <code class="inline">Available</code> · <code class="inline">Removed</code> ·
-                <code class="inline">Developer Removed From Sale</code>…</li>
+                <code class="inline">Unknown</code>. Đây là <em>đang bán ở nước nào</em>, đọc từ bộ nhớ đệm
+                trong tool, <strong>không gọi Apple</strong>.</li>
                 <li>Ô <strong>search</strong> theo Product ID / tên</li>
               </ul>
               <p>Tick từng dòng, hoặc dùng nút chọn tất cả — nút này <strong>chỉ áp cho danh sách đang lọc</strong>.
               Nếu bạn đã chọn item rồi mới đổi filter, tool hiện dòng nhắc
-              <em>"+ N more selected items are hidden by the Type / Apple status filter — still selected, and
+              <em>"+ N more selected items are hidden by the current filters — still selected, and
               still part of the export."</em> — nghĩa là item đó <strong>vẫn nằm trong file</strong>, chỉ đang bị
               ẩn khỏi tầm nhìn. Chưa chọn gì thì nút bị khoá với nhãn
               <code class="inline">Select at least 1 item</code>.</p>
@@ -2513,6 +2521,65 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <p><strong>Bước 2 — chọn nước.</strong> Cùng dialog chọn territory bạn đã gặp ở
               <a class="inline-link" data-goto="apple-bulk-availabilities">Bulk Availabilities</a>. Mỗi nước chọn
               ở đây thành 1 cột giá + tiền tệ trong file.</p>
+
+              <p><strong>Dòng "as of" ngay dưới hàng filter.</strong> Bộ lọc Availability đọc dữ liệu
+              tool đã lưu từ lần đọc Apple gần nhất, nên tool luôn nói rõ dữ liệu đó cũ tới đâu:
+              <em>"Availability as of 2 hours ago · 12 never synced (Unknown)"</em>.</p>
+              <ul>
+                <li>Mốc thời gian là của <strong>item CŨ NHẤT</strong> đang hiển thị, không phải mới nhất.
+                Cố ý như vậy: nếu 1 item vừa đọc xong và 40 item còn lại là dữ liệu tuần trước, câu trả lời
+                trung thực cho "tôi đang nhìn dữ liệu cũ cỡ nào" là <em>tuần trước</em>.</li>
+                <li>Khi màn hình trộn dữ liệu nhiều thời điểm cách nhau quá 1 ngày, tool nói thêm
+                <em>"oldest of N; newest …"</em> thay vì giấu sau một mốc duy nhất.</li>
+                <li>Chưa từng sync item nào thì tool ghi <em>"Availability never synced · N unknown"</em> —
+                <strong>không</strong> bịa ra một mốc thời gian.</li>
+              </ul>
+
+              <div class="callout callout-warning">
+                <div class="callout-title">⚠️ Hai cột, hai câu hỏi khác nhau — đừng gộp</div>
+                <p>
+                  <strong>Apple status</strong> trả lời <em>"IAP này đang ở đâu trong quy trình duyệt của
+                  Apple?"</em> (<code class="inline">APPROVED</code>,
+                  <code class="inline">DEVELOPER_REMOVED_FROM_SALE</code>…). <strong>Availability</strong>
+                  trả lời <em>"IAP này đang bán ở nước nào?"</em> Hai câu hỏi khác nhau, và trên thực tế
+                  chúng thường trùng khớp — nên rất dễ tưởng là một.
+                </p>
+                <p>
+                  Tool <strong>giữ cả hai, hiển thị song song trên từng dòng</strong>, và cố ý không dịch
+                  giá trị thô của Apple. Lý do: ngày hai cột lệch nhau, bạn phải <strong>nhìn thấy</strong>
+                  điều đó — chứ không phải để tool tự chọn một bên rồi bạn không bao giờ biết.
+                </p>
+              </div>
+
+              <div class="callout callout-warning">
+                <div class="callout-title">⚠️ <code class="inline">Unknown</code> KHÔNG phải "chắc là Available"</div>
+                <p>
+                  <code class="inline">Unknown</code> nghĩa là <strong>chưa ai từng hỏi Apple về item này</strong>
+                  — không phải "đang bán", cũng không phải "đã gỡ". Vì thế item Unknown
+                  <strong>không lọt vào cả bộ lọc Available lẫn Removed</strong>, và ngay dưới dòng "as of"
+                  tool nhắc: <em>"Unknown items are excluded from Available and Removed. Use Refresh from Apple
+                  to sync them."</em>
+                </p>
+                <p>
+                  Muốn chúng có câu trả lời: quay lại bảng IAPs, bấm <strong>Refresh from Apple</strong>
+                  (xem mục dưới), rồi mở lại wizard.
+                </p>
+              </div>
+
+              <div class="callout callout-warning">
+                <div class="callout-title">⚠️ Item bị gỡ SAU lần sync gần nhất vẫn lọt vào file</div>
+                <p>
+                  Bộ lọc chạy trên dữ liệu đã lưu ("as of"), nhưng lúc export thì tool đọc
+                  <strong>trực tiếp từ Apple</strong>. Nếu một item bị Remove from Sales <em>sau</em> lần
+                  sync gần nhất, nó vẫn được tính là <code class="inline">Available</code> lúc bạn lọc và
+                  vẫn nằm trong file.
+                </p>
+                <p>
+                  Đây là cái giá của việc lọc <strong>0 request</strong> — và là lý do dòng "as of" luôn
+                  hiện ở đó. Cần chắc chắn tuyệt đối: bấm <strong>Refresh from Apple</strong> ngay trước
+                  khi export.
+                </p>
+              </div>
 
               <p>Bấm export xong tool mới bắt đầu gọi Apple. Trình duyệt tự tải file
               <code class="inline">Apple-IAP-export-&lt;appId&gt;-YYYYMMDD.xlsx</code>. Sheet chính tên
@@ -2522,6 +2589,59 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             </div>
           </li>
         </ol>
+
+        <h2 class="section-title">Refresh from Apple — giờ đọc cả Availability</h2>
+        <p>Nút <strong>Refresh from Apple</strong> trước đây chỉ đọc lại <strong>State</strong>. Từ bản này
+        nó đọc <strong>cả cột Availability cho toàn bộ item của app</strong> — đây chính là thứ làm cho dòng
+        "as of" ở wizard Export có thể mới lại được.</p>
+
+        <p><strong>Bấm xong bạn sẽ thấy toast dạng:</strong>
+        <em>"12 state changed · availability: 1022 read"</em>. Nếu có item đọc không xong, toast ghi rõ
+        <code class="inline">N read, M failed, K not read</code> — ba con số tách bạch, không gộp.</p>
+
+        <h3 class="subsection-title">Chi phí: khoảng 1 lần gọi Apple cho mỗi item</h3>
+        <p>Apple giới hạn số lần một tài khoản được gọi API trong mỗi giờ (cửa sổ trượt — không phải reset đúng
+        đầu giờ), giống hệt khung đã mô tả ở
+        <a class="inline-link" data-goto="apple-bulk-import">Khi batch tự dừng</a>. Refresh một app
+        <strong>1.022 item tốn khoảng 1.022 lần gọi</strong>.</p>
+        <ul>
+          <li><strong>App nhỏ (vài chục item): thoải mái.</strong> Bấm bao nhiêu cũng được.</li>
+          <li><strong>App lớn: đừng Refresh liên tiếp nhiều app lớn trong cùng một giờ.</strong> Hai app
+          nghìn item liền nhau là đã ăn hết phần lớn hạn mức của giờ đó, và những việc khác (Bulk Import,
+          Submit, Export) dùng chung đúng cái hạn mức ấy.</li>
+          <li>Chỉ cần Refresh khi bạn <strong>muốn số liệu mới</strong> — không phải mỗi lần mở trang. Dữ liệu
+          đã đọc được giữ lại, nên mở lại danh sách <strong>không tốn thêm lần gọi nào</strong>.</li>
+        </ul>
+
+        <h3 class="subsection-title">Dừng giữa chừng là ĐÚNG, không phải lỗi</h3>
+        <p>Nếu chạm trần giữa chừng, tool <strong>chủ động dừng đọc</strong> thay vì tiếp tục đâm vào một API
+        đang từ chối, và toast ghi:</p>
+        <p><em>"… — availability stopped on Apple's rate limit. Items not read keep their previous
+        &quot;as of&quot; time."</em></p>
+        <p>Cần hiểu đúng 3 điều:</p>
+        <ul>
+          <li>Những item <strong>đã đọc xong vẫn mới</strong>. Dừng không hoàn tác gì cả.</li>
+          <li>Những item <strong>chưa đọc tới giữ nguyên mốc "as of" CŨ</strong> — kể cả
+          <code class="inline">Unknown</code>. Tool <strong>không</strong> đóng dấu thời gian mới cho item mà
+          nó chưa hề hỏi Apple; làm thế thì dòng "as of" sẽ nói dối đúng vào chỗ nó sinh ra để nói thật.</li>
+          <li>Vì thế sau một lần dừng, màn hình có thể trộn nhiều mốc thời gian — và dòng "as of" sẽ nói ra
+          điều đó (<em>"oldest of N; newest …"</em>).</li>
+        </ul>
+        <p><strong>Việc cần làm:</strong> chờ khoảng 1 tiếng cho hạn mức hồi lại rồi bấm Refresh lại. Item đã
+        đọc xong không phải đọc lại lần nữa.</p>
+
+        <div class="callout callout-info">
+          <div class="callout-title">💡 Cột Availability tự cập nhật — không cần F5</div>
+          <p>
+            Sau khi bạn <strong>Remove from Sales</strong> hoặc <strong>Set Availabilities</strong> cho một
+            nhóm item, cột Availability đổi <strong>ngay</strong>, không cần tải lại trang. Điều tương tự đúng
+            sau khi Refresh from Apple.
+          </p>
+          <p>
+            Nếu bạn thấy phải nhấn F5 mới đúng, <strong>đó là bug — báo lại</strong>, đừng coi là chuyện bình
+            thường.
+          </p>
+        </div>
 
         <h2 class="section-title">Đọc kết quả export</h2>
         <p>Export xong, tool hiện một bảng tổng kết. Câu tiêu đề nói ngay chuyện gì đã xảy ra:</p>
