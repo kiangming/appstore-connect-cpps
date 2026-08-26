@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Settings → API Key Pool (design mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; background:#f1f5f9; }
+    .state-shell { background:#f8fafc; border:1px solid #e2e8f0; border-radius:16px; padding:24px; }
+    .state-title { font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#64748b; margin-bottom:4px; }
+    .state-sub { font-size:12px; color:#64748b; margin-bottom:16px; }
+    .surface { background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
+    .btn-primary { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; font-size:13px; font-weight:500; background:#0071E3; color:#fff; border-radius:8px; }
+    .btn-cancel  { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; font-size:13px; font-weight:500; background:#fff; color:#475569; border:1px solid #e2e8f0; border-radius:8px; }
+    .btn-ghost   { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; font-size:12px; font-weight:500; background:#f1f5f9; color:#334155; border:1px solid #e2e8f0; border-radius:8px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
+    .note { font-size:11.5px; color:#64748b; }
+    .warn { background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:8px; padding:10px 12px; font-size:12px; }
+    .danger { background:#fef2f2; border:1px solid #fecaca; color:#991b1b; border-radius:8px; padding:10px 12px; font-size:12px; }
+    .ok { background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; border-radius:8px; padding:10px 12px; font-size:12px; }
+    .info { background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; border-radius:8px; padding:10px 12px; font-size:12px; }
+    .pill { display:inline-flex; align-items:center; padding:2px 8px; border-radius:999px; font-size:10px; font-weight:500; border-width:1px; }
+    .pill-on   { background:#ecfdf5; color:#047857; border-color:#a7f3d0; }
+    .pill-off  { background:#f1f5f9; color:#475569; border-color:#cbd5e1; }
+    .pill-cool { background:#fffbeb; color:#92400e; border-color:#fde68a; }
+    .krow { display:grid; grid-template-columns:150px 92px 190px 150px 1fr 190px; align-items:center; gap:12px; padding:9px 14px; border-bottom:1px solid #f1f5f9; font-size:13px; }
+    .khead { display:grid; grid-template-columns:150px 92px 190px 150px 1fr 190px; gap:12px; padding:8px 14px; background:#f8fafc; border-bottom:1px solid #e2e8f0; font-size:10px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:#64748b; }
+    .tab { padding:8px 14px; font-size:13px; font-weight:500; border-bottom:2px solid transparent; color:#64748b; }
+    .tab-active { color:#0f172a; border-bottom-color:#0071E3; }
+    label.f { display:block; font-size:12px; font-weight:600; color:#334155; margin-bottom:5px; }
+    .inp { width:100%; border:1px solid #e2e8f0; border-radius:8px; padding:8px 10px; font-size:13px; background:#fff; }
+    textarea.inp { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11.5px; }
+  </style>
+</head>
+<body class="p-8">
+<div class="max-w-5xl mx-auto space-y-8">
+
+  <header>
+    <h1 class="text-2xl font-semibold text-slate-900">Settings → API Key Pool</h1>
+    <p class="text-sm text-slate-500 mt-1">
+      Design mockup · <span class="mono">[POOL-key-management-UI]</span> v1 —
+      thay thế <span class="mono">scripts/seed-asc-pool-key.mjs</span> cho vận hành.
+      Runbook giữ nguyên làm tài liệu dev/khẩn cấp.
+    </p>
+    <div class="info mt-3">
+      <strong>Scope v1 đã chốt:</strong> bảng key · Add · Enable/Disable · Test key. <strong>Hết.</strong>
+      Không có nút đo scope rate-limit (<span class="mono">[Q-POOLUI.no-d1-button]</span>) — verdict D1 đọc từ
+      log của chính Test key, xem state 5. Không delete cứng, không sửa key, không hiện private key.
+    </div>
+  </header>
+
+  <!-- ─────────────── STATE 1 — LIST ─────────────── -->
+  <section class="state-shell">
+    <div class="state-title">State 1 — Danh sách key theo account</div>
+    <div class="state-sub">Điều hướng: Settings → tab <strong>API Key Pool</strong>, cạnh <strong>Pricing Tiers</strong> / <strong>Hub Tracking</strong>. Admin-only.</div>
+
+    <div class="surface">
+      <div class="flex items-center gap-1 px-3 pt-2 border-b border-slate-200">
+        <div class="tab">Pricing Tiers</div>
+        <div class="tab">Hub Tracking</div>
+        <div class="tab tab-active">API Key Pool</div>
+      </div>
+
+      <div class="px-4 py-3 flex items-center justify-between border-b border-slate-100">
+        <div>
+          <div class="text-sm font-semibold text-slate-900">API Key Pool</div>
+          <div class="note">Nhiều key cho một account = nhiều hạn mức gọi Apple mỗi giờ.</div>
+        </div>
+        <button class="btn-primary">+ Add key</button>
+      </div>
+
+      <!-- account group A -->
+      <div class="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
+        <span class="text-[13px] font-semibold text-slate-800">VNG Games Co Ltd</span>
+        <span class="mono text-slate-400">vnggames-co-ltd</span>
+        <span class="note">· issuer <span class="mono">69a6de70-…-1f2b</span></span>
+        <span class="ml-auto note">2 key · rotation đang chạy</span>
+      </div>
+      <div class="khead">
+        <div>Key ID</div><div>Trạng thái</div><div>Cooldown</div><div>Thêm lúc</div><div>Ghi chú</div><div class="text-right">Thao tác</div>
+      </div>
+      <div class="krow">
+        <div class="mono">2X9R4HXF34</div>
+        <div><span class="pill pill-on">enabled</span></div>
+        <div class="note">—</div>
+        <div class="note">26/08/2026 14:02</div>
+        <div class="note">pool key 1</div>
+        <div class="text-right"><button class="btn-ghost">Test key</button> <button class="btn-ghost">Disable</button></div>
+      </div>
+      <div class="krow">
+        <div class="mono">7KQ2M8ZP11</div>
+        <div><span class="pill pill-cool">cooling down</span></div>
+        <div class="note">đến 15:41 (còn ~38 phút)</div>
+        <div class="note">26/08/2026 14:05</div>
+        <div class="note">pool key 2</div>
+        <div class="text-right"><button class="btn-ghost">Test key</button> <button class="btn-ghost">Disable</button></div>
+      </div>
+
+      <!-- account group B -->
+      <div class="px-4 py-2.5 bg-slate-50 border-y border-slate-200 flex items-center gap-2">
+        <span class="text-[13px] font-semibold text-slate-800">VNG Singapore</span>
+        <span class="mono text-slate-400">vngsing</span>
+        <span class="note">· issuer <span class="mono">4b1c88a2-…-9d07</span></span>
+        <span class="ml-auto note">1 key</span>
+      </div>
+      <div class="khead">
+        <div>Key ID</div><div>Trạng thái</div><div>Cooldown</div><div>Thêm lúc</div><div>Ghi chú</div><div class="text-right">Thao tác</div>
+      </div>
+      <div class="krow">
+        <div class="mono">9DDX4LK002</div>
+        <div><span class="pill pill-off">disabled</span></div>
+        <div class="note">—</div>
+        <div class="note">26/08/2026 14:11</div>
+        <div class="note">tạm tắt, nghi sai team</div>
+        <div class="text-right"><button class="btn-ghost">Test key</button> <button class="btn-ghost">Enable</button></div>
+      </div>
+
+      <!-- empty account -->
+      <div class="px-4 py-2.5 bg-slate-50 border-y border-slate-200 flex items-center gap-2">
+        <span class="text-[13px] font-semibold text-slate-800">VNG Publishing</span>
+        <span class="mono text-slate-400">vngpub</span>
+        <span class="ml-auto note">chưa có key</span>
+      </div>
+      <div class="px-4 py-4">
+        <div class="note">
+          Account này chưa có pool key — mọi request vẫn ký bằng key gốc của chính nó,
+          <strong>đúng như trước khi có pool</strong>. Đây là trạng thái bình thường, không phải lỗi.
+        </div>
+      </div>
+    </div>
+
+    <div class="warn mt-3">
+      <strong>Cột Key ID hiển thị đầy đủ, và đó là chủ ý.</strong> ASC Key ID <em>không phải</em> bí mật — nó đi
+      trong header JWT và đã in đầy đủ ở log Railway. Rút gọn nó sẽ làm mất khả năng đối chiếu với log,
+      là công dụng chính của cột này. <strong>Private key thì không bao giờ hiển thị</strong>, kể cả một phần.
+    </div>
+  </section>
+
+  <!-- ─────────────── STATE 2 — ADD ─────────────── -->
+  <section class="state-shell">
+    <div class="state-title">State 2 — Add key</div>
+    <div class="state-sub">Account là <strong>dropdown đọc <span class="mono">asc_accounts</span> thật</strong> — không còn gõ tay <span class="mono">--account</span>.</div>
+
+    <div class="surface max-w-2xl">
+      <div class="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
+        <div class="text-sm font-semibold text-slate-900">Add pool key</div>
+        <div class="note">✕</div>
+      </div>
+      <div class="px-5 py-4 space-y-4">
+        <div>
+          <label class="f">Account *</label>
+          <select class="inp">
+            <option>— Chọn account —</option>
+            <option selected>VNG Games Co Ltd  ·  vnggames-co-ltd  ·  issuer 69a6de70-…-1f2b</option>
+            <option>VNG Singapore  ·  vngsing  ·  issuer 4b1c88a2-…-9d07</option>
+            <option>VNG Publishing  ·  vngpub  ·  issuer 4b1c88a2-…-9d07</option>
+          </select>
+          <div class="note mt-1.5">Dropdown hiện cả <strong>issuer</strong> để thấy ngay hai account có dùng chung team Apple hay không.</div>
+        </div>
+
+        <div class="warn">
+          ⚠ <strong>VNG Singapore</strong> và <strong>VNG Publishing</strong> đang dùng <strong>chung một issuer</strong> —
+          tức cùng một team Apple. Mỗi account phải có key <strong>riêng</strong>: seed cùng một key cho cả hai sẽ
+          <strong>chia đôi hạn mức của đúng một key</strong> trong khi bảng trông như đã tăng gấp đôi.
+        </div>
+
+        <div>
+          <label class="f">Key ID *</label>
+          <input class="inp mono" value="2X9R4HXF34" />
+          <div class="note mt-1.5">Đúng phần <span class="mono">&lt;KID&gt;</span> trong tên file <span class="mono">AuthKey_&lt;KID&gt;.p8</span>.</div>
+        </div>
+
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="f mb-0">Private Key (.p8) *</label>
+            <button class="btn-ghost">Upload .p8</button>
+          </div>
+          <textarea class="inp" rows="4">-----BEGIN PRIVATE KEY-----
+MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQg…
+-----END PRIVATE KEY-----</textarea>
+          <div class="note mt-1.5">
+            Dán nội dung hoặc upload file. Key được <strong>mã hoá ở server</strong> trước khi lưu —
+            cùng routine AES-256-GCM mà app dùng để giải mã. Không bao giờ ghi ra log, không trả về lại trình duyệt.
+          </div>
+        </div>
+
+        <div>
+          <label class="f">Ghi chú</label>
+          <input class="inp" placeholder="vd: pool key 2" />
+        </div>
+      </div>
+      <div class="px-5 py-3 border-t border-slate-100 flex items-center justify-end gap-2">
+        <button class="btn-cancel">Huỷ</button>
+        <button class="btn-primary">Add key</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── STATE 3/4/5 — TEST KEY ─────────────── -->
+  <section class="state-shell">
+    <div class="state-title">State 3 — Test key: ✅ thành công</div>
+    <div class="state-sub">Thay cho bước tự-kiểm SQL của runbook. Gọi <span class="mono">GET /v1/territories?limit=1</span> bằng <strong>đúng key được chỉ định</strong>.</div>
+    <div class="surface max-w-2xl px-5 py-4">
+      <div class="ok">
+        <div class="font-semibold mb-1">✅ Key <span class="mono">2X9R4HXF34</span> hoạt động với account <strong>VNG Games Co Ltd</strong></div>
+        <div>Apple trả <strong>200</strong>. Hạn mức còn lại của <em>riêng key này</em>: <strong>3599 / 3600</strong>.</div>
+      </div>
+      <div class="note mt-2.5">Key đã đúng team và dùng được. Không cần làm gì thêm.</div>
+    </div>
+  </section>
+
+  <section class="state-shell">
+    <div class="state-title">State 4 — Test key: ❌ sai team</div>
+    <div class="state-sub">Đây là lỗi mà UI này sinh ra để bắt.</div>
+    <div class="surface max-w-2xl px-5 py-4">
+      <div class="danger">
+        <div class="font-semibold mb-1">❌ Key <span class="mono">9DDX4LK002</span> không thuộc team của account <strong>VNG Singapore</strong></div>
+        <div>Apple trả <strong>401</strong>. Key này được tạo ở một team Apple khác, hoặc đã bị revoke.</div>
+        <div class="mt-1.5">Cách sửa: <strong>Disable</strong> key này, rồi Add lại key được tạo trong đúng team của <strong>VNG Singapore</strong>.</div>
+      </div>
+      <div class="note mt-2.5">
+        Gán nhầm luôn <strong>fail-closed</strong>: JWT ký bằng issuer của account + kid của key lạ ⇒ Apple từ chối.
+        Không có đường nào đọc nhầm dữ liệu team khác.
+      </div>
+    </div>
+    <div class="mt-3 surface max-w-2xl px-5 py-4">
+      <div class="warn">
+        <div class="font-semibold mb-1">⚠ Không xác minh được key <span class="mono">7KQ2M8ZP11</span></div>
+        <div>Apple trả <strong>503 Service Unavailable</strong>.</div>
+        <div class="mt-1.5">Đây <em>không</em> phải kết luận key sai — thử lại sau ít phút.</div>
+      </div>
+      <div class="note mt-2.5">Mọi lỗi khác 401/403 hiện nguyên trạng, không đoán hộ.</div>
+    </div>
+  </section>
+
+  <section class="state-shell">
+    <div class="state-title">State 5 — Verdict D1 đọc từ log (không có nút riêng)</div>
+    <div class="state-sub"><span class="mono">[Q-POOLUI.no-d1-button]</span> — mỗi lần Test key đã ghi sẵn dòng log cần thiết.</div>
+    <div class="surface px-5 py-4">
+      <div class="note mb-2">Account có 2 key → bấm <strong>Test key</strong> lần lượt cả hai trong vài giây → xem Railway log:</div>
+      <pre class="mono bg-slate-900 text-slate-100 rounded-lg p-3 leading-relaxed" style="font-size:11.5px">[key-pool-test] account=vnggames-co-ltd key=2X9R4HXF34 status=200 rem=3589 lim=3600
+[key-pool-test] account=vnggames-co-ltd key=7KQ2M8ZP11 status=200 rem=3599 lim=3600</pre>
+      <div class="ok mt-3">
+        <strong>PER-KEY</strong> — key thứ hai mở ở <span class="mono">lim − 1</span> (3599) dù key thứ nhất đã tiêu 11.
+        Mỗi key có hạn mức riêng ⇒ pool có tác dụng. Ghi kết quả vào KB §4.9.
+      </div>
+      <pre class="mono bg-slate-900 text-slate-100 rounded-lg p-3 leading-relaxed mt-4" style="font-size:11.5px">[key-pool-test] account=vnggames-co-ltd key=2X9R4HXF34 status=200 rem=3589 lim=3600
+[key-pool-test] account=vnggames-co-ltd key=7KQ2M8ZP11 status=200 rem=3588 lim=3600</pre>
+      <div class="danger mt-3">
+        <strong>PER-TEAM</strong> — key thứ hai <em>đã bị trừ</em> phần key thứ nhất tiêu. Thêm key không thêm hạn mức.
+        <strong>DỪNG toàn bộ nhánh pool, báo ngay.</strong> Theo điều kiện đã ghi ở <span class="mono">TODO.md</span>:
+        pool ở lại dark vĩnh viễn, <strong>không gỡ code</strong>.
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── NOTES ─────────────── -->
+  <section class="state-shell">
+    <div class="state-title">Ghi chú thiết kế — những chỗ census phát hiện</div>
+    <div class="space-y-2.5 text-[12.5px] text-slate-700">
+      <div class="warn">
+        <strong>⚠ Test key phải KHÔNG truyền key pool vào <span class="mono">appleFetch</span>.</strong>
+        Không truyền pool ⇒ <span class="mono">appleFetch</span> ký bằng đúng credentials được đưa, rotation
+        <em>về mặt cấu trúc</em> không thể xen vào. Nếu truyền pool, nút này sẽ test <em>key do rotation chọn</em>,
+        không phải key trên dòng Manager vừa bấm — và nó mất sạch ý nghĩa. Mutation (c) canh đúng chỗ này.
+      </div>
+      <div class="warn">
+        <strong>⚠ Cần một bổ sung nhỏ, có chủ đích, vào <span class="mono">appleFetch</span>.</strong>
+        <span class="mono">generateAscToken</span> hiện chỉ được gọi ở <strong>đúng một nơi</strong>
+        (<span class="mono">apple-fetch.ts:339</span>) — chính bất biến đó khiến key pool ship được bằng một dòng.
+        Nhưng <span class="mono">appleFetch</span> chỉ trả JSON body, không trả header, nên không lấy được
+        <span class="mono">rem/lim</span> cho State 3. Tự viết một đường fetch thứ hai sẽ <strong>phá bất biến</strong>.
+        Đề xuất: thêm <span class="mono">opts.onRateLimitInfo?(info)</span> — một callback gọi ngay chỗ đã tính
+        <span class="mono">budget</span>. Thuần cộng thêm, không đổi kiểu trả về, không caller nào bị ảnh hưởng.
+      </div>
+      <div class="info">
+        <strong>Không cần env mới, Manager không phải đụng <span class="mono">.env</span> nào.</strong>
+        <span class="mono">ENCRYPTION_KEY</span> đã có trong Railway — app đang giải mã key được thì mã hoá được.
+        Route mới dùng lại <span class="mono">encryptPrivateKey()</span>, đúng hàm mà màn thêm ASC account đã dùng.
+      </div>
+      <div class="info">
+        <strong>Cache 30s: không cần đụng.</strong> <span class="mono">invalidatePoolKeyCache(accountId)</span>
+        đã export sẵn. Route add/toggle gọi nó là xong — rẻ hơn và đúng hơn là chờ TTL.
+      </div>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

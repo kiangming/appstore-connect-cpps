@@ -279,6 +279,27 @@ export interface AppleKeyPool {
 
 export interface AppleFetchOptions {
   keyPool?: AppleKeyPool;
+  /**
+   * Observe this response's rate-limit budget. Called once, right where the
+   * header is already parsed, with `null` when Apple did not send one.
+   *
+   * ⚠ WHY A CALLBACK AND NOT A CHANGED RETURN TYPE. `appleFetch` returns the
+   * parsed body, and ~37 call sites depend on that. Widening the return to
+   * `{ data, budget }` would touch every one of them to serve a single
+   * caller — the pool-key Test button, which needs `rem/lim` on screen.
+   *
+   * ⚠ AND WHY NOT A SECOND FETCH PATH. `generateAscToken` is called in
+   * exactly ONE place in this repo — the line below — and that invariant is
+   * what let the key pool ship as a single change rather than as an audit of
+   * every Apple caller. A route that minted its own JWT to read a header
+   * would be the second place, permanently, and would bypass pooling,
+   * logging and 429 handling. Additive callback; nothing else moves.
+   *
+   * ⚠ THROWING FROM HERE CANNOT BREAK THE REQUEST. The call is wrapped: an
+   * observer that fails is an observer bug, not a reason to fail an Apple
+   * call that already succeeded.
+   */
+  onRateLimitInfo?: (info: RateLimitInfo | null) => void;
 }
 
 /**
@@ -364,6 +385,24 @@ export async function appleFetch<T>(
   await log(logTag, `[${creds.keyId}] ${method} ${endpoint} → ${res.status}`);
 
   const budget = parseRateLimit(res.headers);
+  // ⚠ GUARDED, AND IT IS NOT DEFENSIVE HABIT. This is an OBSERVER on a path
+  // that has already done the expensive, side-effecting thing: the request is
+  // sent and Apple has answered. Letting a caller's callback throw here would
+  // convert a successful Apple call into a failure — and on a retry-wrapped
+  // path, into three more requests. The observer's failure is logged so it is
+  // not silent, and then the request continues exactly as if no observer had
+  // been passed.
+  if (opts?.onRateLimitInfo) {
+    try {
+      opts.onRateLimitInfo(budget);
+    } catch (err) {
+      await log(
+        logTag,
+        `onRateLimitInfo observer threw (ignored): ${err instanceof Error ? err.message : String(err)}`,
+        "WARN",
+      );
+    }
+  }
   if (budget) {
     // ⚠ `key=` IS APPENDED, NOT INSERTED. The established audit grep is
     // `[asc-client] … budget=` — adding a trailing k=v field keeps every
