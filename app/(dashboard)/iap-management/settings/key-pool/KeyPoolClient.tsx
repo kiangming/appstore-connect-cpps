@@ -262,6 +262,14 @@ export function KeyPoolClient({ isAdmin }: Props) {
   if (!isAdmin) {
     return (
       <div className="p-8 max-w-5xl mx-auto">
+        <div className="mb-3">
+          <a
+            href="/iap-management/settings/hub-tracking"
+            className="text-sm text-slate-500 hover:text-[#0071E3] transition"
+          >
+            ← Hub Tracking
+          </a>
+        </div>
         <div
           data-testid="not-admin"
           className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
@@ -281,6 +289,19 @@ export function KeyPoolClient({ isAdmin }: Props) {
 
   return (
     <div className="p-8 max-w-5xl mx-auto">
+      {/* ⚠ Header link chain, NOT a tab strip. The approved mockup drew tabs
+          across the three settings pages, but no such component exists: each
+          settings page is a standalone route and they link to each other from
+          the header (`Pricing Templates → Hub Tracking`). Building a tab bar
+          here would have been a fourth navigation idiom in one module. */}
+      <div className="flex items-center justify-between mb-1">
+        <a
+          href="/iap-management/settings/hub-tracking"
+          className="text-sm text-slate-500 hover:text-[#0071E3] transition"
+        >
+          ← Hub Tracking
+        </a>
+      </div>
       <div className="flex items-start justify-between mb-4">
         <div>
           <h1 className="text-lg font-semibold text-slate-900">API Key Pool</h1>

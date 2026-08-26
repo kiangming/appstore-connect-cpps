@@ -3112,6 +3112,27 @@ guard asserting every path in a verify-list resolves to a real file. Candidate
 shape — a test that reads the documented guard-suite list and `statSync`s each
 entry, failing on a missing path, so the list cannot outlive its files.
 
+**P18 near-miss (2026-08-26, `[POOL-key-management-UI]` U1) — "1 failed suite,
+0 tests" reads as a passing run when a sibling file supplies the number.**
+
+Three `vi.mock` factories referenced top-level `class` declarations. `vi.mock`
+is hoisted above the file body and a class is NOT hoisted, so the factory threw
+`Cannot access 'Forbidden' before initialization` and the ENTIRE behavioural
+file failed to collect. Vitest reported:
+
+```
+ Test Files  1 failed | 1 passed (2)
+      Tests  17 passed (17)
+```
+
+Every test that "passed" belonged to the OTHER file — which happened to contain
+exactly 17 tests as well. The coincidence made the line look like a clean run of
+the file just written. Caught only by reading `Test Files`, not `Tests`.
+
+**Practice:** read the FILE count, not just the test count, and confirm the
+count moved by the number of tests just added. The fix is to declare mock-used
+classes inside `vi.hoisted(() => ({ … }))`.
+
 **P19 — PARITY OF OUTPUT IS NOT PARITY OF COST. THE ASSERTION HAS TO SIT ON A
 SPY THAT COUNTS REQUESTS, NOT ON THE RESULTS.**
 
@@ -4336,10 +4357,56 @@ distinguishes "the guard worked" from "the fixture is broken".
 Related: P23 (fixture bug wearing a domain outcome's clothes). Same family,
 different door.
 
-### 15.4 What is left
+### 15.4 The management UI — Settings → API Key Pool (2026-08-26)
+
+`scripts/seed-asc-pool-key.mjs` is no longer the operating surface. Manager
+decision: seeding five accounts by script was not acceptable for day-to-day
+work, so `[POOL-key-management-UI]` was pulled off the backlog and shipped as
+U1 (routes) → U2 (screen) → U3 (wire + e2e). The runbook
+(`docs/iap-management/RUNBOOK-seed-pool-keys.md`) is kept as the dev/emergency
+path and is NOT superseded.
+
+**Scope v1, deliberately small:** a table of keys per account · Add · Enable /
+Disable · Test key. No hard delete (disable keeps the audit trail for the one
+table where "which key was live at 3pm" matters), no editing a key, no
+displaying private key material in any form.
+
+| Lock | Decision |
+|---|---|
+| `[Q-POOLUI.no-d1-button]` | **No "measure rate-limit scope" button.** Test key already emits everything D1 needs — see below. |
+| Q1 | `AppleFetchOptions.onRateLimitInfo` approved: an additive observer on the shared `appleFetch`. Needed because `appleFetch` returns only the parsed body, and a route minting its own JWT to read a header would have broken the one-call-site invariant that let the pool ship as a single change. Gate condition pinned: a call WITHOUT the option is byte-identical. |
+| Q2 | `key_id` displayed in FULL. It is documented non-secret, travels in the JWT header, and is already printed whole on the `[asc-client] … key=` line — truncating it would break the one thing the column is for, matching a row against the logs. Private key material is never shown, not even partially. |
+| Q3 | Reached from the Settings header link chain, after Hub Tracking. |
+
+**⚠ Test key IS the D1 measurement.** It signs with the row's key and
+deliberately does NOT pass the key pool to `appleFetch` — with no pool,
+`appleFetch` signs with exactly the credentials given, so rotation cannot
+interfere. It calls `GET /v1/territories?limit=1`, one of the few endpoints
+that returns `x-rate-limit` (§4.9: the two IAP endpoints omit it), and logs:
+
+```
+[key-pool-test] account=<id> key=<KID> status=<n> rem=<n> lim=<n>
+```
+
+Two clicks a few seconds apart on a two-key account decide the verdict: the
+second key opening at `lim − 1` while the first was just charged means
+PER-KEY; a second key already charged for the first one's traffic means
+PER-TEAM, and the pool stops permanently per `[RATELIMIT-keypool-design]`.
+
+⚠ **The mockup drew a tab strip across the settings pages. No such component
+exists** — each settings page is a standalone route and they link from the
+header. Implementing the drawing would have added a fourth navigation idiom to
+one module; the header chain was used instead.
+
+### 15.5 What is left
 
 - **K4** — seed a second key, run census D1, record the verdict in §4.9.
-  Blocked on the Manager creating the key.
+  Blocked on the Manager creating the key. ⚠ **The mechanics changed in
+  §15.4**: no script and no census file are needed any more. Add both keys in
+  Settings → API Key Pool, click **Test key** on each within a few seconds,
+  and read the two `[key-pool-test]` lines. (The census script this used to
+  point at, `scratchpad/CENSUS-rate-limit-strategy.md`, no longer exists —
+  it was session-local and was lost.)
 - The ⏳ open question in §4.9 (does a 429 carry `Retry-After` when
   `x-rate-limit` is absent) is answered by the `[key-pool] 429-headers` log
   line the first time a real 429 happens. No action until then.
@@ -4524,6 +4591,35 @@ P15's version fails LOUD (an assertion fires on a comment), P28's fails
 **OPEN** — the guard keeps passing while checking nothing. Verified
 load-bearing by reintroducing the exact semicolon AND deleting the column: both
 guards still fire, where before the semicolon alone would have hidden it.
+
+#### P28 corollary — a strip tool serves ONE question, and only that one
+
+The pool-key admin API (`[POOL-key-management-UI]` U1) hit the other edge of
+the same rule. Its structural guard asserted "no route logs the private key",
+using the SAME comment-and-string stripper P28 introduced — and the mutation
+that logged `` `… privateKey=${privateKey}` `` **passed all 38 tests**.
+
+Template interpolation is *the* realistic way a secret reaches a log line, and
+it lives inside a string. The stripper that P28 added to stop a guard firing
+on its own prose had, one file later, blinded a different guard to the leak it
+existed to catch.
+
+**Two strippers now, chosen by the question:**
+
+| Question | Tool | Why |
+|---|---|---|
+| "does the code CALL x?" | `codeOnly` — comments AND strings blanked | prose and string literals are noise |
+| "does any string mention a secret?" | `commentsOnly` — comments blanked, strings KEPT | the string body *is* the evidence |
+
+Plus a test that guards the guard: it asserts the log-call extractor can still
+see inside a template literal, so if the helper ever starts blanking strings
+again, that fails rather than every leak assertion silently passing.
+
+**The generalisation: a stripper is an ANSWER to a question, not a neutral
+cleanup.** Reusing one across two questions silently changes what the second
+one can see. Related: P15 (fails loud), P28 proper (fails open) — this
+corollary is a third failure mode, *fails open in a different assertion than
+the one the tool was written for*.
 
 ### 16.9 ⚠ P29 — the `fetch` boundary is where `tsc` is blind
 

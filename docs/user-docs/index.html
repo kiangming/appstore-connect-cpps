@@ -1058,6 +1058,10 @@
           <a class="nav-item" data-page="apple-pricing-templates" data-keywords="apple pricing templates mẫu giá default per-app">
             <span class="nav-item-label">Pricing templates</span>
           </a>
+          <a class="nav-item" data-page="apple-key-pool" data-keywords="apple key pool api key settings admin quản lý key quan ly key rate limit giới hạn gioi han test key hạn mức han muc">
+            <span class="nav-item-label">API Key Pool</span>
+            <span class="nav-badge">Admin</span>
+          </a>
           <a class="nav-item" data-page="apple-pricing-matrix" data-keywords="apple pricing matrix bảng giá tier cross-cutting">
             <span class="nav-item-label">Pricing matrix</span>
             <span class="nav-badge">Chi tiết</span>
@@ -3341,6 +3345,132 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <div class="callout-title">💡 Tip — Upcoming Changes</div>
           <p>Section <strong>Upcoming Changes</strong> rất quan trọng — hiển thị các thay đổi đã schedule nhưng chưa active. Vd: price change in 7 days, availability change in 30 days. Đọc kỹ trước khi edit để không override schedule sắp tới.</p>
         </div>
+      </section>
+
+      <section class="page" data-page="apple-key-pool">
+        <div class="meta-strip">
+          <span class="meta-chip module-apple">Apple IAP Management</span>
+          <span class="meta-chip">Chỉ admin</span>
+        </div>
+        <h1 class="page-title">Quản lý API key pool</h1>
+        <p class="page-lede">
+          Apple giới hạn số lần một API key được gọi trong mỗi giờ. Thêm nhiều key cho cùng một
+          account = nhiều hạn mức hơn, nên các batch lớn (Bulk Import, Export) ít bị dừng giữa chừng.
+          Màn hình này ở <strong>Settings → API Key Pool</strong>, chỉ admin vào được.
+        </p>
+
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — không có key nào cũng không sao</div>
+          <p>
+            Account chưa có key trong pool vẫn chạy bình thường bằng key gốc của chính nó, đúng như
+            trước đây. Pool là phần <strong>thêm vào</strong>, không phải điều kiện để tool hoạt động.
+          </p>
+        </div>
+
+        <h2 class="section-title">Hướng dẫn sử dụng từng bước</h2>
+        <ol class="steps">
+          <li class="step">
+            <div class="step-title">Tạo key trên App Store Connect</div>
+            <div class="step-body">
+              <p>Đăng nhập App Store Connect <strong>bằng đúng team của account bạn định thêm key</strong> →
+              <strong>Users and Access → Integrations → App Store Connect API</strong> → bấm
+              <strong>+</strong> → role <strong>App Manager</strong> → <strong>Download API Key</strong>.</p>
+              <p>⚠️ File <code class="inline">.p8</code> <strong>chỉ tải được một lần</strong>. Cất ngay
+              sau khi tải; mất file thì phải revoke key và tạo key mới.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Thêm key vào tool</div>
+            <div class="step-body">
+              <p>Vào <strong>Settings → API Key Pool</strong> → <strong>Add key</strong>. Trong form:</p>
+              <ul>
+                <li><strong>Account</strong> — chọn từ dropdown. Mỗi dòng hiện kèm <em>issuer</em>.
+                Nếu bạn chọn một account dùng chung issuer với account khác, tool hiện cảnh báo vàng:
+                hai account đó <strong>cùng một team Apple</strong>, nên mỗi cái phải có key
+                <strong>riêng</strong> — dùng chung một key sẽ chia đôi hạn mức thật trong khi bảng
+                trông như đã tăng gấp đôi.</li>
+                <li><strong>Key ID</strong> — đúng phần <code class="inline">&lt;KID&gt;</code> trong tên
+                file <code class="inline">AuthKey_&lt;KID&gt;.p8</code>.</li>
+                <li><strong>Private Key (.p8)</strong> — dán nội dung hoặc bấm chọn file.</li>
+              </ul>
+              <p>Bấm <strong>Add key</strong>. Form tự xoá nội dung key sau khi thêm thành công.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Bấm Test key — luôn làm bước này</div>
+            <div class="step-body">
+              <p>Ngay trên dòng key vừa thêm, bấm <strong>Test key</strong>. Đây là cách duy nhất biết
+              chắc bạn đã gắn key vào <strong>đúng account</strong> — thao tác gõ nhầm không ai thấy
+              được bằng mắt.</p>
+            </div>
+          </li>
+        </ol>
+
+        <h2 class="section-title">Đọc kết quả Test key</h2>
+        <table class="docs-table">
+          <thead><tr><th>Thấy gì</th><th>Nghĩa là gì</th><th>Làm gì</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>✅ ô xanh, kèm <em>Hạn mức còn lại</em></td>
+              <td>Key đúng team và dùng được. Con số là hạn mức còn lại <strong>của riêng key đó</strong>.</td>
+              <td>Xong, không cần làm gì.</td>
+            </tr>
+            <tr>
+              <td>❌ ô đỏ <em>"không thuộc team của account"</em></td>
+              <td>Key được tạo ở một team Apple <strong>khác</strong>, hoặc đã bị revoke.</td>
+              <td>Bấm <strong>Disable</strong> key đó, rồi Add lại key tạo trong đúng team của account.</td>
+            </tr>
+            <tr>
+              <td>⚠️ ô vàng <em>"Không xác minh được"</em></td>
+              <td><strong>Không</strong> phải kết luận key sai — Apple đang trục trặc tạm thời.</td>
+              <td>Chờ vài phút rồi bấm Test key lại. Đừng vội xoá key.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h2 class="section-title">Bảng key — đọc trạng thái</h2>
+        <table class="docs-table">
+          <thead><tr><th>Thấy gì</th><th>Nghĩa là gì</th><th>Làm gì</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code class="inline">enabled</code> (xanh)</td>
+              <td>Key đang được dùng.</td>
+              <td>—</td>
+            </tr>
+            <tr>
+              <td><code class="inline">cooling down</code> (vàng) kèm giờ</td>
+              <td>Key này vừa chạm giới hạn Apple nên đang được cho nghỉ tới giờ ghi trên dòng.</td>
+              <td>Không cần làm gì — tự quay lại khi hết giờ. Các key khác vẫn chạy.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">disabled</code> (xám)</td>
+              <td>Bạn đã tắt key này. Tool không dùng nó nữa.</td>
+              <td>Bấm <strong>Enable</strong> nếu muốn dùng lại.</td>
+            </tr>
+            <tr>
+              <td>Account ghi <em>"chưa có pool key"</em></td>
+              <td>Trạng thái <strong>bình thường</strong>, không phải lỗi.</td>
+              <td>Thêm key nếu account đó hay chạy batch lớn.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Lưu ý — không có nút xoá, chỉ có Disable</div>
+          <p>
+            Đây là cố ý: <strong>Disable</strong> giữ lại dòng ghi nhận key nào được thêm lúc nào và
+            bởi ai — thông tin cần đến khi phải truy lại sự cố. Muốn vô hiệu hoá key thật sự thì
+            <strong>revoke nó trên App Store Connect</strong>; Disable trong tool chỉ dừng việc dùng nó.
+          </p>
+        </div>
+
+        <h2 class="section-title">Tính năng liên quan</h2>
+        <ul>
+          <li><a class="inline-link" data-goto="apple-bulk-import">Bulk Import</a> — nơi hạn mức Apple
+          hay bị chạm nhất; xem mục <em>Khi batch tự dừng</em>.</li>
+          <li><a class="inline-link" data-goto="apple-iaps">Export list</a> — cũng dừng giữa chừng khi
+          hết hạn mức.</li>
+        </ul>
       </section>
 
       <section class="page" data-page="apple-pricing-templates">

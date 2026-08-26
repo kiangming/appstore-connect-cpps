@@ -91,12 +91,20 @@ export function HubTrackingClient({ initialConfig, isAdmin }: Props) {
             Apple import finishes.
           </p>
         </div>
-        <Link
-          href="/iap-management/settings/pricing-tiers"
-          className="text-sm text-slate-500 hover:text-[#0071E3] transition shrink-0"
-        >
-          ← Pricing Templates
-        </Link>
+        <div className="flex items-center gap-4 shrink-0">
+          <Link
+            href="/iap-management/settings/pricing-tiers"
+            className="text-sm text-slate-500 hover:text-[#0071E3] transition"
+          >
+            ← Pricing Templates
+          </Link>
+          <Link
+            href="/iap-management/settings/key-pool"
+            className="text-sm text-slate-500 hover:text-[#0071E3] transition"
+          >
+            API Key Pool →
+          </Link>
+        </div>
       </div>
 
       <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-6 space-y-5">
