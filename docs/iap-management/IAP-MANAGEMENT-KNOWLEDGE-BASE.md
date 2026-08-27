@@ -4572,6 +4572,37 @@ route's output shape, something must pin the route to it** — a structural
 guard on the branch order, or a test that builds the fixture BY CALLING the
 route's own construction path.
 
+#### P27 applied to DOCUMENTATION — grep every claimed label back to the component
+
+Same class, different artefact. A user guide that quotes a UI label is making a
+CLAIM about the code; nothing checks it, and a wrong label reads perfectly.
+
+The 2026-08-27 guide pass found five such claims, and the fifth was not in any
+arc being documented: the Bulk Availabilities wireframe drew a confirm button
+reading **"Set Avail. for 5"**. No such label has ever existed — the button
+says `OK (5 selected)` / `Remove (5 selected)` / `Continue — read 5 items`. It
+had survived several arcs, several readings, and a Manager UAT, because it is
+exactly what that button *ought* to say.
+
+The others were the same shape: a column drawn as `175/175` when the cell has
+only ever rendered `Available` / `Remove from Sales`; "chỉ admin vào được" on a
+page that gates on `requireIapSession` and shows members a locked panel.
+
+**The method that found them is the point, and it is mechanical:** take every
+label the guide quotes, and grep it back to the component that renders it. What
+does NOT work is reading the guide — a plausible wrong label is invisible that
+way, which is why these lasted.
+
+```
+for label in "$@"; do grep -q "$label" "$component" || echo "MISSING: $label"; done
+```
+
+⚠ Two corollaries worth stating:
+- **Retired copy needs its own grep, at 0 hits.** Adding the new sentence does
+  not remove the old one, and the old one is what a reader hits first.
+- **Case matters.** `Pricing Tiers` returned 0 hits while `Pricing tiers` was
+  still live on another page. A case-sensitive sweep declared clean is not.
+
 ### 16.8 ⚠ P28 — the analyzer under an assertion must strip comments too (P15, one layer down)
 
 P15 says structural tests that grep source must strip comments. C3 found the
