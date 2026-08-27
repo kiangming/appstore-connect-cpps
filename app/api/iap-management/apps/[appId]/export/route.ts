@@ -165,7 +165,24 @@ export async function POST(
     const { sources, failures, stopped } = await fetchExportSources(
       creds,
       appleIaps,
-      { getIapDetail: getIapDetailFromApple, getPriceScheduleForIap },
+      {
+        getIapDetail: getIapDetailFromApple,
+        getPriceScheduleForIap,
+        // ⚠ F-A — THE EXPORT IS THE ONE SURFACE THAT WANTS APPLE'S
+        // AUTO-EQUALIZED PRICES, and this line is where that is decided.
+        //
+        // Without it the file contains only the territories a human priced by
+        // hand — 10 of 175 on the Manager's app — and says nothing about the
+        // other 165 markets Apple actively sells in. Costs +1 Apple request
+        // per item (customerPrice and currency arrive inline via the same
+        // `?include` the manual walk uses, so no N+1): 3 → 4 per item,
+        // ~2,003 for a 500-item app, ≈56% of the 3,600/hour budget.
+        //
+        // ⚠ Do NOT push this default down into `fetchExportSources` or
+        // `getPriceScheduleForIap`. View Detail and the two write paths share
+        // that function and want the manual rows only (KB §4.18).
+        includeAutomatic: true,
+      },
     );
 
     const plan = buildExportPlan(sources, territories);

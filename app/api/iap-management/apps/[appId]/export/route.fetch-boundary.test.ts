@@ -90,9 +90,18 @@ const MANUAL_TERRITORIES = [
  */
 const AUTO_TERRITORIES: string[] = (() => {
   countries.registerLocale(enLocale);
-  const all: string[] = Object.values(
+  // ⚠ KEYS, NOT VALUES. `getAlpha3Codes()` maps alpha3 → alpha2
+  // (`{ AFG: "AF", … }`), so `Object.values` hands back ALPHA-2 — and this
+  // fixture stands in for Apple, which speaks alpha-3. The first draft got
+  // this backwards and the test still looked plausible: `toCatalogCode("AF")`
+  // finds no alpha-3 match and falls through to the raw string, so the
+  // columns came out as "AF" and the names still resolved. What gave it away
+  // was the COUNT — 171 instead of 175, because HK/ID/MO/MY collided with the
+  // manual HKG/IDN/MAC/MYS after conversion. A fixture is a claim about
+  // Apple (P27); this one was quietly claiming the wrong alphabet.
+  const all: string[] = Object.keys(
     countries.getAlpha3Codes() as Record<string, string>,
-  ) as string[];
+  );
   const manual = new Set<string>(MANUAL_TERRITORIES);
   const picked = all.filter((c) => !manual.has(c)).sort().slice(0, 165);
   if (picked.length !== 165) {

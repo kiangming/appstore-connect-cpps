@@ -122,6 +122,25 @@ export interface ExportFetchDeps {
    * caller must not add a second one.
    */
   getPriceScheduleForIap: typeof getPriceScheduleForIap;
+  /**
+   * F-A — read Apple's auto-equalized territories too (`/automaticPrices`),
+   * not just the ones a human priced by hand.
+   *
+   * ⚠ THE CALLER DECIDES, AND THAT IS NOT STYLE. `getPriceScheduleForIap` is
+   * shared with View Detail and the two write paths, which want the ~10
+   * manual rows and would be handed ~175 by a default flip. So the option
+   * lives here as an injected DECISION rather than a constant: the export
+   * route says `true`, everyone else says nothing, and a test can drive both.
+   * A hardcoded `true` inside `fetchExportSources` would also make the guard
+   * asserting it unfalsifiable.
+   *
+   * ⚠ AND IT MUST ACTUALLY BE PASSED. E1 built the capability behind this
+   * flag and no chunk was ever tasked with switching it on, so the export
+   * shipped reading 10 of Apple's 175 territories while four later chunks
+   * built column ordering, shading and `—`/blank on top of data that was
+   * never fetched. An opt-in nobody opts into is dead code that looks alive.
+   */
+  includeAutomatic?: boolean;
   concurrency?: number;
 }
 
@@ -199,7 +218,13 @@ export async function fetchExportSources(
       let priceSchedule = null as ExportSource["priceSchedule"];
       let priceReadFailure: PriceReadFailure | null = null;
       try {
-        const scheduleRes = await deps.getPriceScheduleForIap(creds, iap.id);
+        // ⚠ ALWAYS STATED, never left implicit. Passing the resolved boolean
+        // rather than forwarding `deps.includeAutomatic` raw means the export
+        // declares its choice on every call — and a reader of the Railway log
+        // or the mock's arguments sees an answer instead of an absence.
+        const scheduleRes = await deps.getPriceScheduleForIap(creds, iap.id, {
+          includeAutomatic: deps.includeAutomatic === true,
+        });
         priceSchedule = unpackPriceSchedule(scheduleRes);
         // ⚠ A SUCCESSFUL read that came back SHORT. Stage 2 stopped at its
         // page cap, or collected fewer rows than Apple's own count — either
