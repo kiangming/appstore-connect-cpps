@@ -665,6 +665,31 @@ name you first met in prose.
 
 ---
 
+### 4.16 The price-point cache is a WRITE-path tool — it can never help a read
+
+Asked and settled 2026-08-27, during the export-territory census. Recording it
+so the next person does not re-derive it.
+
+`territory-price-points-cache.ts` looks like the obvious lever for "the export
+reads prices for 25 items, surely they share lookups". They do not, for two
+independent reasons:
+
+1. **It cannot be shared across IAPs, structurally.** Its own header says why:
+   `/v2/inAppPurchases/{appleIapId}/pricePoints` is scoped to one IAP, and
+   *different IAPs return different opaque `price_point_id` values for the same
+   (territory, customerPrice) pair*. Sharing is not a scope decision someone
+   forgot to make — it is impossible. Cross-item hit rate is 0%, not "low".
+2. **The export has no lookup to cache anyway.** The cache exists for the WRITE
+   direction — desired price → price-point id to POST. The export reads the
+   other way and gets `customerPrice` INLINE via
+   `?include=inAppPurchasePricePoint` on the schedule sub-resource
+   (`unpackPriceEntry`, iap-detail.ts:194-214). There is no second call to
+   amortise.
+
+⇒ Widening that cache's scope for an export feature would carry the blast
+radius of every write path (bulk import, create, update) in exchange for zero
+requests saved. Don't.
+
 ## 5. Database Schema
 
 ### 4.14 Per-territory availability — as shipped (arc `19051e8..6f206f8`)
