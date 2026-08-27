@@ -617,3 +617,68 @@ describe("fetchExportSources — incomplete price sets (#2)", () => {
     expect(getIapDetail).toHaveBeenCalledTimes(3);
   });
 });
+
+
+/**
+ * ─── F-C, SUPPLEMENTARY GUARD ──────────────────────────────────────────────
+ *
+ * ⚠ THIS DOES NOT REPLACE `route.fetch-boundary.test.ts`, AND SAYING SO IS
+ * THE POINT OF THIS COMMENT.
+ *
+ * It is a fake at the deps seam — the SAME seam that let the whole
+ * automatic-prices feature ship dead while 4 396 tests stayed green. A fake
+ * here can assert what arguments it was handed, but it can never prove that
+ * the real `getPriceScheduleForIap` does anything with them, that Apple's
+ * `/automaticPrices` sub-resource is reached, or that a single amber cell
+ * lands in the file. Only the HTTP-boundary test can, because it is the only
+ * one whose fake sits BELOW the link that broke.
+ *
+ * Keep it anyway: it is ~20 lines, it fails fast and names the argument, and
+ * it puts the contract next to the code that owns it. Just never let its
+ * green stand in for the other file's.
+ */
+describe("⚠ the export asks for AUTOMATIC prices — supplementary to the HTTP-boundary test", () => {
+  it("passes { includeAutomatic: true } to every schedule read", async () => {
+    const getIapDetail = vi.fn().mockResolvedValue({
+      iap: iap("a1", "com.x.a"),
+      localizations: [],
+      screenshot: null,
+    });
+    const getPriceScheduleForIap = vi.fn().mockResolvedValue(scheduleResponse("USA"));
+
+    await fetchExportSources(creds, [iap("a1", "com.x.a")], {
+      getIapDetail,
+      getPriceScheduleForIap,
+      includeAutomatic: true,
+    });
+
+    // ⚠ The THIRD argument is the whole assertion. Without it the export reads
+    // only the manually-priced territories — ~10 of Apple's 175 — and every
+    // downstream stage (column order, amber fill, `—` vs blank) operates
+    // faithfully on data that was never fetched.
+    expect(getPriceScheduleForIap).toHaveBeenCalledWith(creds, "a1", {
+      includeAutomatic: true,
+    });
+  });
+
+  it("⚠ and does NOT ask when the caller did not — the flag stays the caller's decision", async () => {
+    // The negative control. `fetchExportSources` must not hardcode `true`:
+    // View Detail and the two write paths share `getPriceScheduleForIap` and
+    // would gain 165 prices nobody asked for. Hardcoding here would also make
+    // the assertion above unfalsifiable.
+    const getIapDetail = vi.fn().mockResolvedValue({
+      iap: iap("a1", "com.x.a"),
+      localizations: [],
+      screenshot: null,
+    });
+    const getPriceScheduleForIap = vi.fn().mockResolvedValue(scheduleResponse("USA"));
+
+    await fetchExportSources(creds, [iap("a1", "com.x.a")], {
+      getIapDetail,
+      getPriceScheduleForIap,
+    });
+
+    const opts = getPriceScheduleForIap.mock.calls[0][2];
+    expect(opts?.includeAutomatic ?? false).toBe(false);
+  });
+});
