@@ -180,6 +180,48 @@ console.log("    attributes on entry :", Object.keys(terrs.data[0]?.attributes ?
 console.log("    → territory NAME    :", "name" in (terrs.data[0]?.attributes ?? {}) ? "PRESENT" : "ABSENT — must come from the internal catalog");
 console.log("    Apple codes         :", terrs.data.map((t) => t.id).join(" "));
 
+// ── 2.6b G1 — the CURRENCY per territory, emitted paste-ready ──────────────
+//
+// ⚠ WHY THIS PRINTS SOURCE AND NOT A TABLE. The picker renders
+// `{code} · {currency}` for every territory, so the snapshot has to carry the
+// currency, and the only authority for "what currency does Apple bill this
+// market in" is Apple. Deriving it from an ISO-4217 table would be a guess
+// dressed as data — several Apple territories bill in a currency that is not
+// their country's own (the Caribbean and the overseas territories especially).
+//
+// ⚠ AND IT IS EMITTED AS TYPESCRIPT ON PURPOSE. The last transcription error
+// in this arc (a fixture built in alpha-2 where Apple speaks alpha-3) cost a
+// debugging round and looked correct the whole time. Copy-pasting a block
+// that is already the literal the file needs removes the step where a human
+// re-types 175 rows.
+console.log("\n2.6b currency per territory — PASTE-READY, copy between the markers:");
+console.log("// ---8<--- APPLE_TERRITORIES begin (measured " + new Date().toISOString().slice(0, 10) + ") ---8<---");
+{
+  const rows = terrs.data
+    .map((t) => ({ code: t.id, currency: t.attributes?.currency ?? "" }))
+    .sort((a, b) => a.code.localeCompare(b.code));
+  const missing = rows.filter((r) => !r.currency);
+  for (let i = 0; i < rows.length; i += 4) {
+    console.log(
+      "  " +
+        rows
+          .slice(i, i + 4)
+          .map((r) => `{ code: "${r.code}", currency: "${r.currency}" },`)
+          .join(" "),
+    );
+  }
+  console.log("// ---8<--- APPLE_TERRITORIES end · " + rows.length + " entries ---8<---");
+  if (missing.length > 0) {
+    console.log(
+      "    ⚠ " + missing.length + " territory/territories returned NO currency: " +
+        missing.map((r) => r.code).join(" ") +
+        " — do NOT invent one; report it.",
+    );
+  } else {
+    console.log("    ✓ all " + rows.length + " entries carry a currency.");
+  }
+}
+
 // ── 2.7 DETECTOR (a) — has Apple's list drifted from our snapshot? ─────────
 //
 // ⚠ THE REASON THIS STEP EXISTS. `apple-territories.snapshot.ts` decides how
