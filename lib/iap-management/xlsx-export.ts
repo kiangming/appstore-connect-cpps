@@ -17,7 +17,7 @@
  * no I/O, just plan/workbook construction from already-fetched data.
  *
  * Territory display codes are Apple's native alpha-3 (USA, VNM, …)
- * converted to alpha-2 (US, VN, …) via `i18n-iso-countries` to match the
+ * converted to alpha-2 (US, VN, …) via `apple/territory-code-map` to match the
  * approved sample's header format — the same package
  * components/iap-management/view-detail/territory-name.ts already
  * depends on, no new dependency.
@@ -27,7 +27,7 @@
  * export.
  */
 import * as XLSX from "xlsx";
-import countries from "i18n-iso-countries";
+import { toCatalogCode } from "./apple/territory-code-map";
 
 import type { PriceScheduleView } from "./queries/iap-detail";
 
@@ -191,11 +191,17 @@ export interface ExportPlan {
   rows: ExportRow[];
 }
 
-/** Apple's native alpha-3 → alpha-2, falling back to the raw code for any
- *  territory the ISO table doesn't cover (defensive — mirrors
- *  territory-name.ts's raw-code fallback for the same reason). */
+/**
+ * Apple's native alpha-3 → the code the picker and columns use.
+ *
+ * ⚠ E2b — delegates to `territory-code-map`, which handles the one territory
+ * the ISO tables cannot: Kosovo is `XKS` to Apple and `XK` to the catalog, so
+ * the bare library call left its price keyed under a code the selection could
+ * never match. Still falls back to the raw code for anything unknown — an
+ * unnameable market is still a market with a price.
+ */
 function toAlpha2(code: string): string {
-  return countries.alpha3ToAlpha2(code) ?? code;
+  return toCatalogCode(code);
 }
 
 function toExportRow(source: ExportSource): ExportRow {
@@ -246,8 +252,35 @@ function toExportRow(source: ExportSource): ExportRow {
  * today's unfiltered behavior. Fixed columns and localization groups are
  * per-item/per-locale, not per-territory, and are never affected by this
  * parameter. The selection does NOT change the fetch — every IAP's full
- * price schedule is still fetched regardless; this only narrows which
+ * price schedule is still fetched regardless; this only decides which
  * columns the workbook renders.
+ *
+ * ─── E2 — THE SELECTION IS THE COLUMN SET, NOT A FILTER OVER IT ────────────
+ *
+ * This used to read
+ *
+ *     territories = allTerritories.filter((t) => selection.has(t))
+ *
+ * i.e. the INTERSECTION of (territories some row has a price for) and
+ * (territories the Manager picked). A country the Manager selected that no
+ * item had a price for did not come out blank — **it produced no column at
+ * all**, and the file said nothing about having dropped it.
+ *
+ * That is the silent-drop class, and it hid the real bug for a while: the
+ * export also never read Apple's `automaticPrices` (E1), so "has a price"
+ * meant "has a MANUAL price". The Manager picked ten countries, got ten
+ * columns, and had no way to see that the other selected markets had been
+ * removed from the question rather than answered.
+ *
+ * ⚠ NOW: when a selection is given, THE SELECTION IS THE COLUMNS. Every
+ * country asked about gets a column, and what goes in the cell answers it —
+ * a price, or `—` for "Apple does not sell here". A question asked must be
+ * answered visibly, including when the answer is "nothing".
+ *
+ * ⚠ The no-selection path is UNCHANGED: the union of priced territories.
+ * There is no question to answer there, so there is nothing to leave blank —
+ * and widening it to all ~175 would silently make every unfiltered export
+ * enormous.
  */
 export function buildExportPlan(
   sources: ExportSource[],
@@ -263,13 +296,12 @@ export function buildExportPlan(
   }
 
   const allTerritories = [...territorySet].sort();
-  const selection =
+  // ⚠ `[...new Set(...)]` — the request body is client-supplied and a
+  // duplicated code would otherwise render the same country twice.
+  const territories =
     selectedTerritories && selectedTerritories.length > 0
-      ? new Set(selectedTerritories)
-      : null;
-  const territories = selection
-    ? allTerritories.filter((t) => selection.has(t))
-    : allTerritories;
+      ? [...new Set(selectedTerritories)].sort()
+      : allTerritories;
 
   return {
     territories,

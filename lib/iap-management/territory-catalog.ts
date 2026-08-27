@@ -32,10 +32,27 @@
  * Google module). Codes are ISO 3166-1 alpha-2 — Google's native format,
  * and the same format the Apple export already converts its native
  * alpha-3 codes to for display (see `lib/iap-management/xlsx-export.ts`
- * `toAlpha2`). Picking a territory a given app doesn't actually sell in
- * is harmless — the export's territory union naturally has no data for
- * it, so the column is blank (matching today's behavior for any
- * unpriced territory).
+ * `toAlpha2`).
+ *
+ * ⚠ THIS PARAGRAPH USED TO BE WRONG, AND THE WRONG VERSION IS WHY A BUG
+ * SURVIVED. It said picking a territory an app doesn't sell in was harmless
+ * because "the column is blank". It was not blank — the column DID NOT EXIST.
+ * `buildExportPlan` intersected the selection with the territories some row
+ * had a price for, so an unpriced pick was removed from the question instead
+ * of answered, and the file said nothing about having dropped it. A comment
+ * describing behaviour the code did not have is worse than no comment: it is
+ * what a reader checks against instead of the code.
+ *
+ * Since E2 the selection IS the column set, so the sentence is finally true in
+ * the shape it always claimed: pick a territory the app doesn't sell in and
+ * you get a COLUMN, carrying "—" for "Apple does not sell here".
+ *
+ * ⚠ 20 of this catalog's entries are territories Apple does not sell to at
+ * all (BD TL AD XK LI MC SM HT BI KM DJ GQ ET GN LS TG KI MH WS TV, measured
+ * 2026-08-27 against `/v1/territories`). They are selectable and always
+ * answer "—". That is correct, not a defect. The opposite direction — Apple
+ * territories this catalog is MISSING — is a real gap, tracked as
+ * `[EXPORT-catalog-missing-11]` in TODO.md.
  *
  * Region buckets (Asia / Europe / Americas / Africa / Middle East /
  * Oceania) match the approved mockup's 6-way grouping — NOT Google's

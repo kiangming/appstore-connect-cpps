@@ -144,9 +144,41 @@ describe("buildExportPlan — territory selection (Export options dialog)", () =
     expect(plan.territories).toEqual(["US"]);
   });
 
-  it("a selected territory no item actually has a price for → no column, no crash", () => {
+  /**
+   * ⚠ THIS TEST WAS INVERTED BY [Q-EXPORT.all-selected-territories], and it is
+   * the one place in this file where an assertion changed rather than a
+   * fixture.
+   *
+   * It used to read "a selected territory no item actually has a price for →
+   * no column, no crash" and assert `["US"]` — pinning the behaviour the
+   * Manager reported as the bug. A country asked about in Step 2 vanished from
+   * the file instead of being answered, and nothing said it had.
+   *
+   * The old name shows how the defect stayed invisible: dropping the column
+   * genuinely does not crash, so "no crash" read as the desirable half and
+   * "no column" travelled along as though it were the same finding.
+   */
+  it("⚠ MUTATION (e) — a selected territory with no price still gets a COLUMN", () => {
     const plan = buildExportPlan(twoTerritorySources, ["US", "DE"]);
-    expect(plan.territories).toEqual(["US"]);
+    // DE is in the ask, so DE is in the answer. What goes in the cell is E5's
+    // job ("—" for "Apple does not sell here"); what matters here is that the
+    // question is not silently deleted.
+    expect(plan.territories).toEqual(["DE", "US"]);
+  });
+
+  it("⚠ MUTATION (e) — the selection is the column set, even when NOTHING is priced", () => {
+    // The degenerate case the intersection made unreachable: pick three
+    // countries none of which has a price and the old code produced an export
+    // with no price columns at all.
+    const plan = buildExportPlan(twoTerritorySources, ["FR", "DE", "JP"]);
+    expect(plan.territories).toEqual(["DE", "FR", "JP"]);
+  });
+
+  it("a duplicated code in the request body renders one column, not two", () => {
+    // The selection now flows through to the columns directly, so a client
+    // sending the same code twice would have rendered it twice.
+    const plan = buildExportPlan(twoTerritorySources, ["US", "US", "DE"]);
+    expect(plan.territories).toEqual(["DE", "US"]);
   });
 
   it("does not affect Base Country, localization groups, or fixed columns", () => {
