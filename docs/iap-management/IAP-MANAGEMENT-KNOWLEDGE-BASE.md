@@ -855,6 +855,61 @@ snapshot is built by pasting it. **Do not retype it.** The last hand-built
 territory fixture in this arc was written in the wrong alphabet and looked
 correct until a count exposed it (P27 #4).
 
+### 4.20 ⚠ NEVER HAND-ROLL AN ALPHA-2 / ALPHA-3 CONVERSION. ALWAYS `toCatalogCode`.
+
+**Four times in one arc.** Not a style rule — a defect class with a body count.
+
+Apple speaks **alpha-3** (`USA`, `THA`, `XKS`). The picker, the catalog, the
+column codes and Google all speak **alpha-2** (`US`, `TH`, `XK`). Every Apple
+export path crosses that line, and `lib/iap-management/apple/territory-code-map.ts`
+is the crossing — `toCatalogCode` / `toAppleCode`.
+
+| # | where | what was written | how it presented |
+|---|---|---|---|
+| 1 | F-C fixture | `Object.values(getAlpha3Codes())` — that map is alpha3→**alpha2**, so it fed alpha-2 to a boundary that speaks alpha-3 | names all resolved, columns looked fine; **171 instead of 175** |
+| 2 | G2 test | `code === "XKS" ? "XK" : code` — handled Kosovo, left the other 174 in alpha-3 | 174 spurious mismatches |
+| 3 | G2 test (2nd site) | same open-coding in a second helper | same |
+| 4 | G2 expansion test | comparison built on the same open-coded conversion | same |
+
+⚠ **THE COMMON SHAPE, AND WHY IT KEEPS WORKING FOR A WHILE.** `toCatalogCode`
+falls back to the raw string for anything it cannot map. So a wrong-alphabet
+code does not throw and does not render blank — it renders *the code itself*,
+which looks like a plausible territory. `territoryName` then resolves a real
+name from it. **Every visible signal says "fine".**
+
+⇒ **The only thing that catches it is a COUNT.** All four were found by
+`expected 175, got 171` / `to have length 175`. So:
+
+1. **Never write the conversion.** Not `alpha3ToAlpha2`, not a ternary for
+   Kosovo, not `.slice(0,2)`. Import `toCatalogCode`. It is the only thing that
+   knows Kosovo has no ISO assignment at all.
+2. **In tests too — especially in tests.** Three of the four were test helpers.
+   A test that converts differently from production is comparing two different
+   worlds and will report a defect that does not exist, or miss one that does.
+3. **Assert a COUNT whenever territory codes are involved.** A shape assertion
+   passes in the wrong alphabet; a total does not.
+
+### 4.21 A DIFFERENT QUESTION GETS A DIFFERENT HEADER — never a new meaning for an existing count
+
+G5. The export response carries the workbook as its body, so headers are the
+only channel back to the client. Five were pinned at `b171eeb`
+(`Item-Count`, `Failed-Count`, `Partial-Count`, `Not-Attempted-Count`,
+`Stopped`) and each answers **"how did the export go"**.
+
+Snapshot drift answers a different question — **"is our country list still
+current"** — so it got a sixth header (`X-Export-Unknown-Territories`) rather
+than being folded into a count. Folding it in would have made a healthy export
+read as damaged, and would have silently redefined a number three surfaces
+already display.
+
+⚠ **Emitted only when non-empty**, like `X-Export-Stopped`. A header that is
+always present and usually empty is one readers learn to skip.
+
+⚠ **Capacity checked rather than capped.** The value is space-separated
+alpha-3, so total drift — all 175 unknown — is ~700 bytes against Node's 16 KB
+header limit. No cap was needed, therefore no silently truncated tail (the
+arc's no-silent-caps rule).
+
 ## 5. Database Schema
 
 ### 4.14 Per-territory availability — as shipped (arc `19051e8..6f206f8`)
@@ -3620,7 +3675,24 @@ frequency bar during the C1→C2→PRICING-429→C3 latch arc:
 - **P28** — P15 pushed down a layer: the SLICER underneath an assertion must
   strip comments and strings too, or the guard fails OPEN.
 - **P29** — the `fetch` boundary is where `tsc` is blind. Derive client types
-  from the server's; do not trust the compiler to notice drift. 4 instances.
+  from the server's; do not trust the compiler to notice drift. **5 instances.**
+  ⚠ **G5 EXTENDED IT: `vi.mock` IS THE SAME BLIND SPOT IN ANOTHER COSTUME.**
+  A module replaced by an untyped `vi.fn()` is never compared against its real
+  signature, so a hand-written fixture standing in for its return value can
+  drift from the type without a single compiler complaint.
+  Instance: G5 added a REQUIRED field to `ExportFetchResult`; the route read
+  it; `route.headers.test.ts`'s `fetchResult` helper did not supply it; the
+  route threw on `undefined.length` and **all 14 tests in that file returned
+  502**. `tsc` was clean throughout.
+  Three rules follow:
+  1. **Adding a required field to a mocked type ⇒ grep every fixture of it.**
+     The compiler will not find them for you.
+  2. **Fix the FIXTURE, not the production code.** `?.length ?? 0` goes green
+     just as fast and teaches the caller to tolerate a shape its own type
+     forbids — hiding the next field added and forgotten there. (P27: the
+     fixture is a claim; restore the claim.)
+  3. **Targeted green ≠ suite green.** The targeted run that "proved" G5 simply
+     did not include that file. Run the full suite before believing a chunk.
 
 ---
 
@@ -5267,6 +5339,49 @@ with a date on it, so drift detection is deliberately doubled:
 
 Neither is sufficient: (a) is complete and forgettable, (b) is automatic and
 half-blind. The limitation of (b) is pinned by a test named for it.
+
+### 18.5 Arc G — the Apple picker becomes Apple's (2026-08-27)
+
+`[Q-EXPORT.apple-only-picker]`. The Manager's ask: a country Apple does not
+sell in should not be offered, and should not reach the file.
+
+| | |
+|---|---|
+| G1a/G1b | the snapshot carries Apple's **currency** — and Apple does not bill locally ([§4.19](#419-landmark--apple-does-not-bill-in-the-local-currency-for-most-markets-currency-can-never-be-derived-from-a-country-code)) |
+| G2 | `apple-territory-catalog.ts` — 175 markets, decorated from the snapshot, never re-listed |
+| G3 | `ExportOptionsDialog` gains an optional `catalog` prop; Apple passes 175, Google keeps 183 |
+| G4 | `allExportTerritories()` 194 → **175** |
+| G5 | drift is shown to the Manager, not just Railway |
+
+**It closed `[EXPORT-catalog-missing-11]` for Apple without touching
+`TERRITORY_CATALOG`.** Russia and ten other markets became tickable because
+they come from Apple's snapshot, so Google's picker gained nothing and P8 was
+never engaged.
+
+⚠ **THE NUMBER MOVED THREE TIMES AND NONE WAS A REBASELINE.** F-C pinned 175,
+F-B 194, G4 175 again. One rule throughout — *answer every question that can
+be asked, and only those* — with the picker deciding which questions exist.
+Each change was declared in the test with its reason, and two tests were
+**inverted** rather than deleted, because their names asserted premises that
+had become false ("they are tickable"). The pairs are the record of a rule
+holding while its input moved.
+
+⚠ **`—` CHANGED MEANING AND THE CODE DID NOT.** E5 gave it "Apple does not
+sell here", true while the picker offered 19 such markets. After G3/G4 it
+almost always means **"this IAP has no price for that market"** — most often a
+`MISSING_METADATA` item nobody has priced, whose whole row is `—` across all
+175. The census proved the path is live and common (export scope is ALL
+states), so nothing was deleted; only the user-facing label was wrong.
+⇒ **A meaning can go stale while every test stays green.** When a chunk
+changes what a value implies, grep the docs for the old sentence — the code
+will not tell you.
+
+⚠ **AND THE SEVERITY OF DRIFT ESCALATED SILENTLY.** Before G3 a stale snapshot
+meant a wrong column count. After G3 it means **a market cannot be selected**.
+Same data, same staleness, different consequence — because a downstream chunk
+changed what the data decides. G5 exists only because that escalation was
+noticed while designing PA-1, not after a user hit it.
+
 
 
 **Knowledge base preserved for future development continuity.**

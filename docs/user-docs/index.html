@@ -1039,7 +1039,7 @@
           <a class="nav-item" data-page="apple-apps" data-keywords="apple apps danh sách applications">
             <span class="nav-item-label">Danh sách apps</span>
           </a>
-          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách danh sach export xlsx excel xuất file xuat file export failures failure sheet reason rate limit not attempted partial giới hạn gioi han ô trống o trong gạch ngang gach ngang em dash — không bán khong ban not sold nền vàng nen vang auto equalized manual tự set tay tu set tay freeze đóng băng dong bang header tên nước ten nuoc availability availabilities available removed unknown as of last sync đồng bộ dong bo refresh from apple làm mới lam moi cũ cu read not read fetch failed rate limited chưa sync chua sync không cần f5 khong can f5">
+          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách danh sach export xlsx excel xuất file xuat file export failures failure sheet reason rate limit not attempted partial giới hạn gioi han ô trống o trong gạch ngang gach ngang em dash — chưa có giá chua co gia not sold country list out of date danh sách nước cũ danh sach nuoc cu drift nga russia 175 nước 175 nuoc nền vàng nen vang auto equalized manual tự set tay tu set tay freeze đóng băng dong bang header tên nước ten nuoc availability availabilities available removed unknown as of last sync đồng bộ dong bo refresh from apple làm mới lam moi cũ cu read not read fetch failed rate limited chưa sync chua sync không cần f5 khong can f5">
             <span class="nav-item-label">Danh sách IAPs</span>
           </a>
           <a class="nav-item" data-page="apple-new-iap" data-keywords="apple new iap tạo mới create">
@@ -2589,9 +2589,22 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
 
               <p><strong>File trông thế nào</strong> — 4 điểm đáng biết trước khi mở:</p>
               <ul>
-                <li><strong>Mỗi nước bạn tick = 1 cặp cột</strong> (Price · Currency), kể cả nước Apple
-                không bán — chọn cả 175 nước thì file có 175 cặp. Nước được hỏi thì được trả lời;
-                không nước nào bị bỏ im lặng.</li>
+                <li><strong>Danh sách nước = đúng 175 nước Apple có bán.</strong> Trước đây picker
+                hiện 183 nước dùng chung với Google, trong đó có 19 nước Apple <em>không</em> bán
+                (Andorra, Monaco, Bangladesh…) — tick vào chỉ tổ ra 19 cột trống vô nghĩa. Nay chúng
+                không còn trong danh sách. Đổi lại, <strong>11 nước Apple CÓ bán mà trước đây thiếu
+                nay đã tick được — trong đó có Nga (RU)</strong>.</li>
+                <li><strong>Mỗi nước bạn tick = 1 cặp cột</strong> (Price · Currency). Tick cả 175
+                thì file có <strong>175 cặp cột</strong>. Nước được hỏi thì được trả lời; không nước
+                nào bị bỏ im lặng.</li>
+                <li><strong>Currency trong danh sách là currency APPLE tính tiền</strong>, không phải
+                đồng bản địa. Apple tính phần lớn thị trường bằng USD hoặc EUR: Bulgaria là
+                <code class="inline">EUR</code> (không phải BGN), Macau <code class="inline">USD</code>
+                (không phải MOP). ⚠️ <strong>Vì thế cùng một nước có thể hiện currency KHÁC nhau giữa
+                picker của Apple IAP và của Google IAP</strong> — Bulgaria: <code class="inline">EUR</code>
+                bên Apple, <code class="inline">BGN</code> bên Google. <strong>Đó là đúng, không phải
+                bug</strong>: mỗi bên hiện đồng tiền mà store của mình thật sự tính. Nga vẫn là
+                <code class="inline">RUB</code> — Apple không quy hết về USD.</li>
                 <li><strong>Header ghi tên nước đầy đủ:</strong>
                 <code class="inline">Price in Thailand (TH)</code>, không phải
                 <code class="inline">Price in TH</code>. Dòng header thứ 2 vẫn là
@@ -2784,12 +2797,17 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <tbody>
             <tr>
               <td>Ô giá là <code class="inline">—</code> (gạch ngang dài)</td>
-              <td><strong>Apple không bán item này ở nước đó.</strong> Đây là một <em>câu trả lời</em>:
+              <td><strong>IAP này chưa có giá ở nước đó.</strong> Đây là một <em>câu trả lời</em>:
               tool đã đọc bảng giá thành công, và trong đó không có nước này. Cả 2 ô
-              <strong>Price và Currency</strong> đều là <code class="inline">—</code>.</td>
-              <td>Không cần làm gì. Export lại cũng ra <code class="inline">—</code>.
-              Nếu bạn <em>mong đợi</em> có giá ở nước đó thì vấn đề nằm ở bảng giá trên App Store Connect,
-              không phải ở file.</td>
+              <strong>Price và Currency</strong> đều là <code class="inline">—</code>.
+              <br>⚠️ Hay gặp nhất: <strong>IAP chưa set giá bao giờ</strong> (status
+              <code class="inline">MISSING_METADATA</code>) — khi đó <em>cả dòng</em> là
+              <code class="inline">—</code> trên toàn bộ 175 cột, và ô <strong>Base Country</strong>
+              của dòng đó <strong>để TRỐNG</strong> (không phải <code class="inline">—</code>) vì
+              không có bảng giá nào để nói base là nước nào.</td>
+              <td>Không cần làm gì với file. Export lại cũng ra <code class="inline">—</code>.
+              Nếu bạn <em>mong đợi</em> có giá ở nước đó thì vào App Store Connect set giá cho IAP đó,
+              rồi export lại.</td>
             </tr>
             <tr>
               <td>Ô giá <strong>TRỐNG</strong> (không có gì cả)</td>
@@ -2815,6 +2833,34 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <p>
             Khi file có ô trống, dòng ghi chú màu ở <strong>đầu sheet chính</strong> cũng nhắc lại điều này —
             dòng đó chỉ xuất hiện khi thật sự có item đọc thiếu.
+          </p>
+        </div>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Bảng vàng "The country list may be out of date" — hiếm, nhưng đọc kỹ</div>
+          <p>
+            Sau khi export xong, đôi khi bảng tổng kết có thêm một khối màu vàng:
+            <em>"The country list may be out of date. Apple returned prices for <strong>XXX</strong>,
+            which this tool does not know about — so they are missing from the country picker and
+            cannot be chosen."</em>
+          </p>
+          <p>
+            <strong>Nghĩa là gì.</strong> Apple đã mở bán thêm nước mới kể từ lần tool cập nhật danh
+            sách (đo ngày 2026-08-27). ⚠️ <strong>File bạn vừa tải KHÔNG sai</strong> — những nước đó
+            vẫn có giá đầy đủ trong file. Cái bị mất là <strong>khả năng CHỌN</strong>: chúng không
+            có trong danh sách tick nên bạn không lọc riêng chúng được.
+          </p>
+          <p>
+            <strong>Làm gì.</strong> <em>Không</em> cần export lại — bảng đó nói rõ
+            <em>"Everything you exported is correct and nothing needs re-running"</em>. Báo team dev
+            kèm mã nước hiện trong bảng; team chạy
+            <code class="inline">node scripts/probe-export-price-sources.mjs</code> (step 2.7) để
+            làm mới danh sách.
+          </p>
+          <p>
+            ⓘ <strong>Chiều ngược lại tool KHÔNG tự thấy được.</strong> Nếu Apple <em>ngừng</em> bán
+            ở một nước, nước đó chỉ đơn giản không xuất hiện trong dữ liệu trả về nên không có gì để
+            cảnh báo. Chỉ lần chạy probe định kỳ mới phát hiện được, vì nó so cả hai danh sách.
           </p>
         </div>
 
@@ -3038,7 +3084,9 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           nghĩa là lần fetch giá của riêng item đó bị lỗi tạm thời (network/Apple rate-limit) — item vẫn được
           liệt kê, không bị bỏ sót. Chạy <strong>Export list</strong> lại để lấy đầy đủ giá cho item đó.</p>
           <p>⚠️ <strong>Trống</strong> khác <code class="inline">—</code>: ô
-          <code class="inline">—</code> nghĩa là Apple không bán ở nước đó, và export lại cũng vậy.
+          <code class="inline">—</code> nghĩa là <strong>IAP đó chưa có giá ở nước đó</strong>
+          (thường là IAP chưa set giá bao giờ), và export lại cũng ra vậy — muốn hết
+          <code class="inline">—</code> thì phải set giá trên App Store Connect.
           Chỉ ô <strong>trống</strong> mới đáng chạy lại — và item đó luôn có một dòng ở sheet
           <code class="inline">Export Failures</code>.</p>
         </div>
