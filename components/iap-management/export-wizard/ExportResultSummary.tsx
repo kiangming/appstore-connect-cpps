@@ -64,6 +64,19 @@ export interface ExportResultSummaryProps {
   /** How many items the operator picked, when they picked. `null` on the
    *  export-all path, where there is no denominator to speak of. */
   selectedCount: number | null;
+  /**
+   * G5 — Apple alpha-3 codes that came back priced and are missing from
+   * `apple-territories.snapshot.ts`. Empty in the normal case.
+   *
+   * ⚠ THIS IS NOT AN EXPORT OUTCOME, and it is deliberately kept out of the
+   * three counts above. Those answer "how did the export go"; this answers
+   * "is our country list still current", and folding it in would make a
+   * healthy export look damaged.
+   *
+   * ⚠ IT CAN ARRIVE ON A PERFECTLY CLEAN RUN. That is why the caller opens
+   * this panel for drift alone.
+   */
+  unknownTerritories?: readonly string[];
   onClose: () => void;
 }
 
@@ -82,6 +95,7 @@ export function ExportResultSummary({
   notAttempted,
   stopped,
   selectedCount,
+  unknownTerritories = [],
   onClose,
 }: ExportResultSummaryProps) {
   const attempted = exported + failed;
@@ -183,6 +197,42 @@ export function ExportResultSummary({
               sheet names every one of these {failed + notAttempted + partial}{" "}
               rows individually, with its own reason — closing this does not
               lose them.
+            </span>
+          </p>
+        )}
+
+        {/* ── G5 — THE COUNTRY LIST IS OUT OF DATE ────────────────────────
+            ⚠ ITS OWN BLOCK, not a line in the counts list. The counts describe
+            the export; this describes the TOOL, and the action is different —
+            nothing here needs re-exporting, someone needs to refresh a file.
+
+            ⚠ NAMES THE COUNTRIES, NOT A COUNT. "3 unknown territories" tells a
+            Manager nothing they can act on; seeing RUS in the list tells them
+            immediately whether this is urgent.
+
+            ⚠ SAYS THE EXPORT WAS FINE, in as many words. Since G3 the snapshot
+            decides what the picker OFFERS, so the cost of drift is that these
+            markets cannot be TICKED — not that anything in the file is wrong.
+            A warning that does not say which is a warning people re-run
+            exports over. */}
+        {unknownTerritories.length > 0 && (
+          <p
+            data-testid="unknown-territories-warning"
+            className="mx-5 mb-3 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-[11px] text-amber-900 dark:text-amber-100 flex items-start gap-1.5"
+          >
+            <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-px" />
+            <span>
+              <strong>The country list may be out of date.</strong> Apple
+              returned prices for{" "}
+              <strong data-testid="unknown-territories-codes">
+                {unknownTerritories.join(", ")}
+              </strong>
+              , which this tool does not know about — so they are{" "}
+              <strong>missing from the country picker</strong> and cannot be
+              chosen. Everything you exported is correct and nothing needs
+              re-running. To add them, run{" "}
+              <code>node scripts/probe-export-price-sources.mjs</code> and
+              follow step 2.7.
             </span>
           </p>
         )}

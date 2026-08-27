@@ -170,6 +170,8 @@ export function IapListClient({
     notAttempted: number;
     stopped: boolean;
     selectedCount: number | null;
+    /** G5 — snapshot drift. Not an export outcome; see ExportResultSummary. */
+    unknownTerritories: string[];
   } | null>(null);
   const [page, setPage] = useState(1);
   // Cycle 39 Phase 2 — bulk modal state. Null = closed.
@@ -467,6 +469,14 @@ export function IapListClient({
         res.headers.get("X-Export-Not-Attempted-Count") ?? "0",
       );
       const stopped = res.headers.get("X-Export-Stopped") === "rate_limit";
+      // ⚠ G5 — territories Apple priced that our snapshot has never heard of.
+      // Space-separated alpha-3; absent header ⇒ no drift, which is the
+      // normal case and must stay silent.
+      const unknownTerritories = (
+        res.headers.get("X-Export-Unknown-Territories") ?? ""
+      )
+        .split(" ")
+        .filter(Boolean);
       const selectedCount = selectedIds.length > 0 ? selectedIds.length : null;
 
       // ⚠ WITH A SELECTION THE DENOMINATOR IS THE ASK, NOT THE APP. "Exported
@@ -492,7 +502,21 @@ export function IapListClient({
       // The panel only appears when a toast cannot carry it honestly — three
       // separate outcomes do not fit in one line, and a clean run needs no
       // dialog.
-      if (stopped || failedCount > 0 || notAttemptedCount > 0 || partialCount > 0) {
+      // ⚠ G5 ADDED `unknownTerritories.length` TO THIS CONDITION, and that is
+      // the load-bearing part. Snapshot drift can happen on a completely
+      // clean export — every item fine, nothing failed — and before G3 that
+      // only meant a wrong column count. Since G3 the snapshot decides what
+      // the PICKER OFFERS, so drift means the Manager can no longer select a
+      // market Apple sells in. Leaving it to the toast would let it vanish in
+      // three seconds; leaving it to the existing condition would hide it
+      // exactly when the export otherwise went perfectly.
+      if (
+        stopped ||
+        failedCount > 0 ||
+        notAttemptedCount > 0 ||
+        partialCount > 0 ||
+        unknownTerritories.length > 0
+      ) {
         setExportResult({
           exported,
           partial: partialCount,
@@ -500,6 +524,7 @@ export function IapListClient({
           notAttempted: notAttemptedCount,
           stopped,
           selectedCount,
+          unknownTerritories,
         });
       }
     } catch (err) {

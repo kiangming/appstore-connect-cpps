@@ -563,4 +563,49 @@ describe("the result panel appears only when a toast cannot carry it", () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(screen.queryByTestId("export-result-summary")).toBeNull();
   });
+  /**
+   * ⚠ G5 WIRING — P26 AGAIN, PRE-EMPTED THIS TIME.
+   *
+   * `ExportResultSummary.test.tsx` proves the panel renders drift correctly
+   * WHEN GIVEN it. It cannot prove the client reads the header, or — the part
+   * that actually decides whether a Manager ever sees this — that the panel
+   * OPENS AT ALL on a clean export. That condition is the load-bearing line:
+   * drift arrives on runs where nothing failed, and every other trigger for
+   * this panel is a failure.
+   */
+  it("⚠ drift opens the panel on an OTHERWISE CLEAN export, and names the codes", async () => {
+    stubFetch({
+      "X-Export-Item-Count": "2",
+      "X-Export-Failed-Count": "0",
+      "X-Export-Partial-Count": "0",
+      "X-Export-Not-Attempted-Count": "0",
+      "X-Export-Unknown-Territories": "ZZA ZZB",
+    });
+    renderList();
+    // ⚠ Reuses the file's own `runExport` helper rather than re-driving the
+    // wizard by hand — its `/^Export \d+ countr/` selector is scoped past the
+    // toolbar's own "Export list" button, which a bare /^Export/ matches too.
+    await runExport(["com.x.a", "com.x.b"]);
+
+    // ⚠ Nothing failed. Before G5 this panel would not have opened at all and
+    // the warning would have existed only in a Railway log.
+    await waitFor(() =>
+      expect(screen.getByTestId("export-result-summary")).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("unknown-territories-codes")).toHaveTextContent(
+      "ZZA, ZZB",
+    );
+  });
+
+  it("⚠ VACUITY GUARD — a clean export with no drift opens nothing", async () => {
+    // The other half: if the panel opened unconditionally, the test above
+    // would pass while telling us nothing.
+    stubFetch({ "X-Export-Item-Count": "2", "X-Export-Failed-Count": "0" });
+    renderList();
+    await runExport(["com.x.a", "com.x.b"]);
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(screen.queryByTestId("export-result-summary")).not.toBeInTheDocument();
+  });
+
 });

@@ -107,15 +107,33 @@ function failure(
   };
 }
 
+/**
+ * ⚠ THIS HELPER IS A CLAIM ABOUT `fetchExportSources`' RETURN SHAPE (P27), and
+ * G5 made the claim incomplete: the real function now always returns
+ * `unknownTerritories`, which the route reads. The fixture omitted it, the
+ * route threw on `undefined.length`, and all 14 tests here returned 502.
+ *
+ * ⚠ FIXED IN THE FIXTURE, NOT BY MAKING THE ROUTE DEFENSIVE. `?.length ?? 0`
+ * would have gone green just as fast and would have taught the route to
+ * tolerate a shape its own type forbids — hiding the next field that gets
+ * added and forgotten here.
+ *
+ * ⚠ `tsc` DID NOT CATCH THIS. `fetchExportSources` is replaced by an untyped
+ * `vi.fn()`, so the compiler never compares this literal against
+ * `ExportFetchResult` — the vi.mock boundary is blind in exactly the way P29
+ * describes for `fetch`. The full suite caught it; a targeted run did not.
+ */
 function fetchResult(over: {
   sources?: ExportSource[];
   failures?: ExportFetchFailure[];
   stopped?: boolean;
+  unknownTerritories?: string[];
 }) {
   return {
     sources: over.sources ?? [],
     failures: over.failures ?? [],
     stopped: over.stopped ?? false,
+    unknownTerritories: over.unknownTerritories ?? [],
   };
 }
 

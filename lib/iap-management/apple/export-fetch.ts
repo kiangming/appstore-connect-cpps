@@ -69,6 +69,19 @@ export interface ExportFetchResult {
   /** True when a 429 survived retry and the pool stopped dispatching. Read
    *  from the pool's own latch, not re-derived from the rows. */
   stopped: boolean;
+  /**
+   * G5 — Apple alpha-3 codes that appeared in the prices and are NOT in
+   * `apple-territories.snapshot.ts`. Empty in the normal case.
+   *
+   * ⚠ ADDITIONS ONLY, BY CONSTRUCTION, and this is a limitation rather than a
+   * simplification. The input is "territories Apple priced", so a territory
+   * Apple REMOVED simply does not appear and cannot be noticed here. Only the
+   * probe's whole-list diff (step 2.7) sees removals. Pinned by a test named
+   * for the blind spot so it cannot quietly become an assumption.
+   *
+   * ⚠ Not an error and never a reason to fail the export — see the route.
+   */
+  unknownTerritories: string[];
 }
 
 /**
@@ -345,14 +358,19 @@ export async function fetchExportSources(
       if (entry.territory) observed.add(entry.territory);
     }
   }
-  const unknown = unknownAppleTerritories([...observed]);
-  if (unknown.length > 0) {
+  const unknownTerritories = unknownAppleTerritories([...observed]);
+  if (unknownTerritories.length > 0) {
     console.warn(
-      `[export-fetch] ⚠ APPLE TERRITORY SNAPSHOT DRIFT — ${unknown.length} code(s) Apple priced ` +
-        `are absent from apple-territories.snapshot.ts: ${unknown.join(" ")}. ` +
+      `[export-fetch] ⚠ APPLE TERRITORY SNAPSHOT DRIFT — ${unknownTerritories.length} code(s) Apple priced ` +
+        `are absent from apple-territories.snapshot.ts: ${unknownTerritories.join(" ")}. ` +
         `They still exported. Refresh the snapshot: node scripts/probe-export-price-sources.mjs (step 2.7).`,
     );
   }
 
-  return { sources, failures, stopped };
+  // ⚠ G5 — RETURNED, not just logged. Since G3 the snapshot decides what the
+  // PICKER OFFERS, so a stale one no longer means a wrong column count — it
+  // means a market the Manager cannot select at all. A Railway log line is
+  // the wrong surface for that: it is behind a deploy dashboard, and the
+  // person who needs it is looking at the export screen.
+  return { sources, failures, stopped, unknownTerritories };
 }

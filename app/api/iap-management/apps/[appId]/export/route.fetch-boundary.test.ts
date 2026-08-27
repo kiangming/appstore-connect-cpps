@@ -564,3 +564,99 @@ describe("⚠ G4.5 — an IAP with no price schedule reads `—` across all 175"
     expect(wb3.worksheets[0].getCell(3, 4).value).toBeNull();
   });
 });
+
+
+/**
+ * ─── G5 — SNAPSHOT DRIFT REACHES THE MANAGER, NOT JUST RAILWAY ─────────────
+ *
+ * ⚠ WHY THIS BECAME URGENT AT G3. Before it, a stale snapshot meant the export
+ * had a wrong number of columns — annoying, self-correcting, visible in the
+ * file. Since G3 the snapshot decides what the PICKER OFFERS, so a stale one
+ * means **a market Apple sells in that the Manager cannot select at all**.
+ * That is a different severity and it needs a different surface: the existing
+ * `unknownAppleTerritories` warning goes to a server log nobody reading the
+ * export screen can see.
+ */
+describe("⚠ G5 — the export reports territories the snapshot has never heard of", () => {
+  const UNKNOWN = ["ZZA", "ZZB"];
+
+  async function exportWith(territories: readonly string[]) {
+    requireIapSession.mockResolvedValue({ email: "manager@vng.com.vn" });
+    getActiveAccount.mockResolvedValue({
+      key_id: "K", issuer_id: "I", private_key: "P", id: "acct-1",
+    });
+    appleFetch.mockReset();
+    appleFetch.mockImplementation(async (c: unknown, m: string, e: string) => {
+      if (e.startsWith(`/v1/inAppPurchasePriceSchedules/${SCHEDULE_ID}/manualPrices`)) {
+        return priceRows(territories, true);
+      }
+      if (e.startsWith(`/v1/inAppPurchasePriceSchedules/${SCHEDULE_ID}/automaticPrices`)) {
+        return priceRows([], false);
+      }
+      return appleRouter(c, m, e);
+    });
+    return runExport({ territories: null });
+  }
+
+  it("⚠ names the CODES in a header — not a count", () => {
+    // A count is unactionable: "2 unknown territories" cannot tell a Manager
+    // whether to care. Seeing the codes can.
+    return exportWith([...MANUAL_TERRITORIES, ...UNKNOWN]).then((res) => {
+      expect(res.status).toBe(200);
+      const header = res.headers.get("X-Export-Unknown-Territories");
+      expect(header).toBe("ZZA ZZB");
+      // ⚠ MUTATION (c): emit a count and this fails — the value must not be
+      // parseable as a bare number.
+      expect(header).not.toMatch(/^\d+$/);
+    });
+  });
+
+  it("⚠ MUTATION (b) — WARNS, never blocks: the file still downloads in full", () => {
+    // F-B's rule, still standing: a stale snapshot must never withhold real
+    // data. The unknown markets export too — they simply cannot be ticked.
+    return exportWith([...MANUAL_TERRITORIES, ...UNKNOWN]).then(async (res) => {
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toContain("spreadsheetml");
+      const { wb } = await unzipResponse(res);
+      // the row is there, and so are the prices we did know about
+      expect(String(wb.worksheets[0].getCell(3, 1).value)).toBe("com.vnggames.aoiaf.0.99");
+      expect(headerRow(wb)).toContain("Price in United States (US)");
+    });
+  });
+
+  it("⚠ VACUITY GUARD — a clean export emits NO drift header at all", () => {
+    // 5.6. Without this, every assertion above could pass while the header
+    // was emitted unconditionally, and the Manager would see a warning on
+    // every single export until they stopped reading it.
+    return exportWith(MANUAL_TERRITORIES).then((res) => {
+      expect(res.headers.has("X-Export-Unknown-Territories")).toBe(false);
+    });
+  });
+
+  it("⚠ THE BLIND SPOT, NAMED: a territory Apple REMOVED raises nothing here", () => {
+    // NOT A BUG, AND NOT FIXABLE AT THIS LAYER. The input is "territories
+    // Apple priced", so a market Apple dropped simply stops appearing and
+    // there is nothing for this mechanism to notice. Only the probe's
+    // whole-list diff (step 2.7) compares both directions.
+    //
+    // Named as a test so the limitation cannot quietly become an assumption —
+    // the F-B S2 lesson: (a) is complete and forgettable, (b) is automatic and
+    // half-blind, and neither alone is enough.
+    const appleDroppedNine = MANUAL_TERRITORIES.slice(0, 1);
+    return exportWith(appleDroppedNine).then((res) => {
+      expect(res.headers.has("X-Export-Unknown-Territories")).toBe(false);
+    });
+  });
+
+  it("the five pinned headers keep their meanings alongside the new one", () => {
+    // Parity, asserted rather than assumed: G5 adds a SIXTH header and
+    // redefines none of the five from b171eeb.
+    return exportWith([...MANUAL_TERRITORIES, ...UNKNOWN]).then((res) => {
+      expect(res.headers.get("X-Export-Item-Count")).toBe("1");
+      expect(res.headers.get("X-Export-Failed-Count")).toBe("0");
+      expect(res.headers.get("X-Export-Partial-Count")).toBe("0");
+      expect(res.headers.get("X-Export-Not-Attempted-Count")).toBe("0");
+      expect(res.headers.has("X-Export-Stopped")).toBe(false);
+    });
+  });
+});

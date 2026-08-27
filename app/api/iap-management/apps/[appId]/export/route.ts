@@ -180,7 +180,7 @@ export async function POST(
       appleIaps = iapsRes.data ?? [];
     }
 
-    const { sources, failures, stopped } = await fetchExportSources(
+    const { sources, failures, stopped, unknownTerritories } = await fetchExportSources(
       creds,
       appleIaps,
       {
@@ -238,6 +238,22 @@ export async function POST(
         "X-Export-Partial-Count": String(partialCount),
         "X-Export-Not-Attempted-Count": String(notAttemptedCount),
         ...(stopped ? { "X-Export-Stopped": "rate_limit" } : {}),
+        // ⚠ G5 — A SIXTH HEADER, AND NOT A SIXTH MEANING FOR AN EXISTING ONE.
+        // The five above were pinned at b171eeb and each answers "how did the
+        // export go"; this answers "is our territory list still current",
+        // which is a different question and must not be folded into a count.
+        //
+        // ⚠ Present ONLY when there is drift, like `X-Export-Stopped`. An
+        // always-present empty header is a thing readers learn to skip.
+        //
+        // ⚠ CODES, NOT A COUNT. "3 unknown territories" tells a Manager
+        // nothing actionable; "RUS is not in our list" tells them whether this
+        // is urgent. Alpha-3 is ASCII and header-safe, and even total drift —
+        // all 175 unknown — is ~700 bytes against Node's 16 KB limit, so there
+        // is no cap here and therefore no silently dropped tail.
+        ...(unknownTerritories.length > 0
+          ? { "X-Export-Unknown-Territories": unknownTerritories.join(" ") }
+          : {}),
       },
     });
   } catch (err) {

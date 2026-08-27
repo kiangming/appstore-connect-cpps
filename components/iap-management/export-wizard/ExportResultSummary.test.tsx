@@ -156,3 +156,72 @@ describe("the selection denominator", () => {
     expect(screen.queryByTestId("result-of-selected")).toBeNull();
   });
 });
+
+
+/**
+ * ─── G5 — "THE COUNTRY LIST MAY BE OUT OF DATE" ────────────────────────────
+ *
+ * ⚠ The thing this block must NOT do is read as an export failure. Since G3
+ * the cost of a stale snapshot is that a market cannot be TICKED — the file
+ * itself is completely correct. A Manager who reads this as "the export went
+ * wrong" will re-run a 2,000-request export for nothing.
+ */
+describe("⚠ G5 — snapshot drift is shown, and shown as its own kind of problem", () => {
+  it("names the countries, not a count", () => {
+    // MUTATION (c): render `{unknownTerritories.length} unknown territories`
+    // and this fails. A count cannot tell a Manager whether to care; seeing
+    // RUS in the list can.
+    renderSummary({ unknownTerritories: ["RUS", "ZZA"] });
+    expect(screen.getByTestId("unknown-territories-codes")).toHaveTextContent(
+      "RUS, ZZA",
+    );
+  });
+
+  it("⚠ says the export itself is FINE, in as many words", () => {
+    renderSummary({ unknownTerritories: ["ZZA"] });
+    const box = screen.getByTestId("unknown-territories-warning");
+    expect(box).toHaveTextContent(/Everything you exported is correct/i);
+    expect(box).toHaveTextContent(/nothing needs re-running/i);
+  });
+
+  it("⚠ says what was actually LOST — the picker, not the file", () => {
+    // The whole reason this warning got promoted out of the Railway log.
+    renderSummary({ unknownTerritories: ["ZZA"] });
+    expect(screen.getByTestId("unknown-territories-warning")).toHaveTextContent(
+      /missing from the country picker/i,
+    );
+  });
+
+  it("gives the exact command to fix it", () => {
+    renderSummary({ unknownTerritories: ["ZZA"] });
+    expect(screen.getByTestId("unknown-territories-warning")).toHaveTextContent(
+      /probe-export-price-sources\.mjs/,
+    );
+    expect(screen.getByTestId("unknown-territories-warning")).toHaveTextContent(
+      /step 2\.7/,
+    );
+  });
+
+  it("⚠ VACUITY GUARD — no drift, no warning", () => {
+    // Without this the block could render unconditionally and every export
+    // would carry a warning until people stopped reading it.
+    renderSummary({ unknownTerritories: [] });
+    expect(screen.queryByTestId("unknown-territories-warning")).not.toBeInTheDocument();
+  });
+
+  it("⚠ and the prop is OPTIONAL — every existing caller shape still renders", () => {
+    // Parity: the 10 tests above this block pass no `unknownTerritories` at
+    // all. This states that as a contract rather than leaving it implied.
+    renderSummary();
+    expect(screen.queryByTestId("unknown-territories-warning")).not.toBeInTheDocument();
+    expect(screen.getByTestId("export-result-summary")).toBeInTheDocument();
+  });
+
+  it("⚠ drift does NOT touch the counts — a healthy export stays healthy", () => {
+    // It is not a fourth bucket. Same numbers with and without drift.
+    renderSummary({ exported: 9, partial: 0, failed: 0, notAttempted: 0, unknownTerritories: ["ZZA"] });
+    expect(screen.getByTestId("unknown-territories-warning")).toBeInTheDocument();
+    // …and the failure-sheet pointer, which is about export outcomes, stays away.
+    expect(screen.queryByTestId("failure-sheet-pointer")).not.toBeInTheDocument();
+  });
+});
