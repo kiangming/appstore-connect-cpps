@@ -47,12 +47,28 @@
  * the shape it always claimed: pick a territory the app doesn't sell in and
  * you get a COLUMN, carrying "—" for "Apple does not sell here".
  *
- * ⚠ 20 of this catalog's entries are territories Apple does not sell to at
- * all (BD TL AD XK LI MC SM HT BI KM DJ GQ ET GN LS TG KI MH WS TV, measured
- * 2026-08-27 against `/v1/territories`). They are selectable and always
- * answer "—". That is correct, not a defect. The opposite direction — Apple
+ * ⚠ 19 of this catalog's entries are territories Apple does not sell to at
+ * all (AD BD BI DJ ET GN GQ HT KI KM LI LS MC MH SM TG TL TV WS, measured
+ * 2026-08-27 against `/v1/territories`). The opposite direction — Apple
  * territories this catalog is MISSING — is a real gap, tracked as
  * `[EXPORT-catalog-missing-11]` in TODO.md.
+ *
+ * ⚠ THIS SAID "20 … XK …" UNTIL 2026-08-27, AND KOSOVO DID NOT BELONG THERE.
+ * Apple DOES sell to Kosovo — `XKS` in `/v1/territories` — and the old count
+ * compared this file's alpha-2 codes against Apple's alpha-3 ones, i.e. it
+ * was taken before `apple/territory-code-map.ts` existed to normalise them.
+ * The arithmetic is what exposed it: 183 − 20 + 11 = 174, one short of the
+ * measured 175, while 183 − 19 + 11 = 175 closes exactly. Both numbers are now
+ * pinned by `apple/export-territory-expansion.test.ts`.
+ *
+ * ⚠ AND THOSE 19 NO LONGER REACH THE APPLE PICKER AT ALL. Since
+ * `[Q-EXPORT.apple-only-picker]` (G2/G3) the Apple export builds its list from
+ * `apple/apple-territory-catalog.ts` — Apple's 175 — so a market Apple does
+ * not sell in cannot be ticked there. This file is still the GOOGLE picker's
+ * list, unchanged, all 183. ⚠ Its `currency` column is right about the country
+ * and wrong about Apple for 96 of the 164 codes the two share; Apple paths must
+ * read `apple/apple-territories.snapshot.ts` instead (KB §4.19,
+ * `[CATALOG-currency-wrong]`).
  *
  * Region buckets (Asia / Europe / Americas / Africa / Middle East /
  * Oceania) match the approved mockup's 6-way grouping — NOT Google's
