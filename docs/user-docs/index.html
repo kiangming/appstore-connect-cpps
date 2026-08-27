@@ -1039,7 +1039,7 @@
           <a class="nav-item" data-page="apple-apps" data-keywords="apple apps danh sách applications">
             <span class="nav-item-label">Danh sách apps</span>
           </a>
-          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách danh sach export xlsx excel xuất file xuat file export failures failure sheet reason rate limit not attempted partial giới hạn gioi han availability available removed unknown as of last sync đồng bộ dong bo refresh from apple làm mới lam moi cũ cu">
+          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách danh sach export xlsx excel xuất file xuat file export failures failure sheet reason rate limit not attempted partial giới hạn gioi han availability availabilities available removed unknown as of last sync đồng bộ dong bo refresh from apple làm mới lam moi cũ cu read not read fetch failed rate limited chưa sync chua sync không cần f5 khong can f5">
             <span class="nav-item-label">Danh sách IAPs</span>
           </a>
           <a class="nav-item" data-page="apple-new-iap" data-keywords="apple new iap tạo mới create">
@@ -1055,10 +1055,10 @@
             <span class="nav-item-label">Bulk Import wizard</span>
             <span class="nav-badge">Chi tiết</span>
           </a>
-          <a class="nav-item" data-page="apple-pricing-templates" data-keywords="apple pricing templates mẫu giá default per-app">
+          <a class="nav-item" data-page="apple-pricing-templates" data-keywords="apple pricing templates mẫu giá mau gia default per-app settings cài đặt cai dat tab pricing tiers bảng giá bang gia">
             <span class="nav-item-label">Pricing templates</span>
           </a>
-          <a class="nav-item" data-page="apple-key-pool" data-keywords="apple key pool api key settings admin quản lý key quan ly key rate limit giới hạn gioi han test key hạn mức han muc">
+          <a class="nav-item" data-page="apple-key-pool" data-keywords="apple key pool api key settings cài đặt cai dat admin quản lý key quan ly key rate limit giới hạn gioi han test key hạn mức han muc tab tabs điều hướng dieu huong pricing templates hub tracking cooling disable">
             <span class="nav-item-label">API Key Pool</span>
             <span class="nav-badge">Admin</span>
           </a>
@@ -1066,7 +1066,7 @@
             <span class="nav-item-label">Pricing matrix</span>
             <span class="nav-badge">Chi tiết</span>
           </a>
-          <a class="nav-item" data-page="apple-bulk-availabilities" data-keywords="apple bulk availabilities territories khu vực hàng loạt">
+          <a class="nav-item" data-page="apple-bulk-availabilities" data-keywords="apple bulk availabilities territories khu vực khu vuc hàng loạt hang loat availability cột availabilities cot availabilities không cần f5 khong can f5 tự cập nhật tu cap nhat remove from sales set availabilities">
             <span class="nav-item-label">Bulk Availabilities</span>
           </a>
           <a class="nav-item" data-page="apple-submit-batch" data-keywords="apple submit batch gửi duyệt gui duyet review not sent chưa gửi chua gui skipped rate limit giới hạn gioi han">
@@ -1879,9 +1879,9 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
 
         <ol class="steps">
           <li class="step">
-            <div class="step-title">Mở matrix từ Settings → Pricing tiers</div>
+            <div class="step-title">Mở matrix từ Settings → tab Pricing Templates</div>
             <div class="step-body">
-              <p>Đường dẫn: <code class="inline">/iap-management/settings/pricing-tiers</code>. Trang chia 2 tab — chọn <strong>Default</strong> hoặc <strong>Per-App</strong>.</p>
+              <p>Đường dẫn: <code class="inline">/iap-management/settings/pricing-tiers</code> (URL giữ nguyên chữ <code class="inline">pricing-tiers</code>, nhãn trên màn hình là <strong>Pricing Templates</strong>). Trang chia 2 tab — chọn <strong>Default</strong> hoặc <strong>Per-App</strong>.</p>
             </div>
           </li>
           <li class="step">
@@ -2442,7 +2442,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <tr><td><code class="inline">Type</code></td><td>Consumable / Non-Consumable / Non-Renewing Subscription</td><td>Filter</td></tr>
             <tr><td><code class="inline">Price Tier</code></td><td>Tier giá (vd: USD_0_99)</td><td>Sort</td></tr>
             <tr><td><code class="inline">State</code></td><td>Trạng thái lifecycle (Draft, Waiting for Review, Approved, ...)</td><td>Filter</td></tr>
-            <tr><td><code class="inline">Availability</code></td><td><strong>Available</strong> (đang bán ở ít nhất 1 nước) hoặc <strong>Remove from Sales</strong> (không bán ở đâu cả). Ô còn đang tải hiện thanh xám; đọc lỗi hiện <code class="inline">—</code> kèm <code class="inline">(fetch failed)</code> hoặc <code class="inline">(rate limited)</code> — bấm vào ô để thử lại.</td><td>Đọc từ Apple</td></tr>
+            <tr><td><code class="inline">Availabilities</code></td><td><strong>Available</strong> (đang bán ở ít nhất 1 nước) hoặc <strong>Remove from Sales</strong> (không bán ở đâu cả). Ô còn đang tải hiện thanh xám; đọc lỗi hiện <code class="inline">—</code> kèm <code class="inline">(fetch failed)</code> hoặc <code class="inline">(rate limited)</code> — bấm vào ô để thử lại.</td><td>Đọc từ Apple</td></tr>
           </tbody>
         </table>
 
@@ -2590,6 +2590,59 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </li>
         </ol>
 
+        <h2 class="section-title">Cột Availabilities — đọc gì ở mỗi ô</h2>
+        <table class="docs-table">
+          <thead><tr><th>Thấy gì</th><th>Nghĩa là gì</th><th>Làm gì</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span style="color:var(--success);font-weight:600">🌐 Available</span></td>
+              <td>Apple xác nhận item đang bán ở <strong>ít nhất 1 nước</strong>.</td>
+              <td>Không cần làm gì. Đây là tập mà bộ lọc <code class="inline">Available</code> ở Export wizard lấy.</td>
+            </tr>
+            <tr>
+              <td><span style="color:#dc2626;font-weight:700">⊖ Remove from Sales</span></td>
+              <td>Apple xác nhận item <strong>không bán ở đâu cả</strong> — hoặc bị gỡ, hoặc chưa từng mở bán nước nào.</td>
+              <td>Muốn bán lại: dùng <a class="inline-link" data-goto="apple-bulk-availabilities">Bulk Availabilities</a> chọn territory.</td>
+            </tr>
+            <tr>
+              <td>Thanh xám đang chạy</td>
+              <td>Đang đọc. Ô chỉ đọc khi bạn cuộn tới nó, và <strong>chỉ lần đầu</strong> — lần sau quay lại, tool dùng lại kết quả cũ, không hỏi Apple nữa.</td>
+              <td>Chờ vài giây.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">—</code> <code class="inline">(rate limited)</code></td>
+              <td>Đã hỏi Apple, Apple từ chối vì <strong>chạm giới hạn theo giờ</strong>. <strong>Không</strong> có nghĩa item đã bị gỡ.</td>
+              <td>Bấm vào ô để thử lại. Nếu vẫn vậy, chờ khoảng 1 tiếng.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">—</code> <code class="inline">(fetch failed)</code></td>
+              <td>Đã hỏi Apple và gặp lỗi khác (không phải giới hạn).</td>
+              <td>Bấm vào ô để thử lại. Lặp lại nhiều lần thì báo lại.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">—</code> mờ, bấm không được</td>
+              <td>Item có trên Apple nhưng tool chưa lưu bản ghi nội bộ cho nó.</td>
+              <td>Bấm <strong>Refresh from Apple</strong> một lần; sau đó ô hoạt động bình thường.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Lưu ý — <code class="inline">Unknown</code> ở Export wizard KHÔNG phải "chắc là Available"</div>
+          <p>
+            Cột trên bảng IAPs chỉ có 2 kết quả (<strong>Available</strong> / <strong>Remove from Sales</strong>)
+            vì nó đọc ngay khi bạn nhìn. Bộ lọc ở <strong>Export wizard</strong> thì có
+            <strong>3</strong>: giá trị thứ ba là <code class="inline">Unknown</code> —
+            <strong>chưa ai từng hỏi Apple về item này</strong>, hoặc lần hỏi gần nhất lỗi.
+          </p>
+          <p>
+            Vì thế item <code class="inline">Unknown</code> <strong>không lọt vào cả bộ lọc
+            <code class="inline">Available</code> lẫn <code class="inline">Removed</code></strong>. Nó không bị
+            xếp bừa vào bên nào — nếu bị xếp vào <code class="inline">Available</code>, bạn sẽ export nhầm một
+            item chưa ai kiểm.
+          </p>
+        </div>
+
         <h2 class="section-title">Refresh from Apple — giờ đọc cả Availability</h2>
         <p>Nút <strong>Refresh from Apple</strong> trước đây chỉ đọc lại <strong>State</strong>. Từ bản này
         nó đọc <strong>cả cột Availability cho toàn bộ item của app</strong> — đây chính là thứ làm cho dòng
@@ -2612,6 +2665,36 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <li>Chỉ cần Refresh khi bạn <strong>muốn số liệu mới</strong> — không phải mỗi lần mở trang. Dữ liệu
           đã đọc được giữ lại, nên mở lại danh sách <strong>không tốn thêm lần gọi nào</strong>.</li>
         </ul>
+
+        <h3 class="subsection-title">Đọc kết quả Refresh</h3>
+        <table class="docs-table">
+          <thead><tr><th>Thấy gì</th><th>Nghĩa là gì</th><th>Làm gì</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code class="inline">12 state changed · availability: 1022 read</code></td>
+              <td>Đọc đủ. Mọi item của app đã có câu trả lời mới, cùng một mốc thời gian.</td>
+              <td>Không cần làm gì. Dòng "as of" giờ ghi <em>just now</em> và số Unknown về 0.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">availability: 640 read, 382 not read</code> kèm
+              <em>"availability stopped on Apple's rate limit"</em></td>
+              <td><strong>Đã chạm giới hạn gọi Apple theo giờ.</strong> Tool chủ động dừng thay vì tiếp tục
+              đâm vào một API đang từ chối. 640 item đã mới; 382 item còn lại
+              <strong>giữ nguyên mốc "as of" CŨ</strong>.</td>
+              <td>Chờ khoảng 1 tiếng rồi bấm Refresh lại. Item đã đọc xong không phải đọc lại.</td>
+            </tr>
+            <tr>
+              <td><code class="inline">availability: 1020 read, 2 failed</code></td>
+              <td>2 item Apple trả lỗi riêng (không phải giới hạn). Chúng giữ mốc cũ.</td>
+              <td>Refresh lại; nếu vẫn lỗi đúng 2 item đó thì vấn đề nằm ở chính item trên App Store Connect.</td>
+            </tr>
+            <tr>
+              <td>Toast không nhắc gì tới availability</td>
+              <td>App chưa có item nào đọc được (vd toàn draft chưa lên Apple).</td>
+              <td>Bình thường. Tạo/đẩy item lên Apple trước.</td>
+            </tr>
+          </tbody>
+        </table>
 
         <h3 class="subsection-title">Dừng giữa chừng là ĐÚNG, không phải lỗi</h3>
         <p>Nếu chạm trần giữa chừng, tool <strong>chủ động dừng đọc</strong> thay vì tiếp tục đâm vào một API
@@ -2752,7 +2835,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         </div>
 
         <h2 class="section-title">Hình ảnh minh họa</h2>
-        <div class="screenshot" data-lightbox data-caption="Export list — Step 1: chọn item · filter Type + Apple status + search · không gọi Apple">
+        <div class="screenshot" data-lightbox data-caption="Export list — Step 1: chọn item · 3 filter (Type · Apple status · Availability) + search · không gọi Apple">
           <div class="screenshot-frame">
             <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
               <rect class="wf-bg" width="640" height="360"/>
@@ -2762,54 +2845,68 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <text class="wf-muted" x="556" y="52" font-size="13" text-anchor="end">✕</text>
               <rect class="wf-soft" x="80" y="82" width="480" height="1"/>
               <!-- facets -->
-              <rect class="wf-input" x="80" y="96" width="110" height="24" rx="4"/>
-              <text class="wf-text" x="90" y="112" font-size="9">All types ▾</text>
-              <rect class="wf-input" x="198" y="96" width="140" height="24" rx="4"/>
-              <text class="wf-text" x="208" y="112" font-size="9">All Apple statuses ▾</text>
-              <text class="wf-muted" x="348" y="112" font-size="8">🔍 Filters are local — they cost no Apple requests.</text>
+              <rect class="wf-input" x="80" y="96" width="92" height="24" rx="4"/>
+              <text class="wf-text" x="88" y="112" font-size="9">All types ▾</text>
+              <rect class="wf-input" x="180" y="96" width="132" height="24" rx="4"/>
+              <text class="wf-text" x="188" y="112" font-size="9">All Apple statuses ▾</text>
+              <!-- the third facet, added by the availability arc -->
+              <rect class="wf-input" x="320" y="96" width="112" height="24" rx="4"/>
+              <text class="wf-text" x="328" y="112" font-size="9">All availability ▾</text>
+              <text class="wf-muted" x="440" y="112" font-size="7">🔍 Filters are local — no Apple requests.</text>
+              <!-- as-of line: the filter reads cached data, so it says how old -->
+              <text class="wf-muted" x="80" y="130" font-size="7">Availability as of 2 hours ago · 1 never synced (Unknown) — Unknown items are excluded from Available and Removed.</text>
               <!-- hidden-selection notice -->
-              <text x="80" y="136" font-size="8" fill="#b45309">+ 2 more selected items are hidden by the Type / Apple status filter — still selected.</text>
+              <text x="80" y="143" font-size="7" fill="#b45309">+ 2 more selected items are hidden by the current filters — still selected, and still part of the export.</text>
               <!-- rows -->
-              <g transform="translate(80,148)">
+              <g transform="translate(80,152)">
                 <rect class="wf-soft" x="0" y="0" width="480" height="20"/>
                 <rect class="wf-primary" x="8" y="5" width="10" height="10" rx="2"/>
                 <text class="wf-text" x="28" y="14" font-size="9">com.ck.coin100</text>
-                <text class="wf-muted" x="400" y="14" font-size="8">AVAILABLE</text>
+                <text fill="var(--success)" x="300" y="14" font-size="8" font-weight="600">Available</text>
+                <text class="wf-muted" x="360" y="14" font-size="7">APPROVED</text>
                 <rect class="wf-primary" x="8" y="29" width="10" height="10" rx="2"/>
                 <text class="wf-text" x="28" y="38" font-size="9">com.ck.coin500</text>
-                <text class="wf-muted" x="400" y="38" font-size="8">AVAILABLE</text>
+                <text fill="var(--success)" x="300" y="38" font-size="8" font-weight="600">Available</text>
+                <text class="wf-muted" x="360" y="38" font-size="7">APPROVED</text>
+                <!-- ⚠ the two axes disagreeing is INFORMATION, not a bug -->
                 <rect class="wf-soft" x="8" y="53" width="10" height="10" rx="2"/>
                 <text class="wf-text" x="28" y="62" font-size="9">com.ck.bundle</text>
-                <text class="wf-muted" x="360" y="62" font-size="8">DEVELOPER_REMOVED_FROM_SALE</text>
-                <rect class="wf-primary" x="8" y="77" width="10" height="10" rx="2"/>
+                <text fill="#dc2626" x="300" y="62" font-size="8" font-weight="700">Removed</text>
+                <text class="wf-muted" x="360" y="62" font-size="7">DEVELOPER_REMOVED_FROM_SALE</text>
+                <rect class="wf-soft" x="8" y="77" width="10" height="10" rx="2"/>
                 <text class="wf-text" x="28" y="86" font-size="9">com.ck.starter</text>
-                <text class="wf-muted" x="400" y="86" font-size="8">AVAILABLE</text>
+                <text class="wf-muted" x="300" y="86" font-size="8" font-style="italic">Unknown</text>
+                <text class="wf-muted" x="360" y="86" font-size="7">APPROVED</text>
               </g>
               <rect class="wf-soft" x="80" y="290" width="480" height="1"/>
               <rect class="wf-primary" x="440" y="302" width="120" height="24" rx="4"/>
-              <text x="500" y="318" fill="#fff" text-anchor="middle" font-size="9" font-weight="600">Next — choose countries</text>
+              <text x="500" y="318" fill="#fff" text-anchor="middle" font-size="9" font-weight="600">Continue to countries →</text>
             </svg>
           </div>
           <div class="screenshot-caption">
-            <span>Step 1 · 3 item được tick · filter Type + Apple status chạy tại chỗ · chưa gọi Apple lần nào</span>
+            <span>Step 1 · 2 item được tick · 3 filter chạy tại chỗ · dòng &quot;as of&quot; nói dữ liệu Availability cũ tới đâu · chưa gọi Apple lần nào</span>
           </div>
         </div>
-        <div class="screenshot" data-lightbox data-caption="IAPs list · CashKnight · filter + multi-select bulk actions">
+        <div class="screenshot" data-lightbox data-caption="IAPs list · cột Availabilities (Available / Remove from Sales) · dòng &quot;Availability as of&quot; dưới hàng filter">
           <div class="screenshot-frame">
             <svg width="100%" height="100%" viewBox="0 0 640 360" preserveAspectRatio="xMidYMid meet">
               <rect class="wf-bg" width="640" height="360"/>
               <rect class="wf-card" x="20" y="20" width="600" height="36" rx="6"/>
               <text class="wf-text" x="40" y="42" font-weight="600" fill="var(--text)">CashKnight · IAPs</text>
-              <rect class="wf-soft" x="430" y="28" width="80" height="20" rx="4"/>
-              <text class="wf-text" x="470" y="42" text-anchor="middle" font-size="10">+ New IAP</text>
-              <rect fill="var(--primary)" x="520" y="28" width="80" height="20" rx="4"/>
-              <text fill="#fff" x="560" y="42" text-anchor="middle" font-size="10" font-weight="600">Bulk Import</text>
+              <rect class="wf-soft" x="330" y="28" width="106" height="20" rx="4"/>
+              <text class="wf-text" x="383" y="42" text-anchor="middle" font-size="9">⟳ Refresh from Apple</text>
+              <rect class="wf-soft" x="444" y="28" width="66" height="20" rx="4"/>
+              <text class="wf-text" x="477" y="42" text-anchor="middle" font-size="9">Export list</text>
+              <rect fill="var(--primary)" x="518" y="28" width="82" height="20" rx="4"/>
+              <text fill="#fff" x="559" y="42" text-anchor="middle" font-size="9" font-weight="600">Bulk Import</text>
               <rect class="wf-card" x="20" y="66" width="600" height="28" rx="4"/>
               <text class="wf-text" x="36" y="84">State: All ▼   Type: All ▼   🔍 Search...</text>
-              <rect fill="var(--primary-bg)" x="20" y="104" width="600" height="32" rx="4"/>
-              <text fill="var(--primary)" x="36" y="124" font-weight="600">3 selected · </text>
-              <text fill="var(--primary)" x="120" y="124" font-weight="600">Bulk Availabilities</text>
-              <text fill="var(--primary)" x="230" y="124" font-weight="600">Submit Selected</text>
+              <!-- as-of line: oldest sync among the rows on screen + unknown count -->
+              <text class="wf-muted" x="36" y="101" font-size="8">Availability as of 2 hours ago · 1 never synced (Unknown)</text>
+              <rect fill="var(--primary-bg)" x="20" y="108" width="600" height="30" rx="4"/>
+              <text fill="var(--primary)" x="36" y="127" font-weight="600">3 selected · </text>
+              <text fill="var(--primary)" x="120" y="127" font-weight="600">Bulk Availabilities</text>
+              <text fill="var(--primary)" x="230" y="127" font-weight="600">Submit Selected</text>
               <rect class="wf-card" x="20" y="146" width="600" height="194" rx="6"/>
               <rect class="wf-soft" x="20" y="146" width="600" height="24"/>
               <text class="wf-text" x="40" y="162" font-weight="600" font-size="10">☐</text>
@@ -2818,7 +2915,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <text class="wf-text" x="340" y="162" font-weight="600" font-size="10">Type</text>
               <text class="wf-text" x="420" y="162" font-weight="600" font-size="10">Tier</text>
               <text class="wf-text" x="490" y="162" font-weight="600" font-size="10">State</text>
-              <text class="wf-text" x="560" y="162" font-weight="600" font-size="10">Avail.</text>
+              <text class="wf-text" x="545" y="162" font-weight="600" font-size="10">Availabilities</text>
               <g font-size="10">
                 <rect fill="var(--primary-bg)" x="20" y="170" width="600" height="28"/>
                 <text fill="var(--primary)" x="40" y="188">☑</text>
@@ -2828,7 +2925,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
                 <text class="wf-text" x="420" y="188">USD_0_99</text>
                 <rect fill="var(--success-bg)" x="485" y="178" width="60" height="14" rx="7"/>
                 <text fill="var(--success)" x="515" y="188" text-anchor="middle" font-weight="600">Approved</text>
-                <text class="wf-text" x="560" y="188">175/175</text>
+                <text fill="var(--success)" x="545" y="188" font-size="9" font-weight="600">🌐 Available</text>
                 <line stroke="var(--border)" x1="20" y1="198" x2="620" y2="198"/>
                 <rect fill="var(--primary-bg)" x="20" y="198" width="600" height="28"/>
                 <text fill="var(--primary)" x="40" y="216">☑</text>
@@ -2838,7 +2935,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
                 <text class="wf-text" x="420" y="216">USD_4_99</text>
                 <rect fill="var(--success-bg)" x="485" y="206" width="60" height="14" rx="7"/>
                 <text fill="var(--success)" x="515" y="216" text-anchor="middle" font-weight="600">Approved</text>
-                <text class="wf-text" x="560" y="216">175/175</text>
+                <text fill="var(--success)" x="545" y="216" font-size="9" font-weight="600">🌐 Available</text>
                 <line stroke="var(--border)" x1="20" y1="226" x2="620" y2="226"/>
                 <rect fill="var(--primary-bg)" x="20" y="226" width="600" height="28"/>
                 <text fill="var(--primary)" x="40" y="244">☑</text>
@@ -2848,7 +2945,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
                 <text class="wf-text" x="420" y="244">USD_0_99</text>
                 <rect fill="var(--warning-bg)" x="475" y="234" width="80" height="14" rx="7"/>
                 <text fill="var(--warning)" x="515" y="244" text-anchor="middle" font-weight="600">Waiting Rev.</text>
-                <text class="wf-text" x="560" y="244">160/175</text>
+                <text fill="#dc2626" x="545" y="244" font-size="9" font-weight="700">⊖ Remove from Sales</text>
                 <line stroke="var(--border)" x1="20" y1="254" x2="620" y2="254"/>
                 <text class="wf-text" x="40" y="272">☐</text>
                 <text class="wf-text" x="60" y="272">com.ck.bundle</text>
@@ -2857,7 +2954,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
                 <text class="wf-text" x="420" y="272">USD_4_99</text>
                 <rect fill="var(--surface-3)" x="485" y="262" width="60" height="14" rx="7"/>
                 <text class="wf-text" x="515" y="272" text-anchor="middle" font-weight="600">Draft</text>
-                <text class="wf-text" x="560" y="272">— / 175</text>
+                <rect class="wf-soft" x="545" y="266" width="56" height="8" rx="4"/>
               </g>
             </svg>
           </div>
@@ -3476,7 +3573,10 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         <p class="page-lede">
           Apple giới hạn số lần một API key được gọi trong mỗi giờ. Thêm nhiều key cho cùng một
           account = nhiều hạn mức hơn, nên các batch lớn (Bulk Import, Export) ít bị dừng giữa chừng.
-          Màn hình này ở <strong>Settings → API Key Pool</strong>, chỉ admin vào được.
+          Màn hình này ở <strong>Settings</strong> → tab <strong>API Key Pool</strong>.
+          <strong>Ai cũng mở được trang</strong>; chỉ admin mới thao tác được — người không phải admin
+          vào vẫn thấy tab strip và một khối vàng ghi
+          <em>"Chỉ admin mới quản lý được API Key Pool."</em>, không phải trang trắng hay lỗi 403.
         </p>
 
         <div class="callout callout-tip">
@@ -3485,6 +3585,76 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             Account chưa có key trong pool vẫn chạy bình thường bằng key gốc của chính nó, đúng như
             trước đây. Pool là phần <strong>thêm vào</strong>, không phải điều kiện để tool hoạt động.
           </p>
+        </div>
+
+        <h2 class="section-title">Điều hướng — 3 tab của Settings</h2>
+        <p>Khu vực Settings của Apple IAP Management có <strong>3 trang</strong>, và chúng nằm trên
+        <strong>một hàng tab</strong> ở đầu màn hình:</p>
+        <table class="docs-table">
+          <thead><tr><th>Tab</th><th>Trang này để làm gì</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Pricing Templates</strong></td><td>Bảng giá dùng chung + bảng giá riêng theo app — xem <a class="inline-link" data-goto="apple-pricing-templates">Pricing templates</a>.</td></tr>
+            <tr><td><strong>Hub Tracking</strong></td><td>Bật/tắt việc báo tiến độ Bulk Import lên dashboard Hub.</td></tr>
+            <tr><td><strong>API Key Pool</strong></td><td>Trang này.</td></tr>
+          </tbody>
+        </table>
+        <p>Tab đang mở có chữ đậm màu tối và <strong>gạch chân xanh</strong>; hai tab kia màu xám và
+        bấm được. Trước đây ba trang này nối nhau bằng những link rời rạc kiểu
+        <code class="inline">← Pricing Templates</code> / <code class="inline">API Key Pool →</code> nhét
+        cạnh tiêu đề — mỗi trang một kiểu, và <strong>không trang nào cho biết bạn đang đứng ở đâu</strong>.
+        Hàng tab thay thế toàn bộ số link đó.</p>
+
+        <div class="callout callout-tip">
+          <div class="callout-title">💡 Tip — tên trên URL và tên trên màn hình khác nhau ở 1 chỗ</div>
+          <p>
+            Tab <strong>Pricing Templates</strong> có đường dẫn
+            <code class="inline">/iap-management/settings/pricing-tiers</code>. URL giữ nguyên chữ cũ
+            (<code class="inline">pricing-tiers</code>) để không hỏng bookmark; <strong>nhãn hiển thị ở mọi
+            nơi là "Pricing Templates"</strong>. Nếu bạn còn thấy chỗ nào ghi "Pricing Tiers" thì đó là sót,
+            báo lại.
+          </p>
+        </div>
+
+        <div class="screenshot" data-lightbox data-caption="Settings — hàng 3 tab: Pricing Templates · Hub Tracking · API Key Pool; tab đang mở gạch chân xanh">
+          <div class="screenshot-frame">
+            <svg width="100%" height="100%" viewBox="0 0 640 300" preserveAspectRatio="xMidYMid meet">
+              <rect class="wf-bg" width="640" height="300"/>
+              <!-- tab strip: sát mép trên, đường kẻ chạy hết chiều ngang -->
+              <text class="wf-muted" x="60" y="42" font-size="10">Pricing Templates</text>
+              <text class="wf-muted" x="180" y="42" font-size="10">Hub Tracking</text>
+              <text class="wf-text" x="272" y="42" font-size="10" font-weight="600">API Key Pool</text>
+              <rect fill="var(--primary)" x="266" y="50" width="82" height="2"/>
+              <line stroke="var(--border)" x1="52" y1="51" x2="588" y2="51"/>
+              <!-- tiêu đề trang NẰM DƯỚI hàng tab -->
+              <text class="wf-text" x="60" y="80" font-size="13" font-weight="700">API Key Pool</text>
+              <text class="wf-muted" x="60" y="96" font-size="9">Nhiều key cho một account = nhiều hạn mức gọi Apple mỗi giờ.</text>
+              <rect fill="var(--primary)" x="500" y="70" width="88" height="22" rx="4"/>
+              <text fill="#fff" x="544" y="85" text-anchor="middle" font-size="9" font-weight="600">+ Add key</text>
+              <!-- bảng key rút gọn -->
+              <rect class="wf-card" x="52" y="112" width="536" height="150" rx="6"/>
+              <rect class="wf-soft" x="52" y="112" width="536" height="20"/>
+              <text class="wf-muted" x="64" y="126" font-size="8">KEY ID</text>
+              <text class="wf-muted" x="180" y="126" font-size="8">TRẠNG THÁI</text>
+              <text class="wf-muted" x="300" y="126" font-size="8">GHI CHÚ</text>
+              <text class="wf-muted" x="470" y="126" font-size="8">HÀNH ĐỘNG</text>
+              <text class="wf-text" x="64" y="150" font-size="9">2X9R4HXF34</text>
+              <rect fill="var(--success-bg)" x="180" y="140" width="52" height="14" rx="7"/>
+              <text fill="var(--success)" x="206" y="150" text-anchor="middle" font-size="7" font-weight="600">Enabled</text>
+              <text class="wf-muted" x="300" y="150" font-size="8">pool key 2</text>
+              <text fill="var(--primary)" x="470" y="150" font-size="8" font-weight="600">Test key</text>
+              <text class="wf-muted" x="520" y="150" font-size="8">Disable</text>
+              <text class="wf-text" x="64" y="176" font-size="9">7QK2M8ND41</text>
+              <rect fill="#fffbeb" stroke="#fde68a" x="180" y="166" width="76" height="14" rx="7"/>
+              <text fill="#92400e" x="218" y="176" text-anchor="middle" font-size="7" font-weight="600">Cooling · 14:20</text>
+              <text class="wf-muted" x="300" y="176" font-size="8">pool key 3</text>
+              <text fill="var(--primary)" x="470" y="176" font-size="8" font-weight="600">Test key</text>
+              <text class="wf-muted" x="520" y="176" font-size="8">Disable</text>
+            </svg>
+          </div>
+          <div class="screenshot-caption">
+            <span class="screenshot-caption-label">WIREFRAME</span>
+            <span>Hàng tab nằm TRÊN tiêu đề trang · tab đang mở gạch chân xanh · không còn link ←/→</span>
+          </div>
         </div>
 
         <h2 class="section-title">Hướng dẫn sử dụng từng bước</h2>
@@ -3855,13 +4025,39 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <rect class="wf-card" x="380" y="298" width="70" height="22" rx="4"/>
               <text class="wf-text" x="415" y="313" text-anchor="middle" font-size="10">Cancel</text>
               <rect fill="var(--primary)" x="460" y="298" width="106" height="22" rx="4"/>
-              <text fill="#fff" x="513" y="313" text-anchor="middle" font-size="10" font-weight="600">Set Avail. for 5</text>
+              <text fill="#fff" x="513" y="313" text-anchor="middle" font-size="10" font-weight="600">OK (5 selected)</text>
             </svg>
           </div>
           <div class="screenshot-caption">
             <span class="screenshot-caption-label">TODO</span>
             <span>Modal mở ở chế độ Set Availabilities (một trong ba nút toolbar) · 12 items eligible · 5 selected</span>
           </div>
+        </div>
+
+        <h2 class="section-title">Sau khi chạy xong — cột Availabilities tự cập nhật</h2>
+        <p>Đóng modal xong, quay lại bảng IAPs: cột <strong>Availabilities</strong> của những item vừa xử lý
+        <strong>đổi ngay</strong>, không cần nhấn F5.</p>
+        <ul>
+          <li>Chọn <strong>Remove from Sales</strong> → ô đổi thành
+          <span style="color:#dc2626;font-weight:700">⊖ Remove from Sales</span>.</li>
+          <li>Chọn <strong>Set Availabilities</strong> hoặc <strong>Choose territories</strong> → ô đổi thành
+          <span style="color:var(--success);font-weight:600">🌐 Available</span>.</li>
+          <li>Chỉ những dòng <strong>thành công</strong> mới đổi. Dòng lỗi và dòng
+          <em>không được gửi</em> (khi batch dừng vì giới hạn theo giờ) giữ nguyên giá trị cũ — đúng, vì
+          trên Apple chúng cũng chưa đổi.</li>
+        </ul>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Lưu ý — phải nhấn F5 mới thấy đúng là BUG</div>
+          <p>
+            Trước đây cột này đứng im sau khi bạn Remove from Sales, và chỉ tải lại trang mới thấy kết quả —
+            khiến người dùng tưởng lệnh bị trượt. Nay không còn như vậy. Nếu bạn gặp lại tình trạng phải F5,
+            <strong>đó là lỗi cần báo</strong>, đừng coi là chuyện bình thường.
+          </p>
+          <p>
+            Còn cột <strong>State</strong> là chuyện khác: nó là trạng thái duyệt của Apple, và chỉ đổi khi bạn
+            bấm <strong>Refresh from Apple</strong> — xem
+            <a class="inline-link" data-goto="apple-iaps">Danh sách IAPs</a>.
+          </p>
         </div>
 
         <h2 class="section-title">Tips và pitfalls</h2>
