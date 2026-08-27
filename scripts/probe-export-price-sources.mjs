@@ -235,9 +235,13 @@ const snapshotSrc = readFileSync(
   new URL("../lib/iap-management/apple/apple-territories.snapshot.ts", import.meta.url),
   "utf8",
 );
+// ⚠ MATCHES `code: "XXX"`, NOT ANY 3-LETTER STRING. G1b gave every entry a
+// currency, which is also three uppercase letters in quotes — a bare
+// /"[A-Z]{3}"/ would fold USD and EUR into the territory list and report
+// phantom drift on every run. The narrower pattern is the whole guard.
 const snapshot = [
   ...new Set(
-    (snapshotSrc.match(/"[A-Z]{3}"/g) ?? []).map((q) => q.slice(1, -1)),
+    [...snapshotSrc.matchAll(/code: "([A-Z]{3})"/g)].map((m) => m[1]),
   ),
 ];
 const live = [...new Set(terrs.data.map((t) => t.id))];

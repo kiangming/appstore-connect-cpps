@@ -799,6 +799,62 @@ ASC_KEY_ID=… ASC_ISSUER_ID=… ASC_PRIVATE_KEY="$(cat AuthKey_XXXX.p8)" \
   node scripts/probe-export-price-sources.mjs
 ```
 
+### 4.19 LANDMARK — Apple does NOT bill in the local currency for most markets; currency can never be derived from a country code
+
+Measured 2026-08-27, `GET /v1/territories?limit=200`, all 175 territories.
+Compared against `TERRITORY_CATALOG`'s hand-written currency column on the 164
+codes the two share:
+
+| | |
+|---|---|
+| agree | **68** |
+| **disagree** | **96 — 58.5%** |
+| Apple's replacement | **USD ×93** · **EUR ×3** |
+
+**This is not a tail of exceptions. It is the majority.** Apple collapses most
+of the world to USD and a handful of Balkan markets to EUR:
+
+```
+BGR  BGN → EUR      MAC  MOP → USD      ISL  ISK → USD
+SRB  RSD → EUR      UKR  UAH → USD      ALB  ALL → USD
+BIH  BAM → EUR      KWT  KWD → USD      BHR  BHD → USD
+CYM  (KYD) → USD    BMU  (BMD) → USD    JOR  JOD → USD
+```
+
+Whole currency families vanish: every `XCD` market (AG DM GD KN LC VC), every
+`XOF` market (BF BJ CI GW ML NE SN), every `XAF` market (CG CM GA TD) — all
+USD. Even Nauru, whose catalog entry said AUD, is USD.
+
+⚠ And the exceptions run both ways, so no simple rule replaces the lookup:
+**Russia is RUB**, not USD. Japan is JPY, Brazil BRL, Türkiye TRY. Roughly 68
+markets really are billed locally. There is no pattern to code against — only
+a table to read.
+
+⇒ **THE RULE: currency comes from Apple, never from the territory code.** Any
+function shaped `currency(countryCode)` that does not read Apple's answer is
+wrong for more than half of Apple's markets. This is why the export snapshot
+carries `{ code, currency }` and why G1 could not be satisfied from an
+ISO-4217 table — the ISO answer is *correct about the country* and *wrong
+about Apple*, and for a tool that displays Apple's prices, wrong about Apple
+is simply wrong.
+
+⚠ **The one place in the Apple path that still derives it** is recorded as
+`[CATALOG-currency-wrong]` in TODO.md: `custom-prices/baseline.ts:186-190`
+falls through to `territory.currency` (the catalog guess) whenever a territory
+has no MANUAL price — which is 165 of 175 territories on a typical item.
+
+Refresh the measurement with:
+
+```
+ASC_KEY_ID=… ASC_ISSUER_ID=… ASC_PRIVATE_KEY="$(cat AuthKey_XXXX.p8)" \
+  node scripts/probe-export-price-sources.mjs        # step 2.6b
+```
+
+⚠ Step 2.6b prints the block as TypeScript between copy markers, and the
+snapshot is built by pasting it. **Do not retype it.** The last hand-built
+territory fixture in this arc was written in the wrong alphabet and looked
+correct until a count exposed it (P27 #4).
+
 ## 5. Database Schema
 
 ### 4.14 Per-territory availability — as shipped (arc `19051e8..6f206f8`)

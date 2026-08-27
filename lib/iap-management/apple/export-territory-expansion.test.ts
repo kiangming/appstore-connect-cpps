@@ -15,7 +15,9 @@ import countries from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 
 import {
+  APPLE_TERRITORIES,
   APPLE_TERRITORIES_ALPHA3,
+  appleCurrencyFor,
   unknownAppleTerritories,
 } from "./apple-territories.snapshot";
 import { allExportTerritories } from "./export-territory-expansion";
@@ -50,6 +52,46 @@ describe("the Apple territory snapshot", () => {
     expect(toCatalogCode("XKS")).toBe("XK");
     // …and the ISO library genuinely cannot do it, which is why the map exists.
     expect(countries.alpha3ToAlpha2("XKS")).toBeUndefined();
+  });
+
+  it("⚠ every entry carries a NON-EMPTY currency — G1b mutation (f)", () => {
+    // Apple returned one for all 175 (probe guard: "all 175 entries carry a
+    // currency"). An entry that lost its currency would render the picker as
+    // `US · ` — a label with nothing after the separator — and there is no
+    // safe value to substitute, because the whole finding of G1b is that
+    // currency CANNOT be derived from the country.
+    const blank = APPLE_TERRITORIES.filter((t) => !t.currency?.trim());
+    expect(blank.map((t) => t.code)).toEqual([]);
+    expect(APPLE_TERRITORIES).toHaveLength(175);
+  });
+
+  it("every currency is a well-formed ISO-4217 code", () => {
+    const bad = APPLE_TERRITORIES.filter((t) => !/^[A-Z]{3}$/.test(t.currency));
+    expect(bad.map((t) => `${t.code}=${t.currency}`)).toEqual([]);
+  });
+
+  it("the codes array is DERIVED, not a second hand-kept list", () => {
+    // Two lists that must agree are two lists that will not. This pins that
+    // there is one source and the other is a projection of it.
+    expect(APPLE_TERRITORIES_ALPHA3).toEqual(APPLE_TERRITORIES.map((t) => t.code));
+  });
+
+  it("⚠ Apple's currency is NOT the country's own, for most markets", () => {
+    // The finding that made this field necessary, as an assertion rather than
+    // a paragraph: if someone ever "fixes" these to local currencies, this
+    // goes red and points at KB §4.19.
+    expect(appleCurrencyFor("BGR")).toBe("EUR"); // not BGN
+    expect(appleCurrencyFor("MAC")).toBe("USD"); // not MOP
+    expect(appleCurrencyFor("ISL")).toBe("USD"); // not ISK
+    expect(appleCurrencyFor("CYM")).toBe("USD"); // not KYD
+    expect(appleCurrencyFor("BMU")).toBe("USD"); // not BMD
+    // …and the ones Apple DOES bill locally still do.
+    expect(appleCurrencyFor("JPN")).toBe("JPY");
+    expect(appleCurrencyFor("RUS")).toBe("RUB");
+  });
+
+  it("appleCurrencyFor returns null for an unknown code — never a guess", () => {
+    expect(appleCurrencyFor("ZZZ")).toBeNull();
   });
 
   it("names the measurement date and the refresh command in the file itself", async () => {
