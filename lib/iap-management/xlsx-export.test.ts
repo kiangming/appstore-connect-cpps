@@ -350,7 +350,12 @@ describe("buildExportWorkbook — file structure", () => {
     const wb = buildExportWorkbook(plan);
     const aoa = sheetAoa(wb);
 
-    expect(aoa[0]).toEqual(["Product ID", "SKU Name", "Status", "Base Country", "Price in US", null, "Localization 1", null, null]);
+    // ⚠ E4 CHANGED THIS HEADER ON PURPOSE ([Q-EXPORT.full-market-name]). It
+    // read "Price in US" and now reads "Price in United States (US)". This is
+    // a file-BEHAVIOUR expectation — the kind the library swap was forbidden
+    // to touch — so it is called out rather than quietly updated: the change
+    // is the commissioned one, not a side effect of E3's rewrite.
+    expect(aoa[0]).toEqual(["Product ID", "SKU Name", "Status", "Base Country", "Price in United States (US)", null, "Localization 1", null, null]);
     expect(aoa[1]).toEqual([null, null, null, null, "Price", "Currency", "Locale", "Display Name", "Description"]);
     expect(aoa.length).toBe(3); // 2 header rows + 1 data row
     expect(aoa[2]).toEqual(["sku-1", "Item One", "APPROVED", "US", "0.99", "USD", "en-US", "Item One", "Desc"]);

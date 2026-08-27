@@ -6,9 +6,11 @@
  * `manual === true` on some row must FAIL.
  */
 import { describe, it, expect } from "vitest";
+import { toCatalogCode } from "./apple/territory-code-map";
 import {
   orderTerritoryColumns,
   columnDisplayName,
+  columnHeaderLabel,
   type ColumnOrderRow,
 } from "./export-column-order";
 
@@ -131,5 +133,80 @@ describe("the order is TOTAL — never left to row order", () => {
     // header would sort and render under a bare code.
     expect(columnDisplayName("US")).toBe("United States");
     expect(columnDisplayName("XK")).toBe("XKS");
+  });
+});
+
+// ─── E4 — the header label ─────────────────────────────────────────────────
+
+/** Apple's live territory list, 2026-08-27 probe (`/v1/territories`, 175). */
+const APPLE_TERRITORIES = `AFG AGO AIA ALB ARE ARG ARM ATG AUS AUT AZE BEL BEN
+BFA BGR BHR BHS BIH BLR BLZ BMU BOL BRA BRB BRN BTN BWA CAN CHE CHL CHN CIV CMR
+COD COG COL CPV CRI CYM CYP CZE DEU DMA DNK DOM DZA ECU EGY ESP EST FIN FJI FRA
+FSM GAB GBR GEO GHA GMB GNB GRC GRD GTM GUY HKG HND HRV HUN IDN IND IRL IRQ ISL
+ISR ITA JAM JOR JPN KAZ KEN KGZ KHM KNA KOR KWT LAO LBN LBR LBY LCA LKA LTU LUX
+LVA MAC MAR MDA MDG MDV MEX MKD MLI MLT MMR MNE MNG MOZ MRT MSR MUS MWI MYS NAM
+NER NGA NIC NLD NOR NPL NRU NZL OMN PAK PAN PER PHL PLW PNG POL PRT PRY QAT ROU
+RUS RWA SAU SEN SGP SLB SLE SLV SRB STP SUR SVK SVN SWE SWZ SYC TCA TCD THA TJK
+TKM TON TTO TUN TUR TWN TZA UGA UKR URY USA UZB VCT VEN VGB VNM VUT XKS YEM ZAF
+ZMB ZWE`
+  .split(/\s+/)
+  .filter(Boolean);
+
+describe("⚠ MUTATION (d) — the header carries the FULL MARKET NAME", () => {
+  it.each([
+    ["TH", "Price in Thailand (TH)"],
+    ["US", "Price in United States (US)"],
+    // ⚠ "Vietnam", one word — the library's spelling, not the ISO long form
+    // "Viet Nam". Written from memory first and caught here, which is P27 in
+    // miniature: an expectation about a label is a claim about a source.
+    ["VN", "Price in Vietnam (VN)"],
+    ["MO", "Price in Macau (MO)"],
+    ["TW", "Price in Taiwan (TW)"],
+    ["CN", "Price in China mainland (CN)"],
+  ])("%s → %s", (code, expected) => {
+    // A bare "Price in TH" is the regression: the Manager reads market names,
+    // not two-letter codes, and the code alone is what this replaced.
+    expect(columnHeaderLabel(code)).toBe(expected);
+  });
+
+  it("⚠ the Apple-Connect overrides win over the ISO wording", () => {
+    // territoryName's first tier. "Macao"/"Taiwan, Province of China" are what
+    // ISO says; Apple's own pricing UI says otherwise, and the Manager is
+    // comparing against Apple's UI.
+    expect(columnHeaderLabel("MO")).toContain("Macau");
+    expect(columnHeaderLabel("TW")).toContain("Taiwan (");
+  });
+});
+
+describe("⚠ MUTATION — an unnameable territory must not repeat a code", () => {
+  it("Kosovo renders `Price in XKS`, never `XKS (XK)` and never `XK (XK)`", () => {
+    // ⚠ THE CHECK MUST COMPARE AGAINST BOTH CODES. Kosovo's column code is XK
+    // while the fallback name is Apple's XKS: a naive `name === code` test
+    // sees two different strings and lets "XKS" through as though it were a
+    // name. Sweeping all 175 with that naive rule found ZERO shortened
+    // headers — including this one.
+    const label = columnHeaderLabel("XK");
+    expect(label).toBe("Price in XKS");
+    expect(label).not.toContain("(");
+  });
+
+  it("a wholly unknown code renders once, not twice", () => {
+    expect(columnHeaderLabel("ZZZ")).toBe("Price in ZZZ");
+  });
+
+  it("⚠ EXACTLY ONE of Apple's 175 territories lacks a name", () => {
+    // The sweep, pinned. If this ever reports more than Kosovo, territoryName
+    // has a coverage hole that arrived with an Apple change — and the headers
+    // for those markets silently became codes.
+    const shortened = APPLE_TERRITORIES.map(toCatalogCode).filter(
+      (c) => !columnHeaderLabel(c).includes("("),
+    );
+    expect(shortened).toEqual(["XK"]);
+  });
+
+  it("every one of the 175 produces a non-empty header", () => {
+    for (const code of APPLE_TERRITORIES.map(toCatalogCode)) {
+      expect(columnHeaderLabel(code).length).toBeGreaterThan("Price in ".length);
+    }
   });
 });

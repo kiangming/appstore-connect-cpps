@@ -28,7 +28,10 @@
  */
 import ExcelJS from "exceljs";
 import { toCatalogCode } from "./apple/territory-code-map";
-import { orderTerritoryColumns } from "./export-column-order";
+import {
+  columnHeaderLabel,
+  orderTerritoryColumns,
+} from "./export-column-order";
 
 import type { PriceScheduleView } from "./queries/iap-detail";
 
@@ -479,7 +482,9 @@ export function buildExportWorkbook(
 
   const headerRow1: Array<string | null> = [
     ...FIXED_COLUMNS.map((label) => label as string),
-    ...orderedCodes.flatMap((t) => [`Price in ${t}`, null]),
+    // E4 — full market name + code, e.g. "Price in Thailand (TH)". The
+    // parenthetical is dropped when there is no real name to pair it with.
+    ...columns.flatMap((c) => [columnHeaderLabel(c.code), null]),
     ...Array.from({ length: localizationGroupCount }, (_, i) => [
       `Localization ${i + 1}`,
       null,

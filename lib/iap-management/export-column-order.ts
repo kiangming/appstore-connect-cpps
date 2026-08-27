@@ -72,6 +72,26 @@ export function columnDisplayName(code: string): string {
 }
 
 /**
+ * E4 — the column header: `Price in Thailand (TH)`.
+ *
+ * ⚠ WHEN THERE IS NO REAL NAME, THE PARENTHETICAL IS DROPPED. `territoryName`
+ * falls back to the raw code, so an unnameable territory would otherwise
+ * render a code beside a code — and for Kosovo it would render TWO DIFFERENT
+ * codes beside each other, `Price in XKS (XK)`, neither of which is a name.
+ *
+ * ⚠ THE CHECK COMPARES AGAINST BOTH CODES, and the sweep is why. Testing only
+ * `name === code` found ZERO territories out of Apple's 175 — including
+ * Kosovo, whose column code is `XK` while the fallback name is Apple's `XKS`.
+ * The two strings differ, so the naive check passed it through as though
+ * "XKS" were a name. A fallback is a fallback whichever code it fell back to.
+ */
+export function columnHeaderLabel(code: string): string {
+  const name = columnDisplayName(code);
+  const isRealName = name !== code && name !== toAppleCode(code);
+  return isRealName ? `Price in ${name} (${code})` : `Price in ${name}`;
+}
+
+/**
  * Order the territory columns: manual group first, auto second.
  *
  * ⚠ A column with NO price on any row — the Manager selected a country Apple

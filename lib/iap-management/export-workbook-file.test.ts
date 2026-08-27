@@ -169,3 +169,55 @@ describe("⚠ MUTATION (i) — the fill follows the CELL, not the column", () =>
     expect(part("xl/styles.xml")).not.toContain(AMBER);
   });
 });
+
+// ─── E4.4 — the header got longer; the geometry must not have moved ────────
+
+describe("⚠ long headers do not shift the merges or the columns", () => {
+  it("a 2-wide territory merge still spans exactly its own pair", () => {
+    // THE FRAGILE PART OF E4. Merge rectangles are computed from column
+    // INDEXES (`FIXED_COLUMNS.length + g * 2`), never from header text — but
+    // "Price in United States (US)" is three times the width of the old
+    // "Price in US", and a builder that measured text instead of counting
+    // columns would drift silently, producing a file that opens fine and is
+    // subtly wrong.
+    const plan = buildExportPlan([
+      source({
+        priceSchedule: sched([
+          entry({ territory: "USA", manual: true }),
+          entry({ priceId: "p2", territory: "THA", customerPrice: "35", currency: "THB", manual: false }),
+        ]),
+      }),
+    ]);
+    const ws = buildExportWorkbook(plan).worksheets[0];
+    const merges = (ws as unknown as { model: { merges: string[] } }).model.merges;
+
+    // 4 fixed columns merged vertically across both header rows.
+    expect(merges).toContain("A1:A2");
+    expect(merges).toContain("D1:D2");
+    // US pair = E1:F1, TH pair = G1:H1 — unchanged by the longer labels.
+    expect(merges).toContain("E1:F1");
+    expect(merges).toContain("G1:H1");
+  });
+
+  it("the two header rows still line up: long label above Price/Currency", () => {
+    const plan = buildExportPlan([
+      source({ priceSchedule: sched([entry({ territory: "USA", manual: true })]) }),
+    ]);
+    const ws = buildExportWorkbook(plan).worksheets[0];
+    expect(ws.getCell(1, 5).value).toBe("Price in United States (US)");
+    // Row 2 under it is still the sub-header pair, in the same two columns.
+    expect(ws.getCell(2, 5).value).toBe("Price");
+    expect(ws.getCell(2, 6).value).toBe("Currency");
+  });
+
+  it("column widths are still one per column, not one per character", () => {
+    const plan = buildExportPlan([
+      source({ priceSchedule: sched([entry({ territory: "USA", manual: true })]) }),
+    ]);
+    const ws = buildExportWorkbook(plan).worksheets[0];
+    // 4 fixed + 2 for the single territory. A width array keyed off header
+    // text length would have produced a different count.
+    expect(ws.getColumn(5).width).toBe(10);
+    expect(ws.getColumn(6).width).toBe(10);
+  });
+});
