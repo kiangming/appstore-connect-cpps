@@ -12,6 +12,8 @@ function entry(over: Partial<PriceScheduleEntry> = {}): PriceScheduleEntry {
     endDate: null,
     territory: "USA",
     customerPrice: "0.99",
+    // predates the field; asserts nothing about price source
+    manual: null,
     currency: "USD",
     ...over,
   };

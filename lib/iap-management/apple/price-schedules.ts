@@ -369,9 +369,21 @@ export interface PriceScheduleIncomplete {
   expected?: number;
 }
 
-async function fetchManualPricesPaginated(
+/**
+ * E1 — which of the schedule's two price sub-resources to walk.
+ *
+ * Both return `inAppPurchasePrices` with the same shape and the same
+ * `?include=inAppPurchasePricePoint,territory` support, so ONE paginator
+ * serves both. Measured live 2026-08-27 on com.vnggames.aoiaf.0.99:
+ * manualPrices = 10, automaticPrices = 165, total 175 = Apple's whole
+ * territory list. `limit=200` puts either set in a single page.
+ */
+export type PriceSubResource = "manualPrices" | "automaticPrices";
+
+async function fetchPricesPaginated(
   creds: AscCredentials,
   scheduleId: string,
+  sub: PriceSubResource = "manualPrices",
 ): Promise<{
   data: InAppPurchasePrice[];
   included: Array<AscResource<string, Record<string, unknown>>>;
@@ -382,7 +394,7 @@ async function fetchManualPricesPaginated(
     AscResource<string, Record<string, unknown>>
   > = [];
   let nextPath: string | null =
-    `/v1/inAppPurchasePriceSchedules/${scheduleId}/manualPrices?include=inAppPurchasePricePoint,territory&limit=200`;
+    `/v1/inAppPurchasePriceSchedules/${scheduleId}/${sub}?include=inAppPurchasePricePoint,territory&limit=200`;
   let pageNum = 0;
   let lastPagingTotal: number | undefined;
 
@@ -401,7 +413,7 @@ async function fetchManualPricesPaginated(
     lastPagingTotal = page.meta?.paging?.total;
     const hasNext = !!page.links?.next;
     console.log(
-      `[get-schedule] stage2 page=${pageNum} got=${page.data?.length ?? 0} has_next=${hasNext} apple_total=${lastPagingTotal ?? "?"} schedule_id=${scheduleId}`,
+      `[get-schedule] stage2(${sub}) page=${pageNum} got=${page.data?.length ?? 0} has_next=${hasNext} apple_total=${lastPagingTotal ?? "?"} schedule_id=${scheduleId}`,
     );
     nextPath = hasNext && page.links?.next ? nextPathFromLink(page.links.next) : null;
   }
@@ -410,7 +422,7 @@ async function fetchManualPricesPaginated(
 
   if (pageNum >= MAX_STAGE2_PAGES && nextPath) {
     console.warn(
-      `[get-schedule] stage2 hit MAX_STAGE2_PAGES=${MAX_STAGE2_PAGES} schedule_id=${scheduleId}; surfacing ${collectedPrices.length} prices`,
+      `[get-schedule] stage2(${sub}) hit MAX_STAGE2_PAGES=${MAX_STAGE2_PAGES} schedule_id=${scheduleId}; surfacing ${collectedPrices.length} prices`,
     );
     incomplete = { reason: "PAGE_CAP", collected: collectedPrices.length };
   }
@@ -484,9 +496,28 @@ export class NoPriceScheduleError extends AppleApiError {
   }
 }
 
+/**
+ * E1 — opt-in: also walk `/automaticPrices`.
+ *
+ * ⚠ DEFAULT OFF, AND THAT IS THE WHOLE POINT. Four surfaces call this
+ * function — View Detail, the custom-prices baseline, update-on-apple, and the
+ * export. Only the export wants Apple's auto-equalized territories; turning
+ * them on for everyone would make View Detail jump from 10 rows to 175 and
+ * hand the two write paths a pile of prices no human set, which is a
+ * behaviour change to three surfaces nobody asked to change.
+ *
+ * Costs exactly one extra Apple request per item (measured: 165 auto entries
+ * land in a single `limit=200` page, with customerPrice and currency inline
+ * via the same `?include` the manual walk already uses — no N+1).
+ */
+export interface PriceScheduleOptions {
+  includeAutomatic?: boolean;
+}
+
 export async function getPriceScheduleForIap(
   creds: AscCredentials,
   appleIapId: string,
+  options?: PriceScheduleOptions,
 ): Promise<
   AscApiResponse<InAppPurchasePriceSchedule> & {
     incomplete?: PriceScheduleIncomplete;
@@ -539,11 +570,50 @@ export async function getPriceScheduleForIap(
   // because Stage 1 can truncate.
   const stage2Result =
     manualRefs.length > 0
-      ? await fetchManualPricesPaginated(creds, scheduleId)
+      ? await fetchPricesPaginated(creds, scheduleId, "manualPrices")
       : {
           data: [] as InAppPurchasePrice[],
           included: [] as Array<AscResource<string, Record<string, unknown>>>,
         };
+
+  // ── Stage 2b — automatic prices, only when the caller asked. ────────────
+  //
+  // ⚠ NOT gated on `manualRefs.length`. A schedule can be entirely
+  // auto-equalized (base price set, every other territory derived), and that
+  // item has automatic prices worth exporting even though Stage 1 reported
+  // manual refs. Gating this the way Stage 2 is gated would hide exactly the
+  // items the feature exists to fix.
+  const autoResult = options?.includeAutomatic
+    ? await fetchPricesPaginated(creds, scheduleId, "automaticPrices")
+    : {
+        data: [] as InAppPurchasePrice[],
+        included: [] as Array<AscResource<string, Record<string, unknown>>>,
+      };
+
+  if (options?.includeAutomatic) {
+    // ── F1 — the endpoint is a CROSS-CHECK, never the verdict. ───────────
+    //
+    // `manual` is an attribute Apple puts on the row; the sub-resource it
+    // arrived from is our own inference. They are separately observable and
+    // could disagree. When they do, the attribute wins — it is Apple's
+    // statement about the row — and the disagreement is LOGGED rather than
+    // resolved silently, because a mismatch means one of our two beliefs
+    // about Apple is wrong and we should find out which.
+    const wrongInManual = stage2Result.data.filter(
+      (p) => p.attributes?.manual === false,
+    ).length;
+    const wrongInAuto = autoResult.data.filter(
+      (p) => p.attributes?.manual === true,
+    ).length;
+    if (wrongInManual > 0 || wrongInAuto > 0) {
+      console.warn(
+        `[get-schedule] ⚠ manual-attribute/endpoint MISMATCH schedule_id=${scheduleId} manual_endpoint_saying_auto=${wrongInManual} auto_endpoint_saying_manual=${wrongInAuto} — trusting the attribute`,
+      );
+    }
+    console.log(
+      `[get-schedule] stage2 totals schedule_id=${scheduleId} manual=${stage2Result.data.length} automatic=${autoResult.data.length}`,
+    );
+  }
 
   // ── Merge Stage 1 + Stage 2 ───────────────────────────────────────────
   // Stage 1's `included` may carry link-only InAppPurchasePrice stubs (Apple
@@ -565,6 +635,13 @@ export async function getPriceScheduleForIap(
       // is narrower than the loose `Record<string, unknown>` AscApiResponse's
       // `included[]` requires — same structural row, different TS bookkeeping.
       // Cast through `unknown` so the unifier accepts the merge.
+      ...(autoResult.data as unknown as AscResource<
+        string,
+        Record<string, unknown>
+      >[]),
+      ...(autoResult.included as Array<
+        AscResource<string, Record<string, unknown>>
+      >),
       ...(stage2Result.data as unknown as AscResource<
         string,
         Record<string, unknown>

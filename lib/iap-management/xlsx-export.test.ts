@@ -14,6 +14,11 @@ function entry(overrides: Partial<PriceScheduleEntry>): PriceScheduleEntry {
     endDate: null,
     territory: "USA",
     customerPrice: "0.99",
+    // E1 — the field is REQUIRED on purpose: it decides whether the export
+    // shades a cell, so every fixture must state what it claims. `null` =
+    // "Apple did not say", which is what this fixture claimed before it
+    // existed. NO assertion in this file changed.
+    manual: null,
     currency: "USD",
     ...overrides,
   };

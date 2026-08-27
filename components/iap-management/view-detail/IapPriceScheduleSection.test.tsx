@@ -60,6 +60,7 @@ describe("IapPriceScheduleSection", () => {
             territory: "USA",
             customerPrice: "0.99",
             currency: "USD",
+            manual: null,
           },
         )}
         now={NOW}
@@ -97,6 +98,7 @@ describe("IapPriceScheduleSection", () => {
             territory: "USA",
             customerPrice: "0.99",
             currency: "USD",
+            manual: null,
           },
           {
             priceId: "p-future",
@@ -105,6 +107,7 @@ describe("IapPriceScheduleSection", () => {
             territory: "VNM",
             customerPrice: "29000",
             currency: "VND",
+            manual: null,
           },
         ])}
         now={NOW}
@@ -130,6 +133,7 @@ describe("IapPriceScheduleSection", () => {
             territory: "USA",
             customerPrice: "0.99",
             currency: "USD",
+            manual: null,
           },
         ])}
         now={NOW}

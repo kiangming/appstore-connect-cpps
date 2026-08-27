@@ -154,6 +154,23 @@ if (a0) {
   console.log("    ⚠ `manual` attribute  :", "manual" in (a0.attributes ?? {}) ? `PRESENT = ${a0.attributes.manual}` : "ABSENT (spec lists it; behaviour differs)");
 }
 
+// ── 2.5b the MANUAL side of the same attribute ────────────────────────────
+// The first run dumped an automatic entry only. `manual` is the source of
+// truth for cell shading, so BOTH endpoints must be checked: if /manualPrices
+// rows do not all carry manual=true, then the attribute and the endpoint
+// disagree and the code's cross-check warning will fire in production.
+const withFlag = manual.rows.filter((r) => "manual" in (r.attributes ?? {}));
+const sayingTrue = manual.rows.filter((r) => r.attributes?.manual === true);
+console.log("\n2.5b manualPrices entries:");
+console.log("    carrying `manual`   :", `${withFlag.length}/${manual.rows.length}`);
+console.log("    manual === true     :", `${sayingTrue.length}/${manual.rows.length}`);
+console.log(
+  "    verdict             :",
+  sayingTrue.length === manual.rows.length
+    ? "consistent — endpoint and attribute agree"
+    : "⚠ MISMATCH — the attribute wins; the code logs this and keeps reading it",
+);
+
 // ── 2.6 does Apple return a territory NAME? ───────────────────────────────
 const terrs = await get("/v1/territories?limit=200");
 console.log("\n2.6 /v1/territories:");

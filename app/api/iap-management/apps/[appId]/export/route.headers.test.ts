@@ -79,6 +79,7 @@ function source(id: string, over: Partial<ExportSource> = {}): ExportSource {
           territory: "USA",
           customerPrice: "0.99",
           currency: "USD",
+          manual: null,
         },
       ],
     },

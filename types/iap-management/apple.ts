@@ -139,6 +139,23 @@ export interface InAppPurchasePriceAttributes {
   startDate: string | null;
   /** ISO date when the price stops being effective (optional, future-dated). */
   endDate?: string | null;
+  /**
+   * TRUE when a human set this territory's price; FALSE when Apple's
+   * auto-equalization derived it from the base territory.
+   *
+   * ⚠ THIS IS THE SOURCE OF TRUTH FOR "manual vs automatic", not the
+   * sub-resource the entry arrived from. Both `/manualPrices` and
+   * `/automaticPrices` return `inAppPurchasePrices` resources, so the two
+   * facts are separately observable and can in principle disagree — and when
+   * they do, the attribute is Apple's own statement about the row while the
+   * endpoint is our inference about it. Measured live 2026-08-27: an
+   * automaticPrices entry carries `manual: false`.
+   *
+   * ⚠ OPTIONAL because it is a recent addition to the read path and an older
+   * cached/fixture response may not carry it. `undefined` means "Apple did
+   * not say" and must not be read as `false` — see `entryIsManual`.
+   */
+  manual?: boolean;
 }
 
 export type InAppPurchasePrice = AscResource<

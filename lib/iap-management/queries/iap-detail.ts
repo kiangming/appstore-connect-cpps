@@ -91,6 +91,21 @@ export interface PriceScheduleEntry {
   territory: string;
   /** Customer-facing price string as Apple returns it ("0.99"). */
   customerPrice: string;
+  /**
+   * E1/F1 — who set this price: `true` a human, `false` Apple's
+   * auto-equalization, `null` Apple did not say.
+   *
+   * ⚠ READ FROM `attributes.manual`, NOT from which sub-resource the entry
+   * arrived on. The two are separately observable; the attribute is Apple's
+   * own statement about the row and the endpoint is our inference about it.
+   * `getPriceScheduleForIap` logs a warning when they disagree and keeps the
+   * attribute.
+   *
+   * ⚠ `null` IS NOT `false`. The export shades AUTO cells yellow, and a row
+   * Apple said nothing about must not be shaded as though Apple had called it
+   * automatic — an unshaded cell claims less, so an unknown reads as one.
+   */
+  manual: boolean | null;
   /** Currency code ("USD", "VND") when Apple provides it. */
   currency: string | null;
 }
@@ -213,6 +228,9 @@ function unpackPriceEntry(
     territory: territoryId,
     customerPrice: pricePoint.attributes.customerPrice,
     currency,
+    // ⚠ `?? null`, never `?? false`. Absent means Apple did not say, and
+    // that is a third answer — see the field's doc comment.
+    manual: priceRes.attributes.manual ?? null,
   };
 }
 

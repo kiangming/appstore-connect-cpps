@@ -59,6 +59,7 @@ function makeSchedule(): PriceScheduleView {
         territory: "USA",
         customerPrice: "0.99",
         currency: "USD",
+        manual: null,
       },
     ],
   };
