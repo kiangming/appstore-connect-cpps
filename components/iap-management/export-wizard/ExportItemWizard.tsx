@@ -71,6 +71,7 @@ import { ROW_WINDOW_STEP } from "@/lib/iap-management/apple/bulk-item-search";
 import type { DraftItemInput } from "@/lib/iap-management/apple/bulk-item-rows";
 import { BulkItemPicker } from "@/components/iap-management/item-picker/BulkItemPicker";
 import { ExportOptionsDialog } from "@/components/iap-management/ExportOptionsDialog";
+import { APPLE_TERRITORY_CATALOG } from "@/lib/iap-management/apple/apple-territory-catalog";
 import {
   asOfLabel,
   asOfSummary,
@@ -301,6 +302,14 @@ export function ExportItemWizard({
     return (
       <ExportOptionsDialog
         open
+        // ⚠ G3 — APPLE'S 175, NOT THE SHARED 183
+        // ([Q-EXPORT.apple-only-picker]). The 19 markets Apple does not sell
+        // to are not offered here, so they cannot be ticked and cannot become
+        // a column carrying `—` for a question nobody asked. It also puts
+        // RUSSIA and ten other markets in the picker for the first time —
+        // they are in Apple's list and were never in the shared catalog —
+        // without editing that catalog, so Google's picker is unaffected (P8).
+        catalog={APPLE_TERRITORY_CATALOG}
         // ⚠ In a wizard, cancelling step 2 means "go back", not "give up" —
         // and the selection is still in this component's state, so returning
         // to step 1 preserves it for free. The dialog is not told any of this.

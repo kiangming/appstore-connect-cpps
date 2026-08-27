@@ -35,7 +35,6 @@ import { Search, X } from "lucide-react";
 import {
   TERRITORY_CATALOG,
   TERRITORY_REGIONS,
-  ALL_TERRITORY_CODES,
   type TerritoryEntry,
 } from "@/lib/iap-management/territory-catalog";
 
@@ -46,6 +45,23 @@ export interface ExportOptionsDialogProps {
    *  untouched-selection path). A non-null array is the literal set of
    *  territory codes the operator left checked. */
   onExport: (selectedCodes: string[] | null) => void;
+  /**
+   * G3 — the territories this dialog offers. OPTIONAL, defaulting to the
+   * shared `TERRITORY_CATALOG` so the Google caller is untouched.
+   *
+   * ⚠ THE TWO STORES DO NOT SELL TO THE SAME PLACES, which is the whole
+   * reason this prop exists. Apple passes its own 175
+   * (`apple/apple-territory-catalog.ts`, `[Q-EXPORT.apple-only-picker]`) so a
+   * market Apple does not sell in cannot be ticked and cannot become a column
+   * nobody asked for. Google passes nothing and keeps all 183.
+   *
+   * ⚠ EXPECT THE SAME COUNTRY TO SHOW A DIFFERENT CURRENCY IN THE TWO
+   * MODULES, and that is correct, not a bug. Apple's list carries the
+   * currency Apple bills in, which differs from the country's own for 96 of
+   * the 164 codes the two lists share — Bulgaria reads EUR under Apple and
+   * BGN under Google (KB §4.19).
+   */
+  catalog?: readonly TerritoryEntry[];
 }
 
 function matchesQuery(t: TerritoryEntry, query: string): boolean {
@@ -62,25 +78,37 @@ export function ExportOptionsDialog({
   open,
   onCancel,
   onExport,
+  catalog = TERRITORY_CATALOG,
 }: ExportOptionsDialogProps) {
+  // ⚠ ONE DERIVATION, READ BY EVERY SITE THAT USED TO READ THE MODULE
+  // CONSTANT. There were five — initial state, the reset-on-open, the visible
+  // list, the total, and Select all — and they have to move together or the
+  // dialog lies about itself: leave the total or Select all on the import and
+  // Apple's picker SHOWS 175 while "Select all" ticks 183, sending eight
+  // countries Apple does not sell in to the export. A structural test asserts
+  // the module constants are read in exactly one place each.
+  const codes = useMemo(() => catalog.map((t) => t.code), [catalog]);
+
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(ALL_TERRITORY_CODES),
-  );
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(codes));
 
   // Reset to the default (all-selected, empty search) every time the
   // dialog opens — a stale partial selection from a prior open would be
   // a confusing silent trap otherwise.
+  //
+  // ⚠ `codes` is in the dep list, not just `open`: a caller that swaps the
+  // catalog while mounted must not keep a selection built from the old one.
+  // It is memoised on `catalog`, so a stable catalog cannot loop this.
   useEffect(() => {
     if (open) {
       setSearch("");
-      setSelected(new Set(ALL_TERRITORY_CODES));
+      setSelected(new Set(codes));
     }
-  }, [open]);
+  }, [open, codes]);
 
   const visible = useMemo(
-    () => TERRITORY_CATALOG.filter((t) => matchesQuery(t, search)),
-    [search],
+    () => catalog.filter((t) => matchesQuery(t, search)),
+    [catalog, search],
   );
 
   const grouped = useMemo(() => {
@@ -98,7 +126,7 @@ export function ExportOptionsDialog({
 
   if (!open) return null;
 
-  const total = ALL_TERRITORY_CODES.length;
+  const total = codes.length;
   const count = selected.size;
   const isAllSelected = count === total;
 
@@ -112,7 +140,7 @@ export function ExportOptionsDialog({
   }
 
   function selectAll() {
-    setSelected(new Set(ALL_TERRITORY_CODES));
+    setSelected(new Set(codes));
   }
 
   function clearAll() {

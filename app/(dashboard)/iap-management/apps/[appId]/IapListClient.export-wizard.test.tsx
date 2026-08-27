@@ -198,10 +198,48 @@ describe("opening and working the export wizard costs ZERO Apple requests", () =
     fireEvent.click(wizard().getByRole("checkbox", { name: "Select all" }));
     fireEvent.click(wizard().getByTestId("wizard-continue"));
 
-    // Step 2 is the shared territory dialog — 183 static entries, no request.
+    // ⚠ COMMENT CORRECTED BY G3, not just reworded: step 2 used to be the
+    // SHARED dialog with 183 entries. Since [Q-EXPORT.apple-only-picker] the
+    // Apple wizard passes Apple's own 175. Still static, still no request —
+    // which is what this test is actually about.
     await waitFor(() =>
       expect(screen.getByText("Export options")).toBeInTheDocument(),
     );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ⚠ THE WIRING, WHICH NOTHING TESTED UNTIL THIS POINT — P26 caught it.
+   *
+   * `ExportOptionsDialog.apple-catalog.test.tsx` proves the dialog behaves
+   * correctly WHEN GIVEN Apple's catalog. It cannot prove the Apple wizard
+   * actually gives it one. Mutating `ExportItemWizard` to pass the shared
+   * catalog instead left this file's 19 tests green — the pattern was proven
+   * and the wiring was not.
+   *
+   * This is the only place both halves meet: the real wizard, the real dialog,
+   * the real catalog module.
+   */
+  it("⚠ step 2 offers APPLE's markets — Russia in, Andorra out (the wiring)", async () => {
+    stubFetch();
+    renderList();
+    openWizard();
+
+    fireEvent.click(wizard().getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(wizard().getByTestId("wizard-continue"));
+    await waitFor(() =>
+      expect(screen.getByText("Export options")).toBeInTheDocument(),
+    );
+
+    // 175, and said in the dialog's own words so a count change cannot hide.
+    expect(screen.getByText("175 of 175 selected")).toBeInTheDocument();
+    // RU is in Apple's list and has never been in TERRITORY_CATALOG, so its
+    // presence can only come from the Apple catalog being wired through.
+    expect(screen.getByLabelText(/Russia/i)).toBeInTheDocument();
+    // AD is in the shared catalog and not in Apple's — its absence is the
+    // other direction of the same proof.
+    expect(screen.queryByLabelText(/Andorra/i)).not.toBeInTheDocument();
+    // …and none of this cost a request, which is this file's whole subject.
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
