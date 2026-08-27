@@ -1039,7 +1039,7 @@
           <a class="nav-item" data-page="apple-apps" data-keywords="apple apps danh sách applications">
             <span class="nav-item-label">Danh sách apps</span>
           </a>
-          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách danh sach export xlsx excel xuất file xuat file export failures failure sheet reason rate limit not attempted partial giới hạn gioi han availability availabilities available removed unknown as of last sync đồng bộ dong bo refresh from apple làm mới lam moi cũ cu read not read fetch failed rate limited chưa sync chua sync không cần f5 khong can f5">
+          <a class="nav-item" data-page="apple-iaps" data-keywords="apple iaps in-app purchases list danh sách danh sach export xlsx excel xuất file xuat file export failures failure sheet reason rate limit not attempted partial giới hạn gioi han ô trống o trong gạch ngang gach ngang em dash — không bán khong ban not sold nền vàng nen vang auto equalized manual tự set tay tu set tay freeze đóng băng dong bang header tên nước ten nuoc availability availabilities available removed unknown as of last sync đồng bộ dong bo refresh from apple làm mới lam moi cũ cu read not read fetch failed rate limited chưa sync chua sync không cần f5 khong can f5">
             <span class="nav-item-label">Danh sách IAPs</span>
           </a>
           <a class="nav-item" data-page="apple-new-iap" data-keywords="apple new iap tạo mới create">
@@ -2586,6 +2586,26 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <code class="inline">Apple IAP Export</code>: mỗi item 1 dòng gồm Product ID, SKU Name, Status,
               Base Country, các cột giá theo nước đã chọn, và các nhóm localization
               (Locale · Display Name · Description).</p>
+
+              <p><strong>File trông thế nào</strong> — 4 điểm đáng biết trước khi mở:</p>
+              <ul>
+                <li><strong>Mỗi nước bạn tick = 1 cặp cột</strong> (Price · Currency), kể cả nước Apple
+                không bán — chọn cả 175 nước thì file có 175 cặp. Nước được hỏi thì được trả lời;
+                không nước nào bị bỏ im lặng.</li>
+                <li><strong>Header ghi tên nước đầy đủ:</strong>
+                <code class="inline">Price in Thailand (TH)</code>, không phải
+                <code class="inline">Price in TH</code>. Dòng header thứ 2 vẫn là
+                <code class="inline">Price</code> · <code class="inline">Currency</code>.</li>
+                <li><strong>Cột giá tự set tay đứng trước, giá Apple tự quy đổi đứng sau</strong>, và
+                <strong>ô nền vàng nhạt = giá do Apple tự quy đổi</strong> (auto-equalized), ô nền trắng =
+                người set. Màu bám theo <em>từng ô</em>, không theo cột: cùng một nước có thể là tay ở
+                item này và auto ở item kia. Nước base của bảng giá đứng đầu nhóm set-tay.</li>
+                <li><strong>4 cột trái + 2 dòng header bị "đóng băng"</strong> (freeze panes) — cuộn ngang
+                qua 175 cột vẫn thấy Product ID và tên nước.</li>
+              </ul>
+
+              <p>⚠️ <strong>Ô giá trống và ô giá <code class="inline">—</code> KHÔNG giống nhau.</strong>
+              Xem mục <em>"Đọc kết quả export"</em> ngay dưới.</p>
             </div>
           </li>
         </ol>
@@ -2750,19 +2770,51 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             </tr>
             <tr>
               <td><code class="inline">N of those partially exported — prices missing</code></td>
-              <td>Item <strong>CÓ</strong> trong sheet chính, nhưng các ô giá trống vì đọc giá thất bại.</td>
+              <td>Item <strong>CÓ</strong> trong sheet chính, nhưng các ô giá <strong>để trống</strong>
+              (không phải <code class="inline">—</code>) vì đọc giá thất bại.</td>
               <td>Đối chiếu sheet <code class="inline">Export Failures</code> để biết vì sao.</td>
             </tr>
           </tbody>
         </table>
 
+        <p>Trong <strong>sheet chính</strong>, một ô giá không có số cũng nói hai chuyện khác hẳn nhau.
+        Đây là chỗ dễ đọc nhầm nhất của file:</p>
+        <table class="docs-table">
+          <thead><tr><th>Thấy gì</th><th>Nghĩa là gì</th><th>Làm gì</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Ô giá là <code class="inline">—</code> (gạch ngang dài)</td>
+              <td><strong>Apple không bán item này ở nước đó.</strong> Đây là một <em>câu trả lời</em>:
+              tool đã đọc bảng giá thành công, và trong đó không có nước này. Cả 2 ô
+              <strong>Price và Currency</strong> đều là <code class="inline">—</code>.</td>
+              <td>Không cần làm gì. Export lại cũng ra <code class="inline">—</code>.
+              Nếu bạn <em>mong đợi</em> có giá ở nước đó thì vấn đề nằm ở bảng giá trên App Store Connect,
+              không phải ở file.</td>
+            </tr>
+            <tr>
+              <td>Ô giá <strong>TRỐNG</strong> (không có gì cả)</td>
+              <td><strong>Không đọc được giá của item đó</strong> — rate limit hoặc Apple trả lỗi.
+              Tool <em>không biết</em> nước đó có giá hay không, nên không dám ghi
+              <code class="inline">—</code>.</td>
+              <td>⚠ <strong>Luôn có một dòng cho item đó ở sheet
+              <code class="inline">Export Failures</code></strong> — mở sheet thứ 2, tìm Product ID, đọc cột
+              <strong>Reason</strong> ở bảng dưới để biết nên chờ hay export lại.</td>
+            </tr>
+          </tbody>
+        </table>
+
         <div class="callout callout-warning">
-          <div class="callout-title">⚠️ Lưu ý — ô giá trống KHÔNG có nghĩa là "không có giá"</div>
+          <div class="callout-title">⚠️ Ô trống ⇔ có dòng ở "Export Failures" — luôn đi cặp</div>
           <p>
-            Một dòng trong sheet chính có thể có đủ Product ID, tên, status mà các ô giá vẫn trống. Đó là vì
-            <strong>lần đọc giá thất bại</strong>, không phải vì item không có giá. Sheet chính không thể hiện
-            sự khác nhau này — chỉ sheet <code class="inline">Export Failures</code> nói được. Nếu file có 2
-            sheet, luôn mở sheet thứ 2 trước khi kết luận về giá.
+            Hai chiều đều đúng, và đó là điều khiến file đáng tin: <strong>ô trống thì chắc chắn có dòng
+            giải thích</strong> ở sheet <code class="inline">Export Failures</code>, và ngược lại
+            <strong>một item đã có dòng ở sheet đó thì các ô giá thiếu của nó sẽ TRỐNG chứ không bao giờ
+            là <code class="inline">—</code></strong>. Nên khi file chỉ có 1 sheet, mọi ô
+            <code class="inline">—</code> bạn thấy đều là câu trả lời thật, không phải lỗi đọc bị giấu.
+          </p>
+          <p>
+            Khi file có ô trống, dòng ghi chú màu ở <strong>đầu sheet chính</strong> cũng nhắc lại điều này —
+            dòng đó chỉ xuất hiện khi thật sự có item đọc thiếu.
           </p>
         </div>
 
@@ -2985,6 +3037,10 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <p>Nếu 1 IAP trong file export có <strong>tên/status/localization đầy đủ nhưng cột giá để trống</strong>,
           nghĩa là lần fetch giá của riêng item đó bị lỗi tạm thời (network/Apple rate-limit) — item vẫn được
           liệt kê, không bị bỏ sót. Chạy <strong>Export list</strong> lại để lấy đầy đủ giá cho item đó.</p>
+          <p>⚠️ <strong>Trống</strong> khác <code class="inline">—</code>: ô
+          <code class="inline">—</code> nghĩa là Apple không bán ở nước đó, và export lại cũng vậy.
+          Chỉ ô <strong>trống</strong> mới đáng chạy lại — và item đó luôn có một dòng ở sheet
+          <code class="inline">Export Failures</code>.</p>
         </div>
 
         <h2 class="section-title">Tính năng liên quan</h2>

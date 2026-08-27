@@ -36,6 +36,8 @@
 14. [Sign-off](#14-sign-off)
 15. [Apple ASC key pool — SHIPPED DARK](#15-apple-asc-key-pool--shipped-dark-2026-08-25)
 16. [C3 — PARTIAL at the row level](#16-c3--partial-at-the-row-level-2026-08-25)
+17. [The availability mirror](#17-the-availability-mirror-2026-08-26-ddf8dd6)
+18. [Export price sources — E0→E5](#18-export-price-sources--e0e5-2026-08-27)
 
 ---
 
@@ -741,6 +743,61 @@ imports both, if `exceljs` appears outside the Apple export write path, if the
 Google module reaches for it, or if a parser stops using `xlsx`. The drift a
 second library invites is quiet — someone grabs whichever import is nearest —
 and a comment cannot catch that.
+
+### 4.18 LANDMARK — `automaticPrices` is where the other 165 territories live, and `manual` is the only per-cell truth
+
+Measured 2026-08-27 on item `com.vnggames.aoiaf.0.99` (Apple id `6739523325`,
+app `6738648909`) with `scripts/probe-export-price-sources.mjs` — a read-only
+probe, ~6 GETs. **Three numbers settle the question the export bug raised.**
+
+| | |
+|---|---|
+| stage-1 `?include` relationship count | **10** |
+| stage-2 `manualPrices` total | **10** |
+| `automaticPrices` total | **165** |
+| manual + automatic | **175 = every territory Apple sells to** |
+
+⚠ **This is NOT [§4.1](#41-landmark--apple-v2-include-relationship-truncation-iapp2m) truncation.**
+Stage 1 and stage 2 agree exactly (10 = 10), so the 10-ID cap never fired. The
+export was not losing prices to a paging trap; it was **never asking for the
+other endpoint**. A truncation reflex here would have hardened a path that was
+already correct and left the bug in place. Check `stage2_total` against
+`stage1_rel_count` before reaching for §4.1 — equal counts rule it out.
+
+**`customerPrice` + `currency` arrive INLINE.** The automatic-prices
+sub-resource carries them through `?include`, so reading all 165 costs
+**+1 request per item, not +165**. Export goes 3 → 4 requests/item; a 500-item
+app is 2 003 requests ≈ 56% of the 3 600/hour budget. Cheap enough to be
+default-eligible, expensive enough that it shipped behind `includeAutomatic`.
+
+**`attributes.manual` is real, and it is the source of truth per CELL.** The
+probe found it present on 10/10 `manualPrices` entries, `true` on all 10, and
+`false` on the automatic ones — endpoint and attribute agree. The export shades
+from `manual`, never from which endpoint a row arrived on and never from the
+column's group: a territory can be manual on one item and automatic on another
+in the same file, so anything per-column paints one of those rows a lie.
+`manual === null` (Apple said nothing) is **not** shaded — amber asserts "Apple
+derived this", and asserting it without evidence is the worse error.
+
+**Territory names do not come from Apple.** `/v1/territories` returns 175
+entries, codes in **ALPHA-3**, and `attributes` is `[currency]` only — there is
+no name field to read. Display names come from the internal catalog
+(`i18n-iso-countries` + the Apple-Connect override map in
+`components/iap-management/view-detail/territory-name.ts`).
+
+**Kosovo is the one code that needs a translator.** Apple says `XKS`; the
+shared `TERRITORY_CATALOG` and Google both say `XK`; ISO says neither. The
+normalisation lives at the **Apple boundary only**
+(`lib/iap-management/apple/territory-code-map.ts`) — deliberately not in the
+catalog, because Google needs `XK` (`region-continent.ts:37`) and the catalog
+is shared (P8).
+
+Re-run the measurement with:
+
+```
+ASC_KEY_ID=… ASC_ISSUER_ID=… ASC_PRIVATE_KEY="$(cat AuthKey_XXXX.p8)" \
+  node scripts/probe-export-price-sources.mjs
+```
 
 ## 5. Database Schema
 
@@ -3393,6 +3450,36 @@ there and both read better next to the code that produced them:
   worse than no stub: a missing method fails loudly, but a missing method plus
   a broad guard produces a green test that proves nothing. Sibling of P23.
 
+**P30 — A TEST NAME THAT JOINS TWO BEHAVIOURS LETS THE WRONG ONE HIDE BEHIND
+THE RIGHT ONE.** Variant of P16 (a test can be fake) and P26 (a test can prove
+the pattern and not the wiring); this one is about the *name*, and it is the
+cheapest of the three to prevent.
+
+Instance (E5.1, `xlsx-export.test.ts`). The test was called **"leaves unused
+territory/localization slots blank on a given row"** and asserted one whole row
+in a single `toEqual`. Two unrelated rules shared that sentence:
+
+- an unused **territory** slot renders blank — which E5 changed: a market Apple
+  does not sell in is now answered with `—`;
+- an unused **localization** slot renders blank — unchanged, and correct.
+
+While both were "blank" the name read as one fact. The earlier E2 case is the
+same shape and shows the cost: a test named **"no column, no crash"** paired a
+true claim (nothing throws) with the defect itself (the selected territory's
+column was silently dropped) — and the true half kept the suite green over the
+bug for as long as the name survived.
+
+⚠ **The damage is at repair time, not at write time.** A conflated assertion
+that goes red cannot say *which* half moved, and the cheapest way to green is
+to paste in whatever the code now emits — which pins nothing and looks like a
+passing test. A split assertion goes red on exactly one line and names the rule
+that changed.
+
+⇒ **One behaviour per test name; one rule per assertion.** When a name needs
+"and" or a slash between two nouns, that is two tests. And when a conflated
+test finally breaks, SPLIT it and re-derive both halves from the rule — never
+re-baseline it against the new output.
+
 **P26–P29 live in §16** (C3 PARTIAL row-level). All four crossed the
 frequency bar during the C1→C2→PRICING-429→C3 latch arc:
 - **P26** — a mutation that catches NOTHING means the tests prove the
@@ -4909,6 +4996,95 @@ own API-driven removal was never part of that sample. Two axes that usually
 agree are exactly the pair a UI is tempted to collapse — and collapsing them
 means the day they disagree, nobody sees it.
 
+
+---
+
+## 18. Export price sources — E0→E5 (2026-08-27)
+
+The UAT bug: an export of an app with 175 live markets contained about **ten**
+priced columns. Root cause in [§4.18](#418-landmark--automaticprices-is-where-the-other-165-territories-live-and-manual-is-the-only-per-cell-truth) —
+the export read `manualPrices` and never `automaticPrices`, so 165 markets were
+absent from the question, not answered "no".
+
+Shipped in six commits on `c3a-partial-stage-map` → `main`:
+
+| | | |
+|---|---|---|
+| E0 | `97a5923` | `exceljs` added + the structural fence that keeps the read/write split honest ([§4.17](#417-two-excel-libraries-on-purpose--xlsx-reads-exceljs-writes-the-apple-export)) |
+| E1 | `0dd96e8` | read `automaticPrices`; `manual` becomes a model field (opt-in `includeAutomatic`, default OFF) |
+| E2 + E2b | `5d7a74f` | **the selection IS the column set**, not an intersection with it; Kosovo normalised at the Apple boundary |
+| E3 | `bcb01bb` | manual columns first (rule α), auto cells amber, panes frozen — verified by unzipping the file and reading `styles.xml` |
+| E4 | `90763ef` | headers carry the market name — `Price in Thailand (TH)` |
+| E5 | this commit | `—` vs blank, and the cross-constraint that backs them |
+
+### 18.1 The silent-drop class, named
+
+Three defects in this arc were the same shape and none of them threw:
+
+1. **E1** — a whole price source was never requested, so 165 markets simply had
+   no data to be missing.
+2. **E2** — `territories = allPriced.filter(t => selected.has(t))`. A country
+   the Manager ticked that no item priced produced **no column at all**. The
+   question was deleted rather than answered.
+3. **E5** — a cell with no price rendered empty whether Apple does not sell
+   there or the read failed. Two facts, one appearance.
+
+⇒ **A question asked must be answered visibly, including when the answer is
+"nothing".** Dropping the column, dropping the source, or rendering two
+different facts identically all produce a file that opens perfectly and is
+quietly wrong — the one failure mode a spreadsheet cannot signal.
+
+### 18.2 `—` vs blank, and why it is one predicate
+
+```
+—      the read SUCCEEDED and there is no price → Apple does not sell here
+blank  the read FAILED                          → no answer, and the row is
+                                                   named in "Export Failures"
+```
+
+⚠ **The cross-constraint is the deliverable, not either rendering.** A blank
+with no failure row is a file claiming "no data" and pointing nowhere; a `—` on
+a row whose read failed is a file asserting "not sold here" about a market it
+never read. Both are confident lies.
+
+The guard is structural: `hasPriceReadFailure(row)` is called from **exactly
+two places** — the cell renderer and `buildFailureRows` — so blank-vs-`—` and
+listed-vs-not are literally the same decision. Two separate
+`row.priceReadFailure !== null` tests would hold today and drift the first time
+one of them grows a condition, silently.
+
+Pinned by two universal tests that walk every price cell in the rendered sheet
+and hold it against the failure sheet, plus four mutations, all of which fail
+naming the defect:
+
+| mutation | what goes red |
+|---|---|
+| not-sold rendered blank | 5 tests; cross-constraint names `com.x.us-only` as blank-but-unlisted |
+| failed read rendered `—` | 2 tests; cross-constraint names `com.x.unread` as listed-but-dashed |
+| failure sheet skips one kind (predicate drift) | 6 tests, cross-constraint among them |
+| em dash → ASCII hyphen | the on-disk `sharedStrings.xml` assertion |
+
+⚠ **Both halves of a (Price, Currency) pair carry the same marker.** A `—`
+price beside a blank currency would make the currency cell claim a failed read
+in a row where nothing failed — the same ambiguity, one column right. Same
+reasoning as the amber fill covering both halves.
+
+⚠ **Localization slots stay blank, never `—`.** A price cell answers "does
+Apple sell here"; an unused localization slot asks nothing. This is the seam
+that produced [P30](#9-memory-patterns-crystallized) — one test name had been
+covering both.
+
+### 18.3 What E5 did NOT do
+
+- **No legend row on a clean export.** The note row still appears only when a
+  PARTIAL row exists; it now names both cell kinds, because that is the only
+  file in which both appear. A permanent banner would break the one-sheet
+  byte-shape promise and train people to stop reading it.
+- **`TERRITORY_CATALOG` untouched** — it is shared with Google (P8). See
+  `[EXPORT-catalog-missing-11]` in `TODO.md`: 11 markets Apple sells to,
+  Russia included, still cannot be *selected*, so they cannot be exported.
+  E2 did not fix that and E5 does not either — a territory that cannot be
+  ticked never reaches the column code.
 
 **Knowledge base preserved for future development continuity.**
 
