@@ -114,7 +114,11 @@ describe("⚠ MUTATION — drop the normalization and Kosovo disappears again", 
     // ⚠ The price must have landed under the SAME key the selection used —
     // this is the assertion the un-normalized code fails, because the price
     // sits under "XKS" and the column looks for "XK".
-    expect(plan.rows[0].prices["XK"]).toEqual({ price: "0.99", currency: "EUR" });
+    expect(plan.rows[0].prices["XK"]).toEqual({
+      price: "0.99",
+      currency: "EUR",
+      manual: true,
+    });
   });
 
   it("Kosovo's price is not left stranded under the raw Apple code", () => {

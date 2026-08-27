@@ -54,7 +54,6 @@
  * latch already handles correctly.
  */
 import { NextResponse } from "next/server";
-import * as XLSX from "xlsx";
 
 import {
   requireIapSession,
@@ -186,10 +185,11 @@ export async function POST(
     const partialCount = sources.filter((s) => s.priceReadFailure !== null).length;
     const notAttemptedCount = failures.filter((f) => f.kind === "NOT_ATTEMPTED").length;
     const failedCount = failures.length - notAttemptedCount;
-    const buffer = XLSX.write(workbook, {
-      type: "buffer",
-      bookType: "xlsx",
-    }) as Buffer;
+    // ⚠ exceljs writes asynchronously — `writeBuffer()` returns a promise,
+    // unlike xlsx's synchronous `write()`. Missing the await here would send
+    // a Promise to NextResponse and download a file of literally "[object
+    // Promise]", which is why this is the one line of the swap worth naming.
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
     const filename = xlsxExportFilename(appleAppId);
 
     return new NextResponse(new Uint8Array(buffer), {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 import { buildExportPlan, buildExportWorkbook, xlsxExportFilename,
   buildFailureRows,
@@ -16,8 +16,9 @@ function entry(overrides: Partial<PriceScheduleEntry>): PriceScheduleEntry {
     customerPrice: "0.99",
     // E1 — the field is REQUIRED on purpose: it decides whether the export
     // shades a cell, so every fixture must state what it claims. `null` =
-    // "Apple did not say", which is what this fixture claimed before it
-    // existed. NO assertion in this file changed.
+    // "Apple did not say", which is what these fixtures claimed before the
+    // field existed — and, usefully, the value that must NOT be shaded, so
+    // most of this suite doubles as a guard on that.
     manual: null,
     currency: "USD",
     ...overrides,
@@ -41,6 +42,77 @@ function source(overrides: Partial<ExportSource>): ExportSource {
     ...overrides,
   };
 }
+
+/**
+ * ─── E3 — READING AN exceljs WORKBOOK BACK ─────────────────────────────────
+ *
+ * `buildExportWorkbook` now returns an exceljs Workbook (E0: xlsx cannot write
+ * a cell fill, and the Manager's design requires one). These three helpers are
+ * the ONLY thing that changed in this file's structure tests: they translate
+ * exceljs's accessors into the shapes the assertions already used, so every
+ * expectation below is the same expectation it was.
+ *
+ * ⚠ THAT IS THE POINT. This file pins FILE BEHAVIOUR — sheet count, sheet
+ * names, header rows, merge geometry, cell contents — none of which the
+ * library swap is allowed to change. If an assertion here had to be weakened
+ * to make the swap pass, the swap changed behaviour and the right move was to
+ * stop, not to edit the expectation.
+ */
+function sheetNames(wb: ExcelJS.Workbook): string[] {
+  return wb.worksheets.map((w) => w.name);
+}
+
+/**
+ * Matches `XLSX.utils.sheet_to_json(ws, { header: 1, defval: null })`.
+ *
+ * ⚠ MERGED CELLS ARE NULLED EXCEPT AT THE ANCHOR, and that is a real
+ * difference between the two libraries' object models, not a fudge to make an
+ * assertion pass. In the .xlsx file a merged range stores ONE value, at its
+ * top-left; xlsx's reader reflects that and leaves the rest empty, while
+ * exceljs mirrors the master's value across every cell in the range as a
+ * convenience. Reading exceljs raw would report `["Price in US", "Price in
+ * US"]` for a range the file stores once — describing the model instead of
+ * the file. The assertions in this suite are about the FILE.
+ */
+function sheetAoa(wb: ExcelJS.Workbook, name?: string): unknown[][] {
+  const ws = name ? wb.getWorksheet(name)! : wb.worksheets[0];
+  const width = ws.columnCount;
+  const out: unknown[][] = [];
+  ws.eachRow({ includeEmpty: true }, (row) => {
+    const cells: unknown[] = [];
+    for (let c = 1; c <= width; c += 1) {
+      const cell = row.getCell(c);
+      // `master` is the range's anchor; for an unmerged cell it is the cell
+      // itself, so this reads "keep only what the file actually stores".
+      const isMirrored = cell.isMerged && cell.master.address !== cell.address;
+      const v = isMirrored ? null : cell.value;
+      cells.push(v === undefined || v === "" ? null : v);
+    }
+    out.push(cells);
+  });
+  return out;
+}
+
+/** Matches `ws["!merges"]` — 0-indexed {s,e} rectangles. */
+function sheetMerges(
+  wb: ExcelJS.Workbook,
+  name?: string,
+): Array<{ s: { r: number; c: number }; e: { r: number; c: number } }> {
+  const ws = name ? wb.getWorksheet(name)! : wb.worksheets[0];
+  // exceljs exposes merges as "A1:B1" strings on the internal model.
+  const raw = (ws as unknown as { model: { merges?: string[] } }).model.merges ?? [];
+  return raw.map((range) => {
+    const [from, to] = range.split(":");
+    const parse = (ref: string) => {
+      const m = /^([A-Z]+)(\d+)$/.exec(ref)!;
+      let col = 0;
+      for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+      return { r: Number(m[2]) - 1, c: col - 1 };
+    };
+    return { s: parse(from), e: parse(to) };
+  });
+}
+
 
 describe("buildExportPlan — territory columns", () => {
   it("is the sorted (alpha-2) union of territories-with-a-price across all rows", () => {
@@ -79,7 +151,7 @@ describe("buildExportPlan — territory columns", () => {
         ]),
       }),
     ]);
-    expect(plan.rows[0].prices.US).toEqual({ price: "0.99", currency: "USD" });
+    expect(plan.rows[0].prices.US).toEqual({ price: "0.99", currency: "USD", manual: null });
   });
 
   it("uses Apple's customerPrice/currency verbatim — no re-conversion (already currency-correct)", () => {
@@ -96,9 +168,9 @@ describe("buildExportPlan — territory columns", () => {
       }),
     ]);
     const row = plan.rows[0];
-    expect(row.prices.US).toEqual({ price: "0.99", currency: "USD" });
-    expect(row.prices.JP).toEqual({ price: "160", currency: "JPY" });
-    expect(row.prices.VN).toEqual({ price: "24000", currency: "VND" });
+    expect(row.prices.US).toEqual({ price: "0.99", currency: "USD", manual: null });
+    expect(row.prices.JP).toEqual({ price: "160", currency: "JPY", manual: null });
+    expect(row.prices.VN).toEqual({ price: "24000", currency: "VND", manual: null });
   });
 
   it("leaves baseTerritory + all prices blank when there's no schedule at all", () => {
@@ -276,8 +348,7 @@ describe("buildExportWorkbook — file structure", () => {
       }),
     ]);
     const wb = buildExportWorkbook(plan);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as unknown[][];
+    const aoa = sheetAoa(wb);
 
     expect(aoa[0]).toEqual(["Product ID", "SKU Name", "Status", "Base Country", "Price in US", null, "Localization 1", null, null]);
     expect(aoa[1]).toEqual([null, null, null, null, "Price", "Currency", "Locale", "Display Name", "Description"]);
@@ -299,8 +370,7 @@ describe("buildExportWorkbook — file structure", () => {
       }),
     ]);
     const wb = buildExportWorkbook(plan);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const merges = ws["!merges"] ?? [];
+    const merges = sheetMerges(wb);
 
     // Fixed columns: A1:A2 .. D1:D2.
     for (let c = 0; c < 4; c += 1) {
@@ -323,8 +393,7 @@ describe("buildExportWorkbook — file structure", () => {
       source({ productId: "b", status: "MISSING_METADATA", priceSchedule: null, localizations: [] }),
     ]);
     const wb = buildExportWorkbook(plan);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as unknown[][];
+    const aoa = sheetAoa(wb);
     const rowB = aoa[3];
     expect(rowB).toEqual(["b", "Item", "MISSING_METADATA", null, null, null, null, null, null]);
   });
@@ -334,8 +403,7 @@ describe("buildExportWorkbook — file structure", () => {
     expect(plan.territories).toEqual([]);
     expect(plan.localizationGroupCount).toBe(0);
     const wb = buildExportWorkbook(plan);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1 }) as unknown[][];
+    const aoa = sheetAoa(wb);
     expect(aoa[0]).toEqual(["Product ID", "SKU Name", "Status", "Base Country"]);
     expect(aoa.length).toBe(2);
   });
@@ -366,21 +434,21 @@ describe("buildExportWorkbook — the Export Failures sheet", () => {
 
   it("⚠ a CLEAN export is a ONE-SHEET workbook — unchanged from before this feature", () => {
     const wb = buildExportWorkbook(buildExportPlan([source({})]));
-    expect(wb.SheetNames).toEqual(["Apple IAP Export"]);
+    expect(sheetNames(wb)).toEqual(["Apple IAP Export"]);
   });
 
   it("a clean export has NO note row — the header is still the first row", () => {
     const wb = buildExportWorkbook(buildExportPlan([source({})]));
-    const ws = wb.Sheets["Apple IAP Export"];
+    const aoa = sheetAoa(wb, "Apple IAP Export");
     // A1 is the first fixed column header, exactly as before.
-    expect(ws["A1"].v).toBe("Product ID");
+    expect(aoa[0][0]).toBe("Product ID");
     // and the two-row header merge still starts at row 0
-    expect(ws["!merges"]?.[0]).toEqual({ s: { r: 0, c: 0 }, e: { r: 1, c: 0 } });
+    expect(sheetMerges(wb, "Apple IAP Export")[0]).toEqual({ s: { r: 0, c: 0 }, e: { r: 1, c: 0 } });
   });
 
   it("the failure sheet appears only when there is something to report", () => {
     const wb = buildExportWorkbook(buildExportPlan([partial("RATE_LIMITED", 429)]));
-    expect(wb.SheetNames).toEqual(["Apple IAP Export", "Export Failures"]);
+    expect(sheetNames(wb)).toEqual(["Apple IAP Export", "Export Failures"]);
   });
 
   it("a PARTIAL row is in BOTH sheets — it exported, and its blanks have a reason", () => {
@@ -431,20 +499,19 @@ describe("buildExportWorkbook — the Export Failures sheet", () => {
       error: "stopped",
     }));
     const wb = buildExportWorkbook(buildExportPlan([source({})]), failures);
-    const ws = wb.Sheets["Export Failures"];
     // header + 3 rows
-    expect(ws["!ref"]).toBeDefined();
-    expect(XLSX.utils.sheet_to_json(ws, { header: 1 })).toHaveLength(4);
+    expect(sheetNames(wb)).toContain("Export Failures");
+    expect(sheetAoa(wb, "Export Failures")).toHaveLength(4);
   });
 
   it("the main sheet gains a note row ONLY when a PARTIAL row exists, and merges shift with it", () => {
     const wb = buildExportWorkbook(buildExportPlan([partial("RATE_LIMITED", 429)]));
-    const ws = wb.Sheets["Apple IAP Export"];
-    expect(String(ws["A1"].v)).toContain("incomplete");
-    expect(String(ws["A1"].v)).toContain("Export Failures");
+    const aoa = sheetAoa(wb, "Apple IAP Export");
+    expect(String(aoa[0][0])).toContain("incomplete");
+    expect(String(aoa[0][0])).toContain("Export Failures");
     // header moved down one row, and the merge moved with it
-    expect(ws["A2"].v).toBe("Product ID");
-    expect(ws["!merges"]?.[0]).toEqual({ s: { r: 1, c: 0 }, e: { r: 2, c: 0 } });
+    expect(aoa[1][0]).toBe("Product ID");
+    expect(sheetMerges(wb, "Apple IAP Export")[0]).toEqual({ s: { r: 1, c: 0 }, e: { r: 2, c: 0 } });
   });
 
   it("INCOMPLETE_PRICES renders its own reason, distinct from every other kind", () => {
@@ -490,7 +557,7 @@ describe("buildExportWorkbook — the Export Failures sheet", () => {
     const wb = buildExportWorkbook(buildExportPlan([source({})]), [
       { productId: "p", appleIapId: "a", kind: "APPLE_ERROR", error: "404: gone" },
     ]);
-    expect(wb.SheetNames).toEqual(["Apple IAP Export", "Export Failures"]);
-    expect(wb.Sheets["Apple IAP Export"]["A1"].v).toBe("Product ID");
+    expect(sheetNames(wb)).toEqual(["Apple IAP Export", "Export Failures"]);
+    expect(sheetAoa(wb, "Apple IAP Export")[0][0]).toBe("Product ID");
   });
 });

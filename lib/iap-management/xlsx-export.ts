@@ -26,8 +26,9 @@
  * but not cell styling — plain/unstyled, same decision as the Google
  * export.
  */
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import { toCatalogCode } from "./apple/territory-code-map";
+import { orderTerritoryColumns } from "./export-column-order";
 
 import type { PriceScheduleView } from "./queries/iap-detail";
 
@@ -165,6 +166,15 @@ export interface ExportSource {
 export interface ExportRowPrice {
   price: string;
   currency: string;
+  /**
+   * E3 — who set this price: `true` a human, `false` Apple's
+   * auto-equalization, `null` Apple did not say.
+   *
+   * ⚠ Carried per CELL, not per column, because a territory can be manual on
+   * one item and automatic on another in the same file. That is the whole
+   * reason the marking is a fill and not a header suffix.
+   */
+  manual: boolean | null;
 }
 
 export interface ExportRow {
@@ -216,7 +226,13 @@ function toExportRow(source: ExportSource): ExportRow {
       if (entry.startDate !== null) continue;
       const code = toAlpha2(entry.territory);
       if (prices[code]) continue;
-      prices[code] = { price: entry.customerPrice, currency: entry.currency ?? "" };
+      prices[code] = {
+        price: entry.customerPrice,
+        currency: entry.currency ?? "",
+        // ⚠ Straight from the entry, which took it from Apple's `manual`
+        // attribute (E1/F1) — never re-derived here.
+        manual: entry.manual,
+      };
     }
   }
 
@@ -406,7 +422,9 @@ function detailFor(
   return message;
 }
 
-function buildFailureSheet(failureRows: readonly ExportFailureRow[]) {
+/** The failure sheet as data. Rendered by `addSheet` like the main one, so
+ *  both sheets go through one place that knows how exceljs is driven. */
+function buildFailureSheet(failureRows: readonly ExportFailureRow[]): SheetSpec {
   const aoa: Array<Array<string | null>> = [
     [...FAILURE_COLUMNS],
     ...failureRows.map((r) => [
@@ -417,9 +435,7 @@ function buildFailureSheet(failureRows: readonly ExportFailureRow[]) {
       r.detail,
     ]),
   ];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [{ wch: 40 }, { wch: 16 }, { wch: 15 }, { wch: 16 }, { wch: 72 }];
-  return ws;
+  return { aoa, widths: [40, 16, 15, 16, 72] };
 }
 
 /**
@@ -434,7 +450,7 @@ function buildFailureSheet(failureRows: readonly ExportFailureRow[]) {
 export function buildExportWorkbook(
   plan: ExportPlan,
   failures: readonly ExportFetchFailureLike[] = [],
-): XLSX.WorkBook {
+): ExcelJS.Workbook {
   const { territories, localizationGroupCount, rows } = plan;
   const failureRows = buildFailureRows(rows, failures);
   const partialCount = failureRows.filter((r) => r.status === "PARTIAL").length;
@@ -455,9 +471,15 @@ export function buildExportWorkbook(
       : [];
   const noteOffset = noteRow.length;
 
+  // E3.1 — manual columns first, then auto; base territory heads the manual
+  // group; alphabetical by DISPLAY NAME inside each group. Pure, and tested
+  // on its own so the ordering rule is not buried in the rendering.
+  const columns = orderTerritoryColumns(rows, territories);
+  const orderedCodes = columns.map((c) => c.code);
+
   const headerRow1: Array<string | null> = [
     ...FIXED_COLUMNS.map((label) => label as string),
-    ...territories.flatMap((t) => [`Price in ${t}`, null]),
+    ...orderedCodes.flatMap((t) => [`Price in ${t}`, null]),
     ...Array.from({ length: localizationGroupCount }, (_, i) => [
       `Localization ${i + 1}`,
       null,
@@ -467,7 +489,7 @@ export function buildExportWorkbook(
 
   const headerRow2: Array<string | null> = [
     ...FIXED_COLUMNS.map(() => null),
-    ...territories.flatMap(() => ["Price", "Currency"]),
+    ...orderedCodes.flatMap(() => ["Price", "Currency"]),
     ...Array.from({ length: localizationGroupCount }, () => [
       ...LOCALIZATION_SUBHEADERS,
     ]).flat(),
@@ -478,7 +500,7 @@ export function buildExportWorkbook(
     row.skuName,
     row.status,
     row.baseTerritory,
-    ...territories.flatMap((t) => {
+    ...orderedCodes.flatMap((t) => {
       const cell = row.prices[t];
       return cell ? [cell.price, cell.currency] : [null, null];
     }),
@@ -489,15 +511,19 @@ export function buildExportWorkbook(
   ]);
 
   const aoa = [...noteRow, headerRow1, headerRow2, ...dataRows];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
 
   // Vertical merges for the fixed columns (span both header rows).
-  const merges: XLSX.Range[] = FIXED_COLUMNS.map((_, c) => ({
+  // ⚠ Coordinates stay 0-INDEXED here, exactly as they were, and `addSheet`
+  // converts to exceljs's 1-indexed API in one place. Rewriting every
+  // `noteOffset` arithmetic to 1-indexed would have been the easiest way to
+  // introduce an off-by-one into merge geometry that no assertion covers
+  // cell-by-cell.
+  const merges: MergeRange[] = FIXED_COLUMNS.map((_, c) => ({
     s: { r: noteOffset, c },
     e: { r: noteOffset + 1, c },
   }));
   // Horizontal 2-col merges for every territory group header.
-  for (let g = 0; g < territories.length; g += 1) {
+  for (let g = 0; g < orderedCodes.length; g += 1) {
     const startCol = FIXED_COLUMNS.length + g * 2;
     merges.push({
       s: { r: noteOffset, c: startCol },
@@ -505,7 +531,7 @@ export function buildExportWorkbook(
     });
   }
   // Horizontal 3-col merges for every localization group header.
-  const locStart = FIXED_COLUMNS.length + territories.length * 2;
+  const locStart = FIXED_COLUMNS.length + orderedCodes.length * 2;
   for (let g = 0; g < localizationGroupCount; g += 1) {
     const startCol = locStart + g * 3;
     merges.push({
@@ -513,28 +539,120 @@ export function buildExportWorkbook(
       e: { r: noteOffset, c: startCol + 2 },
     });
   }
-  ws["!merges"] = merges;
-
-  ws["!cols"] = [
-    { wch: 40 }, // Product ID
-    { wch: 28 }, // SKU Name
-    { wch: 20 }, // Status
-    { wch: 12 }, // Base Country
-    ...territories.flatMap(() => [{ wch: 10 }, { wch: 10 }]),
-    ...Array.from({ length: localizationGroupCount }, () => [
-      { wch: 10 },
-      { wch: 22 },
-      { wch: 34 },
-    ]).flat(),
+  const widths = [
+    40, // Product ID
+    28, // SKU Name
+    20, // Status
+    12, // Base Country
+    ...orderedCodes.flatMap(() => [10, 10]),
+    ...Array.from({ length: localizationGroupCount }, () => [10, 22, 34]).flat(),
   ];
 
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, SHEET_NAME);
+  // ── E3.2 — the AUTO fills. ────────────────────────────────────────────────
+  //
+  // ⚠ SOURCE OF TRUTH IS `cell.manual`, the attribute Apple put on the price
+  // row (E1/F1). Not the column's group, not the endpoint it arrived on, not
+  // its position. The column group is a navigation aid computed from the same
+  // attribute; shading from the group instead would repaint every cell in a
+  // mixed column with the majority's answer, which is the precise lie the fill
+  // was chosen to avoid.
+  //
+  // ⚠ ONLY `manual === false` IS SHADED. `null` — Apple said nothing — stays
+  // white, because a yellow cell asserts "Apple derived this" and we would be
+  // asserting it without evidence. White under-claims; yellow over-claims.
+  const fills: CellFill[] = [];
+  const firstDataRow = noteOffset + 2; // note? + header1 + header2
+  rows.forEach((row, r) => {
+    orderedCodes.forEach((code, g) => {
+      if (row.prices[code]?.manual !== false) return;
+      const priceCol = FIXED_COLUMNS.length + g * 2;
+      // Both halves of the pair — a shaded price beside an unshaded currency
+      // reads as a rendering fault, not as a statement.
+      fills.push({ r: firstDataRow + r, c: priceCol });
+      fills.push({ r: firstDataRow + r, c: priceCol + 1 });
+    });
+  });
+
+  const wb = new ExcelJS.Workbook();
+  addSheet(wb, SHEET_NAME, {
+    aoa,
+    widths,
+    merges,
+    fills,
+    // ⚠ FREEZE 4, NOT 5. The fixed block is exactly the 4 FIXED_COLUMNS; a
+    // 5-column freeze would cut the first territory in half, pinning its
+    // Price while its Currency scrolls away. Derived from the structure so it
+    // stays right if a fixed column is ever added.
+    freeze: { cols: FIXED_COLUMNS.length, rows: noteOffset + 2 },
+  });
   if (failureRows.length > 0) {
-    XLSX.utils.book_append_sheet(wb, buildFailureSheet(failureRows), FAILURE_SHEET_NAME);
+    addSheet(wb, FAILURE_SHEET_NAME, buildFailureSheet(failureRows));
   }
   return wb;
 }
+
+/** 0-indexed merge rectangle, in the same coordinates the builder computes. */
+interface MergeRange {
+  s: { r: number; c: number };
+  e: { r: number; c: number };
+}
+
+/** 0-indexed cell to shade. */
+interface CellFill {
+  r: number;
+  c: number;
+}
+
+interface SheetSpec {
+  aoa: Array<Array<string | null>>;
+  widths: number[];
+  merges?: MergeRange[];
+  fills?: CellFill[];
+  freeze?: { cols: number; rows: number };
+}
+
+/**
+ * ⚠ THE ONLY PLACE THAT DRIVES exceljs. Everything above builds plain data in
+ * 0-indexed coordinates — the same shapes the xlsx version built — and this
+ * converts once. Two benefits worth the indirection: the 0→1 index shift
+ * happens in one spot instead of at every call site, and the failure sheet
+ * cannot drift away from the main sheet's rendering rules.
+ */
+function addSheet(wb: ExcelJS.Workbook, name: string, spec: SheetSpec): void {
+  const ws = wb.addWorksheet(name);
+  for (const row of spec.aoa) {
+    // `?? null` keeps blank cells blank rather than writing "undefined".
+    ws.addRow(row.map((v) => v ?? null));
+  }
+  spec.widths.forEach((w, i) => {
+    ws.getColumn(i + 1).width = w;
+  });
+  for (const m of spec.merges ?? []) {
+    ws.mergeCells(m.s.r + 1, m.s.c + 1, m.e.r + 1, m.e.c + 1);
+  }
+  for (const f of spec.fills ?? []) {
+    ws.getCell(f.r + 1, f.c + 1).fill = AUTO_PRICE_FILL;
+  }
+  if (spec.freeze) {
+    ws.views = [
+      { state: "frozen", xSplit: spec.freeze.cols, ySplit: spec.freeze.rows },
+    ];
+  }
+}
+
+/**
+ * The yellow the Manager chose for auto-equalized prices.
+ *
+ * A pale amber rather than a saturated yellow: it has to stay legible behind
+ * black text in both Excel and Google Sheets, and roughly 165 of ~175 columns
+ * can carry it on a typical row — a strong yellow at that density stops being
+ * a highlight and becomes the page.
+ */
+const AUTO_PRICE_FILL: ExcelJS.FillPattern = {
+  type: "pattern",
+  pattern: "solid",
+  fgColor: { argb: "FFFFF2CC" },
+};
 
 /** Manager filename convention: `Apple-IAP-export-<appRef>-<YYYYMMDD>.xlsx`. */
 export function xlsxExportFilename(appRef: string, now: Date = new Date()): string {
