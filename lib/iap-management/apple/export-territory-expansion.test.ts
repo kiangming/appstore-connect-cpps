@@ -142,8 +142,47 @@ describe("⚠ the arithmetic between the two lists — 183 − 19 + 11 = 175", (
 });
 
 describe("allExportTerritories — what 'all countries' expands to", () => {
-  it("is the UNION of both lists: 194 columns", () => {
-    expect(allExportTerritories()).toHaveLength(194);
+  /**
+   * ⚠ G4 CHANGED THIS FROM 194, AND IT IS NOT A REBASELINE.
+   *
+   * F-B pinned `union(catalog 183, Apple 175) = 194`, and that was correct
+   * for the picker of the day: all 183 were tickable, so all 183 were
+   * questions, and dropping any would have been a silent drop.
+   *
+   * G3 changed the PICKER, so it changed the QUESTION. The Apple dialog now
+   * offers Apple's 175; the 19 catalog-only markets cannot be ticked at all.
+   * A column for a market nobody can ask about is not an answer — it is 19
+   * columns of `—` on every export that no reader requested.
+   *
+   * The rule is unchanged: *answer every question that can be asked, and only
+   * those*. Only its input moved. Which is exactly why this assertion is
+   * edited rather than deleted, and why the sibling test below proves nothing
+   * was pushed out on the way.
+   */
+  it("is Apple's list: 175 columns — every market Apple sells to", () => {
+    expect(allExportTerritories()).toHaveLength(175);
+  });
+
+  it("⚠ 175 still COVERS EVERYTHING Apple sells to — nothing was displaced", () => {
+    // The other half of the change above. Shrinking a column set is exactly
+    // where a market quietly falls out, so this checks coverage directly
+    // rather than trusting the count: every code in the snapshot is present.
+    const expanded = new Set(allExportTerritories());
+    const missing = APPLE_TERRITORIES_ALPHA3.map(toCatalogCode).filter(
+      (c) => !expanded.has(c),
+    );
+    expect(missing).toEqual([]);
+    expect(expanded.size).toBe(175);
+  });
+
+  it("⚠ and it drops exactly the 19 the picker no longer offers — no more", () => {
+    // Bounds the loss from the other side: 194 − 175 = 19, and they are the
+    // catalog-only markets, not an arbitrary 19.
+    const expanded = new Set(allExportTerritories());
+    const apple2 = new Set(APPLE_TERRITORIES_ALPHA3.map(toCatalogCode));
+    const dropped = [...ALL_TERRITORY_CODES].filter((c) => !expanded.has(c));
+    expect(dropped).toHaveLength(19);
+    for (const code of dropped) expect(apple2.has(code)).toBe(false);
   });
 
   it("⚠ contains Russia — the market the catalog alone cannot reach", () => {
@@ -152,14 +191,28 @@ describe("allExportTerritories — what 'all countries' expands to", () => {
     expect(allExportTerritories()).toContain("RU");
   });
 
-  it("⚠ keeps the 19 markets Apple does not sell to — they are tickable", () => {
-    // MUTATION: expand from Apple's list only → these disappear, which is a
-    // silent drop on countries the dialog offers.
+  /**
+   * ⚠ G4 INVERTED THIS TEST, DELIBERATELY, AND THE OLD ONE WAS NOT WRONG.
+   *
+   * It read "keeps the 19 markets Apple does not sell to — they are tickable"
+   * and was F-B's entire justification for unioning: the dialog offered those
+   * 19, so removing their columns would have been a silent drop.
+   *
+   * G3 made them un-tickable. The premise in the old test's own name — "they
+   * are tickable" — is now false, so the test cannot simply be renumbered;
+   * its inverse is what the code must now guarantee. Kept as an inversion
+   * rather than a deletion so the reasoning survives: this pair of tests is
+   * the record of a rule holding while its input changed.
+   */
+  it("⚠ DROPS the 19 markets Apple does not sell to — they are no longer tickable", () => {
+    // MUTATION: expand from the union again → these come back, as 19 columns
+    // of `—` answering a question the picker will not let anyone ask.
     const apple2 = new Set(APPLE_TERRITORIES_ALPHA3.map(toCatalogCode));
     const catalogOnly = [...ALL_TERRITORY_CODES].filter((c) => !apple2.has(c));
     expect(catalogOnly).toHaveLength(19);
+    const expanded = allExportTerritories();
     for (const code of catalogOnly) {
-      expect(allExportTerritories()).toContain(code);
+      expect(expanded, `${code} should no longer get a column`).not.toContain(code);
     }
   });
 

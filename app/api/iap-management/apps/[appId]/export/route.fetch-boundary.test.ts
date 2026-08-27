@@ -42,6 +42,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import ExcelJS from "exceljs";
+import { AppleApiError } from "@/lib/iap-management/apple/fetch";
 import countries from "i18n-iso-countries";
 import enLocale from "i18n-iso-countries/langs/en.json";
 
@@ -296,20 +297,32 @@ describe("⚠ F-C — POST → Apple (faked at the HTTP boundary) → .xlsx byte
   });
 
   /**
-   * ⚠ F-B CHANGED THIS ASSERTION ON PURPOSE, and it is declared rather than
-   * quietly re-baselined. One commit ago it read `toHaveLength(175)`, pinning
-   * "every territory Apple priced gets a column" — which was the right pin
-   * while `null` meant "the union of what happened to have a price".
+   * ⚠ THIS NUMBER HAS MOVED TWICE, AND NEITHER MOVE WAS A REBASELINE.
    *
-   * `[Q-EXPORT.union-columns]` replaced that question: "all countries" now
-   * expands to catalog(183) ∪ Apple(175) = 194, so a market NOBODY priced
-   * still gets asked. The 175 are still all there — the number grew, nothing
-   * was displaced — and the test below proves the extra 19 are the tickable
-   * markets Apple does not sell to.
+   *   F-C  175  — "every territory Apple priced gets a column", correct while
+   *               `null` meant the union of what happened to have a price.
+   *   F-B  194  — [Q-EXPORT.union-columns]: catalog(183) ∪ Apple(175), so a
+   *               market nobody priced still gets asked. Correct while the
+   *               picker offered all 183.
+   *   G4   175  — [Q-EXPORT.apple-only-picker]: G3 made the picker Apple's
+   *               175, so the 19 catalog-only markets cannot be ticked, and a
+   *               column for an unaskable question is not an answer.
+   *
+   * One rule throughout — *answer every question that can be asked, and only
+   * those*. What moved each time is which questions the picker permits. That
+   * is why the assertion is edited with the reason each time instead of being
+   * deleted, and why a sibling test proves coverage rather than just a count.
    */
-  it("⚠ all 194 columns — Apple's 175 plus the 19 catalog markets Apple does not sell to", () => {
+  it("⚠ all 175 columns — exactly the markets Apple sells to", () => {
     const priceCols = header.filter((h) => h.startsWith("Price in "));
-    expect(priceCols).toHaveLength(194);
+    expect(priceCols).toHaveLength(175);
+  });
+
+  it("⚠ and the 19 markets Apple does not sell to are GONE from the file", () => {
+    // The picker cannot offer them since G3; the file must not carry them
+    // either, or it answers a question nobody was allowed to ask.
+    expect(header).not.toContain("Price in Andorra (AD)");
+    expect(header).not.toContain("Price in Monaco (MC)");
   });
 
   it("⚠ (2) xl/styles.xml carries the amber — at least one cell is shaded AUTO", () => {
@@ -411,8 +424,12 @@ describe("⚠ F-B — a market nobody priced still gets a column, with `—` in 
     header = headerRow(wb2);
   });
 
-  it("still 194 columns — the ask does not shrink to fit the data", () => {
-    expect(header.filter((h) => h.startsWith("Price in "))).toHaveLength(194);
+  it("still 175 columns — the ask does not shrink to fit the data", () => {
+    // ⚠ G4: was 194. Same reasoning as the header block above — the picker
+    // changed, so the set of askable questions changed. The property under
+    // test is unchanged: the column set does NOT shrink to whatever happened
+    // to have a price, which for this fixture is three markets.
+    expect(header.filter((h) => h.startsWith("Price in "))).toHaveLength(175);
   });
 
   it("⚠ Germany is priced NOWHERE on this item, and still has a column reading `—`", () => {
@@ -431,12 +448,13 @@ describe("⚠ F-B — a market nobody priced still gets a column, with `—` in 
     expect(wb2.worksheets[0].getCell(3, ru).value).toBe("\u2014");
   });
 
-  it("⚠ Andorra has a column too — Apple does not sell there, but it IS tickable", () => {
-    // The other direction: an Apple-only expansion drops the 19 markets the
-    // dialog offers. Both mutations have to be red, or the union is unmotivated.
-    const ad = header.indexOf("Price in Andorra (AD)");
-    expect(ad).toBeGreaterThan(0);
-    expect(wb2.worksheets[0].getCell(3, ad).value).toBe("\u2014");
+  it("⚠ G4 INVERTED THIS — Andorra has NO column, because it is no longer tickable", () => {
+    // F-B asserted the opposite, and was right then: the dialog offered
+    // Andorra, so dropping its column would have been a silent drop. G3
+    // removed it from the picker, so carrying the column would now be the
+    // defect instead. Inverted rather than deleted — the pair records a rule
+    // holding while its input moved.
+    expect(header.indexOf("Price in Andorra (AD)")).toBe(-1);
   });
 
   it("the three real prices are still real — expansion adds columns, it does not blank them", () => {
@@ -447,15 +465,102 @@ describe("⚠ F-B — a market nobody priced still gets a column, with `—` in 
 
   it("⚠ and the file does NOT lie: no failure sheet, so every blank-looking cell is `—`", () => {
     // The E5 cross-constraint, re-checked at route level now that 191 of the
-    // 194 columns have no price. If any of them rendered BLANK instead of `—`
+    // 172 of the 175 columns have no price. If any rendered BLANK instead of `—`
     // the file would be claiming a failed read that never happened.
     expect(wb2.worksheets.map((w) => w.name)).toEqual(["Apple IAP Export"]);
     const ws = wb2.worksheets[0];
     const firstPriceCol = header.findIndex((h) => h.startsWith("Price in "));
     let blanks = 0;
-    for (let c = firstPriceCol; c < firstPriceCol + 194 * 2; c += 1) {
+    for (let c = firstPriceCol; c < firstPriceCol + 175 * 2; c += 1) {
       if (ws.getCell(3, c).value == null) blanks += 1;
     }
     expect(blanks).toBe(0);
+  });
+});
+
+
+/**
+ * ─── G4.5 — WHAT `—` MEANS AFTER THE PICKER BECAME APPLE'S 175 ─────────────
+ *
+ * ⚠ THIS TEST EXISTS TO KEEP A SENTENCE IN THE USER GUIDE TRUE.
+ *
+ * E5 introduced `—` with the meaning "Apple does not sell here", and that was
+ * accurate while the picker offered 19 markets Apple does not sell in. G3
+ * removed those from the picker and G4 removed their columns, so that reading
+ * is now almost never the reason a cell is `—`.
+ *
+ * The census asked whether `—` had therefore become dead code. It has not,
+ * and this is the path that keeps it alive: an IAP with **no price schedule
+ * at all** — a freshly created product, `MISSING_METADATA`, nobody has priced
+ * it yet. `getPriceScheduleForIap` throws `NoPriceScheduleError`, export-fetch
+ * maps that to `priceSchedule: null` with `priceReadFailure: null`
+ * (export-fetch.ts:283-286), and every one of the 175 columns renders `—`.
+ *
+ * The export scope is ALL IAPs in ALL states (route.ts:9), so these rows are
+ * not hypothetical — they are in most real files.
+ *
+ * ⇒ `—` now means "**this IAP has no price for that market**", which is what
+ * G6 must write into the guide. Without this test that sentence would rest on
+ * a code reading rather than on observed behaviour.
+ */
+describe("⚠ G4.5 — an IAP with no price schedule reads `—` across all 175", () => {
+  let header: string[];
+  let wb3: ExcelJS.Workbook;
+  let sheetNames: string[];
+
+  beforeAll(async () => {
+    requireIapSession.mockResolvedValue({ email: "manager@vng.com.vn" });
+    getActiveAccount.mockResolvedValue({
+      key_id: "K", issuer_id: "I", private_key: "P", id: "acct-1",
+    });
+    appleFetch.mockReset();
+    appleFetch.mockImplementation(async (c: unknown, m: string, e: string) => {
+      // Apple's way of saying "this IAP has no price schedule": 404 on the
+      // schedule sub-resource. Stage 1, so it becomes NoPriceScheduleError.
+      if (e.startsWith(`/v2/inAppPurchases/${APPLE_IAP_ID}/iapPriceSchedule`)) {
+        throw new AppleApiError(404, "GET", e, "NOT_FOUND");
+      }
+      return appleRouter(c, m, e);
+    });
+
+    const res3 = await runExport({ territories: null });
+    expect(res3.status).toBe(200);
+    ({ wb: wb3 } = await unzipResponse(res3));
+    header = headerRow(wb3);
+    sheetNames = wb3.worksheets.map((w) => w.name);
+  });
+
+  it("the row still exports — a priceless IAP is not a failed IAP", () => {
+    expect(String(wb3.worksheets[0].getCell(3, 1).value)).toBe("com.vnggames.aoiaf.0.99");
+    expect(header.filter((h) => h.startsWith("Price in "))).toHaveLength(175);
+  });
+
+  it("⚠ EVERY price cell reads `—`, and not one is blank", () => {
+    const ws = wb3.worksheets[0];
+    const first = header.findIndex((h) => h.startsWith("Price in "));
+    let dashes = 0;
+    let blanks = 0;
+    for (let c = first; c < first + 175 * 2; c += 1) {
+      const v = ws.getCell(3, c).value;
+      if (v === "\u2014") dashes += 1;
+      else if (v == null) blanks += 1;
+    }
+    // 175 columns × (Price, Currency) = 350 cells, all answered.
+    expect(dashes).toBe(350);
+    expect(blanks).toBe(0);
+  });
+
+  it("⚠ and there is NO failure sheet — nothing failed, so nothing is owed one", () => {
+    // The E5 cross-constraint from the other side: `—` must never imply a
+    // failure row, and a missing schedule is not a failed read.
+    expect(sheetNames).toEqual(["Apple IAP Export"]);
+    expect(String(wb3.worksheets[0].getCell(1, 1).value)).toBe("Product ID");
+  });
+
+  it("Base Country is blank too — there is no schedule to have a base", () => {
+    // ⚠ BLANK, not `—`. The `—`/blank rule is about PRICE cells answering
+    // "does this item have a price here". Base Country is a fixed column
+    // asking something else, and it has no answer to give.
+    expect(wb3.worksheets[0].getCell(3, 4).value).toBeNull();
   });
 });
