@@ -6,9 +6,13 @@
  * docs/iap-management/design/Apple-IAP-export-SAMPLE-layout.xlsx):
  * one row per IAP, a two-row merged header — fixed Product ID / SKU Name /
  * Status / Base Country columns, then a (Price, Currency) pair per
- * territory that has a price on ANY exported IAP, then a "Localization N"
- * group (Locale / Display Name / Description) sized to the IAP with the
- * most localizations.
+ * territory, then a "Localization N" group (Locale / Display Name /
+ * Description) sized to the IAP with the most localizations.
+ *
+ * WHICH territories get a pair is `buildExportPlan`'s call and has changed:
+ * with a selection it is THE SELECTION (E2 — every country asked about is
+ * answered, `—` when Apple does not sell there); without one it is the union
+ * of territories priced on any exported IAP.
  *
  * Unlike Google (whose list fetch returns complete pricing in one pass),
  * Apple has no per-territory price cache — every row here comes from a
@@ -22,9 +26,11 @@
  * components/iap-management/view-detail/territory-name.ts already
  * depends on, no new dependency.
  *
- * xlsx@0.18.5 (SheetJS Community Edition) writes merges + column widths
- * but not cell styling — plain/unstyled, same decision as the Google
- * export.
+ * ⚠ THE WRITER IS `exceljs`, NOT `xlsx` (E0, KB §4.17). The Manager's design
+ * marks auto-equalized prices with a cell fill, and `xlsx@0.18.5` accepts a
+ * fill and silently drops it at write time. `xlsx` still owns every READ path
+ * in the repo; a structural test (`excel-library-split.structural.test.ts`)
+ * fails if either library crosses into the other's half.
  */
 import ExcelJS from "exceljs";
 import { toCatalogCode } from "./apple/territory-code-map";
@@ -47,6 +53,22 @@ const FAILURE_COLUMNS = [
   "Detail",
 ] as const;
 const FIXED_COLUMNS = ["Product ID", "SKU Name", "Status", "Base Country"] as const;
+
+/**
+ * E5.1 — the cell for "Apple does not sell this item in this market".
+ *
+ * ⚠ THIS EXISTS SO THAT A BLANK MEANS EXACTLY ONE THING. Before it, a
+ * territory column with no price rendered empty whether Apple has no price
+ * there or the read of that item's prices failed — the same two-meanings-one-
+ * value collapse `priceReadFailure` was introduced to undo one layer up, still
+ * alive at the cell. A Manager reconciling prices could not tell "no market"
+ * from "no data", and only one of those is safe to act on.
+ *
+ * An em dash, not "N/A" or "-": it is unmistakably a rendered answer rather
+ * than a typed value, it never parses as a number or a formula in Excel or
+ * Sheets, and it does not collide with a currency code.
+ */
+const NOT_SOLD_CELL = "\u2014";
 const LOCALIZATION_SUBHEADERS = ["Locale", "Display Name", "Description"] as const;
 
 /**
@@ -360,6 +382,26 @@ const KIND_LABEL: Record<ExportFailureKind, string> = {
  * "Not attempted" tells them it is safe to re-export blindly. One merged
  * "failed" column would destroy all three messages at once.
  */
+/**
+ * ⚠ E5.1 — THE ONE PREDICATE BEHIND BOTH THE BLANK CELL AND THE FAILURE ROW.
+ *
+ * The file makes a promise a reader relies on: **a blank price cell means the
+ * read failed, and every such row is named in the "Export Failures" sheet.**
+ * That promise holds only while the workbook's choice of blank-vs-`—` and the
+ * failure sheet's choice of listed-vs-not are the SAME decision. Two separate
+ * `row.priceReadFailure !== null` tests would satisfy it today and drift the
+ * first time one of them grows a condition — and the drift is silent, because
+ * a file with an unexplained blank still opens perfectly.
+ *
+ * So it is one function, called from exactly two places. The structural guard
+ * is that there is nothing else to call.
+ */
+function hasPriceReadFailure(
+  row: ExportRow,
+): row is ExportRow & { priceReadFailure: PriceReadFailure } {
+  return row.priceReadFailure !== null;
+}
+
 export function buildFailureRows(
   rows: readonly ExportRow[],
   failures: readonly ExportFetchFailureLike[],
@@ -367,8 +409,8 @@ export function buildFailureRows(
   const out: ExportFailureRow[] = [];
 
   for (const row of rows) {
+    if (!hasPriceReadFailure(row)) continue;
     const f = row.priceReadFailure;
-    if (!f) continue;
     out.push({
       productId: row.productId,
       appleIapId: row.appleIapId,
@@ -468,7 +510,12 @@ export function buildExportWorkbook(
     partialCount > 0
       ? [
           [
-            `⚠ ${partialCount} row${partialCount === 1 ? "" : "s"} incomplete — price columns are blank because the read failed, not because there is no price. See the "${FAILURE_SHEET_NAME}" sheet.`,
+            // ⚠ E5.1 — THE NOTE NAMES BOTH CELL KINDS, because this is the
+            // only file in which both appear and a reader has to tell them
+            // apart. It stays absent on a clean export: a legend for a
+            // distinction that file does not contain is noise, and the
+            // one-sheet byte shape is a promise made elsewhere.
+            `⚠ ${partialCount} row${partialCount === 1 ? "" : "s"} incomplete — a BLANK price cell means the read failed, not that there is no price (${NOT_SOLD_CELL} means Apple does not sell there). See the "${FAILURE_SHEET_NAME}" sheet.`,
           ],
         ]
       : [];
@@ -500,20 +547,42 @@ export function buildExportWorkbook(
     ]).flat(),
   ];
 
-  const dataRows: Array<Array<string | null>> = rows.map((row) => [
-    row.productId,
-    row.skuName,
-    row.status,
-    row.baseTerritory,
-    ...orderedCodes.flatMap((t) => {
-      const cell = row.prices[t];
-      return cell ? [cell.price, cell.currency] : [null, null];
-    }),
-    ...Array.from({ length: localizationGroupCount }, (_, i) => {
-      const loc = row.localizations[i];
-      return loc ? [loc.locale, loc.displayName, loc.description] : [null, null, null];
-    }).flat(),
-  ]);
+  const dataRows: Array<Array<string | null>> = rows.map((row) => {
+    // ── E5.1 — WHAT AN ABSENT PRICE LOOKS LIKE, AND WHY IT DEPENDS ON THE ROW.
+    //
+    // Same missing value, two different facts:
+    //
+    //   read SUCCEEDED, no price here → Apple does not sell this item in that
+    //                                   market. A real answer: `—`.
+    //   read FAILED                   → we do not know. Blank, and the row is
+    //                                   listed in "Export Failures".
+    //
+    // ⚠ Derived from `hasPriceReadFailure`, THE SAME CALL the failure sheet
+    // gates on, so "blank ⇒ there is a failure row" is a property of the code
+    // rather than of two conditions that happen to agree.
+    const missing = hasPriceReadFailure(row) ? null : NOT_SOLD_CELL;
+    return [
+      row.productId,
+      row.skuName,
+      row.status,
+      row.baseTerritory,
+      // ⚠ BOTH HALVES OF THE PAIR. A `—` price beside a blank currency would
+      // make the currency cell claim a failed read, in a row where nothing
+      // failed — re-introducing the exact ambiguity this removes, one column to
+      // the right.
+      ...orderedCodes.flatMap((t) => {
+        const cell = row.prices[t];
+        return cell ? [cell.price, cell.currency] : [missing, missing];
+      }),
+      // ⚠ LOCALIZATION SLOTS STAY BLANK. `—` answers "does Apple sell here"; a
+      // localization slot asks nothing — group N simply does not exist on an
+      // item with fewer locales. Filling it would invent a statement.
+      ...Array.from({ length: localizationGroupCount }, (_, i) => {
+        const loc = row.localizations[i];
+        return loc ? [loc.locale, loc.displayName, loc.description] : [null, null, null];
+      }).flat(),
+    ];
+  });
 
   const aoa = [...noteRow, headerRow1, headerRow2, ...dataRows];
 

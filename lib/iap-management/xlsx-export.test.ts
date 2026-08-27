@@ -114,6 +114,11 @@ function sheetMerges(
 }
 
 
+/** E5.1 — the "Apple does not sell here" cell. Spelled with an escape so a
+ *  reviewer can see WHICH dash is asserted; an en dash would look identical. */
+const EM_DASH = "\u2014";
+
+
 describe("buildExportPlan — territory columns", () => {
   it("is the sorted (alpha-2) union of territories-with-a-price across all rows", () => {
     const plan = buildExportPlan([
@@ -388,7 +393,20 @@ describe("buildExportWorkbook — file structure", () => {
     expect(merges).toContainEqual({ s: { r: 0, c: 8 }, e: { r: 0, c: 10 } });
   });
 
-  it("leaves unused territory/localization slots blank on a given row", () => {
+  /**
+   * ⚠ THIS PAIR WAS ONE TEST, AND E5 IS WHAT MADE THE SEAM VISIBLE.
+   *
+   * It was called "leaves unused territory/localization slots blank on a given
+   * row" and asserted one whole row at once. Two unrelated behaviours shared
+   * that name and that assertion — territory slots and localization slots —
+   * and E5.1 changed exactly one of them (a territory with no price now reads
+   * `—`, a localization slot stays blank). A single assertion covering both
+   * cannot say which half moved: it just goes red, and the cheapest way to get
+   * it green is to paste in whatever the code now emits, which pins nothing.
+   *
+   * Split, declared, and re-derived from the rule rather than from the output.
+   */
+  it("a territory slot with no price is an ANSWER — `—`, not a blank", () => {
     const plan = buildExportPlan([
       source({
         productId: "a",
@@ -397,10 +415,27 @@ describe("buildExportWorkbook — file structure", () => {
       }),
       source({ productId: "b", status: "MISSING_METADATA", priceSchedule: null, localizations: [] }),
     ]);
-    const wb = buildExportWorkbook(plan);
-    const aoa = sheetAoa(wb);
-    const rowB = aoa[3];
-    expect(rowB).toEqual(["b", "Item", "MISSING_METADATA", null, null, null, null, null, null]);
+    const aoa = sheetAoa(buildExportWorkbook(plan));
+    // Item b has no schedule at all, and its read did not fail — so the US
+    // column is answered, not left open.
+    expect(aoa[3].slice(4, 6)).toEqual([EM_DASH, EM_DASH]);
+  });
+
+  it("an unused localization slot stays BLANK — group N simply does not exist", () => {
+    const plan = buildExportPlan([
+      source({
+        productId: "a",
+        priceSchedule: schedule([entry({ territory: "USA", customerPrice: "0.99", currency: "USD" })], "USA"),
+        localizations: [{ locale: "en-US", displayName: "A", description: "Desc" }],
+      }),
+      source({ productId: "b", status: "MISSING_METADATA", priceSchedule: null, localizations: [] }),
+    ]);
+    const aoa = sheetAoa(buildExportWorkbook(plan));
+    // ⚠ NOT `—`. A price cell answers "does Apple sell here"; a localization
+    // slot asks nothing, so there is nothing for it to answer.
+    expect(aoa[3].slice(6)).toEqual([null, null, null]);
+    // and the fixed columns are untouched by either rule
+    expect(aoa[3].slice(0, 4)).toEqual(["b", "Item", "MISSING_METADATA", null]);
   });
 
   it("handles an empty IAP list (no territories, no localization groups)", () => {
@@ -564,5 +599,147 @@ describe("buildExportWorkbook — the Export Failures sheet", () => {
     ]);
     expect(sheetNames(wb)).toEqual(["Apple IAP Export", "Export Failures"]);
     expect(sheetAoa(wb, "Apple IAP Export")[0][0]).toBe("Product ID");
+  });
+});
+
+
+/**
+ * ─── E5.1 — TWO KINDS OF EMPTY, AND THE PROMISE THAT TELLS THEM APART ───────
+ *
+ * `[Q-EXPORT.all-selected-territories]` puts a column in the file for every
+ * country the Manager asked about, which means most files now contain cells
+ * with no price in them. Those cells carry two completely different facts:
+ *
+ *   `—`    Apple does not sell this item in that market. An ANSWER.
+ *   blank  the price read for that item failed. NO answer — and the row is
+ *          named in the "Export Failures" sheet, with a reason.
+ *
+ * ⚠ THE CROSS-CONSTRAINT IS THE POINT, not either rendering on its own. A
+ * blank with no failure row is a file that quietly claims "no data" and offers
+ * nowhere to look; a `—` on a row whose read failed is a file that ASSERTS
+ * "not sold here" about a market it never managed to read. Both are lies a
+ * spreadsheet tells confidently, and neither is visible by opening it.
+ *
+ * So the last two tests do not check a cell — they walk every price cell in
+ * the main sheet and hold it against the failure sheet.
+ */
+describe("buildExportWorkbook — `—` vs blank, and the failure sheet that backs it", () => {
+  const priced = (territory: string, customerPrice: string, currency: string) =>
+    entry({ priceId: `p-${territory}`, territory, customerPrice, currency });
+
+  /** US + VN priced; US only; and one whose read failed outright. */
+  const mixed = () =>
+    buildExportPlan([
+      source({
+        appleIapId: "a-both",
+        productId: "com.x.both",
+        priceSchedule: schedule([priced("USA", "0.99", "USD"), priced("VNM", "24000", "VND")], "USA"),
+      }),
+      source({
+        appleIapId: "a-us-only",
+        productId: "com.x.us-only",
+        priceSchedule: schedule([priced("USA", "0.99", "USD")], "USA"),
+      }),
+      source({
+        appleIapId: "a-unread",
+        productId: "com.x.unread",
+        priceSchedule: null,
+        priceReadFailure: { kind: "RATE_LIMITED", status: 429, message: "429 after retries" },
+      }),
+    ]);
+
+  /** Product id → its price cells, read out of the rendered sheet. */
+  function priceCellsByProduct(wb: ExcelJS.Workbook): Map<string, unknown[]> {
+    const aoa = sheetAoa(wb, "Apple IAP Export");
+    // ⚠ Found, not hard-coded: the note row shifts the header down by one and
+    // a test that assumed row 0 would silently read the note as a header.
+    const headerAt = aoa.findIndex((r) => r[0] === "Product ID");
+    expect(headerAt).toBeGreaterThanOrEqual(0);
+    const territoryCols = aoa[headerAt + 1]
+      .map((v, i) => (v === "Price" || v === "Currency" ? i : -1))
+      .filter((i) => i >= 0);
+    expect(territoryCols.length).toBeGreaterThan(0);
+    const out = new Map<string, unknown[]>();
+    for (const row of aoa.slice(headerAt + 2)) {
+      out.set(String(row[0]), territoryCols.map((i) => row[i]));
+    }
+    return out;
+  }
+
+  function failedProductIds(wb: ExcelJS.Workbook): Set<string> {
+    const ws = wb.getWorksheet("Export Failures");
+    if (!ws) return new Set();
+    return new Set(sheetAoa(wb, "Export Failures").slice(1).map((r) => String(r[0])));
+  }
+
+  it("a market Apple does not sell in reads `—`, on a row whose read succeeded", () => {
+    const cells = priceCellsByProduct(buildExportWorkbook(mixed()));
+    // Column order: nothing is `manual: true`, so both land in the auto group
+    // and sort by display name — "United States" then "Vietnam".
+    expect(cells.get("com.x.us-only")).toEqual(["0.99", "USD", EM_DASH, EM_DASH]);
+  });
+
+  it("⚠ a row whose price read FAILED is BLANK, never `—` — it has no answer to give", () => {
+    const cells = priceCellsByProduct(buildExportWorkbook(mixed()));
+    expect(cells.get("com.x.unread")).toEqual([null, null, null, null]);
+    // and specifically NOT the not-sold marker, which would be a claim
+    expect(cells.get("com.x.unread")).not.toContain(EM_DASH);
+  });
+
+  it("⚠ CROSS-CONSTRAINT — every BLANK price cell has a row in Export Failures", () => {
+    const wb = buildExportWorkbook(mixed());
+    const failed = failedProductIds(wb);
+    for (const [productId, cells] of priceCellsByProduct(wb)) {
+      if (cells.some((c) => c === null)) {
+        // A blank the failure sheet does not explain is the file saying
+        // "no data" and pointing nowhere.
+        expect({ productId, listed: failed.has(productId) }).toEqual({ productId, listed: true });
+      }
+    }
+    // the fixture must actually exercise the branch, or this passes vacuously
+    expect(failed).toContain("com.x.unread");
+  });
+
+  it("⚠ CROSS-CONSTRAINT — a `—` cell never appears on a row the failure sheet names", () => {
+    const wb = buildExportWorkbook(mixed());
+    const failed = failedProductIds(wb);
+    for (const [productId, cells] of priceCellsByProduct(wb)) {
+      if (cells.some((c) => c === EM_DASH)) {
+        expect({ productId, listed: failed.has(productId) }).toEqual({ productId, listed: false });
+      }
+    }
+    // …and the fixture really does contain a `—`
+    expect([...priceCellsByProduct(wb).values()].flat()).toContain(EM_DASH);
+  });
+
+  it("a `—` cell is not shaded — amber means Apple derived a price, and there is none", () => {
+    const ws = buildExportWorkbook(mixed()).worksheets[0];
+    // com.x.us-only is data row 2; note row + 2 headers ⇒ sheet row 5. VN's
+    // Price sits at column 7 (4 fixed + the US pair).
+    expect(String(ws.getCell(5, 1).value)).toBe("com.x.us-only");
+    const fill = ws.getCell(5, 7).fill as { fgColor?: { argb?: string } } | undefined;
+    expect(ws.getCell(5, 7).value).toBe(EM_DASH);
+    expect(fill?.fgColor?.argb ?? null).toBeNull();
+  });
+
+  it("the note row names BOTH kinds, so the legend is in the file that needs it", () => {
+    const aoa = sheetAoa(buildExportWorkbook(mixed()), "Apple IAP Export");
+    const note = String(aoa[0][0]);
+    expect(note).toContain("BLANK");
+    expect(note).toContain(EM_DASH);
+    expect(note).toContain("Export Failures");
+  });
+
+  it("a clean export gets NO legend — there is no blank in it to explain", () => {
+    // ⚠ The negative control for the line above. The note must not become a
+    // permanent banner: the one-sheet clean export is a promise made in
+    // `buildExportWorkbook`'s header, and a legend row would break it.
+    const wb = buildExportWorkbook(
+      buildExportPlan([
+        source({ productId: "com.x.clean", priceSchedule: schedule([priced("USA", "0.99", "USD")], "USA") }),
+      ]),
+    );
+    expect(sheetNames(wb)).toEqual(["Apple IAP Export"]);
+    expect(sheetAoa(wb)[0][0]).toBe("Product ID");
   });
 });

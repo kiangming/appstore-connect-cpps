@@ -221,3 +221,67 @@ describe("⚠ long headers do not shift the merges or the columns", () => {
     expect(ws.getColumn(6).width).toBe(10);
   });
 });
+
+
+// ─── E5.1 — the em dash has to survive the write, not just the object model ──
+
+describe("⚠ `—` reaches the bytes on disk, correctly encoded", () => {
+  it("the em dash is in the archive as U+2014, not as mojibake or an entity", async () => {
+    // THE REASON THIS IS A FILE TEST AND NOT AN OBJECT-MODEL ONE. `—` is the
+    // first non-ASCII character this writer emits. A workbook part written
+    // latin-1 would round-trip through exceljs's own reader looking fine and
+    // open in Excel as "â€"". Only the bytes can say.
+    const plan = buildExportPlan([
+      source({
+        productId: "com.x.us-only",
+        priceSchedule: sched([entry({ territory: "USA", manual: true })]),
+      }),
+      source({
+        productId: "com.x.th-only",
+        priceSchedule: sched(
+          [entry({ priceId: "p2", territory: "THA", customerPrice: "35", currency: "THB", manual: true })],
+          "THA",
+        ),
+      }),
+    ]);
+    const { part } = await writeAndUnzip(buildExportWorkbook(plan));
+    // exceljs writes text cells into the shared-string table.
+    const strings = part("xl/sharedStrings.xml");
+    expect(strings).toContain("\u2014");
+    // …and not as the HTML entity, which Excel renders literally.
+    expect(strings).not.toContain("&mdash;");
+  });
+
+  it("a `—` cell carries no fill — the amber is reserved for a real auto price", () => {
+    // Both territories here are `manual: true`, so nothing at all should be
+    // shaded: if the writer shaded the not-sold cells, `styles.xml` would gain
+    // the amber and this negative control would catch it.
+    const plan = buildExportPlan([
+      source({ productId: "a", priceSchedule: sched([entry({ territory: "USA", manual: true })]) }),
+      source({
+        productId: "b",
+        priceSchedule: sched(
+          [entry({ priceId: "p2", territory: "THA", customerPrice: "35", currency: "THB", manual: true })],
+          "THA",
+        ),
+      }),
+    ]);
+    const ws = buildExportWorkbook(plan).worksheets[0];
+    // ⚠ Column order re-derived, not assumed: both territories are some row's
+    // BASE (a's is USA, b's is THA), so both take rank 0 and sort by name —
+    // Thailand at columns 5/6, United States at 7/8. Guessing here is how a
+    // cell assertion ends up reading a neighbour and passing for the wrong
+    // reason.
+    expect(ws.getCell(1, 5).value).toBe("Price in Thailand (TH)");
+    expect(ws.getCell(1, 7).value).toBe("Price in United States (US)");
+    const fillOf = (r: number, c: number) => {
+      const f = ws.getCell(r, c).fill as { fgColor?: { argb?: string } } | undefined;
+      return f?.fgColor?.argb ?? null;
+    };
+    // item a: no TH price → `—`, unshaded. item b: no US price → `—`, unshaded.
+    expect(ws.getCell(3, 5).value).toBe("\u2014");
+    expect(fillOf(3, 5)).toBeNull();
+    expect(ws.getCell(4, 7).value).toBe("\u2014");
+    expect(fillOf(4, 7)).toBeNull();
+  });
+});
