@@ -690,6 +690,58 @@ independent reasons:
 radius of every write path (bulk import, create, update) in exchange for zero
 requests saved. Don't.
 
+### 4.17 TWO Excel libraries, on purpose — xlsx reads, exceljs writes the Apple export
+
+Added 2026-08-27 (E0). A second Excel library is normally a smell, so the
+reason is recorded here rather than left to be re-litigated.
+
+**What forced it.** The Manager's export design marks AUTO-priced cells with a
+yellow fill (`[Q-EXPORT.source-marking]`) — colour, per cell, because it is the
+only marking that stays true when a territory is manual on one item and
+automatic on another in the same file. `xlsx@0.18.5` (SheetJS Community
+Edition) silently discards cell fills AT WRITE TIME. Measured, not read off a
+doc:
+
+```
+ws.B1.s = { fill: { patternType: "solid", fgColor: { rgb: "FFFF00" } } }
+XLSX.writeFile(wb, out, { cellStyles: true })
+unzip -p out xl/styles.xml  →  patternType="none" · patternType="gray125"
+grep FFFF00                 →  absent from the archive
+```
+
+Cell styling is a paid (Pro) feature, and 0.18.5 is the last npm release — so
+upgrading is not a path to it. `exceljs` writes the same fill and it survives a
+round trip at 352 columns, along with the freeze panes the design also needs
+(352 columns, 175 filled cells = 8 KB).
+
+**The split, and why it is not "migrate everything".**
+
+| | |
+|---|---|
+| `exceljs` | WRITING the Apple IAP export — nothing else |
+| `xlsx` | Google export writer · BOTH upload parsers · Google export route |
+
+The parsers READ workbooks a human uploaded (Excel, Numbers, Sheets exports).
+`xlsx` is the more forgiving reader and those paths have been through UAT
+against real Manager files. Rewriting a working, unrelated READ path to satisfy
+a write-side colour requirement would risk the import flow to decorate the
+export flow.
+
+**Cost, stated plainly.** +22 MB in `node_modules`, server-only (the export
+route is `runtime = "nodejs"`), no `.node` and no `.wasm` in the dependency
+tree — so unlike `re2-wasm` it needs no `serverComponentsExternalPackages`
+entry. `npm audit` flags exceljs only transitively through `uuid@8.3.2`
+(GHSA-w5hq-g745-h8pq), which `next-auth` already brought into the tree before
+exceljs existed here; npm's suggested "fix" is a downgrade to exceljs 3.4.0 and
+would not remove uuid anyway.
+
+⚠ **The fence is a test, not this paragraph.**
+`lib/iap-management/excel-library-split.structural.test.ts` fails if any file
+imports both, if `exceljs` appears outside the Apple export write path, if the
+Google module reaches for it, or if a parser stops using `xlsx`. The drift a
+second library invites is quiet — someone grabs whichever import is nearest —
+and a comment cannot catch that.
+
 ## 5. Database Schema
 
 ### 4.14 Per-territory availability — as shipped (arc `19051e8..6f206f8`)
