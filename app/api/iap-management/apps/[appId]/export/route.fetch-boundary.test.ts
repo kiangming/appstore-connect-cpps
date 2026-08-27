@@ -295,9 +295,21 @@ describe("⚠ F-C — POST → Apple (faked at the HTTP boundary) → .xlsx byte
     expect(header).toContain("Price in Thailand (TH)");
   });
 
-  it("⚠ all 175 markets get a column — 10 manual + 165 automatic", () => {
+  /**
+   * ⚠ F-B CHANGED THIS ASSERTION ON PURPOSE, and it is declared rather than
+   * quietly re-baselined. One commit ago it read `toHaveLength(175)`, pinning
+   * "every territory Apple priced gets a column" — which was the right pin
+   * while `null` meant "the union of what happened to have a price".
+   *
+   * `[Q-EXPORT.union-columns]` replaced that question: "all countries" now
+   * expands to catalog(183) ∪ Apple(175) = 194, so a market NOBODY priced
+   * still gets asked. The 175 are still all there — the number grew, nothing
+   * was displaced — and the test below proves the extra 19 are the tickable
+   * markets Apple does not sell to.
+   */
+  it("⚠ all 194 columns — Apple's 175 plus the 19 catalog markets Apple does not sell to", () => {
     const priceCols = header.filter((h) => h.startsWith("Price in "));
-    expect(priceCols).toHaveLength(175);
+    expect(priceCols).toHaveLength(194);
   });
 
   it("⚠ (2) xl/styles.xml carries the amber — at least one cell is shaded AUTO", () => {
@@ -352,5 +364,98 @@ describe("⚠ F-C — POST → Apple (faked at the HTTP boundary) → .xlsx byte
     expect(String(wb.worksheets[0].getCell(1, 1).value)).toBe("Product ID");
     expect(res.headers.get("X-Export-Item-Count")).toBe("1");
     expect(res.headers.get("X-Export-Partial-Count")).toBe("0");
+  });
+});
+
+
+/**
+ * ─── F-B — "ALL COUNTRIES" MEANS EVERY COUNTRY, NOT EVERY PRICED COUNTRY ────
+ *
+ * The fixture below is the case the union exists for: Apple prices this item
+ * in a handful of markets and NOT in Germany, while Germany is a market the
+ * operator can tick. Before F-B, ticking "all" produced no German column at
+ * all — the question was deleted rather than answered.
+ *
+ * MUTATIONS, all three red:
+ *   route falls back to the priced union   → DE and RU columns vanish
+ *   expand from the catalog only           → RU vanishes (not in the catalog)
+ *   expand from Apple's list only          → the 19 tickable markets vanish
+ */
+describe("⚠ F-B — a market nobody priced still gets a column, with `—` in it", () => {
+  const SOLD_IN = ["USA", "VNM", "THA"] as const;
+
+  let header: string[];
+  let wb2: ExcelJS.Workbook;
+
+  beforeAll(async () => {
+    requireIapSession.mockResolvedValue({ email: "manager@vng.com.vn" });
+    getActiveAccount.mockResolvedValue({
+      key_id: "K", issuer_id: "I", private_key: "P", id: "acct-1",
+    });
+    appleFetch.mockReset();
+    appleFetch.mockImplementation(async (c: unknown, m: string, e: string) => {
+      // ⚠ Only three territories priced, and NO automaticPrices beyond them:
+      // this item genuinely is not sold in most of the world.
+      if (e.startsWith(`/v1/inAppPurchasePriceSchedules/${SCHEDULE_ID}/manualPrices`)) {
+        return priceRows(SOLD_IN, true);
+      }
+      if (e.startsWith(`/v1/inAppPurchasePriceSchedules/${SCHEDULE_ID}/automaticPrices`)) {
+        return priceRows([], false);
+      }
+      return appleRouter(c, m, e);
+    });
+
+    const res2 = await runExport({ territories: null });
+    expect(res2.status).toBe(200);
+    ({ wb: wb2 } = await unzipResponse(res2));
+    header = headerRow(wb2);
+  });
+
+  it("still 194 columns — the ask does not shrink to fit the data", () => {
+    expect(header.filter((h) => h.startsWith("Price in "))).toHaveLength(194);
+  });
+
+  it("⚠ Germany is priced NOWHERE on this item, and still has a column reading `—`", () => {
+    const de = header.indexOf("Price in Germany (DE)");
+    expect(de).toBeGreaterThan(0);
+    // Row 3 = the single data row. `—` in BOTH halves of the pair.
+    expect(wb2.worksheets[0].getCell(3, de).value).toBe("\u2014");
+    expect(wb2.worksheets[0].getCell(3, de + 1).value).toBe("\u2014");
+  });
+
+  it("⚠ RUSSIA has a column — the market the shared catalog cannot reach", () => {
+    // The point of unioning Apple's list in: RU is absent from
+    // TERRITORY_CATALOG, so a catalog-only expansion silently omits it.
+    const ru = header.indexOf("Price in Russia (RU)");
+    expect(ru).toBeGreaterThan(0);
+    expect(wb2.worksheets[0].getCell(3, ru).value).toBe("\u2014");
+  });
+
+  it("⚠ Andorra has a column too — Apple does not sell there, but it IS tickable", () => {
+    // The other direction: an Apple-only expansion drops the 19 markets the
+    // dialog offers. Both mutations have to be red, or the union is unmotivated.
+    const ad = header.indexOf("Price in Andorra (AD)");
+    expect(ad).toBeGreaterThan(0);
+    expect(wb2.worksheets[0].getCell(3, ad).value).toBe("\u2014");
+  });
+
+  it("the three real prices are still real — expansion adds columns, it does not blank them", () => {
+    const us = header.indexOf("Price in United States (US)");
+    expect(wb2.worksheets[0].getCell(3, us).value).toBe("0.99");
+    expect(wb2.worksheets[0].getCell(3, us + 1).value).toBe("USD");
+  });
+
+  it("⚠ and the file does NOT lie: no failure sheet, so every blank-looking cell is `—`", () => {
+    // The E5 cross-constraint, re-checked at route level now that 191 of the
+    // 194 columns have no price. If any of them rendered BLANK instead of `—`
+    // the file would be claiming a failed read that never happened.
+    expect(wb2.worksheets.map((w) => w.name)).toEqual(["Apple IAP Export"]);
+    const ws = wb2.worksheets[0];
+    const firstPriceCol = header.findIndex((h) => h.startsWith("Price in "));
+    let blanks = 0;
+    for (let c = firstPriceCol; c < firstPriceCol + 194 * 2; c += 1) {
+      if (ws.getCell(3, c).value == null) blanks += 1;
+    }
+    expect(blanks).toBe(0);
   });
 });

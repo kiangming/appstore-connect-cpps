@@ -66,6 +66,7 @@ import { getIapDetailFromApple } from "@/lib/iap-management/queries/iap-detail";
 import { getPriceScheduleForIap } from "@/lib/iap-management/apple/price-schedules";
 import { AppleApiError } from "@/lib/iap-management/apple/fetch";
 import { fetchExportSources } from "@/lib/iap-management/apple/export-fetch";
+import { allExportTerritories } from "@/lib/iap-management/apple/export-territory-expansion";
 import {
   buildExportPlan,
   buildExportWorkbook,
@@ -120,7 +121,24 @@ export async function POST(
 
   const appleAppId = ctx.params.appId;
   const body = (await req.json().catch(() => ({}))) as ExportRequestBody;
-  const territories = Array.isArray(body.territories) ? body.territories : null;
+  // ── F-B — "ALL COUNTRIES" IS A QUESTION, AND IT GETS AN ANSWER PER COUNTRY.
+  //
+  // The dialog collapses "every box ticked" to `null` (its contract, shared
+  // with Google and pinned by 13 tests — P8, do not touch it there). Downstream
+  // `null` used to fall through to "the union of territories that happened to
+  // have a price", which is not what was asked: a market no exported item is
+  // sold in produced NO COLUMN, and the file said nothing about having been
+  // asked. Same silent-drop class E2 removed from the intersection, surviving
+  // on the other branch.
+  //
+  // ⚠ EXPANDED HERE, AT THE APPLE ROUTE, not in the shared dialog. `null` is
+  // overloaded — it means both "nobody opened the dialog" and "the operator
+  // ticked all 183" — and only this route knows that, for the Apple export,
+  // both should mean "every territory either side knows about" (194 = catalog
+  // 183 ∪ Apple 175). Google's route reads the same `null` and is untouched.
+  const territories = Array.isArray(body.territories)
+    ? body.territories
+    : allExportTerritories();
 
   // ⚠ `[]` and "absent" must not collapse — see the header. `Array.isArray`
   // first, so only a REAL empty array reaches the 400.

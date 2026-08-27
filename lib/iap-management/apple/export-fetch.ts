@@ -25,6 +25,7 @@
  */
 import { runStoppablePool } from "@/lib/iap-management/stoppable-pool";
 import { getIapDetailFromApple, unpackPriceSchedule } from "@/lib/iap-management/queries/iap-detail";
+import { unknownAppleTerritories } from "./apple-territories.snapshot";
 import {
   getPriceScheduleForIap,
   NoPriceScheduleError,
@@ -321,5 +322,37 @@ export async function fetchExportSources(
     if (outcome.ok) sources.push(outcome.source);
     else failures.push(outcome.failure);
   }
+
+  // ── F-B / S2(b) — DID APPLE'S TERRITORY LIST MOVE UNDER US? ───────────────
+  //
+  // `apple-territories.snapshot.ts` decides how many columns an "all
+  // countries" export has, and it is a photograph nothing in this app
+  // refreshes. This is the half of the drift detection that needs nobody to
+  // remember anything: every territory Apple actually priced is checked
+  // against the snapshot, once per export, and the unknown ones are named.
+  //
+  // ⚠ IT WARNS, IT DOES NOT BLOCK. An unrecognised territory still exports
+  // with its price and its column — `buildExportPlan` unions observed codes
+  // over the expansion. A market Apple added yesterday is a log line, not a
+  // failed export.
+  //
+  // ⚠ ADDITIONS ONLY. A territory Apple REMOVED cannot appear in `observed`,
+  // so it cannot be seen here; the probe's whole-list diff (step 2.7) is what
+  // catches that direction.
+  const observed = new Set<string>();
+  for (const src of sources) {
+    for (const entry of src.priceSchedule?.entries ?? []) {
+      if (entry.territory) observed.add(entry.territory);
+    }
+  }
+  const unknown = unknownAppleTerritories([...observed]);
+  if (unknown.length > 0) {
+    console.warn(
+      `[export-fetch] ⚠ APPLE TERRITORY SNAPSHOT DRIFT — ${unknown.length} code(s) Apple priced ` +
+        `are absent from apple-territories.snapshot.ts: ${unknown.join(" ")}. ` +
+        `They still exported. Refresh the snapshot: node scripts/probe-export-price-sources.mjs (step 2.7).`,
+    );
+  }
+
   return { sources, failures, stopped };
 }

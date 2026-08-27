@@ -37,7 +37,7 @@
 15. [Apple ASC key pool — SHIPPED DARK](#15-apple-asc-key-pool--shipped-dark-2026-08-25)
 16. [C3 — PARTIAL at the row level](#16-c3--partial-at-the-row-level-2026-08-25)
 17. [The availability mirror](#17-the-availability-mirror-2026-08-26-ddf8dd6)
-18. [Export price sources — E0→E5](#18-export-price-sources--e0e5-2026-08-27)
+18. [Export price sources — E0→E5, then F-A/F-B/F-C](#18-export-price-sources--e0e5-then-f-afbf-c-2026-08-27)
 
 ---
 
@@ -3480,14 +3480,87 @@ that changed.
 test finally breaks, SPLIT it and re-derive both halves from the rule — never
 re-baseline it against the new output.
 
+**P31 — EVERY FAKE ABOVE THE BROKEN LINK MEANS THE BROKEN LINK IS OUTSIDE
+COVERAGE. A TEST COUNT SAYS NOTHING ABOUT WHICH SEAMS ARE CROSSED.**
+
+The most expensive lesson of the export arc, and the one with a historical
+proof rather than an argument: at commit `d97b7ac` the gauntlet reported
+**4 396 / 4 396 passing** while the export's headline feature was dead in
+production. The Manager's file had 10 territory columns out of 175 and
+`<fills count="2">` — no colour at all.
+
+The defect was one missing argument at `export-fetch.ts:202`. Every export
+test faked Apple AT or ABOVE that line:
+
+| test | fakes | relative to the break |
+|---|---|---|
+| `route.headers.test.ts` | `fetchExportSources` | above |
+| `route.selected-ids.test.ts` | `getPriceScheduleForIap` | at |
+| `export-fetch.test.ts` | a `vi.fn()` through deps | at |
+| `xlsx-export.test.ts` | starts from `ExportSource` fixtures | above |
+| `price-source-attribute.test.ts` | a hand-written merged response | above |
+
+No individual test was wrong. **The LAYER was missing**, and no quantity of
+tests at the wrong altitude can substitute for one at the right one. Adding
+more tests to any of those five files would have raised the count and changed
+nothing.
+
+⇒ **When a feature spans layers, at least one test must fake BELOW the lowest
+layer the feature touches.** For anything that talks to Apple, that means the
+HTTP boundary (`appleFetch`), not a dependency-injected helper. The fix here
+was `route.fetch-boundary.test.ts`: POST → real `iapFetch` → real schedule
+read → real workbook → unzip the bytes. It went red on the shipped code with
+`<fills count="2">` — byte-identical to the Manager's production file.
+
+⇒ **Diagnostic that costs nothing:** for any suspected defect, list where each
+existing test fakes and mark it above/at/below. If nothing is below, the suite
+cannot see the defect no matter how green it is.
+
+**P32 — A CHUNK THAT CREATES AN OPT-IN FLAG MUST NAME, BY CHUNK, WHO TURNS IT
+ON. AN OPT-IN NOBODY OPTS INTO IS DEAD CODE THAT LOOKS ALIVE.**
+
+E1 added `includeAutomatic` to `getPriceScheduleForIap`, default OFF, for a
+correct reason — three other surfaces share that function and would have
+jumped from ~10 prices to ~175. E1's commit message even observed that
+`automaticPrices` had "0 hits in .ts anywhere in the repo". After E1 it still
+had zero hits **at every call site**. E2, E3, E4 and E5 then built column
+ordering, cell shading, market-name headers and `—`/blank semantics on top of
+data that was never fetched — four chunks of correct work on an empty input.
+
+⚠ **This was a TASKING failure, not a coding one, and both roles missed it** —
+the strategist never wrote "and chunk N passes it", the implementing agent
+never asked. Neither the flag nor any chunk was wrong in isolation.
+
+⇒ **The rule: an opt-in flag ships with its switch-on site named in the same
+commit message, or it ships already switched on.** "Opt-in, default off" is
+only a complete design when the opt-in exists. A one-line grep in the same
+commit (`grep -rn "flagName" --include=*.ts`) settles it: if the only hits are
+the declaration, the feature is not wired.
+
 **P26–P29 live in §16** (C3 PARTIAL row-level). All four crossed the
 frequency bar during the C1→C2→PRICING-429→C3 latch arc:
 - **P26** — a mutation that catches NOTHING means the tests prove the
   PATTERN and not the WIRING. Add a structural guard; never lower the
   mutation. 4 instances.
 - **P27** — a hand-written fixture is a CLAIM about the route, not evidence
-  of it. 2 instances, both where the fixture was right and the route was
-  wrong.
+  of it. **4 instances.** The first two were fixtures that were right about a
+  route that was wrong. The export arc added the other two, both the reverse —
+  the fixture itself was the lie:
+  - **#3 (E1, `price-source-attribute.test.ts`)** — a merged schedule response
+    written by hand that ALREADY contained the automatic-price rows. It proved
+    "auto rows unpack with `manual: false`" and could not, even in principle,
+    say whether Apple was ever ASKED for them. It was green for the whole time
+    the feature was dead. ⚠ Written in the same arc that added P27 to this
+    document, by the agent that wrote P27.
+  - **#4 (F-C, `route.fetch-boundary.test.ts`)** — the 165 auto territories
+    were generated with `Object.values(getAlpha3Codes())`, but that map is
+    alpha3 → alpha2, so the fixture fed Apple's boundary **alpha-2** codes.
+    Apple speaks alpha-3. It looked correct — `toCatalogCode` falls through to
+    the raw string and every display name still resolved — and only the COUNT
+    exposed it: 171 columns instead of 175, HK/ID/MO/MY colliding with the
+    manual HKG/IDN/MAC/MYS after conversion. ⇒ **When a fixture stands in for
+    an external system, assert a COUNT as well as a shape.** Shapes look right
+    in the wrong alphabet; totals do not.
 - **P28** — P15 pushed down a layer: the SLICER underneath an assertion must
   strip comments and strings too, or the guard fails OPEN.
 - **P29** — the `fetch` boundary is where `tsc` is blind. Derive client types
@@ -4999,7 +5072,7 @@ means the day they disagree, nobody sees it.
 
 ---
 
-## 18. Export price sources — E0→E5 (2026-08-27)
+## 18. Export price sources — E0→E5, then F-A/F-B/F-C (2026-08-27)
 
 The UAT bug: an export of an app with 175 live markets contained about **ten**
 priced columns. Root cause in [§4.18](#418-landmark--automaticprices-is-where-the-other-165-territories-live-and-manual-is-the-only-per-cell-truth) —
@@ -5085,6 +5158,60 @@ covering both.
   Russia included, still cannot be *selected*, so they cannot be exported.
   E2 did not fix that and E5 does not either — a territory that cannot be
   ticked never reaches the column code.
+### 18.4 F-A / F-B / F-C — the UAT that came back red, and what it cost
+
+The Manager exported after E5 shipped and got **10 columns and no colour**.
+Everything E2→E5 built was live and correct; the data under it was not.
+
+| | |
+|---|---|
+| **Cause** | `includeAutomatic` had **zero** occurrences outside its own declaration. The export never asked Apple for `/automaticPrices`. |
+| **F-C** | The missing TEST LAYER: `route.fetch-boundary.test.ts` fakes `appleFetch` and runs POST → real everything → unzip the bytes. Written and committed RED, on purpose. |
+| **F-A** | Three lines: `includeAutomatic: true` at the route, an option on `ExportFetchDeps`, and the argument at the call. |
+| **F-B** | `[Q-EXPORT.union-columns]` — "all countries" expands to catalog(183) ∪ Apple(175) = **194** at the Apple route. |
+
+**The measurement that matters** (P31): under a mutation restoring the bug,
+the new layer goes 7 red and the **4 396 pre-existing tests all stay green**.
+History says the same thing without a mutation — that is literally the number
+the E5 gate reported while production was broken.
+
+#### `[Q-EXPORT.union-columns]` — why the union, in one table
+
+| source | columns | what it silently drops |
+|---|---|---|
+| catalog only | 183 | the 11 Apple markets the catalog lacks — **Russia** |
+| Apple only | 175 | the 19 tickable markets Apple does not sell to |
+| **union** | **194** | **nothing either side knows about** |
+
+⚠ Unioning at the **Apple route** reaches Russia **without touching
+`TERRITORY_CATALOG`**, which is shared with Google (P8) — the same move
+`territory-code-map` made for Kosovo. The asymmetry it leaves (tick "all" →
+Russia column; tick Russia alone → impossible) is `[EXPORT-catalog-missing-11]`
+and is recorded there, not papered over.
+
+⚠ **The `20` in that TODO entry was wrong and is now 19.** Kosovo was filed as
+"Apple does not sell there" because the count compared alpha-2 catalog codes
+against alpha-3 Apple codes — measured before the normalisation existed. The
+arithmetic exposed it: `183 − 20 + 11 = 174`, one short of the measured 175.
+Now pinned by a test, so the identity `183 − 19 + 11 = 175` breaks loudly.
+
+#### The snapshot, and its two detectors
+
+`apple-territories.snapshot.ts` is Apple's 175 as a **product input**, carrying
+its measurement date and refresh command. A snapshot nothing checks is a lie
+with a date on it, so drift detection is deliberately doubled:
+
+- **(a) probe diff** (`probe-export-price-sources.mjs` step 2.7) — compares
+  whole lists, so it sees additions AND removals. Complete, but only runs when
+  a human remembers.
+- **(b) runtime warning** (`unknownAppleTerritories`, called in
+  `fetchExportSources`) — automatic, needs nobody to remember, but sees
+  **additions only**: a territory Apple removed cannot appear in what Apple
+  returned. Warns, never blocks — an unknown market still exports.
+
+Neither is sufficient: (a) is complete and forgettable, (b) is automatic and
+half-blind. The limitation of (b) is pinned by a test named for it.
+
 
 **Knowledge base preserved for future development continuity.**
 

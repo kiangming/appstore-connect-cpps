@@ -41,6 +41,7 @@
  *
  * ⚠ It prints counts and field NAMES only — never a key, never a token.
  */
+import { readFileSync } from "node:fs";
 import { createHmac, createSign } from "node:crypto";
 
 const APP_ID = "6738648909";
@@ -178,5 +179,41 @@ console.log("    count               :", terrs.data.length);
 console.log("    attributes on entry :", Object.keys(terrs.data[0]?.attributes ?? {}));
 console.log("    → territory NAME    :", "name" in (terrs.data[0]?.attributes ?? {}) ? "PRESENT" : "ABSENT — must come from the internal catalog");
 console.log("    Apple codes         :", terrs.data.map((t) => t.id).join(" "));
+
+// ── 2.7 DETECTOR (a) — has Apple's list drifted from our snapshot? ─────────
+//
+// ⚠ THE REASON THIS STEP EXISTS. `apple-territories.snapshot.ts` decides how
+// many columns an "all countries" export has. It is a photograph taken
+// 2026-08-27 and nothing in the app refreshes it. The runtime detector
+// (`unknownAppleTerritories`) catches ADDITIONS automatically but is blind to
+// REMOVALS by construction — a territory Apple dropped simply stops appearing.
+// Comparing whole lists is the only way to see both, and this is the only
+// place with a live list to compare against.
+const snapshotSrc = readFileSync(
+  new URL("../lib/iap-management/apple/apple-territories.snapshot.ts", import.meta.url),
+  "utf8",
+);
+const snapshot = [
+  ...new Set(
+    (snapshotSrc.match(/"[A-Z]{3}"/g) ?? []).map((q) => q.slice(1, -1)),
+  ),
+];
+const live = [...new Set(terrs.data.map((t) => t.id))];
+const added = live.filter((c) => !snapshot.includes(c)).sort();
+const removed = snapshot.filter((c) => !live.includes(c)).sort();
+console.log("\n2.7 snapshot drift (apple-territories.snapshot.ts):");
+console.log("    snapshot count      :", snapshot.length);
+console.log("    live count          :", live.length);
+if (added.length === 0 && removed.length === 0) {
+  console.log("    → IN SYNC. No edit needed.");
+} else {
+  console.log("    ⚠ DRIFTED — edit the snapshot, then re-run the pinned tests.");
+  console.log("    ADDED by Apple      :", added.join(" ") || "(none)");
+  console.log("    REMOVED by Apple    :", removed.join(" ") || "(none)");
+  console.log(
+    "    ⚠ An ADDED territory has no column on an 'all countries' export until",
+  );
+  console.log("      the snapshot is updated. A REMOVED one exports as an empty `—`.");
+}
 
 console.log(`\nApple GETs used: ${calls}`);
