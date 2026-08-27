@@ -532,12 +532,43 @@ it appears rather than at the push. The destination check is the safety net —
 carrying five arcs under the first arc's name is a name that lies a little more
 with every commit, and eventually somebody trusts it.
 
+⚠ **SWITCH AT THE ARC BOUNDARY. That is the only moment the name can be
+right.** Mid-arc a rename papers over a mistake worth noticing; after the next
+arc has started, the branch is already lying. The boundary — arc gated, pushed,
+`rev-list --left-right --count HEAD...origin/main` = `0 0` — is the one point
+where "cut a new branch, delete the old one" is a two-second chore instead of
+a decision. Do it there, every time, or it does not get done.
+
 ⚠ **Do not rename mid-arc.** The name is set when the arc opens; if it turns
 out to be wrong, that is worth noticing rather than papering over.
 
 ⚠ **Deleting the branch is part of finishing.** A local branch left behind
 after its arc shipped is the raw material for exactly this problem — it is the
 one lying around when the next arc needs somewhere to start.
+
+**If a branch is ALREADY carrying several arcs** — which is how this rule got
+written twice — do not rename it and do not try to split it. The history is on
+`origin/main` already and is not the problem; the stale *name* is. Wait for the
+next arc boundary and cut from there:
+
+```
+git rev-list --left-right --count HEAD...origin/main   # must be 0 0 first
+git checkout -b <next-arc-name>
+git branch -d <old-name>                               # -d, never -D: it
+                                                       # refuses if anything
+                                                       # is unmerged
+```
+
+⚠ `git branch -d` is itself the safety check. If it refuses, something on that
+branch never reached `origin/main` — stop and find out what, rather than
+reaching for `-D`.
+
+Instance: `c3a-partial-stage-map` was cut for the C3 partial-stage arc and went
+on to carry the availability mirror, the export-price-sources arc (E0–E5) and
+the F-A/F-B/F-C repair arc. Three arcs under a fourth arc's name. Nothing broke
+— the destination check caught the one push that would have — but every
+`git log origin/main..HEAD` in between read as a lie about what the branch was
+for.
 
 ### Migration checkpoint — blocks PUSH, not code
 
