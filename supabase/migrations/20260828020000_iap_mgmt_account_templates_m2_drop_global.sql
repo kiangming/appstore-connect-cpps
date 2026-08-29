@@ -12,13 +12,21 @@
 --   5. apply M-2  ← file này
 --   6. chạy verify M2-V1 … M2-V4
 --
--- ── ⚠ HẠN CHẾ VẬN HÀNH GIỮA M-1 VÀ M-2 ────────────────────────────────
+-- ── ⚠ HẠN CHẾ VẬN HÀNH — TỪ M-1 TỚI LÚC DEPLOY CODE, KHÔNG PHẢI TỚI M-2 ─
 -- **ĐỪNG Replace/Remove Default Template ở Settings → Pricing Templates
---   trong khoảng từ lúc apply M-1 tới lúc apply M-2.**
+--   trong khoảng từ lúc apply M-1 tới lúc DEPLOY code mới (bước 3).**
 --
--- Vì sao: N bản sao được chụp tại thời điểm M-1. Thay bản gốc sau đó làm
--- chúng mang nội dung CŨ, trong khi tab Settings hiển thị nội dung MỚI —
--- hai thứ khác nhau, không surface nào nói ra.
+-- ⚠ Cửa sổ này NGẮN HƠN so với bản viết đầu tiên (đã sửa sau phát hiện C4).
+--   Lý do: sau khi C-C lên production, tab Default đọc/ghi dòng scope
+--   ACCOUNT, và nút Remove xoá dòng ACCOUNT. Dòng GLOBAL trở nên KHÔNG THỂ
+--   CHẠM TỚI từ UI — nên từ lúc deploy trở đi, Manager upload đè thoải mái
+--   mà GUARD 3 dưới đây vẫn đúng.
+--   Chỉ code CŨ (trước deploy) mới sửa được dòng GLOBAL, và đó là toàn bộ
+--   khoảng thời gian cần kiêng.
+--
+-- Vì sao phải kiêng trong khoảng đó: N bản sao được chụp tại thời điểm M-1.
+-- Code cũ thay bản gốc sau đó làm chúng mang nội dung CŨ, trong khi tab
+-- Settings hiển thị nội dung MỚI — hai thứ khác nhau, không surface nào nói ra.
 --
 -- Nếu lỡ làm: **GUARD 3 ở BƯỚC 0 bên dưới sẽ TỪ CHỐI chạy M-2** (so id +
 -- số entry của GLOBAL với ảnh chụp M-1). Không im lặng. Cách gỡ:

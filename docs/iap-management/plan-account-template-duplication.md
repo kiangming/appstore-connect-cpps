@@ -903,10 +903,16 @@ dữ liệu vẫn nằm trong N bản sao; bảng backup là thứ dựng lại 
 | 7 | chạy **M2-V1…V4** | Manager | |
 | 8 | (sau) dọn 2 bảng backup | Manager | chỉ khi đã submit thật thành công |
 
-### ⚠ HẠN CHẾ VẬN HÀNH GIỮA M-1 VÀ M-2
+### ⚠ HẠN CHẾ VẬN HÀNH — từ M-1 tới lúc DEPLOY, không phải tới M-2
 
 **Đừng Replace/Remove Default Template ở Settings → Pricing Templates trong
-khoảng từ lúc apply M-1 tới lúc apply M-2.**
+khoảng từ lúc apply M-1 tới lúc deploy code mới (bước 4 của bảng trên).**
+
+⚠ **Cửa sổ này ngắn hơn bản viết đầu tiên** — sửa sau phát hiện C4. Sau khi
+C-C lên production, tab Default đọc/ghi dòng scope `ACCOUNT` và nút Remove xoá
+dòng `ACCOUNT`; dòng `GLOBAL` **không thể chạm tới từ UI** nữa. Từ lúc deploy
+trở đi Manager upload đè thoải mái, GUARD 3 của M-2 vẫn đúng. Chỉ **code cũ**
+mới sửa được dòng GLOBAL.
 
 N bản sao được chụp tại thời điểm M-1. Thay bản gốc sau đó làm chúng mang nội
 dung **cũ**, trong khi tab Settings hiển thị nội dung **mới** — hai thứ khác
