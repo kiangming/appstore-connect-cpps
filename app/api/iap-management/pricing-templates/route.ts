@@ -10,6 +10,7 @@ import {
 } from "@/lib/iap-management/queries/templates";
 import { ensureAppRegistered } from "@/lib/iap-management/queries/iaps";
 import { getActiveAccount } from "@/lib/get-active-account";
+import { findAllAccountsPublic } from "@/lib/asc-account-repository";
 import { getApp } from "@/lib/asc-client";
 import { log } from "@/lib/logger";
 
@@ -29,6 +30,12 @@ export const runtime = "nodejs";
  *                  chỉ để một tab trình duyệt cũ mở từ trước lúc deploy
  *                  không upload hỏng. Cả hai đều nghĩa là "template mặc
  *                  định của account đang chọn". Bỏ bí danh sau khi M-2 chạy.
+ *   account_id — khi scope=ACCOUNT: account NÀO. ⚠ Bắt buộc về mặt ngữ
+ *                nghĩa dù kỹ thuật là optional: thiếu nó, route rơi về
+ *                account đang active — mà tab Default cho phép XEM account
+ *                khác account active, nên "rơi về active" chính là ca ghi
+ *                nhầm chỗ. Client LUÔN gửi. Fallback chỉ để một tab cũ
+ *                không upload hỏng.
  *   app_id     — required when scope=APP
  *
  * Hotfix 11: scope-conditional admin gate. `scope=GLOBAL` (Default
@@ -50,6 +57,7 @@ export async function POST(req: Request) {
   let file: File | null = null;
   let scopeField: string | null = null;
   let appIdField: string | null = null;
+  let accountIdField: string | null = null;
   let appleAppIdField: string | null = null;
   try {
     const form = await req.formData();
@@ -59,6 +67,8 @@ export async function POST(req: Request) {
     if (typeof scopeRaw === "string") scopeField = scopeRaw;
     const appIdRaw = form.get("app_id");
     if (typeof appIdRaw === "string") appIdField = appIdRaw;
+    const accountIdRaw = form.get("account_id");
+    if (typeof accountIdRaw === "string") accountIdField = accountIdRaw;
     // IAP.p1.j Issue 3: Settings → Per-App tab live-fetches Apple's app
     // catalog and sends the Apple numeric ID; the route resolves to the
     // internal iap_mgmt.apps UUID via ensureAppRegistered (auto-registers
@@ -90,8 +100,29 @@ export async function POST(req: Request) {
         { status: 403 },
       );
     }
-    const accountCreds = await getActiveAccount();
-    scope = { kind: "ACCOUNT", account_id: accountCreds.id };
+    // ⚠ C-D — CHỖ NGUY HIỂM NHẤT CỦA CHUNK NÀY.
+    //   Tab Default cho phép Manager XEM và THAY template của một account
+    //   KHÁC account đang active ở TopNav. Nếu route tự suy account từ
+    //   getActiveAccount(), thì "chọn account B rồi bấm Replace" sẽ ghi đè
+    //   template của A — mất 1140 ô thật, im lặng, và bản bị mất là bản
+    //   Manager đang không nhìn.
+    //   Nên account đến TỪ CLIENT, và được đối chiếu với danh sách thật
+    //   trước khi dùng (soft-ref: không FK nào làm việc này giúp).
+    let accountId: string;
+    if (accountIdField) {
+      const known = await findAllAccountsPublic();
+      if (!known.some((a) => a.id === accountIdField)) {
+        return NextResponse.json(
+          { error: `Unknown ASC account "${accountIdField}".` },
+          { status: 400 },
+        );
+      }
+      accountId = accountIdField;
+    } else {
+      // Back-compat cho tab trình duyệt mở từ trước lúc deploy.
+      accountId = (await getActiveAccount()).id;
+    }
+    scope = { kind: "ACCOUNT", account_id: accountId };
   } else if (scopeField === "APP") {
     let internalAppId = appIdField;
     if (!internalAppId && appleAppIdField) {

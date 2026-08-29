@@ -50,6 +50,10 @@ export interface TemplateHeader {
   uploaded_at: string;
   uploaded_by: string;
   source_filename: string | null;
+  /** C-D: dấu vết nguồn gốc. NOT NULL ⇒ bản do migration nhân bản, chưa ai
+   *  cấu hình riêng. Upload đè sinh bản mới với origin_note = NULL, nên pill
+   *  "do migration" tự biến mất — không cần ai đi xoá cờ. */
+  origin_note: string | null;
 }
 
 export interface TemplateWithEntries {
@@ -119,7 +123,7 @@ async function fetchTemplateHeader(
   const db = iapDb();
   const base = db
     .from("price_tier_templates")
-    .select("id, scope_type, scope_app_id, uploaded_at, uploaded_by, source_filename");
+    .select("id, scope_type, scope_app_id, scope_account_id, uploaded_at, uploaded_by, source_filename, origin_note");
   const res = await applyScopeFilter(base, scope).maybeSingle();
   if (res.error) {
     throw new Error(`Template header fetch failed: ${res.error.message}`);
@@ -320,6 +324,63 @@ export async function listUsdTiersForSource(
   return (res.data ?? []) as UsdTierEntry[];
 }
 
+export interface AccountTemplateSummary {
+  account_id: string;
+  template: TemplateHeader | null;
+  entry_count: number;
+}
+
+/**
+ * C-D: tóm tắt template mặc định của MỖI account trong danh sách truyền vào.
+ *
+ * ⚠ Trả về một dòng cho MỌI account được hỏi, kể cả account chưa có template
+ * (`template: null`). Đó là điều kiện để dropdown hiện đủ account — lập luận
+ * đã viết ở Settings → API Key Pool: ẩn account chưa cấu hình đi thì "chưa
+ * có template" và "account không tồn tại" nhìn giống hệt nhau, mà cái đầu
+ * mới là trạng thái bình thường của một account vừa được thêm.
+ *
+ * Đây cũng là nguồn của badge "x / N account": N = độ dài danh sách truyền
+ * vào (account đang tồn tại), x = số dòng có `template !== null`.
+ */
+export async function listAccountTemplateSummaries(
+  accountIds: readonly string[],
+): Promise<AccountTemplateSummary[]> {
+  if (accountIds.length === 0) return [];
+  const db = iapDb();
+  const res = await db
+    .from("price_tier_templates")
+    .select(
+      "id, scope_type, scope_app_id, scope_account_id, uploaded_at, uploaded_by, source_filename, origin_note",
+    )
+    .eq("scope_type", "ACCOUNT")
+    .in("scope_account_id", accountIds as string[]);
+  if (res.error) {
+    throw new Error(`Account templates fetch failed: ${res.error.message}`);
+  }
+  const rows = (res.data ?? []) as Array<
+    TemplateHeader & { scope_account_id: string | null }
+  >;
+  const byAccount = new Map(rows.map((r) => [r.scope_account_id ?? "", r]));
+
+  const out: AccountTemplateSummary[] = [];
+  for (const accountId of accountIds) {
+    const template = byAccount.get(accountId) ?? null;
+    let entry_count = 0;
+    if (template) {
+      const cnt = await db
+        .from("price_tier_template_entries")
+        .select("template_id", { count: "exact", head: true })
+        .eq("template_id", template.id);
+      if (cnt.error) {
+        throw new Error(`Entry count failed for ${template.id}: ${cnt.error.message}`);
+      }
+      entry_count = cnt.count ?? 0;
+    }
+    out.push({ account_id: accountId, template, entry_count });
+  }
+  return out;
+}
+
 /**
  * List every app that has its own template + a summary count. Used by the
  * Settings "Per-App Templates" tab.
@@ -328,7 +389,7 @@ export async function listAppsWithTemplates(): Promise<AppTemplateSummary[]> {
   const db = iapDb();
   const templatesRes = await db
     .from("price_tier_templates")
-    .select("id, scope_type, scope_app_id, uploaded_at, uploaded_by, source_filename")
+    .select("id, scope_type, scope_app_id, scope_account_id, uploaded_at, uploaded_by, source_filename, origin_note")
     .eq("scope_type", "APP")
     .order("uploaded_at", { ascending: false });
   if (templatesRes.error) {
@@ -691,7 +752,7 @@ export async function deleteTemplate(template_id: string): Promise<TemplateHeade
   const db = iapDb();
   const headerRes = await db
     .from("price_tier_templates")
-    .select("id, scope_type, scope_app_id, uploaded_at, uploaded_by, source_filename")
+    .select("id, scope_type, scope_app_id, scope_account_id, uploaded_at, uploaded_by, source_filename, origin_note")
     .eq("id", template_id)
     .maybeSingle();
   if (headerRes.error) {

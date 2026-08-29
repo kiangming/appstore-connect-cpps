@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import type {
+  AccountTemplateSummary,
   AppTemplateSummary,
   TemplateOverview,
 } from "@/lib/iap-management/queries/templates";
+import type { AccountOption } from "./DefaultTemplateTab";
 import { SettingsTabs } from "@/components/iap-management/settings/SettingsTabs";
 import { DefaultTemplateTab } from "./DefaultTemplateTab";
 import { PerAppTemplateTab } from "./PerAppTemplateTab";
@@ -12,6 +14,11 @@ import { PerAppTemplateTab } from "./PerAppTemplateTab";
 interface Props {
   defaultOverview: TemplateOverview;
   appsWithTemplates: AppTemplateSummary[];
+  /** C-D: mọi account đang tồn tại (mẫu số của badge). */
+  accounts: AccountOption[];
+  /** C-D: account nào đã có template (tử số của badge). */
+  accountSummaries: AccountTemplateSummary[];
+  selectedAccountId: string;
   /** Hotfix 11: role-aware rendering. Non-admin sees Default tab in
    *  read-only mode (upload/remove hidden) but the Per-App tab is full
    *  edit. The Per-App tab uses currentUserEmail to gate the
@@ -25,10 +32,28 @@ type Tab = "default" | "per-app";
 export function PricingTiersClient({
   defaultOverview,
   appsWithTemplates,
+  accounts,
+  accountSummaries,
+  selectedAccountId,
   isAdmin,
   currentUserEmail,
 }: Props) {
   const [tab, setTab] = useState<Tab>("default");
+
+  // D2 — badge đếm "account CÓ template / account ĐANG TỒN TẠI".
+  //
+  // ⚠ Mẫu số là `accounts.length` (account đang tồn tại), KHÔNG phải số
+  //   template. Account thứ 7 thêm sau migration phải làm badge thành 6/7 —
+  //   nếu mẫu số lấy từ accountSummaries đã lọc, badge sẽ mãi là 6/6 và
+  //   giấu đi đúng thứ nó sinh ra để hiện.
+  //
+  // Vì sao không đếm số ô như trước: badge nằm ở dải ĐIỀU HƯỚNG, nên con số
+  // đúng ở đó là con số cần biết TRƯỚC khi click. Số ô đã có sẵn ở thẻ
+  // "Populated entries" bên trong. Và badge tab bên cạnh đang đếm template —
+  // hai badge cạnh nhau đếm hai loại khác nhau là một bẫy đọc.
+  const accountsWithTemplate = accountSummaries.filter(
+    (s) => s.template !== null,
+  ).length;
 
   return (
     <div className="p-8 max-w-6xl mx-auto">
@@ -42,9 +67,9 @@ export function PricingTiersClient({
           Pricing Templates
         </h1>
         <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
-          Default Template applies to every app; per-app templates override
-          the Default for specific apps. Apple&apos;s auto-equalization fills
-          in territories that no template covers.
+          Mỗi ASC account có Default Template riêng, áp dụng cho mọi app của
+          account đó. Template theo app ghi đè Default của account. Territory
+          nào không có trong template thì Apple tự auto-equalize.
         </p>
       </div>
 
@@ -52,7 +77,7 @@ export function PricingTiersClient({
         <nav className="flex gap-6" aria-label="Pricing templates tabs">
           <TabButton
             label="Default Template"
-            count={defaultOverview.populated_entry_count}
+            count={`${accountsWithTemplate} / ${accounts.length} account`}
             active={tab === "default"}
             onClick={() => setTab("default")}
           />
@@ -66,7 +91,14 @@ export function PricingTiersClient({
       </div>
 
       {tab === "default" ? (
-        <DefaultTemplateTab overview={defaultOverview} readOnly={!isAdmin} />
+        <DefaultTemplateTab
+          overview={defaultOverview}
+          readOnly={!isAdmin}
+          accounts={accounts}
+          summaries={accountSummaries}
+          selectedAccountId={selectedAccountId}
+          currentUserEmail={currentUserEmail}
+        />
       ) : (
         <PerAppTemplateTab
           appsWithTemplates={appsWithTemplates}
@@ -84,7 +116,7 @@ function TabButton({
   onClick,
 }: {
   label: string;
-  count: number;
+  count: number | string;
   active: boolean;
   onClick: () => void;
 }) {
