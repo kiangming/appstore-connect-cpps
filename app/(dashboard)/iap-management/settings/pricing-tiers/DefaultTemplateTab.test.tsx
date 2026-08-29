@@ -16,6 +16,14 @@
  *                                   SYSTEM_MIGRATION.
  *   (f) phân biệt modal bằng chuỗi 'SYSTEM_MIGRATION' — bản sao hằng số của
  *                                   file SQL, sẽ trôi.
+ *   (g) NÚT KHÔNG NỐI VÀO GÌ        — [ACCOUNT-default-template] chunk 2.3.
+ *                                   Mọi test (a)–(f) gọi fireEvent.change
+ *                                   THẲNG lên <input type=file>, bỏ qua nút.
+ *                                   Nên `onClick` của Replace và Remove là
+ *                                   vùng KHÔNG AI CANH: xoá đi, cả bộ vẫn
+ *                                   xanh, còn Manager thì bấm mà không có
+ *                                   gì xảy ra. Đây đúng dạng "test đi vòng
+ *                                   qua đường người dùng thật sự đi".
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -76,7 +84,9 @@ function renderTab(opts: {
   currentUserEmail?: string;
 } = {}) {
   const template = opts.template === undefined ? header() : opts.template;
-  render(
+  // trả về kết quả render để (g) unmount được giữa hai trạng thái của cùng
+  // một nút; các test (a)–(f) bỏ qua giá trị trả về, hành vi không đổi.
+  return render(
     <DefaultTemplateTab
       overview={overview(template)}
       accounts={ACCOUNTS}
@@ -254,5 +264,60 @@ describe("empty state của account chưa có template (mockup State 2)", () => 
     renderTab({ selected: "account-moi", template: null });
     expect(screen.getByText(/Chưa có Default Template cho Account Mới/)).toBeTruthy();
     expect(screen.getByText(/không còn tầng global đỡ phía sau/i)).toBeTruthy();
+  });
+});
+
+describe("(g) ⚠ NÚT có thật sự nối vào hành vi không", () => {
+  // Vì sao phải spy lên prototype: nút Replace không tự làm gì cả, việc duy
+  // nhất của nó là gọi fileInputRef.current.click() để mở hộp chọn file của
+  // hệ điều hành. jsdom không mở hộp nào, nên KHÔNG có hiệu ứng quan sát
+  // được nào khác để bám vào — lời gọi .click() CHÍNH LÀ hành vi.
+  it("bấm Replace mở hộp chọn file (onClick nối vào <input type=file>)", () => {
+    const clickSpy = vi
+      .spyOn(HTMLInputElement.prototype, "click")
+      .mockImplementation(() => {});
+    try {
+      renderTab({ template: header() });
+      fireEvent.click(screen.getByTestId("upload-button"));
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      clickSpy.mockRestore();
+    }
+  });
+
+  it("nút hiện chữ Replace khi ĐÃ có template, Upload .xlsx khi chưa", () => {
+    // Cùng một nút, hai nghĩa. Nếu điều kiện đảo, Manager của một account
+    // chưa có template sẽ đọc là "Replace" — tức là tin rằng có cái để thay.
+    const { unmount } = renderTab({ template: header() });
+    expect(screen.getByTestId("upload-button").textContent).toContain("Replace");
+    unmount();
+    renderTab({ template: null });
+    expect(screen.getByTestId("upload-button").textContent).toContain("Upload .xlsx");
+  });
+
+  it("bấm Remove gọi DELETE đúng template id (onClick nối vào handleRemove)", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    renderTab({ template: header({ id: "tpl-corp" }) });
+    fireEvent.click(screen.getByText("Remove"));
+
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    const call = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    expect(call[0]).toBe("/api/iap-management/pricing-templates/tpl-corp");
+    expect(call[1]).toMatchObject({ method: "DELETE" });
+  });
+
+  it("Remove bị huỷ ở hộp xác nhận thì KHÔNG gọi DELETE", async () => {
+    // Khẳng định này là thứ phân biệt "nút nối vào handleRemove" với "nút
+    // nối vào một fetch DELETE trần". Bỏ nó đi thì một nút xoá KHÔNG HỎI
+    // vẫn xanh — và xoá 1140 ô là việc không lùi được từ UI.
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    renderTab({ template: header({ id: "tpl-corp" }) });
+    fireEvent.click(screen.getByText("Remove"));
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("account chưa có template thì KHÔNG có nút Remove để bấm", () => {
+    renderTab({ selected: "account-moi", template: null });
+    expect(screen.queryByText("Remove")).toBeNull();
   });
 });
