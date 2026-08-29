@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowLeft, Sparkles, Upload } from "lucide-react";
 
 import { requireIapSession } from "@/lib/iap-management/auth";
+import { getActiveAccount } from "@/lib/get-active-account";
 import { fetchDefaultMatrix } from "@/lib/iap-management/queries/template-matrix";
 import { DefaultMatrixView } from "@/components/iap-management/pricing-templates/DefaultMatrixView";
 
@@ -13,7 +14,9 @@ export default async function DefaultMatrixPage() {
   // the same data either way — no admin gate here.
   await requireIapSession();
 
-  const result = await fetchDefaultMatrix();
+  // C-A: xem ma trận của template mặc định NÀO — account đang chọn.
+  const creds = await getActiveAccount();
+  const result = await fetchDefaultMatrix(creds.id);
 
   if (!result) {
     return (

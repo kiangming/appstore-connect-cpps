@@ -143,7 +143,9 @@ export async function GET(
       const template =
         pricingSource === "APP_TEMPLATE"
           ? await getAppTemplate(existing.iap.app_id)
-          : await getDefaultTemplate();
+          : creds
+            ? await getDefaultTemplate(creds.id)
+            : null;
       if (template) {
         for (const entry of template.entries) {
           if (entry.tier_id !== tierId) continue;

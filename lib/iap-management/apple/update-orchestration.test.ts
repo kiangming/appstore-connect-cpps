@@ -484,7 +484,7 @@ describe("updateIapOnApple — pricing stage (delegated)", () => {
       appleIapId: "iap-1",
       diff: emptyDiff(),
       newUsdPrice: 1.99,
-      source: { kind: "DEFAULT_TEMPLATE" },
+      source: { kind: "DEFAULT_TEMPLATE", account_id: "acct-1" },
       currentTierId: "TIER_5",
       audit: baseAudit,
     });
@@ -492,7 +492,7 @@ describe("updateIapOnApple — pricing stage (delegated)", () => {
       expect.objectContaining({
         localTierId: "TIER_5",
         usdPrice: 1.99,
-        source: { kind: "DEFAULT_TEMPLATE" },
+        source: { kind: "DEFAULT_TEMPLATE", account_id: "acct-1" },
       }),
     );
     expect(out.stages.pricing.changed).toBe(true);

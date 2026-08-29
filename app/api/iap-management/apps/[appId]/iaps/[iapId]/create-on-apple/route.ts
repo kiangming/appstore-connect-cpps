@@ -347,7 +347,7 @@ export async function POST(
     formPricingSource === "APP_TEMPLATE"
       ? { kind: "APP_TEMPLATE", app_id: existing.iap.app_id }
       : formPricingSource === "DEFAULT_TEMPLATE"
-        ? { kind: "DEFAULT_TEMPLATE" }
+        ? { kind: "DEFAULT_TEMPLATE", account_id: creds.id }
         : { kind: "APPLE" };
   console.log(
     `[create-on-apple] Stage 2 pricing source=${source.kind} apple_iap_id=${appleIapId}`,

@@ -495,7 +495,7 @@ describe("applyPricingSchedule — three-source pricing model (IAP.p1.e)", () =>
       appleIapId: "iap-1",
       localTierId: "TIER_5",
       usdPrice: 4.99,
-      source: { kind: "DEFAULT_TEMPLATE" },
+      source: { kind: "DEFAULT_TEMPLATE", account_id: "acct-1" },
       audit: baseAudit,
     });
     expect(out.kind).toBe("set");
@@ -578,7 +578,7 @@ describe("applyPricingSchedule — three-source pricing model (IAP.p1.e)", () =>
       appleIapId: "iap-1",
       localTierId: "TIER_5",
       usdPrice: 4.99,
-      source: { kind: "DEFAULT_TEMPLATE" },
+      source: { kind: "DEFAULT_TEMPLATE", account_id: "acct-1" },
       audit: baseAudit,
     });
     expect(out.kind).toBe("partial-template-fail");
@@ -623,7 +623,7 @@ describe("applyPricingSchedule — three-source pricing model (IAP.p1.e)", () =>
       appleIapId: "iap-1",
       localTierId: "TIER_5",
       usdPrice: 4.99,
-      source: { kind: "DEFAULT_TEMPLATE" },
+      source: { kind: "DEFAULT_TEMPLATE", account_id: "acct-1" },
       audit: baseAudit,
     });
     expect(out.kind).toBe("set");

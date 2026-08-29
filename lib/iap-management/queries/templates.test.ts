@@ -105,7 +105,7 @@ describe("listUsdTiersForSource — Cycle 43 source→table mapping", () => {
       });
     });
 
-    const out = await listUsdTiersForSource({ kind: "DEFAULT_TEMPLATE" });
+    const out = await listUsdTiersForSource({ kind: "DEFAULT_TEMPLATE", account_id: "acct-1" });
     expect(out).toEqual([{ tier_id: "TIER_8", customer_price: 7.99 }]);
     expect(tablesSeen).toContain("price_tier_templates");
     expect(tablesSeen).toContain("price_tier_template_entries");
@@ -143,7 +143,7 @@ describe("listUsdTiersForSource — Cycle 43 source→table mapping", () => {
       throw new Error("should not query entries when no template header exists");
     });
 
-    const out = await listUsdTiersForSource({ kind: "DEFAULT_TEMPLATE" });
+    const out = await listUsdTiersForSource({ kind: "DEFAULT_TEMPLATE", account_id: "acct-1" });
     expect(out).toEqual([]);
   });
 

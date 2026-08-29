@@ -24,13 +24,28 @@ import { findAllAccounts } from "@/lib/asc-account-repository";
 
 const ENTRY_BATCH_SIZE = 1000;
 
+/**
+ * C-A [ACCOUNT-default-template] — GUARD CẤU TRÚC.
+ *
+ * `{ kind: "GLOBAL" }` (không tham số) đã bị thay bằng
+ * `{ kind: "ACCOUNT"; account_id }`. `account_id` là BẮT BUỘC — không
+ * optional, không default — nên `tsc` bắt được MỌI call site đọc template
+ * mặc định mà không nói rõ của account nào. Đó là mục đích chính của thay
+ * đổi này, không phải hệ quả phụ.
+ *
+ * ⚠ C-A CHƯA ĐỔI HÀNH VI. Truy vấn bên dưới vẫn đọc dòng scope_type='GLOBAL'
+ *   (M-1 giữ nguyên dòng đó, xem migration 20260828010000). C-C mới đổi sang
+ *   đọc theo account. Tách làm hai bước để chunk này có diff thuần-kiểu và
+ *   con số call-site đếm được.
+ */
 export type TemplateScope =
-  | { kind: "GLOBAL" }
+  | { kind: "ACCOUNT"; account_id: string }
   | { kind: "APP"; app_id: string };
 
 export interface TemplateHeader {
   id: string;
-  scope_type: "GLOBAL" | "APP";
+  /** M-1 đã thêm 'ACCOUNT' vào CHECK; 'GLOBAL' còn tới khi M-2 chạy. */
+  scope_type: "GLOBAL" | "APP" | "ACCOUNT";
   scope_app_id: string | null;
   uploaded_at: string;
   uploaded_by: string;
@@ -87,7 +102,13 @@ function applyScopeFilter<T extends { eq: (col: string, val: unknown) => T; is: 
   query: T,
   scope: TemplateScope,
 ): T {
-  if (scope.kind === "GLOBAL") {
+  if (scope.kind === "ACCOUNT") {
+    // ⚠ C-A: CHƯA đọc theo account. Vẫn là dòng GLOBAL, y như trước — nên
+    //   chunk này không đổi một byte hành vi nào ở runtime.
+    //   C-C thay bằng:
+    //     .eq("scope_type", "ACCOUNT").eq("scope_account_id", scope.account_id)
+    //   và chỉ được làm sau khi M-2 xoá dòng GLOBAL.
+    void scope.account_id;
     return query.eq("scope_type", "GLOBAL").is("scope_app_id", null);
   }
   return query.eq("scope_type", "APP").eq("scope_app_id", scope.app_id);
@@ -145,8 +166,10 @@ async function fetchEntries(templateId: string): Promise<FlatTemplateEntry[]> {
  * empty state). Orchestrator interprets null as "default source unavailable
  * — gray it out in the UI."
  */
-export async function getDefaultTemplate(): Promise<TemplateWithEntries | null> {
-  const template = await fetchTemplateHeader({ kind: "GLOBAL" });
+export async function getDefaultTemplate(
+  accountId: string,
+): Promise<TemplateWithEntries | null> {
+  const template = await fetchTemplateHeader({ kind: "ACCOUNT", account_id: accountId });
   if (!template) return null;
   const entries = await fetchEntries(template.id);
   return { template, entries };
@@ -219,7 +242,7 @@ export async function getAppTemplate(
  */
 export type UsdTierSource =
   | { kind: "APPLE" }
-  | { kind: "DEFAULT_TEMPLATE" }
+  | { kind: "DEFAULT_TEMPLATE"; account_id: string }
   | { kind: "APP_TEMPLATE"; app_id: string };
 
 export async function listUsdTiersForSource(
@@ -233,7 +256,7 @@ export async function listUsdTiersForSource(
 
   const scope: TemplateScope =
     source.kind === "DEFAULT_TEMPLATE"
-      ? { kind: "GLOBAL" }
+      ? { kind: "ACCOUNT", account_id: source.account_id }
       : { kind: "APP", app_id: source.app_id };
   const header = await fetchTemplateHeader(scope);
   if (!header) return [];
@@ -470,7 +493,11 @@ export async function replaceTemplate(
   const db = iapDb();
   const flatEntries = flattenTemplateEntries(parsed);
 
-  const scope_type = scope.kind;
+  // ⚠ C-A staged: scope ACCOUNT vẫn GHI vào dòng scope_type='GLOBAL', đúng
+  //   như trước. Ghi thẳng 'ACCOUNT' mà không kèm scope_account_id sẽ vi phạm
+  //   CHECK coherence mà M-1 vừa thêm (INSERT bị Postgres từ chối) — nên
+  //   việc đổi đường ghi thuộc C-C, sau khi cột được thread đầy đủ.
+  const scope_type: "GLOBAL" | "APP" = scope.kind === "APP" ? "APP" : "GLOBAL";
   const scope_app_id = scope.kind === "APP" ? scope.app_id : null;
 
   // 1. Open an audit batch up front so failures get logged.

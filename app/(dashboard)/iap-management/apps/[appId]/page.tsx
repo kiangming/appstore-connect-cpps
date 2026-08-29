@@ -122,7 +122,9 @@ async function IapListContent({ appId }: { appId: string }) {
         appTemplateEntryCount = summary.entry_count;
       }
     }
-    const def = await getTemplateSummary({ kind: "GLOBAL" });
+    const def = ascAccountId
+      ? await getTemplateSummary({ kind: "ACCOUNT", account_id: ascAccountId })
+      : null;
     defaultTemplateExists = def !== null;
   } catch {
     // registration + seed + drafts + template lookups are non-essential

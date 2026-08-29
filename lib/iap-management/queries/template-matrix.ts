@@ -182,19 +182,26 @@ export function composeMatrix(args: {
 
 // ── DB-bound fetchers ────────────────────────────────────────────────────────
 
-interface ScopeQuery {
-  scope: "GLOBAL" | "APP";
-  appId?: string;
-}
+/**
+ * C-A [ACCOUNT-default-template]: `{ scope: "GLOBAL" }` (không tham số) đổi
+ * thành `{ scope: "ACCOUNT"; accountId }` — bắt buộc. Cùng mục đích với
+ * TemplateScope ở queries/templates.ts: `tsc` phải bắt được mọi chỗ đọc
+ * template mặc định mà không nói của account nào.
+ */
+type ScopeQuery =
+  | { scope: "ACCOUNT"; accountId: string }
+  | { scope: "APP"; appId: string };
 
 async function fetchTemplateId(scope: ScopeQuery): Promise<string | null> {
   const db = iapDb();
   let q = db
     .from("price_tier_templates")
     .select("id")
-    .eq("scope_type", scope.scope);
+    // ⚠ C-A: nhánh ACCOUNT vẫn map về dòng GLOBAL — chưa đổi hành vi.
+    //   C-C đổi sang scope_type='ACCOUNT' + eq(scope_account_id, …).
+    .eq("scope_type", scope.scope === "APP" ? "APP" : "GLOBAL");
   q =
-    scope.scope === "APP" && scope.appId
+    scope.scope === "APP"
       ? q.eq("scope_app_id", scope.appId)
       : q.is("scope_app_id", null);
   const { data, error } = await q.maybeSingle();
@@ -270,8 +277,10 @@ export interface AppleMatrixResult {
 
 /** Default (GLOBAL) matrix. Returns null when no Default Template
  *  exists — the page renders its empty state. */
-export async function fetchDefaultMatrix(): Promise<AppleMatrixResult | null> {
-  const templateId = await fetchTemplateId({ scope: "GLOBAL" });
+export async function fetchDefaultMatrix(
+  accountId: string,
+): Promise<AppleMatrixResult | null> {
+  const templateId = await fetchTemplateId({ scope: "ACCOUNT", accountId });
   if (!templateId) return null;
   const [entries, tierNames, header] = await Promise.all([
     fetchAllEntries(templateId),
@@ -287,10 +296,14 @@ export async function fetchDefaultMatrix(): Promise<AppleMatrixResult | null> {
  *  template hasn't been uploaded — the page renders its empty state. */
 export async function fetchPerAppMatrix(
   appId: string,
+  /** ⚠ C-A: BẮT BUỘC. Hàm này đọc CẢ template mặc định (để diff-annotate ô),
+   *  nên nó cũng là một "đường đọc GLOBAL" — census §0.4 ban đầu bỏ sót nó
+   *  vì chỉ grep theo tên hàm ở tầng page, không lần vào trong. */
+  accountId: string,
 ): Promise<AppleMatrixResult | null> {
   const [perAppTemplateId, defaultTemplateId] = await Promise.all([
     fetchTemplateId({ scope: "APP", appId }),
-    fetchTemplateId({ scope: "GLOBAL" }),
+    fetchTemplateId({ scope: "ACCOUNT", accountId }),
   ]);
   if (!perAppTemplateId) return null;
   const [perAppEntries, defaultEntries, tierNames, header] = await Promise.all([

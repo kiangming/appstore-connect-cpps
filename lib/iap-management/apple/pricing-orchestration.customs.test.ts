@@ -274,7 +274,7 @@ describe("CP-2 — customs apply under ALL THREE pricing sources", () => {
       appleIapId: "iap-1",
       localTierId: "TIER_5",
       usdPrice: 4.99,
-      source: { kind: "DEFAULT_TEMPLATE" },
+      source: { kind: "DEFAULT_TEMPLATE", account_id: "acct-1" },
       customPrices: custom,
       audit: baseAudit,
     });

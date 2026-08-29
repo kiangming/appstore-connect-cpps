@@ -20,8 +20,12 @@ export default async function NewIapPage({ params }: PageProps) {
   await requireIapSession();
 
   let appName = "";
+  // C-A: `creds` được nâng khỏi try block vì template mặc định giờ cần
+  // account_id. Vẫn non-fatal: lỗi Apple chỉ làm mất tên app, và creds=null
+  // làm template mặc định hiện như "chưa có" thay vì làm hỏng trang.
+  let creds: Awaited<ReturnType<typeof getActiveAccount>> | null = null;
   try {
-    const creds = await getActiveAccount();
+    creds = await getActiveAccount();
     const app = await getApp(creds, params.appId);
     appName = app.data.attributes.name;
   } catch {
@@ -37,7 +41,9 @@ export default async function NewIapPage({ params }: PageProps) {
   let appTemplateAvailable = false;
   let appTemplateEntryCount = 0;
   try {
-    const def = await getTemplateSummary({ kind: "GLOBAL" });
+    const def = creds
+      ? await getTemplateSummary({ kind: "ACCOUNT", account_id: creds.id })
+      : null;
     if (def) {
       defaultTemplateAvailable = true;
       defaultTemplateEntryCount = def.entry_count;

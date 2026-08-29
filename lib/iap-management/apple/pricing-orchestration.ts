@@ -58,9 +58,14 @@ import {
 } from "./territory-price-points-cache";
 import type { BatchPricePointCatalog } from "./batch-price-point-catalog";
 
+/**
+ * C-A [ACCOUNT-default-template]: DEFAULT_TEMPLATE giờ BẮT BUỘC mang
+ * `account_id`. Nguồn giá trị ở mọi call-site là `creds.id` — đã có sẵn
+ * trong tay tại cả 4 chỗ dựng PricingSource, không phải thread thêm gì.
+ */
 export type PricingSource =
   | { kind: "APPLE" }
-  | { kind: "DEFAULT_TEMPLATE" }
+  | { kind: "DEFAULT_TEMPLATE"; account_id: string }
   | { kind: "APP_TEMPLATE"; app_id: string };
 
 export interface MissingPricePoint {
@@ -418,7 +423,7 @@ async function runPricingFlow(
   if (source.kind !== "APPLE") {
     const template: TemplateWithEntries | null =
       source.kind === "DEFAULT_TEMPLATE"
-        ? await getDefaultTemplate()
+        ? await getDefaultTemplate(source.account_id)
         : await getAppTemplate(source.app_id);
 
     if (!template) {

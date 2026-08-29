@@ -426,7 +426,7 @@ async function runExecute(
     pricingSourceKind === "APP_TEMPLATE"
       ? { kind: "APP_TEMPLATE", app_id: internalAppId }
       : pricingSourceKind === "DEFAULT_TEMPLATE"
-        ? { kind: "DEFAULT_TEMPLATE" }
+        ? { kind: "DEFAULT_TEMPLATE", account_id: creds.id }
         : { kind: "APPLE" };
   console.log(
     `[bulk-execute] pricing source=${pricingSource.kind}`,

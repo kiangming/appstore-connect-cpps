@@ -134,7 +134,9 @@ export default async function EditIapPage({ params }: PageProps) {
   let appTemplateAvailable = false;
   let appTemplateEntryCount = 0;
   try {
-    const def = await getTemplateSummary({ kind: "GLOBAL" });
+    const def = creds
+      ? await getTemplateSummary({ kind: "ACCOUNT", account_id: creds.id })
+      : null;
     if (def) {
       defaultTemplateAvailable = true;
       defaultTemplateEntryCount = def.entry_count;

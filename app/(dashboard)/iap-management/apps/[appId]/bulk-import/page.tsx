@@ -64,11 +64,11 @@ export default async function BulkImportPage({ params }: PageProps) {
     }
     const [appleTiers, defaultTiers, appTiers, def, appTpl] = await Promise.all([
       listUsdTiersForSource({ kind: "APPLE" }),
-      listUsdTiersForSource({ kind: "DEFAULT_TEMPLATE" }),
+      listUsdTiersForSource({ kind: "DEFAULT_TEMPLATE", account_id: creds.id }),
       internalAppId
         ? listUsdTiersForSource({ kind: "APP_TEMPLATE", app_id: internalAppId })
         : Promise.resolve<UsdTierEntry[]>([]),
-      getTemplateSummary({ kind: "GLOBAL" }),
+      getTemplateSummary({ kind: "ACCOUNT", account_id: creds.id }),
       internalAppId
         ? getTemplateSummary({ kind: "APP", app_id: internalAppId })
         : Promise.resolve(null),

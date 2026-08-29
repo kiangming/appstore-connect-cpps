@@ -1,4 +1,5 @@
 import { requireIapSession } from "@/lib/iap-management/auth";
+import { getActiveAccount } from "@/lib/get-active-account";
 import {
   getTemplateOverview,
   listAppsWithTemplates,
@@ -22,8 +23,12 @@ export default async function PricingTiersPage() {
   // pre-list local apps. appsWithTemplates is still served from the DB
   // because the table also captures upload metadata + per-template
   // entry counts that aren't exposed by Apple's app catalog.
+  // C-A: template mặc định luôn phải nói của account nào. Nguồn ở đây là
+  // account đang chọn ở AccountSwitcher (C-D sẽ thay bằng dropdown riêng
+  // trong tab Default, khuôn Key Pool).
+  const creds = await getActiveAccount();
   const [defaultOverview, appsWithTemplates] = await Promise.all([
-    getTemplateOverview({ kind: "GLOBAL" }),
+    getTemplateOverview({ kind: "ACCOUNT", account_id: creds.id }),
     listAppsWithTemplates(),
   ]);
 

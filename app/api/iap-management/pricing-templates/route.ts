@@ -84,7 +84,11 @@ export async function POST(req: Request) {
         { status: 403 },
       );
     }
-    scope = { kind: "GLOBAL" };
+    // C-A: upload template mặc định giờ phải nói của account nào.
+    // ⚠ Đường GHI vẫn tạo dòng scope_type='GLOBAL' (replaceTemplate map
+    //   ACCOUNT → GLOBAL cho tới C-C) — xem comment trong queries/templates.ts.
+    const globalCreds = await getActiveAccount();
+    scope = { kind: "ACCOUNT", account_id: globalCreds.id };
   } else if (scopeField === "APP") {
     let internalAppId = appIdField;
     if (!internalAppId && appleAppIdField) {

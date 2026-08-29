@@ -5,6 +5,7 @@ import { notFound } from "next/navigation";
 import { Package2, Upload } from "lucide-react";
 
 import { requireIapSession } from "@/lib/iap-management/auth";
+import { getActiveAccount } from "@/lib/get-active-account";
 import { iapDb } from "@/lib/iap-management/db";
 import { fetchPerAppMatrix } from "@/lib/iap-management/queries/template-matrix";
 import { MatrixBreadcrumb } from "@/components/iap-management/pricing-templates/MatrixBreadcrumb";
@@ -48,8 +49,12 @@ export default async function PerAppMatrixPage({ params }: PageProps) {
   const app = await loadApp(appId);
   if (!app) notFound();
 
+  // C-A: fetchPerAppMatrix đọc CẢ template mặc định (để diff-annotate ô),
+  // nên nó cũng cần biết account. `defaultTemplateExists()` ngay dưới là
+  // query inline mà tsc KHÔNG với tới — đó là việc của C-B.
+  const creds = await getActiveAccount();
   const [result, hasDefault] = await Promise.all([
-    fetchPerAppMatrix(appId),
+    fetchPerAppMatrix(appId, creds.id),
     defaultTemplateExists(),
   ]);
 
