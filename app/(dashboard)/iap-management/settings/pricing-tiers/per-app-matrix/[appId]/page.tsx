@@ -8,6 +8,7 @@ import { requireIapSession } from "@/lib/iap-management/auth";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { iapDb } from "@/lib/iap-management/db";
 import { fetchPerAppMatrix } from "@/lib/iap-management/queries/template-matrix";
+import { templateExists } from "@/lib/iap-management/queries/templates";
 import { MatrixBreadcrumb } from "@/components/iap-management/pricing-templates/MatrixBreadcrumb";
 import { PerAppMatrixView } from "@/components/iap-management/pricing-templates/PerAppMatrixView";
 
@@ -31,17 +32,6 @@ async function loadApp(appId: string): Promise<AppRow | null> {
   return (data as AppRow | null) ?? null;
 }
 
-async function defaultTemplateExists(): Promise<boolean> {
-  const { count, error } = await iapDb()
-    .from("price_tier_templates")
-    .select("id", { head: true, count: "exact" })
-    .eq("scope_type", "GLOBAL");
-  if (error) {
-    throw new Error(`Default template existence probe failed: ${error.message}`);
-  }
-  return (count ?? 0) > 0;
-}
-
 export default async function PerAppMatrixPage({ params }: PageProps) {
   await requireIapSession();
 
@@ -49,13 +39,14 @@ export default async function PerAppMatrixPage({ params }: PageProps) {
   const app = await loadApp(appId);
   if (!app) notFound();
 
-  // C-A: fetchPerAppMatrix đọc CẢ template mặc định (để diff-annotate ô),
-  // nên nó cũng cần biết account. `defaultTemplateExists()` ngay dưới là
-  // query inline mà tsc KHÔNG với tới — đó là việc của C-B.
+  // C-B: `defaultTemplateExists()` từng là một query inline chạm thẳng
+  // bảng — đường thứ 10 của census, đường DUY NHẤT mà C-A không bắt được
+  // vì tsc không có kiểu nào để bám. Nay nó đi qua repository và hỏi đúng
+  // câu hỏi mới: "ACCOUNT NÀY có template chưa", không phải "có GLOBAL không".
   const creds = await getActiveAccount();
   const [result, hasDefault] = await Promise.all([
     fetchPerAppMatrix(appId, creds.id),
-    defaultTemplateExists(),
+    templateExists({ kind: "ACCOUNT", account_id: creds.id }),
   ]);
 
   if (!result) {

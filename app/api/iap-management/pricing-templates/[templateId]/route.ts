@@ -3,7 +3,10 @@ import {
   requireIapSession,
   IapUnauthorizedError,
 } from "@/lib/iap-management/auth";
-import { deleteTemplate } from "@/lib/iap-management/queries/templates";
+import {
+  deleteTemplate,
+  getTemplateScopeById,
+} from "@/lib/iap-management/queries/templates";
 import { iapDb } from "@/lib/iap-management/db";
 import { log } from "@/lib/logger";
 
@@ -38,25 +41,23 @@ export async function DELETE(
   // Small race window between this read and deleteTemplate's own header
   // load is acceptable — scope_type doesn't change mid-template-life
   // and the team is small.
-  const scopeProbe = await iapDb()
-    .from("price_tier_templates")
-    .select("scope_type")
-    .eq("id", ctx.params.templateId)
-    .maybeSingle();
-  if (scopeProbe.error) {
-    return NextResponse.json(
-      { error: `Template lookup failed: ${scopeProbe.error.message}` },
-      { status: 500 },
-    );
+  // C-B: đi qua repository thay vì query thẳng bảng — xem
+  // lib/iap-management/queries/templates.structure.test.ts.
+  let scopeProbe: Awaited<ReturnType<typeof getTemplateScopeById>>;
+  try {
+    scopeProbe = await getTemplateScopeById(ctx.params.templateId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Template lookup failed";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
-  if (!scopeProbe.data) {
+  if (!scopeProbe) {
     return NextResponse.json(
       { error: `Template ${ctx.params.templateId} does not exist.` },
       { status: 404 },
     );
   }
   if (
-    scopeProbe.data.scope_type === "GLOBAL" &&
+    scopeProbe.scope_type === "GLOBAL" &&
     session.user.role !== "admin"
   ) {
     return NextResponse.json(

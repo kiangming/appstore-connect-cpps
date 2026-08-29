@@ -181,6 +181,50 @@ export interface TemplateSummary {
 }
 
 /**
+ * C-B: "scope này đã có template chưa" — một câu head/count, không kéo
+ * entries. Tồn tại để `defaultTemplateExists()` (query inline ở trang
+ * per-app-matrix) có chỗ mà đi: đường đó là thứ `tsc` không với tới, nên
+ * nó phải bị chặn bằng test cấu trúc + một helper thay thế, không phải
+ * bằng lời nhắc.
+ */
+export async function templateExists(scope: TemplateScope): Promise<boolean> {
+  const db = iapDb();
+  const base = db
+    .from("price_tier_templates")
+    .select("id", { head: true, count: "exact" });
+  const res = await applyScopeFilter(base, scope);
+  if (res.error) {
+    throw new Error(`Template existence probe failed: ${res.error.message}`);
+  }
+  return (res.count ?? 0) > 0;
+}
+
+/**
+ * C-B: đọc scope của một template theo id. Route DELETE cần nó để gate
+ * quyền theo scope, và trước C-B nó tự query thẳng bảng — chỗ duy nhất
+ * ngoài repository ngoài đường inline ở trang matrix.
+ *
+ * ⚠ Hàm này KHÔNG nhận accountId, và đó là đúng: tra theo khoá chính thì
+ *   không có gì để mà nhầm account. Nhưng nó vẫn phải sống trong
+ *   repository, nếu không allow-list của guard sẽ phải chứa một route —
+ *   và một allow-list có route trong đó là lời mời cho route thứ hai.
+ */
+export async function getTemplateScopeById(
+  templateId: string,
+): Promise<Pick<TemplateHeader, "scope_type"> | null> {
+  const db = iapDb();
+  const res = await db
+    .from("price_tier_templates")
+    .select("scope_type")
+    .eq("id", templateId)
+    .maybeSingle();
+  if (res.error) {
+    throw new Error(`Template lookup failed: ${res.error.message}`);
+  }
+  return (res.data as Pick<TemplateHeader, "scope_type"> | null) ?? null;
+}
+
+/**
  * IAP.p1.j: lightweight "exists + count" variant of getDefaultTemplate /
  * getAppTemplate. Used by page servers (App detail, New IAP) that only
  * need the existence flag and a stat-card count — calling the full
