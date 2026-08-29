@@ -246,7 +246,7 @@ describe("enrichWithTiers — Cycle 43 per-source resolution", () => {
     ...legacyList,
     { tier_id: "TIER_12", customer_price: 12.99 },
   ];
-  // Default (GLOBAL) template USA/USD entries: carries a distinct $7.99 tier.
+  // Default (ACCOUNT-scoped) template USA/USD entries: distinct $7.99 tier.
   const defaultTemplateList: UsdTierEntry[] = [
     { tier_id: "FREE", customer_price: 0 },
     { tier_id: "TIER_1", customer_price: 0.99 },

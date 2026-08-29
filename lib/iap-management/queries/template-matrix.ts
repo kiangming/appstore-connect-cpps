@@ -273,7 +273,7 @@ export interface AppleMatrixResult {
   header: TemplateHeaderInfo;
 }
 
-/** Default (GLOBAL) matrix. Returns null when no Default Template
+/** Default matrix của MỘT account. Returns null when no Default Template
  *  exists — the page renders its empty state. */
 export async function fetchDefaultMatrix(
   accountId: string,

@@ -166,7 +166,7 @@ async function fetchEntries(templateId: string): Promise<FlatTemplateEntry[]> {
 }
 
 /**
- * Load the Default (GLOBAL) Template + entries. Returns null when Manager
+ * Load the Default Template của MỘT account + entries. Returns null when Manager
  * has never uploaded a default template (clean install, post-migration
  * empty state). Orchestrator interprets null as "default source unavailable
  * — gray it out in the UI."
@@ -280,7 +280,7 @@ export async function getAppTemplate(
  *
  *   APPLE            → legacy `price_tier_territories` USA/USD (back-compat;
  *                      delegates to the existing `listUsdTiers`).
- *   DEFAULT_TEMPLATE → the GLOBAL template's USA/USD entries.
+ *   DEFAULT_TEMPLATE → USA/USD entries của template mặc định CỦA ACCOUNT đó.
  *   APP_TEMPLATE     → this app's template USA/USD entries.
  *
  * Returns `[]` when the selected template scope has no uploaded template.

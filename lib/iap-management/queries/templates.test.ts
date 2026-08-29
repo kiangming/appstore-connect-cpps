@@ -4,7 +4,7 @@
  * The load-bearing data-source guard for the bulk-import cross-path fix.
  * Proves the helper reads:
  *   APPLE            → legacy price_tier_territories (delegates to listUsdTiers)
- *   DEFAULT_TEMPLATE → price_tier_template_entries (GLOBAL scope)
+ *   DEFAULT_TEMPLATE → price_tier_template_entries (ACCOUNT scope)
  *   APP_TEMPLATE     → price_tier_template_entries (that app's scope)
  * and returns [] when the selected template scope has no uploaded template.
  *
@@ -44,10 +44,11 @@ function builder(opts: {
   return b;
 }
 
-const GLOBAL_HEADER = {
-  id: "tpl-global",
-  scope_type: "GLOBAL",
+const DEFAULT_HEADER = {
+  id: "tpl-acct-1",
+  scope_type: "ACCOUNT",
   scope_app_id: null,
+  scope_account_id: "acct-1",
   uploaded_at: "2026-01-01T00:00:00Z",
   uploaded_by: "manager",
   source_filename: "default.xlsx",
@@ -90,12 +91,12 @@ describe("listUsdTiersForSource — Cycle 43 source→table mapping", () => {
     expect(tablesSeen).not.toContain("price_tier_template_entries");
   });
 
-  it("DEFAULT_TEMPLATE → reads template entries for the GLOBAL scope", async () => {
+  it("DEFAULT_TEMPLATE → reads template entries for the ACCOUNT scope", async () => {
     const tablesSeen: string[] = [];
     fromMock.mockImplementation((table: string) => {
       tablesSeen.push(table);
       if (table === "price_tier_templates") {
-        return builder({ single: { data: GLOBAL_HEADER, error: null } });
+        return builder({ single: { data: DEFAULT_HEADER, error: null } });
       }
       return builder({
         list: {

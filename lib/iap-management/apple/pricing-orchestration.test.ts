@@ -471,7 +471,7 @@ describe("applyPricingSchedule — three-source pricing model (IAP.p1.e)", () =>
     getDefaultTemplate.mockResolvedValueOnce({
       template: {
         id: "tmpl-default",
-        scope_type: "GLOBAL",
+        scope_type: "ACCOUNT",
         scope_app_id: null,
         uploaded_at: "2026-05-18T00:00:00Z",
         uploaded_by: "tester",
@@ -592,7 +592,7 @@ describe("applyPricingSchedule — three-source pricing model (IAP.p1.e)", () =>
     getDefaultTemplate.mockResolvedValueOnce({
       template: {
         id: "tmpl-default",
-        scope_type: "GLOBAL",
+        scope_type: "ACCOUNT",
         scope_app_id: null,
         uploaded_at: "2026-05-18T00:00:00Z",
         uploaded_by: "tester",

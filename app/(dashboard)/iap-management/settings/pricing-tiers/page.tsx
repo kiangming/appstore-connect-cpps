@@ -17,8 +17,8 @@ interface PageProps {
 export default async function PricingTiersPage({ searchParams }: PageProps) {
   // Hotfix 11: page is member-accessible; the Default Template tab renders
   // read-only for non-admins (S1.B). Default mutation routes still enforce
-  // admin role server-side (POST /pricing-templates scope=GLOBAL + DELETE on
-  // GLOBAL templates).
+  // admin role server-side (POST /pricing-templates scope=ACCOUNT + DELETE
+  // on ACCOUNT-scoped templates).
   const session = await requireIapSession();
   const isAdmin = session.user.role === "admin";
   const currentUserEmail = session.user.email ?? "unknown";

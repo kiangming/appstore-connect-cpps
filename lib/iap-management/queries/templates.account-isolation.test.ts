@@ -63,8 +63,11 @@ const TEMPLATES = [
     uploaded_by: "manager",
     source_filename: "app1.xlsx",
   },
-  // ⚠ Dòng GLOBAL cũ — còn sống trong DB tới khi M-2 chạy. Có mặt ở đây để
-  //   test chứng minh code SAU C-C không còn nhìn thấy nó nữa (C4).
+  // ⚠ Dòng GLOBAL cũ. M-2 (apply 2026-08-29) đã XOÁ nó khỏi DB thật — nhưng
+  //   nó Ở LẠI fixture này CỐ Ý: bài test không canh "DB có sạch không" (đó
+  //   là việc của verify M2-V1), nó canh "code có đi tìm nó không". Bỏ dòng
+  //   này khỏi fixture thì một query lọc scope_type='GLOBAL' cắm lại về sau
+  //   sẽ trả rỗng và test vẫn xanh — mất đúng cái đang canh (C4).
   {
     id: "tpl-global-legacy",
     scope_type: "GLOBAL",
@@ -209,8 +212,8 @@ describe("C-C — cách ly template theo account", () => {
     );
     expect(
       filteredOnGlobal,
-      "Còn query lọc scope_type='GLOBAL' — sau M-2 nó sẽ trả rỗng cho MỌI " +
-        "account, im lặng.",
+      "Còn query lọc scope_type='GLOBAL' — M-2 đã xoá dòng đó, nên query " +
+        "này trả rỗng cho MỌI account, im lặng.",
     ).toBe(false);
   });
 

@@ -16,9 +16,9 @@
  * cái xanh đó là bằng chứng cho sự tồn tại của file này.
  *
  * Nguy hiểm của nó không phải "code xấu": sau C-C, câu hỏi đúng là "ACCOUNT
- * NÀY đã có template chưa". Một query hỏi `scope_type='GLOBAL'` sau khi M-2
- * xoá dòng GLOBAL sẽ trả `false` cho MỌI account — im lặng, và UI sẽ nói
- * "chưa có template" trong khi có đủ cả sáu.
+ * NÀY đã có template chưa". M-2 (apply 2026-08-29) đã xoá dòng GLOBAL, nên
+ * một query hỏi `scope_type='GLOBAL'` trả `false` cho MỌI account — im
+ * lặng, và UI sẽ nói "chưa có template" trong khi có đủ cả sáu.
  *
  * ─── ĐIỀU TEST NÀY ÉP ──────────────────────────────────────────────────────
  *
