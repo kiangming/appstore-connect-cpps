@@ -57,7 +57,7 @@ export interface IapFormProps {
   initial: IapFormState;
   /** Tier rows from iap_mgmt.price_tiers cache. */
   tiers: PriceTierRow[];
-  /** IAP.p1.f: Manager has uploaded a global Default Template. */
+  /** IAP.p1.f + C-C: account sở hữu app này đã có Default Template. */
   defaultTemplateAvailable?: boolean;
   /** IAP.p1.f: this app has its own pricing template. */
   appTemplateAvailable?: boolean;

@@ -2,6 +2,19 @@
 
 Format: `- [ ] [PR-X] description — file path — rationale`
 
+## From [ACCOUNT-default-template] (Default Template theo từng ASC account, 2026-08-29)
+
+**Trạng thái arc: code XONG (C-A…C-E), M-1 đã apply, chờ deploy → UAT 1 IAP thật → M-2.**
+
+- [ ] [ACCOUNT-default-template] **Apply M-2** — `supabase/migrations/20260828020000_iap_mgmt_account_templates_m2_drop_global.sql` — xoá dòng `scope_type='GLOBAL'`, thu hẹp CHECK, drop index `..._global_unique`. ⚠ CHỈ chạy sau khi code đã deploy VÀ Manager kiểm 1 IAP thật ra giá đúng. Verify: `docs/iap-management/queries/verify-account-template-duplication.sql` M2-V1…V4.
+- [ ] [ACCOUNT-default-template] **Dọn 2 bảng backup** — `iap_mgmt.price_tier_templates_backup_global` + `..._entries_backup_global` — đường lui của M-2. Điều kiện xoá: Manager xác nhận template ACCOUNT đã chạy đúng qua ít nhất một lần submit THẬT (không phải chỉ preview). Trước đó thì để nguyên.
+- [ ] [ACCOUNT-default-template] **Bỏ bí danh `scope="GLOBAL"` ở POST /pricing-templates** — `app/api/iap-management/pricing-templates/route.ts:83` — hiện nhận cả `"ACCOUNT"` lẫn `"GLOBAL"` (cùng nghĩa) để tab trình duyệt mở từ trước lúc deploy không upload hỏng. Sau M-2 vài ngày thì bỏ nhánh `"GLOBAL"`.
+- [ ] [ACCOUNT-default-template] **Bỏ `'GLOBAL'` khỏi union `TemplateHeader.scope_type`** — `lib/iap-management/queries/templates.ts` — giá trị này chỉ còn tồn tại vì dòng legacy sống tới M-2. Sau M-2, DB không thể sinh ra nó nữa (CHECK cấm), nên union nên thu về `'ACCOUNT' | 'APP'`. Cùng lúc, bỏ nhánh `scope_type === "GLOBAL"` ở gate admin của DELETE route.
+- [ ] [ACCOUNT-default-template] **Tên account chưa từng đọc được** — census V0 có trả cột `asc_accounts.name` nhưng phần Manager dán lại chỉ có `id`, nên mockup + guide dùng id làm nhãn. UI thật đã dùng `name` (từ `findAllAccountsPublic`) — chỉ cần xác nhận bằng mắt lúc UAT rằng nhãn hiện ra là tên người đọc được, không phải slug.
+- [ ] [ACCOUNT-default-template] **`asc_account_keys.account_id` không có guard cấu trúc tương đương** — `lib/iap-management/queries/templates.structure.test.ts` chặn truy cập thẳng 2 bảng template; bảng key pool (cũng soft-ref sang `public.asc_accounts`) chưa có guard cùng loại. Không cấp bách — nhưng nếu key pool mọc thêm surface thì đây là khuôn có sẵn.
+
+- [ ] [GOOGLE-account-scoped-template] **Google có Y HỆT vấn đề này và CHƯA đụng tới** — `google_iap_mgmt.pricing_templates` sao chép nguyên mô hình 2-scope của Apple (`CHECK (scope_type IN ('GLOBAL','APP'))`, 2 partial unique index, comment còn ghi *"matching the iap_mgmt p1.a pattern"*), và Default Template của Google cũng đang dùng CHUNG cho mọi `google_console_accounts`. ⚠ **Đừng port 1:1** (P8): `google_iap_mgmt.apps` có `google_console_account_id UUID NOT NULL REFERENCES … ` + `UNIQUE(account, package_name)` — Google account-scope ở tầng app CHẶT HƠN Apple (Apple chỉ có TEXT nullable, không FK), nên backfill của Google gần như miễn phí trong khi của Apple thì không. Cần census riêng trước khi thiết kế.
+
 ## From PR-2 (Team page + guarded user mutations)
 
 - [ ] [PR-2] Replace `zodResolver(schema) as any` cast in team forms — `app/(dashboard)/store-submissions/config/team/*` — temporary workaround for RHF v7 + Zod v4 typing mismatch; revisit when react-hook-form v8 stable ships.

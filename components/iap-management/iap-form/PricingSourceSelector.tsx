@@ -5,7 +5,8 @@ import type { PricingSourceKind } from "@/lib/iap-management/validation";
 interface Props {
   value: PricingSourceKind;
   onChange: (next: PricingSourceKind) => void;
-  /** Manager uploaded a global Default Template (Settings → Pricing Templates). */
+  /** Account sở hữu app này đã có Default Template (Settings → Pricing
+   *  Templates → chip của account đó). KHÔNG còn là template dùng chung. */
   defaultTemplateAvailable: boolean;
   /** This app has its own template (App detail page → Pricing Template section). */
   appTemplateAvailable: boolean;

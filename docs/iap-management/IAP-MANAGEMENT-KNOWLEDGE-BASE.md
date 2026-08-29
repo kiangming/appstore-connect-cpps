@@ -3627,6 +3627,34 @@ read → real workbook → unzip the bytes. It went red on the shipped code with
 existing test fakes and mark it above/at/below. If nothing is below, the suite
 cannot see the defect no matter how green it is.
 
+**P33 — A MUTATION THAT DID NOT APPLY IS NOT A MUTATION THAT WAS NOT CAUGHT.
+CONFIRM THE EDIT LANDED BEFORE READING THE SUITE'S ANSWER.**
+
+Mutation testing asks: break the code, does a test go red? The whole method
+rests on the break having happened. When the anchor text matches **more than
+one** place, a `str_replace`-style edit refuses (or silently rewrites the wrong
+one), the file is unchanged, the suite runs against pristine code — and returns
+**green**. Read that green as the mutation's verdict and the conclusion inverts:
+"the guard does not catch this" when in fact nothing was ever broken.
+
+Confirmed instance — C-D mutation (b), `[ACCOUNT-default-template]`: the anchor
+`{accounts.map((account) => {` appeared twice (the account chips and the
+overview table). The edit aborted; vitest reported 16/16 passing. Only the
+script's own assertion (`anchor khớp 2`) distinguished "not applied" from "not
+caught". Without it, the honest-looking write-up would have been *"the test
+does not detect hidden accounts"* — the opposite of the truth.
+
+Why this is not just carelessness: the failure is **silent in the direction of
+reassurance**. A mutation that fails to apply produces exactly the output a
+passing guard produces. The same shape as P2 (a CHECK-rejected audit insert
+looks like a successful one) and as the vacuous-scanner trap in
+`templates.structure.test.ts` — a broken instrument reporting "all clear".
+
+⇒ **Rule: every mutation must prove it landed.** Either assert the anchor is
+unique before replacing, or diff the file after replacing and refuse to run the
+suite on an empty diff. A mutation run whose diff is empty has no result — not
+a pass, not a fail. Report it as "not applied", fix the anchor, run again.
+
 **P32 — A CHUNK THAT CREATES AN OPT-IN FLAG MUST NAME, BY CHUNK, WHO TURNS IT
 ON. AN OPT-IN NOBODY OPTS INTO IS DEAD CODE THAT LOOKS ALIVE.**
 
@@ -5383,6 +5411,133 @@ changed what the data decides. G5 exists only because that escalation was
 noticed while designing PA-1, not after a user hit it.
 
 
+
+## 19. Account-scoped Default Template (2026-08-28/29, `[ACCOUNT-default-template]`)
+
+### 19.1 The question the old schema could not answer
+
+`{ kind: "GLOBAL" }` — one template, no parameter, every account reading the
+same row. Manager's ask: one Default Template **per ASC account**. That turns
+"the default template" from a fact of the system into a fact about *which
+account is asking*, and the old type had nowhere to put the asker.
+
+### 19.2 Why two migrations, not one
+
+The merged migration did three things: (a) add column + ACCOUNT scope,
+(b) duplicate the GLOBAL template into 6 account rows, (c) delete GLOBAL +
+narrow the CHECK. **Only (c) breaks old code.** Splitting it moved the whole
+apply→deploy window to zero:
+
+| | Migration | Content | When |
+|---|---|---|---|
+| M-1 | `20260828010000` | backup · ADD COLUMN · **widen** CHECK · account unique index · duplicate · audit | **before** deploy |
+| M-2 | `20260828020000` | **delete** GLOBAL · **narrow** CHECK · drop global index | **after** deploy + verify |
+
+Evidence M-1 was safe for the old code: 11 sites touch
+`price_tier_templates`, **every one filters** by `scope_type` or by `id`
+(census §0.4 + the C-A error list). The 6 new ACCOUNT rows were invisible to
+old queries, and old writes still satisfied the widened coherence CHECK
+because `replaceTemplate` never set `scope_account_id` (⇒ NULL ⇒ valid for
+both GLOBAL and APP branches).
+
+Two properties fell out of the split that the merged version did not have:
+
+1. **M-1 is fully re-runnable**, not merely safe to re-run — it does not
+   destroy its own copy source. The merged one deleted GLOBAL and could never
+   redo the work.
+2. **A guard became possible**: M-2's GUARD 3 compares the live GLOBAL row to
+   the snapshot M-1 took. That guard cannot exist in a single migration —
+   there is no "between" for anything to change in.
+
+⚠ And the split created its own trap, caught before shipping: re-running M-1
+**after** M-2 would re-widen the CHECK and silently make `'GLOBAL'` legal
+again. M-1's widening step is therefore conditional on a GLOBAL row existing —
+**M-1 cannot undo M-2's progress.**
+
+### 19.3 Schema
+
+```
+scope_type       TEXT   CHECK IN ('ACCOUNT','APP')   ← was ('GLOBAL','APP')
+scope_app_id     UUID   FK → iap_mgmt.apps(id) ON DELETE CASCADE
+scope_account_id TEXT   SOFT REF → public.asc_accounts.id, NO FK
+origin_note      TEXT   nullable
+```
+
+Two coherence branches: `ACCOUNT ⇒ account NOT NULL AND app NULL`;
+`APP ⇒ app NOT NULL AND account NULL`. Two partial unique indexes, one per
+scope. ⚠ **Two scope columns, two different types, deliberately** —
+`asc_accounts` lives in `public` and CLAUDE.md invariant #9 forbids
+cross-schema FKs. Same soft-ref precedent as `iap_mgmt.apps.asc_account_id`
+(20260520000000) and `iap_mgmt.asc_account_keys.account_id` (20260825010000).
+Cost stated plainly: deleting an account does not cascade; an orphan template
+stays.
+
+⚠ **Both CHECKs were unnamed in the original migration**, so Postgres
+auto-generated the names (`price_tier_templates_scope_type_check` and
+`price_tier_templates_check`). They had to be **read from `pg_constraint`**
+before writing any `DROP CONSTRAINT` — the repo had already been bitten by this
+once (20260515010000 dropping two name variants "for resilience against
+Postgres constraint-naming variations").
+
+### 19.4 Resolution chain: app → account → Apple
+
+No global tier remains. The decision lives in **`defaultPricingSource()` in the
+UI**, not in the orchestrator — the orchestrator only *receives* a chosen
+source (census §0.2 corrected an assumption here). `PricingSource`'s
+`DEFAULT_TEMPLATE` variant now carries `account_id`, sourced from `creds.id`,
+which was already in hand at all four construction sites.
+
+⚠ There is no fallback layer below account. An account with no template means
+the Default option is **disabled**, and IAPs created there use Apple's
+auto-equalisation.
+
+### 19.5 `origin_note` carries two jobs, and the second one was not planned
+
+Job one: provenance — "this row came from the migration, nobody configured it".
+Job two, discovered while writing the rollback: it is also the discriminator
+between *a copy* and *a human's work*. Both fell out of it:
+
+- The rollback for M-1 is `DELETE … WHERE scope_type='ACCOUNT' AND origin_note
+  IS NOT NULL` — the `IS NOT NULL` spares any template a Manager uploaded in
+  the meantime.
+- The replace-confirmation modal picks its variant on `origin_note != null`,
+  **not** on `uploaded_by === 'SYSTEM_MIGRATION'`. That string is written by the
+  SQL file; comparing it in the UI would be a copy of a constant living in a
+  migration, and the two would drift with nothing to catch it.
+
+The second job also fixed a copy bug the census never looked for: all six
+copies carry `uploaded_by = 'SYSTEM_MIGRATION'`, so the existing "you are
+overwriting someone else's template" modal — keyed on `uploaded_by !==
+currentUserEmail` — fires for **everyone, on every account, on the first
+replace**. Its wording ("will REPLACE *their* entries") reads as if a colleague
+named SYSTEM_MIGRATION exists. The common case had the scariest copy.
+
+### 19.6 The isolation bug that cannot be seen today
+
+All six copies are identical. So a cache/filter bug where account A reads
+account B's template returns **the right prices** — and stays invisible until
+the first day someone uploads a per-account template, by which point wrong
+prices are already on Apple. The isolation test therefore uses a fake DB that
+**actually filters** on the recorded `.eq()` calls (an argument-recording fake
+stays green if the code filters and then ignores the result) and gives the two
+accounts **different prices**, so a failure surfaces as a price, which is how
+it would surface in production.
+
+### 19.7 What changed in the UI, and one thing that did not
+
+Tab Default gained an account chip row, an origin pill, an overview table and a
+two-variant replace modal. The account there is **independent of the TopNav
+AccountSwitcher** — which created the sharpest hazard of the whole arc, and it
+was in the route, not the UI: `POST /pricing-templates` used to derive the
+account from `getActiveAccount()`. Selecting account B and pressing Replace
+would have overwritten account A's 1140 rows, silently, and the lost copy is
+the one the Manager is not looking at. The account now travels from the client
+and is validated against the real list before use — no FK does that job for a
+soft ref.
+
+Unchanged: the Per-App tab, and the resolution order itself.
+
+---
 
 **Knowledge base preserved for future development continuity.**
 

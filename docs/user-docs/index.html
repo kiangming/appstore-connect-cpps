@@ -1055,7 +1055,7 @@
             <span class="nav-item-label">Bulk Import wizard</span>
             <span class="nav-badge">Chi tiết</span>
           </a>
-          <a class="nav-item" data-page="apple-pricing-templates" data-keywords="apple pricing templates mẫu giá mau gia default per-app settings cài đặt cai dat tab pricing tiers bảng giá bang gia">
+          <a class="nav-item" data-page="apple-pricing-templates" data-keywords="apple pricing templates mẫu giá mau gia default per-app settings cài đặt cai dat tab pricing tiers bảng giá bang gia account theo account theo tai khoan asc account chọn account chon account chip do migration nhân bản nhan ban chưa ai cấu hình chua ai cau hinh nguồn gốc nguon goc badge 6/6 account ghi đè ghi de thay template disable mờ mo option default">
             <span class="nav-item-label">Pricing templates</span>
           </a>
           <a class="nav-item" data-page="apple-key-pool" data-keywords="apple key pool api key settings cài đặt cai dat admin quản lý key quan ly key rate limit giới hạn gioi han test key hạn mức han muc tab tabs điều hướng dieu huong pricing templates hub tracking cooling disable">
@@ -1858,7 +1858,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         <h2 class="section-title">Khi nào dùng tính năng này?</h2>
         <ul>
           <li>Kiểm tra giá thực tế áp dụng cho app/IAP sau khi cấu hình pricing template.</li>
-          <li>So sánh giữa Default template (toàn workspace) và Per-App override.</li>
+          <li>So sánh giữa Default template (của ASC account đang chọn) và Per-App override.</li>
           <li>Debug khi user complain giá hiển thị trên store khác với expectation.</li>
           <li>Export bảng giá ra CSV để chia sẻ với team Marketing / Finance.</li>
         </ul>
@@ -1870,7 +1870,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         <table class="docs-table">
           <thead><tr><th>Tab</th><th>Phạm vi</th><th>Override</th></tr></thead>
           <tbody>
-            <tr><td><strong>Default matrix</strong></td><td>Toàn workspace, áp dụng nếu app không có override.</td><td>Không</td></tr>
+            <tr><td><strong>Default matrix</strong></td><td><strong>Của ASC account đang chọn</strong> — áp dụng cho mọi app của account đó, nếu app không có override.</td><td>Không</td></tr>
             <tr><td><strong>Per-App matrix</strong></td><td>Override cho 1 app cụ thể (overlay lên Default).</td><td>Có</td></tr>
           </tbody>
         </table>
@@ -3151,7 +3151,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <strong>Create on Apple</strong> trên form Edit, nên bạn sẽ gặp nó ngay sau đó.
               Tạo nhiều IAP một lượt thì chọn territory ở
               <a class="inline-link" data-goto="apple-bulk-import">Bulk Import</a> (Step 4).</p>
-              <p><strong>Pricing section</strong>: chọn nguồn — Default template (toàn workspace), Per-App template (override), hoặc Manual (chọn tier USD trực tiếp).</p>
+              <p><strong>Pricing section</strong>: chọn nguồn — Apple base data, Default Template (của ASC account sở hữu app này), hoặc App-specific template (override). Account chưa có Default Template thì option đó bị mờ — xem <a class="inline-link" data-goto="apple-pricing-templates">Pricing templates</a>.</p>
               <p><strong>Custom territory prices</strong> (ghi đè giá từng quốc gia) nằm ngay dưới, nhưng ở form này nút bị disable kèm lý do <em>“Save as draft first”</em> — custom prices lưu gắn với IAP đã save. Không thêm bước nào: <strong>Create on Apple</strong> vốn chỉ có trên form Edit, nên luồng create luôn đã đi qua draft. Chi tiết: <a class="inline-link" data-goto="apple-edit-iap">Chỉnh sửa IAP</a>.</p>
             </div>
           </li>
@@ -3697,7 +3697,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         <table class="docs-table">
           <thead><tr><th>Tab</th><th>Trang này để làm gì</th></tr></thead>
           <tbody>
-            <tr><td><strong>Pricing Templates</strong></td><td>Bảng giá dùng chung + bảng giá riêng theo app — xem <a class="inline-link" data-goto="apple-pricing-templates">Pricing templates</a>.</td></tr>
+            <tr><td><strong>Pricing Templates</strong></td><td>Bảng giá mặc định <strong>của từng ASC account</strong> + bảng giá riêng theo app — xem <a class="inline-link" data-goto="apple-pricing-templates">Pricing templates</a>.</td></tr>
             <tr><td><strong>Hub Tracking</strong></td><td>Bật/tắt việc báo tiến độ Bulk Import lên dashboard Hub.</td></tr>
             <tr><td><strong>API Key Pool</strong></td><td>Trang này.</td></tr>
           </tbody>
@@ -3874,22 +3874,102 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         </div>
         <h1 class="page-title">Pricing templates</h1>
         <p class="page-lede">
-          Quản lý 2 loại template giá: <strong>Default</strong> (toàn workspace) và <strong>Per-App</strong>
-          (override cho app cụ thể). Template = bảng entries map tier USD → price thực tế per territory.
+          Quản lý 2 loại template giá: <strong>Default</strong> — <strong>mỗi ASC account một
+          bảng riêng</strong> — và <strong>Per-App</strong> (override cho app cụ thể).
+          Template = bảng entries map tier USD → price thực tế per territory.
           Khi tạo IAP, chọn pricing source = template → tier sẽ được lookup từ template.
         </p>
+
+        <div class="callout callout-warn">
+          <strong>Thay đổi tháng 8/2026 — Default Template giờ theo từng account.</strong>
+          Trước đây cả workspace dùng CHUNG một Default Template. Nay <strong>mỗi ASC
+          account có Default Template riêng</strong>: sửa bảng của account này không
+          ảnh hưởng account khác. Bảng cũ đã được nhân bản sang cả 6 account nên giá
+          hiện tại không đổi — xem <a class="inline-link" data-goto="apple-pricing-templates">mục
+          “Chọn account” bên dưới</a>.
+        </div>
 
         <h2 class="section-title">Default vs Per-App</h2>
         <table class="docs-table">
           <thead><tr><th>Khía cạnh</th><th>Default</th><th>Per-App</th></tr></thead>
           <tbody>
-            <tr><td>Phạm vi</td><td>Toàn workspace</td><td>1 app cụ thể</td></tr>
-            <tr><td>Số lượng</td><td>Tối đa 1</td><td>Tối đa 1 / app</td></tr>
-            <tr><td>Override</td><td>—</td><td>Override Default cho app đó</td></tr>
-            <tr><td>Thời điểm tạo</td><td>Thường tạo trước cycle 1</td><td>Tạo khi app cần giá khác Default</td></tr>
-            <tr><td>Use case</td><td>Game thông thường — giá USD chuẩn</td><td>Game đặc biệt (vd: SDK, premium app) — giá VND cao hơn</td></tr>
+            <tr><td>Phạm vi</td><td><strong>1 ASC account</strong> — mọi app của account đó</td><td>1 app cụ thể</td></tr>
+            <tr><td>Số lượng</td><td>Tối đa 1 / account</td><td>Tối đa 1 / app</td></tr>
+            <tr><td>Override</td><td>—</td><td>Override Default của account đó cho app này</td></tr>
+            <tr><td>Nếu không có</td><td>IAP của account đó không chọn được nguồn Default — rơi về giá auto-equalize của Apple</td><td>Rơi về Default của account</td></tr>
+            <tr><td>Use case</td><td>Giá chuẩn cho toàn bộ app của một account</td><td>Game đặc biệt (vd: SDK, premium app) — giá khác chuẩn</td></tr>
           </tbody>
         </table>
+
+        <h2 class="section-title">Chọn account</h2>
+        <p>
+          Tab <strong>Default Template</strong> có một hàng chip ở đầu, nhãn
+          <strong>Account App Store</strong> — mỗi account một chip, kèm tên và mã
+          account. Chip có nhãn <code class="inline">có template</code> hoặc
+          <code class="inline">chưa có</code>. Bấm để chuyển. Chip đang xem có viền
+          xanh + quầng sáng.
+        </p>
+
+        <div class="callout callout-danger">
+          <strong>⚠ Account ở tab này ĐỘC LẬP với account trên TopNav.</strong>
+          Đổi account ở thanh trên cùng KHÔNG đổi account đang xem ở tab này, và
+          ngược lại. <strong>Nhìn kỹ tiêu đề thẻ “Default Template · &lt;tên
+          account&gt;” trước khi bấm Replace hoặc Remove</strong> — hai nút đó tác
+          động lên đúng account đang xem ở tab, không phải account trên TopNav.
+        </div>
+
+        <p>
+          Hàng chip <strong>luôn hiện đủ mọi account</strong>, kể cả account chưa có
+          template. Cố ý như vậy: nếu ẩn đi thì “account này chưa có template” và
+          “account này không tồn tại” trông giống hệt nhau, mà cái đầu mới là trạng
+          thái bình thường của một account vừa được thêm.
+        </p>
+
+        <h2 class="section-title">Badge “6 / 6 account”</h2>
+        <p>
+          Con số cạnh tên tab <strong>Default Template</strong> đọc là
+          <strong>“số account đã có template / tổng số account đang có”</strong>.
+          <code class="inline">6 / 6 account</code> nghĩa là cả 6 account đều đã có.
+          Thêm account thứ 7 mà chưa upload thì badge thành
+          <code class="inline">6 / 7 account</code> — đó là cách nhanh nhất để thấy
+          còn account nào bỏ trống mà không phải bấm vào từng chip.
+        </p>
+
+        <h2 class="section-title">Nhãn “Do migration nhân bản”</h2>
+        <p>
+          Template nào mang nhãn tím
+          <code class="inline">Do migration nhân bản · chưa ai cấu hình riêng</code>
+          nghĩa là: nó là <strong>bản sao tự động</strong> của Default Template dùng
+          chung ngày trước, <strong>chưa có người nào cố ý cấu hình riêng cho account
+          này</strong>. Di chuột vào nhãn để xem câu đầy đủ (nguồn gốc, ngày, người
+          upload bản gốc).
+        </p>
+        <p>
+          Nhãn <strong>tự biến mất</strong> ngay sau lần upload đè đầu tiên — không
+          cần ai đi xoá. Bảng <strong>Toàn cảnh</strong> ở cuối trang có cột
+          <strong>Nguồn gốc</strong> hiện cùng thông tin đó cho cả 6 account cạnh nhau.
+        </p>
+
+        <h2 class="section-title">Hộp thoại khi thay template</h2>
+        <p>Bấm <strong>Replace</strong> khi account đã có template sẽ hiện một trong hai hộp thoại:</p>
+        <table class="docs-table">
+          <thead><tr><th>Hộp thoại</th><th>Khi nào</th><th>Nghĩa là</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Xanh</strong> — “Thay Default Template của …?”</td>
+              <td>Bản hiện tại do migration nhân bản</td>
+              <td>Thông tin, không phải cảnh báo. Chưa ai cấu hình riêng cho account này nên bạn không đè lên việc của ai cả.</td>
+            </tr>
+            <tr>
+              <td><strong>Đỏ</strong> — “Ghi đè Default Template của …?”</td>
+              <td>Bản hiện tại do <em>người khác</em> upload</td>
+              <td>Cảnh báo thật: hộp thoại nêu đích danh ai upload và lúc nào. Hỏi người đó trước khi bấm.</td>
+            </tr>
+          </tbody>
+        </table>
+        <p>
+          Tự mình upload lần trước thì không hiện hộp thoại nào — vào thẳng.
+        </p>
 
         <h2 class="section-title">Hướng dẫn sử dụng</h2>
         <ol class="steps">
@@ -3898,15 +3978,21 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <div class="step-body"><p>Sidebar → <strong>Settings</strong> → tab <strong>Pricing Templates</strong>. URL: <code class="inline">/iap-management/settings/pricing-tiers</code> (đường dẫn giữ nguyên chữ <code class="inline">pricing-tiers</code>). Trang chia 2 tab: <strong>Default Template</strong> và <strong>Per-App Templates</strong>.</p></div>
           </li>
           <li class="step">
-            <div class="step-title">Setup Default template</div>
+            <div class="step-title">Setup Default template cho MỘT account</div>
             <div class="step-body">
-              <p>Tab Default → upload Excel (cột: tier_id, tier_name, currency, customer_price, territory). Tool parse và validate format:</p>
+              <p>Tab <strong>Default Template</strong> → <strong>bấm chip của account cần sửa</strong> ở hàng
+                 <strong>Account App Store</strong> → kiểm tiêu đề thẻ đã đúng account chưa
+                 (<em>“Default Template · &lt;tên account&gt;”</em>) → bấm
+                 <strong>Upload .xlsx</strong> (account chưa có template) hoặc
+                 <strong>Replace</strong> (đã có).</p>
+              <p>File Excel gồm các cột: tier_id, tier_name, currency, customer_price, territory. Tool parse và validate:</p>
               <ul>
                 <li>Tier IDs unique</li>
                 <li>Currency match territory (vd: USD cho US, JPY cho JP)</li>
                 <li>customer_price là số dương</li>
               </ul>
-              <p>Click <strong>Save Default</strong> → entries lưu vào DB.</p>
+              <p>Upload xong, chỉ template của <strong>account đang chọn</strong> bị thay.
+                 Các account khác và mọi template Per-App không đụng tới.</p>
             </div>
           </li>
           <li class="step">
@@ -3923,10 +4009,23 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <div class="step-title">Apply template khi tạo IAP</div>
             <div class="step-body"><p>Form <a class="inline-link" data-goto="apple-new-iap">Tạo IAP mới</a> hoặc <a class="inline-link" data-goto="apple-bulk-import">Bulk Import</a> → Pricing section chọn source:</p>
               <ul>
-                <li><strong>Default</strong> — lookup từ Default template</li>
-                <li><strong>Per-App</strong> — lookup từ Per-App template (fallback Default cho missing tier)</li>
-                <li><strong>Manual</strong> — chọn tier USD trực tiếp (bypass template)</li>
+                <li><strong>Apple base data</strong> — gửi 1 giá USA, Apple tự quy đổi các nước còn lại</li>
+                <li><strong>Default Template · &lt;tên account&gt;</strong> — lookup từ Default template
+                    <strong>của account sở hữu app này</strong></li>
+                <li><strong>App-specific template</strong> — lookup từ template riêng của app
+                    (territory nào template không có thì Apple tự quy đổi)</li>
               </ul>
+              <div class="callout callout-warn">
+                <strong>Account chưa có Default Template thì option “Default Template” bị mờ,
+                không bấm được</strong>, kèm dòng chữ <em>“Chưa có Default Template cho account
+                “&lt;tên&gt;” — vào Settings → Pricing Templates để upload.”</em>
+                Cách xử: vào <strong>Settings → Pricing Templates</strong>, bấm chip của account
+                đó, upload file. Quay lại form thì option hết mờ.
+                <br><br>
+                Hay gặp với <strong>account mới thêm</strong>: tool không tự tạo template cho
+                account mới, và <strong>không còn bảng giá chung nào đỡ phía sau</strong> —
+                IAP tạo lúc đó sẽ dùng giá auto-equalize của Apple.
+              </div>
             </div>
           </li>
         </ol>
