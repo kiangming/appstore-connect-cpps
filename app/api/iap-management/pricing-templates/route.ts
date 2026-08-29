@@ -24,7 +24,11 @@ export const runtime = "nodejs";
  *
  * Multipart form fields:
  *   file       — the .xlsx template (required)
- *   scope      — "GLOBAL" or "APP" (required)
+ *   scope      — "ACCOUNT" or "APP" (required).
+ *                ⚠ "GLOBAL" còn được chấp nhận như BÍ DANH của "ACCOUNT",
+ *                  chỉ để một tab trình duyệt cũ mở từ trước lúc deploy
+ *                  không upload hỏng. Cả hai đều nghĩa là "template mặc
+ *                  định của account đang chọn". Bỏ bí danh sau khi M-2 chạy.
  *   app_id     — required when scope=APP
  *
  * Hotfix 11: scope-conditional admin gate. `scope=GLOBAL` (Default
@@ -76,19 +80,18 @@ export async function POST(req: Request) {
   }
 
   let scope: TemplateScope;
-  if (scopeField === "GLOBAL") {
-    // Hotfix 11: Default Template upload is admin-only (global blast).
+  if (scopeField === "ACCOUNT" || scopeField === "GLOBAL") {
+    // Hotfix 11 giữ nguyên tinh thần: template mặc định là admin-only. Bán
+    // kính nổ hẹp lại — một account thay vì toàn hệ thống — nhưng vẫn là
+    // "mọi app của account này", nên vẫn admin.
     if (session.user.role !== "admin") {
       return NextResponse.json(
         { error: "Admin role required to upload the Default Template." },
         { status: 403 },
       );
     }
-    // C-A: upload template mặc định giờ phải nói của account nào.
-    // ⚠ Đường GHI vẫn tạo dòng scope_type='GLOBAL' (replaceTemplate map
-    //   ACCOUNT → GLOBAL cho tới C-C) — xem comment trong queries/templates.ts.
-    const globalCreds = await getActiveAccount();
-    scope = { kind: "ACCOUNT", account_id: globalCreds.id };
+    const accountCreds = await getActiveAccount();
+    scope = { kind: "ACCOUNT", account_id: accountCreds.id };
   } else if (scopeField === "APP") {
     let internalAppId = appIdField;
     if (!internalAppId && appleAppIdField) {
@@ -117,7 +120,7 @@ export async function POST(req: Request) {
     scope = { kind: "APP", app_id: internalAppId };
   } else {
     return NextResponse.json(
-      { error: 'scope must be "GLOBAL" or "APP".' },
+      { error: 'scope must be "ACCOUNT" or "APP".' },
       { status: 400 },
     );
   }
@@ -147,6 +150,7 @@ export async function POST(req: Request) {
         template_id: result.template_id,
         scope_type: result.scope_type,
         scope_app_id: result.scope_app_id,
+        scope_account_id: result.scope_account_id,
         inserted_entry_count: result.inserted_entry_count,
         tier_count: parsed.tiers.length,
         territory_count: parsed.territory_count,

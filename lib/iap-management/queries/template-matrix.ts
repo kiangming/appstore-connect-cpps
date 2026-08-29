@@ -197,13 +197,11 @@ async function fetchTemplateId(scope: ScopeQuery): Promise<string | null> {
   let q = db
     .from("price_tier_templates")
     .select("id")
-    // ⚠ C-A: nhánh ACCOUNT vẫn map về dòng GLOBAL — chưa đổi hành vi.
-    //   C-C đổi sang scope_type='ACCOUNT' + eq(scope_account_id, …).
-    .eq("scope_type", scope.scope === "APP" ? "APP" : "GLOBAL");
+    .eq("scope_type", scope.scope);
   q =
     scope.scope === "APP"
       ? q.eq("scope_app_id", scope.appId)
-      : q.is("scope_app_id", null);
+      : q.eq("scope_account_id", scope.accountId);
   const { data, error } = await q.maybeSingle();
   if (error) throw new Error(`fetchTemplateId failed: ${error.message}`);
   return data ? (data as { id: string }).id : null;

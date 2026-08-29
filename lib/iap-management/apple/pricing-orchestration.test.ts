@@ -543,6 +543,40 @@ describe("applyPricingSchedule — three-source pricing model (IAP.p1.e)", () =>
     expect(getDefaultTemplate).not.toHaveBeenCalled();
   });
 
+  it("C-C: DEFAULT_TEMPLATE tra template CỦA ĐÚNG account trong source", async () => {
+    listPricePointsForIap.mockResolvedValueOnce(POINTS);
+    getDefaultTemplate.mockResolvedValueOnce({
+      template: {
+        id: "tmpl-acct-B",
+        scope_type: "ACCOUNT",
+        scope_app_id: null,
+        uploaded_at: "2026-08-28T00:00:00Z",
+        uploaded_by: "SYSTEM_MIGRATION",
+        source_filename: null,
+      },
+      entries: [],
+    });
+    setPriceSchedule.mockResolvedValueOnce({
+      ok: true,
+      schedule_id: "sched-acct",
+      attempts: 1,
+    });
+    const out = await applyPricingSchedule({
+      creds,
+      appleIapId: "iap-1",
+      localTierId: "TIER_5",
+      usdPrice: 4.99,
+      source: { kind: "DEFAULT_TEMPLATE", account_id: "acct-B" },
+      audit: baseAudit,
+    });
+    expect(out.kind).toBe("set");
+    // ⚠ Chuỗi app → account → Apple: tầng giữa phải hỏi ĐÚNG account trong
+    //   source. Gọi không tham số (hay tham số khác) = quay về ngữ nghĩa
+    //   dùng-chung cũ, tức bỏ tầng account.
+    expect(getDefaultTemplate).toHaveBeenCalledWith("acct-B");
+    expect(getAppTemplate).not.toHaveBeenCalled();
+  });
+
   // ── Q-K fail-soft: template entry with no Apple catalog match ─────────
   it("DEFAULT_TEMPLATE: missing Apple match → partial-template-fail, POST still happens", async () => {
     listPricePointsForIap

@@ -43,10 +43,12 @@ export default async function BulkImportPage({ params }: PageProps) {
   let usdTiersBySource: Record<PricingSourceKind, UsdTierEntry[]> = emptyBySource;
   let defaultTemplateAvailable = false;
   let defaultTemplateEntryCount = 0;
+  let defaultTemplateAccountName: string | undefined;
   let appTemplateAvailable = false;
   let appTemplateEntryCount = 0;
   try {
     const creds = await getActiveAccount();
+    defaultTemplateAccountName = creds.name;
     const [appRes, iapsRes] = await Promise.all([
       getApp(creds, params.appId),
       listAllInAppPurchases(creds, params.appId),
@@ -110,6 +112,7 @@ export default async function BulkImportPage({ params }: PageProps) {
         appTemplateAvailable={appTemplateAvailable}
         defaultTemplateEntryCount={defaultTemplateEntryCount}
         appTemplateEntryCount={appTemplateEntryCount}
+        defaultTemplateAccountName={defaultTemplateAccountName}
       />
     </div>
   );

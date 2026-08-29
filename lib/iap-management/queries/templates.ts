@@ -33,10 +33,10 @@ const ENTRY_BATCH_SIZE = 1000;
  * mặc định mà không nói rõ của account nào. Đó là mục đích chính của thay
  * đổi này, không phải hệ quả phụ.
  *
- * ⚠ C-A CHƯA ĐỔI HÀNH VI. Truy vấn bên dưới vẫn đọc dòng scope_type='GLOBAL'
- *   (M-1 giữ nguyên dòng đó, xem migration 20260828010000). C-C mới đổi sang
- *   đọc theo account. Tách làm hai bước để chunk này có diff thuần-kiểu và
- *   con số call-site đếm được.
+ * C-C đã nối kiểu này với hàng thật: `applyScopeFilter` lọc
+ * `scope_type='ACCOUNT' AND scope_account_id=<id>`, `replaceTemplate` ghi
+ * đúng hai cột đó. Dòng `scope_type='GLOBAL'` cũ vẫn nằm trong DB tới khi
+ * M-2 chạy, nhưng KHÔNG truy vấn nào của code còn nhìn thấy nó.
  */
 export type TemplateScope =
   | { kind: "ACCOUNT"; account_id: string }
@@ -103,13 +103,12 @@ function applyScopeFilter<T extends { eq: (col: string, val: unknown) => T; is: 
   scope: TemplateScope,
 ): T {
   if (scope.kind === "ACCOUNT") {
-    // ⚠ C-A: CHƯA đọc theo account. Vẫn là dòng GLOBAL, y như trước — nên
-    //   chunk này không đổi một byte hành vi nào ở runtime.
-    //   C-C thay bằng:
-    //     .eq("scope_type", "ACCOUNT").eq("scope_account_id", scope.account_id)
-    //   và chỉ được làm sau khi M-2 xoá dòng GLOBAL.
-    void scope.account_id;
-    return query.eq("scope_type", "GLOBAL").is("scope_app_id", null);
+    // C-C: đọc ĐÚNG template của account này. Hai điều kiện, không phải một —
+    // `scope_account_id` một mình là chưa đủ, vì dòng APP cũng có cột đó (NULL)
+    // và một filter thiếu `scope_type` sẽ mở cửa cho NULL-matching về sau.
+    return query
+      .eq("scope_type", "ACCOUNT")
+      .eq("scope_account_id", scope.account_id);
   }
   return query.eq("scope_type", "APP").eq("scope_app_id", scope.app_id);
 }
@@ -401,8 +400,9 @@ export async function listAppsWithTemplates(): Promise<AppTemplateSummary[]> {
 
 export interface ReplaceTemplateResult {
   template_id: string;
-  scope_type: "GLOBAL" | "APP";
+  scope_type: "ACCOUNT" | "APP";
   scope_app_id: string | null;
+  scope_account_id: string | null;
   inserted_entry_count: number;
   audit_batch_id: string;
 }
@@ -537,12 +537,15 @@ export async function replaceTemplate(
   const db = iapDb();
   const flatEntries = flattenTemplateEntries(parsed);
 
-  // ⚠ C-A staged: scope ACCOUNT vẫn GHI vào dòng scope_type='GLOBAL', đúng
-  //   như trước. Ghi thẳng 'ACCOUNT' mà không kèm scope_account_id sẽ vi phạm
-  //   CHECK coherence mà M-1 vừa thêm (INSERT bị Postgres từ chối) — nên
-  //   việc đổi đường ghi thuộc C-C, sau khi cột được thread đầy đủ.
-  const scope_type: "GLOBAL" | "APP" = scope.kind === "APP" ? "APP" : "GLOBAL";
+  // C-C: ghi đúng scope. CHECK coherence của M-1 đòi
+  //   ACCOUNT ⇒ scope_account_id NOT NULL AND scope_app_id NULL
+  //   APP     ⇒ scope_app_id NOT NULL AND scope_account_id NULL
+  // Ghi lệch một cột là Postgres từ chối INSERT, và `headerIns.error` bên
+  // dưới ném ra — hỏng TO, không im lặng. Đó là lý do ba biến này được dựng
+  // từ MỘT chỗ chứ không rải ở lời gọi.
+  const scope_type: "ACCOUNT" | "APP" = scope.kind;
   const scope_app_id = scope.kind === "APP" ? scope.app_id : null;
+  const scope_account_id = scope.kind === "ACCOUNT" ? scope.account_id : null;
 
   // 1. Open an audit batch up front so failures get logged.
   const batchIns = await db
@@ -550,7 +553,8 @@ export async function replaceTemplate(
     .insert({
       app_id: scope_app_id,
       imported_by: uploadedBy,
-      template_version: scope_type === "GLOBAL" ? "default-template-v1" : "app-template-v1",
+      template_version:
+        scope_type === "ACCOUNT" ? "account-template-v1" : "app-template-v1",
       total_rows: flatEntries.length,
       status: "IN_PROGRESS",
       notes: `Pricing template upload (${scope_type}): ${flatEntries.length} entries across ${parsed.tiers.length} tiers × ${parsed.territory_count} territories`,
@@ -602,6 +606,7 @@ export async function replaceTemplate(
       .insert({
         scope_type,
         scope_app_id,
+        scope_account_id,
         uploaded_by: uploadedBy,
         source_filename: sourceFilename,
       })
@@ -645,6 +650,7 @@ export async function replaceTemplate(
       payload: {
         scope: scope_type,
         scope_app_id,
+        scope_account_id,
         template_id: templateId,
         entry_count: rows.length,
         tier_count: parsed.tiers.length,
@@ -657,6 +663,7 @@ export async function replaceTemplate(
       template_id: templateId,
       scope_type,
       scope_app_id,
+      scope_account_id,
       inserted_entry_count: rows.length,
       audit_batch_id: batchId,
     };
@@ -670,7 +677,7 @@ export async function replaceTemplate(
       batch_id: batchId,
       actor: uploadedBy,
       action_type: "PRICE_TIER_IMPORT",
-      payload: { scope: scope_type, scope_app_id, error: message },
+      payload: { scope: scope_type, scope_app_id, scope_account_id, error: message },
     });
     throw err;
   }

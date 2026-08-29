@@ -12,6 +12,16 @@ interface Props {
   /** Entry counts surfaced in helper copy so Manager can gauge sparsity. */
   defaultTemplateEntryCount?: number;
   appTemplateEntryCount?: number;
+  /**
+   * C-C: tên ASC account mà template mặc định thuộc về.
+   *
+   * ⚠ Có mặt ở đây vì sau khi tách theo account, "chưa có Default Template"
+   * KHÔNG còn là một sự thật của hệ thống mà là sự thật của MỘT account —
+   * và một dòng chữ không nói account nào sẽ khiến Manager đi tìm nhầm chỗ.
+   * Ca này chưa gặp (6/6 account đều có template sau M-1) nhưng account tạo
+   * SAU migration sẽ gặp ngay lần đầu mở form.
+   */
+  defaultTemplateAccountName?: string;
 }
 
 /**
@@ -58,7 +68,14 @@ export function PricingSourceSelector({
   appTemplateAvailable,
   defaultTemplateEntryCount,
   appTemplateEntryCount,
+  defaultTemplateAccountName,
 }: Props) {
+  const accountLabel = defaultTemplateAccountName
+    ? `account “${defaultTemplateAccountName}”`
+    : "account này";
+  const defaultUnavailableCopy =
+    `Chưa có Default Template cho ${accountLabel} — vào Settings → ` +
+    `Pricing Templates để upload.`;
   return (
     <fieldset className="space-y-2">
       <legend className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">
@@ -79,15 +96,20 @@ export function PricingSourceSelector({
       />
       <Option
         kind="DEFAULT_TEMPLATE"
-        title="Default Template"
+        title={
+          defaultTemplateAccountName
+            ? `Default Template · ${defaultTemplateAccountName}`
+            : "Default Template"
+        }
         helper={
           defaultTemplateAvailable
-            ? `Override per territory using the global Default Template (${defaultTemplateEntryCount ?? 0} entries).`
-            : "No Default Template uploaded. Add one in Settings → Pricing Templates."
+            ? `Override per territory using ${accountLabel}'s Default Template (${defaultTemplateEntryCount ?? 0} entries).`
+            : defaultUnavailableCopy
         }
         checked={value === "DEFAULT_TEMPLATE"}
         onChange={onChange}
         disabled={!defaultTemplateAvailable}
+        tooltip={defaultTemplateAvailable ? undefined : defaultUnavailableCopy}
       />
       <Option
         kind="APP_TEMPLATE"
@@ -112,6 +134,7 @@ function Option({
   checked,
   onChange,
   disabled,
+  tooltip,
 }: {
   kind: PricingSourceKind;
   title: string;
@@ -119,9 +142,11 @@ function Option({
   checked: boolean;
   onChange: (next: PricingSourceKind) => void;
   disabled: boolean;
+  tooltip?: string;
 }) {
   return (
     <label
+      title={tooltip}
       className={`flex items-start gap-3 rounded-lg border p-3 transition ${
         disabled
           ? "border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 cursor-not-allowed opacity-60"

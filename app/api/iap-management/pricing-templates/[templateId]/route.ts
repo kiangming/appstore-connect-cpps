@@ -56,8 +56,12 @@ export async function DELETE(
       { status: 404 },
     );
   }
+  // ⚠ C-C: gate phải đi theo NGHĨA, không theo chữ. "Default Template" nay
+  //   là scope ACCOUNT — nếu chỉ gate 'GLOBAL' như trước thì sau C-C một
+  //   member xoá được template mặc định của cả account mà không ai chặn.
+  //   'GLOBAL' giữ trong điều kiện vì dòng cũ còn sống tới khi M-2 chạy.
   if (
-    scopeProbe.scope_type === "GLOBAL" &&
+    (scopeProbe.scope_type === "ACCOUNT" || scopeProbe.scope_type === "GLOBAL") &&
     session.user.role !== "admin"
   ) {
     return NextResponse.json(

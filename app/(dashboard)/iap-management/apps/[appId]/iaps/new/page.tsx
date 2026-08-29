@@ -85,6 +85,7 @@ export default async function NewIapPage({ params }: PageProps) {
         initial={emptyIapForm()}
         tiers={tiers}
         defaultTemplateAvailable={defaultTemplateAvailable}
+        defaultTemplateAccountName={creds?.name}
         appTemplateAvailable={appTemplateAvailable}
         defaultTemplateEntryCount={defaultTemplateEntryCount}
         appTemplateEntryCount={appTemplateEntryCount}

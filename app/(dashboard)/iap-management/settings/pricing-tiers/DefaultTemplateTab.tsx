@@ -35,7 +35,7 @@ export function DefaultTemplateTab({ overview, readOnly = false }: Props) {
     setUploading(true);
     const form = new FormData();
     form.append("file", file);
-    form.append("scope", "GLOBAL");
+    form.append("scope", "ACCOUNT");
 
     try {
       const res = await fetch("/api/iap-management/pricing-templates", {

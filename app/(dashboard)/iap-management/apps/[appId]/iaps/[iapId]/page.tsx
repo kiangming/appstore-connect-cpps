@@ -214,6 +214,7 @@ export default async function EditIapPage({ params }: PageProps) {
         initial={initial}
         tiers={tiers}
         defaultTemplateAvailable={defaultTemplateAvailable}
+        defaultTemplateAccountName={creds?.name}
         appTemplateAvailable={appTemplateAvailable}
         defaultTemplateEntryCount={defaultTemplateEntryCount}
         appTemplateEntryCount={appTemplateEntryCount}

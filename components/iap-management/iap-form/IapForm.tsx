@@ -64,6 +64,8 @@ export interface IapFormProps {
   /** Entry counts surfaced in PricingSourceSelector helper copy. */
   defaultTemplateEntryCount?: number;
   appTemplateEntryCount?: number;
+  /** C-C: tên account sở hữu template mặc định — vào copy của selector. */
+  defaultTemplateAccountName?: string;
   /** SC5 — the item's Apple-side availability at page-render time. Null means
    *  Apple has no availability resource (Removed from Sale). Edit + synced only. */
   availabilitySelection?: TerritorySelection | null;
@@ -103,6 +105,7 @@ export function IapForm({
   appTemplateAvailable = false,
   defaultTemplateEntryCount,
   appTemplateEntryCount,
+  defaultTemplateAccountName,
   availabilitySelection = null,
   availabilityPreviousKnown = false,
   allTerritoryIds = [],
@@ -722,6 +725,7 @@ export function IapForm({
               appTemplateAvailable={appTemplateAvailable}
               defaultTemplateEntryCount={defaultTemplateEntryCount}
               appTemplateEntryCount={appTemplateEntryCount}
+              defaultTemplateAccountName={defaultTemplateAccountName}
             />
           </div>
           <div className="grid grid-cols-2 gap-4">

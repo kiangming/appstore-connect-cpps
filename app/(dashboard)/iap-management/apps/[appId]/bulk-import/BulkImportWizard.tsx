@@ -86,8 +86,11 @@ interface Props {
    *  matrix + /execute read (template tables for the template sources, the
    *  legacy USA/USD cache for APPLE). Keyed by PricingSourceKind. */
   usdTiersBySource: Record<PricingSourceKind, UsdTierEntry[]>;
-  /** IAP.p1.g: Manager-uploaded global Default Template availability. */
+  /** IAP.p1.g: Default Template availability. C-C: "default" nay là template
+   *  của ASC account đang chọn, không còn là một template dùng chung. */
   defaultTemplateAvailable?: boolean;
+  /** C-C: tên account đó, để copy nói rõ thiếu template CỦA AI. */
+  defaultTemplateAccountName?: string;
   /** IAP.p1.g: this app has its own pricing template. */
   appTemplateAvailable?: boolean;
   defaultTemplateEntryCount?: number;
@@ -204,6 +207,7 @@ export function BulkImportWizard({
   appTemplateAvailable = false,
   defaultTemplateEntryCount,
   appTemplateEntryCount,
+  defaultTemplateAccountName,
 }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>(1);
@@ -610,6 +614,7 @@ export function BulkImportWizard({
           appTemplateAvailable={appTemplateAvailable}
           defaultTemplateEntryCount={defaultTemplateEntryCount}
           appTemplateEntryCount={appTemplateEntryCount}
+          defaultTemplateAccountName={defaultTemplateAccountName}
           onTierOverride={(productId, tier_id) =>
             setTierOverrides((prev) => ({ ...prev, [productId]: tier_id }))
           }
@@ -1076,6 +1081,7 @@ export function Step3Preview({
   appTemplateAvailable,
   defaultTemplateEntryCount,
   appTemplateEntryCount,
+  defaultTemplateAccountName,
 }: {
   decisions: ConflictDecision[];
   counts: ResolveResult["counts"];
@@ -1098,6 +1104,7 @@ export function Step3Preview({
   appTemplateAvailable: boolean;
   defaultTemplateEntryCount?: number;
   appTemplateEntryCount?: number;
+  defaultTemplateAccountName?: string;
 }) {
   const matchedProductIds = new Set(
     screenshots
@@ -1180,6 +1187,7 @@ export function Step3Preview({
           appTemplateAvailable={appTemplateAvailable}
           defaultTemplateEntryCount={defaultTemplateEntryCount}
           appTemplateEntryCount={appTemplateEntryCount}
+          defaultTemplateAccountName={defaultTemplateAccountName}
         />
       </div>
 
