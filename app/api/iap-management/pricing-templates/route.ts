@@ -31,12 +31,11 @@ export const runtime = "nodejs";
  *                  M-2 đã thu hẹp CHECK của iap_mgmt.price_tier_templates
  *                  còn 'APP' | 'ACCOUNT' và xoá dòng GLOBAL, nên nhận chữ
  *                  đó chỉ còn là một cách ghi nhầm chỗ mà không ai thấy.
- *   account_id — khi scope=ACCOUNT: account NÀO. ⚠ Bắt buộc về mặt ngữ
- *                nghĩa dù kỹ thuật là optional: thiếu nó, route rơi về
- *                account đang active — mà tab Default cho phép XEM account
- *                khác account active, nên "rơi về active" chính là ca ghi
- *                nhầm chỗ. Client LUÔN gửi. Fallback chỉ để một tab cũ
- *                không upload hỏng.
+ *   account_id — khi scope=ACCOUNT: account NÀO. **BẮT BUỘC** — thiếu nó
+ *                là 400, KHÔNG có fallback. Từng có một nhánh rơi về
+ *                account đang active cho tab trình duyệt mở từ trước lúc
+ *                deploy C-C; đã GỠ 2026-08-29 (chunk 2.6) cùng cửa sổ với
+ *                bí danh scope="GLOBAL".
  *   app_id     — required when scope=APP
  *
  * Hotfix 11: scope-conditional admin gate. `scope=ACCOUNT` (Default
@@ -109,21 +108,38 @@ export async function POST(req: Request) {
     //   Manager đang không nhìn.
     //   Nên account đến TỪ CLIENT, và được đối chiếu với danh sách thật
     //   trước khi dùng (soft-ref: không FK nào làm việc này giúp).
-    let accountId: string;
-    if (accountIdField) {
-      const known = await findAllAccountsPublic();
-      if (!known.some((a) => a.id === accountIdField)) {
-        return NextResponse.json(
-          { error: `Unknown ASC account "${accountIdField}".` },
-          { status: 400 },
-        );
-      }
-      accountId = accountIdField;
-    } else {
-      // Back-compat cho tab trình duyệt mở từ trước lúc deploy.
-      accountId = (await getActiveAccount()).id;
+    // ⚠ KHÔNG CÓ NHÁNH FALLBACK, và sự vắng mặt đó là nội dung chính của
+    //   đoạn này. "Account đang active ở TopNav" và "account Manager đang
+    //   chọn ở dãy chip" là HAI THỨ KHÁC NHAU; suy ra cái thứ nhất khi
+    //   client định nói cái thứ hai chính là ca ghi đè 1140 ô thật của một
+    //   account mà Manager đang không nhìn — im lặng, và bản mất là bản
+    //   không ai đang mở. Một 400 ồn ào rẻ hơn vô hạn so với ca đó.
+    //   Nhánh fallback cũ tồn tại cho tab trình duyệt mở từ trước lúc deploy
+    //   C-C; gỡ 2026-08-29 (chunk 2.6) cùng cửa sổ với bí danh
+    //   scope="GLOBAL" — gỡ một nửa cửa sổ là không gỡ.
+    //   ⚠ Chuỗi rỗng cũng rơi vào đây, cố ý: `!""` là true, nên một
+    //   `account_id=""` bị từ chối thay vì lặng lẽ thành account active.
+    if (!accountIdField) {
+      return NextResponse.json(
+        {
+          error:
+            'scope=ACCOUNT requires "account_id" in form data. The target ' +
+            "account must be stated by the caller — it is never inferred " +
+            "from the active account, because writing to the active account " +
+            "instead of the specified one silently overwrites a template " +
+            "nobody is looking at.",
+        },
+        { status: 400 },
+      );
     }
-    scope = { kind: "ACCOUNT", account_id: accountId };
+    const known = await findAllAccountsPublic();
+    if (!known.some((a) => a.id === accountIdField)) {
+      return NextResponse.json(
+        { error: `Unknown ASC account "${accountIdField}".` },
+        { status: 400 },
+      );
+    }
+    scope = { kind: "ACCOUNT", account_id: accountIdField };
   } else if (scopeField === "APP") {
     let internalAppId = appIdField;
     if (!internalAppId && appleAppIdField) {
