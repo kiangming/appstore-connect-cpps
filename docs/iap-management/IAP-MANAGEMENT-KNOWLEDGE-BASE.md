@@ -5539,6 +5539,99 @@ Unchanged: the Per-App tab, and the resolution order itself.
 
 ---
 
+## 20. The healthcheck outage (2026-08-29) — three lessons about reading logs
+
+Production went down right after the `[ACCOUNT-default-template]` push. The
+deploy log's loudest line was:
+
+```
+⚠ "next start" does not work with "output: standalone" configuration.
+   Use "node .next/standalone/server.js" instead.
+✓ Ready in 457ms
+```
+
+Two independent diagnoses — an external one and a PR opened against the repo —
+both named that warning as the root cause and proposed changing the start
+command. Both were wrong, and the same two checks refuted them.
+
+### 20.1 ⚠ THE LOUDEST LINE IN A LOG IS NOT THE CAUSE. CHECK ITS AGE AND ITS SEVERITY FIRST.
+
+Two cheap checks, both mechanical, both decisive:
+
+**Age — `git log -S`.** `output: "standalone"` was added by `074d169` on
+**2026-03-13**. **442 commits** had deployed green with it since. A line that
+has printed on every boot for five months cannot explain a failure that started
+on Friday.
+
+**Severity — read the emitting source.** `next/dist/server/next.js:204-212`:
+
+```js
+if (conf.output === "standalone") {
+    _log.warn(`"next start" does not work with…`);   // warn, then falls through
+} else if (conf.output === "export") {
+    throw new Error(…);                              // this one actually stops
+}
+this.server = await this.createServer({…});          // ← runs either way
+```
+
+Next distinguishes the two cases itself: `export` throws, `standalone` grumbles.
+The warning is cosmetic. **The fix it proposed would also have deleted 111
+files of `.next/static` and all of `public/`** — standalone copies neither —
+turning a loud failure into a silently broken site that passes its healthcheck.
+That is the worse outcome, and it would have looked like success.
+
+⇒ **Before believing a log line: `git log -S` it (is it new?) and read the code
+that prints it (does it warn or throw?).** Neither takes two minutes.
+
+### 20.2 "Ready in Xms" + "service unavailable" = the container is ALIVE
+
+A container that fails to start prints a stack trace and dies. This one printed
+`Ready` and stayed up — so the process, the port binding and the build were all
+fine. The only thing failing was **the healthcheck's verdict on a URL**.
+
+⚠ Railway's healthcheck path was `/`. In this app `/` is
+`app/(dashboard)/page.tsx`, which does `redirect("/login")` when there is no
+session — **since the initial commit `c922f83`, 2026-03-12**. A healthcheck
+carries no cookie, so it has always received a 307, never a 2xx.
+
+Fix: `app/api/health/route.ts` — 200, no auth, and **deliberately no DB**. A
+healthcheck answers *"is this process alive"*, not *"is the system healthy"*.
+Wire it to Supabase and a Supabase incident makes Railway **kill a container
+that is working**, then restart it into the same incident. `route.test.ts`
+enforces the no-DB rule structurally, because "surely the healthcheck should
+check the database too" is a well-meaning change someone will make.
+
+### 20.3 What is still NOT explained — and saying so is the point
+
+`/` has returned 307 since day one; the healthcheck path never changed; the
+green deploy (`d713dd5`, 08-27 23:19) and the red one (`0d4b3b3`, 08-29 18:45)
+are **byte-identical on every file `/` renders** (`app/layout.tsx`,
+`app/(dashboard)/{layout,page}.tsx`, `components/layout/*`), on `/login`, on
+`next.config.mjs`, on `package.json`, and on the `next` version
+(`14.2.35`, never bumped since `c922f83`). No `middleware.ts` has ever existed.
+
+So **the repo cannot explain why the same request became fatal on Friday.**
+The leading hypothesis is platform-side — Railway previously tolerating or
+following the 307 and no longer doing so — but that is *not readable from this
+repo* and is recorded as an open question, not a finding.
+
+⇒ **A cause you cannot demonstrate is a hypothesis. Write it down as one.**
+The pressure to produce an explanation is highest exactly when production is
+down, which is when a fabricated one does the most damage — it ends the
+investigation.
+
+### 20.4 The M-1/M-2 split paid for itself
+
+Rollback was safe **because M-1 was additive**: the `GLOBAL` row was still
+there with all 1140 entries, the widened CHECK still accepted every write the
+old code makes, and old code filters on `scope_type='GLOBAL'` so it never saw
+the new ACCOUNT rows. No schema work was needed to roll back — which is the
+entire reason the destructive half was split into M-2 and left unapplied.
+The design was justified on paper as "no apply→deploy window"; its first real
+payment came from a different direction entirely.
+
+---
+
 **Knowledge base preserved for future development continuity.**
 
 ---
