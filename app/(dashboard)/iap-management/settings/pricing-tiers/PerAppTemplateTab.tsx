@@ -286,6 +286,16 @@ export function PerAppTemplateTab({
               )}
             </p>
           )}
+          {/* [PERAPP-account-picker-asymmetry] Tab Default có dãy chip chọn
+              account, tab này KHÔNG — nó bám account ở TopNav. Manager vừa
+              dùng dãy chip xong sẽ đi tìm dãy chip ở đây; câu dưới trả lời
+              trước câu hỏi đó thay vì để người dùng tự đoán là hỏng. */}
+          <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
+            Danh sách app bám account ở TopNav (khác tab Default, nơi chọn
+            account bằng dãy chip) — danh sách này hỏi thẳng Apple, mà mỗi
+            account là một bộ credential riêng. Muốn xem account khác thì đổi
+            ở TopNav rồi mở lại dropdown.
+          </p>
         </div>
       </div>
 
