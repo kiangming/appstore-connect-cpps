@@ -25,11 +25,12 @@ export const runtime = "nodejs";
  *
  * Multipart form fields:
  *   file       — the .xlsx template (required)
- *   scope      — "ACCOUNT" or "APP" (required).
- *                ⚠ "GLOBAL" còn được chấp nhận như BÍ DANH của "ACCOUNT",
- *                  chỉ để một tab trình duyệt cũ mở từ trước lúc deploy
- *                  không upload hỏng. Cả hai đều nghĩa là "template mặc
- *                  định của account đang chọn". Bỏ bí danh sau khi M-2 chạy.
+ *   scope      — "ACCOUNT" or "APP" (required). Giá trị khác → 400 kèm
+ *                message, KHÔNG rơi âm thầm vào nhánh nào.
+ *                ⚠ Bí danh "GLOBAL" ĐÃ GỠ (2026-08-29, sau khi M-2 apply).
+ *                  M-2 đã thu hẹp CHECK của iap_mgmt.price_tier_templates
+ *                  còn 'APP' | 'ACCOUNT' và xoá dòng GLOBAL, nên nhận chữ
+ *                  đó chỉ còn là một cách ghi nhầm chỗ mà không ai thấy.
  *   account_id — khi scope=ACCOUNT: account NÀO. ⚠ Bắt buộc về mặt ngữ
  *                nghĩa dù kỹ thuật là optional: thiếu nó, route rơi về
  *                account đang active — mà tab Default cho phép XEM account
@@ -38,10 +39,10 @@ export const runtime = "nodejs";
  *                không upload hỏng.
  *   app_id     — required when scope=APP
  *
- * Hotfix 11: scope-conditional admin gate. `scope=GLOBAL` (Default
- * Template) remains admin-only — global blast radius. `scope=APP`
- * (per-app override) is open to any signed-in member. Failures return
- * JSON `{ error }`.
+ * Hotfix 11: scope-conditional admin gate. `scope=ACCOUNT` (Default
+ * Template của một account) remains admin-only — bán kính nổ là mọi app
+ * của account đó. `scope=APP` (per-app override) is open to any signed-in
+ * member. Failures return JSON `{ error }`.
  */
 export async function POST(req: Request) {
   let session;
@@ -90,7 +91,7 @@ export async function POST(req: Request) {
   }
 
   let scope: TemplateScope;
-  if (scopeField === "ACCOUNT" || scopeField === "GLOBAL") {
+  if (scopeField === "ACCOUNT") {
     // Hotfix 11 giữ nguyên tinh thần: template mặc định là admin-only. Bán
     // kính nổ hẹp lại — một account thay vì toàn hệ thống — nhưng vẫn là
     // "mọi app của account này", nên vẫn admin.

@@ -35,8 +35,8 @@ const ENTRY_BATCH_SIZE = 1000;
  *
  * C-C đã nối kiểu này với hàng thật: `applyScopeFilter` lọc
  * `scope_type='ACCOUNT' AND scope_account_id=<id>`, `replaceTemplate` ghi
- * đúng hai cột đó. Dòng `scope_type='GLOBAL'` cũ vẫn nằm trong DB tới khi
- * M-2 chạy, nhưng KHÔNG truy vấn nào của code còn nhìn thấy nó.
+ * đúng hai cột đó. M-2 (2026-08-29) đã xoá hẳn dòng `scope_type='GLOBAL'`
+ * khỏi DB và bỏ giá trị đó khỏi CHECK — không còn đường nào chạm tới nó.
  */
 export type TemplateScope =
   | { kind: "ACCOUNT"; account_id: string }
@@ -44,8 +44,10 @@ export type TemplateScope =
 
 export interface TemplateHeader {
   id: string;
-  /** M-1 đã thêm 'ACCOUNT' vào CHECK; 'GLOBAL' còn tới khi M-2 chạy. */
-  scope_type: "GLOBAL" | "APP" | "ACCOUNT";
+  /** M-2 (apply 2026-08-29) đã thu hẹp CHECK của bảng còn đúng hai giá trị
+   *  này và xoá dòng GLOBAL. Kiểu hẹp theo là CỐ Ý: nó biến mọi so sánh
+   *  `=== "GLOBAL"` còn sót thành lỗi tsc thay vì một nhánh chết im lặng. */
+  scope_type: "APP" | "ACCOUNT";
   scope_app_id: string | null;
   uploaded_at: string;
   uploaded_by: string;

@@ -45,7 +45,7 @@ const MEMBER_ACCESSIBLE = [
   "app/api/iap-management/apps/[appId]/iaps/[iapId]/submit/route.ts",
   "app/api/iap-management/apps/[appId]/bulk-import/execute/route.ts",
   // API routes (Hotfix 11 — dual-purpose: requireIapSession at entry,
-  // then scope-conditional admin gate when scope_type === "GLOBAL")
+  // then scope-conditional admin gate when scope_type === "ACCOUNT")
   "app/api/iap-management/pricing-templates/route.ts",
   "app/api/iap-management/pricing-templates/[templateId]/route.ts",
 ];
@@ -59,9 +59,16 @@ const ADMIN_ONLY = [
 
 // Surfaces with scope-conditional admin gate (Hotfix 11): entry uses
 // requireIapSession but the handler enforces admin when the request
-// targets the GLOBAL (Default Template) scope. Assertion: must mention
-// both the role-check pattern AND the GLOBAL token so a future
+// targets the privileged Default-Template scope. Assertion: must mention
+// both the role-check pattern AND the scope comparison so a future
 // regression that drops one or the other gets caught.
+//
+// ⚠ 2026-08-29 [ACCOUNT-default-template] chunk 2.1: scope đặc quyền đổi
+//   tên từ GLOBAL sang ACCOUNT khi M-2 xoá scope GLOBAL khỏi CHECK. Khẳng
+//   định dùng `=== "ACCOUNT"` chứ KHÔNG phải `ACCOUNT` trần: chữ ACCOUNT
+//   trần cũng khớp `{ kind: "ACCOUNT", … }` ở nhánh dựng scope, nên bản
+//   trần sẽ vẫn xanh khi ai đó xoá mất phép so sánh — yếu hơn bản GLOBAL
+//   cũ. Ràng vào dấu `===` giữ nguyên độ chặt.
 const SCOPE_CONDITIONAL_ADMIN = [
   "app/api/iap-management/pricing-templates/route.ts",
   "app/api/iap-management/pricing-templates/[templateId]/route.ts",
@@ -92,11 +99,11 @@ describe("Hotfix 10 + 11 RBAC posture audit", () => {
   describe("scope-conditional admin gate (Hotfix 11 dual-purpose routes)", () => {
     it.each(SCOPE_CONDITIONAL_ADMIN)("%s", (path) => {
       const src = stripComments(read(path));
-      // Must reference GLOBAL scope AND enforce role check (the literal
-      // string "admin" appears in the role comparison). Together these
-      // catch a regression that either drops the scope check or
-      // flattens the route back to unconditional access.
-      expect(src).toMatch(/GLOBAL/);
+      // Must reference the ACCOUNT scope comparison AND enforce role check
+      // (the literal string "admin" appears in the role comparison).
+      // Together these catch a regression that either drops the scope
+      // check or flattens the route back to unconditional access.
+      expect(src).toMatch(/=== "ACCOUNT"/);
       expect(src).toMatch(/role !== "admin"|role === "admin"/);
     });
   });

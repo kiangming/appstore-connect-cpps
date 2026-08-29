@@ -18,10 +18,10 @@ export const runtime = "nodejs";
  * Remove a Default or App-specific pricing template. CASCADE wipes its
  * entries automatically.
  *
- * Hotfix 11: scope-conditional admin gate. Deleting a GLOBAL (Default)
- * template requires admin (global blast); APP-scoped templates are open
- * to any signed-in member, consistent with member-uploadable per-app
- * templates.
+ * Hotfix 11: scope-conditional admin gate. Deleting an ACCOUNT-scoped
+ * (Default) template requires admin — bán kính nổ là mọi app của account
+ * đó; APP-scoped templates are open to any signed-in member, consistent
+ * with member-uploadable per-app templates.
  */
 export async function DELETE(
   _req: Request,
@@ -37,7 +37,7 @@ export async function DELETE(
     throw err;
   }
 
-  // Hotfix 11: pre-fetch scope to enforce admin-only on GLOBAL deletes.
+  // Hotfix 11: pre-fetch scope to enforce admin-only on ACCOUNT deletes.
   // Small race window between this read and deleteTemplate's own header
   // load is acceptable — scope_type doesn't change mid-template-life
   // and the team is small.
@@ -57,13 +57,12 @@ export async function DELETE(
     );
   }
   // ⚠ C-C: gate phải đi theo NGHĨA, không theo chữ. "Default Template" nay
-  //   là scope ACCOUNT — nếu chỉ gate 'GLOBAL' như trước thì sau C-C một
-  //   member xoá được template mặc định của cả account mà không ai chặn.
-  //   'GLOBAL' giữ trong điều kiện vì dòng cũ còn sống tới khi M-2 chạy.
-  if (
-    (scopeProbe.scope_type === "ACCOUNT" || scopeProbe.scope_type === "GLOBAL") &&
-    session.user.role !== "admin"
-  ) {
+  //   là scope ACCOUNT — gate phải bám chữ đó, nếu không thì một member xoá
+  //   được template mặc định của cả account mà không ai chặn.
+  //   Nhánh 'GLOBAL' đã gỡ 2026-08-29: M-2 xoá dòng GLOBAL và thu hẹp CHECK
+  //   ⇒ scope_type không bao giờ nhận giá trị đó nữa (kiểu TemplateHeader
+  //   cũng đã hẹp lại, nên tsc bắt được nếu ai viết lại).
+  if (scopeProbe.scope_type === "ACCOUNT" && session.user.role !== "admin") {
     return NextResponse.json(
       { error: "Admin role required to remove the Default Template." },
       { status: 403 },
