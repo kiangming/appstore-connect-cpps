@@ -5535,7 +5535,66 @@ the one the Manager is not looking at. The account now travels from the client
 and is validated against the real list before use — no FK does that job for a
 soft ref.
 
-Unchanged: the Per-App tab, and the resolution order itself.
+Unchanged: the resolution order itself. The Per-App tab gained exactly one
+line of prose (chunk 2.4) and no picker — see §19.9.
+
+### 19.8 Closure — M-2 applied, and what it proved
+
+M-2 applied 2026-08-29. Verify 7/7:
+
+| Check | Result |
+|---|---|
+| M2-V1 | 0 GLOBAL · 6 ACCOUNT · 3 APP · 9 total |
+| M2-V1b | `tong_entry_account` = `ky_vong` = 6840; table total 41103 = 6840 + 34263 (the 3 APP templates, matching M1-V7) ⇒ **CASCADE removed only the GLOBAL row's entries** |
+| M2-V2 | 2 CHECKs, no `'GLOBAL'`; coherence CHECK has exactly the APP and ACCOUNT branches |
+| M2-V3 | 4 indexes; `global_unique` dropped, `account_unique` partial on `scope_account_id` |
+| M2-V4a | 3 APP templates identical cell-for-cell to M1-V7 |
+| M2-V4b | backup intact: 1 header / 1140 entries |
+| M2-V4c | 6 audit rows, `source_uploaded_by` = the real author, `source_uploaded_at` = 2026-05-18 |
+
+**M2-V4c is the one worth remembering.** The GLOBAL row carried the only
+record of who uploaded the original 1140 prices and when. Deleting it destroys
+that permanently — unless the duplication step copies the provenance forward
+first, which is what M-1's `actions_log` INSERT does. Had that INSERT hit the
+`action_type` CHECK and failed silently (KB §9 P2 — the trap it was written to
+dodge by reusing the existing `PRICE_TIER_IMPORT` type), the pricing data would
+still have been perfect and the authorship gone with no error anywhere. **A
+destructive migration should carry forward what only the doomed row knows,
+and the verify should read it back after the delete, not before.**
+
+The type narrowing that followed is the same idea aimed at code:
+`TemplateHeader.scope_type` went from `"GLOBAL" | "APP" | "ACCOUNT"` to
+`"APP" | "ACCOUNT"` **because the DB can no longer produce the third value**.
+Every leftover `=== "GLOBAL"` became a `tsc` error instead of a dead branch
+that runs quietly forever. Narrowing a type after a migration narrows the data
+is not tidying — it is the only mechanism that converts "this is now
+impossible" into something a machine checks.
+
+### 19.9 The account-picker asymmetry, and the rule that resolves it
+
+Two tabs sit side by side in Settings → Pricing Templates. Default has an
+account chip row. Per-App does not — its app list comes from
+`GET /api/iap-management/asc-apps`, which derives the account from
+`getActiveAccount()` and takes no parameter.
+
+Same pattern, opposite verdict, and the difference is **read vs write**:
+
+| Site | Direction | Consequence of deriving from active | Verdict |
+|---|---|---|---|
+| `POST /pricing-templates` | **write** | overwrites another account's 1140 real rows, silently, and the lost copy is the one nobody is looking at | **fixed in C-D** — account travels from the client and is validated against the real list |
+| `GET /asc-apps` | **read** | list shows a different account's apps than the Manager has in mind | **prose, not plumbing** (chunk 2.4) — backlog `[PERAPP-account-picker-asymmetry]` holds the full fix |
+
+> **Rule.** Not "every route must take an `account_id`". **A write path's
+> account MUST come from the client and MUST be validated; a read path may
+> infer it from the active account, provided the surface says out loud where
+> it inferred it from.** The unsaid inference is the defect, not the
+> inference.
+
+The prose fix targets a specific misreading: a Manager who has just used the
+chip row on the Default tab goes looking for one here, does not find it, and
+**reads the absence as broken**. One line naming the TopNav account and why
+(each account is a separate set of Apple credentials) costs nothing and
+removes the wrong conclusion.
 
 ---
 

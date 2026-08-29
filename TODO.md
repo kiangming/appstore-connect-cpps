@@ -4,17 +4,41 @@ Format: `- [ ] [PR-X] description — file path — rationale`
 
 ## From [ACCOUNT-default-template] (Default Template theo từng ASC account, 2026-08-29)
 
-**Trạng thái arc: code XONG (C-A…C-E), M-1 đã apply, chờ deploy → UAT 1 IAP thật → M-2.**
+**Trạng thái arc: ✅ SHIPPED (2026-08-29).** Code C-A…C-E deploy `0d4b3b3`
+· UAT 8/8 xanh · M-1 apply + M1-V0 `TAT_CA_PASS=true` · M-2 apply + M2-V1…V4
+7/7 xanh · dọn hậu 2.1–2.5. Kiến trúc + bài học: **KB §19** (§19.8 phần đóng,
+§19.9 quy tắc đường-ghi/đường-đọc).
 
-- [ ] [HEALTHCHECK] **Bật lại Railway Healthcheck Path = `/api/health`** — sau khi route mới lên production. Hiện Manager đã TẮT healthcheck để khôi phục dịch vụ; tắt hẳn nghĩa là Railway không còn biết container chết. ⚠ Đừng trỏ lại `/`: nó `redirect("/login")` từ commit đầu tiên nên healthcheck không bao giờ nhận 2xx.
+⚠ **CÒN ĐÚNG MỘT VIỆC TREO:** dọn 2 bảng backup — mục ngay dưới. Nó KHÔNG
+phải việc dọn dẹp cho gọn; nó là đường lui đọc được duy nhất sau khi dòng
+GLOBAL bị xoá, nên có điều kiện mở khoá riêng.
+
+- [x] [HEALTHCHECK] **Bật lại Railway Healthcheck Path = `/api/health`** — ✅ 2026-08-29. Route `/api/health` lên production ở `b5a0fc9`, Manager đã trỏ Healthcheck Path sang đó, deploy xanh. (Lý do không trỏ lại `/`: nó `redirect("/login")` từ commit đầu tiên nên healthcheck không bao giờ nhận 2xx.)
 - [ ] [HEALTHCHECK-openq] **CÂU HỎI MỞ: vì sao healthcheck `/` xanh nhiều tháng rồi đỏ ngày 29/08?** — không giải thích được từ repo. Đã loại trừ bằng git: `/` trả 307 từ `c922f83` (2026-03-12) · file trên đường render `/` và `/login` không đổi giữa deploy xanh `d713dd5` và deploy đỏ `0d4b3b3` · `next.config.mjs`/`package.json` không đổi · `next` vẫn 14.2.35 chưa từng bump · `middleware.ts` chưa từng tồn tại. Giả thuyết còn lại nằm phía Railway (trước đây chấp nhận hoặc đi theo 307, nay không) — **chưa chứng minh được, đừng ghi thành kết luận**. Nếu Railway có changelog/support thì hỏi; nếu không thì để mở.
 
-- [ ] [ACCOUNT-default-template] **Apply M-2** — `supabase/migrations/20260828020000_iap_mgmt_account_templates_m2_drop_global.sql` — xoá dòng `scope_type='GLOBAL'`, thu hẹp CHECK, drop index `..._global_unique`. ⚠ CHỈ chạy sau khi code đã deploy VÀ Manager kiểm 1 IAP thật ra giá đúng. Verify: `docs/iap-management/queries/verify-account-template-duplication.sql` M2-V1…V4.
-- [ ] [ACCOUNT-default-template] **Dọn 2 bảng backup** — `iap_mgmt.price_tier_templates_backup_global` + `..._entries_backup_global` — đường lui của M-2. Điều kiện xoá: Manager xác nhận template ACCOUNT đã chạy đúng qua ít nhất một lần submit THẬT (không phải chỉ preview). Trước đó thì để nguyên.
-- [ ] [ACCOUNT-default-template] **Bỏ bí danh `scope="GLOBAL"` ở POST /pricing-templates** — `app/api/iap-management/pricing-templates/route.ts:83` — hiện nhận cả `"ACCOUNT"` lẫn `"GLOBAL"` (cùng nghĩa) để tab trình duyệt mở từ trước lúc deploy không upload hỏng. Sau M-2 vài ngày thì bỏ nhánh `"GLOBAL"`.
-- [ ] [ACCOUNT-default-template] **Bỏ `'GLOBAL'` khỏi union `TemplateHeader.scope_type`** — `lib/iap-management/queries/templates.ts` — giá trị này chỉ còn tồn tại vì dòng legacy sống tới M-2. Sau M-2, DB không thể sinh ra nó nữa (CHECK cấm), nên union nên thu về `'ACCOUNT' | 'APP'`. Cùng lúc, bỏ nhánh `scope_type === "GLOBAL"` ở gate admin của DELETE route.
-- [ ] [ACCOUNT-default-template] **Tên account chưa từng đọc được** — census V0 có trả cột `asc_accounts.name` nhưng phần Manager dán lại chỉ có `id`, nên mockup + guide dùng id làm nhãn. UI thật đã dùng `name` (từ `findAllAccountsPublic`) — chỉ cần xác nhận bằng mắt lúc UAT rằng nhãn hiện ra là tên người đọc được, không phải slug.
+- [x] [ACCOUNT-default-template] **Apply M-2** — ✅ apply 2026-08-29, verify M2-V1…V4 **7/7 xanh**: 0 GLOBAL · 6 ACCOUNT · 3 APP · 9 tổng; `tong_entry_account` = `ky_vong` = 6840 và tổng bảng 41103 = 6840 + 34263 của 3 template APP (khớp M1-V7) ⇒ CASCADE chỉ dọn đúng dòng GLOBAL; 2 CHECK không còn `'GLOBAL'`; 4 index, `global_unique` đã drop; backup còn nguyên 1 header / 1140 entry; **6 dòng audit với `source_uploaded_by` = tác giả thật, `source_uploaded_at` = 2026-05-18 ⇒ dấu vết tác giả gốc SỐNG SÓT, bẫy KB §9 P2 không kích hoạt.**
+- [ ] [ACCOUNT-default-template] ⚠ **VIỆC TREO DUY NHẤT CỦA ARC — dọn 2 bảng backup.** `iap_mgmt.price_tier_templates_backup_global` + `iap_mgmt.price_tier_template_entries_backup_global` (1 header / 1140 entry). **ĐIỀU KIỆN MỞ KHOÁ: sau ÍT NHẤT MỘT LẦN SUBMIT THẬT lên Apple bằng template ACCOUNT — submit thật, KHÔNG phải preview.**
+
+  Vì sao preview không tính: preview không đi qua đường ghi, nên nó không chứng minh được vế còn thiếu. M2-V1…V4 xanh chỉ chứng minh **dữ liệu đúng trong database**; nó không chứng minh **orchestrator đọc đúng dữ liệu đó rồi POST đúng giá lên Apple**. Chỉ một lần submit thật mới nối được hai vế.
+
+  Vì sao đừng dọn sớm: M-2 đã xoá dòng GLOBAL (`route`: migration bước 1). Hai bảng này là **đường lui duy nhất còn ĐỌC ĐƯỢC** — dữ liệu tuy cũng sống trong 6 bản sao ACCOUNT, nhưng muốn dựng lại đúng một dòng GLOBAL nguyên bản thì chỉ có ở đây. ⚠ Dựng lại cần nới CHECK trước, vì M-2 đã cấm giá trị `'GLOBAL'`.
+- [x] [ACCOUNT-default-template] **Bỏ bí danh `scope="GLOBAL"` ở POST /pricing-templates** — ✅ chunk 2.1 (`0b1d072`). `app/api/iap-management/pricing-templates/route.ts:93`. Chữ `"GLOBAL"` nay rơi xuống `else` sẵn có ⇒ 400 `'scope must be "ACCOUNT" or "APP".'`. Test mới `route.scope-rejection.test.ts` canh **cách** từ chối chứ không chỉ việc từ chối: 400 phải kèm message, message nêu đủ hai giá trị hợp lệ, `replaceTemplate` không được gọi, và `getActiveAccount` không được gọi (nhánh nguy hiểm nhất nếu gỡ ẩu). Census kèm theo: **không có zod schema nào cho `scope`** — đây là so sánh chuỗi thô.
+- [x] [ACCOUNT-default-template] **Bỏ `'GLOBAL'` khỏi union `TemplateHeader.scope_type`** — ✅ chunk 2.1 (`0b1d072`). `lib/iap-management/queries/templates.ts:48` nay là `"APP" | "ACCOUNT"`; gate admin của DELETE (`[templateId]/route.ts:64`) chỉ còn bám `"ACCOUNT"`. Thu hẹp kiểu là **guard cấu trúc**, không phải dọn dẹp: mọi `=== "GLOBAL"` còn sót từ nay là lỗi `tsc` thay vì một nhánh chết chạy im lặng.
+- [x] [ACCOUNT-default-template] **Comment/fixture còn nói scope GLOBAL như đường sống** — ✅ chunk 2.2 (`a6f701b`). Grep ra **11 chỗ trong 8 file**, không phải 1 (bài học C-E lặp lại). Giữ nguyên có lý do: `batch-price-point-catalog.ts:7` + `price-point-donor.ts:10` (chữ GLOBAL ở đó là catalog giá toàn cầu của Apple, nghĩa khác hẳn), các đoạn lịch sử đã đúng thì quá khứ, các guard hồi quy còn sống, và `DefaultTemplateTab.test.tsx:53` (chuỗi `origin_note` là dữ liệu thật migration ghi vào DB).
+- [x] [ACCOUNT-default-template] **Không test nào bấm nút Replace/Remove** — ✅ chunk 2.3 (`27f6dda`). Mọi test cũ gọi `fireEvent.change` thẳng lên `<input type=file>` ⇒ `onClick` là vùng không ai canh. Thêm 5 test ở `DefaultTemplateTab.test.tsx` describe (g). ⚠ **Lỗ tương tự CHƯA vá** ở hai surface sinh đôi — xem mục `[PERAPP-REMOVE-no-test]` bên dưới.
+- [x] [ACCOUNT-default-template] **Tên account chưa từng đọc được** — ✅ xác nhận ở UAT 8/8 (2026-08-29): nhãn hiện ra là tên người đọc được. Bằng chứng mạnh nhất là mục quyết định của UAT — TopNav = NCV, app `sa.lw.ap.104` hiện option **"Default Template · NCV"**; NCV là account CUỐI danh sách nên nó cũng loại trừ luôn giả thuyết "rơi về account đầu danh sách".
 - [ ] [ACCOUNT-default-template] **`asc_account_keys.account_id` không có guard cấu trúc tương đương** — `lib/iap-management/queries/templates.structure.test.ts` chặn truy cập thẳng 2 bảng template; bảng key pool (cũng soft-ref sang `public.asc_accounts`) chưa có guard cùng loại. Không cấp bách — nhưng nếu key pool mọc thêm surface thì đây là khuôn có sẵn.
+
+- [ ] [PERAPP-REMOVE-no-test] **Hai surface template KHÔNG CÓ FILE TEST NÀO — nút mở file picker và nút Remove đều không ai canh.** Sinh ra từ census của chunk 2.3: tab Default ít nhất có 21 test và nay có canh wiring nút; hai surface sinh đôi thì không có gì.
+
+  - `app/(dashboard)/iap-management/settings/pricing-tiers/PerAppTemplateTab.tsx:259` (mở file picker) + `:356` (Remove theo từng hàng app)
+  - `components/iap-management/pricing-tiers/AppPricingTemplateSection.tsx:190` (mở file picker) + `:182` (Remove)
+
+  Khuôn có sẵn, chép từ `DefaultTemplateTab.test.tsx` describe (g): spy `HTMLInputElement.prototype.click` → `fireEvent.click` nút → assert spy được gọi; và với Remove thì assert DELETE đúng id **cộng** assert huỷ ở `window.confirm` thì KHÔNG gọi DELETE (khẳng định thứ hai là thứ phân biệt "nút nối vào handler có hỏi" với "nút nối vào một fetch DELETE trần").
+
+  ⚠ Không rẻ như tab Default: cả hai component fetch trong `useEffect` (`PerAppTemplateTab` còn có `fetchInFlight` chống trùng lời gọi), nên phải dựng harness mock vòng fetch trước. Đó là lý do chunk 2.3 dừng ở tab Default và ghi mục này thay vì làm cố.
+
+  ⚠ Nút Remove ở `PerAppTemplateTab:356` xoá template của MỘT app, không phải của account — bán kính nổ nhỏ hơn nút Remove ở tab Default. Đừng chép nguyên câu chữ cảnh báo sang.
 
 - [ ] [PERAPP-account-picker-asymmetry] **Tab Per-App bám account TopNav, tab Default có dãy chip — hai tab cạnh nhau, hai cách chọn account.** Sau C-D, tab Default cho Manager chọn account bằng dãy chip và XEM/SỬA template của một account KHÁC account đang active. Tab Per-App ngay bên cạnh thì không: danh sách app đến từ `GET /api/iap-management/asc-apps`, và route đó tự suy account bằng `getActiveAccount()` (`app/api/iap-management/asc-apps/route.ts:39`), không nhận tham số. Muốn thấy app của account khác thì phải đổi ở TopNav.
 

@@ -10,8 +10,10 @@ Three sources are now available wherever the Tool sets prices on Apple:
 
 1. **Apple base** — Tool sends one USA price-point; Apple auto-equalizes
    every other territory. (= behavior before IAP.p1.)
-2. **Default Template** — global per-territory overrides Manager uploads
-   once in Settings. Used by every app unless overridden.
+2. **Default Template** — per-territory overrides Manager uploads in
+   Settings, **one per ASC account**. Used by every app of that account
+   unless overridden. (⚠ Changed 2026-08-29, `[ACCOUNT-default-template]`:
+   before that date there was a single template shared by all accounts.)
 3. **App-specific template** — per-app per-territory overrides Manager
    uploads on the app detail page. Wins over Default for that app.
 
@@ -20,14 +22,30 @@ auto-equalize." Manager doesn't need to fill the whole grid.
 
 ## Where to upload
 
-### Default Template (one global)
+### Default Template (one per ASC account)
 
-Settings → Pricing Templates → **Default Template** tab → Upload .xlsx.
+Settings → Pricing Templates → **Default Template** tab → pick the account
+in the chip row → Upload .xlsx.
 
-The legacy upload button (before IAP.p1) now routes to this surface
-automatically. Existing tiers from `price_tier_territories` were promoted
-to a Default Template on the IAP.p1.a migration — Manager can replace it
-anytime, or remove it to fall back to Apple-only behavior.
+⚠ **The chip row is independent of the account in the TopNav switcher.**
+That is deliberate: it lets you look at another account's template without
+switching context. It also means **the account you upload to is the chip
+you have selected, not the one in the TopNav** — check the chip before
+pressing Replace.
+
+Each account holds at most one Default Template. Replacing is destructive
+for that account only; the other accounts are untouched. Remove falls that
+account back to Apple-only behavior — with no shared template behind it,
+because there no longer is one.
+
+A template you have not configured yourself shows an origin pill saying it
+came from the 2026-08-29 migration, which duplicated the old shared
+template into one copy per account. Uploading your own makes the pill
+disappear on its own.
+
+⚠ The Per-App tab next to it has **no chip row** — its app list follows the
+TopNav account, because listing apps means asking Apple with that account's
+credentials. To see another account's apps, switch in the TopNav.
 
 ### Per-App Template
 
