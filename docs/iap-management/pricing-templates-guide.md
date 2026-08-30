@@ -158,6 +158,79 @@ template default when you explicitly picked Apple base.
 Bulk Import remains batch-level (Q-E): every row in the same execute
 call shares one source.
 
+## Export the matrix to .xlsx (2026-08-30)
+
+Both matrix screens — **Settings → Pricing Templates → Default Template**
+and **… → Per-App Templates → _app_** — have an **`Export XLSX`** button in
+the filter bar. It replaces the old `Export CSV`; **the CSV export is gone.**
+
+### What the file is
+
+**A snapshot of what the screen is showing.** Nothing is added, removed or
+recomputed on the way out. Concretely:
+
+| | |
+|---|---|
+| **Rows** | one per tier, in the order the screen lists them (`Free Tier`, `Tier 1`, `Tier 2`, … then `Alternate Tier *`) |
+| **Columns** | one **pair** per territory — `Price` and `Currency` — under a merged header carrying the full country name |
+| **Column order** | the order the territories appear **in the .xlsx you uploaded** — VN first, then the SEA neighbours, etc. **Not alphabetical**, and not re-sorted |
+| **Which territories** | exactly the ones passing the current search / currency / continent filters. Filter first, then export |
+| **Frozen** | the `Tier` column and both header rows stay put while you scroll |
+
+### Reading the cells
+
+- **A number** — the price, exactly as stored. No thousands separator, no
+  rounding, no trailing decimal separator. It is a real Excel number, so
+  sorting, filtering and `SUM()` work on it.
+- **`·`** — there is **no entry** for that (tier, territory) pair in the
+  template. Same meaning as on screen: *"no override for that tier-territory
+  pair (Apple auto-equalisation fills)"*. It is **not** a zero and **not** a
+  missing read.
+- **Orange text** (Per-App only) — that cell differs from the **Default
+  Template** at the same tier/territory. Hover the cell in Excel: the note
+  reads `Default: <price> <CCY>` / `Per-App: <price> <CCY>` — both
+  currencies, because a cell can differ by currency alone while the two
+  numbers look identical.
+
+⚠ The `★` you see on screen is **not** written into the cell. Putting it
+there would turn the cell into text and break sorting; the orange carries the
+same statement.
+
+### The Highlight switch changes the file
+
+On the Per-App screen the checkbox **`Highlight differences from Default ★`**
+controls the file too. Untick it and the exported workbook has **no orange
+cells and no notes** — the values are identical either way, only the marking
+changes. (The old CSV ignored this switch, which is one of the three
+mismatches this rewrite fixed.)
+
+### When the button is greyed out
+
+If the filters leave zero territories the screen shows *"No territories match
+the active filters."* and the button is disabled with the tooltip *"No
+territories match the active filters — nothing to export."* There is nothing
+to put in a file; clear a filter.
+
+### If it refuses
+
+The message says which of three things happened, and each needs a different
+move:
+
+| Message says | Do |
+|---|---|
+| …a field was rejected / no territories selected | fix the filters and retry |
+| *"No Default template for the active account."* / *"No Per-App template for this app."* | upload the template first |
+| *"The pricing template changed since this page was loaded — it no longer covers: XXX, YYY."* | someone re-uploaded the template while your page was open. **Reload the page**, then export |
+
+### ⚠ This file cannot be uploaded back
+
+The export uses `Price | Currency`; the **upload** parser expects a sheet
+named `price_tiers` with headers `Country (AAA_CCC)` and sub-columns
+`Price | Proceeds`. They are different shapes, and `proceeds` is not part of
+the matrix data at all — so an exported workbook is **for reading and
+comparing, not for re-uploading**. Round-tripping is deferred on purpose and
+tracked as `[TEMPLATE-xlsx-reimport]` in `TODO.md`.
+
 ## Replace vs Remove
 
 - **Replace** = upload a new file. Old entries are deleted and the new

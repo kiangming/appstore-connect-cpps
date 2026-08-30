@@ -5691,6 +5691,154 @@ payment came from a different direction entirely.
 
 ---
 
+## 21. Pricing-template matrix export — CSV → .xlsx (2026-08-30, `arc-pricing-template-xlsx-export`)
+
+Six chunks, no migration, no schema touched. The Default and Per-App "View
+matrix" screens now export a **matrix-shaped .xlsx** (row = tier, column pair =
+territory `Price` + `Currency`) instead of the long-format CSV, and the CSV
+path was deleted.
+
+### 21.1 The product rule that decided every open question
+
+**The file is a snapshot of the screen.** Data comes in → the screen shows it →
+the file shows exactly and only that. Whenever a design question came up —
+should empty cells be filled, should the country list be expanded to Apple's
+175, should values be normalised — the answer was already fixed by that
+sentence. Nothing is added, removed or recomputed on the way out.
+
+⇒ The source of truth is therefore `MatrixData` from `composeMatrix`, and the
+writer contains **zero** data logic: tier set/order, territory set/order,
+header names, currencies, `isDiff`, the Default values behind the note — all
+read straight off the composer.
+
+### 21.2 The census found the CSV said three different things than the screen
+
+None of these were logic bugs. Every part was individually correct.
+
+| | what the CSV did | what the screen does |
+|---|---|---|
+| **F6** | `csv-export.ts:64` `if (!cell) continue` — a (tier, territory) with no entry produced **no row at all**; 5 576 cells vanished on the real Per-App template | renders `·` with the footnote *"no override for that tier-territory pair"* |
+| **F1** | sent `includeDefaultDiff: defaultTemplateExists` | the ★/amber marking is driven by the **`showDiff` checkbox**; untick it and the screen is clean while the file still carried the diff column |
+| **F2** | had `default_customer_price` but no `default_currency`, while `isDiff` fires on `def.currency !== cell.currency` too — a currency-only difference printed two identical numbers | shows ★ and a tooltip naming both currencies |
+
+All three are now named tests (`⚠ F6 …`, `⚠ F1 …`, `⚠ F2 …`) with a matching
+mutation in the C6 gauntlet, at both the object-model and the byte level.
+
+⚠ **F1 is the shape worth remembering: it was ONE wiring line.** `buildCsv`
+took what it was given, `composeMatrix` computed `isDiff` correctly,
+`MatrixTable` rendered `showDiff` correctly. The screen passed the wrong
+variable into the export call, and no test below the view could see it —
+those layers do not know what they were called with. See P26; the fix is a
+test that renders the real screen, clicks the real button and reads the body
+`fetch` received.
+
+### 21.3 ⚠ `lib/` MUST NOT import a function from a `"use client"` module
+
+`formatPrice` lived privately inside `MatrixTable.tsx`, which begins with
+`"use client"`. The .xlsx note mirrors the screen tooltip, so the writer needs
+the same formatter — and the writer runs **server-side** (exceljs is a
+server-only dependency, §4.17).
+
+In the Next 14 App Router a server module importing a plain function from a
+`"use client"` module receives a **client-reference proxy, not the function**.
+Calling it fails at runtime, and **`tsc` does not catch it** — the types line
+up perfectly.
+
+⇒ `formatPrice` was extracted to `lib/iap-management/matrix-price-format.ts`,
+a plain module both sides import. Census confirmed there is **no precedent**
+in this repo for `lib/` importing from a `"use client"` module;
+`territory-name.ts` (which `queries/template-matrix.ts` does import) is a
+plain module, not a counter-example.
+
+**Rule.** Shared between a client component and server code ⇒ it lives in a
+plain module. Never "just export it" from the client component.
+
+### 21.4 ⚠ The number format that drew a stray decimal separator
+
+Manager reported a trailing `,` on every whole-number price. The values were
+clean (`49000`, `1.99`), so it was the **rendering**, not the data. Measured
+with `XLSX.SSF` — SheetJS's implementation of Excel's format grammar — over
+ten representative values:
+
+| value | screen | `General` | `0.####` ← was in use | `0.00` |
+|---|---|---|---|---|
+| 49000 | `49000` | `49000` | **`49000.`** | `49000.00` |
+| 1.999 | `1.999` | `1.999` | `1.999` | **`2.00`** ⚠ rounds |
+| 0 | `0` | `0` | **`0.`** | `0.00` |
+
+The `.` inside `0.####` is a **literal**, emitted even when the fractional
+part is empty. On a machine whose decimal separator is `,` that renders
+`49000,`. `General` was the only numeric format matching the screen glyph on
+all ten.
+
+⚠ **The fix is to write no `numFmt` at all**, not to write `"General"`.
+exceljs serialises both identically — `numFmtId="0"`, and **`styles.xml` gets
+no `<numFmts>` block whatsoever**. A thing that does not exist cannot drift,
+and the byte-level test asserts its absence rather than asserting a string.
+
+### 21.5 The route, and the one line that matters in it
+
+`POST /api/iap-management/pricing-templates/matrix-export`, `runtime =
+"nodejs"`. Server-side because exceljs must not enter the browser bundle
+(§4.17) — which forces the client's filtered territory list to travel to the
+server, which forces validation.
+
+- **Account is read server-side** (`getActiveAccount`), never taken from the
+  body. A client-sent `accountId` is ignored, with a test saying so (C-D).
+- **`territories` is a FILTER, never an ORDER.** Column order always comes
+  from `matrix.markets` — the order of the columns in the Manager's uploaded
+  workbook (Hotfix 24), which is not alphabetical. Two different shuffles of
+  the same selection must produce byte-identical layout, or two exports of the
+  same data cannot be compared. This is the single most important line in the
+  route.
+- **`[]` is a 400, not "export everything"** — the item-list export route's
+  precedent.
+- **An unknown code is a 409 that NAMES the codes** (§4.21), never a silent
+  drop: it means either a client bug or the template was replaced while the
+  page was open, and both need a human.
+- **A COUNT assert** (§4.20) guards the filter. It earned its place in the C6
+  gauntlet: with the 409 check mutated away, the count assert still turned a
+  silently-short file into a 500.
+
+### 21.6 Deleting 11 tests is a decision, and one of them had no replacement
+
+`csv-export.test.ts` pinned a format that no longer exists, so it went — but
+each of its 11 tests was mapped to a replacement first. Ten had one. The
+eleventh, `returns empty string for undefined / empty input`, corresponded to
+the `diffNote` guard for a cell flagged `isDiff` with no Default value, and
+**nothing covered it**. Without the guard the writer emits
+`"Default: undefined undefined"` — it does not throw. The replacement test was
+written *before* the deletion and verified to fail when the guard is removed.
+
+⚠ Note the security test among them (`sanitises unsafe filename characters in
+the bundle-id slug`): its replacement lives at **two** levels — the pure
+filename function, and the route proving a dirty `bundle_id` cannot split
+`Content-Disposition` in half.
+
+### 21.7 Two Excel writers now, and the fence still holds
+
+`EXCELJS_ALLOWED` gained two entries. The question the allowlist demands an
+answer to — *why is this writing an Apple export workbook from outside the
+Apple export writer* — has one: it is a **second** Apple export writer, for a
+different surface (template matrix from the DB, versus items live from Apple).
+Verified the entry is load-bearing by removing it and watching the fence fail.
+
+⚠ **The two files must not share a marking.** The item-list export shades
+auto-equalised prices with fill `FFFFF2CC`. The matrix export marks
+differs-from-Default with **font colour** `FFB45309`, and a byte-level test
+asserts `FFFFF2CC` appears nowhere in it. Two Apple workbooks wearing the same
+colour for two different meanings is the §9 trap in its most deniable form.
+
+### 21.8 Not done, on purpose
+
+The exported workbook **cannot be uploaded back**: the parser wants sheet
+`price_tiers`, headers `Country (AAA_CCC)` and sub-columns `Price | Proceeds`.
+Four concrete gaps, the last one decisive — `proceeds` is not in `MatrixData`
+at all, so round-tripping needs a new read path, not a column rename. Tracked
+as `[TEMPLATE-xlsx-reimport]`.
+
+---
+
 **Knowledge base preserved for future development continuity.**
 
 ---

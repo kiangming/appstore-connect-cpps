@@ -2,6 +2,20 @@
 
 Format: `- [ ] [PR-X] description — file path — rationale`
 
+## From [TEMPLATE-xlsx-export] (export ma trận Pricing Template ra .xlsx, 2026-08-30)
+
+**Trạng thái arc: code xong C1–C6, chờ Manager UAT trên production.** Kiến
+trúc + bài học: **KB §21**. Không có migration nào ⇒ đường lui là Railway
+Rollback về `7951eae`, DB không liên quan.
+
+- [ ] [TEMPLATE-xlsx-reimport] ⚠ **HOÃN CÓ CHỦ ĐÍCH — file .xlsx export ra CHƯA nạp ngược lại được.** Manager chốt arc này CHỈ LÀM EXPORT; round-trip sẽ ra yêu cầu riêng nếu cần. Sự thật đã điều tra, ghi lại để lần sau khỏi làm lại:
+  - Importer đòi: `.xlsx`, **sheet tên `price_tiers`** (`lib/iap-management/parsers/price-tiers.ts:36`), header hàng 0 khớp `/^(.+?)\s*\(([A-Z]{3})_([A-Z]{3})\)\s*$/` tức `United States (USA_USD)` (`:37`), hàng 1 sub-header **`Price` / `Proceeds`** (`:206-217`), cột 0 là tên tier khớp `Free Tier` / `Tier N` / `Alternate Tier X` (`:90-106`).
+  - File export mới: sheet `Default Template` / `Per-App Template`, header tên nước trần (không có `(AAA_CCC)`), sub-cột **`Price` / `Currency`**.
+  - **4 khoảng cách**: tên sheet · header nước thiếu `(AAA_CCC)` · `Currency` ≠ `Proceeds` · **`proceeds` KHÔNG có trong `MatrixData`**.
+  - ⚠ Mục thứ 4 là mục quyết định: round-trip **không phải** đổi nhãn cột — nó cần dữ liệu mà `MatrixData` hôm nay không mang, tức một đường đọc mới. Đừng ước lượng nó như một việc nhỏ.
+- [ ] [TEMPLATE-xlsx-export] **Chỉ Apple có export ma trận .xlsx; Google vẫn CSV.** `lib/google-iap-management/csv-export.ts` + hai màn matrix của Google còn nguyên đường CSV cũ, kèm cả ba lệch F1/F2/F6 tương ứng (Google `PerAppMatrixView.tsx:75` cũng truyền `includeDefaultDiff` chứ không phải công tắc). ⚠ **Đừng port 1:1** (P8): Google là **micros** (`formatPriceForCsv(priceMicros, currency)`) còn Apple là decimal; Google khoá theo `packageName`, Apple theo `bundleId`. Cần census riêng trước khi thiết kế.
+- [ ] [TEMPLATE-xlsx-export] **`X-Export-Tier-Count` / `X-Export-Territory-Count` chưa có test canh Ý NGHĨA, mới canh giá trị.** Khác với 6 header của export item list (§4.21 — mỗi cái trả lời một câu hỏi khác nhau và có file test riêng pin định nghĩa). Hai header này hôm nay chỉ nuôi một dòng toast; nếu có surface thứ hai đọc chúng thì cần pin định nghĩa trước.
+
 ## From [ACCOUNT-default-template] (Default Template theo từng ASC account, 2026-08-29)
 
 **Trạng thái arc: ✅ SHIPPED (2026-08-29).** Code C-A…C-E deploy `0d4b3b3`
