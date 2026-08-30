@@ -72,6 +72,29 @@ const ROOT = process.cwd();
 const EXCELJS_ALLOWED = new Set<string>([
   "lib/iap-management/xlsx-export.ts",
   "app/api/iap-management/apps/[appId]/export/route.ts",
+  // ── [TEMPLATE-xlsx] ────────────────────────────────────────────────────────
+  // The question this list demands an answer to — "why is this writing an
+  // Apple export workbook from somewhere that is not the Apple export
+  // writer?" — has one here: it is a SECOND Apple export writer, for a
+  // different surface.
+  //
+  // `xlsx-export.ts` exports ITEMS of one app, live from Apple. This one
+  // exports the pricing-template MATRIX (Default + Per-App) that the "View
+  // matrix" screens render from `iap_mgmt.price_tier_template_entries`.
+  // Different data, different reader, different sheet shape; they share only
+  // the fact that both must write things `xlsx@0.18.5` CE drops at write
+  // time — here a font colour on cells that differ from the Default, freeze
+  // panes across 351 columns, and cell notes.
+  //
+  // ⚠ NOT a shortcut past the fence: this is the ONLY module that writes that
+  // surface's workbook, and it drives exceljs in exactly one function, the
+  // same discipline `xlsx-export.ts` keeps.
+  "lib/iap-management/xlsx-template-matrix-export.ts",
+  // The route that serves the writer above. Present for the same reason the
+  // item-list export route is: `writeBuffer()` has to run server-side because
+  // exceljs is a server-only dependency (KB §4.17) — pulling it into the
+  // browser bundle is the thing that decision was made to avoid.
+  "app/api/iap-management/pricing-templates/matrix-export/route.ts",
 ]);
 
 /** Files that legitimately use `xlsx` — the Google writer, both parsers, the

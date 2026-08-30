@@ -5,6 +5,11 @@ import type {
   MatrixData,
   MatrixMarket,
 } from "@/lib/iap-management/queries/template-matrix";
+// ⚠ Hàm này từng nằm private ngay trong file. Nó chuyển ra module thường để
+// writer .xlsx (chạy server-side) dùng CHUNG một hàm với màn — file này là
+// `"use client"`, nên server không import ngược vào đây được. Xem header của
+// `matrix-price-format.ts`. Hành vi không đổi: cùng một thân hàm.
+import { formatPrice } from "@/lib/iap-management/matrix-price-format";
 
 export interface MatrixTableProps {
   matrix: MatrixData;
@@ -16,15 +21,6 @@ export interface MatrixTableProps {
 const STICKY_COL_BASE =
   "sticky left-0 bg-white border-r-2 border-slate-300 w-[180px] min-w-[180px] max-w-[180px]";
 const STICKY_COL_SHADOW = { boxShadow: "3px 0 6px -3px rgba(15, 23, 42, 0.18)" };
-
-function formatPrice(value: number | string): string {
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n)) return String(value);
-  // Match the matrix table's compact display: strip trailing zeros
-  // ("25000.0000" → "25000"), keep fractional precision for sub-unit
-  // currencies ("0.99" stays "0.99").
-  return n.toFixed(4).replace(/\.?0+$/, "");
-}
 
 function CellContent({ cell, showDiff }: { cell: MatrixCell; showDiff: boolean }) {
   const formatted = formatPrice(cell.customerPrice);
