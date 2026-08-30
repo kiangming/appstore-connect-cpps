@@ -1,17 +1,14 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 
 import {
   APPLE_CONTINENTS,
   type Continent,
 } from "@/lib/iap-management/apple/territory-continent";
 import type { MatrixData } from "@/lib/iap-management/queries/template-matrix";
-import {
-  buildCsv,
-  csvFilename,
-  triggerCsvDownload,
-} from "@/lib/iap-management/csv-export";
+import { downloadMatrixExport } from "@/lib/iap-management/matrix-export-download";
 
 import { MatrixBreadcrumb } from "./MatrixBreadcrumb";
 import {
@@ -36,6 +33,7 @@ export function DefaultMatrixView({
   const [continentToggle, setContinentToggle] = useState<Set<Continent>>(
     () => new Set(APPLE_CONTINENTS),
   );
+  const [exporting, setExporting] = useState(false);
 
   const visibleMarkets = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -62,13 +60,32 @@ export function DefaultMatrixView({
     });
   }
 
-  function handleExportCsv() {
-    const csv = buildCsv({
-      matrix,
-      filteredMarkets: visibleMarkets,
-      includeDefaultDiff: false,
-    });
-    triggerCsvDownload(csvFilename({ scope: "default" }), csv);
+  async function handleExport() {
+    setExporting(true);
+    const toastId = toast.loading("Building the .xlsx…");
+    try {
+      const error = await downloadMatrixExport({
+        scope: "default",
+        territories: visibleMarkets.map((m) => m.code),
+        // ⚠ MÀN DEFAULT KHÔNG CÓ CÔNG TẮC "Highlight differences" — không có
+        // template nào để so, và `MatrixTable` dưới đây nhận `showDiff={false}`
+        // cứng. Gửi `false` là chép lại đúng thứ màn đang hiện, không phải một
+        // mặc định tiện tay.
+        showDiff: false,
+      });
+      if (error) toast.error(error, { id: toastId });
+      else
+        toast.success(
+          `Exported ${matrix.tiers.length} tiers × ${visibleMarkets.length} territories.`,
+          { id: toastId },
+        );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Export failed.", {
+        id: toastId,
+      });
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -121,7 +138,8 @@ export function DefaultMatrixView({
         onContinentToggle={toggleContinent}
         visibleMarketCount={visibleMarkets.length}
         totalMarketCount={matrix.markets.length}
-        onExportCsv={handleExportCsv}
+        onExport={handleExport}
+        isExporting={exporting}
       />
 
       <MatrixTable matrix={matrix} visibleMarkets={visibleMarkets} showDiff={false} />

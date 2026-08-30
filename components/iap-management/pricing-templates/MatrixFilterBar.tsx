@@ -19,7 +19,9 @@ export interface MatrixFilterBarProps {
   visibleMarketCount: number;
   totalMarketCount: number;
 
-  onExportCsv: () => void;
+  onExport: () => void;
+  /** True while the server is building the workbook — chặn bấm hai lần. */
+  isExporting?: boolean;
 }
 
 export const CURRENCY_FILTER_ALL = "ALL";
@@ -35,8 +37,14 @@ export function MatrixFilterBar({
   onContinentToggle,
   visibleMarketCount,
   totalMarketCount,
-  onExportCsv,
+  onExport,
+  isExporting = false,
 }: MatrixFilterBarProps) {
+  // ⚠ 0 nước ⇒ không có gì để xuất. Màn ở trạng thái đó đang hiện "No
+  // territories match the active filters" (MatrixTable), và route từ chối
+  // `territories: []` bằng 400 — nút vô hiệu ở đây là để hai đầu nói cùng một
+  // chuyện, không phải để giấu lỗi 400.
+  const nothingToExport = visibleMarketCount === 0;
   return (
     <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4">
       <div className="flex items-center gap-3 mb-3 flex-wrap">
@@ -72,11 +80,17 @@ export function MatrixFilterBar({
         </div>
         <button
           type="button"
-          onClick={onExportCsv}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 border border-slate-300 hover:bg-white rounded-lg transition"
+          onClick={onExport}
+          disabled={nothingToExport || isExporting}
+          title={
+            nothingToExport
+              ? "No territories match the active filters — nothing to export."
+              : undefined
+          }
+          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 border border-slate-300 hover:bg-white rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
         >
           <Download className="h-4 w-4" />
-          Export CSV
+          {isExporting ? "Exporting…" : "Export XLSX"}
         </button>
         <div className="ml-auto text-xs text-slate-500">
           Showing{" "}

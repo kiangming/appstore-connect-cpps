@@ -3,17 +3,14 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { ArrowLeft } from "lucide-react";
+import { toast } from "sonner";
 
 import {
   APPLE_CONTINENTS,
   type Continent,
 } from "@/lib/iap-management/apple/territory-continent";
 import type { MatrixData } from "@/lib/iap-management/queries/template-matrix";
-import {
-  buildCsv,
-  csvFilename,
-  triggerCsvDownload,
-} from "@/lib/iap-management/csv-export";
+import { downloadMatrixExport } from "@/lib/iap-management/matrix-export-download";
 
 import { MatrixBreadcrumb } from "./MatrixBreadcrumb";
 import {
@@ -24,18 +21,24 @@ import { MatrixTable } from "./MatrixTable";
 
 export interface PerAppMatrixViewProps {
   matrix: MatrixData;
+  /** UUID nội bộ của app (iap_mgmt.apps.id) — route cần nó để biết đọc
+   *  template Per-App nào. ⚠ KHÔNG phải Apple numeric id, và KHÔNG phải
+   *  bundleId: `fetchPerAppMatrix` khoá theo `scope_app_id`. */
+  appId: string;
   appName: string;
   bundleId: string;
   uploadedAt: string | null;
   uploadedBy: string | null;
-  /** True when a Default Template exists — drives whether the diff
-   *  highlight checkbox is offered and whether the CSV export carries
-   *  a default_customer_price column. */
+  /** True when a Default Template exists — quyết định có HIỆN checkbox
+   *  "Highlight differences" hay không, và giá trị KHỞI TẠO của nó.
+   *  ⚠ KHÔNG được dùng làm thứ gửi lên export: cái file bám là `showDiff`,
+   *  tức trạng thái công tắc lúc bấm nút (F1). */
   defaultTemplateExists: boolean;
 }
 
 export function PerAppMatrixView({
   matrix,
+  appId,
   appName,
   bundleId,
   uploadedAt,
@@ -48,6 +51,7 @@ export function PerAppMatrixView({
     () => new Set(APPLE_CONTINENTS),
   );
   const [showDiff, setShowDiff] = useState(defaultTemplateExists);
+  const [exporting, setExporting] = useState(false);
 
   const visibleMarkets = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -74,13 +78,34 @@ export function PerAppMatrixView({
     });
   }
 
-  function handleExportCsv() {
-    const csv = buildCsv({
-      matrix,
-      filteredMarkets: visibleMarkets,
-      includeDefaultDiff: defaultTemplateExists,
-    });
-    triggerCsvDownload(csvFilename({ scope: "per-app", bundleId }), csv);
+  async function handleExport() {
+    setExporting(true);
+    const toastId = toast.loading("Building the .xlsx…");
+    try {
+      const error = await downloadMatrixExport({
+        scope: "per-app",
+        appId,
+        territories: visibleMarkets.map((m) => m.code),
+        // ⚠ F1 — CÔNG TẮC, KHÔNG PHẢI `defaultTemplateExists`. Đường CSV cũ
+        // gửi `includeDefaultDiff: defaultTemplateExists`, nên tắt highlight
+        // thì màn sạch mà file vẫn có cột diff. File là ảnh chụp của MÀN, và
+        // thứ màn đang hiện do `showDiff` quyết (MatrixTable nhận đúng biến
+        // này ở dưới).
+        showDiff,
+      });
+      if (error) toast.error(error, { id: toastId });
+      else
+        toast.success(
+          `Exported ${matrix.tiers.length} tiers × ${visibleMarkets.length} territories.`,
+          { id: toastId },
+        );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Export failed.", {
+        id: toastId,
+      });
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -161,7 +186,8 @@ export function PerAppMatrixView({
         onContinentToggle={toggleContinent}
         visibleMarketCount={visibleMarkets.length}
         totalMarketCount={matrix.markets.length}
-        onExportCsv={handleExportCsv}
+        onExport={handleExport}
+        isExporting={exporting}
       />
 
       <MatrixTable matrix={matrix} visibleMarkets={visibleMarkets} showDiff={showDiff} />
