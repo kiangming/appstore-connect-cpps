@@ -404,8 +404,23 @@ describe("hình dạng sheet", () => {
     expect(spec.aoa[0][0]).toBe("Tier");
     expect(spec.aoa[1][0]).toBeNull();
     expect(spec.aoa[1].slice(1, 3)).toEqual(["Price", "Currency"]);
-    expect(spec.merges).toHaveLength(9);
-    expect(spec.merges[0]).toEqual({ s: { r: 0, c: 1 }, e: { r: 0, c: 2 } });
+    // 1 merge DỌC cho cột Tier + 9 merge NGANG cho 9 nước.
+    expect(spec.merges).toHaveLength(1 + 9);
+    expect(spec.merges[0]).toEqual({ s: { r: 0, c: 0 }, e: { r: 1, c: 0 } });
+    expect(spec.merges[1]).toEqual({ s: { r: 0, c: 1 }, e: { r: 0, c: 2 } });
+  });
+
+  it("cột Tier merge DỌC A1:A2 — A2 không phải ô dữ liệu rỗng", () => {
+    const spec = buildTemplateMatrixSpec(input({ regionCodes: ["US"] }));
+    const tierMerge = spec.merges[0];
+    expect(tierMerge.s).toEqual({ r: 0, c: 0 });
+    expect(tierMerge.e).toEqual({ r: HEADER_ROW_COUNT - 1, c: 0 });
+    // Mọi merge còn lại là NGANG trong hàng 0.
+    for (const m of spec.merges.slice(1)) {
+      expect(m.s.r).toBe(0);
+      expect(m.e.r).toBe(0);
+      expect(m.e.c - m.s.c).toBe(1);
+    }
   });
 
   it("freeze suy ra từ hằng, không hardcode", () => {

@@ -426,10 +426,17 @@ export function buildTemplateMatrixSpec(
     },
   );
 
-  const merges: MergeRange[] = markets.map((_, gi) => ({
-    s: { r: 0, c: priceColumn(gi) },
-    e: { r: 0, c: priceColumn(gi) + 1 },
-  }));
+  const merges: MergeRange[] = [
+    // Cột "Tier" trải DỌC hết khối header (A1:A2). Không có nó, ô A2 là một
+    // ô trống nằm ngay dưới chữ "Tier" và ngay trên hàng dữ liệu đầu tiên —
+    // đọc như một ô dữ liệu rỗng chứ không như phần của header. Mọi cột khác
+    // đều trải hết khối header (nước merge NGANG 2 cột); cột này trải DỌC.
+    { s: { r: 0, c: 0 }, e: { r: HEADER_ROW_COUNT - 1, c: 0 } },
+    ...markets.map((_, gi) => ({
+      s: { r: 0, c: priceColumn(gi) },
+      e: { r: 0, c: priceColumn(gi) + 1 },
+    })),
+  ];
 
   const widths = [
     TIER_COLUMN_WIDTH,
