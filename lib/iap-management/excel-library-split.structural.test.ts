@@ -95,6 +95,45 @@ const EXCELJS_ALLOWED = new Set<string>([
   // exceljs is a server-only dependency (KB §4.17) — pulling it into the
   // browser bundle is the thing that decision was made to avoid.
   "app/api/iap-management/pricing-templates/matrix-export/route.ts",
+  // ── [GOOGLE-TEMPLATE-xlsx] ────────────────────────────────────────────────
+  // ⚠ THE QUESTION THIS LIST ASKS DOES NOT APPLY HERE, AND PRETENDING IT DOES
+  // WOULD BE A LIE. The list asks "why is this writing an APPLE export
+  // workbook from somewhere that is not the Apple export writer?" — this is
+  // not an Apple workbook. It writes the GOOGLE pricing-template matrix, from
+  // `google_iap_mgmt.pricing_template_entries`, for the Google matrix screens.
+  //
+  // The question that DOES apply is the one the Google test below asks, and
+  // its answer is MEASURED, not read off a doc. When that test was written,
+  // Google had exactly ONE writer — the item-list export — and it needs no
+  // cell styling at all (verified: zero fill/font code in
+  // lib/google-iap-management/xlsx-export.ts). "Google's export keeps xlsx"
+  // was true of that writer and STILL IS; the test below still says so.
+  //
+  // The matrix export is a different surface with the requirement that brought
+  // exceljs into this repo in the first place — a per-cell marking that must
+  // survive the write. Measured for Google with xlsx@0.18.5:
+  //   • font colour → DISCARDED at write time (FFB45309 appears nowhere in
+  //     the archive; same finding as the Apple case above)
+  //   • freeze panes → CANNOT BE WRITTEN AT ALL. Three API variants tried
+  //     (`!freeze` as string, `!freeze` as object, `!views`); sheet1.xml has
+  //     no <pane> element in any of them.
+  // A 94-row × 9-country matrix needs both.
+  "lib/google-iap-management/xlsx-template-matrix-export.ts",
+  // (C4b adds the Google matrix-export route here for the same server-only
+  // reason as the Apple route above.)
+]);
+
+/**
+ * The ONLY Google files permitted to import `exceljs`.
+ *
+ * ⚠ NARROWED, NOT DELETED. Before [GOOGLE-TEMPLATE-xlsx] this was an absolute
+ * "the Google module never imports exceljs". Deleting the test to make room
+ * for one file would have thrown away the fence; narrowing it keeps the fence
+ * AND records the decision. The Google item-list export keeps xlsx and has its
+ * own test below saying so.
+ */
+const GOOGLE_EXCELJS_ALLOWED = new Set<string>([
+  "lib/google-iap-management/xlsx-template-matrix-export.ts",
 ]);
 
 /** Files that legitimately use `xlsx` — the Google writer, both parsers, the
@@ -172,13 +211,32 @@ describe("exceljs is confined to the Apple export write path", () => {
     expect(strays).toEqual([]);
   });
 
-  it("⚠ the Google module never imports it", () => {
-    // Google's export keeps xlsx. Stated separately from the allowlist so the
-    // failure NAMES the module rather than reporting a generic stray path.
-    const googleImporters = FILES.filter(
+  it("⚠ the Google module uses it ONLY for the template-matrix export", () => {
+    // Stated separately from the allowlist so the failure NAMES the module
+    // rather than reporting a generic stray path.
+    //
+    // ⚠ This assertion used to be `toEqual([])` — an absolute "Google never
+    // imports exceljs". [GOOGLE-TEMPLATE-xlsx] narrowed it rather than
+    // deleting it: see the reasoning beside the Google entry in
+    // EXCELJS_ALLOWED. The item-list export still keeps xlsx, and the test
+    // below is what holds that half in place.
+    const strays = FILES.filter(
       (f) => f.path.includes("google-iap-management") && importsPkg(f.code, "exceljs"),
-    ).map((f) => f.path);
-    expect(googleImporters).toEqual([]);
+    )
+      .map((f) => f.path)
+      .filter((p) => !GOOGLE_EXCELJS_ALLOWED.has(p));
+    expect(strays).toEqual([]);
+  });
+
+  it("⚠ the Google item-list export still writes with xlsx, never exceljs", () => {
+    // The half of "Google's export keeps xlsx" that is still absolute. This
+    // writer needs no cell styling, so nothing about the matrix export's
+    // colour requirement applies to it — and the day someone reaches for the
+    // nearer import here is the day the split stops meaning anything.
+    const f = FILES.find((x) => x.path === "lib/google-iap-management/xlsx-export.ts");
+    expect(f, "lib/google-iap-management/xlsx-export.ts not found").toBeDefined();
+    expect(importsPkg(f!.code, "xlsx")).toBe(true);
+    expect(importsPkg(f!.code, "exceljs")).toBe(false);
   });
 });
 
