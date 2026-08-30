@@ -166,6 +166,28 @@ describe("⚠ F2 — ô khác MỖI currency vẫn phải nói ra là nó khác"
     expect(note).toContain("Per-App: 1.99 USD");
   });
 
+  it("⚠ isDiff nhưng KHÔNG có giá trị Default ⇒ vẫn tô cam, KHÔNG có note", () => {
+    // Bản thay cho `formatPriceForCsv > returns empty string for undefined`
+    // của csv-export.test.ts. Cột CSV cũ để rỗng khi thiếu giá trị Default;
+    // ở đây "rỗng" tương ứng với KHÔNG SINH note.
+    //
+    // ⚠ `composeMatrix` không bao giờ sinh ra tổ hợp này (isDiff chỉ được đặt
+    // khi tìm thấy entry Default), nên phải dựng tay — nhưng nhánh guard thì
+    // có thật trong `diffNote`, và bỏ nó đi sẽ ghi ra "Default: undefined
+    // undefined" chứ không nổ. Màn cũng guard đúng như vậy: tô màu theo
+    // `isDiff`, còn tooltip thì bỏ khi thiếu giá trị (MatrixTable.tsx:32-35).
+    const m: MatrixData = {
+      tiers: [{ tier_id: "TIER_2", tier_name: "Tier 2", is_alternate: false }],
+      markets: [{ code: "VNM", name: "Vietnam", currency: "VND", continent: "Asia" }],
+      cells: { "TIER_2|VNM": { customerPrice: 49000, currency: "VND", isDiff: true } },
+      currenciesUsed: ["VND"],
+      continentCounts: { Asia: 1, Europe: 0, Americas: 0, Africa: 0, Oceania: 0 },
+    };
+    const ws = sheet(m, { showDiff: true, scope: "per-app" });
+    expect(ws.getCell(3, 2).font?.color?.argb).toBe(DIFF_FONT_COLOR);
+    expect(ws.getCell(3, 2).note).toBeUndefined();
+  });
+
   it("note mang đúng hai giá trị của tooltip màn khi giá cũng khác", () => {
     const m = composeMatrix({
       entries: [row("TIER_2", "VNM", "VND", 385000)],
