@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>G1 — Default Template theo account (mockup)</title>
+<style>
+  :root{
+    --bg:#f8fafc; --card:#fff; --line:#e2e8f0; --line2:#cbd5e1;
+    --ink:#0f172a; --mut:#64748b; --mut2:#94a3b8;
+    --em:#059669; --em-bg:#ecfdf5; --em-line:#a7f3d0;
+    --amber:#b45309; --amber-bg:#fffbeb; --amber-line:#fde68a;
+    --blue:#1d4ed8; --blue-bg:#eff6ff; --blue-line:#bfdbfe;
+    --red:#b91c1c; --red-bg:#fef2f2; --red-line:#fecaca;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:28px 24px 64px}
+  .note{background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:10px;
+        padding:12px 14px;font-size:12.5px;color:#78350f;margin-bottom:22px}
+  .note b{color:#7c2d12}
+  h1{font-size:22px;margin:0 0 4px;font-weight:600}
+  .sub{color:var(--mut);font-size:13px;margin:0 0 22px;max-width:70ch}
+  .crumb{font-size:11.5px;color:var(--mut2);margin-bottom:10px}
+  .crumb a{color:var(--mut);text-decoration:none}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px}
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:18px}
+  .tab{padding:9px 14px;font-size:13px;color:var(--mut);border-bottom:2px solid transparent;cursor:default}
+  .tab.on{color:var(--em);border-bottom-color:var(--em);font-weight:600}
+
+  /* chip chọn account */
+  .chiprow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+  .chiplab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut2);margin-right:4px}
+  .chip{display:inline-flex;align-items:center;gap:7px;padding:6px 11px;border-radius:999px;
+        border:1px solid var(--line2);background:#fff;font-size:12.5px;color:#334155;cursor:default}
+  .chip.on{border-color:var(--em);background:var(--em-bg);color:#065f46;font-weight:600;
+           box-shadow:0 0 0 3px rgba(5,150,105,.10)}
+  .badge{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:18px;
+         padding:0 6px;border-radius:999px;font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums}
+  .b-ok{background:#d1fae5;color:#065f46}
+  .b-none{background:#fee2e2;color:#991b1b}
+  .b-mut{background:#e2e8f0;color:#475569}
+  .dot{width:6px;height:6px;border-radius:50%}
+  .d-ver{background:#10b981} .d-pend{background:#f59e0b} .d-inv{background:#ef4444}
+  .hint{font-size:11.5px;color:var(--mut2);margin:8px 0 0}
+
+  /* pill nguồn gốc */
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border-radius:999px;
+        font-size:11px;font-weight:600;letter-spacing:.01em}
+  .p-clone{background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue-line)}
+  .p-own{background:var(--em-bg);color:#047857;border:1px solid var(--em-line)}
+  .p-none{background:var(--red-bg);color:var(--red);border:1px solid var(--red-line)}
+
+  .head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}
+  .h2{font-size:15.5px;font-weight:600;margin:0 0 3px}
+  .desc{font-size:12px;color:var(--mut);max-width:62ch;margin:0}
+  .btns{display:flex;gap:8px;flex-shrink:0}
+  .btn{padding:8px 14px;border-radius:8px;font-size:13px;font-weight:500;border:1px solid transparent;cursor:default}
+  .btn-p{background:var(--em);color:#fff}
+  .btn-s{background:#fff;border-color:var(--em-line);color:#047857}
+  .btn-g{background:#fff;border-color:var(--line2);color:#475569}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;padding-top:16px;border-top:1px solid var(--line)}
+  .st .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--mut2)}
+  .st .v{font-size:19px;font-weight:600;margin-top:3px;font-variant-numeric:tabular-nums}
+  .st .h{font-size:11px;color:var(--mut2);margin-top:2px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut2);
+     font-weight:500;padding:7px 10px;border-bottom:1px solid var(--line)}
+  td{padding:9px 10px;border-bottom:1px solid #f1f5f9}
+  td.n{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,Menlo,monospace}
+  .mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--mut)}
+  .empty{border:1px dashed var(--line2);border-radius:12px;padding:34px;text-align:center;background:#fff}
+  .empty .t{font-size:14px;font-weight:600;margin-bottom:4px}
+  .empty .d{font-size:12.5px;color:var(--mut);max-width:52ch;margin:0 auto 16px}
+  .cap{font-size:11px;color:var(--mut2);margin:6px 0 20px}
+  .sec{margin:34px 0 10px;font-size:12px;font-weight:700;letter-spacing:.08em;
+       text-transform:uppercase;color:var(--mut2);border-top:1px solid var(--line);padding-top:18px}
+  .q{background:#fff;border:1px solid var(--line);border-left:3px solid var(--amber);
+     border-radius:0 8px 8px 0;padding:11px 14px;margin-bottom:9px;font-size:12.5px}
+  .q b{display:block;margin-bottom:3px;color:#78350f}
+</style></head>
+<body><div class="wrap">
+
+<div class="note">
+  <b>⚠ MOCKUP — không phải màn thật, chưa có dòng code nào.</b><br>
+  Tên account (<span class="mono">Account A / B / C</span>) và mọi con số của phần
+  <b>account</b> là <b>CHỖ TRỐNG</b> — số thật đến từ <span class="mono">Q4</span> trong
+  <span class="mono">docs/google-iap-management/queries/census-google-pricing-templates.sql</span>,
+  Manager chạy rồi mới điền. Riêng <b>94 tier · 9 region · 846 entry</b> là
+  <b>SỐ THẬT</b>, đọc từ file CSV Manager gửi
+  (<span class="mono">google-pricing-template-default-20260830-2157.csv</span>).
+</div>
+
+<div class="crumb"><a href="#">Settings</a> › <a href="#">Pricing Templates</a></div>
+<h1>Pricing Templates</h1>
+<p class="sub">Mỗi Google Console account có Default Template <b>riêng</b>. Per-app template
+đè lên Default của chính account đó. Region nào không có trong template thì Google
+tự quy đổi (auto-equalisation).</p>
+
+<div class="tabs">
+  <div class="tab">Google Conversion</div>
+  <div class="tab on">Default Template</div>
+  <div class="tab">Per-App Templates</div>
+</div>
+
+<div class="chiprow">
+  <span class="chiplab">Account</span>
+  <span class="chip on"><span class="dot d-ver"></span>Account A <span class="badge b-ok">846</span></span>
+  <span class="chip"><span class="dot d-ver"></span>Account B <span class="badge b-ok">846</span></span>
+  <span class="chip"><span class="dot d-pend"></span>Account C <span class="badge b-none">chưa có</span></span>
+</div>
+<p class="hint">
+  ● xanh = verified · ● vàng = pending · ● đỏ = invalid ·
+  <b>badge = số entry của Default Template account đó</b>.
+  ⚠ Account <b>chưa có</b> template vẫn hiện ở đây — đó là điểm khác quan trọng so với
+  màn hiện tại (hiện tại chỉ có MỘT Default, không có khái niệm account nào thiếu).
+</p>
+<p class="cap">Chip đổi account ở đây <b>chỉ đổi Default đang xem</b>. Nó KHÔNG đổi
+active-account cookie <span class="mono">g_iap_active_v2</span> của cả module — cần Manager chốt (câu G1-Q4).</p>
+
+<div class="card">
+  <div class="head">
+    <div>
+      <p class="h2">Default Template — Account A
+        <span class="pill p-clone" style="margin-left:8px">⧉ Bản sao từ Default dùng chung</span>
+      </p>
+      <p class="desc">Áp cho mọi app của <b>Account A</b>, trừ app nào có per-app template riêng.
+      Ô thưa được phép — cặp (tier, region) thiếu sẽ do Google tự quy đổi.</p>
+    </div>
+    <div class="btns">
+      <span class="btn btn-s">Open matrix view</span>
+      <span class="btn btn-g">Remove</span>
+      <span class="btn btn-p">Replace</span>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="st"><div class="k">Tiers</div><div class="v">94</div></div>
+    <div class="st"><div class="k">Regions</div><div class="v">9</div><div class="h">US VN SG MY ID PH TH HK TW</div></div>
+    <div class="st"><div class="k">Entries</div><div class="v">846</div><div class="h">ma trận đầy, 0 ô thưa</div></div>
+    <div class="st"><div class="k">Uploaded</div><div class="v" style="font-size:14px">— chờ Q1/Q8 —</div><div class="h">chưa đo</div></div>
+  </div>
+</div>
+
+<div class="cap">⬆ <b>Pill nguồn gốc</b> — ba trạng thái, đây là thứ trả lời câu
+“account này đang dùng bản gốc hay bản của riêng nó?”:</div>
+<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+  <span class="pill p-clone">⧉ Bản sao từ Default dùng chung</span>
+  <span class="pill p-own">✓ Bản riêng của account</span>
+  <span class="pill p-none">✕ Chưa có Default</span>
+</div>
+<p class="cap">Pill <b>⧉</b> tồn tại vì sau migration M-1 mọi account đều có bản sao
+<b>giống hệt nhau</b>. Không có pill này thì Manager không phân biệt được
+“chưa ai đụng vào” với “đã cố ý set giống bản gốc”.</p>
+
+<div class="sec">Cùng màn, account khác — Account C chưa có Default</div>
+<div class="card" style="padding:0;overflow:hidden">
+  <div style="padding:20px 20px 0"><div class="head" style="margin-bottom:12px">
+    <div><p class="h2">Default Template — Account C
+      <span class="pill p-none" style="margin-left:8px">✕ Chưa có Default</span></p>
+      <p class="desc">App của account này đang chạy bằng Google Conversion cho tới khi có template.</p></div>
+    <div class="btns"><span class="btn btn-s">Sao chép từ Account A</span><span class="btn btn-p">Upload .xlsx</span></div>
+  </div></div>
+  <div class="empty" style="border:0;border-top:1px solid var(--line);border-radius:0">
+    <div class="t">Account C chưa có Default Template</div>
+    <p class="d">Account này được thêm <b>sau</b> lần nhân bản (migration M-1) nên không
+    có bản sao. Upload file <span class="mono">.xlsx</span>, hoặc sao chép từ account khác.</p>
+  </div>
+</div>
+<p class="cap">⚠ Nút <b>“Sao chép từ …”</b> là <b>đề xuất</b>, chưa được chốt — xem câu G1-Q5.
+Không có nó thì mọi account mới đều phải upload tay.</p>
+
+<div class="sec">Tab Per-App — phải lọc theo account (hiện tại KHÔNG lọc)</div>
+<div class="card">
+  <table>
+    <thead><tr><th>App</th><th>Package</th><th style="text-align:right">Tiers</th>
+      <th style="text-align:right">Entries</th><th>Uploaded by</th></tr></thead>
+    <tbody>
+      <tr><td>Light and Night</td><td class="mono">vng.games.lightandnight</td>
+        <td class="n">41</td><td class="n">369</td><td class="mono">— chờ Q2 —</td></tr>
+      <tr><td colspan="5" style="color:var(--mut2);font-size:11.5px;padding:12px 10px">
+        Các dòng còn lại: chờ <span class="mono">Q2</span>.</td></tr>
+    </tbody>
+  </table>
+</div>
+<p class="cap">⚠ <b>Lỗi đang tồn tại, độc lập với G1:</b>
+<span class="mono">listAppTemplates()</span> (queries/templates.ts:124-188) select
+<b>toàn bộ</b> scope APP, không lọc account — trong khi danh sách app bên cạnh nó
+(<span class="mono">listAppsForAccount</span>) thì có lọc. Hai nửa của cùng một màn
+đang trả lời hai câu hỏi khác nhau. Q2 cho biết lỗi này đã hiện hữu chưa.</p>
+
+<div class="sec">Câu Manager phải chốt trước khi code G1</div>
+<div class="q"><b>G1-Q1 · Bỏ hẳn GLOBAL, hay giữ GLOBAL làm lớp fallback?</b>
+Đề xuất: <b>bỏ hẳn</b> (theo đúng arc Apple M-2). Giữ lại = 3 tầng
+account→GLOBAL→Google, mỗi đường đọc phải thử 2 lần.</div>
+<div class="q"><b>G1-Q2 · Enum <span class="mono">default_template</span> giữ nguyên nghĩa, hay thêm giá trị mới?</b>
+Đề xuất: <b>giữ nguyên</b>, đổi <i>nghĩa</i> thành “Default của account đang active”.
+Thêm giá trị mới = chạm ~11 chỗ chép tay (xem A5) + 1 CHECK constraint.</div>
+<div class="q"><b>G1-Q3 · Upload/xoá Default có cần gate admin không?</b>
+Hiện Google <b>không</b> gate (route.ts:21-24 chỉ kiểm đăng nhập) — khác Apple.
+Đề xuất: <b>gate admin</b>, vì sau khi tách, một lần bấm nhầm chỉ hỏng 1 account
+nhưng vẫn nên có rào.</div>
+<div class="q"><b>G1-Q4 · Chip account ở màn này có đổi active-account của cả module không?</b>
+Đề xuất: <b>không</b> — chip chỉ là bộ lọc của màn. Đổi cookie sẽ làm Manager
+quay lại danh sách app thì thấy account khác.</div>
+<div class="q"><b>G1-Q5 · Có làm nút “Sao chép từ account khác” không?</b>
+Đề xuất: <b>có, nhưng ở arc sau</b>. G1 chỉ cần nhân bản một lần lúc migration.</div>
+
+</div></body></html>
