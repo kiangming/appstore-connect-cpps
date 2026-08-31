@@ -147,12 +147,24 @@ export async function PATCH(
       (body.pricingSource === "default_template" || body.pricingSource === "app_template") &&
       isNonEmptyString(body.tierIdentifier)
     ) {
-      const scope = body.pricingSource === "app_template" ? "APP" : "GLOBAL";
-      const entries = await lookupTemplateEntriesForIdentifier({
-        scope,
-        appId: scope === "APP" ? app.id : null,
-        identifier: body.tierIdentifier.trim(),
-      });
+      // G1b — "Default Template" giờ là Default CỦA ACCOUNT SỞ HỮU APP.
+      // `app` ở đây đến từ getAppByPackage(accountId, …) nên account sở
+      // hữu và account active trùng nhau theo cấu trúc.
+      const entries = await lookupTemplateEntriesForIdentifier(
+        body.pricingSource === "app_template"
+          ? {
+              scope: "APP",
+              appId: app.id,
+              accountId: null,
+              identifier: body.tierIdentifier.trim(),
+            }
+          : {
+              scope: "ACCOUNT",
+              accountId: app.google_console_account_id,
+              appId: null,
+              identifier: body.tierIdentifier.trim(),
+            },
+      );
       if (entries.length === 0) {
         return NextResponse.json(
           {

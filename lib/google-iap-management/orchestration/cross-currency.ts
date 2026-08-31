@@ -42,7 +42,7 @@ import { decimalToMicros } from "../google/price-conversion";
 import {
   findCandidateTiersForCurrencyPrice,
   lookupTemplateEntriesForIdentifier,
-  type TemplateScope,
+  type TemplateScopeRef,
   type TierCandidate,
 } from "../queries/templates";
 import type { ParsedPricingEntry } from "../parsers/pricing-template-parser";
@@ -159,24 +159,23 @@ export function fileDecimalToAnchorMicros(
  *   1 → auto-resolve via {@link resolveAppCurrencyEntryForTier}
  *  >1 → surface the candidates as a chooser; handler picks one
  */
-export async function findCrossCurrencyCandidates(args: {
-  scope: TemplateScope;
-  appId: string | null;
+export async function findCrossCurrencyCandidates(
+  args: TemplateScopeRef & {
   filePriceDecimal: string;
   /** Anchor currency for template lookup. Defaults to USD (Manager-
    *  template convention) when omitted, matching the pre-Cycle-43
    *  inferred-header behavior. Explicit "Price (XXX)" headers pass
    *  XXX here. */
   anchorCurrency?: string;
-}): Promise<TierCandidate[]> {
+  },
+): Promise<TierCandidate[]> {
   const anchor = (args.anchorCurrency ?? DEFAULT_ANCHOR_CURRENCY)
     .trim()
     .toUpperCase();
   const anchorMicros = fileDecimalToAnchorMicros(args.filePriceDecimal, anchor);
   if (anchorMicros === null) return [];
   return findCandidateTiersForCurrencyPrice({
-    scope: args.scope,
-    appId: args.appId,
+    ...args,
     currencyCode: anchor,
     priceMicros: anchorMicros,
   });
@@ -212,15 +211,14 @@ export type ResolveOutcome =
   | { kind: "missing-entries" }
   | { kind: "no-app-currency-entry"; allEntries: ParsedPricingEntry[] };
 
-export async function resolveAppCurrencyEntryForTier(args: {
-  scope: TemplateScope;
-  appId: string | null;
-  identifier: string;
-  appDefaultCurrency: string;
-}): Promise<ResolveOutcome> {
+export async function resolveAppCurrencyEntryForTier(
+  args: TemplateScopeRef & {
+    identifier: string;
+    appDefaultCurrency: string;
+  },
+): Promise<ResolveOutcome> {
   const entries = await lookupTemplateEntriesForIdentifier({
-    scope: args.scope,
-    appId: args.appId,
+    ...args,
     identifier: args.identifier,
   });
   if (entries.length === 0) return { kind: "missing-entries" };

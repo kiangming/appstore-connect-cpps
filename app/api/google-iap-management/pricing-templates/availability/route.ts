@@ -12,6 +12,11 @@ import { getServerSession } from "next-auth";
 
 import { authOptions } from "@/lib/auth";
 import {
+  readActiveAccountId,
+  resolveActiveAccountId,
+} from "@/lib/google-iap-management/active-account";
+import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
+import {
   getTemplateAvailability,
   listTemplateTiers,
 } from "@/lib/google-iap-management/queries/templates";
@@ -27,14 +32,24 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const appId = url.searchParams.get("appId");
 
+  // ⚠ ACCOUNT ĐỌC Ở SERVER, KHÔNG NHẬN TỪ CLIENT. Client chỉ gửi appId.
+  const accounts = await listAccounts().catch(() => []);
+  const accountId = resolveActiveAccountId(accounts, readActiveAccountId());
+  if (!accountId) {
+    return NextResponse.json(
+      { error: "No Google Console accounts configured." },
+      { status: 400 },
+    );
+  }
+
   try {
-    const availability = await getTemplateAvailability(appId);
+    const availability = await getTemplateAvailability({ accountId, appId });
     const defaultTiers = availability.defaultExists
-      ? await listTemplateTiers({ scope: "GLOBAL", appId: null })
+      ? await listTemplateTiers({ scope: "ACCOUNT", accountId, appId: null })
       : [];
     const appTiers =
       availability.appExists && appId
-        ? await listTemplateTiers({ scope: "APP", appId })
+        ? await listTemplateTiers({ scope: "APP", appId, accountId: null })
         : [];
     return NextResponse.json({
       defaultExists: availability.defaultExists,

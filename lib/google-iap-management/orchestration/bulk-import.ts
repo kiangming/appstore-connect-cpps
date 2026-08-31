@@ -62,6 +62,7 @@ import {
   findCandidateTiersForCurrencyPrice,
   templateExists,
   findTemplateId,
+  type TemplateScopeRef,
 } from "../queries/templates";
 import {
   detectCrossCurrencyTrigger,
@@ -152,6 +153,11 @@ export interface BulkImportRow extends ParsedIapRow {
 
 export interface BulkImportInput {
   appId: string;
+  /** G1b — account SỞ HỮU app này. Route execute đã đọc sẵn
+   *  (bulk-import/execute/route.ts:127) rồi mới `getAppByPackage(accountId,
+   *  packageName)`, nên app và account ở đây luôn khớp nhau theo cấu
+   *  trúc. Orchestrator KHÔNG tự đi lấy account — nó nhận từ tầng biết. */
+  accountId: string;
   packageName: string;
   pricingSource: PricingSource;
   sourceFilename: string | null;
@@ -487,10 +493,10 @@ export async function executeBulkImport(
   }
 
   const appCurrencyNorm = (input.appDefaultCurrency ?? "").trim().toUpperCase();
-  const crossCurrencyScope: "GLOBAL" | "APP" =
-    input.pricingSource === "app_template" ? "APP" : "GLOBAL";
-  const crossCurrencyAppId =
-    crossCurrencyScope === "APP" ? input.appId : null;
+  const crossCurrencyRef: TemplateScopeRef =
+    input.pricingSource === "app_template"
+      ? { scope: "APP", appId: input.appId, accountId: null }
+      : { scope: "ACCOUNT", accountId: input.accountId, appId: null };
   let crossCurrencyResolved = 0;
   let crossCurrencyRefused = 0;
   let crossCurrencyByExplicitHeader = 0;
@@ -544,8 +550,7 @@ export async function executeBulkImport(
     // candidates via the trigger's anchor currency.
     if (row.chosenTierIdentifier) {
       const outcome = await resolveAppCurrencyEntryForTier({
-        scope: crossCurrencyScope,
-        appId: crossCurrencyAppId,
+        ...crossCurrencyRef,
         identifier: row.chosenTierIdentifier,
         appDefaultCurrency: appCurrencyNorm,
       });
@@ -558,8 +563,7 @@ export async function executeBulkImport(
       );
     } else {
       const candidates = await findCrossCurrencyCandidates({
-        scope: crossCurrencyScope,
-        appId: crossCurrencyAppId,
+        ...crossCurrencyRef,
         filePriceDecimal: row.basePriceDecimal,
         anchorCurrency: trigger.anchorCurrency,
       });
@@ -592,8 +596,7 @@ export async function executeBulkImport(
         // Exactly 1 candidate — auto-resolve.
         const tier = candidates[0];
         const outcome = await resolveAppCurrencyEntryForTier({
-          scope: crossCurrencyScope,
-          appId: crossCurrencyAppId,
+          ...crossCurrencyRef,
           identifier: tier.identifier,
           appDefaultCurrency: appCurrencyNorm,
         });
@@ -672,7 +675,8 @@ export async function executeBulkImport(
   // Manager can correlate "matched" counters with the actual entries
   // the orchestrator applied.
   let templateIdResolved: string | null = null;
-  let templateScopeUsed: "GLOBAL" | "APP" | null = null;
+  let templateScopeUsed: "ACCOUNT" | "APP" | null = null;
+  let templateAccountIdUsed: string | null = null;
   let templateAppIdUsed: string | null = null;
   type PriceProvenance =
     | "custom"
@@ -743,14 +747,22 @@ export async function executeBulkImport(
   }
 
   if (input.pricingSource !== "google_default") {
-    const scope = input.pricingSource === "app_template" ? "APP" : "GLOBAL";
-    const appIdForScope = scope === "APP" ? input.appId : null;
+    // G1b — MỘT ref duy nhất cho cả khối, thay cho việc dựng lại
+    // `{scope, appId}` ở từng lời gọi. Dựng lại từng chỗ chính là chỗ để
+    // quên `accountId` mà vẫn biên dịch sạch.
+    const templateRef: TemplateScopeRef =
+      input.pricingSource === "app_template"
+        ? { scope: "APP", appId: input.appId, accountId: null }
+        : { scope: "ACCOUNT", accountId: input.accountId, appId: null };
+    const scope = templateRef.scope;
+    const appIdForScope = templateRef.appId;
     templateScopeUsed = scope;
     templateAppIdUsed = appIdForScope;
+    templateAccountIdUsed = templateRef.accountId;
 
     // Hotfix 17 pre-flight (preserved): refuse to silently auto-bootstrap
     // when the selected template scope has no rows.
-    const exists = await templateExists({ scope, appId: appIdForScope });
+    const exists = await templateExists(templateRef);
     if (!exists) {
       // Every name in this message must be one the operator can actually
       // SEE. It previously interpolated the raw enum (`"app_template"`,
@@ -770,7 +782,7 @@ export async function executeBulkImport(
       );
     }
 
-    templateIdResolved = await findTemplateId({ scope, appId: appIdForScope });
+    templateIdResolved = await findTemplateId(templateRef);
     console.info(
       `[google-iap:bulk-import] template_resolved scope=${scope} app_id=${appIdForScope ?? "-"} template_id=${templateIdResolved ?? "?"}`,
     );
@@ -839,8 +851,7 @@ export async function executeBulkImport(
         // throw rather than guess.
         selectedTier = row.chosenTierIdentifier;
         entries = await lookupTemplateEntriesForIdentifier({
-          scope,
-          appId: appIdForScope,
+          ...templateRef,
           identifier: row.chosenTierIdentifier,
         });
         if (entries.length === 0) {
@@ -884,8 +895,7 @@ export async function executeBulkImport(
         // but only accept the result when exactly 1 candidate exists.
         // Multiple candidates throws (Hotfix 19 silent-pick removal).
         const skuEntries = await lookupTemplateEntriesForIdentifier({
-          scope,
-          appId: appIdForScope,
+          ...templateRef,
           identifier: row.sku,
         });
         if (skuEntries.length > 0) {
@@ -899,8 +909,7 @@ export async function executeBulkImport(
           let candidates: Array<{ identifier: string }> = [];
           try {
             candidates = await findCandidateTiersForCurrencyPrice({
-              scope,
-              appId: appIdForScope,
+              ...templateRef,
               currencyCode: row.baseCurrency,
               priceMicros: baseMicros,
             });
@@ -911,8 +920,7 @@ export async function executeBulkImport(
           }
           if (candidates.length === 1) {
             const probeEntries = await lookupTemplateEntriesForIdentifier({
-              scope,
-              appId: appIdForScope,
+              ...templateRef,
               identifier: candidates[0].identifier,
             });
             if (probeEntries.length > 0) {
@@ -1280,6 +1288,10 @@ export async function executeBulkImport(
       template_id_resolved: templateIdResolved,
       template_scope_used: templateScopeUsed,
       template_app_id_used: templateAppIdUsed,
+      /** G1b — account mà bản Default được đọc từ đó. Không có trường
+       *  này thì audit log nói "đã dùng Default" mà không nói Default
+       *  CỦA AI, đúng câu hỏi mà arc này sinh ra để trả lời. */
+      template_account_id_used: templateAccountIdUsed,
       per_row_diagnostic: perRowDiagnostic,
       // Cycle 43 cross-currency telemetry — per-row fail-soft counts +
       // detail so Manager debugging can correlate refused-row SKUs with

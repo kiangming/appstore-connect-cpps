@@ -10,7 +10,7 @@ import { listAccounts } from "@/lib/google-iap-management/repository/google-acco
 import { listAppsForAccount } from "@/lib/google-iap-management/repository/apps";
 import { readActiveAccountId } from "@/lib/google-iap-management/active-account";
 import {
-  getGlobalTemplateOverview,
+  getAccountTemplateOverview,
   listAppTemplates,
 } from "@/lib/google-iap-management/queries/templates";
 import { PricingTemplatesClient } from "@/components/google-iap-management/pricing-templates/PricingTemplatesClient";
@@ -31,7 +31,7 @@ export default async function PricingTemplatesPage() {
       : fallbackId;
 
   const [defaultOverview, appTemplates, cachedApps] = await Promise.all([
-    getGlobalTemplateOverview(),
+    getAccountTemplateOverview(activeAccountId),
     listAppTemplates(),
     listAppsForAccount(activeAccountId),
   ]);

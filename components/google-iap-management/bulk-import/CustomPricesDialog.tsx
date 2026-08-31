@@ -48,7 +48,7 @@ import {
 
 export interface CustomBaseline {
   kind: "template";
-  scope: "GLOBAL" | "APP";
+  scope: "ACCOUNT" | "APP";
   identifier: string;
 }
 
@@ -69,7 +69,7 @@ interface Props {
    *  "no template match" would be misleading there, since not having a
    *  template is the point of the source, not a miss. */
   isGoogleConversion?: boolean;
-  scope: "GLOBAL" | "APP";
+  scope: "ACCOUNT" | "APP";
   appId: string;
   packageName: string;
   appDefaultCurrency: string | null;

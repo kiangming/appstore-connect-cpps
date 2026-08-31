@@ -87,6 +87,8 @@ function customRow(over: Partial<BulkImportRow> = {}): BulkImportRow {
 
 const INPUT_BASE = {
   appId: "app-1",
+  // G1b — account sở hữu app. Route execute lấy từ hàng app.
+  accountId: "acct-1",
   packageName: "com.vng.cashknight",
   sourceFilename: "iaps.xlsx",
   actorEmail: "manager@vng.com.vn",

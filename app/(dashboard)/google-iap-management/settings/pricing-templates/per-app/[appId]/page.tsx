@@ -31,10 +31,19 @@ export default async function PerAppMatrixPage({
   const app = await getAppById(appId);
   if (!app) notFound();
 
+  // ⚠ G1b — account dùng ở màn này là ACCOUNT SỞ HỮU APP, lấy từ chính
+  //   hàng app vừa đọc, KHÔNG phải account active trong cookie. Xem hợp
+  //   đồng đầy đủ ở fetchPerAppMatrix (queries/template-matrix.ts).
+  const owningAccountId = app.google_console_account_id;
+
   const [matrix, overview, defaultTemplateExists] = await Promise.all([
-    fetchPerAppMatrix(appId),
+    fetchPerAppMatrix({ appId, accountId: owningAccountId }),
     getAppTemplateOverview(appId),
-    templateExists({ scope: "GLOBAL", appId: null }),
+    templateExists({
+      scope: "ACCOUNT",
+      accountId: owningAccountId,
+      appId: null,
+    }),
   ]);
 
   if (!matrix) {

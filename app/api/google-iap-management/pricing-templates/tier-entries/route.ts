@@ -25,6 +25,11 @@ import { getServerSession } from "next-auth";
 
 import { authOptions } from "@/lib/auth";
 import {
+  readActiveAccountId,
+  resolveActiveAccountId,
+} from "@/lib/google-iap-management/active-account";
+import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
+import {
   lookupTemplateEntriesForIdentifier,
   type TemplateScope,
 } from "@/lib/google-iap-management/queries/templates";
@@ -52,13 +57,25 @@ export async function GET(req: Request) {
   const appId = url.searchParams.get("appId");
   const identifier = url.searchParams.get("identifier");
 
-  if (rawScope !== "GLOBAL" && rawScope !== "APP") {
+  // ⚠ G1b — GIÁ TRỊ TRÊN DÂY ĐỔI "GLOBAL" → "ACCOUNT", cùng từ vựng với
+  //   server và DB. Client gửi giá trị này ở 3 chỗ (IapForm.tsx,
+  //   BulkImportWizard.tsx, CustomPricesDialog.tsx) và cả 3 đều được đổi
+  //   trong cùng commit — chúng deploy cùng nhau nên không có cửa sổ lệch.
+  if (rawScope !== "ACCOUNT" && rawScope !== "APP") {
     return NextResponse.json(
-      { error: 'scope must be "GLOBAL" or "APP".' },
+      { error: 'scope must be "ACCOUNT" or "APP".' },
       { status: 400 },
     );
   }
   const scope: TemplateScope = rawScope;
+  const accounts = await listAccounts().catch(() => []);
+  const accountId = resolveActiveAccountId(accounts, readActiveAccountId());
+  if (!accountId) {
+    return NextResponse.json(
+      { error: "No Google Console accounts configured." },
+      { status: 400 },
+    );
+  }
   if (!identifier || !identifier.trim()) {
     return NextResponse.json({ error: "identifier is required." }, { status: 400 });
   }
@@ -73,11 +90,11 @@ export async function GET(req: Request) {
   }
 
   try {
-    const entries = await lookupTemplateEntriesForIdentifier({
-      scope,
-      appId: scope === "APP" ? appId : null,
-      identifier: identifier.trim(),
-    });
+    const entries = await lookupTemplateEntriesForIdentifier(
+      scope === "APP"
+        ? { scope, appId: appId as string, accountId: null, identifier: identifier.trim() }
+        : { scope, accountId, appId: null, identifier: identifier.trim() },
+    );
     return NextResponse.json({
       entries: entries.map((e) => ({
         regionCode: e.regionCode,

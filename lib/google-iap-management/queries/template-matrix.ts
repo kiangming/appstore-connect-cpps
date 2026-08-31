@@ -15,6 +15,7 @@
  * the client can render the ★ marker + tooltip without re-fetching.
  */
 import { googleIapDb } from "../db";
+import { findTemplateId } from "./templates";
 import {
   getContinentForRegion,
   type Continent,
@@ -168,31 +169,22 @@ async function fetchEntriesForTemplate(
   return (data ?? []) as TemplateEntryRow[];
 }
 
-async function findTemplateIdForScope(args: {
-  scope: "GLOBAL" | "APP";
-  appId: string | null;
-}): Promise<string | null> {
-  const db = googleIapDb();
-  let q = db
-    .from("pricing_templates")
-    .select("id")
-    .eq("scope_type", args.scope);
-  q =
-    args.scope === "APP" && args.appId
-      ? q.eq("scope_app_id", args.appId)
-      : q.is("scope_app_id", null);
-  const { data, error } = await q.maybeSingle();
-  if (error) {
-    throw new Error(`findTemplateIdForScope failed: ${error.message}`);
-  }
-  return data ? (data as { id: string }).id : null;
-}
+/* G1b — `findTemplateIdForScope` ĐÃ XOÁ. Nó là BẢN SAO THỨ 11 của mệnh
+ * đề lọc scope, đứng riêng ở file này nên mọi lần siết bảo mật bên
+ * templates.ts đều bỏ sót nó. Thay bằng `findTemplateId` — cùng một
+ * điểm nghẽn `applyScopeFilter` với 10 đường còn lại.
+ * Đây chính là ĐƯỜNG ẨN mà census cảnh báo: nó được gọi BÊN TRONG
+ * `fetchPerAppMatrix`, nên grep ở tầng page KHÔNG nhìn thấy. */
 
-/** Server-side fetcher for the Default matrix view. Returns null when
- *  no Default Template exists — the page renders the empty state. */
-export async function fetchDefaultMatrix(): Promise<MatrixData | null> {
-  const templateId = await findTemplateIdForScope({
-    scope: "GLOBAL",
+/** Server-side fetcher for the Default matrix view của MỘT account.
+ *  Trả null khi account đó chưa có Default Template — page render empty
+ *  state. */
+export async function fetchDefaultMatrix(
+  accountId: string,
+): Promise<MatrixData | null> {
+  const templateId = await findTemplateId({
+    scope: "ACCOUNT",
+    accountId,
     appId: null,
   });
   if (!templateId) return null;
@@ -205,10 +197,36 @@ export async function fetchDefaultMatrix(): Promise<MatrixData | null> {
  *  entries + the Default Template entries (when present) so the
  *  composer can annotate diff cells. Returns null when the Per-App
  *  template has not been uploaded — the page renders the empty state. */
-export async function fetchPerAppMatrix(appId: string): Promise<MatrixData | null> {
+export async function fetchPerAppMatrix(args: {
+  appId: string;
+  /**
+   * ⚠ HỢP ĐỒNG (quyết định Manager, 2026-08-31 — ĐỪNG "sửa cho nhất quán"):
+   *   ĐÂY LÀ ACCOUNT SỞ HỮU APP (`apps.google_console_account_id`),
+   *   KHÔNG PHẢI account đang active trong cookie.
+   *
+   *   Cookie là trạng thái ĐIỀU HƯỚNG UI; nó trả lời "người dùng đang
+   *   xem account nào", không trả lời "app này thuộc về ai". Hai câu đó
+   *   TÁCH NHAU thật, không phải lý thuyết: `getAppById` không lọc
+   *   account (repository/apps.ts), và census đã chứng minh có 2 package
+   *   nằm dưới 2 account khác nhau.
+   *
+   *   Lấy nhầm cookie ⇒ ma trận Per-App so giá với Default của account
+   *   KHÁC, và bulk-import đẩy giá theo Default sai lên Google. Cùng họ
+   *   với vụ ghi đè 1140 ô ở arc Apple C-D, nhưng tệ hơn: Apple ghi đè
+   *   template (nhìn thấy được), đây là GIÁ SAI đã lên store.
+   *
+   *   Test ghim tính chất này: template-matrix.account-isolation.test.ts
+   *   — fixture app thuộc account B trong khi cookie active là A.
+   */
+  accountId: string;
+}): Promise<MatrixData | null> {
   const [perAppTemplateId, defaultTemplateId] = await Promise.all([
-    findTemplateIdForScope({ scope: "APP", appId }),
-    findTemplateIdForScope({ scope: "GLOBAL", appId: null }),
+    findTemplateId({ scope: "APP", appId: args.appId, accountId: null }),
+    findTemplateId({
+      scope: "ACCOUNT",
+      accountId: args.accountId,
+      appId: null,
+    }),
   ]);
   if (!perAppTemplateId) return null;
   const [perAppEntries, defaultEntries] = await Promise.all([

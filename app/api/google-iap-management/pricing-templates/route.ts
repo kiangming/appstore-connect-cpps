@@ -12,6 +12,11 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { parsePricingTemplate } from "@/lib/google-iap-management/parsers/pricing-template-parser";
 import { replaceTemplate } from "@/lib/google-iap-management/queries/templates";
+import {
+  readActiveAccountId,
+  resolveActiveAccountId,
+} from "@/lib/google-iap-management/active-account";
+import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
 import { appendAction } from "@/lib/google-iap-management/repository/actions-log";
 import { googleIapDb } from "@/lib/google-iap-management/db";
 
@@ -36,13 +41,28 @@ export async function POST(req: Request) {
   }
 
   const scopeRaw = form.get("scope");
-  if (scopeRaw !== "GLOBAL" && scopeRaw !== "APP") {
+  // ⚠ G1b — từ vựng trên dây đổi "GLOBAL" → "ACCOUNT". Bên gửi là
+  //   DefaultTemplateTab.tsx (form.append("scope", …)), đổi cùng commit.
+  if (scopeRaw !== "ACCOUNT" && scopeRaw !== "APP") {
     return NextResponse.json(
-      { error: "scope must be 'GLOBAL' or 'APP'." },
+      { error: "scope must be 'ACCOUNT' or 'APP'." },
       { status: 400 },
     );
   }
   const scope = scopeRaw;
+
+  // ⚠ ACCOUNT ĐỌC Ở SERVER, KHÔNG NHẬN TỪ CLIENT. Đây là đường GHI đè
+  //   Default Template — để client tự khai account là mở đúng cửa cho
+  //   một request nắn tay ghi đè Default của account khác.
+  //   (Gate admin cho Replace/Remove thuộc G1c, chưa làm ở đây.)
+  const accounts = await listAccounts().catch(() => []);
+  const accountId = resolveActiveAccountId(accounts, readActiveAccountId());
+  if (!accountId) {
+    return NextResponse.json(
+      { error: "No Google Console accounts configured." },
+      { status: 400 },
+    );
+  }
 
   let appId: string | null = null;
   if (scope === "APP") {
@@ -89,8 +109,9 @@ export async function POST(req: Request) {
 
   try {
     const result = await replaceTemplate({
-      scope,
-      appId,
+      ...(scope === "APP"
+        ? { scope, appId: appId as string, accountId: null as null }
+        : { scope, accountId, appId: null as null }),
       uploadedBy: session.user.email,
       sourceFilename: file.name,
       entries: parsed.entries,

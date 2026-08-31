@@ -7,8 +7,12 @@ import { ArrowLeft, Sparkles, Upload } from "lucide-react";
 
 import { authOptions } from "@/lib/auth";
 import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
+import {
+  readActiveAccountId,
+  resolveActiveAccountId,
+} from "@/lib/google-iap-management/active-account";
 import { fetchDefaultMatrix } from "@/lib/google-iap-management/queries/template-matrix";
-import { getGlobalTemplateOverview } from "@/lib/google-iap-management/queries/templates";
+import { getAccountTemplateOverview } from "@/lib/google-iap-management/queries/templates";
 import { DefaultMatrixView } from "@/components/google-iap-management/pricing-templates/DefaultMatrixView";
 
 export default async function DefaultMatrixPage() {
@@ -18,9 +22,15 @@ export default async function DefaultMatrixPage() {
   const accounts = await listAccounts().catch(() => []);
   if (accounts.length === 0) redirect("/google-iap-management");
 
+  // G1b — màn này là màn CẤP ACCOUNT (không gắn với app nào), nên account
+  // đúng ở đây LÀ account đang active. Khác với màn Per-App: ở đó account
+  // phải là account SỞ HỮU APP, xem hợp đồng trong fetchPerAppMatrix.
+  const accountId = resolveActiveAccountId(accounts, readActiveAccountId());
+  if (!accountId) redirect("/google-iap-management");
+
   const [matrix, overview] = await Promise.all([
-    fetchDefaultMatrix(),
-    getGlobalTemplateOverview(),
+    fetchDefaultMatrix(accountId),
+    getAccountTemplateOverview(accountId),
   ]);
 
   if (!matrix) {

@@ -22,6 +22,7 @@ import { parseIapTemplate } from "@/lib/google-iap-management/parsers/excel-pars
 import { decimalToMicros, microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
 import {
   findRowCandidates,
+  type TemplateScopeRef,
   getPrimaryTierFromCandidates,
   type TierCandidate,
 } from "@/lib/google-iap-management/queries/templates";
@@ -141,9 +142,12 @@ export async function POST(
   // resolve cross-currency (no template) — refusals are surfaced
   // inline so the wizard can flag rows up front.
   const appCurrencyNorm = (app.default_currency ?? "").trim().toUpperCase();
-  const scope: "APP" | "GLOBAL" =
-    pricingSource === "app_template" ? "APP" : "GLOBAL";
-  const scopeAppId = pricingSource === "app_template" ? app.id : null;
+  // G1b — MỘT ref cho cả route. `app` đến từ getAppByPackage(accountId, …)
+  // nên account sở hữu app == accountId theo cấu trúc.
+  const templateRef: TemplateScopeRef =
+    pricingSource === "app_template"
+      ? { scope: "APP", appId: app.id, accountId: null }
+      : { scope: "ACCOUNT", accountId: app.google_console_account_id, appId: null };
 
   type RowResolution =
     | { kind: "same_currency" }
@@ -218,8 +222,7 @@ export async function POST(
         }
         try {
           const crossCandidates = await findCrossCurrencyCandidates({
-            scope,
-            appId: scopeAppId,
+            ...templateRef,
             filePriceDecimal: row.basePriceDecimal,
             anchorCurrency: trigger.anchorCurrency,
           });
@@ -259,8 +262,7 @@ export async function POST(
           // exact app-currency amount the push will send.
           const tier = crossCandidates[0];
           const outcome = await resolveAppCurrencyEntryForTier({
-            scope,
-            appId: scopeAppId,
+            ...templateRef,
             identifier: tier.identifier,
             appDefaultCurrency: appCurrencyNorm,
           });
@@ -341,8 +343,7 @@ export async function POST(
           row.baseCurrency,
         );
         const result = await findRowCandidates({
-          scope,
-          appId: scopeAppId,
+          ...templateRef,
           sku: row.sku,
           currencyCode: row.baseCurrency,
           priceMicros: baseMicros,

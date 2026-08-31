@@ -1182,7 +1182,7 @@ export function BulkImportWizard({
               // pre-filled, which is the correct baseline there.
               tierIdentifier={pricingSource === "google_default" ? null : tier}
               isGoogleConversion={pricingSource === "google_default"}
-              scope={pricingSource === "app_template" ? "APP" : "GLOBAL"}
+              scope={pricingSource === "app_template" ? "APP" : "ACCOUNT"}
               appId={appId}
               packageName={packageName}
               appDefaultCurrency={appDefaultCurrency}

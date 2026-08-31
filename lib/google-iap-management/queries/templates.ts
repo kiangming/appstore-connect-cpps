@@ -13,12 +13,103 @@ import { googleIapDb } from "../db";
 import { microsToDecimal } from "../google/price-conversion";
 import type { ParsedPricingEntry } from "../parsers/pricing-template-parser";
 
-export type TemplateScope = "GLOBAL" | "APP";
+export type TemplateScope = "ACCOUNT" | "APP";
+
+/**
+ * G1b — mọi truy vấn template phải nói RÕ nó đang đọc template CỦA AI.
+ *
+ * Kiểu này là bản sao 1:1 của CHECK trong DB
+ * (`pricing_templates_scope_coherent_check`, migration
+ * 20260831000000): đúng MỘT trong hai cột định danh khác NULL. Cố ý —
+ * trạng thái không mạch lạc không biểu diễn được, nên không cần guard
+ * runtime cho tính mạch lạc ở từng hàm.
+ *
+ * ⚠ KHÔNG CÒN biến thể "GLOBAL". Trước G1 cả hệ thống dùng CHUNG một
+ *   Default Template; từ G1 mỗi account một bản. Bỏ hẳn giá trị cũ khỏi
+ *   kiểu là CỐ Ý: mọi `=== "GLOBAL"` còn sót lại thành LỖI TSC thay vì
+ *   một nhánh chết im lặng.
+ */
+export type TemplateScopeRef =
+  | { scope: "ACCOUNT"; accountId: string; appId: null }
+  | { scope: "APP"; accountId: null; appId: string };
+
+/**
+ * ĐIỂM NGHẼN DUY NHẤT áp bộ lọc scope lên một query `pricing_templates`.
+ *
+ * ⚠ VÌ SAO TỒN TẠI: trước G1b mệnh đề lọc này được CHÉP TAY ở 10 chỗ
+ *   (getGlobalTemplateOverview · getAppTemplateOverview ·
+ *   getTemplateAvailability ×2 · replaceTemplate DELETE ·
+ *   lookupTemplateEntriesForIdentifier · findTemplateId · templateExists ·
+ *   listTemplateTiers · findCandidateTiersForCurrencyPrice), cộng 1 bản
+ *   nữa ở template-matrix.ts. Mười một bản sao là mười một chỗ để sau này
+ *   sửa một bên quên bên kia.
+ *
+ * ⚠ HÀM ĐỌC TEMPLATE MỚI PHẢI ĐI QUA ĐÂY. Tự chép `.eq("scope_type", …)`
+ *   ở chỗ khác là mở lại đúng lớp lỗi đó. `templates.structure.test.ts`
+ *   canh tính chất này.
+ */
+/**
+ * Kiểm tính mạch lạc của ref. TÁCH RIÊNG khỏi `applyScopeFilter` là CỐ Ý,
+ * không phải chia nhỏ cho đẹp.
+ *
+ * ⚠ TÍNH CHẤT PHẢI GIỮ: guard nổ TRƯỚC khi dựng client DB.
+ *   `applyScopeFilter` nhận vào `db.from(...)`, nghĩa là `googleIapDb()`
+ *   đã chạy xong rồi mới tới lượt nó. Trong môi trường thiếu biến môi
+ *   trường, `googleIapDb()` ném "Missing SUPABASE_URL…" và NUỐT MẤT lỗi
+ *   lập trình thật. Đo được, không phải suy đoán: khi guard còn nằm
+ *   trong applyScopeFilter, 8 test Hotfix 17 đỏ với đúng thông báo đó.
+ *   Vì vậy mỗi hàm công khai gọi `assertScopeRef(args)` ở DÒNG ĐẦU.
+ */
+function assertScopeRef(ref: TemplateScopeRef): void {
+  if (ref.scope === "APP") {
+    if (!ref.appId) {
+      throw new Error('applyScopeFilter: scope="APP" requires a non-empty appId.');
+    }
+    return;
+  }
+  if (!ref.accountId) {
+    throw new Error(
+      'applyScopeFilter: scope="ACCOUNT" requires a non-empty accountId.',
+    );
+  }
+}
+
+function applyScopeFilter<T>(query: T, ref: TemplateScopeRef): T {
+  // ⚠ VÌ SAO CÓ ÉP KIỂU Ở ĐÂY (lý do bắt buộc phải ghi, CLAUDE.md #9).
+  //   Cách viết tự nhiên là ràng buộc generic đệ quy
+  //   `T extends { eq: (col, val) => T }`. Đã thử: tsc bung TS2589
+  //   "Type instantiation is excessively deep and possibly infinite" —
+  //   ràng buộc tự tham chiếu đó nhân với kiểu builder nhiều tầng của
+  //   supabase-js. Ép kiểu gói gọn TRONG hàm này, còn mọi call site vẫn
+  //   giữ nguyên kiểu builder chính xác vì hàm trả đúng `T`.
+  const q = query as unknown as {
+    eq: (col: string, val: unknown) => typeof q;
+  };
+  // Gọi lại lần nữa: hàm này là điểm nghẽn cuối trước khi mệnh đề lọc
+  // được sinh ra, nên nó tự bảo vệ mình chứ không tin caller đã kiểm.
+  // `.eq("scope_account_id", "")` KHÔNG lỗi — nó khớp 0 dòng, rồi caller
+  // đọc ra "account này chưa có template" và âm thầm rơi về nhánh khác.
+  // Một câu trả lời SAI mà im lặng tệ hơn một ngoại lệ.
+  assertScopeRef(ref);
+  if (ref.scope === "APP") {
+    return q.eq("scope_type", "APP").eq("scope_app_id", ref.appId) as unknown as T;
+  }
+  return q
+    .eq("scope_type", "ACCOUNT")
+    .eq("scope_account_id", ref.accountId) as unknown as T;
+}
 
 export interface PricingTemplateRow {
   id: string;
   scope_type: TemplateScope;
   scope_app_id: string | null;
+  /** G1 M-1: account sở hữu bản Default này khi scope_type='ACCOUNT'. */
+  scope_account_id: string | null;
+  /** G1 M-1: NOT NULL ⇒ bản do migration nhân bản, CHƯA ai cấu hình
+   *  riêng cho account. Đây là điều kiện rẽ nhánh của modal Replace ở
+   *  G1c — KHÔNG so chuỗi `uploaded_by === "SYSTEM_MIGRATION"`, vì
+   *  uploaded_by là dữ liệu người dùng nhập được, origin_note thì không. */
+  origin_note: string | null;
   uploaded_at: string;
   uploaded_by: string;
   source_filename: string | null;
@@ -42,6 +133,11 @@ export interface AppTemplateSummary {
 }
 
 const SAMPLE_SIZE = 50;
+
+/** Cột header template. G1 M-1 thêm scope_account_id + origin_note; giữ
+ *  MỘT hằng số để không đường đọc nào lỡ thiếu hai cột mới. */
+const TEMPLATE_COLUMNS =
+  "id, scope_type, scope_app_id, scope_account_id, uploaded_at, uploaded_by, source_filename, origin_note";
 
 async function fetchOverviewForTemplate(
   template: PricingTemplateRow | null,
@@ -92,13 +188,25 @@ async function fetchOverviewForTemplate(
   };
 }
 
-export async function getGlobalTemplateOverview(): Promise<TemplateOverview> {
+/**
+ * Default Template CỦA MỘT ACCOUNT.
+ *
+ * ⚠ B1 — ĐỔI CHỮ KÝ THỦ CÔNG, tsc KHÔNG bắt được việc này.
+ *   Bản trước tên `getGlobalTemplateOverview()`, KHÔNG nhận tham số nào,
+ *   và hardcode `.eq("scope_type","GLOBAL")` ngay trong thân hàm. Nếu chỉ
+ *   THÊM bộ lọc account vào thân hàm thì chữ ký không đổi ⇒ mọi call site
+ *   vẫn biên dịch sạch trong khi hàm âm thầm đọc sai. ĐỔI TÊN chính là
+ *   guard: nó biến mọi call site cũ thành lỗi tsc.
+ */
+export async function getAccountTemplateOverview(
+  accountId: string,
+): Promise<TemplateOverview> {
+  assertScopeRef({ scope: "ACCOUNT", accountId, appId: null });
   const db = googleIapDb();
-  const { data, error } = await db
-    .from("pricing_templates")
-    .select("id, scope_type, scope_app_id, uploaded_at, uploaded_by, source_filename")
-    .eq("scope_type", "GLOBAL")
-    .maybeSingle();
+  const { data, error } = await applyScopeFilter(
+    db.from("pricing_templates").select(TEMPLATE_COLUMNS),
+    { scope: "ACCOUNT", accountId, appId: null },
+  ).maybeSingle();
   if (error) {
     throw new Error(`Failed to load default template: ${error.message}`);
   }
@@ -109,24 +217,30 @@ export async function getAppTemplateOverview(
   appId: string,
 ): Promise<TemplateOverview> {
   const db = googleIapDb();
-  const { data, error } = await db
-    .from("pricing_templates")
-    .select("id, scope_type, scope_app_id, uploaded_at, uploaded_by, source_filename")
-    .eq("scope_type", "APP")
-    .eq("scope_app_id", appId)
-    .maybeSingle();
+  const { data, error } = await applyScopeFilter(
+    db.from("pricing_templates").select(TEMPLATE_COLUMNS),
+    { scope: "APP", appId, accountId: null },
+  ).maybeSingle();
   if (error) {
     throw new Error(`Failed to load app template: ${error.message}`);
   }
   return fetchOverviewForTemplate((data as PricingTemplateRow | null) ?? null);
 }
 
+/**
+ * ⚠ TODO(G1c) — RÒ RỈ CROSS-ACCOUNT ĐÃ BIẾT, chưa sửa ở G1b.
+ *   Hàm này liệt kê template APP của MỌI account (không nhận accountId),
+ *   trong khi danh sách app ngay cạnh nó trên cùng màn hình
+ *   (`listAppsForAccount`) thì CÓ lọc. G1b không đụng vì đây là thay đổi
+ *   HÀNH VI (màn sẽ hiện ít dòng hơn), mà B6 yêu cầu G1b không đổi hành
+ *   vi. Sửa cùng `getAppById` ở G1c.
+ */
 export async function listAppTemplates(): Promise<AppTemplateSummary[]> {
   const db = googleIapDb();
   const { data: templates, error } = await db
     .from("pricing_templates")
     .select(
-      "id, scope_type, scope_app_id, uploaded_at, uploaded_by, source_filename",
+      TEMPLATE_COLUMNS,
     )
     .eq("scope_type", "APP")
     .order("uploaded_at", { ascending: false });
@@ -187,13 +301,11 @@ export async function listAppTemplates(): Promise<AppTemplateSummary[]> {
     .filter((x): x is AppTemplateSummary => x !== null);
 }
 
-export interface ReplaceTemplateInput {
-  scope: TemplateScope;
-  appId: string | null;
+export type ReplaceTemplateInput = TemplateScopeRef & {
   uploadedBy: string;
   sourceFilename: string | null;
   entries: ParsedPricingEntry[];
-}
+};
 
 export interface ReplaceTemplateResult {
   templateId: string;
@@ -203,22 +315,19 @@ export interface ReplaceTemplateResult {
 export async function replaceTemplate(
   input: ReplaceTemplateInput,
 ): Promise<ReplaceTemplateResult> {
-  if (input.scope === "GLOBAL" && input.appId !== null) {
-    throw new Error("GLOBAL scope must not carry an appId.");
-  }
-  if (input.scope === "APP" && !input.appId) {
-    throw new Error("APP scope requires an appId.");
-  }
+  assertScopeRef(input);
   const db = googleIapDb();
 
   // Delete existing template in this slot (partial unique index ensures
   // at most one row).
-  let deleteQuery = db.from("pricing_templates").delete().eq("scope_type", input.scope);
-  deleteQuery =
-    input.scope === "APP" && input.appId
-      ? deleteQuery.eq("scope_app_id", input.appId)
-      : deleteQuery.is("scope_app_id", null);
-  const { error: delErr } = await deleteQuery;
+  // ⚠ Replace = DELETE-rồi-INSERT. Bộ lọc của lệnh DELETE này là thứ
+  //   quyết định XOÁ TEMPLATE CỦA AI. Trước G1b nó chép tay mệnh đề scope;
+  //   thiếu bộ lọc account ở đây nghĩa là Manager upload Default cho
+  //   account mình lại xoá Default của cả 6 account. Đi qua choke point.
+  const { error: delErr } = await applyScopeFilter(
+    db.from("pricing_templates").delete(),
+    input,
+  );
   if (delErr) {
     throw new Error(`Failed to clear existing template: ${delErr.message}`);
   }
@@ -229,6 +338,7 @@ export async function replaceTemplate(
     .insert({
       scope_type: input.scope,
       scope_app_id: input.appId,
+      scope_account_id: input.accountId,
       uploaded_by: input.uploadedBy,
       source_filename: input.sourceFilename,
     })
@@ -271,23 +381,36 @@ export interface PricingTemplateAvailability {
   appExists: boolean;
 }
 
-export async function getTemplateAvailability(
-  appId: string | null,
-): Promise<PricingTemplateAvailability> {
+/**
+ * ⚠ B1 — ĐỔI CHỮ KÝ THỦ CÔNG, tsc KHÔNG bắt được. Bản trước nhận đúng
+ *   `appId: string | null` và hardcode GLOBAL inline; thêm account vào
+ *   thân hàm mà giữ nguyên chữ ký thì mọi call site vẫn xanh.
+ *
+ * ⚠ HÀM NGUY HIỂM NHẤT ARC. Nó KHÔNG ném lỗi — nó TRẢ VỀ SỐ. Đọc thiếu
+ *   bộ lọc account thì `defaultExists` bật `true` nhờ template của
+ *   account KHÁC, radio "Default Template" sáng lên, và `pickByPriority`
+ *   (PricingSourceSelector.tsx:61-65) chọn đúng nguồn giá đó để ĐẨY LÊN
+ *   GOOGLE. Không có exception nào ở giữa để ai kịp thấy.
+ *   Vì thế test của nó khẳng định bằng GIÁ TRỊ ĐẾM ĐƯỢC, không phải bằng
+ *   "có ném lỗi không" — templates.account-isolation.test.ts.
+ */
+export async function getTemplateAvailability(args: {
+  accountId: string;
+  appId: string | null;
+}): Promise<PricingTemplateAvailability> {
   const db = googleIapDb();
-  const globalCount = await db
-    .from("pricing_templates")
-    .select("id", { count: "exact", head: true })
-    .eq("scope_type", "GLOBAL");
-  const defaultExists = (globalCount.count ?? 0) > 0;
+  const accountCount = await applyScopeFilter(
+    db.from("pricing_templates").select("id", { count: "exact", head: true }),
+    { scope: "ACCOUNT", accountId: args.accountId, appId: null },
+  );
+  const defaultExists = (accountCount.count ?? 0) > 0;
 
   let appExists = false;
-  if (appId) {
-    const appCount = await db
-      .from("pricing_templates")
-      .select("id", { count: "exact", head: true })
-      .eq("scope_type", "APP")
-      .eq("scope_app_id", appId);
+  if (args.appId) {
+    const appCount = await applyScopeFilter(
+      db.from("pricing_templates").select("id", { count: "exact", head: true }),
+      { scope: "APP", appId: args.appId, accountId: null },
+    );
     appExists = (appCount.count ?? 0) > 0;
   }
   return { defaultExists, appExists };
@@ -297,33 +420,16 @@ export async function getTemplateAvailability(
  *  Returns the most-specific template's entries when present
  *  (Q-GIAP.D: App template > Default template > base price). */
 export async function lookupTemplateEntriesForIdentifier(
-  args: {
-    scope: TemplateScope;
-    appId: string | null;
-    identifier: string;
-  },
+  args: TemplateScopeRef & { identifier: string },
 ): Promise<ParsedPricingEntry[]> {
-  // Hotfix 17: hard-fail on scope=APP + missing appId. The pre-Hotfix-17
-  // code silently treated this as a GLOBAL query (the `&& args.appId`
-  // short-circuit fell through to the `is("scope_app_id", null)`
-  // clause), which would have surfaced Per-App misuse as a Default-
-  // template result — a debugging nightmare. Force the caller to be
-  // explicit.
-  if (args.scope === "APP" && !args.appId) {
-    throw new Error(
-      'lookupTemplateEntriesForIdentifier: scope="APP" requires a non-empty appId.',
-    );
-  }
+  assertScopeRef(args);
+  // Hotfix 17 (guard giữ nguyên ý nghĩa, đã chuyển vào applyScopeFilter):
+  // scope=APP + thiếu appId phải NÉM, không được âm thầm rơi về Default.
   const db = googleIapDb();
-  let templateQuery = db
-    .from("pricing_templates")
-    .select("id")
-    .eq("scope_type", args.scope);
-  templateQuery =
-    args.scope === "APP"
-      ? templateQuery.eq("scope_app_id", args.appId!)
-      : templateQuery.is("scope_app_id", null);
-  const { data: template, error } = await templateQuery.maybeSingle();
+  const { data: template, error } = await applyScopeFilter(
+    db.from("pricing_templates").select("id"),
+    args,
+  ).maybeSingle();
   if (error) {
     throw new Error(`Failed to look up template: ${error.message}`);
   }
@@ -381,109 +487,14 @@ export function pickTierByCurrencyMicros(
   }
   return null;
 }
-
-/** Hotfix 15 USD-only pure picker, kept as a thin alias over the
- *  Hotfix 16 currency-aware picker. Pre-existing tests still exercise
- *  this signature; new code should call `pickTierByCurrencyMicros`. */
-export function pickTierByUsdMicros(
-  entries: ReadonlyArray<{
-    identifier: string;
-    region_code: string;
-    currency: string;
-    price_micros: string;
-  }>,
-  usdMicros: string,
-): string | null {
-  // Preserve the pre-Hotfix-16 enforcement: only US-region rows count
-  // for the USD-only path. Hotfix 16's currency-aware path doesn't need
-  // the region constraint because EUR can legitimately appear under
-  // multiple Eurozone region codes.
-  const usOnly = entries.filter(
-    (e) => e.region_code === "US" && e.currency === "USD",
-  );
-  return pickTierByCurrencyMicros(usOnly, "USD", usdMicros);
-}
-
-/** Hotfix 15 → Hotfix 16: currency-aware tier inference for bulk-import.
- *
- *  Bulk-import looks up template entries WHERE identifier = row.sku
- *  first (documented design). When that returns zero entries —
- *  typically because Manager's template indexes entries by tier name
- *  ("Tier 1") rather than SKU — the orchestrator falls back here:
- *  find the tier whose entry for the row's base currency matches the
- *  row's base price in micros.
- *
- *  Hotfix 16: generalised from the Hotfix 15 USD-only variant so
- *  non-USD app workflows (Manager's VND apps, Eurozone apps, etc.)
- *  also benefit from template inference. Region-agnostic — see
- *  pickTierByCurrencyMicros docs.
- *
- *  Returns the tier identifier or null when no match. Caller decides
- *  whether to fail the row or fall through to auto-convert.
+/* B4 (G1b) — ĐÃ XOÁ 3 HÀM CHẾT, 0 caller sản phẩm tại thời điểm xoá:
+ *   pickTierByUsdMicros · findTemplateTierByCurrencyMicros ·
+ *   findTemplateTierByUsdMicros
+ * Cả ba là di sản Hotfix 15/16. Hai hàm I/O trong số đó nhận
+ * `{scope, appId}` KHÔNG có account — giữ lại qua G1 nghĩa là để sẵn hai
+ * đường đọc template KHÔNG lọc account cho người sau vô tình gọi.
+ * Bảng đối chiếu test cũ → bản thay: xem báo cáo B4.
  */
-export async function findTemplateTierByCurrencyMicros(args: {
-  scope: TemplateScope;
-  appId: string | null;
-  currencyCode: string;
-  priceMicros: string;
-}): Promise<string | null> {
-  // Hotfix 17: same silent-fallback landmine as the SKU lookup —
-  // refuse to query when scope=APP is requested without appId.
-  if (args.scope === "APP" && !args.appId) {
-    throw new Error(
-      'findTemplateTierByCurrencyMicros: scope="APP" requires a non-empty appId.',
-    );
-  }
-  const db = googleIapDb();
-  let templateQuery = db
-    .from("pricing_templates")
-    .select("id")
-    .eq("scope_type", args.scope);
-  templateQuery =
-    args.scope === "APP"
-      ? templateQuery.eq("scope_app_id", args.appId!)
-      : templateQuery.is("scope_app_id", null);
-  const { data: template, error } = await templateQuery.maybeSingle();
-  if (error) {
-    throw new Error(`Failed to look up template: ${error.message}`);
-  }
-  if (!template) return null;
-  const templateId = (template as { id: string }).id;
-  const normalisedCurrency = args.currencyCode.trim().toUpperCase();
-  const { data: entries, error: entriesErr } = await db
-    .from("pricing_template_entries")
-    .select("identifier, currency, price_micros")
-    .eq("template_id", templateId)
-    .eq("currency", normalisedCurrency)
-    .eq("price_micros", args.priceMicros);
-  if (entriesErr) {
-    throw new Error(
-      `Failed to load template ${normalisedCurrency} entries: ${entriesErr.message}`,
-    );
-  }
-  const rows = (entries ?? []) as Array<{
-    identifier: string;
-    currency: string;
-    price_micros: string;
-  }>;
-  return pickTierByCurrencyMicros(rows, normalisedCurrency, args.priceMicros);
-}
-
-/** @deprecated Hotfix 15 wrapper; use `findTemplateTierByCurrencyMicros`
- *  with currencyCode="USD" instead. Kept for any external caller still
- *  on the Hotfix 15 signature. */
-export async function findTemplateTierByUsdMicros(args: {
-  scope: TemplateScope;
-  appId: string | null;
-  usdPriceMicros: string;
-}): Promise<string | null> {
-  return findTemplateTierByCurrencyMicros({
-    scope: args.scope,
-    appId: args.appId,
-    currencyCode: "USD",
-    priceMicros: args.usdPriceMicros,
-  });
-}
 
 /** Hotfix 18: companion to `templateExists` — returns the template id
  *  (UUID) for the given scope, or null if no template row exists.
@@ -493,23 +504,15 @@ export async function findTemplateTierByUsdMicros(args: {
  *
  *  Same defensive guard as the sibling helpers: scope=APP without an
  *  appId throws before any DB I/O. */
-export async function findTemplateId(args: {
-  scope: TemplateScope;
-  appId: string | null;
-}): Promise<string | null> {
-  if (args.scope === "APP" && !args.appId) {
-    throw new Error('findTemplateId: scope="APP" requires a non-empty appId.');
-  }
+export async function findTemplateId(
+  args: TemplateScopeRef,
+): Promise<string | null> {
+  assertScopeRef(args);
   const db = googleIapDb();
-  let query = db
-    .from("pricing_templates")
-    .select("id")
-    .eq("scope_type", args.scope);
-  query =
-    args.scope === "APP"
-      ? query.eq("scope_app_id", args.appId!)
-      : query.is("scope_app_id", null);
-  const { data, error } = await query.maybeSingle();
+  const { data, error } = await applyScopeFilter(
+    db.from("pricing_templates").select("id"),
+    args,
+  ).maybeSingle();
   if (error) {
     throw new Error(`findTemplateId failed: ${error.message}`);
   }
@@ -526,23 +529,19 @@ export async function findTemplateId(args: {
  *  app, the orchestrator fails fast with an actionable message rather
  *  than silently auto-bootstrapping every row and leaving Manager to
  *  wonder why "Per-App" produced auto-converted prices. */
-export async function templateExists(args: {
-  scope: TemplateScope;
-  appId: string | null;
-}): Promise<boolean> {
-  if (args.scope === "APP" && !args.appId) {
-    throw new Error('templateExists: scope="APP" requires a non-empty appId.');
-  }
+/** ⚠ Hàm count/head: KHÔNG ném khi đọc thiếu bộ lọc, chỉ TRẢ SỐ SAI.
+ *  Cùng lớp nguy hiểm với `getTemplateAvailability` — nó là pre-flight
+ *  của bulk import, đếm sai là cho qua rồi mới hỏng ở giữa chừng. Test
+ *  khẳng định bằng GIÁ TRỊ, không bằng "có ném không". */
+export async function templateExists(
+  args: TemplateScopeRef,
+): Promise<boolean> {
+  assertScopeRef(args);
   const db = googleIapDb();
-  let query = db
-    .from("pricing_templates")
-    .select("id", { head: true, count: "exact" })
-    .eq("scope_type", args.scope);
-  query =
-    args.scope === "APP"
-      ? query.eq("scope_app_id", args.appId!)
-      : query.is("scope_app_id", null);
-  const { count, error } = await query;
+  const { count, error } = await applyScopeFilter(
+    db.from("pricing_templates").select("id", { head: true, count: "exact" }),
+    args,
+  );
   if (error) {
     throw new Error(`Template existence probe failed: ${error.message}`);
   }
@@ -551,20 +550,15 @@ export async function templateExists(args: {
 
 /** List distinct tier identifiers under the active scope (used by the
  *  single-IAP form's tier picker when Manager picks a template source). */
-export async function listTemplateTiers(args: {
-  scope: TemplateScope;
-  appId: string | null;
-}): Promise<string[]> {
+export async function listTemplateTiers(
+  args: TemplateScopeRef,
+): Promise<string[]> {
+  assertScopeRef(args);
   const db = googleIapDb();
-  let q = db
-    .from("pricing_templates")
-    .select("id")
-    .eq("scope_type", args.scope);
-  q =
-    args.scope === "APP" && args.appId
-      ? q.eq("scope_app_id", args.appId)
-      : q.is("scope_app_id", null);
-  const { data: template, error } = await q.maybeSingle();
+  const { data: template, error } = await applyScopeFilter(
+    db.from("pricing_templates").select("id"),
+    args,
+  ).maybeSingle();
   if (error) {
     throw new Error(`Failed to look up template: ${error.message}`);
   }
@@ -659,27 +653,15 @@ function stripTrailingZeros(decimal: string): string {
  *
  *  Same defensive guards as the sibling helpers (Hotfix 17): scope=APP
  *  without `appId` throws before any DB I/O. */
-export async function findCandidateTiersForCurrencyPrice(args: {
-  scope: TemplateScope;
-  appId: string | null;
-  currencyCode: string;
-  priceMicros: string;
-}): Promise<TierCandidate[]> {
-  if (args.scope === "APP" && !args.appId) {
-    throw new Error(
-      'findCandidateTiersForCurrencyPrice: scope="APP" requires a non-empty appId.',
-    );
-  }
+export async function findCandidateTiersForCurrencyPrice(
+  args: TemplateScopeRef & { currencyCode: string; priceMicros: string },
+): Promise<TierCandidate[]> {
+  assertScopeRef(args);
   const db = googleIapDb();
-  let templateQuery = db
-    .from("pricing_templates")
-    .select("id")
-    .eq("scope_type", args.scope);
-  templateQuery =
-    args.scope === "APP"
-      ? templateQuery.eq("scope_app_id", args.appId!)
-      : templateQuery.is("scope_app_id", null);
-  const { data: template, error } = await templateQuery.maybeSingle();
+  const { data: template, error } = await applyScopeFilter(
+    db.from("pricing_templates").select("id"),
+    args,
+  ).maybeSingle();
   if (error) {
     throw new Error(`Failed to look up template: ${error.message}`);
   }
@@ -745,26 +727,24 @@ export async function findCandidateTiersForCurrencyPrice(args: {
  *    candidates.length === 0 → no template match → auto-bootstrap
  *    candidates.length === 1 → unambiguous → render read-only
  *    candidates.length  >  1 → ambiguous   → Manager picks via dropdown */
-export async function findRowCandidates(args: {
-  scope: TemplateScope;
-  appId: string | null;
-  sku: string;
-  currencyCode: string;
-  priceMicros: string;
-}): Promise<{
+export async function findRowCandidates(
+  args: TemplateScopeRef & {
+    sku: string;
+    currencyCode: string;
+    priceMicros: string;
+  },
+): Promise<{
   candidates: TierCandidate[];
   matchedBy: "sku" | "currency_price" | "none";
 }> {
+  // ⚠ Truyền NGUYÊN ref xuống, không tách rồi ghép lại từng trường: tách
+  //   ra là chỗ để quên `accountId` mà vẫn biên dịch sạch.
   const skuEntries = await lookupTemplateEntriesForIdentifier({
-    scope: args.scope,
-    appId: args.appId,
+    ...args,
     identifier: args.sku,
   });
   if (skuEntries.length > 0) {
-    const templateId = await findTemplateId({
-      scope: args.scope,
-      appId: args.appId,
-    });
+    const templateId = await findTemplateId(args);
     const candidates = buildCandidatesFromEntries(
       templateId ?? "",
       [args.sku],
@@ -777,12 +757,7 @@ export async function findRowCandidates(args: {
     );
     return { candidates, matchedBy: "sku" };
   }
-  const candidates = await findCandidateTiersForCurrencyPrice({
-    scope: args.scope,
-    appId: args.appId,
-    currencyCode: args.currencyCode,
-    priceMicros: args.priceMicros,
-  });
+  const candidates = await findCandidateTiersForCurrencyPrice(args);
   return {
     candidates,
     matchedBy: candidates.length > 0 ? "currency_price" : "none",
@@ -824,6 +799,14 @@ export function getPrimaryTierFromCandidates(
   return sorted[0].identifier;
 }
 
+/**
+ * ⚠ TODO(G1c) — CHƯA XONG, ĐỪNG TƯỞNG ĐÃ XONG.
+ *   Hàm này xoá theo id TRẦN: nó KHÔNG đọc `scope_type`, KHÔNG kiểm
+ *   template thuộc account nào. G1b cố ý không đụng (quyết định Manager,
+ *   S4). Việc còn lại thuộc G1c: route DELETE phải ĐỌC scope_type trước
+ *   khi xoá, và gate admin phải chặn cả Replace lẫn Remove.
+ *   Call site: app/api/google-iap-management/pricing-templates/[id]/route.ts:29
+ */
 export async function deleteTemplate(templateId: string): Promise<void> {
   const db = googleIapDb();
   const { error } = await db.from("pricing_templates").delete().eq("id", templateId);

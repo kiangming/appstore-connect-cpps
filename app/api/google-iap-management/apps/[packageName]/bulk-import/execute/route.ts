@@ -280,6 +280,11 @@ export async function POST(
       const jwt = jwtClientFromEncrypted(encrypted);
       const result = await executeBulkImport(jwt, {
         appId: app.id,
+        // G1b — account sở hữu app. `app` đến từ
+        // getAppByPackage(accountId, packageName) ngay trên, nên hai giá
+        // trị này khớp theo cấu trúc; lấy từ hàng app để hợp đồng
+        // "Default của account SỞ HỮU" đúng ngay cả khi guard kia đổi.
+        accountId: app.google_console_account_id,
         packageName,
         pricingSource,
         sourceFilename: body.sourceFilename ?? null,

@@ -175,6 +175,12 @@ export async function POST(req: Request) {
     // nguyên hành vi (sửa nó là việc của arc G1, cùng chỗ với `listAppTemplates`).
     // Trả 404 chứ không 403: không xác nhận cho người gọi rằng id đó có tồn tại.
     let packageName: string | undefined;
+    // ⚠ Account dùng để đọc Default là ACCOUNT SỞ HỮU APP (hợp đồng ở
+    //   fetchPerAppMatrix). Ở route này nó BẰNG `accountId` vì guard ngay
+    //   dưới đã từ chối app không thuộc account đang active — nhưng vẫn
+    //   lấy từ hàng app, để chỗ này không phải là chỗ hợp đồng bị phá nếu
+    //   guard kia đổi.
+    let owningAccountId: string = accountId;
     if (scope === "per-app" && appId) {
       const app = await getAppById(appId);
       if (!app || app.google_console_account_id !== accountId) {
@@ -184,12 +190,16 @@ export async function POST(req: Request) {
         );
       }
       packageName = app.package_name;
+      owningAccountId = app.google_console_account_id;
     }
 
     const matrix =
       scope === "per-app"
-        ? await fetchPerAppMatrix(appId as string)
-        : await fetchDefaultMatrix();
+        ? await fetchPerAppMatrix({
+            appId: appId as string,
+            accountId: owningAccountId,
+          })
+        : await fetchDefaultMatrix(accountId);
 
     // ⚠ CÙNG ĐƯỜNG ĐỌC VỚI MÀN (B8). `fetchDefaultMatrix` / `fetchPerAppMatrix`
     // là đúng hai hàm hai page đang gọi. Dựng một đường đọc riêng cho export

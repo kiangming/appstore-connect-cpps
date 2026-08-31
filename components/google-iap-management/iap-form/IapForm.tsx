@@ -453,7 +453,7 @@ export function IapForm({
   ): Promise<DerivedRegionPrice[] | null> {
     if (source === "google_default" || !tier.trim()) return null;
     const qs = new URLSearchParams({
-      scope: source === "app_template" ? "APP" : "GLOBAL",
+      scope: source === "app_template" ? "APP" : "ACCOUNT",
       appId,
       identifier: tier.trim(),
     });

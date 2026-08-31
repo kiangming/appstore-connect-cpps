@@ -43,7 +43,9 @@ export function DefaultTemplateTab({ overview }: Props) {
     setUploading(true);
     const form = new FormData();
     form.append("file", file);
-    form.append("scope", "GLOBAL");
+    // G1b — "ACCOUNT": Default Template giờ thuộc về account đang active.
+    // Route đọc account ở SERVER; client không gửi và không được gửi.
+    form.append("scope", "ACCOUNT");
     try {
       const res = await fetch("/api/google-iap-management/pricing-templates", {
         method: "POST",
