@@ -21,6 +21,7 @@ import * as XLSX from "xlsx";
 import { microsToDecimal } from "./google/price-conversion";
 import { getCurrencyDecimals } from "./google/currency-precision";
 import type { ToolInAppProduct } from "./google/onetime-product-adapter";
+import { regionNameFromCode } from "./region-name";
 
 const SHEET_NAME = "IAP Export";
 const FIXED_COLUMNS = ["Product ID", "Product Name", "Status"] as const;
@@ -135,13 +136,59 @@ export function buildExportPlan(
   };
 }
 
+/**
+ * R3 — the territory column header: `Price in Vietnam (VN)`.
+ *
+ * ⚠ THE NAME COMES FROM `regionNameFromCode`, WHICH IS NOT REDEFINED HERE.
+ * That resolver already owns alpha-2 → display name for this module
+ * (`region-name.ts`: i18n-iso-countries plus 18 overrides matching the labels
+ * Google Play Console actually renders) and four other surfaces already read
+ * it — the Edit form's region picker, the unified pricing table, the
+ * custom-prices dialog and the template matrix. A second copy of that rule
+ * living in the export would drift from the screen at the first override
+ * anyone adds, and the file would then disagree with the UI about what a
+ * country is called.
+ *
+ * ⚠ AND IT IS NOT MODIFIED EITHER. `regionNameFromCode` returns the name
+ * ALONE ("Vietnam"), by a Manager directive recorded in its own docblock
+ * (region-name.ts:20-21 — "display the country name only … to match Google
+ * Play Console pricing UI"). The parenthetical code is an EXPORT-FILE
+ * concern: a spreadsheet is read away from the tool, where "Vietnam" alone
+ * cannot be matched back to the `VN` key a re-import needs. So the
+ * composition lives here, at the one place that builds the file, and the
+ * shared resolver keeps doing exactly what four UI surfaces already expect.
+ *
+ * ⚠ WHEN THERE IS NO REAL NAME, THE PARENTHETICAL IS DROPPED — never
+ * `Price in ZZ (ZZ)`. `regionNameFromCode` falls back to the code itself
+ * (region-name.ts:67-68), so the naive template would print a code beside
+ * itself: two tokens, neither of them a name, in a header whose whole job
+ * is to name a market.
+ *
+ * ⚠ ONE COMPARISON IS ENOUGH HERE, AND THAT IS A FACT ABOUT GOOGLE, NOT A
+ * SIMPLIFICATION OF APPLE'S. Apple's `columnHeaderLabel` must test the
+ * fallback against TWO codes (`export-column-order.ts:88-90`) because its
+ * column key is alpha-2 while its resolver speaks alpha-3, so Kosovo comes
+ * back as `XKS` against a column keyed `XK` — two different strings, and the
+ * naive check waves it through. Google has no such split: `regionCode` from
+ * `convertRegionPrices` and the input to `regionNameFromCode` are the SAME
+ * alpha-2 token, confirmed on production data by census Q2b (0 rows outside
+ * `^[A-Z]{2}$` across 308,933 price rows). Equality with `code` is therefore
+ * the whole of the fallback. ⚠ Do NOT import Apple's `toCatalogCode` /
+ * `toAppleCode` to "be safe" — there is no conversion to make (KB §4.20),
+ * and reaching for one would mean the source is wrong.
+ */
+export function territoryColumnHeader(code: string): string {
+  const name = regionNameFromCode(code);
+  return name === code ? `Price in ${code}` : `Price in ${name} (${code})`;
+}
+
 /** Build the two-row merged-header workbook from a plan. */
 export function buildExportWorkbook(plan: ExportPlan): XLSX.WorkBook {
   const { territories, localizationGroupCount, rows } = plan;
 
   const headerRow1: Array<string | null> = [
     ...FIXED_COLUMNS.map((label) => label as string),
-    ...territories.flatMap((t) => [`Price in ${t}`, null]),
+    ...territories.flatMap((t) => [territoryColumnHeader(t), null]),
     ...Array.from({ length: localizationGroupCount }, (_, i) => [
       `Localization ${i + 1}`,
       null,

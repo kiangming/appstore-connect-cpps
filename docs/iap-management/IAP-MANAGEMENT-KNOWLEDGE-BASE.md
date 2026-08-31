@@ -3655,6 +3655,65 @@ unique before replacing, or diff the file after replacing and refuse to run the
 suite on an empty diff. A mutation run whose diff is empty has no result — not
 a pass, not a fail. Report it as "not applied", fix the anchor, run again.
 
+**P34 — A CROSS-MODULE DEPENDENCY CAN ENTER THROUGH A DEFAULT PARAMETER
+INSTEAD OF AN IMPORT. GREPPING THE CONSTANT'S NAME IN THE CONSUMING MODULE
+RETURNS 0 HITS AND CERTIFIES IT "CLEAN" — WHILE THE MODULE IS USING IT.**
+
+The standard check for "does module B depend on module A's data?" is to grep
+B's tree for A's exported symbols. That check has a blind spot: a **shared
+component with an optional prop that defaults to A's constant**. B imports the
+component, omits the prop, and receives A's data — with A's symbol appearing
+nowhere in B.
+
+Confirmed instance — census of the Google export, arc `arc-google-export-item-optimize`
+(2026-09-01). The Manager suspected the Google export's 183-country picker was
+really Apple's list. The audit greps ran clean in the most convincing way
+possible:
+
+```
+TERRITORY_CATALOG · ALL_TERRITORY_CODES · toCatalogCode · territoryName
+toAlpha2 · toAppleCode · apple-territories.snapshot
+  → 0 imports anywhere under lib/google-iap-management/
+                            app/api/google-iap-management/
+grep "iap-management" | grep -v google-iap-management | grep import
+  → 0 hits
+```
+
+Every one of those is true, and the conclusion they invite is false. The
+dependency is one line in the UI layer —
+`components/google-iap-management/iap-list/IapListClient.tsx:607` renders
+`<ExportOptionsDialog>` with three props, omitting the optional fourth, and
+`components/iap-management/ExportOptionsDialog.tsx:81` declares
+`catalog = TERRITORY_CATALOG`. The Google picker therefore offered Apple's
+183 hand-typed entries. Measurement then showed Google Play sells in **173**
+regions, overlapping by 158: **15 markets Google sells in could not be ticked
+at all** (RU, KY, BY, GI, LY, TC, VG, YE, ZW, AW, BM, CF, ER, SO, VA) and 25
+tickable entries were markets Google does not sell in.
+
+⚠ **The docblock said so in plain English and it still went unnoticed for
+months.** `ExportOptionsDialog.tsx:56` reads *"Google passes nothing and keeps
+all 183."* Prose in the DEPENDED-ON file cannot warn the depending module —
+nobody greps the file they are not suspicious of. Related to P15/P28 (prose is
+not a guard), with a sharper edge: here the prose was accurate.
+
+⚠ **AND THE SAME MODULE ALREADY HAD THE RIGHT ANSWER.** A sibling dialog,
+custom-prices, had been reading Google's real region list from
+`/api/google-iap-management/regions/catalog` for months. Two dialogs, two
+sources, one module — a twin-path (P1) whose two halves were never compared
+because neither one looked broken on its own.
+
+⇒ **Rule: an isolation audit must check CALL SITES, not only imports.** For
+every component a module imports from across a boundary, enumerate its
+optional props and ask what each one defaults to. A prop the caller does not
+pass is a decision the caller made silently — and it is made in the OTHER
+module's file.
+
+⇒ **Corollary for the fix:** make the default the suspicious thing. Once the
+consuming module passes the prop explicitly, a structural test can assert the
+prop is present at the call site, and the mutation that proves it is *remove
+the prop and watch the suite go red* — which is precisely how the defect
+occurred the first time.
+
 **P32 — A CHUNK THAT CREATES AN OPT-IN FLAG MUST NAME, BY CHUNK, WHO TURNS IT
 ON. AN OPT-IN NOBODY OPTS INTO IS DEAD CODE THAT LOOKS ALIVE.**
 

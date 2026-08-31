@@ -81,6 +81,60 @@ Reporting access or hasn't been granted any apps in Play Console.
 
 ---
 
+### 3.1 Export list — download the app's IAPs as .xlsx
+
+Click **Export list** on the app detail page. A dialog opens to pick which
+country price columns to include; **Export** downloads
+`IAP-export-<package>-<YYYYMMDD>.xlsx`.
+
+The file is read **live from Google**, not from the tool's cache — so it
+reflects Google Play at the moment you click, even if the list on screen was
+synced earlier. It costs **one** Google API request regardless of how many
+items the app has.
+
+Layout: one row per SKU. Fixed columns `Product ID · Product Name · Status`,
+then a **Price / Currency** pair for each country, then a **Locale Code /
+Description** pair per localization.
+
+**Country column headers read `Price in Vietnam (VN)`** — the market name with
+its ISO 3166-1 alpha-2 code in parentheses. The code is kept because a
+spreadsheet is read away from the tool, where the name alone cannot be matched
+back to the key.
+
+> ⚠ **The country names are ISO names, not Google's names.** Google publishes
+> no country-name list through its API — `convertRegionPrices` returns a
+> region code and a price and nothing else — so the tool resolves names from
+> the `i18n-iso-countries` package, plus 18 hand-checked overrides that match
+> what Google Play Console renders (United States, South Korea, Taiwan,
+> Vietnam, Macau, Russia and 12 more).
+>
+> Outside those 18, expect the ISO wording, which is sometimes stiffer than
+> Play Console's. Real examples from the current list:
+>
+> | Code | Header in the file |
+> |---|---|
+> | `VA` | `Price in Holy See (Vatican City State) (VA)` |
+> | `VG` | `Price in Virgin Islands, British (VG)` |
+> | `FM` | `Price in Micronesia, Federated States of (FM)` |
+> | `CI` | `Price in Cote d'Ivoire (CI)` |
+>
+> These are correct, not bugs. If one of them should read differently, say
+> which label Play Console shows and it becomes a new override — the override
+> list is only ever extended from a label someone has actually read on screen.
+
+If a country code has no name at all, the header shortens to the bare code
+(`Price in ZZ`) rather than repeating it as `Price in ZZ (ZZ)`. No market
+Google currently sells in falls into this case; a test fails loudly if one
+ever starts to.
+
+> ⓘ **Changing shortly.** The item selection and Active/Inactive filter
+> (chunks X2-X3) and the country list in the dialog (chunk X4) are not yet
+> built — today the export always covers every item, and the country picker
+> still offers a list that is not Google's. This section will be extended as
+> each ships.
+
+---
+
 ## 4. Create a single IAP
 
 **Route:** `/google-iap-management/apps/[packageName]/iaps/new`

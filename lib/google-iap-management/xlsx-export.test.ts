@@ -252,11 +252,18 @@ describe("buildExportWorkbook — file structure", () => {
       defval: null,
     }) as unknown[][];
 
+    // ⚠ X1/R3 — this assertion read "Price in US" until 2026-09-01. The
+    // header now carries the market name, and the code stays in parentheses
+    // because a spreadsheet is read away from the tool, where "United
+    // States" alone cannot be matched back to the `US` key. The GEOMETRY is
+    // deliberately untouched and is re-asserted below: the label still
+    // occupies one cell with a `null` beside it, and row 2 still carries the
+    // Price/Currency pair under it.
     expect(aoa[0].slice(0, 5)).toEqual([
       "Product ID",
       "Product Name",
       "Status",
-      "Price in US",
+      "Price in United States (US)",
       null,
     ]);
     expect(aoa[1].slice(0, 5)).toEqual([null, null, null, "Price", "Currency"]);
