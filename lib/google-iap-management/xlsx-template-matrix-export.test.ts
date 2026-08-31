@@ -14,7 +14,6 @@ import { SSF } from "xlsx";
 import {
   buildTemplateMatrixSpec,
   diffNote,
-  formatMatrixPrice,
   isTruncatedCell,
   priceCellValue,
   priceColumn,
@@ -25,6 +24,7 @@ import {
   HEADER_ROW_COUNT,
   type TemplateMatrixExportInput,
 } from "./xlsx-template-matrix-export";
+import { formatPrice } from "./matrix-price-format";
 import { getCurrencyDecimals } from "./google/currency-precision";
 import { microsToDecimal } from "./google/price-conversion";
 import { composeMatrix, type TemplateEntryRow } from "./queries/template-matrix";
@@ -267,7 +267,7 @@ describe("ô Price là SỐ; ô Currency và ô '·' không có numFmt", () => {
   it("glyph không phải số → ô giữ CHUỖI THÔ, đúng nhánh catch của màn", () => {
     // price_micros là cột TEXT không ràng buộc chữ số; màn nuốt lỗi và vẽ
     // chuỗi thô (MatrixTable.tsx:21-23). Ghi NaN sẽ là file bịa giá trị.
-    expect(formatMatrixPrice("not-a-number", "USD")).toBe("not-a-number");
+    expect(formatPrice("not-a-number", "USD")).toBe("not-a-number");
     expect(priceCellValue("not-a-number")).toBe("not-a-number");
     const matrix = composeMatrix([row("Tier 1", "US", "USD", "not-a-number")]);
     const spec = buildTemplateMatrixSpec(input({ matrix, regionCodes: ["US"] }));

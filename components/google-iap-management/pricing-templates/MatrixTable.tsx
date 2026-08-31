@@ -5,22 +5,13 @@ import type {
   MatrixData,
   MatrixMarket,
 } from "@/lib/google-iap-management/queries/template-matrix";
-import { microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
-import { getCurrencyDecimals } from "@/lib/google-iap-management/google/currency-precision";
+import { formatPrice } from "@/lib/google-iap-management/matrix-price-format";
 
 export interface MatrixTableProps {
   matrix: MatrixData;
   visibleMarkets: ReadonlyArray<MatrixMarket>;
   /** When true, render the ★ marker on diffed cells (Per-App view). */
   showDiff: boolean;
-}
-
-function formatPrice(priceMicros: string, currency: string): string {
-  try {
-    return microsToDecimal(priceMicros, getCurrencyDecimals(currency));
-  } catch {
-    return priceMicros;
-  }
 }
 
 const STICKY_COL_BASE =

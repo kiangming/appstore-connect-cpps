@@ -69,7 +69,7 @@
 import ExcelJS from "exceljs";
 
 import { getCurrencyDecimals } from "./google/currency-precision";
-import { microsToDecimal } from "./google/price-conversion";
+import { formatPrice } from "./matrix-price-format";
 import type {
   MatrixCell,
   MatrixData,
@@ -77,31 +77,6 @@ import type {
 } from "./queries/template-matrix";
 
 export type TemplateMatrixScope = "default" | "per-app";
-
-/**
- * Glyph của MỘT ô giá — bản sao CHÍNH XÁC của `formatPrice` đang nằm private
- * trong `MatrixTable.tsx:18-24`, **kể cả nhánh `catch`**.
- *
- * Nhánh catch không phải thừa: `price_micros` là cột TEXT không có ràng buộc
- * chữ số (init.sql), và `microsToDecimal` THROW với chuỗi không khớp `^\d+$`
- * (price-conversion.ts:111-113). Màn nuốt lỗi đó và vẽ chuỗi thô; file phải
- * làm y hệt, nếu không thì đúng ô hỏng lại là ô file nói khác màn. Census Q7b
- * đo được 0 dòng như thế hôm nay.
- *
- * ⚠ C3 SẼ CHUYỂN HÀM NÀY sang `lib/google-iap-management/matrix-price-format.ts`
- * để `MatrixTable.tsx` (client) và writer này (server) gọi CHUNG một hàm.
- * Lý do bắt buộc, KB §21.3: `lib/` KHÔNG được import hàm thường từ module
- * `"use client"` — Next 14 App Router trả về client-reference proxy chứ không
- * phải hàm, gọi là lỗi runtime, và `tsc` KHÔNG bắt. Cho tới C3 thì đây là
- * ĐỊNH NGHĨA DUY NHẤT phía server (không có bản chép thứ hai).
- */
-export function formatMatrixPrice(priceMicros: string, currency: string): string {
-  try {
-    return microsToDecimal(priceMicros, getCurrencyDecimals(currency));
-  } catch {
-    return priceMicros;
-  }
-}
 
 /**
  * numFmt của ô giá — theo currency, có ĐUÔI TUỲ CHỌN.
@@ -299,8 +274,8 @@ export function priceColumn(g: number): number {
  */
 export function diffNote(cell: MatrixCell): string | undefined {
   if (!cell.defaultPriceMicros || !cell.defaultCurrency) return undefined;
-  const def = formatMatrixPrice(cell.defaultPriceMicros, cell.defaultCurrency);
-  const cur = formatMatrixPrice(cell.priceMicros, cell.currency);
+  const def = formatPrice(cell.defaultPriceMicros, cell.defaultCurrency);
+  const cur = formatPrice(cell.priceMicros, cell.currency);
   return `Default: ${def} ${cell.defaultCurrency} → Per-App: ${cur} ${cell.currency}`;
 }
 
@@ -401,7 +376,7 @@ export function buildTemplateMatrixSpec(
           return;
         }
 
-        const glyph = formatMatrixPrice(cell.priceMicros, cell.currency);
+        const glyph = formatPrice(cell.priceMicros, cell.currency);
         row.push(priceCellValue(glyph), cell.currency);
 
         // ⚠ numFmt gán THEO Ô, chỉ cho ô Price CÓ GIÁ. Gán theo CỘT sẽ vẽ lại
