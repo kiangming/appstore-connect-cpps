@@ -7,10 +7,10 @@ import { ArrowLeft } from "lucide-react";
 import { CONTINENTS, type Continent } from "@/lib/google-iap-management/region-continent";
 import type { MatrixData } from "@/lib/google-iap-management/queries/template-matrix";
 import {
-  buildCsv,
-  csvFilename,
-  triggerCsvDownload,
-} from "@/lib/google-iap-management/csv-export";
+  describeMatrixExportError,
+  downloadMatrixExport,
+  truncatedCellsNotice,
+} from "@/lib/google-iap-management/matrix-export-download";
 
 import { MatrixBreadcrumb } from "./MatrixBreadcrumb";
 import {
@@ -21,6 +21,9 @@ import { MatrixTable } from "./MatrixTable";
 
 export interface PerAppMatrixViewProps {
   matrix: MatrixData;
+  /** UUID của app trong `google_iap_mgmt.apps`. Route export cần nó để tìm
+   *  đúng template per-app, và để kiểm app có thuộc account đang active. */
+  appId: string;
   packageName: string;
   appDisplayName: string | null;
   uploadedAt: string | null;
@@ -33,6 +36,7 @@ export interface PerAppMatrixViewProps {
 
 export function PerAppMatrixView({
   matrix,
+  appId,
   packageName,
   appDisplayName,
   uploadedAt,
@@ -45,6 +49,9 @@ export function PerAppMatrixView({
     () => new Set(CONTINENTS),
   );
   const [showDiff, setShowDiff] = useState(defaultTemplateExists);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
 
   const visibleMarkets = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -71,16 +78,29 @@ export function PerAppMatrixView({
     });
   }
 
-  function handleExportCsv() {
-    const csv = buildCsv({
-      matrix,
-      filteredMarkets: visibleMarkets,
-      includeDefaultDiff: defaultTemplateExists,
-    });
-    triggerCsvDownload(
-      csvFilename({ scope: "per-app", packageName }),
-      csv,
-    );
+  async function handleExport() {
+    setExporting(true);
+    setExportError(null);
+    setExportNotice(null);
+    try {
+      const result = await downloadMatrixExport({
+        scope: "per-app",
+        appId,
+        regionCodes: visibleMarkets.map((m) => m.code),
+        // ⚠ F1 — GỬI CÔNG TẮC, KHÔNG GỬI `defaultTemplateExists`.
+        // Đây chính là chỗ đường CSV cũ nói khác màn: nó truyền
+        // `includeDefaultDiff: defaultTemplateExists`, nên bỏ tick công tắc
+        // thì màn sạch ★ mà file vẫn mang cột diff. Hai biến này KHÁC NHAU:
+        // `defaultTemplateExists` chỉ nói "có Default để mà so", `showDiff`
+        // nói "người dùng có đang muốn thấy so sánh hay không".
+        showDiff,
+      });
+      setExportNotice(truncatedCellsNotice(result.truncatedCells));
+    } catch (err) {
+      setExportError(describeMatrixExportError(err));
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -161,8 +181,26 @@ export function PerAppMatrixView({
         onContinentToggle={toggleContinent}
         visibleMarketCount={visibleMarkets.length}
         totalMarketCount={matrix.markets.length}
-        onExportCsv={handleExportCsv}
+        onExport={() => void handleExport()}
+        exporting={exporting}
       />
+
+      {exportError && (
+        <p
+          role="alert"
+          className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3"
+        >
+          {exportError}
+        </p>
+      )}
+      {exportNotice && (
+        <p
+          role="status"
+          className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 mb-3"
+        >
+          {exportNotice}
+        </p>
+      )}
 
       <MatrixTable matrix={matrix} visibleMarkets={visibleMarkets} showDiff={showDiff} />
 

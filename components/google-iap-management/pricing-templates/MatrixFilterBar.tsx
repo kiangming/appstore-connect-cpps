@@ -19,7 +19,9 @@ export interface MatrixFilterBarProps {
   visibleMarketCount: number;
   totalMarketCount: number;
 
-  onExportCsv: () => void;
+  onExport: () => void;
+  /** Nút đang chạy — chặn bấm hai lần. */
+  exporting?: boolean;
 }
 
 export const CURRENCY_FILTER_ALL = "ALL";
@@ -35,7 +37,8 @@ export function MatrixFilterBar({
   onContinentToggle,
   visibleMarketCount,
   totalMarketCount,
-  onExportCsv,
+  onExport,
+  exporting = false,
 }: MatrixFilterBarProps) {
   return (
     <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-4">
@@ -72,11 +75,21 @@ export function MatrixFilterBar({
         </div>
         <button
           type="button"
-          onClick={onExportCsv}
-          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 border border-slate-300 hover:bg-white rounded-lg transition"
+          onClick={onExport}
+          // ⚠ 0 nước ⇒ disabled. Route trả 400 cho `regionCodes: []` (nó KHÔNG
+          // hiểu mảng rỗng là "export tất cả"), nên để bấm được chỉ tạo ra một
+          // lỗi mà người dùng không làm gì được. Ở trạng thái này bảng cũng
+          // đang hiện "No markets match the active filters".
+          disabled={exporting || visibleMarketCount === 0}
+          title={
+            visibleMarketCount === 0
+              ? "No markets match the active filters — nothing to export."
+              : undefined
+          }
+          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 border border-slate-300 hover:bg-white rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
         >
           <Download className="h-4 w-4" />
-          Export CSV
+          {exporting ? "Exporting…" : "Export XLSX"}
         </button>
         <div className="ml-auto text-xs text-slate-500">
           Showing{" "}

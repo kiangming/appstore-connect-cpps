@@ -94,6 +94,7 @@ export default async function PerAppMatrixPage({
     <div className="p-8 max-w-[1400px]">
       <PerAppMatrixView
         matrix={matrix}
+        appId={appId}
         packageName={app.package_name}
         appDisplayName={app.display_name}
         uploadedAt={overview.template?.uploaded_at ?? null}

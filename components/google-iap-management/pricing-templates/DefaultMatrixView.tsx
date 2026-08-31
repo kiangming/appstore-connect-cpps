@@ -5,10 +5,10 @@ import { useMemo, useState } from "react";
 import { CONTINENTS, type Continent } from "@/lib/google-iap-management/region-continent";
 import type { MatrixData } from "@/lib/google-iap-management/queries/template-matrix";
 import {
-  buildCsv,
-  csvFilename,
-  triggerCsvDownload,
-} from "@/lib/google-iap-management/csv-export";
+  describeMatrixExportError,
+  downloadMatrixExport,
+  truncatedCellsNotice,
+} from "@/lib/google-iap-management/matrix-export-download";
 
 import { MatrixBreadcrumb } from "./MatrixBreadcrumb";
 import {
@@ -33,6 +33,9 @@ export function DefaultMatrixView({
   const [continentToggle, setContinentToggle] = useState<Set<Continent>>(
     () => new Set(CONTINENTS),
   );
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
 
   const visibleMarkets = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -59,13 +62,26 @@ export function DefaultMatrixView({
     });
   }
 
-  function handleExportCsv() {
-    const csv = buildCsv({
-      matrix,
-      filteredMarkets: visibleMarkets,
-      includeDefaultDiff: false,
-    });
-    triggerCsvDownload(csvFilename({ scope: "default" }), csv);
+  async function handleExport() {
+    setExporting(true);
+    setExportError(null);
+    setExportNotice(null);
+    try {
+      const result = await downloadMatrixExport({
+        scope: "default",
+        regionCodes: visibleMarkets.map((m) => m.code),
+        // ⚠ `false` LÀ CỐ Ý, KHÔNG PHẢI QUÊN. Màn Default không có công tắc
+        // "Highlight differences" — nó truyền `showDiff={false}` cứng xuống
+        // MatrixTable (xem dòng ~150 của chính file này), vì Default không có
+        // gì để so. File phải nói đúng thứ màn nói, nên nó cũng là `false`.
+        showDiff: false,
+      });
+      setExportNotice(truncatedCellsNotice(result.truncatedCells));
+    } catch (err) {
+      setExportError(describeMatrixExportError(err));
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -118,8 +134,26 @@ export function DefaultMatrixView({
         onContinentToggle={toggleContinent}
         visibleMarketCount={visibleMarkets.length}
         totalMarketCount={matrix.markets.length}
-        onExportCsv={handleExportCsv}
+        onExport={() => void handleExport()}
+        exporting={exporting}
       />
+
+      {exportError && (
+        <p
+          role="alert"
+          className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3"
+        >
+          {exportError}
+        </p>
+      )}
+      {exportNotice && (
+        <p
+          role="status"
+          className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 mb-3"
+        >
+          {exportNotice}
+        </p>
+      )}
 
       <MatrixTable matrix={matrix} visibleMarkets={visibleMarkets} showDiff={false} />
 
