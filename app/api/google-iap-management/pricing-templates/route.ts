@@ -71,6 +71,33 @@ export async function POST(req: Request) {
   //         account mà công cụ quản lý;
   //     (2) GATE ADMIN của G1c ngay bên dưới.
   //   Thiếu (1) thì đây đúng là cửa ghi đè Default của account bất kỳ.
+  // ⚠ C1 — Replace Default Template = hành động cấp account ⇒ CHỈ ADMIN.
+  //   Đối xứng với Remove ở [id]/route.ts: gác một đường mà bỏ đường kia
+  //   thì cái gate không có tác dụng gì, vì Replace ghi đè cũng mất bản
+  //   cũ y như Remove.
+  //   Scope APP giữ quy tắc cũ (mọi user đã đăng nhập) — quyết định
+  //   Manager, và đó đúng là quy tắc route này đang chạy trước G1c.
+  //
+  // ⚠ GATE PHẢI ĐỨNG TRƯỚC MỌI PHÉP ĐỌC VỀ ACCOUNT. Bản G1e đầu đặt gate
+  //   SAU bước đối chiếu `account_id`, và như thế người KHÔNG phải admin
+  //   gửi một id bịa sẽ nhận 404 còn gửi id thật sẽ nhận 403 — tức là
+  //   route trả lời giúp câu "id này có tồn tại không" cho đúng người
+  //   không được phép biết. Gác trước thì mọi câu trả lời cho người đó
+  //   đều là 403, không rò rỉ gì.
+  if (scope === "ACCOUNT") {
+    try {
+      await requireGoogleIapAdmin();
+    } catch (err) {
+      if (err instanceof GoogleIapUnauthorizedError) {
+        return NextResponse.json({ error: err.message }, { status: 401 });
+      }
+      if (err instanceof GoogleIapForbiddenError) {
+        return NextResponse.json({ error: err.message }, { status: 403 });
+      }
+      throw err;
+    }
+  }
+
   const accounts = await listAccounts().catch(() => []);
   if (accounts.length === 0) {
     return NextResponse.json(
@@ -99,26 +126,6 @@ export async function POST(req: Request) {
       );
     }
     accountId = fallback;
-  }
-
-  // ⚠ C1 — Replace Default Template = hành động cấp account ⇒ CHỈ ADMIN.
-  //   Đối xứng với Remove ở [id]/route.ts: gác một đường mà bỏ đường kia
-  //   thì cái gate không có tác dụng gì, vì Replace ghi đè cũng mất bản
-  //   cũ y như Remove.
-  //   Scope APP giữ quy tắc cũ (mọi user đã đăng nhập) — quyết định
-  //   Manager, và đó đúng là quy tắc route này đang chạy trước G1c.
-  if (scope === "ACCOUNT") {
-    try {
-      await requireGoogleIapAdmin();
-    } catch (err) {
-      if (err instanceof GoogleIapUnauthorizedError) {
-        return NextResponse.json({ error: err.message }, { status: 401 });
-      }
-      if (err instanceof GoogleIapForbiddenError) {
-        return NextResponse.json({ error: err.message }, { status: 403 });
-      }
-      throw err;
-    }
   }
 
   let appId: string | null = null;

@@ -224,6 +224,58 @@ describe("C1 — Replace (upload) scope ACCOUNT cũng chỉ dành cho admin", ()
     expect(h.parsePricingTemplate).not.toHaveBeenCalled();
   });
 
+  it("⚠ account_id KHÔNG thuộc tập listAccounts → 404 và KHÔNG ghi gì", async () => {
+    // G1e lật tiền đề của G1b ("account không nhận từ client"). Thứ giữ
+    // cho việc lật đó an toàn KHÔNG phải là giấu giá trị, mà là ĐỐI CHIẾU
+    // này. Bỏ nó đi là mở đúng cửa ghi đè Default của account bất kỳ.
+    const form = new FormData();
+    form.append("file", new File(["x"], "t.xlsx"));
+    form.append("scope", "ACCOUNT");
+    form.append("account_id", "acct-KHONG-TON-TAI");
+    const res = await POST(
+      new Request("http://x", { method: "POST", body: form }),
+    );
+    expect(res.status).toBe(404);
+    expect(h.replaceTemplate).not.toHaveBeenCalled();
+    // Chặn TRƯỚC cả bước parse file.
+    expect(h.parsePricingTemplate).not.toHaveBeenCalled();
+  });
+
+  it("⚠ KHÔNG phải admin + account_id bịa → 403, KHÔNG phải 404", async () => {
+    // Thứ tự gate quyết định ca này. Nếu đối chiếu account chạy TRƯỚC
+    // gate, người không được phép sẽ nhận 404 cho id bịa và 403 cho id
+    // thật — tức route trả lời giúp câu "id này có tồn tại không" cho
+    // đúng người không được biết. Gác trước ⇒ mọi câu đều 403.
+    h.requireGoogleIapAdmin.mockRejectedValue(new ForbiddenError());
+    const form = new FormData();
+    form.append("file", new File(["x"], "t.xlsx"));
+    form.append("scope", "ACCOUNT");
+    form.append("account_id", "acct-KHONG-TON-TAI");
+    const res = await POST(
+      new Request("http://x", { method: "POST", body: form }),
+    );
+    expect(res.status).toBe(403);
+    expect(h.replaceTemplate).not.toHaveBeenCalled();
+  });
+
+  it("account_id HỢP LỆ → đi tiếp, và ghi vào ĐÚNG account đó", async () => {
+    h.parsePricingTemplate.mockReturnValue({
+      errors: [], warnings: [], entries: [{ identifier: "T1", regionCode: "VN", currency: "VND", priceMicros: "1", sortOrder: 1 }],
+      tierCount: 1, territoryCount: 1,
+    });
+    h.replaceTemplate.mockResolvedValue({ templateId: "tpl-x", insertedEntryCount: 1 });
+    const form = new FormData();
+    form.append("file", new File(["x"], "t.xlsx"));
+    form.append("scope", "ACCOUNT");
+    form.append("account_id", ACCT_A);
+    await POST(new Request("http://x", { method: "POST", body: form }));
+    expect(h.replaceTemplate).toHaveBeenCalledTimes(1);
+    expect(h.replaceTemplate.mock.calls[0][0]).toMatchObject({
+      scope: "ACCOUNT",
+      accountId: ACCT_A,
+    });
+  });
+
   it("admin → đi tiếp tới bước parse", async () => {
     h.parsePricingTemplate.mockReturnValue({
       errors: ["stop-here"],
