@@ -47,6 +47,13 @@ export default async function PerAppMatrixPage({
   // ⚠ G1b — account dùng ở màn này là ACCOUNT SỞ HỮU APP, lấy từ chính
   //   hàng app vừa đọc, KHÔNG phải account active trong cookie. Xem hợp
   //   đồng đầy đủ ở fetchPerAppMatrix (queries/template-matrix.ts).
+  // ⚠⚠ Xem ghi chú đầy đủ ở
+  //    app/api/google-iap-management/pricing-templates/matrix-export/route.ts
+  //    (mục "HỢP ĐỒNG (b) KHÔNG CÒN ĐƯỢC ĐỘT BIẾN KIỂM TẠI TẦNG NÀY").
+  //    Tóm tắt: sau C4, `getAppById(appId, activeAccountId)` đã lọc account
+  //    nên dòng dưới LUÔN bằng `activeAccountId` — một đột biến đổi nó
+  //    thành cookie ở tầng này KHÔNG test nào bắt được. Hợp đồng (b) chỉ
+  //    còn ghim ở tầng unit (fetchPerAppMatrix). Gỡ C4 ⇒ mất cảnh báo.
   const owningAccountId = app.google_console_account_id;
 
   const [matrix, overview, defaultTemplateExists] = await Promise.all([

@@ -198,6 +198,25 @@ export async function POST(req: Request) {
       owningAccountId = app.google_console_account_id;
     }
 
+    // ⚠⚠ HỢP ĐỒNG (b) KHÔNG CÒN ĐƯỢC ĐỘT BIẾN KIỂM TẠI TẦNG NÀY — ĐỌC KỸ
+    //    TRƯỚC KHI GỠ BẤT CỨ THỨ GÌ Ở TRÊN.
+    //
+    //    Đo thật (G1c/C6, mutation #7): đổi `owningAccountId` thành
+    //    `accountId` ở lời gọi bên dưới ⇒ TOÀN BỘ test vẫn XANH. Không
+    //    phải test thiếu răng — hai biểu thức ĐỒNG NHẤT theo cấu trúc tại
+    //    đây: hoặc nhánh per-app không chạy (owningAccountId = accountId
+    //    từ dòng khởi tạo), hoặc nó chạy và đã qua guard
+    //    `app.google_console_account_id !== accountId → 404`, mà
+    //    `getAppById` (repository/apps.ts) còn tự lọc account nữa.
+    //
+    //    HỆ QUẢ PHẢI BIẾT: nếu sau này ai gỡ bộ lọc account của
+    //    `getAppById` HOẶC gỡ guard 404 ở trên, thì ca "cookie ≠ chủ sở
+    //    hữu app" SỐNG LẠI, và ở tầng này KHÔNG CÓ TEST NÀO KÊU.
+    //    Chỗ duy nhất còn ghim hợp đồng (b) là TẦNG UNIT:
+    //      lib/google-iap-management/queries/template-matrix.account-isolation.test.ts
+    //      "B3(2) — ĐƯỜNG ẨN: fetchPerAppMatrix so với Default của
+    //       ACCOUNT SỞ HỮU APP"
+    //    Gỡ C4 mà không dựng lại một test ở tầng route = mất cảnh báo.
     const matrix =
       scope === "per-app"
         ? await fetchPerAppMatrix({
