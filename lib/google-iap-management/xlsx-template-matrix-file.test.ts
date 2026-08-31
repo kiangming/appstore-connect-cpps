@@ -407,6 +407,26 @@ describe("C2 · numFmt — ⚠ Google KHÁC Apple ở chính chỗ này", () => 
   });
 });
 
+describe("⚠ dấu thời gian ĐƯỢC GHIM — khẳng định TẤT ĐỊNH", () => {
+  it("docProps/core.xml mang epoch, không mang giờ chạy test", () => {
+    /**
+     * ⚠ TEST NÀY RA ĐỜI VÌ MỘT ĐỘT BIẾN KHÔNG ĐỎ (C6, đột biến #12).
+     *
+     * Phép so "hai lần export ra mọi part giống nhau" ở route.test.ts CÓ phủ
+     * việc ghim — nhưng chỉ phủ THEO ĐỒNG HỒ: bỏ ghim mà hai request rơi vào
+     * cùng một giây thì `core.xml` vẫn giống nhau và test vẫn xanh. Chạy
+     * nhanh thì gần như luôn cùng giây, nên nó xanh một cách vô tình.
+     *
+     * Khẳng định dưới đây không phụ thuộc thời điểm: epoch có mặt trong bytes
+     * hay không là một sự thật của MỘT file, không cần file thứ hai.
+     */
+    const core = part("docProps/core.xml");
+    expect(core).toContain("1970-01-01");
+    // Và tuyệt đối không mang năm hiện tại.
+    expect(core).not.toContain(String(new Date().getFullYear()));
+  });
+});
+
 describe("C2 · vỏ file", () => {
   it("đúng một sheet, tên theo scope", () => {
     expect(part("xl/workbook.xml")).toContain('name="Per-App Template"');

@@ -5776,6 +5776,14 @@ exceljs serialises both identically — `numFmtId="0"`, and **`styles.xml` gets
 no `<numFmts>` block whatsoever**. A thing that does not exist cannot drift,
 and the byte-level test asserts its absence rather than asserting a string.
 
+⚠⚠ **THIS CONCLUSION IS APPLE-ONLY. DO NOT APPLY IT TO GOOGLE — SEE §22.**
+The Google matrix export writes a `numFmt` on purpose and its byte test
+asserts `<numFmts>` is **present**. The condition that makes `General` the
+only answer here (a decimal count that varies cell-by-cell, and one column
+carrying several currencies) does not hold there. Somebody who reads this
+section alone and "fixes" the Google writer by deleting its `numFmt` makes
+555 cells quietly wrong again.
+
 ### 21.5 The route, and the one line that matters in it
 
 `POST /api/iap-management/pricing-templates/matrix-export`, `runtime =
@@ -5836,6 +5844,126 @@ The exported workbook **cannot be uploaded back**: the parser wants sheet
 Four concrete gaps, the last one decisive — `proceeds` is not in `MatrixData`
 at all, so round-tripping needs a new read path, not a column rename. Tracked
 as `[TEMPLATE-xlsx-reimport]`.
+
+---
+
+---
+
+## §22 — `numFmt`: why Apple writes none and Google writes one
+
+Two Excel writers in one repo reached **opposite** conclusions about the same
+knob, and both are right. This section exists so the next person finds the
+reason before they "unify" them.
+
+| | Apple matrix export | Google matrix export |
+|---|---|---|
+| Stored price | `customer_price NUMERIC(18,4)` — a real number | `price_micros TEXT` — an integer count of 10⁻⁶ units |
+| Decimal places | **vary cell by cell** (`49000` and `1.999` in one column) | **constant per currency** (`getCurrencyDecimals`) |
+| Currencies per column | ⚠ several (one tier priced across many territories) | **exactly one** — census Q6b measured 11/11 regions carrying a single currency |
+| ⇒ conclusion | every fixed format is wrong somewhere ⇒ **`General`, write no `numFmt`** (§21.4) | the format is **decidable per column** ⇒ write it |
+
+**The Google formula**, per cell, never per column:
+
+```
+d === 0 ? "0" : "0." + "0".repeat(d) + "#".repeat(6 - d)
+```
+
+Measured with `XLSX.SSF` over 16 values taken from the Manager's real export:
+`General` matched the screen **8/16**, a fixed `"0.00"` **9/16**, this formula
+**16/16**. Without it, **376 of 846 cells** in the real Default file showed
+`9.9` where the screen showed `9.90`, and `35` where the screen showed
+`35.00` — whole columns (MYR, THB, HKD, PHP) wrong in a way that reads as a
+different price.
+
+⚠ **The `#` tail is what prevents rounding — it is not decoration.** `micros`
+carries at most 6 decimals, so `"#".repeat(6 - d)` always has room for any
+remainder: `0.00####` renders `4.901234` intact, while a fixed `0.00` renders
+`4.90` — rounding, which the Manager's directive forbids outright. Turning the
+formula into a fixed format is a mandatory red mutation.
+
+⚠ **`0.00####` does not hit §21.4's bare-separator trap.** That trap needs an
+*optional* integer of decimals: `0.####` renders `35` as `35.` because the `.`
+is a literal emitted even when the fraction is empty. In `0.00####` the two
+`0`s are **required**, so the `.` is never left standing alone. Measured:
+`0.####` → `35.` ✗ · `0.00####` → `35.00` ✓.
+
+⚠ **Assign `numFmt` PER CELL, never per column.** A column also holds `·`
+cells (the empty-cell glyph); a column-level format would repaint those too.
+
+⚠ **Byte-level expectations are therefore OPPOSITE between the two writers.**
+Apple asserts `styles.xml` has **no** `<numFmts>` block. Google asserts it has
+`<numFmts count="1">` with `formatCode="0.00####"` — and that the 0-decimal
+format `"0"` is **absent from `<numFmts>`**, because it is Excel's built-in
+`numFmtId="1"` and lives in `cellXfs` instead. Copying either file's
+assertion to the other turns a correct decision red.
+
+---
+
+## §23 — A measuring tool must prove it is reading what it claims to read
+
+Five instances inside one arc, all the same shape: **the check produced
+nothing, and nothing looked like success.**
+
+| | Instance | What it did |
+|---|---|---|
+| **(a)** | `git diff` used as the mutation-applied proof (P33) on an **untracked** file | Printed empty 5/5 times. P33 disabled itself and still reported fine. Fix: use `md5`/hash when the file is not tracked |
+| **(b)** | `unzip -p` on a part name that did not match | Exits **0** with a warning on stderr, so the part read back as `""` — and every `expect(x).not.toContain(…)` on an empty string passes. Fix: throw when a part reads empty |
+| **(c)** | `[Content_Types].xml` — a mandatory `.xlsx` part | `unzip` treats part names as **globs**, so the brackets became a character class. Measured, because two guesses were wrong: `[Content_Types].xml` → rc=11 ✗ · `[[]Content_Types[]].xml` → rc=11 ✗ (escaping `]` too is wrong — outside a class it is already literal) · `[[]Content_Types].xml` → rc=0 ✓ · `\[Content_Types\].xml` → rc=0 ✓ |
+| **(d)** | Mutation runner grepping vitest's summary line | A test file that fails to **parse** prints `Tests no tests`; the grep found nothing and the results table printed blank cells that read as "normal". Fix: no summary line ⇒ shout |
+| **(e)** | `existsSync(app-paths-manifest.json)` as the "was it built?" guard | ⚠ The only instance with **both** failure directions: a manifest older than the route gives a **false red**; a manifest still holding a deleted route gives a **false green**. Fix: compare mtimes, and always run one test that reports whether the tier was skipped |
+
+A sixth, adjacent: passing an unquoted `$VAR` of space-separated paths to a
+runner **in zsh**, which does not word-split — the whole string became one
+filter, vitest found no files, and the baseline came back empty. The (d) guard
+is what caught it, at the baseline, before any mutation result was read.
+
+**Rule.** Every tool used to *check* something must prove it is reading what
+it says it is reading. Operationally: **a measurement that comes back EMPTY
+must SHOUT, never stay silent.** A guard that cannot distinguish "nothing
+wrong" from "nothing measured" is not a guard.
+
+---
+
+## §24 — Three smaller rules from the same arc
+
+**24.1 A mutation that stays green has TWO meanings — decide which before
+concluding.** Either the test lacks teeth, or *the mutation was applied at the
+wrong layer*. Instance: adding `accountId` to the argument object of
+`downloadMatrixExport` changed nothing, because that function builds its
+request body from four **named** fields and drops everything else — the module
+doing its job. Re-applied at the body-building layer, it went red immediately.
+Reading the first result as "the test is weak" would have produced a pointless
+test; reading it as "the code is safe" would have missed that the safety is
+untested. Neither: find the layer that can actually break.
+
+**24.2 If a property cannot be measured, state the range you CAN measure —
+don't lower the bar in silence.** The design called for "two exports of the
+same data are byte-identical". Measured: they are not, and there are two
+timestamp sources — `docProps/core.xml` (exceljs stamps the current time;
+**pinned** to the epoch) and the **mtime of each ZIP entry** (written by
+exceljs's zip layer, which exposes no knob). After pinning, *every part* is
+byte-identical and the sizes match; only the raw buffer differs. So the test
+asserts **"every part is byte-identical"** and both the writer and the test
+say why that is the honest bar. It still catches what matters — a column-order
+change lives in `sheet1.xml`.
+
+⚠ And pinning needs its own **deterministic** assertion. The part-wise
+comparison does cover it, but only *by the clock*: remove the pin and two
+requests landing in the same second still match. Found by a mutation that
+stayed green on the final code. The replacement asserts the epoch is present
+in `docProps/core.xml` of a **single** file — a fact that needs no second file
+and no timing.
+
+**24.3 A defect is closed by a MECHANISM, not by "it hasn't happened yet."**
+F2 (a cell differing only in currency printing as two identical numbers) was
+measured absent on production twice, independently: census Q6c returned PASS
+(no region carries two currencies) and Q6d, which reproduces `isDiff`'s
+currency clause directly (`GLOBAL ⋈ APP` on `(identifier, region_code)` where
+`currency` differs), returned 0 rows. Both are statements about **today's
+data**, not guarantees. The writer therefore still puts **both currencies in
+the cell note**, and a test pins that a currency-only difference is legible.
+Q6c/Q6d justify not treating F2 as an incident; they do not justify skipping
+the cover.
 
 ---
 

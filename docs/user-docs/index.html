@@ -1100,7 +1100,7 @@
           <a class="nav-item" data-page="google-bulk-import" data-keywords="google bulk import nhập hàng loạt csv excel">
             <span class="nav-item-label">Bulk Import</span>
           </a>
-          <a class="nav-item" data-page="google-pricing-matrix" data-keywords="google pricing matrix bảng giá template">
+          <a class="nav-item" data-page="google-pricing-matrix" data-keywords="google pricing matrix bảng giá bang gia template export xlsx excel xuất file xuat file csv highlight differences amber cam ô trống o trong dấu chấm dau cham freeze cố định cot tier">
             <span class="nav-item-label">Pricing matrix</span>
           </a>
           <a class="nav-item" data-page="google-bulk-activate" data-keywords="google bulk activate kích hoạt hàng loạt items batchupdate">
@@ -5337,19 +5337,30 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </li>
           <li class="step">
             <div class="step-title">Tab Default matrix — view giá workspace</div>
-            <div class="step-body"><p>Filter theo currency/region, view giá toàn template. Cell vàng = override per-app.</p></div>
+            <div class="step-body"><p>Filter theo currency/region, view giá toàn template. Màn Default <strong>không có</strong> công tắc Highlight — Default không có gì để so, nên không ô nào được đánh dấu.</p></div>
           </li>
           <li class="step">
             <div class="step-title">Tab Per-App matrix — view override theo app</div>
-            <div class="step-body"><p>Chọn app từ dropdown → bảng matrix overlay Per-App lên Default. Cell vàng highlight overrides.</p></div>
+            <div class="step-body"><p>Chọn app từ dropdown → bảng matrix overlay Per-App lên Default. Công tắc <strong>Highlight differences from Default ★</strong> bật thì ô khác Default hiện <strong>chữ màu hổ phách + ★</strong>.</p></div>
           </li>
           <li class="step">
             <div class="step-title">Tab Google Default Reference</div>
             <div class="step-body"><p>Read-only · giá Google đề xuất cho mỗi tier. Useful khi build Default template lần đầu — copy reference làm baseline rồi adjust per business.</p></div>
           </li>
           <li class="step">
-            <div class="step-title">Export CSV</div>
-            <div class="step-body"><p>Nút Export góc phải — file CSV bao gồm tier × region × currency × price · open Excel để analyze.</p></div>
+            <div class="step-title">Export XLSX — file là ảnh chụp của màn</div>
+            <div class="step-body">
+              <p>Nút <strong>Export XLSX</strong> ở góc phải thanh lọc (trước đây là "Export CSV" — đường CSV đã bỏ). Nguyên tắc: <strong>màn hiện gì thì file ra đúng vậy</strong> — không thêm, không xoá, không sửa.</p>
+              <ul>
+                <li><strong>Bố cục</strong>: một sheet · hàng = tier · mỗi nước chiếm <strong>2 cột</strong> (Price ‖ Currency) dưới một header tên nước gộp · cột <code class="inline">Tier</code> và 2 hàng header được <strong>freeze</strong> nên cuộn ngang/dọc vẫn thấy.</li>
+                <li><strong>Ô giá là SỐ Excel</strong> (sort/filter/SUM được), giữ đúng số chữ số thập phân của currency: <code class="inline">4.90</code> chứ không phải <code class="inline">4.9</code> · <code class="inline">35.00</code> chứ không phải <code class="inline">35</code>. Currency không có phần thập phân (VND · IDR · TWD) hiện số nguyên: <code class="inline">25000</code>.</li>
+                <li><strong>Ô <code class="inline">·</code></strong> (dấu chấm giữa) = cặp (tier, nước) không có trong template — đúng ký tự màn đang vẽ, và ghi ở <strong>cả ô Price lẫn ô Currency</strong>. Chú thích dưới bảng: <em>"empty cell (·) = no override for that tier-market pair (Google auto-equalisation fills)"</em>.</li>
+                <li><strong>Ô chữ màu hổ phách</strong> (chỉ ở Per-App) = giá khác Default. Rê chuột vào ô sẽ thấy note ghi <strong>currency của cả hai bên</strong>, ví dụ <code class="inline">Default: 1.48 SGD → Per-App: 1.28 SGD</code>.</li>
+                <li><strong>Bộ lọc ảnh hưởng file</strong>: chỉ những nước đang hiện sau bộ lọc mới vào file. Lọc còn 0 nước thì nút mờ đi.</li>
+                <li><strong>Thứ tự cột</strong> = thứ tự cột trong file <code class="inline">.xlsx</code> đã upload, <em>không</em> phải thứ tự bảng chữ cái.</li>
+              </ul>
+              <p>Tên file có tiền tố <code class="inline">google-</code> để không lẫn với file Apple cùng tên: <code class="inline">google-pricing-template-default-20260831-1035.xlsx</code> · <code class="inline">google-pricing-template-per-app-&lt;package&gt;-….xlsx</code>.</p>
+            </div>
           </li>
         </ol>
 
@@ -5364,7 +5375,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <text class="wf-text" x="180" y="42" font-size="11">Per-App matrix</text>
               <text class="wf-text" x="290" y="42" font-size="11">Google Default Reference</text>
               <rect fill="var(--teal)" x="510" y="28" width="80" height="20" rx="4"/>
-              <text fill="#fff" x="550" y="42" text-anchor="middle" font-size="10" font-weight="600">Export CSV</text>
+              <text fill="#fff" x="550" y="42" text-anchor="middle" font-size="10" font-weight="600">Export XLSX</text>
               <rect class="wf-card" x="20" y="66" width="600" height="30" rx="4"/>
               <text class="wf-text" x="40" y="86">Currency: USD ▼   Region: 190 selected ▼   Tier: 1 → 12 ▼</text>
               <rect class="wf-card" x="20" y="106" width="600" height="220" rx="6"/>
@@ -5425,6 +5436,14 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         <div class="callout callout-info">
           <div class="callout-title">ℹ️ Google Default Reference — benchmark</div>
           <p>Tab này read-only · Google đề xuất giá cho mỗi tier theo PPP (Purchasing Power Parity) per region. Useful khi muốn align với Google recommendation thay vì tự build pricing strategy.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Công tắc Highlight ảnh hưởng tới FILE, không chỉ tới màn</div>
+          <p>Ở màn Per-App, <strong>tắt</strong> công tắc <strong>Highlight differences from Default ★</strong> rồi bấm Export thì file <strong>không có ô hổ phách nào và không có note nào</strong> — vì file phải nói đúng thứ màn đang nói. Muốn file mang dấu so sánh thì <strong>bật công tắc trước khi bấm</strong>. (Đường CSV cũ làm khác: nó bám "có Default template hay không" nên tắt công tắc mà file vẫn mang cột diff.)</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ File xuất ra CHƯA nạp ngược lại được</div>
+          <p>File <code class="inline">.xlsx</code> này là <strong>bản đọc</strong>, không phải file để upload lại. Bộ nạp template cần sheet tên <code class="inline">price_tiers</code> với header dạng <code class="inline">VN - VND - Vietnam</code> và một cột tier ở trái; file export có bố cục khác hẳn (2 cột mỗi nước, 2 hàng header). Muốn sửa giá thì sửa trên file template gốc rồi upload đè.</p>
         </div>
         <div class="callout callout-warning">
           <div class="callout-title">⚠️ regionsVersion drift</div>
