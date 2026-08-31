@@ -92,9 +92,15 @@ Route đã tồn tại, đã có auth. Bên trong gọi đúng một lần `conv
 
 ---
 
-## `[GOOGLE-template-column-order]` — G2-Q3, đẩy sang arc G1
+## ✅ `[GOOGLE-template-column-order]` — G2-Q3 · ĐÃ ĐÓNG ở arc G1 (chunk G1d)
 
-**Trạng thái:** Manager đã chốt đẩy sang G1 vì cần **migration**.
+**Trạng thái:** ✅ **XONG.** `sort_order` đã có trong
+`google_iap_mgmt.pricing_template_entries` (M-1 backfill theo `ctid` cho cả 10
+template đang có; parser ghi từ G1d trở đi). Hai đường đọc đã hợp nhất về
+`(identifier, sort_order)`, và `composeMatrix` sắp cột **tường minh** theo
+`sort_order` thay vì dựa vào thứ tự dòng. Ca thiếu `sort_order` không âm thầm
+rơi về alphabet mà bật cờ `columnOrderUnknown` để màn công bố.
+Giữ lại phần mô tả bên dưới làm ghi chép lý do.
 
 Thứ tự cột trong cả màn lẫn file hiện dựa vào **thứ tự dòng Postgres trả về khi
 `SELECT` không có `ORDER BY`** ([`queries/template-matrix.ts:161-164`](../../lib/google-iap-management/queries/template-matrix.ts)).
@@ -120,3 +126,41 @@ docblock của [`xlsx-template-matrix-export.ts`](../../lib/google-iap-managemen
 | Tag | Đóng khi nào | Ghi chú |
 |---|---|---|
 | *(ghi chú tài liệu)* User Guide mục **Apple** Pricing matrix còn hướng dẫn bấm "Export CSV" | 2026-08-31, commit riêng `fix-apple-guide-export-xlsx` | Grep toàn guide ra **4 chỗ**, không phải 3 — chỗ thứ tư (`<li>Export bảng giá ra CSV…`) **không chứa cụm "Export CSV"** nên sửa theo trí nhớ chắc chắn sót. Sót của arc `[TEMPLATE-xlsx]` phía Apple |
+
+
+---
+
+## `[GOOGLE-copy-template-across-accounts]` — hoãn từ đầu arc G1
+
+**Trạng thái:** chưa làm, Manager đã chốt hoãn ngay khi mở arc G1.
+
+Sau khi Default Template tách theo account, một thao tác hay dùng sẽ là "lấy
+bảng của account A đặt sang account B" — hiện phải tải `.xlsx` từ A rồi upload
+lại vào B. Nút **copy template sang account khác** làm thẳng việc đó.
+
+⚠ Khi làm, đọc trước hai thứ đã có: `replaceConfirmVariant`
+([`replace-confirm.ts`](../../lib/google-iap-management/replace-confirm.ts)) —
+copy vào một account đã có bản người thật upload phải hiện đúng biến thể ĐỎ; và
+gate admin ở [`pricing-templates/route.ts`](../../app/api/google-iap-management/pricing-templates/route.ts)
+— copy là đường GHI, phải gác y như Replace.
+
+---
+
+## `[GOOGLE-g1-backup-cleanup]` — dọn 2 bảng backup của M-1
+
+**Trạng thái:** ⏸ **CHỜ ĐIỀU KIỆN**, không phải chờ người làm.
+
+Hai bảng `pricing_templates_backup_global` và
+`pricing_template_entries_backup_global` là **đường lui duy nhất** còn lại sau
+M-2 (rollback code không dùng được nữa — code cũ đọc `GLOBAL`, mà M-2 đã xoá
+dòng đó).
+
+**Điều kiện dọn (F4):** đã có **ít nhất một lần Replace/upload THẬT thành công
+sau deploy** — không phải chỉ xem màn hình.
+
+⚠ Điều kiện này **CHƯA thoả**: mục U6/U6b của
+[UAT G1](uat-g1-account-default-template.md) bị hoãn theo quyết định Manager
+(UAT xanh ở U1–U4 + Export XLSX; U6 để lại cho lần dùng thật). Giữ backup cho
+tới khi thoả. Câu dọn ghi sẵn ở cuối
+[verify-google-account-default-template.sql](queries/verify-google-account-default-template.sql)
+mục M2-V6.

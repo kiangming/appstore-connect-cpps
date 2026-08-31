@@ -73,7 +73,7 @@ export default async function PricingTemplatesPage({
         Pricing Templates
       </h1>
       <p className="text-sm text-slate-500 mb-6 max-w-prose">
-        Default Template applies to every app; per-app templates override the
+        Mỗi Google Console account có Default Template riêng, áp dụng cho mọi app của account đó; per-app template ghi đè lên
         Default for specific apps. Google&apos;s auto-equalisation fills in
         regions that no template covers.
       </p>

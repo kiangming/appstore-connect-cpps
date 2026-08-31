@@ -402,3 +402,140 @@ SELECT t.id AS template_id, t.scope_app_id, t.uploaded_at, t.uploaded_by
 FROM google_iap_mgmt.pricing_templates t
 LEFT JOIN google_iap_mgmt.apps ap ON ap.id = t.scope_app_id
 WHERE t.scope_type = 'APP' AND ap.id IS NULL;
+
+
+-- ╔═════════════════════════════════════════════════════════════════════════╗
+-- ║  CHẶNG M-2 — SAU KHI APPLY                                              ║
+-- ║  supabase/migrations/20260901000000_google_iap_mgmt_account_templates_m2_drop_global.sql
+-- ║  Bất biến của chặng này: GLOBAL đã biến mất, 6 bản ACCOUNT còn NGUYÊN.  ║
+-- ╚═════════════════════════════════════════════════════════════════════════╝
+--
+-- ⚠ CHẠY TỪNG CÂU MỘT. Chạy M2-V0 trước.
+
+-- ── M2-V0 — BẢNG KIỂM GỘP: MỘT query, MỘT dòng ────────────────────────────
+-- • TAT_CA_PASS = PASS ⇒ arc G1 đóng.
+-- • FAIL ⇒ xem cột nào false rồi chạy M2-V1…M2-V5 tương ứng.
+WITH
+n_acct  AS (SELECT COUNT(*)::int c FROM google_iap_mgmt.google_console_accounts),
+n_snap  AS (SELECT COUNT(*)::int c FROM google_iap_mgmt.pricing_template_entries_backup_global),
+n_snaph AS (SELECT COUNT(*)::int c FROM google_iap_mgmt.pricing_templates_backup_global),
+n_glob  AS (SELECT COUNT(*)::int c FROM google_iap_mgmt.pricing_templates WHERE scope_type='GLOBAL'),
+n_acct_tpl AS (SELECT COUNT(*)::int c FROM google_iap_mgmt.pricing_templates WHERE scope_type='ACCOUNT'),
+n_app   AS (SELECT COUNT(*)::int c FROM google_iap_mgmt.pricing_templates WHERE scope_type='APP'),
+n_ent   AS (SELECT COUNT(*)::int c FROM google_iap_mgmt.pricing_template_entries e
+              JOIN google_iap_mgmt.pricing_templates t ON t.id=e.template_id
+             WHERE t.scope_type='ACCOUNT'),
+-- entry mồ côi: trỏ tới template không còn tồn tại (CASCADE phải dọn sạch)
+n_orphan AS (SELECT COUNT(*)::int c FROM google_iap_mgmt.pricing_template_entries e
+              WHERE NOT EXISTS (SELECT 1 FROM google_iap_mgmt.pricing_templates t
+                                 WHERE t.id = e.template_id)),
+-- CHECK còn nhắc 'GLOBAL' không (phải KHÔNG)
+chk_global AS (SELECT COUNT(*)::int c FROM pg_constraint c
+                 JOIN pg_class t ON t.oid=c.conrelid
+                 JOIN pg_namespace n ON n.oid=t.relnamespace
+                WHERE n.nspname='google_iap_mgmt' AND t.relname='pricing_templates'
+                  AND c.contype='c' AND pg_get_constraintdef(c.oid) LIKE '%GLOBAL%'),
+-- index global_unique đã drop chưa
+idx_glob AS (SELECT COUNT(*)::int c FROM pg_indexes
+              WHERE schemaname='google_iap_mgmt'
+                AND indexname='idx_google_iap_mgmt_pricing_templates_global_unique'),
+-- account nào thiếu template
+acct_thieu AS (SELECT COUNT(*)::int c FROM google_iap_mgmt.google_console_accounts a
+                WHERE NOT EXISTS (SELECT 1 FROM google_iap_mgmt.pricing_templates t
+                                   WHERE t.scope_type='ACCOUNT' AND t.scope_account_id=a.id)),
+-- entry còn sort_order NULL
+so_null AS (SELECT COUNT(*)::int c FROM google_iap_mgmt.pricing_template_entries
+             WHERE sort_order IS NULL)
+SELECT
+  (SELECT c FROM n_glob)                              AS so_global,
+  (SELECT c FROM n_acct_tpl)                          AS so_tpl_account,
+  (SELECT c FROM n_app)                               AS so_tpl_app,
+  (SELECT c FROM n_ent)                               AS tong_entry_account,
+  ((SELECT c FROM n_glob) = 0)                        AS v1_global_da_xoa,
+  ((SELECT c FROM n_acct_tpl) = (SELECT c FROM n_acct)) AS v2_du_moi_account,
+  ((SELECT c FROM acct_thieu) = 0)                    AS v2b_khong_account_nao_thieu,
+  ((SELECT c FROM n_ent) = (SELECT c FROM n_acct) * (SELECT c FROM n_snap))
+                                                      AS v3_tong_entry_dung,
+  ((SELECT c FROM n_orphan) = 0)                      AS v4_khong_entry_mo_coi,
+  ((SELECT c FROM chk_global) = 0)                    AS v5_check_da_bo_GLOBAL,
+  ((SELECT c FROM idx_glob) = 0)                      AS v5b_da_drop_global_unique,
+  ((SELECT c FROM n_snaph) > 0 AND (SELECT c FROM n_snap) > 0)
+                                                      AS v6_backup_con_nguyen,
+  ((SELECT c FROM so_null) = 0)                       AS v7_sort_order_phu_kin,
+  CASE WHEN
+        (SELECT c FROM n_glob) = 0
+    AND (SELECT c FROM n_acct_tpl) = (SELECT c FROM n_acct)
+    AND (SELECT c FROM acct_thieu) = 0
+    AND (SELECT c FROM n_ent) = (SELECT c FROM n_acct) * (SELECT c FROM n_snap)
+    AND (SELECT c FROM n_orphan) = 0
+    AND (SELECT c FROM chk_global) = 0
+    AND (SELECT c FROM idx_glob) = 0
+    AND (SELECT c FROM n_snaph) > 0 AND (SELECT c FROM n_snap) > 0
+    AND (SELECT c FROM so_null) = 0
+       THEN 'PASS — M-2 xong, arc G1 dong. Van GIU 2 bang backup (dieu kien F4 chua thoa).'
+       ELSE 'FAIL — xem cot nao false, chay cau chi tiet ben duoi.'
+  END AS TAT_CA_PASS;
+
+
+-- ── M2-V1 — đếm template theo scope ───────────────────────────────────────
+-- KỲ VỌNG: 2 dòng. ACCOUNT = số account (census: 6) · APP = y hệt trước
+-- M-2 (census: 3). KHÔNG còn dòng GLOBAL nào.
+SELECT scope_type, COUNT(*) AS so_template
+FROM google_iap_mgmt.pricing_templates
+GROUP BY scope_type ORDER BY scope_type;
+
+
+-- ── M2-V2 — CASCADE có dọn sạch entry của GLOBAL không ────────────────────
+-- KỲ VỌNG: **0 dòng.** (0 dòng ở câu này = PASS.)
+-- Entry trỏ tới một template không còn tồn tại nghĩa là FK CASCADE đã không
+-- chạy — dữ liệu rác, và số đếm ở mọi màn sẽ sai.
+SELECT e.template_id, COUNT(*) AS so_entry_mo_coi
+FROM google_iap_mgmt.pricing_template_entries e
+WHERE NOT EXISTS (
+  SELECT 1 FROM google_iap_mgmt.pricing_templates t WHERE t.id = e.template_id
+)
+GROUP BY e.template_id;
+
+
+-- ── M2-V3 — CHECK đã thu hẹp thật chưa ────────────────────────────────────
+-- KỲ VỌNG: 2 dòng, và KHÔNG dòng nào chứa chữ GLOBAL trong `definition`.
+SELECT c.conname AS constraint_name, pg_get_constraintdef(c.oid) AS definition
+FROM pg_constraint c
+JOIN pg_class t ON t.oid = c.conrelid
+JOIN pg_namespace n ON n.oid = t.relnamespace
+WHERE n.nspname='google_iap_mgmt' AND t.relname='pricing_templates' AND c.contype='c'
+ORDER BY c.conname;
+
+
+-- ── M2-V4 — THỬ GHI 'GLOBAL' và đòi nó HỎNG ───────────────────────────────
+-- ⚠ Câu này CÓ INSERT nhưng nằm trong BEGIN…ROLLBACK nên KHÔNG ghi gì.
+--   Đọc tên ràng buộc (M2-V3) chỉ chứng minh cái tên còn đó; câu này chứng
+--   minh NỘI DUNG đã hẹp.
+-- KỲ VỌNG: lệnh INSERT BÁO LỖI đỏ dạng
+--   "new row for relation ... violates check constraint". ĐÓ LÀ PASS.
+--   Nếu INSERT chạy LỌT (không lỗi) ⇒ FAIL, báo lại ngay.
+BEGIN;
+INSERT INTO google_iap_mgmt.pricing_templates
+  (scope_type, scope_app_id, scope_account_id, uploaded_by)
+VALUES ('GLOBAL', NULL, NULL, 'M2_V4_PROBE');
+ROLLBACK;
+
+
+-- ── M2-V5 — hai bảng backup CÒN NGUYÊN ────────────────────────────────────
+-- ⚠ Sau M-2, đây là ĐƯỜNG LUI DUY NHẤT còn lại (rollback code không dùng
+--   được nữa — code cũ đọc GLOBAL, mà GLOBAL đã bị xoá).
+-- KỲ VỌNG: 1 dòng, `header` = 1 và `entries` = 846 (census).
+--   Bằng 0 ⇒ DỪNG, báo lại: đường lui đã biến mất.
+SELECT
+  (SELECT COUNT(*) FROM google_iap_mgmt.pricing_templates_backup_global)        AS header,
+  (SELECT COUNT(*) FROM google_iap_mgmt.pricing_template_entries_backup_global) AS entries;
+
+
+-- ── M2-V6 — TODO còn treo (KHÔNG phải phép kiểm) ──────────────────────────
+-- ⚠ CHƯA DỌN hai bảng backup, CÓ CHỦ Ý. Điều kiện dọn (F4): đã có ÍT NHẤT
+--   MỘT lần Replace/upload THẬT thành công sau deploy — không phải chỉ xem
+--   màn hình. U6/U6b của UAT bị hoãn nên điều kiện đó CHƯA thoả.
+--   Khi thoả, câu dọn là:
+--     DROP TABLE google_iap_mgmt.pricing_template_entries_backup_global;
+--     DROP TABLE google_iap_mgmt.pricing_templates_backup_global;
+--   Chạy hai câu đó chỉ sau khi Manager xác nhận đã Replace thật thành công.

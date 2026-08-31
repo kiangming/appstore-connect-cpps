@@ -5972,3 +5972,180 @@ the cover.
 ---
 
 *Generated 2026-05-20 post-IAP.q.3 closure. Commit `f81032c`. Tests 1815. Gauntlet 4/4 ✅.*
+
+## §25 — Arc G1 (Google, Default Template split per account): nine rules
+
+Cross-module. G1 split Google's single shared Default Pricing Template into
+one per Console account (M-1 additive clone → code → M-2 drop GLOBAL). Nine
+findings survived the arc. Three of them are new instances of **§23** and one
+of them *sharpens* §23's rule, so read §23 first.
+
+### 25.1 ⚠ P34 — a gate must run BEFORE every read it protects, or the endpoint becomes an oracle
+
+G1e's upload route validated `account_id` against `listAccounts()` **before**
+running `requireGoogleIapAdmin()`. Both checks were correct in isolation, and
+every gate test passed. But the ORDER leaked: a non-admin posting a fabricated
+account id got **404**, and posting a real one got **403**. The difference
+between the two answers is the answer to *"does this account exist?"* — handed
+to exactly the caller who is not allowed to know.
+
+**Rule.** Order authorization before *any* lookup whose result the caller can
+distinguish. A gate placed after a lookup does not protect the lookup; it only
+changes which status code narrates it. The test that pins this cannot be
+"non-admin → 403" alone — it must be **"non-admin + a nonexistent id → 403,
+NOT 404"**, because only that phrasing can tell the two orderings apart.
+
+Found by the third arbitration pass, not by the chunk that wrote the code:
+both competing reports of G1e missed it. Neither had a test that varied the
+id's validity while holding the role fixed.
+
+### 25.2 ⚠ P35 — a "never accept X from the client" contract expires when the UI gains a reason to send X
+
+G1b hardened the Google upload route with an explicit contract: *account is
+read server-side from the cookie, never accepted from the client.* True and
+correct — **while the screen could only ever act on the active account.**
+
+G1e added an account chip that VIEWS another account's Default without
+changing the active account (Manager's decision). From that commit onward the
+cookie could no longer answer *"which account does the operator mean to write
+to"* — only the screen knew. The old contract had quietly become unsatisfiable,
+not merely inconvenient.
+
+**Rule.** A "never from the client" contract is a statement about what the
+server can *infer*, and it expires the moment the UI can mean something the
+server cannot infer. Reversing it is legitimate, but the safety must be moved,
+not dropped — it was never coming from secrecy. Five conditions before the flip
+ships:
+
+1. **reconcile** the client-supplied id against the server's own set →
+   404 when it is outside (the client must not be able to name a stranger);
+2. the **authorization gate runs first** (25.1 — otherwise the reconcile step
+   becomes the oracle);
+3. a test that the id **outside the set writes nothing** — spy on the mutation,
+   not just the status code;
+4. a **mutation removing the reconcile** must go red;
+5. a **contract comment at the point of acceptance** stating why the earlier
+   premise stopped holding — otherwise the next reader finds G1b's comment and
+   files it as a regression.
+
+### 25.3 ⚠ §23 sharpened — EMPTY must shout, but a NON-EMPTY number can be wrong too
+
+§23's rule is *"a measurement that comes back empty must shout."* G1e found the
+failure mode one step past it, and it is worse because nothing looks missing.
+
+A mutation broke a `.tsx` file's syntax. Vitest reported:
+
+```
+Test Files  2 failed | 3 passed (5)
+Tests       25 passed (25)          ← the harness read THIS line
+```
+
+The two suites that could not be **loaded** contribute no tests to the `Tests`
+line at all. The harness read a real, plausible, non-empty `25 passed`, found
+zero failures, and reported the mutation **GREEN** — "the tests do not catch
+this." The truth was that the tests never ran.
+
+**Rule.** A count is only evidence when it is **reconciled against what was
+supposed to run**. Operationally: treat `Failed Suites` / `PARSE_ERROR` /
+`Transform failed` as `INVALID`, a third outcome that is neither red nor green
+— never fold it into either. A mutation result is readable only when it is
+(a) **applied** (P33: hash, not `git diff`), (b) **valid** (it compiles and
+every suite loads), and (c) **red for the stated reason** (read the failing
+test NAMES, do not count them).
+
+Two sibling instances from the same arc, same family as §23:
+
+- **fake** layer: a hand-rolled Supabase fake whose `.order()` returned `this`.
+  Every ordering test passed — including against a query with no `ORDER BY` at
+  all. A fake that no-ops the very operation under test converts the whole file
+  into decoration.
+- **mutation** layer: the first attempt at the same mutation forgot an
+  `import`, so it went red on a `ReferenceError`. Red for the wrong reason is
+  not evidence either; it says "the file is broken", not "the behaviour is
+  pinned".
+
+### 25.4 ⚠ P15, third instance — a structural test must strip comments (see also §16.8/P28)
+
+G1e's structural guard forbade the literal `SYSTEM_MIGRATION` anywhere in the
+UI source, to stop the string-compare from creeping back. It went red
+immediately — on the **comment that warns against exactly that compare**.
+
+A fence that fires on the warning written against it pressures the next person
+to delete the explanation to get green, which makes the code worse. Strip
+comments and assert on code. Recorded as a third instance because P15 and P28
+are both already in this KB and it *still* happened.
+
+### 25.5 A guard must fire BEFORE the DB client is constructed
+
+Folding the scope-coherence guard into `applyScopeFilter` — which takes
+`db.from(...)` as its argument — meant `googleIapDb()` ran first. In an
+environment without Supabase env vars that throws
+`Missing SUPABASE_URL…`, which **swallows the programming error**: eight
+Hotfix-17 guard tests went red with a message about configuration.
+
+**Rule.** Validation that exists to catch a caller's mistake must run before
+anything that can fail for an environmental reason. Keep the logic in one
+shared function (`assertScopeRef`) but call it on the first line of each public
+entry point; the choke point still owns the rule, the call site owns the order.
+
+### 25.6 A mutation can be un-catchable because of a guard YOU just added
+
+After G1c made `getAppById(appId, accountId)` account-scoped, the route's
+`owningAccountId` and the cookie's `accountId` became **structurally
+identical** at the call site — the 404 guard above it enforces the equality.
+The mutation "pass the cookie account instead of the owning account" therefore
+changes nothing observable, and no test can catch it.
+
+That is not a missing test; it is a mutation at a layer where the two
+expressions cannot differ. But the contract has now sunk to the unit layer
+only. **Write a comment at the resolve site naming the test that still pins
+it** — because removing the guard silently revives the case, and the route
+layer will have nothing to say about it.
+
+### 25.7 A test can be green for the WRONG reason when a fixture lags the schema
+
+G1d added `sort_order`. The `.xlsx` export suite's `row()` helper did not set
+it, so `composeMatrix` saw all-NULL, took the **fallback** branch, and preserved
+array order — which happened to equal the expected column order. 124 tests
+stayed green while silently testing the degraded path.
+
+**Rule.** When a new field changes which branch runs, pin *which branch is
+running* — here, one assertion that `columnOrderUnknown === false` on the
+fixture. Right answer, wrong path, is the shape that stops protecting you at
+the exact moment the real path breaks.
+
+### 25.8 Client-local unions make `tsc` blind (P29's shape, at the type layer)
+
+Google's client components declared `scope: "GLOBAL" | "APP"` **inline** rather
+than importing `TemplateScope`. Renaming the server union to `"ACCOUNT"`
+produced zero client type errors. The worst instance was
+`form.append("scope", "GLOBAL")` — a bare string literal, invisible to the
+compiler, which would have broken Replace **silently at runtime**.
+
+**Rule.** When a server-owned union changes, `tsc` covers only the call sites
+that *import the type*. Grep for the string literals as well; the wire is a
+type boundary the compiler does not see. (§16.9/P29 is the same blindness at
+the `fetch` boundary.)
+
+### 25.9 Two reports of the same commit can both be wrong — arbitrate by RE-RUNNING, not by averaging
+
+Three times in this arc, two accounts of the same commit hash disagreed on test
+counts, mutation tables, and even on whether a defect existed. Resolution that
+worked, every time:
+
+1. `git log origin/main..HEAD` + `git status` — establish the tree is clean and
+   the hash is what both claim;
+2. rebuild, then re-run the full suite — that number is the only one used;
+3. re-run the **whole** mutation table on the final state, with the harness
+   fixed, reporting failing test **names**;
+4. refute a claimed bug by **constructing it** (mutate the code into the
+   reported shape and watch a test go red), never by argument.
+
+Step 4 is the one that pays. Two "bugs" reported against G1d
+(`getTemplateAvailability` dropping its account filter; `bulk-import.ts:527`
+touching the table directly) were both disproved this way — the first by a
+mutation that went red on the very test said to be missing, the second by a
+grep showing 22/22 table accesses inside the two `queries/` files. Averaging
+the two reports, or trusting the more detailed one, would have shipped a fix
+for a defect that did not exist — and, worse, would have missed 25.1, which
+neither report contained.

@@ -265,7 +265,7 @@ export function DefaultTemplateTab({
               </span>
             </h2>
             <p className="text-xs text-slate-500 mt-0.5 max-w-prose">
-              Applied to every app unless overridden by a per-app template.
+              Áp dụng cho mọi app CỦA ACCOUNT NÀY, trừ app đã có template riêng.
               Sparse cells are permitted — missing (tier, region) pairs fall
               back to Google&apos;s auto-equalisation.
             </p>
@@ -391,7 +391,7 @@ export function DefaultTemplateTab({
             <code className="bg-slate-100 px-1.5 py-0.5 rounded text-[11px]">
               pricing-template-google.xlsx
             </code>{" "}
-            to set per-region pricing shared across all apps.
+            để đặt giá theo region dùng chung cho mọi app của account này.
           </p>
         </div>
       ) : (

@@ -5346,6 +5346,75 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <li><strong>Google Default Reference</strong> tab: benchmark giá Google đề xuất cho mọi tier.</li>
         </ul>
 
+        <div class="callout callout-warn">
+          <strong>Thay đổi tháng 9/2026 — Default Template của Google giờ theo từng account.</strong>
+          Trước đây cả workspace dùng CHUNG một Default Template. Nay <strong>mỗi Google
+          Console account có Default Template riêng</strong>: sửa bảng của account này
+          không ảnh hưởng account khác. Bảng cũ đã được nhân bản sang cả 6 account nên
+          giá hiện tại không đổi.
+        </div>
+
+        <h2 class="section-title">Chọn account</h2>
+        <p>
+          Tab <strong>Default Template</strong> có một hàng chip ở đầu — mỗi account
+          một chip, kèm tên và mã account (chữ mono). Chip có nhãn
+          <code class="inline">có template</code> hoặc <code class="inline">chưa có</code>.
+          Bấm để chuyển. Chip đang xem có viền xanh.
+          <strong>Account chưa có template vẫn hiện</strong> — cố ý, để phân biệt
+          “chưa cấu hình” với “account không tồn tại”.
+        </p>
+
+        <div class="callout callout-danger">
+          <strong>⚠ Account ở tab này ĐỘC LẬP với account trên TopNav.</strong>
+          Bấm chip chỉ đổi account đang XEM (địa chỉ thành
+          <code class="inline">?account=…</code>); nó KHÔNG đổi account đang hoạt động
+          của module, nên danh sách app, Bulk Import và form IAP vẫn giữ nguyên account
+          cũ. <strong>Nhìn kỹ tiêu đề thẻ “Default Template · &lt;tên account&gt;”
+          trước khi bấm Replace hoặc Remove</strong> — hai nút đó tác động lên đúng
+          account đang xem ở tab, không phải account trên TopNav.
+        </div>
+
+        <h2 class="section-title">Badge, pill nguồn gốc và bảng toàn cảnh</h2>
+        <ul>
+          <li>Con số cạnh tên tab <strong>Default Template</strong> đọc là
+            <code class="inline">6 / 6 account</code> — <em>số account đã có template
+            / số account đang tồn tại</em>. Thêm account mới mà chưa upload thì nó
+            thành <code class="inline">6 / 7 account</code>; đó là lời nhắc, không
+            phải lỗi.</li>
+          <li>Pill tím <strong>“Do migration nhân bản · chưa ai cấu hình riêng cho
+            account này”</strong> nghĩa là bản đang có là <strong>bản sao tự động</strong>
+            sinh khi tách Default theo account — chưa ai chỉnh riêng cho account đó.
+            Pill <strong>tự biến mất</strong> sau lần Replace đầu tiên.</li>
+          <li>Cuối trang có bảng <strong>“Toàn cảnh N account”</strong> (Account ·
+            Trạng thái · Số ô · Nguồn gốc) — chỗ duy nhất so được các account cạnh nhau.
+            Cột <strong>Nguồn gốc</strong> ghi <code class="inline">bản sao migration</code>
+            hoặc email người đã upload.</li>
+        </ul>
+
+        <h2 class="section-title">Xác nhận khi Replace — hai màu</h2>
+        <table class="docs-table">
+          <thead><tr><th>Bản đang có</th><th>Hộp xác nhận</th><th>Nghĩa</th></tr></thead>
+          <tbody>
+            <tr><td>Bản sao migration (còn pill tím)</td><td><strong>Xanh</strong> — “Replace the Default Template?” / “Chưa ai cấu hình riêng cho account này.”</td><td>Thay nó không đè lên việc của ai</td></tr>
+            <tr><td>Người thật đã upload</td><td><strong>Đỏ</strong> — “Ghi đè Default Template của account này?” / “Sẽ ghi đè việc của &lt;email&gt;.”</td><td>Mất toàn bộ nội dung đó, không hoàn tác được</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout callout-warn">
+          <strong>Chỉ admin sửa được Default Template.</strong> Người không phải admin
+          vẫn xem được ma trận và Export XLSX, nhưng không thấy nút
+          <strong>Replace</strong> / <strong>Remove</strong> — thay vào đó là dòng
+          <em>“Chỉ admin sửa được Default Template”</em>. Per-App template giữ quy tắc
+          cũ: mọi người đã đăng nhập đều sửa được.
+        </div>
+
+        <div class="callout">
+          <strong>Dải xanh “Thứ tự cột của template này chưa xác định”.</strong>
+          Hiện trên màn matrix khi template được upload trước khi tool biết ghi lại
+          thứ tự cột. <strong>Giá trong bảng vẫn chính xác</strong> — chỉ thứ tự các
+          cột nước là không bảo đảm. Replace lại một lần là hết.
+        </div>
+
         <h2 class="section-title">Hướng dẫn sử dụng</h2>
         <ol class="steps">
           <li class="step">
@@ -5353,8 +5422,8 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <div class="step-body"><p>Sidebar → <strong>Settings</strong> → <strong>Pricing Templates</strong> (module Google). URL: <code class="inline">/google-iap-management/settings/pricing-templates</code>.</p></div>
           </li>
           <li class="step">
-            <div class="step-title">Tab Default matrix — view giá workspace</div>
-            <div class="step-body"><p>Filter theo currency/region, view giá toàn template. Màn Default <strong>không có</strong> công tắc Highlight — Default không có gì để so, nên không ô nào được đánh dấu.</p></div>
+            <div class="step-title">Tab Default matrix — view giá của account đang chọn</div>
+            <div class="step-body"><p>Filter theo currency/region, view giá toàn template <strong>của account đang chọn</strong>. Màn Default <strong>không có</strong> công tắc Highlight — Default không có gì để so, nên không ô nào được đánh dấu.</p></div>
           </li>
           <li class="step">
             <div class="step-title">Tab Per-App matrix — view override theo app</div>
