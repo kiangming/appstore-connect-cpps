@@ -56,17 +56,49 @@ export async function POST(req: Request) {
   }
   const scope = scopeRaw;
 
-  // ⚠ ACCOUNT ĐỌC Ở SERVER, KHÔNG NHẬN TỪ CLIENT. Đây là đường GHI đè
-  //   Default Template — để client tự khai account là mở đúng cửa cho
-  //   một request nắn tay ghi đè Default của account khác.
-  //   (Gate admin cho Replace/Remove thuộc G1c, chưa làm ở đây.)
+  // ── ACCOUNT ĐÍCH CỦA LỆNH GHI ─────────────────────────────────────────
+  //
+  // ⚠ ĐÃ ĐỔI Ở G1e so với G1b, có chủ ý. G1b viết ở đây "KHÔNG NHẬN TỪ
+  //   CLIENT" và lấy thẳng account đang active từ cookie. Điều đó đúng
+  //   CHỪNG NÀO màn hình chỉ xem được Default của account đang active.
+  //   G1e cho phép chip chọn XEM account khác mà KHÔNG đổi active account
+  //   (quyết định Manager), nên từ lúc đó cookie KHÔNG CÒN trả lời được
+  //   câu "Manager đang muốn ghi vào account nào" — chỉ màn hình biết.
+  //
+  //   An toàn KHÔNG đến từ việc giấu giá trị này, mà từ hai lớp:
+  //     (1) ĐỐI CHIẾU: `account_id` phải nằm trong listAccounts(); client
+  //         không bịa ra được một account, cũng không trỏ ra ngoài tập
+  //         account mà công cụ quản lý;
+  //     (2) GATE ADMIN của G1c ngay bên dưới.
+  //   Thiếu (1) thì đây đúng là cửa ghi đè Default của account bất kỳ.
   const accounts = await listAccounts().catch(() => []);
-  const accountId = resolveActiveAccountId(accounts, readActiveAccountId());
-  if (!accountId) {
+  if (accounts.length === 0) {
     return NextResponse.json(
       { error: "No Google Console accounts configured." },
       { status: 400 },
     );
+  }
+  const requestedAccountId = form.get("account_id");
+  let accountId: string;
+  if (typeof requestedAccountId === "string" && requestedAccountId !== "") {
+    if (!accounts.some((a) => a.id === requestedAccountId)) {
+      // 404 chứ không 403: không xác nhận id đó có tồn tại hay không.
+      return NextResponse.json(
+        { error: "Account not found." },
+        { status: 404 },
+      );
+    }
+    accountId = requestedAccountId;
+  } else {
+    // Không gửi account_id → giữ hành vi cũ: account đang active.
+    const fallback = resolveActiveAccountId(accounts, readActiveAccountId());
+    if (!fallback) {
+      return NextResponse.json(
+        { error: "No Google Console accounts configured." },
+        { status: 400 },
+      );
+    }
+    accountId = fallback;
   }
 
   // ⚠ C1 — Replace Default Template = hành động cấp account ⇒ CHỈ ADMIN.

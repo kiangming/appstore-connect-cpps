@@ -11,11 +11,16 @@ import { listAppsForAccount } from "@/lib/google-iap-management/repository/apps"
 import { readActiveAccountId } from "@/lib/google-iap-management/active-account";
 import {
   getAccountTemplateOverview,
+  listAccountTemplateSummaries,
   listAppTemplates,
 } from "@/lib/google-iap-management/queries/templates";
 import { PricingTemplatesClient } from "@/components/google-iap-management/pricing-templates/PricingTemplatesClient";
 
-export default async function PricingTemplatesPage() {
+export default async function PricingTemplatesPage({
+  searchParams,
+}: {
+  searchParams?: { account?: string };
+}) {
   const session = await getServerSession(authOptions);
   if (!session) redirect("/login");
 
@@ -30,11 +35,30 @@ export default async function PricingTemplatesPage() {
       ? cookieActiveId
       : fallbackId;
 
-  const [defaultOverview, appTemplates, cachedApps] = await Promise.all([
-    getAccountTemplateOverview(activeAccountId),
-    listAppTemplates(activeAccountId),
-    listAppsForAccount(activeAccountId),
-  ]);
+  // ── G1e/E1 — ACCOUNT ĐANG XEM ≠ ACCOUNT ĐANG ACTIVE ───────────────────
+  //
+  // Chip chọn account ghi lựa chọn vào QUERY STRING `?account=`, KHÔNG ghi
+  // vào cookie active account. Đó là quyết định của Manager, và nó có lý
+  // do vận hành: Manager cần liếc Default của account khác mà không làm
+  // xê dịch account mà mọi màn khác của module đang bám theo.
+  //
+  // ⚠ Vì thế `selectedAccountId` là thứ mọi truy vấn của TAB NÀY phải
+  //   dùng, còn `activeAccountId` chỉ là giá trị mặc định khi chưa chọn.
+  //   Lẫn hai biến này là đọc/ghi đè template của account Manager đang
+  //   KHÔNG nhìn.
+  const requested = searchParams?.account;
+  const selectedAccountId =
+    requested && accounts.some((a) => a.id === requested)
+      ? requested
+      : activeAccountId;
+
+  const [defaultOverview, appTemplates, cachedApps, accountSummaries] =
+    await Promise.all([
+      getAccountTemplateOverview(selectedAccountId),
+      listAppTemplates(selectedAccountId),
+      listAppsForAccount(selectedAccountId),
+      listAccountTemplateSummaries(accounts.map((a) => a.id)),
+    ]);
 
   return (
     <div className="p-8 max-w-6xl">
@@ -61,6 +85,13 @@ export default async function PricingTemplatesPage() {
           package_name: a.package_name,
           display_name: a.display_name,
         }))}
+        accounts={accounts.map((a) => ({ id: a.id, name: a.display_name }))}
+        accountSummaries={accountSummaries}
+        selectedAccountId={selectedAccountId}
+        /* E7 — gate admin đã chặn ở SERVER (G1c). Cờ này chỉ để UI khỏi
+           mời người dùng bấm vào một nút chắc chắn bị 403. Nó KHÔNG phải
+           lớp bảo vệ: bỏ cờ đi thì route vẫn từ chối. */
+        canEditDefault={session.user?.role === "admin"}
       />
     </div>
   );

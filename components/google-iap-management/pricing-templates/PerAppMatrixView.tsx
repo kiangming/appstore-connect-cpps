@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { Info } from "lucide-react";
 import { ArrowLeft } from "lucide-react";
 
 import { CONTINENTS, type Continent } from "@/lib/google-iap-management/region-continent";
@@ -121,7 +122,22 @@ export function PerAppMatrixView({
       />
       <div className="flex items-start justify-between mb-4 gap-3 flex-wrap">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900 mb-1">
+      {/* ── E4 · CÔNG BỐ thứ tự cột chưa xác định (xem DefaultMatrixView
+          để biết đầy đủ lý do vì sao là CÔNG BỐ chứ không phải lỗi). */}
+      {matrix.columnOrderUnknown && (
+        <div
+          data-testid="column-order-unknown"
+          className="mb-4 flex items-start gap-2 text-sm text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2"
+        >
+          <Info className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <span>
+            Thứ tự cột của template này chưa xác định (upload trước khi tính
+            năng thứ tự cột ra đời) — Replace lại để có thứ tự đúng. Giá trị
+            trong bảng vẫn chính xác.
+          </span>
+        </div>
+      )}
+                <h1 className="text-2xl font-semibold text-slate-900 mb-1">
             Per-App Pricing Template — {appDisplayName ?? packageName}
           </h1>
           <p className="text-sm text-slate-500">

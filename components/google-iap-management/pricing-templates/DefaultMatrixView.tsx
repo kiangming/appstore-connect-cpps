@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { Info } from "lucide-react";
 
 import { CONTINENTS, type Continent } from "@/lib/google-iap-management/region-continent";
 import type { MatrixData } from "@/lib/google-iap-management/queries/template-matrix";
@@ -97,6 +98,26 @@ export function DefaultMatrixView({
         ]}
       />
       <div className="flex items-start justify-between mb-4 gap-4">
+
+      {/* ── E4 · CÔNG BỐ thứ tự cột chưa xác định ─────────────────────────
+          ⚠ VAI LÀ CÔNG BỐ, KHÔNG PHẢI BÁO LỖI. Dữ liệu giá hoàn toàn
+          đúng; chỉ THỨ TỰ CỘT là không bảo đảm, vì template này được
+          upload trước khi có `sort_order` (G1d) và M-1 chưa backfill nó.
+          Vì thế: nền xanh-thông-tin, không phải nền đỏ, và không chặn thao
+          tác nào. Câu chữ chờ Manager duyệt lúc nghiệm thu. */}
+      {matrix.columnOrderUnknown && (
+        <div
+          data-testid="column-order-unknown"
+          className="mb-4 flex items-start gap-2 text-sm text-sky-800 bg-sky-50 border border-sky-200 rounded-lg px-3 py-2"
+        >
+          <Info className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <span>
+            Thứ tự cột của template này chưa xác định (upload trước khi tính
+            năng thứ tự cột ra đời) — Replace lại để có thứ tự đúng. Giá trị
+            trong bảng vẫn chính xác.
+          </span>
+        </div>
+      )}
         <div>
           <h1 className="text-2xl font-semibold text-slate-900 mb-1">
             Default Pricing Template

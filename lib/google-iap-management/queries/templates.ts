@@ -123,6 +123,15 @@ export interface TemplateOverview {
   sampleEntries: ParsedPricingEntry[];
 }
 
+/** G1e — một dòng cho MỖI account đang tồn tại, kể cả account CHƯA có
+ *  template (`template: null`). Badge, pill và bảng toàn cảnh đều đọc từ
+ *  đây. */
+export interface AccountTemplateSummary {
+  account_id: string;
+  template: PricingTemplateRow | null;
+  entry_count: number;
+}
+
 export interface AppTemplateSummary {
   app_id: string;
   package_name: string;
@@ -849,6 +858,58 @@ export function getPrimaryTierFromCandidates(
     collator.compare(a.identifier, b.identifier),
   );
   return sorted[0].identifier;
+}
+
+/**
+ * G1e — tóm tắt template Default của TỪNG account.
+ *
+ * ⚠ TRẢ ĐỦ MỘT DÒNG CHO MỖI accountId ĐƯỢC HỎI, kể cả account chưa có
+ *   template (`template: null`). Đây là tính chất, không phải tiện tay:
+ *   nếu chỉ trả account CÓ template thì màn hình mất khả năng phân biệt
+ *   "account này chưa cấu hình" với "account này không tồn tại" — và
+ *   badge sẽ lấy mẫu số từ danh sách đã lọc nên mãi mãi là N/N.
+ */
+export async function listAccountTemplateSummaries(
+  accountIds: readonly string[],
+): Promise<AccountTemplateSummary[]> {
+  if (accountIds.length === 0) return [];
+  const db = googleIapDb();
+  const { data, error } = await db
+    .from("pricing_templates")
+    .select(TEMPLATE_COLUMNS)
+    .eq("scope_type", "ACCOUNT")
+    .in("scope_account_id", accountIds as string[]);
+  if (error) {
+    throw new Error(`Account template summaries failed: ${error.message}`);
+  }
+  const rows = (data ?? []) as PricingTemplateRow[];
+  const byAccount = new Map(
+    rows.map((r) => [r.scope_account_id ?? "", r] as const),
+  );
+
+  const templateIds = rows.map((r) => r.id);
+  const counts = new Map<string, number>();
+  if (templateIds.length > 0) {
+    const { data: entries, error: entErr } = await db
+      .from("pricing_template_entries")
+      .select("template_id")
+      .in("template_id", templateIds);
+    if (entErr) {
+      throw new Error(`Account template counts failed: ${entErr.message}`);
+    }
+    for (const e of (entries ?? []) as Array<{ template_id: string }>) {
+      counts.set(e.template_id, (counts.get(e.template_id) ?? 0) + 1);
+    }
+  }
+
+  return accountIds.map((accountId) => {
+    const template = byAccount.get(accountId) ?? null;
+    return {
+      account_id: accountId,
+      template,
+      entry_count: template ? (counts.get(template.id) ?? 0) : 0,
+    };
+  });
 }
 
 /**

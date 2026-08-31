@@ -11,14 +11,34 @@ import {
   AlertCircle,
   CheckCircle2,
   Table2,
+  Cog,
+  Lock,
 } from "lucide-react";
 
-import type { TemplateOverview } from "@/lib/google-iap-management/queries/templates";
+import type {
+  AccountTemplateSummary,
+  TemplateOverview,
+} from "@/lib/google-iap-management/queries/templates";
 import { replaceConfirmVariant } from "@/lib/google-iap-management/replace-confirm";
 import { EntriesPreviewTable } from "./EntriesPreviewTable";
 
+export interface AccountOption {
+  id: string;
+  name: string;
+}
+
 interface Props {
   overview: TemplateOverview;
+  /** ⚠ E1 — MỌI account đang tồn tại, KỂ CẢ account chưa có template.
+   *  Ẩn account chưa có template đi thì "chưa cấu hình" và "không tồn
+   *  tại" nhìn giống hệt nhau trên màn, và người dùng không có cách nào
+   *  phân biệt. */
+  accounts: AccountOption[];
+  summaries: AccountTemplateSummary[];
+  /** Account ĐANG XEM. `overview` là của ĐÚNG account này. */
+  selectedAccountId: string;
+  /** E7 — không phải admin thì tab ở chế độ chỉ-đọc. */
+  readOnly?: boolean;
 }
 
 function formatTimestamp(iso: string | null | undefined): string {
@@ -30,7 +50,13 @@ function formatTimestamp(iso: string | null | undefined): string {
   }
 }
 
-export function DefaultTemplateTab({ overview }: Props) {
+export function DefaultTemplateTab({
+  overview,
+  accounts,
+  summaries,
+  selectedAccountId,
+  readOnly = false,
+}: Props) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -40,15 +66,52 @@ export function DefaultTemplateTab({ overview }: Props) {
   /** File đang chờ Manager xác nhận trong modal Replace. */
   const [pendingFile, setPendingFile] = useState<File | null>(null);
 
+  const summaryByAccount = new Map(summaries.map((s) => [s.account_id, s]));
+  const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
+  const selectedLabel = selectedAccount?.name ?? selectedAccountId;
+  const isMigrated = overview.template?.origin_note != null;
+
+  /**
+   * ⚠ E1 — CHỌN ACCOUNT ĐỂ XEM, KHÔNG ĐỔI ACTIVE ACCOUNT CỦA MODULE.
+   *
+   * Lựa chọn đi vào QUERY STRING `?account=`. Nó CỐ Ý không gọi
+   * `writeActiveAccountId` và không đụng cookie `g_iap_active_v2`:
+   * Manager cần liếc Default của một account khác mà không làm xê dịch
+   * account mà mọi màn còn lại của module đang bám theo (danh sách app,
+   * bulk import, single-IAP form…).
+   *
+   * Đổi chỗ này thành "đổi luôn active account cho tiện" là làm một cú
+   * bấm để XEM biến thành một cú bấm đổi NGỮ CẢNH của cả module.
+   * Test ghim: DefaultTemplateTab.account-chips.test.tsx.
+   */
+  function selectAccount(accountId: string) {
+    if (accountId === selectedAccountId || uploading) return;
+    startTransition(() => {
+      router.push(
+        `/google-iap-management/settings/pricing-templates?account=${encodeURIComponent(accountId)}`,
+      );
+      router.refresh();
+    });
+  }
+
   async function handleFile(file: File) {
     setError(null);
     setSuccess(null);
     setUploading(true);
     const form = new FormData();
     form.append("file", file);
-    // G1b — "ACCOUNT": Default Template giờ thuộc về account đang active.
-    // Route đọc account ở SERVER; client không gửi và không được gửi.
     form.append("scope", "ACCOUNT");
+    // ⚠ G1e — GỬI ACCOUNT ĐANG XEM, và đây là một thay đổi CÓ CHỦ Ý so
+    //   với G1b (khi đó comment ở đây ghi "client không gửi và không
+    //   được gửi").
+    //   Lý do đổi: G1e cho phép XEM Default của account khác mà KHÔNG
+    //   đổi active account. Từ lúc đó, cookie không còn trả lời được câu
+    //   "Manager đang muốn ghi vào account nào" — chỉ màn hình biết.
+    //   An toàn KHÔNG đến từ việc giấu giá trị này, mà đến từ:
+    //     (1) route đối chiếu account_id với listAccounts() — client
+    //         không bịa ra được một account;
+    //     (2) gate admin của G1c vẫn chặn trước đó.
+    form.append("account_id", selectedAccountId);
     try {
       const res = await fetch("/api/google-iap-management/pricing-templates", {
         method: "POST",
@@ -130,6 +193,48 @@ export function DefaultTemplateTab({ overview }: Props) {
 
   return (
     <div className="space-y-4">
+      {/* ── E1 · hàng chip chọn account ─────────────────────────────── */}
+      <div data-testid="account-chips" className="space-y-2">
+        <div className="text-xs text-slate-500">
+          {accounts.length} account · chọn để XEM Default của account đó.
+          Việc chọn ở đây KHÔNG đổi account đang hoạt động của module.
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {accounts.map((account) => {
+            const has = summaryByAccount.get(account.id)?.template != null;
+            const isSelected = account.id === selectedAccountId;
+            return (
+              <button
+                key={account.id}
+                type="button"
+                data-testid={`account-chip-${account.id}`}
+                data-selected={isSelected ? "true" : "false"}
+                onClick={() => selectAccount(account.id)}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs transition ${
+                  isSelected
+                    ? "border-emerald-500 bg-emerald-50 text-emerald-900"
+                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
+                }`}
+              >
+                <span className="font-medium">{account.name}</span>
+                <span className="font-mono text-[11px] text-slate-400">
+                  {account.id}
+                </span>
+                <span
+                  className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] border ${
+                    has
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      : "bg-amber-50 text-amber-700 border-amber-200"
+                  }`}
+                >
+                  {has ? "có template" : "chưa có"}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {pendingFile && overview.template && (
         <ReplaceConfirmDialog
           fileName={pendingFile.name}
@@ -151,15 +256,59 @@ export function DefaultTemplateTab({ overview }: Props) {
         <div className="flex items-start justify-between mb-4 gap-4">
           <div>
             <h2 className="text-base font-semibold text-slate-900">
-              Default Template
+              Default Template ·{" "}
+              <span data-testid="selected-account-label" className="text-emerald-700">
+                {selectedLabel}
+              </span>{" "}
+              <span className="font-mono text-xs text-slate-400">
+                {selectedAccountId}
+              </span>
             </h2>
             <p className="text-xs text-slate-500 mt-0.5 max-w-prose">
               Applied to every app unless overridden by a per-app template.
               Sparse cells are permitted — missing (tier, region) pairs fall
               back to Google&apos;s auto-equalisation.
             </p>
+            {/* ── E3 · pill nguồn gốc ────────────────────────────────── */}
+            {isMigrated && (
+              <div className="mt-2">
+                <span
+                  data-testid="origin-pill"
+                  title={overview.template?.origin_note ?? undefined}
+                  className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-violet-50 text-violet-700 border border-violet-200"
+                >
+                  <Cog className="h-3 w-3" />
+                  Do migration nhân bản · chưa ai cấu hình riêng cho account
+                  này
+                </span>
+              </div>
+            )}
+            {/* ── E5 · account CHƯA có template ──────────────────────── */}
+            {!overview.template && (
+              <p
+                data-testid="empty-state-note"
+                className="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"
+              >
+                Account này chưa có Default Template. IAP của nó rơi về giá
+                gốc + auto-equalisation của Google cho tới khi có bản upload
+                đầu tiên.
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {/* ── E7 · không phải admin → chỉ đọc ──────────────────────
+                Gate THẬT nằm ở server (G1c requireGoogleIapAdmin). Cụm
+                này chỉ để khỏi mời người dùng bấm vào nút chắc chắn 403.
+                Vẫn giữ lối vào "Open matrix view" vì XEM không bị gate. */}
+            {readOnly && (
+              <div
+                data-testid="readonly-lock"
+                className="flex items-center gap-1.5 px-3 py-2 text-xs text-slate-500 bg-slate-100 rounded-lg"
+              >
+                <Lock className="h-3.5 w-3.5" />
+                Chỉ admin sửa được Default Template
+              </div>
+            )}
             {overview.template && (
               <Link
                 href="/google-iap-management/settings/pricing-templates/default"
@@ -169,7 +318,7 @@ export function DefaultTemplateTab({ overview }: Props) {
                 Open matrix view
               </Link>
             )}
-            {overview.template && (
+            {overview.template && !readOnly && (
               <button
                 onClick={handleRemove}
                 disabled={uploading}
@@ -181,7 +330,8 @@ export function DefaultTemplateTab({ overview }: Props) {
             )}
             <button
               onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
+              disabled={uploading || readOnly}
+              hidden={readOnly}
               className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition disabled:opacity-50"
             >
               {uploading ? (
@@ -250,6 +400,74 @@ export function DefaultTemplateTab({ overview }: Props) {
           totalEntryCount={overview.entryCount}
         />
       )}
+
+      {/* ── E6 · bảng toàn cảnh N account ───────────────────────────────
+          Đây là CHỖ DUY NHẤT so được các account cạnh nhau. Thẻ phía trên
+          chỉ nói về account đang chọn, nên một account bị bỏ quên sẽ không
+          bao giờ tự lộ ra ở đó. */}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-100">
+          <div className="text-sm font-semibold text-slate-900">
+            Toàn cảnh {accounts.length} account
+          </div>
+          <div className="text-[11.5px] text-slate-500">
+            Cột &ldquo;Nguồn gốc&rdquo; phân biệt bản thừa hưởng từ migration
+            với bản có người cố ý đặt.
+          </div>
+        </div>
+        <table className="w-full text-[13px]" data-testid="overview-table">
+          <thead>
+            <tr className="bg-slate-50 text-[10px] uppercase tracking-wide text-slate-500">
+              <th className="text-left font-semibold px-4 py-2">Account</th>
+              <th className="text-left font-semibold px-4 py-2">Trạng thái</th>
+              <th className="text-left font-semibold px-4 py-2">Số ô</th>
+              <th className="text-left font-semibold px-4 py-2">Nguồn gốc</th>
+            </tr>
+          </thead>
+          <tbody>
+            {accounts.map((account) => {
+              const sum = summaryByAccount.get(account.id);
+              const has = sum?.template != null;
+              const migrated = sum?.template?.origin_note != null;
+              return (
+                <tr
+                  key={account.id}
+                  data-testid={`overview-row-${account.id}`}
+                  className="border-b border-slate-50 last:border-0"
+                >
+                  <td className="px-4 py-2">
+                    <span className="text-slate-800">{account.name}</span>{" "}
+                    <span className="font-mono text-[11px] text-slate-400">
+                      {account.id}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    <span
+                      className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] border ${
+                        has
+                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                          : "bg-amber-50 text-amber-700 border-amber-200"
+                      }`}
+                    >
+                      {has ? "có template" : "chưa có"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2 font-mono text-slate-600">
+                    {has ? sum?.entry_count.toLocaleString() : "—"}
+                  </td>
+                  <td className="px-4 py-2 text-[11.5px] text-slate-500">
+                    {!has
+                      ? "—"
+                      : migrated
+                        ? "bản sao migration"
+                        : sum?.template?.uploaded_by}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
