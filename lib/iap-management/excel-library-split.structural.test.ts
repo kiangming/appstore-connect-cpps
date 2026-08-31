@@ -119,8 +119,12 @@ const EXCELJS_ALLOWED = new Set<string>([
   //     no <pane> element in any of them.
   // A 94-row × 9-country matrix needs both.
   "lib/google-iap-management/xlsx-template-matrix-export.ts",
-  // (C4b adds the Google matrix-export route here for the same server-only
-  // reason as the Apple route above.)
+  // The route that serves the writer above. Same server-only reason as the
+  // Apple route: `writeBuffer()` must not run in the browser bundle. Measured
+  // for this exact route — importing exceljs client-side took
+  // /google-iap-management/settings/pricing-templates/default from 169 kB to
+  // 424 kB First Load JS (+255 kB).
+  "app/api/google-iap-management/pricing-templates/matrix-export/route.ts",
 ]);
 
 /**
@@ -134,6 +138,7 @@ const EXCELJS_ALLOWED = new Set<string>([
  */
 const GOOGLE_EXCELJS_ALLOWED = new Set<string>([
   "lib/google-iap-management/xlsx-template-matrix-export.ts",
+  "app/api/google-iap-management/pricing-templates/matrix-export/route.ts",
 ]);
 
 /** Files that legitimately use `xlsx` — the Google writer, both parsers, the

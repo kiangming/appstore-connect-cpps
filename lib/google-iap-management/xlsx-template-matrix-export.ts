@@ -441,6 +441,36 @@ export async function writeTemplateMatrixXlsx(
   const spec = buildTemplateMatrixSpec(input);
 
   const wb = new ExcelJS.Workbook();
+
+  /**
+   * ⚠ GHIM DẤU THỜI GIAN — ĐỂ "HAI LẦN EXPORT CÙNG DỮ LIỆU CHO RA FILE
+   * GIỐNG HỆT" LÀ ĐÚNG THEO NGHĨA ĐEN.
+   *
+   * Mặc định exceljs đóng `dcterms:created`/`dcterms:modified` bằng giờ hiện
+   * tại vào `docProps/core.xml`. Đo được: hai lần ghi CÙNG input, cách nhau
+   * hơn một giây, cho ra hai file khác bytes — và `docProps/core.xml` là part
+   * DUY NHẤT khác (mọi part nội dung: sheet1.xml, styles.xml,
+   * sharedStrings.xml đều giống hệt).
+   *
+   * Điều đó biến tính chất thiết kế thành ra "gần đúng": Manager tải hai lần
+   * rồi so file sẽ thấy khác nhau mà không có gì trong DỮ LIỆU khác cả, và
+   * test byte-identical thì flaky theo đồng hồ (bắt được ở C4b, 1/3 lần chạy).
+   *
+   * Ghim về epoch — một giá trị hiển nhiên KHÔNG phải ngày thật, nên không ai
+   * đọc nó như thông tin. Dấu thời gian thật của bản export nằm ở TÊN FILE
+   * (`…-20260831-1035.xlsx`), nên không mất mát gì.
+   *
+   * ⚠ GIỚI HẠN, ĐÃ ĐO — ĐỪNG HỨA QUÁ. Ghim này làm MỌI PART trong archive
+   * giống hệt nhau giữa hai lần ghi (đo: cùng kích thước 6780 B, không part
+   * nào khác nội dung). Nhưng buffer THÔ vẫn khác, vì tầng zip của exceljs
+   * đóng mtime hiện tại vào từng entry của vỏ ZIP và không phơi ra API nào
+   * để chỉnh. ⇒ Tính chất ĐÚNG và kiểm được là "mọi part byte-identical",
+   * KHÔNG phải "buffer byte-identical". Test canh đúng câu đó.
+   */
+  const DETERMINISTIC_STAMP = new Date(0);
+  wb.created = DETERMINISTIC_STAMP;
+  wb.modified = DETERMINISTIC_STAMP;
+
   const ws = wb.addWorksheet(spec.sheetName);
 
   for (const row of spec.aoa) ws.addRow(row);
@@ -510,4 +540,40 @@ export async function writeTemplateMatrixXlsx(
     truncated: spec.truncated,
     columnCount: spec.columnCount,
   };
+}
+
+/**
+ * Tên file .xlsx. Hàm THUẦN, tách khỏi route để test được ở hai tầng —
+ * tầng này (chuỗi ra sao) và tầng route (header `Content-Disposition` có bị
+ * tách đôi được không).
+ *
+ * ⚠ ĐÂY LÀ BẢN THAY THẾ TẦNG 1 cho test bảo mật của `csvFilename`
+ * ("sanitises unsafe filename characters in the package slug") sắp bị xoá ở
+ * C5. Tầng 2 nằm ở `matrix-export/route.test.ts`. Xoá `csv-export.ts` mà
+ * không có cả hai là bỏ rơi một test đang canh thật.
+ *
+ * ⚠ SANITISE LÀ BẮT BUỘC, KHÔNG PHẢI CHO ĐẸP. `package_name` đi vào header
+ * HTTP; một giá trị chứa `\r\n` hoặc `"` sẽ tách `Content-Disposition` làm
+ * đôi. Whitelist `[a-z0-9._-]` (giống `csvFilename` cũ) loại sạch cả hai.
+ *
+ * ⚠ Có tiền tố `google-`, khác `csvFilename` cũ (`pricing-template-…csv`).
+ * Manager đang phải TỰ ĐỔI TÊN file sau khi tải để phân biệt với file Apple
+ * cùng tên — hai file CSV gửi kèm census đều mang tiền tố `google-` do thêm
+ * tay. Đặt sẵn ở đây thì thao tác đó biến mất.
+ */
+export function templateMatrixXlsxFilename(args: {
+  scope: TemplateMatrixScope;
+  packageName?: string;
+  now?: Date;
+}): string {
+  const d = args.now ?? new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp =
+    `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
+    `-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  if (args.scope === "per-app") {
+    const slug = (args.packageName ?? "app").replace(/[^a-z0-9._-]+/gi, "_");
+    return `google-pricing-template-per-app-${slug}-${stamp}.xlsx`;
+  }
+  return `google-pricing-template-default-${stamp}.xlsx`;
 }

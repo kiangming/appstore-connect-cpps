@@ -14,6 +14,7 @@ import { SSF } from "xlsx";
 import {
   buildTemplateMatrixSpec,
   diffNote,
+  templateMatrixXlsxFilename,
   isTruncatedCell,
   priceCellValue,
   priceColumn,
@@ -442,4 +443,58 @@ describe("hình dạng sheet", () => {
     expect(DIFF_FONT_COLOR).toBe("FFB45309");
     expect(DIFF_FONT_COLOR).not.toBe("FFFFF2CC");
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tên file — TẦNG 1 của bản thay thế cho test bảo mật của `csvFilename`
+// (tầng 2 ở app/api/.../matrix-export/route.test.ts, canh header thật)
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("templateMatrixXlsxFilename", () => {
+  const now = new Date(2026, 7, 31, 10, 35); // 2026-08-31 10:35 local
+
+  it("scope default: có tiền tố google- và dấu thời gian YYYYMMDD-HHmm", () => {
+    // ⚠ Tiền tố `google-` là CHỦ ĐÍCH, khác `csvFilename` cũ. Manager đang
+    // phải tự đổi tên file sau khi tải để phân biệt với file Apple cùng tên —
+    // hai file CSV gửi kèm census đều mang tiền tố đó do thêm tay.
+    expect(templateMatrixXlsxFilename({ scope: "default", now })).toBe(
+      "google-pricing-template-default-20260831-1035.xlsx",
+    );
+  });
+
+  it("scope per-app: kèm package slug", () => {
+    expect(
+      templateMatrixXlsxFilename({
+        scope: "per-app",
+        packageName: "vng.games.lightandnight",
+        now,
+      }),
+    ).toBe("google-pricing-template-per-app-vng.games.lightandnight-20260831-1035.xlsx");
+  });
+
+  it("per-app thiếu packageName → 'app', không phải 'undefined'", () => {
+    expect(templateMatrixXlsxFilename({ scope: "per-app", now })).toContain(
+      "per-app-app-",
+    );
+  });
+
+  it.each([
+    { bad: 'evil"\r\nSet-Cookie: a=b', why: "CRLF + nháy kép" },
+    { bad: "a\r\nContent-Length: 0", why: "CRLF" },
+    { bad: 'x"; filename="other.xlsx', why: "nháy kép + dấu chấm phẩy" },
+    { bad: "../../etc/passwd", why: "path traversal" },
+    { bad: "a b\tc", why: "khoảng trắng + tab" },
+  ])(
+    "⚠ BẢO MẬT — sanitise $why: không còn ký tự tách được header",
+    ({ bad }) => {
+      const name = templateMatrixXlsxFilename({
+        scope: "per-app",
+        packageName: bad,
+        now,
+      });
+      // Whitelist [a-z0-9._-] cộng với các ký tự cố định của khuôn tên.
+      expect(name).toMatch(/^google-pricing-template-per-app-[A-Za-z0-9._-]+-\d{8}-\d{4}\.xlsx$/);
+      expect(name).not.toMatch(/[\r\n"';\\/]/);
+    },
+  );
 });
