@@ -418,3 +418,92 @@ describe("C2 · vỏ file", () => {
     expect(part("xl/worksheets/sheet1.xml")).toContain('<dimension ref="A1:E4"/>');
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Ký tự đặc biệt trong DỮ LIỆU — bản thay cho csv-export.test.ts #7
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("⚠ ký tự đặc biệt trong tier: sống sót nguyên vẹn vào file", () => {
+  /**
+   * Bản thay cho `csv-export.test.ts` #7 ("quotes fields containing commas /
+   * quotes / newlines — RFC 4180").
+   *
+   * ⚠ ĐỪNG BỎ TEST NÀY VÌ "CSV KHÔNG CÒN NÊN KHÔNG CẦN ESCAPE NỮA". Cái nó
+   * canh không phải dấu nháy của CSV — nó canh rằng **một tên tier do Manager
+   * đặt, chứa ký tự bất kỳ, đi vào file mà không hỏng và không đổi**. Định
+   * dạng đổi thì rủi ro đổi hình dạng chứ không biến mất: .xlsx là XML, nên
+   * `&`, `<`, `>` phải được escape đúng, còn `,` và `"` thì phải KHÔNG bị
+   * đụng tới (CSV cần, XML không). Cả hai vế đều sai được.
+   *
+   * Đây đúng là lớp lỗi §21.6 của arc Apple: một test trông như đã lỗi thời
+   * theo định dạng cũ, mà thật ra đang canh một tính chất của DỮ LIỆU.
+   */
+  const NASTY = [
+    { label: "dấu phẩy", tier: "Tier, special" },
+    { label: "nháy kép", tier: 'Tier "quoted"' },
+    { label: "và + ngoặc nhọn", tier: "Tier <b>1</b> & Co" },
+    { label: "xuống dòng", tier: "Tier\nwrapped" },
+    { label: "nháy đơn + apostrophe", tier: "Côte d'Ivoire tier" },
+    { label: "phi-ASCII", tier: "Tier Việt — Türkiye" },
+  ];
+
+  it.each(NASTY)("$label — đọc lại từ file ra ĐÚNG chuỗi gốc", async ({ tier }) => {
+    const matrix = composeMatrix([row(tier, "US", "USD", "990000")]);
+    const out = await writeTemplateMatrixXlsx({
+      matrix,
+      regionCodes: ["US"],
+      showDiff: false,
+      scope: "default",
+    });
+    const dir = mkdtempSync(join(tmpdir(), "gmatrix-nasty-"));
+    const file = join(dir, "m.xlsx");
+    writeFileSync(file, out.buffer);
+    const read = (n: string) =>
+      execFileSync("unzip", ["-p", file, globEscape(n)], { encoding: "utf8" });
+
+    const sheet = read("xl/worksheets/sheet1.xml");
+    const shared = read("xl/sharedStrings.xml");
+
+    // A3 = ô tier của hàng dữ liệu đầu tiên.
+    const m = sheet.match(/<c r="A3"[^>]*t="s"[^>]*><v>(\d+)<\/v>/);
+    if (!m) throw new Error("ô A3 không phải shared string");
+    const items = shared.match(/<si>[\s\S]*?<\/si>/g) ?? [];
+    const raw = (items[Number(m[1])].match(/<t[^>]*>([\s\S]*?)<\/t>/) ?? ["", ""])[1];
+
+    // Un-escape XML để so với chuỗi gốc.
+    const decoded = raw
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&#10;/g, "\n")
+      .replace(/&amp;/g, "&");
+    expect(decoded).toBe(tier);
+  });
+
+  it("`&` và `<` ĐƯỢC escape trong XML; `,` và `\"` thì KHÔNG bị đụng tới", async () => {
+    // Hai vế của cùng một sự thật: XML cần escape ba ký tự, CSV cần escape ba
+    // ký tự KHÁC. Lẫn hai bộ vào nhau là cách file hỏng mà vẫn "trông ổn".
+    const matrix = composeMatrix([
+      row('A & B < C, D "E"', "US", "USD", "990000"),
+    ]);
+    const out = await writeTemplateMatrixXlsx({
+      matrix,
+      regionCodes: ["US"],
+      showDiff: false,
+      scope: "default",
+    });
+    const dir = mkdtempSync(join(tmpdir(), "gmatrix-esc-"));
+    const file = join(dir, "m.xlsx");
+    writeFileSync(file, out.buffer);
+    const shared = execFileSync("unzip", ["-p", file, "xl/sharedStrings.xml"], {
+      encoding: "utf8",
+    });
+    expect(shared).toContain("&amp;");
+    expect(shared).toContain("&lt;");
+    // `,` là ký tự thường trong XML — không được biến thành gì cả.
+    expect(shared).toContain(",");
+    // XML KHÔNG bị hỏng: mọi `&` đều mở đầu một entity hợp lệ.
+    expect(shared).not.toMatch(/&(?!amp;|lt;|gt;|quot;|apos;|#\d+;)/);
+  });
+});
