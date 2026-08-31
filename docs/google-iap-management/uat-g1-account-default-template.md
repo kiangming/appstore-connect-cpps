@@ -1,5 +1,8 @@
 # UAT — G1: Default Pricing Template tách theo account (Google)
 
+> ✅ **ĐÃ NGHIỆM THU 2026-09-01 — arc G1 ĐÓNG.** Xanh ở U1·U2·U3·U4·U8.
+> U6/U6b hoãn, U9 không kiểm được (đúng). Giữ lại làm hồ sơ; xem khối cuối file.
+
 **Bản deploy cần kiểm:** `a995616` (và `3233d78` ngay dưới nó).
 Trước khi bắt đầu, xác nhận Railway đã deploy xong đúng commit này —
 kiểm ở Railway → service `web` → Deployments, dòng trên cùng phải là
@@ -157,7 +160,15 @@ HAVING COUNT(*) FILTER (WHERE e.sort_order IS NULL) > 0;
 
 Với mỗi mục: **OK** / **LỆCH (mô tả thấy gì)** / **KHÔNG KIỂM ĐƯỢC (lý do)**.
 
-⚠ **Chỉ sau khi UAT xanh** mới tới M-2 (xoá dòng GLOBAL + thu hẹp CHECK +
-drop index `…_global_unique`). Trước đó dòng GLOBAL vẫn nằm trong DB và
-**không đường code nào đọc nó** — đó là trạng thái đã tính trước, không
-phải sót.
+⚠ **ĐÃ XONG (2026-09-01).** UAT xanh ở U1 · U2 · U3 · U4 · U8 (Export XLSX).
+**U6/U6b hoãn** theo quyết định Manager — để lại cho lần dùng thật.
+M-2 đã apply + verify xanh sau đó (M2-V0 13/13), nên dòng GLOBAL đã bị xoá và
+CHECK đã thu hẹp. File này giữ lại làm **hồ sơ nghiệm thu**, không còn là việc
+phải làm.
+
+⚠ Hai mục còn treo, cố ý:
+- **U6/U6b** — chưa chạy. Đây cũng là lý do chưa dọn 2 bảng backup (điều kiện
+  F4 là "đã có ít nhất một lần Replace/upload THẬT thành công sau deploy").
+- **U9** — cờ `columnOrderUnknown`: ghi "KHÔNG KIỂM ĐƯỢC" là kết quả đúng, vì
+  M-1 đã backfill `sort_order` cho toàn bộ template nên ca đó không tồn tại
+  trên dữ liệu thật.

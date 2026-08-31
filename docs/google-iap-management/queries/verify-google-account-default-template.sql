@@ -1,8 +1,13 @@
 -- ═══════════════════════════════════════════════════════════════════════════
+-- ✅ ARC G1 ĐÃ ĐÓNG (2026-09-01). File này giữ lại làm HỒ SƠ, không còn là
+--    việc phải làm. M-1 và M-2 đều đã apply và verify xanh trên production.
+--    Hai bảng backup VẪN CÒN — xem M2-V6 và tag [GOOGLE-g1-backup-cleanup].
+-- ═══════════════════════════════════════════════════════════════════════════
 -- VERIFY — [G1 · GOOGLE account-default-template]
 --
 --   M-1  supabase/migrations/20260831000000_google_iap_mgmt_account_templates_m1_additive.sql
---   M-2  CHƯA VIẾT (thuộc chunk G1f, apply SAU khi code mới đã deploy)
+--   M-2  supabase/migrations/20260901000000_google_iap_mgmt_account_templates_m2_drop_global.sql
+--        ✅ ĐÃ APPLY + VERIFY XANH (M2-V0 13/13). Arc G1 ĐÓNG.
 --
 -- THỨ TỰ:
 --   0. TRƯỚC khi apply M-1  → M1-V-PRE-A, M1-V-PRE-B
@@ -360,7 +365,7 @@ SELECT
 
 -- ╔═════════════════════════════════════════════════════════════════════════╗
 -- ║  G1c/C4 — HỆ QUẢ CỦA VIỆC BỊT RÒ RỈ CROSS-ACCOUNT                       ║
--- ║  Chạy TRƯỚC khi deploy G1c, để biết màn nào sẽ bớt dòng.                ║
+-- ║  ✅ ĐÃ CHẠY trước khi deploy G1c. Giữ lại làm ghi chép.                 ║
 -- ╚═════════════════════════════════════════════════════════════════════════╝
 
 -- ── G1c-V1 — template APP thuộc account nào ───────────────────────────────

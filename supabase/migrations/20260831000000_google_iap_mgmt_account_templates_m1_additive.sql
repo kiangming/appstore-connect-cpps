@@ -73,8 +73,9 @@
 --     docs/google-iap-management/queries/verify-google-account-default-template.sql
 --   Census đã chạy (nguồn của mọi con số trong file này):
 --     docs/google-iap-management/queries/census-google-pricing-templates.sql
---   M-2 (phần XOÁ GLOBAL, apply SAU khi code mới đã deploy): CHƯA VIẾT, thuộc
---     chunk G1f.
+--   M-2 (phần XOÁ GLOBAL, apply SAU khi code mới đã deploy):
+--     supabase/migrations/20260901000000_google_iap_mgmt_account_templates_m2_drop_global.sql
+--     ✅ ĐÃ APPLY. Ghi lại để đọc M-1 không tưởng M-2 còn treo.
 --
 -- ── VÌ SAO TÁCH LÀM HAI (M-1 / M-2) ──────────────────────────────────────
 -- M-1 chỉ CỘNG: thêm cột, nới CHECK, nhân bản. Code CŨ chạy y nguyên sau M-1.

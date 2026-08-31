@@ -125,8 +125,35 @@ docblock của [`xlsx-template-matrix-export.ts`](../../lib/google-iap-managemen
 
 | Tag | Đóng khi nào | Ghi chú |
 |---|---|---|
+| **`[GOOGLE-account-default-template]`** — arc G1, tách Default Template theo account | **2026-09-01 · SHIPPED** | M-1 (`20260831000000`) + M-2 (`20260901000000`) đều đã apply + verify xanh trên production (M2-V0 13/13). Chi tiết ngay dưới bảng |
+| `[GOOGLE-template-column-order]` — G2-Q3 thứ tự cột | 2026-09-01, chunk G1d | `sort_order` + hợp nhất hai đường đọc. Mô tả gốc giữ ở mục phía trên |
 | *(ghi chú tài liệu)* User Guide mục **Apple** Pricing matrix còn hướng dẫn bấm "Export CSV" | 2026-08-31, commit riêng `fix-apple-guide-export-xlsx` | Grep toàn guide ra **4 chỗ**, không phải 3 — chỗ thứ tư (`<li>Export bảng giá ra CSV…`) **không chứa cụm "Export CSV"** nên sửa theo trí nhớ chắc chắn sót. Sót của arc `[TEMPLATE-xlsx]` phía Apple |
 
+### `[GOOGLE-account-default-template]` — trạng thái đóng sổ
+
+**Đã ship gì.** Default Pricing Template của Google tách từ MỘT bản dùng chung
+thành **một bản cho mỗi Google Console account** (6 account). Kèm theo: gate
+admin cho Replace/Remove, bịt hai rò rỉ cross-account (`listAppTemplates`,
+`getAppById`), cột `sort_order` ghim thứ tự cột, và UI chọn account.
+
+**Migration.** `20260831000000` (M-1, thuần cộng thêm) và `20260901000000`
+(M-2, xoá GLOBAL + thu hẹp CHECK + drop `..._global_unique`) — **cả hai đã
+apply + verify xanh** trên production.
+
+**UAT.** Xanh ở U1 (chip 6 account) · U2 (chip KHÔNG đổi active account) ·
+U3 (badge) · U4 (pill) · Export XLSX không hồi quy.
+⏸ **U6/U6b (Replace thật + modal hai biến thể) HOÃN** theo quyết định Manager —
+để lại cho lần dùng thật; issue phát sinh thì Manager báo sau.
+
+**⚠ RỦI RO MANAGER ĐÃ CHẤP NHẬN — đọc trước khi xử lý sự cố.**
+Sau M-2, **đường lui "rollback code" KHÔNG còn dùng được**: code trước G1b đọc
+`scope_type='GLOBAL'`, mà M-2 đã xoá dòng đó và bỏ luôn giá trị `'GLOBAL'` khỏi
+CHECK. Deploy lại bản code cũ sẽ thấy 0 template ở mọi đường đọc Default.
+**Đường lui còn lại: phục hồi từ 2 bảng backup bằng SQL** —
+`pricing_templates_backup_global` và `pricing_template_entries_backup_global`
+(1 header / 846 entry, còn nguyên). Chậm hơn, nhưng không mất dữ liệu.
+Vì thế hai bảng đó **chưa được dọn** — xem tag
+`[GOOGLE-g1-backup-cleanup]` bên trên.
 
 ---
 
