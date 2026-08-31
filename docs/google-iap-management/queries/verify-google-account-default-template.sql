@@ -356,3 +356,49 @@ SELECT
 --      M-1 → deploy ở đầu file M-1.
 --
 -- Cả 4 mục OK ⇒ báo lại để deploy code mới (chunk G1b…G1e).
+
+
+-- ╔═════════════════════════════════════════════════════════════════════════╗
+-- ║  G1c/C4 — HỆ QUẢ CỦA VIỆC BỊT RÒ RỈ CROSS-ACCOUNT                       ║
+-- ║  Chạy TRƯỚC khi deploy G1c, để biết màn nào sẽ bớt dòng.                ║
+-- ╚═════════════════════════════════════════════════════════════════════════╝
+
+-- ── G1c-V1 — template APP thuộc account nào ───────────────────────────────
+-- Sau G1c, tab "Per-App Templates" ở màn
+--   /google-iap-management/settings/pricing-templates
+-- CHỈ còn hiện template của app thuộc ACCOUNT ĐANG ACTIVE. Trước G1c nó
+-- hiện TẤT CẢ, bất kể account — trong khi ô chọn app ngay cạnh
+-- (`listAppsForAccount`) thì đã lọc. Hai nửa cùng màn trả lời hai câu khác
+-- nhau; G1c làm chúng nói cùng một câu.
+--
+-- ⚠ ĐÂY KHÔNG PHẢI MẤT DỮ LIỆU. Không dòng nào bị xoá — chúng chỉ thôi
+--   hiện ở màn của account KHÔNG sở hữu chúng. Đổi account (chip account)
+--   là thấy lại đầy đủ.
+--
+-- KỲ VỌNG: census 2026-08-30 đếm 3 template APP (PASS SDK · Play Together ·
+-- Light and Night). Cột `so_template_app` cộng lại phải bằng 3.
+-- Đọc cột `account`: mỗi Manager khi mở màn dưới account nào sẽ thấy đúng
+-- số dòng ở cột `so_template_app` của account đó.
+SELECT
+  acc.display_name                       AS account,
+  COUNT(t.id)                            AS so_template_app,
+  STRING_AGG(ap.package_name, ' · ' ORDER BY ap.package_name) AS cac_app
+FROM google_iap_mgmt.google_console_accounts acc
+LEFT JOIN google_iap_mgmt.apps ap
+       ON ap.google_console_account_id = acc.id
+LEFT JOIN google_iap_mgmt.pricing_templates t
+       ON t.scope_type = 'APP' AND t.scope_app_id = ap.id
+GROUP BY acc.display_name
+ORDER BY acc.display_name;
+
+
+-- ── G1c-V2 — có template APP nào MỒ CÔI không? ────────────────────────────
+-- Template APP trỏ tới một app không còn tồn tại. Những dòng này KHÔNG hiện
+-- ở bất kỳ màn nào, cả trước lẫn sau G1c (code bỏ qua khi không ghép được
+-- app) — nêu ra để không ai nhầm chúng với dòng "bị G1c giấu đi".
+--
+-- KỲ VỌNG: 0 dòng. Có dòng ⇒ báo lại, đó là rác cần dọn riêng, không thuộc G1c.
+SELECT t.id AS template_id, t.scope_app_id, t.uploaded_at, t.uploaded_by
+FROM google_iap_mgmt.pricing_templates t
+LEFT JOIN google_iap_mgmt.apps ap ON ap.id = t.scope_app_id
+WHERE t.scope_type = 'APP' AND ap.id IS NULL;

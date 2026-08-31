@@ -50,9 +50,17 @@ export function tpl(id: string, over: Partial<TplRow>): TplRow {
 
 /** Fake mô hình đúng hai bảng, có LỌC THẬT — nhờ vậy khẳng định nằm ở
  *  GIÁ TRỊ đọc ra, không phải ở việc "đã gọi .eq() nào". */
+export type AppRow = {
+  id: string;
+  package_name: string;
+  display_name: string | null;
+  google_console_account_id: string;
+};
+
 export class FakeDb {
   templates: TplRow[] = [];
   entries: EntryRow[] = [];
+  apps: AppRow[] = [];
   nextId = 1;
   from(table: string) {
     return new FakeBuilder(this, table);
@@ -61,6 +69,7 @@ export class FakeDb {
 
 class FakeBuilder {
   private filters: Array<[string, unknown]> = [];
+  private inFilters: Array<[string, unknown[]]> = [];
   private head = false;
   private op: "select" | "delete" | "insert" = "select";
   private payload: unknown = null;
@@ -85,6 +94,10 @@ class FakeBuilder {
     this.filters.push([col, val]);
     return this;
   }
+  in(col: string, vals: unknown[]) {
+    this.inFilters.push([col, vals]);
+    return this;
+  }
   order() {
     return this;
   }
@@ -92,8 +105,12 @@ class FakeBuilder {
     const src: Array<Record<string, unknown>> =
       this.table === "pricing_templates"
         ? (this.db.templates as unknown as Array<Record<string, unknown>>)
-        : (this.db.entries as unknown as Array<Record<string, unknown>>);
-    return src.filter((r) => this.filters.every(([c, v]) => r[c] === v));
+        : this.table === "apps"
+          ? (this.db.apps as unknown as Array<Record<string, unknown>>)
+          : (this.db.entries as unknown as Array<Record<string, unknown>>);
+    return src
+      .filter((r) => this.filters.every(([c, v]) => r[c] === v))
+      .filter((r) => this.inFilters.every(([c, vs]) => vs.includes(r[c])));
   }
   async maybeSingle() {
     if (this.op === "insert") {

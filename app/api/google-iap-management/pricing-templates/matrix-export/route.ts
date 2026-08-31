@@ -168,11 +168,12 @@ export async function POST(req: Request) {
     // Per-App cần `package_name` cho tên file. Lấy luôn dịp này để KIỂM app
     // có thuộc account đang active không.
     //
-    // ⚠ SIẾT CÓ CHỦ Ý, CHỈ TRÊN SURFACE MỚI NÀY. Census phát hiện
-    // `settings/pricing-templates/per-app/[appId]/page.tsx:31` gọi
-    // `getAppById(appId)` mà KHÔNG lọc account — biết `appId` là xem được
-    // template của account khác. Route này không lặp lại lỗ đó. Màn cũ giữ
-    // nguyên hành vi (sửa nó là việc của arc G1, cùng chỗ với `listAppTemplates`).
+    // ⚠ LỊCH SỬ (đã khép). Census từng phát hiện màn Per-App gọi
+    // `getAppById(appId)` KHÔNG lọc account — biết `appId` là xem được
+    // template của account khác; route này khi đó siết một mình. G1c/C4 đã
+    // sửa tận gốc: `getAppById(appId, accountId)` nay BẮT BUỘC có account
+    // (repository/apps.ts). Mệnh đề so sánh dưới đây được GIỮ như hàng rào
+    // thứ hai, không phải vì repository còn hở.
     // Trả 404 chứ không 403: không xác nhận cho người gọi rằng id đó có tồn tại.
     let packageName: string | undefined;
     // ⚠ Account dùng để đọc Default là ACCOUNT SỞ HỮU APP (hợp đồng ở
@@ -182,7 +183,11 @@ export async function POST(req: Request) {
     //   guard kia đổi.
     let owningAccountId: string = accountId;
     if (scope === "per-app" && appId) {
-      const app = await getAppById(appId);
+      // G1c/C4 — `getAppById` nay tự lọc account. Mệnh đề so sánh phía
+      // sau được GIỮ LẠI có chủ ý: nó là hàng rào thứ hai, và nó là thứ
+      // làm bất biến "app thuộc account đang active" đọc được ngay tại
+      // chỗ này thay vì phải đi đọc repository mới biết.
+      const app = await getAppById(appId, accountId);
       if (!app || app.google_console_account_id !== accountId) {
         return NextResponse.json(
           { error: "App not found for the active Google Console account." },

@@ -57,11 +57,28 @@ export async function getAppByPackage(
   return (data as AppRow | null) ?? null;
 }
 
-export async function getAppById(appId: string): Promise<AppRow | null> {
+/**
+ * G1c/C4 — RÒ RỈ CROSS-ACCOUNT ĐÃ SỬA: `accountId` nay BẮT BUỘC.
+ *
+ * Trước G1c hàm này tra app theo id trần, không kiểm account. Biết một
+ * `appId` là xem được app — và qua đó là ma trận giá — của account khác.
+ * Anh em của nó, `getAppByPackage(accountId, packageName)`, vốn ĐÃ lọc;
+ * chỉ đường theo-id là hở.
+ *
+ * ⚠ Tham số BẮT BUỘC chứ không phải tuỳ chọn: tuỳ chọn thì call site cũ
+ *   vẫn biên dịch sạch và lỗ vẫn nguyên. Bắt buộc ⇒ tsc chỉ mặt từng chỗ.
+ * ⚠ Trả `null` (→ 404) chứ không ném 403: không xác nhận với người gọi
+ *   rằng id đó có tồn tại. Cùng kỷ luật với route matrix-export.
+ */
+export async function getAppById(
+  appId: string,
+  accountId: string,
+): Promise<AppRow | null> {
   const { data, error } = await googleIapDb()
     .from("apps")
     .select(APP_COLUMNS)
     .eq("id", appId)
+    .eq("google_console_account_id", accountId)
     .maybeSingle();
   if (error) {
     throw new Error(`Failed to fetch app: ${error.message}`);

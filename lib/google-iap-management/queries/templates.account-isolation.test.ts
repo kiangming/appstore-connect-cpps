@@ -33,6 +33,7 @@ import {
   listTemplateTiers,
   findTemplateId,
   replaceTemplate,
+  listAppTemplates,
 } from "./templates";
 
 import {
@@ -180,5 +181,51 @@ describe("B3 — replaceTemplate chỉ được xoá Default CỦA CHÍNH accoun
     expect(
       db.templates.filter((t) => t.scope_account_id === ACCT_A),
     ).toHaveLength(1);
+  });
+});
+
+describe("C4 — listAppTemplates KHÔNG được liệt kê template APP của account khác", () => {
+  it("chỉ trả template của app thuộc account đang hỏi", async () => {
+    db.templates.push(
+      tpl("tpl-app-A", {
+        scope_type: "APP",
+        scope_app_id: "app-A",
+        scope_account_id: null,
+      }),
+      tpl("tpl-app-B", {
+        scope_type: "APP",
+        scope_app_id: "app-B",
+        scope_account_id: null,
+      }),
+    );
+    db.apps.push(
+      {
+        id: "app-A",
+        package_name: "com.vng.a",
+        display_name: "A",
+        google_console_account_id: ACCT_A,
+      },
+      {
+        id: "app-B",
+        package_name: "com.vng.b",
+        display_name: "B",
+        google_console_account_id: ACCT_B,
+      },
+    );
+    db.entries.push({
+      template_id: "tpl-app-A",
+      identifier: "Tier 1",
+      region_code: "VN",
+      currency: "VND",
+      price_micros: "1",
+      sort_order: 1,
+    });
+
+    const listed = await listAppTemplates(ACCT_A);
+    expect(listed.map((x) => x.package_name)).toEqual(["com.vng.a"]);
+    expect(listed).toHaveLength(1);
+
+    const listedB = await listAppTemplates(ACCT_B);
+    expect(listedB.map((x) => x.package_name)).toEqual(["com.vng.b"]);
   });
 });

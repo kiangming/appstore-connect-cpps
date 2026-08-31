@@ -17,6 +17,11 @@ import {
   resolveActiveAccountId,
 } from "@/lib/google-iap-management/active-account";
 import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
+import {
+  requireGoogleIapAdmin,
+  GoogleIapForbiddenError,
+  GoogleIapUnauthorizedError,
+} from "@/lib/google-iap-management/auth";
 import { appendAction } from "@/lib/google-iap-management/repository/actions-log";
 import { googleIapDb } from "@/lib/google-iap-management/db";
 
@@ -62,6 +67,26 @@ export async function POST(req: Request) {
       { error: "No Google Console accounts configured." },
       { status: 400 },
     );
+  }
+
+  // ⚠ C1 — Replace Default Template = hành động cấp account ⇒ CHỈ ADMIN.
+  //   Đối xứng với Remove ở [id]/route.ts: gác một đường mà bỏ đường kia
+  //   thì cái gate không có tác dụng gì, vì Replace ghi đè cũng mất bản
+  //   cũ y như Remove.
+  //   Scope APP giữ quy tắc cũ (mọi user đã đăng nhập) — quyết định
+  //   Manager, và đó đúng là quy tắc route này đang chạy trước G1c.
+  if (scope === "ACCOUNT") {
+    try {
+      await requireGoogleIapAdmin();
+    } catch (err) {
+      if (err instanceof GoogleIapUnauthorizedError) {
+        return NextResponse.json({ error: err.message }, { status: 401 });
+      }
+      if (err instanceof GoogleIapForbiddenError) {
+        return NextResponse.json({ error: err.message }, { status: 403 });
+      }
+      throw err;
+    }
   }
 
   let appId: string | null = null;

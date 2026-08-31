@@ -32,7 +32,7 @@ export default async function PricingTemplatesPage() {
 
   const [defaultOverview, appTemplates, cachedApps] = await Promise.all([
     getAccountTemplateOverview(activeAccountId),
-    listAppTemplates(),
+    listAppTemplates(activeAccountId),
     listAppsForAccount(activeAccountId),
   ]);
 

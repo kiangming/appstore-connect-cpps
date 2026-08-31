@@ -228,14 +228,22 @@ export async function getAppTemplateOverview(
 }
 
 /**
- * ⚠ TODO(G1c) — RÒ RỈ CROSS-ACCOUNT ĐÃ BIẾT, chưa sửa ở G1b.
- *   Hàm này liệt kê template APP của MỌI account (không nhận accountId),
- *   trong khi danh sách app ngay cạnh nó trên cùng màn hình
- *   (`listAppsForAccount`) thì CÓ lọc. G1b không đụng vì đây là thay đổi
- *   HÀNH VI (màn sẽ hiện ít dòng hơn), mà B6 yêu cầu G1b không đổi hành
- *   vi. Sửa cùng `getAppById` ở G1c.
+ * G1c/C4 — RÒ RỈ CROSS-ACCOUNT ĐÃ SỬA.
+ *
+ * Trước G1c hàm này liệt kê template APP của MỌI account, trong khi
+ * `listAppsForAccount` ngay cạnh nó trên CÙNG MỘT MÀN HÌNH thì có lọc:
+ * hai nửa của một màn trả lời hai câu hỏi khác nhau.
+ *
+ * ⚠ LỌC Ở BƯỚC GHÉP APP, KHÔNG PHẢI BẰNG `.in()` DANH SÁCH APP.
+ *   Lọc bằng cách nạp trước toàn bộ app của account rồi `.in(appIds)` sẽ
+ *   đẩy 142 UUID (VNG Sing) vào query string. Repo này đã có tiền lệ đúng
+ *   lớp đó: `.in()` quá dài làm gateway từ chối và đường đọc trả RỖNG
+ *   (repository/iaps-list-read.test.ts). Ở đây `.in()` bị chặn trên bởi
+ *   SỐ TEMPLATE (census: 3), không phải số app.
  */
-export async function listAppTemplates(): Promise<AppTemplateSummary[]> {
+export async function listAppTemplates(
+  accountId: string,
+): Promise<AppTemplateSummary[]> {
   const db = googleIapDb();
   const { data: templates, error } = await db
     .from("pricing_templates")
@@ -253,8 +261,9 @@ export async function listAppTemplates(): Promise<AppTemplateSummary[]> {
   const appIds = rows.map((r) => r.scope_app_id).filter((x): x is string => !!x);
   const { data: apps, error: appsErr } = await db
     .from("apps")
-    .select("id, package_name, display_name")
-    .in("id", appIds);
+    .select("id, package_name, display_name, google_console_account_id")
+    .in("id", appIds)
+    .eq("google_console_account_id", accountId);
   if (appsErr) {
     throw new Error(`Failed to load app metadata: ${appsErr.message}`);
   }
@@ -263,6 +272,7 @@ export async function listAppTemplates(): Promise<AppTemplateSummary[]> {
       id: string;
       package_name: string;
       display_name: string | null;
+      google_console_account_id: string;
     }>).map((a) => [a.id, a]),
   );
 
@@ -288,7 +298,11 @@ export async function listAppTemplates(): Promise<AppTemplateSummary[]> {
   return rows
     .map((t) => {
       const app = t.scope_app_id ? appsById.get(t.scope_app_id) : undefined;
-      if (!app) return null; // app row deleted but template lingered — skip
+      // `app` vắng mặt ở ĐÚNG HAI ca, và cả hai đều phải bị loại:
+      //   1. hàng app đã bị xoá mà template còn sót (ca cũ);
+      //   2. G1c — app thuộc account KHÁC nên không nằm trong lượt đọc
+      //      đã lọc ở trên. Đây chính là chỗ rò rỉ được bịt.
+      if (!app) return null;
       return {
         app_id: app.id,
         package_name: app.package_name,
@@ -800,12 +814,46 @@ export function getPrimaryTierFromCandidates(
 }
 
 /**
- * ⚠ TODO(G1c) — CHƯA XONG, ĐỪNG TƯỞNG ĐÃ XONG.
- *   Hàm này xoá theo id TRẦN: nó KHÔNG đọc `scope_type`, KHÔNG kiểm
- *   template thuộc account nào. G1b cố ý không đụng (quyết định Manager,
- *   S4). Việc còn lại thuộc G1c: route DELETE phải ĐỌC scope_type trước
- *   khi xoá, và gate admin phải chặn cả Replace lẫn Remove.
- *   Call site: app/api/google-iap-management/pricing-templates/[id]/route.ts:29
+ * G1c — TRA scope của một template THEO ID, để route biết mình đang gác
+ * cái gì TRƯỚC khi xoá.
+ *
+ * ⚠ VÌ SAO TỒN TẠI: `deleteTemplate(id)` xoá theo id trần. Một gate đặt
+ *   trước nó mà không biết id đó là template ACCOUNT hay APP thì hoặc gác
+ *   nhầm (chặn cả APP, đổi quy tắc hiện có), hoặc không gác gì (ai cũng
+ *   xoá được Default của cả 6 account). Đọc trước, gác sau.
+ */
+export interface TemplateScopeProbe {
+  id: string;
+  scope_type: TemplateScope;
+  scope_app_id: string | null;
+  scope_account_id: string | null;
+  uploaded_by: string;
+  origin_note: string | null;
+}
+
+export async function getTemplateScopeById(
+  templateId: string,
+): Promise<TemplateScopeProbe | null> {
+  const db = googleIapDb();
+  const { data, error } = await db
+    .from("pricing_templates")
+    .select(
+      "id, scope_type, scope_app_id, scope_account_id, uploaded_by, origin_note",
+    )
+    .eq("id", templateId)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`getTemplateScopeById failed: ${error.message}`);
+  }
+  return (data as TemplateScopeProbe | null) ?? null;
+}
+
+/**
+ * ⚠ XOÁ THEO ID TRẦN — CÓ CHỦ Ý, nhưng KHÔNG được gọi thẳng từ route.
+ *   Route phải `getTemplateScopeById` trước để biết áp gate nào
+ *   (G1c: ACCOUNT → gate admin; APP → quy tắc cũ là mọi user đã đăng
+ *   nhập). Test hàng rào canh đúng thứ tự đó:
+ *   pricing-templates-delete-gate.test.ts
  */
 export async function deleteTemplate(templateId: string): Promise<void> {
   const db = googleIapDb();

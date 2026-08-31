@@ -8,6 +8,10 @@ import { Package2, Upload } from "lucide-react";
 import { authOptions } from "@/lib/auth";
 import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
 import { getAppById } from "@/lib/google-iap-management/repository/apps";
+import {
+  readActiveAccountId,
+  resolveActiveAccountId,
+} from "@/lib/google-iap-management/active-account";
 import { fetchPerAppMatrix } from "@/lib/google-iap-management/queries/template-matrix";
 import {
   getAppTemplateOverview,
@@ -28,7 +32,16 @@ export default async function PerAppMatrixPage({
   if (accounts.length === 0) redirect("/google-iap-management");
 
   const appId = decodeURIComponent(params.appId);
-  const app = await getAppById(appId);
+
+  // G1c/C4 — app phải thuộc account đang active, nếu không → 404.
+  // Trước G1c `getAppById(appId)` không kiểm account: biết appId là xem
+  // được ma trận giá của account khác.
+  const activeAccountId = resolveActiveAccountId(
+    accounts,
+    readActiveAccountId(),
+  );
+  if (!activeAccountId) redirect("/google-iap-management");
+  const app = await getAppById(appId, activeAccountId);
   if (!app) notFound();
 
   // ⚠ G1b — account dùng ở màn này là ACCOUNT SỞ HỮU APP, lấy từ chính
