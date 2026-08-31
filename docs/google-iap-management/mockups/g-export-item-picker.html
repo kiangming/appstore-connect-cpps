@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Export item list — picker + status filter (Google IAP mockup)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; background:#f8fafc; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .zone { font-size:10px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; color:#047857; }
+  .note { border-left:3px solid #f59e0b; background:#fffbeb; }
+  .note-red { border-left:3px solid #dc2626; background:#fef2f2; }
+  .note-green { border-left:3px solid #059669; background:#ecfdf5; }
+</style>
+</head>
+<body class="p-8">
+
+<div class="max-w-5xl mx-auto space-y-10">
+
+  <header>
+    <h1 class="text-2xl font-semibold text-slate-900">Export item list — mockup (arc G-EXPORT)</h1>
+    <p class="text-sm text-slate-500 mt-1">
+      Google IAP Management · phục vụ R1 (chọn item + lọc trạng thái) và R3 (tên nước).
+      Palette <strong>emerald</strong> của module Google — <em>không</em> dùng navy #0c447c của Apple.
+    </p>
+    <div class="note-red mt-3 px-4 py-2.5 text-[13px] text-slate-700 rounded-r">
+      ⚠ <strong>Mọi con số và mọi SKU dưới đây là MINH HOẠ, không phải dữ liệu production.</strong>
+      Mã nước dùng để minh hoạ lấy từ hằng <span class="mono">COMMON_REGIONS</span>
+      (<span class="mono">lib/google-iap-management/regions.ts:19-50</span>) — hằng có thật trong repo.
+      Dữ liệu thật chỉ có sau khi Manager chạy
+      <span class="mono">queries/census-google-export-item-list.sql</span> và duyệt phép đo M1.
+    </div>
+  </header>
+
+  <!-- ══════════════ BƯỚC 1 ══════════════ -->
+  <section>
+    <div class="zone mb-2">Bước 1 / 2 — chọn item</div>
+    <div class="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+
+      <div class="px-5 pt-4 pb-3 border-b border-slate-100 flex items-start justify-between gap-3">
+        <div>
+          <h3 class="text-base font-semibold text-slate-900">Export list — chọn item</h3>
+          <p class="text-xs text-slate-500 mt-0.5">Bước 1 / 2 · sau đó chọn quốc gia</p>
+        </div>
+        <button class="text-slate-400 hover:text-slate-600 text-lg leading-none">&times;</button>
+      </div>
+
+      <div class="px-5 py-4">
+        <!-- Lock statement -->
+        <div class="note-green px-3.5 py-2 text-[12px] text-emerald-900 rounded-r mb-3">
+          ✓ <strong>Đổi filter hoặc đổi lựa chọn = 0 request Google.</strong>
+          Danh sách này đọc từ mirror đã có sẵn trên màn.
+          <span class="text-emerald-700">Và ở Google, bấm Export cũng chỉ tốn <strong>1 request</strong>,
+          bất kể chọn 1 hay 500 item</span> — khác Apple (~3 request / item).
+        </div>
+
+        <!-- Search -->
+        <input type="text" placeholder="Tìm theo SKU hoặc tên…"
+          class="w-full rounded-lg border border-slate-300 px-3 py-2 text-[13px] mb-3
+                 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent" />
+
+        <!-- Status filter chips -->
+        <div class="flex items-center gap-2 mb-1">
+          <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mr-1">Trạng thái</span>
+          <button class="px-2.5 py-1 rounded-full text-[12px] font-semibold bg-emerald-600 text-white">Tất cả <span class="opacity-70">(24)</span></button>
+          <button class="px-2.5 py-1 rounded-full text-[12px] font-semibold bg-white border border-slate-300 text-slate-600 hover:bg-slate-50">Active <span class="opacity-60">(18)</span></button>
+          <button class="px-2.5 py-1 rounded-full text-[12px] font-semibold bg-white border border-slate-300 text-slate-600 hover:bg-slate-50">Inactive <span class="opacity-60">(6)</span></button>
+        </div>
+
+        <!-- ⚠ honesty line about what "active" means -->
+        <div class="note px-3.5 py-2 text-[12px] text-amber-900 rounded-r my-3">
+          ⚠ <strong>&ldquo;Active&rdquo; ở đây là giá trị của TOOL, gộp hai state của Google.</strong>
+          <span class="mono">mapStateToStatus</span> xếp cả <span class="mono">ACTIVE</span> lẫn
+          <span class="mono">INACTIVE_PUBLISHED</span> vào <span class="mono">active</span>
+          (<span class="mono">onetime-product-adapter.ts:117-122</span>).
+          <span class="text-amber-800">Câu Manager chốt: Q-R1.1.</span>
+        </div>
+
+        <!-- Select-all bar -->
+        <div class="flex items-center justify-between px-3 py-2 bg-slate-50 border border-slate-200 rounded-t-lg border-b-0">
+          <label class="flex items-center gap-2 text-[13px] font-medium text-slate-700 cursor-pointer">
+            <input type="checkbox" class="h-3.5 w-3.5 rounded border-slate-300 accent-emerald-600" checked />
+            Chọn tất cả (24)
+          </label>
+          <span class="text-[11px] text-slate-500">3 đã chọn</span>
+        </div>
+
+        <!-- Rows -->
+        <div class="border border-slate-200 rounded-b-lg divide-y divide-slate-100 max-h-[280px] overflow-y-auto">
+          <label class="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50 cursor-pointer">
+            <input type="checkbox" class="h-3.5 w-3.5 rounded border-slate-300 accent-emerald-600" checked />
+            <span class="flex-1 min-w-0 text-[13px] text-slate-900 truncate">Gói Kim Cương Nhỏ</span>
+            <span class="mono text-[11px] text-slate-500 truncate w-44">com.example.gem.small</span>
+            <span class="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">active</span>
+          </label>
+          <label class="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50 cursor-pointer">
+            <input type="checkbox" class="h-3.5 w-3.5 rounded border-slate-300 accent-emerald-600" checked />
+            <span class="flex-1 min-w-0 text-[13px] text-slate-900 truncate">Gói Kim Cương Vừa</span>
+            <span class="mono text-[11px] text-slate-500 truncate w-44">com.example.gem.medium</span>
+            <span class="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">active</span>
+          </label>
+          <label class="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50 cursor-pointer">
+            <input type="checkbox" class="h-3.5 w-3.5 rounded border-slate-300 accent-emerald-600" checked />
+            <span class="flex-1 min-w-0 text-[13px] text-slate-900 truncate">Gói Khởi Đầu (ngừng bán)</span>
+            <span class="mono text-[11px] text-slate-500 truncate w-44">com.example.starter.v1</span>
+            <span class="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">inactive</span>
+          </label>
+          <label class="flex items-center gap-3 px-3 py-2.5 hover:bg-slate-50 cursor-pointer opacity-60">
+            <input type="checkbox" class="h-3.5 w-3.5 rounded border-slate-300 accent-emerald-600" />
+            <span class="flex-1 min-w-0 text-[13px] text-slate-900 truncate">Gói Kim Cương Lớn</span>
+            <span class="mono text-[11px] text-slate-500 truncate w-44">com.example.gem.large</span>
+            <span class="inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">active</span>
+          </label>
+        </div>
+
+        <!-- staleness / divergence disclosure -->
+        <div class="note px-3.5 py-2 text-[12px] text-amber-900 rounded-r mt-3">
+          ⚠ <strong>Danh sách này là bản cache, đồng bộ lúc 31/08 09:12.</strong>
+          File export đọc <strong>LIVE</strong> từ Google, nên một item đổi trạng thái sau lần
+          Refresh cuối có thể không khớp filter. Nếu có, phần mềm sẽ
+          <strong>nói rõ ở bước cuối</strong> — không im lặng bỏ.
+          <span class="text-amber-800">Câu Manager chốt: Q-R1.2.</span>
+        </div>
+      </div>
+
+      <div class="px-5 py-3 border-t border-slate-100 bg-slate-50 flex items-center justify-between rounded-b-2xl">
+        <span class="text-[12px] text-slate-500">3 / 24 item được chọn</span>
+        <div class="flex gap-2">
+          <button class="px-3.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 rounded-lg">Huỷ</button>
+          <button class="px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg">Tiếp → chọn quốc gia</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ BƯỚC 2 ══════════════ -->
+  <section>
+    <div class="zone mb-2">Bước 2 / 2 — chọn quốc gia (dialog dùng chung, KHÔNG sửa)</div>
+    <div class="bg-white border border-slate-200 rounded-2xl shadow-sm p-5">
+      <p class="text-[13px] text-slate-700">
+        Bước 2 là <span class="mono">ExportOptionsDialog</span> <strong>giữ nguyên, không sửa một dòng</strong>
+        (lock P8 — dùng chung với module Apple). Wizard bọc từ <em>bên ngoài</em>, y hệt cách
+        <span class="mono">ExportItemWizard</span> của Apple đã làm.
+      </p>
+      <div class="note-red px-3.5 py-2.5 text-[12px] text-slate-700 rounded-r mt-3">
+        ⚠ <strong>Nhưng danh sách 183 nước trong dialog đó đang lấy từ module APPLE.</strong>
+        Google gọi dialog với đúng 3 prop, không truyền <span class="mono">catalog</span>, nên rơi về
+        default <span class="mono">TERRITORY_CATALOG</span>
+        (<span class="mono">ExportOptionsDialog.tsx:81</span>).
+        Sửa = truyền <span class="mono">catalog={…}</span> từ phía Google — <em>vẫn không sửa dialog</em>.
+        <span class="block mt-1 text-red-800">Chặn bởi phép đo M1. Câu Manager chốt: Q-R2.1 / Q-R2.2 / Q-R2.3.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ R3 ══════════════ -->
+  <section>
+    <div class="zone mb-2">R3 — header cột trong file .xlsx</div>
+    <div class="bg-white border border-slate-200 rounded-2xl shadow-sm p-5 space-y-4">
+
+      <div>
+        <p class="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Hiện tại</p>
+        <div class="overflow-x-auto">
+          <table class="mono text-[12px] border-collapse">
+            <tr>
+              <td class="border border-slate-300 bg-slate-100 px-3 py-1.5" rowspan="2">Product ID</td>
+              <td class="border border-slate-300 bg-slate-100 px-3 py-1.5" rowspan="2">Product Name</td>
+              <td class="border border-slate-300 bg-slate-100 px-3 py-1.5" rowspan="2">Status</td>
+              <td class="border border-slate-300 bg-red-50 px-3 py-1.5 text-center text-red-700" colspan="2">Price in US</td>
+              <td class="border border-slate-300 bg-red-50 px-3 py-1.5 text-center text-red-700" colspan="2">Price in VN</td>
+              <td class="border border-slate-300 bg-red-50 px-3 py-1.5 text-center text-red-700" colspan="2">Price in KR</td>
+            </tr>
+            <tr>
+              <td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Price</td><td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Currency</td>
+              <td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Price</td><td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Currency</td>
+              <td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Price</td><td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Currency</td>
+            </tr>
+          </table>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-1"><span class="mono">xlsx-export.ts:144</span> — <span class="mono">`Price in ${t}`</span></p>
+      </div>
+
+      <div>
+        <p class="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-1.5">Đề xuất</p>
+        <div class="overflow-x-auto">
+          <table class="mono text-[12px] border-collapse">
+            <tr>
+              <td class="border border-slate-300 bg-slate-100 px-3 py-1.5" rowspan="2">Product ID</td>
+              <td class="border border-slate-300 bg-slate-100 px-3 py-1.5" rowspan="2">Product Name</td>
+              <td class="border border-slate-300 bg-slate-100 px-3 py-1.5" rowspan="2">Status</td>
+              <td class="border border-slate-300 bg-emerald-50 px-3 py-1.5 text-center text-emerald-800" colspan="2">Price in United States (US)</td>
+              <td class="border border-slate-300 bg-emerald-50 px-3 py-1.5 text-center text-emerald-800" colspan="2">Price in Vietnam (VN)</td>
+              <td class="border border-slate-300 bg-emerald-50 px-3 py-1.5 text-center text-emerald-800" colspan="2">Price in South Korea (KR)</td>
+            </tr>
+            <tr>
+              <td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Price</td><td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Currency</td>
+              <td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Price</td><td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Currency</td>
+              <td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Price</td><td class="border border-slate-300 bg-slate-50 px-3 py-1.5">Currency</td>
+            </tr>
+          </table>
+        </div>
+        <p class="text-[11px] text-slate-500 mt-1">
+          Tên từ <span class="mono">regionNameFromCode()</span> — <span class="mono">lib/google-iap-management/region-name.ts:63</span>.
+          <strong>Cùng module Google</strong>, không đụng nguồn Apple.
+          <span class="text-slate-400">(US / KR nằm trong 18 override khớp Play Console; VN cũng vậy.)</span>
+        </p>
+      </div>
+
+      <div class="note px-3.5 py-2.5 text-[12px] text-amber-900 rounded-r">
+        ⚠ <strong>Ca không phân giải được tên → rút gọn còn mã trần.</strong>
+        <span class="mono">regionNameFromCode</span> rơi về chính mã, nên nếu in máy móc sẽ ra
+        <span class="mono">Price in XK (XK)</span> — một mã đứng cạnh chính nó.
+        Luật: <span class="mono">name !== code ? `Price in ${name} (${code})` : `Price in ${code}`</span>.
+        <span class="block mt-1">Kèm <strong>test ĐẾM số ca rút gọn</strong> trên tập mã thật (Q7), để mã mới không âm thầm thành mã trần.</span>
+      </div>
+
+      <div class="note-green px-3.5 py-2.5 text-[12px] text-emerald-900 rounded-r">
+        ✓ <strong>Không cần phép chuyển mã nào (KB §4.20).</strong> Google dùng alpha-2,
+        <span class="mono">regionNameFromCode</span> nhận alpha-2. Nếu thấy mình sắp viết
+        <span class="mono">toAlpha2</span>/<span class="mono">toCatalogCode</span> thì nghĩa là đã lấy nhầm nguồn.
+        <span class="block mt-1 text-emerald-800">⚠ Điều kiện: Q2b phải ra <strong>0 dòng</strong>. Chưa chạy.</span>
+      </div>
+    </div>
+  </section>
+
+  <footer class="text-[11px] text-slate-400 pt-2 border-t border-slate-200">
+    Mockup cho arc <span class="mono">arc-google-export-item-optimize</span> ·
+    thiết kế đầy đủ: <span class="mono">docs/google-iap-management/design-export-item-list-optimize.md</span> ·
+    SQL: <span class="mono">docs/google-iap-management/queries/census-google-export-item-list.sql</span>
+  </footer>
+
+</div>
+</body>
+</html>
