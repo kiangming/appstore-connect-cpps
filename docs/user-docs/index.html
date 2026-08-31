@@ -1062,7 +1062,7 @@
             <span class="nav-item-label">API Key Pool</span>
             <span class="nav-badge">Admin</span>
           </a>
-          <a class="nav-item" data-page="apple-pricing-matrix" data-keywords="apple pricing matrix bảng giá tier cross-cutting">
+          <a class="nav-item" data-page="apple-pricing-matrix" data-keywords="apple pricing matrix bảng giá bang gia tier cross-cutting export xlsx excel xuất file xuat file csv highlight differences amber cam ô trống o trong dấu chấm dau cham freeze cố định cot tier">
             <span class="nav-item-label">Pricing matrix</span>
             <span class="nav-badge">Chi tiết</span>
           </a>
@@ -1860,8 +1860,17 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <li>Kiểm tra giá thực tế áp dụng cho app/IAP sau khi cấu hình pricing template.</li>
           <li>So sánh giữa Default template (của ASC account đang chọn) và Per-App override.</li>
           <li>Debug khi user complain giá hiển thị trên store khác với expectation.</li>
-          <li>Export bảng giá ra CSV để chia sẻ với team Marketing / Finance.</li>
+          <li>Export bảng giá ra <strong>.xlsx</strong> để chia sẻ với team Marketing / Finance.</li>
         </ul>
+
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Công tắc Highlight ảnh hưởng tới FILE, không chỉ tới màn</div>
+          <p>Ở màn Per-App, <strong>tắt</strong> công tắc <strong>Highlight differences from Default ★</strong> rồi bấm Export thì file <strong>không có ô hổ phách nào và không có note nào</strong> — vì file phải nói đúng thứ màn đang nói. Muốn file mang dấu so sánh thì <strong>bật công tắc trước khi bấm</strong>.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ File xuất ra CHƯA nạp ngược lại được</div>
+          <p>File <code class="inline">.xlsx</code> này là <strong>bản đọc</strong>, không phải file để upload lại — bộ nạp cần sheet <code class="inline">price_tiers</code> với bố cục khác hẳn. Muốn sửa giá thì sửa trên file template gốc rồi upload đè.</p>
+        </div>
 
         <h2 class="section-title">Cấu trúc giao diện</h2>
         <p>
@@ -1907,9 +1916,17 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             </div>
           </li>
           <li class="step">
-            <div class="step-title">Export CSV nếu cần</div>
+            <div class="step-title">Export XLSX nếu cần</div>
             <div class="step-body">
-              <p>Click nút <strong>Export CSV</strong> ở góc phải. File CSV bao gồm tất cả tier × territory × currency, có thể mở bằng Excel để filter/sort tiếp.</p>
+              <p>Click nút <strong>Export XLSX</strong> ở góc phải. Nguyên tắc: <strong>màn hiện gì thì file ra đúng vậy</strong> — không thêm, không xoá, không sửa.</p>
+              <ul>
+                <li><strong>Bố cục</strong>: một sheet · hàng = tier · mỗi territory chiếm <strong>2 cột</strong> (Price ‖ Currency) dưới một header tên nước gộp · cột <code class="inline">Tier</code> và 2 hàng header được <strong>freeze</strong> nên cuộn ngang/dọc vẫn thấy.</li>
+                <li><strong>Ô giá là SỐ Excel</strong> — sort/filter/SUM được.</li>
+                <li><strong>Ô <code class="inline">·</code></strong> (dấu chấm giữa) = cặp (tier, territory) không có trong template, đúng ký tự màn đang vẽ. Chú thích dưới bảng: <em>"empty cell (·) = no override for that tier-territory pair (Apple auto-equalisation fills)"</em>.</li>
+                <li><strong>Ô chữ màu hổ phách</strong> (chỉ ở Per-App) = giá khác Default; rê chuột vào ô có note ghi giá trị Default.</li>
+                <li><strong>Bộ lọc ảnh hưởng file</strong>: chỉ territory đang hiện sau bộ lọc mới vào file. Lọc còn 0 territory thì nút mờ đi.</li>
+              </ul>
+              <p>Tên file: <code class="inline">apple-pricing-template-default-&lt;YYYYMMDD-HHmm&gt;.xlsx</code> · <code class="inline">apple-pricing-template-per-app-&lt;bundle-id&gt;-….xlsx</code>.</p>
             </div>
           </li>
         </ol>
@@ -1936,7 +1953,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
                 <rect class="wf-card" x="380" y="0" width="120" height="28" rx="4"/>
                 <text class="wf-text" x="392" y="18">Tier: 0.99 → 9.99 ▼</text>
                 <rect fill="var(--primary)" x="520" y="0" width="80" height="28" rx="4"/>
-                <text fill="#fff" x="560" y="18" text-anchor="middle" font-size="11" font-weight="600">Export CSV</text>
+                <text fill="#fff" x="560" y="18" text-anchor="middle" font-size="11" font-weight="600">Export XLSX</text>
               </g>
               <!-- matrix -->
               <rect class="wf-card" x="20" y="116" width="600" height="224" rx="6"/>

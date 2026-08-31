@@ -115,11 +115,8 @@ docblock của [`xlsx-template-matrix-export.ts`](../../lib/google-iap-managemen
 
 ---
 
-## Ghi chú tài liệu — ngoài phạm vi arc G2
+## Đã đóng
 
-⚠ **User Guide mục Apple Pricing matrix đang nói sai** (phát hiện khi sửa mục
-Google, **chưa sửa** vì khác module/arc):
-`docs/user-docs/index.html` dòng ~1910, ~1912, ~1939 vẫn hướng dẫn bấm
-**"Export CSV"**, trong khi nút thật trên màn Apple là **"Export XLSX"**
-([`components/iap-management/pricing-templates/MatrixFilterBar.tsx:93`](../../components/iap-management/pricing-templates/MatrixFilterBar.tsx)).
-Sót của arc `[TEMPLATE-xlsx]` phía Apple.
+| Tag | Đóng khi nào | Ghi chú |
+|---|---|---|
+| *(ghi chú tài liệu)* User Guide mục **Apple** Pricing matrix còn hướng dẫn bấm "Export CSV" | 2026-08-31, commit riêng `fix-apple-guide-export-xlsx` | Grep toàn guide ra **4 chỗ**, không phải 3 — chỗ thứ tư (`<li>Export bảng giá ra CSV…`) **không chứa cụm "Export CSV"** nên sửa theo trí nhớ chắc chắn sót. Sót của arc `[TEMPLATE-xlsx]` phía Apple |
