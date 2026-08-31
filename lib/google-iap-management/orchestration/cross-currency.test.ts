@@ -233,10 +233,12 @@ describe("detectCrossCurrencyTrigger (Cycle 43 header-first)", () => {
 
 describe("pickAppCurrencyEntry", () => {
   const sample: ParsedPricingEntry[] = [
-    { identifier: "Tier 5", regionCode: "US", currency: "USD", priceMicros: "4990000" },
-    { identifier: "Tier 5", regionCode: "VN", currency: "VND", priceMicros: "120000000000" },
-    { identifier: "Tier 5", regionCode: "JP", currency: "JPY", priceMicros: "750000000" },
-    { identifier: "Tier 5", regionCode: "DE", currency: "EUR", priceMicros: "4990000" },
+    // G1d — sortOrder thêm vào để khớp kiểu; `pickAppCurrencyEntry` chọn
+    // theo CURRENCY nên thứ tự cột không ảnh hưởng kết quả test này.
+    { identifier: "Tier 5", regionCode: "US", currency: "USD", priceMicros: "4990000", sortOrder: 1 },
+    { identifier: "Tier 5", regionCode: "VN", currency: "VND", priceMicros: "120000000000", sortOrder: 2 },
+    { identifier: "Tier 5", regionCode: "JP", currency: "JPY", priceMicros: "750000000", sortOrder: 3 },
+    { identifier: "Tier 5", regionCode: "DE", currency: "EUR", priceMicros: "4990000", sortOrder: 4 },
   ];
 
   it("returns the entry matching the app's default currency", () => {

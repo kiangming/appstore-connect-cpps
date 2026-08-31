@@ -169,9 +169,20 @@ describe("B3 — replaceTemplate chỉ được xoá Default CỦA CHÍNH accoun
           regionCode: "VN",
           currency: "VND",
           priceMicros: "9",
+          // cố ý KHÔNG phải 1: nếu code ghi hằng số thay vì đọc từ entry
+          // thì test đỏ.
+          sortOrder: 7,
         },
       ],
     });
+
+    // D1 — entry mới phải mang sort_order do parser tính, KHÔNG NULL.
+    //   Thiếu dòng ghi này thì mọi template upload sau deploy mất thứ tự
+    //   cột, trong khi 10 template cũ (M-1 backfill) vẫn đúng — hỏng chỉ
+    //   lộ ra sau lần Replace đầu tiên.
+    const inserted = db.entries.filter((e) => e.identifier === "Tier A2");
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0].sort_order).toBe(7);
 
     // Bản của B còn nguyên, cả header lẫn entry.
     expect(db.templates.some((t) => t.id === "tpl-B")).toBe(true);

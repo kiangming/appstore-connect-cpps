@@ -30,27 +30,38 @@ import { getCurrencyDecimals } from "./google/currency-precision";
 import { microsToDecimal } from "./google/price-conversion";
 import { composeMatrix, type TemplateEntryRow } from "./queries/template-matrix";
 
+/**
+ * ⚠ G1d — `sortOrder` BẮT BUỘC TRUYỀN, và cố ý KHÔNG có giá trị mặc định.
+ *
+ * Trước khi sửa chỗ này, helper bỏ trống `sort_order` ⇒ `composeMatrix`
+ * thấy toàn NULL ⇒ bật `columnOrderUnknown` và giữ thứ tự mảng. Test VẪN
+ * XANH — nhưng nó đang canh NHÁNH DỰ PHÒNG (thiếu sort_order thì giữ thứ
+ * tự dòng), chứ KHÔNG canh hợp đồng thật (thứ tự cột = sort_order).
+ * Nói cách khác: đúng kết quả, sai lý do — và một test đúng vì lý do sai
+ * sẽ thôi bảo vệ đúng lúc người ta cần nó nhất.
+ */
 function row(
   identifier: string,
   region_code: string,
   currency: string,
   price_micros: string,
+  sort_order: number,
 ): TemplateEntryRow {
-  return { identifier, region_code, currency, price_micros };
+  return { identifier, region_code, currency, price_micros, sort_order };
 }
 
 /** Ma trận Default rút gọn, giữ ĐÚNG thứ tự nước của file thật:
  *  US VN SG MY ID PH TH HK TW (không phải alphabet — Hotfix 24). */
 const DEFAULT_ENTRIES: TemplateEntryRow[] = [
-  row("Tier 1", "US", "USD", "990000"),
-  row("Tier 1", "VN", "VND", "25000000000"),
-  row("Tier 1", "SG", "SGD", "1480000"),
-  row("Tier 1", "MY", "MYR", "4900000"),
-  row("Tier 1", "ID", "IDR", "16000000000"),
-  row("Tier 1", "PH", "PHP", "49000000"),
-  row("Tier 1", "TH", "THB", "35000000"),
-  row("Tier 1", "HK", "HKD", "8000000"),
-  row("Tier 1", "TW", "TWD", "33000000"),
+  row("Tier 1", "US", "USD", "990000", 1),
+  row("Tier 1", "VN", "VND", "25000000000", 2),
+  row("Tier 1", "SG", "SGD", "1480000", 3),
+  row("Tier 1", "MY", "MYR", "4900000", 4),
+  row("Tier 1", "ID", "IDR", "16000000000", 5),
+  row("Tier 1", "PH", "PHP", "49000000", 6),
+  row("Tier 1", "TH", "THB", "35000000", 7),
+  row("Tier 1", "HK", "HKD", "8000000", 8),
+  row("Tier 1", "TW", "TWD", "33000000", 9),
 ];
 
 const ALL_CODES = ["US", "VN", "SG", "MY", "ID", "PH", "TH", "HK", "TW"];
@@ -77,7 +88,7 @@ describe("⚠ F6 — ô thưa: màn vẽ '·' nên file GHI '·', ở CẢ HAI n
     // (csv-export.ts:69) làm 8 ô đó biến mất hẳn khỏi file.
     const matrix = composeMatrix([
       ...DEFAULT_ENTRIES,
-      row("Tier 2", "US", "USD", "1990000"),
+      row("Tier 2", "US", "USD", "1990000", 1),
     ]);
     const spec = buildTemplateMatrixSpec(input({ matrix }));
 
@@ -93,7 +104,7 @@ describe("⚠ F6 — ô thưa: màn vẽ '·' nên file GHI '·', ở CẢ HAI n
   it("ô '·' KHÔNG nằm trong priceCells nên KHÔNG được gán numFmt", () => {
     const matrix = composeMatrix([
       ...DEFAULT_ENTRIES,
-      row("Tier 2", "US", "USD", "1990000"),
+      row("Tier 2", "US", "USD", "1990000", 1),
     ]);
     const spec = buildTemplateMatrixSpec(input({ matrix }));
     // 9 ô giá của Tier 1 + 1 ô giá của Tier 2 = 10, không hơn.
@@ -109,8 +120,8 @@ describe("⚠ F6 — ô thưa: màn vẽ '·' nên file GHI '·', ở CẢ HAI n
 
 describe("⚠ F1 — file bám công tắc showDiff, KHÔNG bám 'có Default template'", () => {
   const perApp = composeMatrix(
-    [row("Tier 1", "US", "USD", "990000"), row("Tier 1", "VN", "VND", "25000000000")],
-    [row("Tier 1", "US", "USD", "990000"), row("Tier 1", "VN", "VND", "29000000000")],
+    [row("Tier 1", "US", "USD", "990000", 1), row("Tier 1", "VN", "VND", "25000000000", 2)],
+    [row("Tier 1", "US", "USD", "990000", 1), row("Tier 1", "VN", "VND", "29000000000", 2)],
   );
 
   it("showDiff=true → ô khác Default vào diffCells", () => {
@@ -158,7 +169,7 @@ describe("⚠ F2 — note ghi currency CẢ HAI BÊN", () => {
       diffNote({ priceMicros: "990000", currency: "USD", isDiff: true }),
     ).toBeUndefined();
 
-    const matrix = composeMatrix([row("Tier 1", "US", "USD", "990000")]);
+    const matrix = composeMatrix([row("Tier 1", "US", "USD", "990000", 1)]);
     matrix.cells["Tier 1|US"].isDiff = true; // isDiff không kèm giá trị Default
     const spec = buildTemplateMatrixSpec(
       input({ matrix, regionCodes: ["US"], showDiff: true, scope: "per-app" }),
@@ -185,6 +196,19 @@ describe("⚠ F2 — note ghi currency CẢ HAI BÊN", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 // Thứ tự — lấy từ matrix, KHÔNG lấy từ regionCodes
 // ═══════════════════════════════════════════════════════════════════════════
+
+describe("G1d/D5 — fixture của bộ test này đi ĐƯỜNG THẬT, không đi nhánh dự phòng", () => {
+  it("composeMatrix(DEFAULT_ENTRIES) có sort_order đầy đủ ⇒ columnOrderUnknown = false", () => {
+    // ⚠ Đây là dòng giữ cho toàn bộ khẳng định "byte-identical" bên dưới
+    //   nói về đúng thứ nó tưởng. Nếu ai đó bỏ `sort_order` khỏi helper
+    //   `row()`, mọi test dưới VẪN XANH (thứ tự mảng tình cờ trùng thứ tự
+    //   cột) nhưng chúng sẽ đang canh nhánh dự phòng NULL. Dòng này đỏ
+    //   trước, và nói thẳng lý do.
+    const m = composeMatrix(DEFAULT_ENTRIES);
+    expect(m.columnOrderUnknown).toBe(false);
+    expect(m.markets.map((x) => x.code)).toEqual(ALL_CODES);
+  });
+});
 
 describe("thứ tự cột lấy từ matrix.markets, regionCodes chỉ là BỘ LỌC", () => {
   it("giữ thứ tự upload (US VN SG MY ID PH TH HK TW), không alphabet", () => {
@@ -215,9 +239,9 @@ describe("thứ tự cột lấy từ matrix.markets, regionCodes chỉ là BỘ
 
   it("thứ tự tier lấy từ matrix.tiers (numeric-aware, Alternate xuống cuối)", () => {
     const matrix = composeMatrix([
-      row("Tier 10", "US", "USD", "990000"),
-      row("Alternate Tier 1", "US", "USD", "990000"),
-      row("Tier 2", "US", "USD", "990000"),
+      row("Tier 10", "US", "USD", "990000", 1),
+      row("Alternate Tier 1", "US", "USD", "990000", 1),
+      row("Tier 2", "US", "USD", "990000", 1),
     ]);
     const spec = buildTemplateMatrixSpec(input({ matrix, regionCodes: ["US"] }));
     expect(spec.aoa.slice(HEADER_ROW_COUNT).map((r) => r[0])).toEqual(
@@ -270,7 +294,7 @@ describe("ô Price là SỐ; ô Currency và ô '·' không có numFmt", () => {
     // chuỗi thô (MatrixTable.tsx:21-23). Ghi NaN sẽ là file bịa giá trị.
     expect(formatPrice("not-a-number", "USD")).toBe("not-a-number");
     expect(priceCellValue("not-a-number")).toBe("not-a-number");
-    const matrix = composeMatrix([row("Tier 1", "US", "USD", "not-a-number")]);
+    const matrix = composeMatrix([row("Tier 1", "US", "USD", "not-a-number", 1)]);
     const spec = buildTemplateMatrixSpec(input({ matrix, regionCodes: ["US"] }));
     expect(spec.aoa[HEADER_ROW_COUNT][priceColumn(0)]).toBe("not-a-number");
   });
@@ -341,7 +365,7 @@ describe("⚠ V4 — currency 0 chữ số + micros có dư: ô mang ĐÚNG giá
   it.each(CASES)(
     "$cur micros=$micros → ô mang $screen (KHÔNG phải giá trị đầy đủ)",
     ({ cur, micros, screen }) => {
-      const matrix = composeMatrix([row("Tier 1", "XX", cur, micros)]);
+      const matrix = composeMatrix([row("Tier 1", "XX", cur, micros, 1)]);
       const spec = buildTemplateMatrixSpec(
         input({ matrix, regionCodes: ["XX"] }),
       );
@@ -378,8 +402,8 @@ describe("⚠ V4 — currency 0 chữ số + micros có dư: ô mang ĐÚNG giá
     expect(isTruncatedCell("not-a-number", "VND")).toBe(false);
 
     const matrix = composeMatrix([
-      row("Tier 1", "VN", "VND", "25000500000"),
-      row("Tier 1", "US", "USD", "990000"),
+      row("Tier 1", "VN", "VND", "25000500000", 2),
+      row("Tier 1", "US", "USD", "990000", 1),
     ]);
     const spec = buildTemplateMatrixSpec(
       input({ matrix, regionCodes: ["VN", "US"] }),

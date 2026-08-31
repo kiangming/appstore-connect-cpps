@@ -132,6 +132,34 @@ export interface AppTemplateSummary {
   entry_count: number;
 }
 
+/**
+ * G1d — HỢP ĐỒNG THỨ TỰ ĐỌC ENTRY, DÙNG CHUNG CHO CẢ HAI ĐƯỜNG ĐỌC.
+ *
+ * Trước G1d hai đường đọc cùng một bảng mà sắp KHÁC NHAU:
+ *   • templates.ts fetchOverviewForTemplate  → .order(identifier).order(region_code)
+ *     tức ALPHABET theo mã nước;
+ *   • template-matrix.ts fetchEntriesForTemplate → KHÔNG có .order() nào,
+ *     tức phó mặc thứ tự vật lý Postgres (không cam kết).
+ * Hai câu trả lời khác nhau cho cùng một câu hỏi, và cái thứ hai còn có
+ * thể đổi sau một VACUUM FULL.
+ *
+ * ⚠ ĐƯỜNG NÀO ĐỔI: CẢ HAI.
+ *   • đường overview BỎ `.order("region_code")` — alphabet là SAI hợp
+ *     đồng, không phải "tạm đúng": Manager sắp cột theo thứ tự nghiệp vụ
+ *     (US·VN·SG·MY·ID·PH·TH·HK·TW), Hotfix 24 đã một lần sửa đúng lỗi
+ *     alphabet-hoá này ở tầng compose;
+ *   • đường matrix THÊM `.order()` để thôi phó mặc Postgres.
+ *   Cả hai chốt về `(identifier, sort_order)`.
+ *
+ * ⚠ VÀ THỨ TỰ CỘT KHÔNG CÒN DỰA VÀO THỨ TỰ DÒNG TRẢ VỀ. `composeMatrix`
+ *   nay sắp `markets` theo `sort_order` một cách TƯỜNG MINH. Chỉ thêm
+ *   ORDER BY mà vẫn để thứ tự cột "nổi lên" từ thứ tự dòng đến là đổi
+ *   một chỗ phó mặc này lấy một chỗ phó mặc khác — với template THƯA
+ *   (census: Play Together 5 cột, Light and Night 11 cột) một nước chỉ
+ *   xuất hiện ở tier về sau sẽ rơi xuống cuối dù sort_order của nó nhỏ.
+ */
+const ENTRY_SELECT = "identifier, region_code, currency, price_micros, sort_order";
+
 const SAMPLE_SIZE = 50;
 
 /** Cột header template. G1 M-1 thêm scope_account_id + origin_note; giữ
@@ -154,10 +182,10 @@ async function fetchOverviewForTemplate(
   const db = googleIapDb();
   const { data: entries, error } = await db
     .from("pricing_template_entries")
-    .select("identifier, region_code, currency, price_micros")
+    .select(ENTRY_SELECT)
     .eq("template_id", template.id)
     .order("identifier", { ascending: true })
-    .order("region_code", { ascending: true });
+    .order("sort_order", { ascending: true });
 
   if (error) {
     throw new Error(`Failed to load template entries: ${error.message}`);
@@ -167,6 +195,7 @@ async function fetchOverviewForTemplate(
     region_code: string;
     currency: string;
     price_micros: string;
+    sort_order: number | null;
   }>;
   const tiers = new Set<string>();
   const territories = new Set<string>();
@@ -182,6 +211,7 @@ async function fetchOverviewForTemplate(
     sampleEntries: rows.slice(0, SAMPLE_SIZE).map((r) => ({
       identifier: r.identifier,
       regionCode: r.region_code,
+      sortOrder: r.sort_order ?? 0,
       currency: r.currency,
       priceMicros: r.price_micros,
     })),
@@ -373,6 +403,11 @@ export async function replaceTemplate(
       region_code: e.regionCode,
       currency: e.currency,
       price_micros: e.priceMicros,
+      // ⚠ G1d — KHÔNG ĐƯỢC BỎ. Thiếu dòng này thì mọi template upload SAU
+      //   khi deploy có sort_order NULL, trong khi 10 template cũ đã được
+      //   M-1 backfill: màn sẽ sắp cột đúng cho bản cũ và mất thứ tự ở
+      //   bản mới — kiểu hỏng chỉ lộ ra sau lần Replace đầu tiên.
+      sort_order: e.sortOrder,
     }));
     if (chunk.length === 0) continue;
     const { error: chunkErr } = await db
@@ -451,9 +486,10 @@ export async function lookupTemplateEntriesForIdentifier(
   const templateId = (template as { id: string }).id;
   const { data: entries, error: entriesErr } = await db
     .from("pricing_template_entries")
-    .select("identifier, region_code, currency, price_micros")
+    .select(ENTRY_SELECT)
     .eq("template_id", templateId)
-    .eq("identifier", args.identifier);
+    .eq("identifier", args.identifier)
+    .order("sort_order", { ascending: true });
   if (entriesErr) {
     throw new Error(`Failed to load template entries: ${entriesErr.message}`);
   }
@@ -462,9 +498,11 @@ export async function lookupTemplateEntriesForIdentifier(
     region_code: string;
     currency: string;
     price_micros: string;
+    sort_order: number | null;
   }>).map((r) => ({
     identifier: r.identifier,
     regionCode: r.region_code,
+    sortOrder: r.sort_order ?? 0,
     currency: r.currency,
     priceMicros: r.price_micros,
   }));

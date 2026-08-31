@@ -40,13 +40,24 @@ import {
 } from "./xlsx-template-matrix-export";
 import { composeMatrix, type TemplateEntryRow } from "./queries/template-matrix";
 
+/**
+ * ⚠ G1d — `sortOrder` BẮT BUỘC TRUYỀN, và cố ý KHÔNG có giá trị mặc định.
+ *
+ * Trước khi sửa chỗ này, helper bỏ trống `sort_order` ⇒ `composeMatrix`
+ * thấy toàn NULL ⇒ bật `columnOrderUnknown` và giữ thứ tự mảng. Test VẪN
+ * XANH — nhưng nó đang canh NHÁNH DỰ PHÒNG (thiếu sort_order thì giữ thứ
+ * tự dòng), chứ KHÔNG canh hợp đồng thật (thứ tự cột = sort_order).
+ * Nói cách khác: đúng kết quả, sai lý do — và một test đúng vì lý do sai
+ * sẽ thôi bảo vệ đúng lúc người ta cần nó nhất.
+ */
 function row(
   identifier: string,
   region_code: string,
   currency: string,
   price_micros: string,
+  sort_order: number,
 ): TemplateEntryRow {
-  return { identifier, region_code, currency, price_micros };
+  return { identifier, region_code, currency, price_micros, sort_order };
 }
 
 /**
@@ -60,13 +71,13 @@ function row(
  */
 const MATRIX = composeMatrix(
   [
-    row("Tier 1", "US", "USD", "990000"),
-    row("Tier 1", "VN", "VND", "25000500000"),
-    row("Tier 2", "US", "USD", "1990000"),
+    row("Tier 1", "US", "USD", "990000", 1),
+    row("Tier 1", "VN", "VND", "25000500000", 2),
+    row("Tier 2", "US", "USD", "1990000", 1),
   ],
   [
-    row("Tier 1", "US", "USD", "990000"),
-    row("Tier 1", "VN", "VND", "29000000000"),
+    row("Tier 1", "US", "USD", "990000", 1),
+    row("Tier 1", "VN", "VND", "29000000000", 2),
   ],
 );
 
@@ -468,7 +479,7 @@ describe("⚠ ký tự đặc biệt trong tier: sống sót nguyên vẹn vào 
   ];
 
   it.each(NASTY)("$label — đọc lại từ file ra ĐÚNG chuỗi gốc", async ({ tier }) => {
-    const matrix = composeMatrix([row(tier, "US", "USD", "990000")]);
+    const matrix = composeMatrix([row(tier, "US", "USD", "990000", 1)]);
     const out = await writeTemplateMatrixXlsx({
       matrix,
       regionCodes: ["US"],
@@ -505,7 +516,7 @@ describe("⚠ ký tự đặc biệt trong tier: sống sót nguyên vẹn vào 
     // Hai vế của cùng một sự thật: XML cần escape ba ký tự, CSV cần escape ba
     // ký tự KHÁC. Lẫn hai bộ vào nhau là cách file hỏng mà vẫn "trông ổn".
     const matrix = composeMatrix([
-      row('A & B < C, D "E"', "US", "USD", "990000"),
+      row('A & B < C, D "E"', "US", "USD", "990000", 1),
     ]);
     const out = await writeTemplateMatrixXlsx({
       matrix,

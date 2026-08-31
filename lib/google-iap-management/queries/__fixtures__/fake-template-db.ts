@@ -70,6 +70,7 @@ export class FakeDb {
 class FakeBuilder {
   private filters: Array<[string, unknown]> = [];
   private inFilters: Array<[string, unknown[]]> = [];
+  private orderBy: Array<[string, boolean]> = [];
   private head = false;
   private op: "select" | "delete" | "insert" = "select";
   private payload: unknown = null;
@@ -98,7 +99,17 @@ class FakeBuilder {
     this.inFilters.push([col, vals]);
     return this;
   }
-  order() {
+  /**
+   * ⚠ SẮP THẬT, không phải no-op.
+   *
+   * Bản đầu của fake này trả thẳng `this` cho `.order()`. Một fake như
+   * thế làm MỌI test về thứ tự thành vô nghĩa: chúng xanh kể cả khi truy
+   * vấn thật không có ORDER BY nào — đúng loại "phép đo tự vô hiệu".
+   * Nhiều lời gọi `.order()` xếp chồng thành khoá phụ, như PostgREST.
+   * NULL xếp cuối ở chiều tăng, khớp mặc định của Postgres.
+   */
+  order(col: string, opts?: { ascending?: boolean }) {
+    this.orderBy.push([col, opts?.ascending !== false]);
     return this;
   }
   private rows(): Array<Record<string, unknown>> {
@@ -108,9 +119,26 @@ class FakeBuilder {
         : this.table === "apps"
           ? (this.db.apps as unknown as Array<Record<string, unknown>>)
           : (this.db.entries as unknown as Array<Record<string, unknown>>);
-    return src
+    const out = src
       .filter((r) => this.filters.every(([c, v]) => r[c] === v))
       .filter((r) => this.inFilters.every(([c, vs]) => vs.includes(r[c])));
+    if (this.orderBy.length === 0) return out;
+    return [...out].sort((a, b) => {
+      for (const [col, asc] of this.orderBy) {
+        const av = a[col];
+        const bv = b[col];
+        // NULL LAST ở chiều tăng — mặc định của Postgres.
+        if (av === null || av === undefined) {
+          if (bv !== null && bv !== undefined) return 1;
+          continue;
+        }
+        if (bv === null || bv === undefined) return -1;
+        if (av === bv) continue;
+        const cmp = av < bv ? -1 : 1;
+        return asc ? cmp : -cmp;
+      }
+      return 0;
+    });
   }
   async maybeSingle() {
     if (this.op === "insert") {

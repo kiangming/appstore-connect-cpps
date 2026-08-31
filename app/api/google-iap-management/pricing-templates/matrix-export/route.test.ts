@@ -51,21 +51,32 @@ import {
 
 const ACCOUNT_ID = "acc-1";
 
+/**
+ * ⚠ G1d — `sortOrder` BẮT BUỘC TRUYỀN, và cố ý KHÔNG có giá trị mặc định.
+ *
+ * Trước khi sửa chỗ này, helper bỏ trống `sort_order` ⇒ `composeMatrix`
+ * thấy toàn NULL ⇒ bật `columnOrderUnknown` và giữ thứ tự mảng. Test VẪN
+ * XANH — nhưng nó đang canh NHÁNH DỰ PHÒNG (thiếu sort_order thì giữ thứ
+ * tự dòng), chứ KHÔNG canh hợp đồng thật (thứ tự cột = sort_order).
+ * Nói cách khác: đúng kết quả, sai lý do — và một test đúng vì lý do sai
+ * sẽ thôi bảo vệ đúng lúc người ta cần nó nhất.
+ */
 function row(
   identifier: string,
   region_code: string,
   currency: string,
   price_micros: string,
+  sort_order: number,
 ): TemplateEntryRow {
-  return { identifier, region_code, currency, price_micros };
+  return { identifier, region_code, currency, price_micros, sort_order };
 }
 
 /** Thứ tự nước = thứ tự file .xlsx Manager upload, KHÔNG alphabet. */
 const ENTRIES: TemplateEntryRow[] = [
-  row("Tier 1", "US", "USD", "990000"),
-  row("Tier 1", "VN", "VND", "25000000000"),
-  row("Tier 1", "SG", "SGD", "1480000"),
-  row("Tier 1", "TH", "THB", "35000000"),
+  row("Tier 1", "US", "USD", "990000", 1),
+  row("Tier 1", "VN", "VND", "25000000000", 2),
+  row("Tier 1", "SG", "SGD", "1480000", 3),
+  row("Tier 1", "TH", "THB", "35000000", 7),
 ];
 const MATRIX = composeMatrix(ENTRIES);
 const ALL = ["US", "VN", "SG", "TH"];
@@ -359,8 +370,8 @@ describe("phản hồi thành công", () => {
   it("X-Truncated-Cells đếm thật, không hardcode 0", async () => {
     fetchDefaultMatrix.mockResolvedValue(
       composeMatrix([
-        row("Tier 1", "VN", "VND", "25000500000"), // ⚠ 0 chữ số + có dư
-        row("Tier 1", "US", "USD", "990000"),
+        row("Tier 1", "VN", "VND", "25000500000", 2), // ⚠ 0 chữ số + có dư
+        row("Tier 1", "US", "USD", "990000", 1),
       ]),
     );
     const res = await POST(req(okBody({ regionCodes: ["VN", "US"] })));
@@ -419,7 +430,7 @@ describe("⚠ COUNT ASSERT — thà 500 còn hơn file thiếu cột", () => {
     // Dựng ca không thể xảy ra qua đường bình thường (mã lạ đã bị 409 chặn),
     // đúng vai của một assert: bắt cái lẽ ra không xảy ra. Ở đây ép bằng cách
     // cho `markets` chứa MÃ TRÙNG — filter khớp 2, nhưng Set requested chỉ có 1.
-    const weird = composeMatrix([row("Tier 1", "US", "USD", "990000")]);
+    const weird = composeMatrix([row("Tier 1", "US", "USD", "990000", 1)]);
     weird.markets = [...weird.markets, { ...weird.markets[0] }];
     fetchDefaultMatrix.mockResolvedValue(weird);
     const res = await POST(req(okBody({ regionCodes: ["US"] })));

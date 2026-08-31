@@ -30,6 +30,19 @@ export interface ParsedPricingEntry {
   currency: string;
   /** Google wire format (digits-only string). */
   priceMicros: string;
+  /**
+   * G1d — THỨ TỰ CỘT trong file .xlsx nguồn, 1-based.
+   *
+   * Mọi entry cùng `regionCode` trong một lần parse mang cùng giá trị:
+   * nó là vị trí của CỘT, không phải của ô. Đây là thứ duy nhất giữ được
+   * thứ tự nước Manager sắp trong file (US·VN·SG·MY·ID·PH·TH·HK·TW —
+   * KHÔNG phải alphabet).
+   *
+   * ⚠ Trước G1d thứ tự đó không được lưu ở đâu cả: nó sống nhờ thứ tự
+   *   dòng Postgres tình cờ trả về khi SELECT không có ORDER BY
+   *   (Hotfix 24). Một VACUUM FULL là đủ để đảo cột.
+   */
+  sortOrder: number;
 }
 
 export interface PricingTemplateParseResult {
@@ -120,6 +133,8 @@ export function parsePricingTemplate(
       );
       continue;
     }
+    // `territorySpecs` được đẩy theo đúng thứ tự quét cột trái→phải, nên
+    // CHỈ SỐ trong mảng này CHÍNH LÀ thứ tự cột. Không cần đọc lại header.
     territorySpecs.push({
       col: c,
       region: parsed.region,
@@ -150,7 +165,7 @@ export function parsePricingTemplate(
     }
     seenTiers.add(identifier);
 
-    for (const spec of territorySpecs) {
+    for (const [specIndex, spec] of territorySpecs.entries()) {
       const v = cellValue(ws, r, spec.col);
       if (v === null) continue;
       const decimal =
@@ -167,6 +182,9 @@ export function parsePricingTemplate(
           regionCode: spec.region,
           currency: spec.currency,
           priceMicros,
+          // 1-based: khớp với backfill của M-1 (ROW_NUMBER() OVER … bắt
+          // đầu từ 1), để template cũ và template mới cùng một thang.
+          sortOrder: specIndex + 1,
         });
       } catch (err) {
         warnings.push(

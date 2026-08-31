@@ -26,11 +26,13 @@ describe("parsePricingTemplate", () => {
     expect(result.errors).toEqual([]);
     expect(result.tierCount).toBe(2);
     expect(result.territoryCount).toBe(2);
+    // G1d — `sortOrder` = thứ tự CỘT trong file (US=1, VN=2), lặp lại y
+    // nguyên ở mọi hàng: nó thuộc về cột, không thuộc về ô.
     expect(result.entries).toEqual([
-      { identifier: "Tier 1", regionCode: "US", currency: "USD", priceMicros: "990000" },
-      { identifier: "Tier 1", regionCode: "VN", currency: "VND", priceMicros: "25000000000" },
-      { identifier: "Tier 2", regionCode: "US", currency: "USD", priceMicros: "1990000" },
-      { identifier: "Tier 2", regionCode: "VN", currency: "VND", priceMicros: "49000000000" },
+      { identifier: "Tier 1", regionCode: "US", currency: "USD", priceMicros: "990000", sortOrder: 1 },
+      { identifier: "Tier 1", regionCode: "VN", currency: "VND", priceMicros: "25000000000", sortOrder: 2 },
+      { identifier: "Tier 2", regionCode: "US", currency: "USD", priceMicros: "1990000", sortOrder: 1 },
+      { identifier: "Tier 2", regionCode: "VN", currency: "VND", priceMicros: "49000000000", sortOrder: 2 },
     ]);
   });
 
@@ -41,9 +43,13 @@ describe("parsePricingTemplate", () => {
       ["Tier 2", "", 49000],
     ]);
     const result = parsePricingTemplate(buf, size);
+    // ⚠ Ca THƯA là ca đáng giá nhất: VN vẫn mang sortOrder 2 dù nó là
+    //   entry DUY NHẤT của Tier 2. `sortOrder` bám vào CỘT, nên template
+    //   thưa vẫn dựng lại đúng thứ tự cột — đây chính là điều mà cách cũ
+    //   (suy ra thứ tự cột từ thứ tự dòng đến) làm sai.
     expect(result.entries).toEqual([
-      { identifier: "Tier 1", regionCode: "US", currency: "USD", priceMicros: "990000" },
-      { identifier: "Tier 2", regionCode: "VN", currency: "VND", priceMicros: "49000000000" },
+      { identifier: "Tier 1", regionCode: "US", currency: "USD", priceMicros: "990000", sortOrder: 1 },
+      { identifier: "Tier 2", regionCode: "VN", currency: "VND", priceMicros: "49000000000", sortOrder: 2 },
     ]);
   });
 
@@ -55,8 +61,12 @@ describe("parsePricingTemplate", () => {
     const result = parsePricingTemplate(buf, size);
     expect(result.territoryCount).toBe(1);
     expect(result.warnings.join("\n")).toMatch(/Garbage/);
+    // ⚠ Cột "Garbage column" đứng TRƯỚC cột US trong file nhưng bị loại,
+    //   và US vẫn là sortOrder 1 — đánh số chạy trên CỘT HỢP LỆ, liên
+    //   tiếp 1..N, không chừa lỗ. Cùng thang với backfill của M-1
+    //   (ROW_NUMBER() cũng liên tiếp), nên template cũ và mới so được.
     expect(result.entries).toEqual([
-      { identifier: "Tier 1", regionCode: "US", currency: "USD", priceMicros: "990000" },
+      { identifier: "Tier 1", regionCode: "US", currency: "USD", priceMicros: "990000", sortOrder: 1 },
     ]);
   });
 

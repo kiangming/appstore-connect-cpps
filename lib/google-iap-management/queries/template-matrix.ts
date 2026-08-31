@@ -28,6 +28,9 @@ export interface TemplateEntryRow {
   region_code: string;
   currency: string;
   price_micros: string;
+  /** G1d — thứ tự CỘT trong file .xlsx nguồn, 1-based. NULL = hàng có
+   *  trước G1d mà M-1 chưa backfill (xem `columnOrderUnknown`). */
+  sort_order?: number | null;
 }
 
 export interface MatrixMarket {
@@ -58,6 +61,20 @@ export interface MatrixData {
   currenciesUsed: string[];
   /** Per-continent market counts. UI uses these in the toggle pills. */
   continentCounts: Record<Continent, number>;
+  /**
+   * G1d/D3 — CỜ BÁO THỨ TỰ CỘT KHÔNG ĐÁNG TIN.
+   *
+   * `true` khi có entry mang `sort_order` NULL. Khi đó thứ tự cột được
+   * giữ NGUYÊN như thứ tự dòng đọc về (đúng hành vi trước G1d), chứ
+   * KHÔNG rơi về alphabet — Hotfix 24 đã sửa đúng lỗi alphabet-hoá đó
+   * một lần rồi, tái phạm âm thầm là tệ hơn cả ban đầu.
+   *
+   * ⚠ CỜ NÀY TỒN TẠI ĐỂ KHÔNG IM LẶNG. Ca sinh ra nó rất hẹp — template
+   * upload trong cửa sổ giữa M-1 và deploy G1d — nhưng nếu có thì màn
+   * đang hiện một thứ tự cột KHÔNG bảo đảm, và người xem phải biết điều
+   * đó thay vì tin nhầm.
+   */
+  columnOrderUnknown: boolean;
 }
 
 const COLLATOR = new Intl.Collator(undefined, {
@@ -83,6 +100,9 @@ export function composeMatrix(
 ): MatrixData {
   const tierSet = new Set<string>();
   const marketCurrencyByCode = new Map<string, string>();
+  /** sort_order nhỏ nhất quan sát được cho mỗi region. */
+  const marketSortByCode = new Map<string, number>();
+  let sawNullSortOrder = false;
   const cells: Record<string, MatrixCell> = {};
   const currenciesUsed = new Set<string>();
 
@@ -90,6 +110,14 @@ export function composeMatrix(
     tierSet.add(e.identifier);
     if (!marketCurrencyByCode.has(e.region_code)) {
       marketCurrencyByCode.set(e.region_code, e.currency);
+    }
+    if (e.sort_order === null || e.sort_order === undefined) {
+      sawNullSortOrder = true;
+    } else {
+      const prev = marketSortByCode.get(e.region_code);
+      if (prev === undefined || e.sort_order < prev) {
+        marketSortByCode.set(e.region_code, e.sort_order);
+      }
     }
     currenciesUsed.add(e.currency);
     const key = `${e.identifier}|${e.region_code}`;
@@ -116,21 +144,35 @@ export function composeMatrix(
 
   const tiers = Array.from(tierSet).sort(compareTiers);
 
-  // Hotfix 24 — preserve Excel upload order. Manager's `.xlsx` lists
-  // markets left-to-right in business-priority order; the alphabetic
-  // sort that lived here pre-Hotfix-24 buried that intent. The
-  // `marketCurrencyByCode` Map iterates in insertion order = the
-  // order rows arrive from the DB. Templates are REPLACE-ONLY (Q-A)
-  // so a fresh upload yields physical-heap order = insertion order
-  // for the SELECT without ORDER BY.
-  const markets: MatrixMarket[] = Array.from(marketCurrencyByCode.entries()).map(
-    ([code, currency]) => ({
-      code,
-      name: regionNameFromCode(code),
-      currency,
-      continent: getContinentForRegion(code),
-    }),
-  );
+  // G1d — THỨ TỰ CỘT LÀ `sort_order`, TƯỜNG MINH.
+  //
+  // Hotfix 24 giữ đúng ý định (thứ tự nước theo file Excel của Manager,
+  // KHÔNG phải alphabet) nhưng giữ bằng một thứ không cam kết: Map iterate
+  // theo thứ tự chèn = thứ tự dòng Postgres trả về khi SELECT không
+  // ORDER BY. G1d giữ NGUYÊN ý định đó và thay chỗ dựa: cột nay sắp theo
+  // `sort_order` do parser ghi lúc upload.
+  //
+  // ⚠ Sắp TƯỜNG MINH chứ không dựa vào thứ tự dòng đến, kể cả khi truy vấn
+  //   đã có ORDER BY: với template THƯA, một nước chỉ xuất hiện ở tier về
+  //   sau sẽ được gặp muộn và rơi xuống cuối dù sort_order của nó nhỏ.
+  //
+  // ⚠ KHÔNG có nhánh nào rơi về alphabet. Khi thiếu sort_order
+  //   (`columnOrderUnknown`), giữ NGUYÊN thứ tự dòng đến — đúng hành vi
+  //   trước G1d — và báo bằng cờ, chứ không lặng lẽ đổi sang alphabet.
+  const marketCodes = Array.from(marketCurrencyByCode.keys());
+  if (!sawNullSortOrder) {
+    marketCodes.sort(
+      (a, b) =>
+        (marketSortByCode.get(a) ?? Number.MAX_SAFE_INTEGER) -
+        (marketSortByCode.get(b) ?? Number.MAX_SAFE_INTEGER),
+    );
+  }
+  const markets: MatrixMarket[] = marketCodes.map((code) => ({
+    code,
+    name: regionNameFromCode(code),
+    currency: marketCurrencyByCode.get(code) as string,
+    continent: getContinentForRegion(code),
+  }));
 
   const continentCounts: Record<Continent, number> = {
     Asia: 0,
@@ -149,6 +191,7 @@ export function composeMatrix(
     cells,
     currenciesUsed: Array.from(currenciesUsed).sort(),
     continentCounts,
+    columnOrderUnknown: sawNullSortOrder,
   };
 }
 
@@ -161,8 +204,22 @@ async function fetchEntriesForTemplate(
   const db = googleIapDb();
   const { data, error } = await db
     .from("pricing_template_entries")
-    .select("identifier, region_code, currency, price_micros")
-    .eq("template_id", templateId);
+    // G1d — cùng hợp đồng thứ tự với đường overview bên templates.ts
+    // (xem doc của ENTRY_SELECT ở đó): `(identifier, sort_order)`.
+    //
+    // ⚠ ĐO ĐƯỢC, GHI LẠI ĐỂ KHỎI HIỂU LẦM: bỏ hai dòng `.order()` này
+    //   KHÔNG làm test nào đỏ (đột biến D4-1). KHÔNG phải test thiếu
+    //   răng — là vì `composeMatrix` nay sắp cột TƯỜNG MINH theo
+    //   `sort_order` và các ô thì tra theo khoá `tier|region`, nên thứ
+    //   tự dòng trả về không còn quan sát được QUA MA TRẬN. Đó chính là
+    //   điều G1d muốn: bảo đảm không còn treo vào thứ tự dòng nữa.
+    //   GIỮ hai dòng này vì (a) D2 yêu cầu hai đường đọc CÙNG một hợp
+    //   đồng, và (b) bất kỳ người dùng tương lai nào đọc thẳng kết quả
+    //   hàm này sẽ nhận thứ tự xác định thay vì tuỳ Postgres.
+    .select("identifier, region_code, currency, price_micros, sort_order")
+    .eq("template_id", templateId)
+    .order("identifier", { ascending: true })
+    .order("sort_order", { ascending: true });
   if (error) {
     throw new Error(`Failed to load template entries: ${error.message}`);
   }
