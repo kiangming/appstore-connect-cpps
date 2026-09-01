@@ -71,7 +71,33 @@ nhưng lý do khác: bên Apple thiếu hẳn `proceeds` trong `MatrixData`.)*
 
 ---
 
-## `[GOOGLE-regions-unmeasured]`
+## ✅ `[GOOGLE-regions-unmeasured]` — ĐÃ ĐO XONG, ĐÓNG 2026-09-01
+
+**Trạng thái:** ✅ **ĐÓNG.** Con số là **173**.
+
+Ba nguồn độc lập trùng khít 100%, 0 mã lệch ở bất kỳ cặp nào:
+
+| Nguồn | Kết quả |
+|---|---|
+| **M1** — `GET /api/google-iap-management/regions/catalog?packageName=…` (1 request, đọc thuần, Manager chạy) | 173 cặp `{regionCode, currency}`, `regionsVersion` **"2025/03"** |
+| **Q7** — `SELECT DISTINCT region_code FROM google_iap_mgmt.iap_prices` (308.933 dòng giá / 1.794 IAP) | 173 mã |
+| **Play Console**, màn **Pricing** (Manager cung cấp) | 173 mã + currency |
+
+Số học khép kín với catalog cũ: `183 − 25 + 15 = 173`, `158 + 25 = 183`, `158 + 15 = 173`.
+
+- **15 mã Google BÁN mà catalog 183 THIẾU** (Manager không tick được):
+  `AW BM BY CF ER GI KY LY RU SO TC VA VG YE ZW`
+- **25 mã catalog CÓ mà Google không bán** (tick xong không ra cột):
+  `AD AF BB BI BN BT CN ET GQ GY KI LS ME MG MH MR MW NR PW ST SZ TL TV VC XK`
+
+⚠ **`regionsVersion` là cơ chế phát hiện drift, và nó TỐT HƠN cách bên Apple.**
+Google **tự khai** version của catalog region; Apple phải so từng mã để biết
+danh sách đã đổi. X4 phải dùng chỗ này, **không bê drift-detection của Apple**.
+
+⚠ Việc còn lại KHÔNG thuộc mục này: dialog export vẫn đang tick 183 —
+đó là **X4**, không phải mục đo lường này.
+
+<details><summary>Nội dung cũ (trước khi đo)</summary>
 
 **Trạng thái:** ⚠ **KHÔNG ĐỌC ĐƯỢC — cần Manager.** Tag này nằm ngoài repo;
 grep `docs/` = 0 hit. Nội dung và ba backlog nó đang chặn chưa xác định được.
@@ -89,6 +115,8 @@ GET /api/google-iap-management/regions/catalog?packageName=<package đã cache>
 Route đã tồn tại, đã có auth. Bên trong gọi đúng một lần `convertRegionPrices`
 ([`google/regions-helper.ts:85`](../../lib/google-iap-management/google/regions-helper.ts)).
 Đọc-thuần, không ghi gì. Cần credential production ⇒ Manager duyệt trước.
+
+</details>
 
 ---
 
@@ -191,3 +219,143 @@ sau deploy** — không phải chỉ xem màn hình.
 tới khi thoả. Câu dọn ghi sẵn ở cuối
 [verify-google-account-default-template.sql](queries/verify-google-account-default-template.sql)
 mục M2-V6.
+
+---
+
+## `[GOOGLE-play-console-two-lists]` — Play Console có HAI danh sách nước, đừng lấy nhầm
+
+**Trạng thái:** ⚠ **GHI ĐỂ NGƯỜI SAU KHÔNG LẤY NHẦM.** Không phải việc cần làm.
+
+Play Console phát hành **hai** danh sách quốc gia khác nhau, và chúng **không
+bằng nhau**:
+
+| Màn | Số mục | Trả lời câu gì |
+|---|---|---|
+| **Pricing** (country + currency) | **173** | "bán được ở đâu" — nước có currency để đặt giá |
+| **Country targeting / distribution** | **176** | "phân phối được ở đâu" — nước app xuất hiện được |
+
+Khác biệt đã đo: danh sách 176 **có** `CN CU IR SD` và một mục **"Rest of
+World"** (không phải mã ISO), và **thiếu `CF`**.
+
+⚠ **Toàn bộ arc export dùng danh sách PRICING (173).** Nó là tập khớp
+`convertRegionPrices`, tức tập tool thực sự đặt giá được.
+
+⚠ **Nếu sau này có màn cần "nước phân phối được"** — ví dụ một bề mặt về
+availability chứ không phải giá — thì đó là **tập KHÁC, nguồn KHÁC**, và
+`PLAY_CONSOLE_LABELS` (region-name.ts) **không** phải nguồn cho nó. Mục này
+tồn tại vì trong arc này đã có một lần suýt lấy nhầm: bản 176 mục được gửi
+trước, và chỉ bị bác bỏ nhờ phép so bằng máy với M1.
+
+---
+
+## `[GOOGLE-common-regions-usd-default]` — `defaultCurrencyForRegion` trả USD cho 145/173 thị trường
+
+**Trạng thái:** ⚠ **ĐÃ ĐO, CHƯA SỬA.** Ngoài phạm vi arc export item.
+
+[`regions.ts:56-58`](../../lib/google-iap-management/regions.ts) —
+`defaultCurrencyForRegion(code)` tra trong `COMMON_REGIONS` (**30 mục**, docblock
+tự khai "curated subset … v1") và **trả `"USD"` cho mọi mã không có trong đó**.
+
+Đo bằng máy (2026-09-01) đối chiếu với tập 173 của M1:
+
+- **145 / 173** thị trường Google bán **không** có trong `COMMON_REGIONS`
+  ⇒ hàm trả `USD`.
+- `COMMON_REGIONS` chứa **2 mã Google KHÔNG bán**: `CN` (Google không bán) và
+  ⚠ **`EU`** — *không phải mã ISO 3166-1 nào cả*, trong khi `InAppProduct.prices`
+  của Google keyed theo **mã quốc gia**.
+
+**Ba nơi gọi**, đều ở form Create/Edit:
+[`IapForm.tsx:335`](../../components/google-iap-management/iap-form/IapForm.tsx#L335) ·
+[`:346`](../../components/google-iap-management/iap-form/IapForm.tsx#L346) ·
+[`:392`](../../components/google-iap-management/iap-form/IapForm.tsx#L392)
+(chỗ thứ ba là `currency || defaultCurrencyForRegion(region)` — chỉ chạy khi
+currency rỗng).
+
+⚠ **CHƯA XÁC ĐỊNH ĐƯỢC — cần điều tra riêng:** giá trị `USD` sai đó có bao giờ
+đi tới lệnh ghi Google không, hay luôn bị `regions/catalog` ghi đè trước. Câu
+đó quyết định mục này là lỗi thật hay chỉ là mặc định xấu. **Không kết luận
+khi chưa đo.**
+
+⚠ **File export item KHÔNG dính.** Nó đọc currency thẳng từ Google
+([`xlsx-export.ts:77`](../../lib/google-iap-management/xlsx-export.ts#L77) —
+`currency: p.currency`, nguồn `regionalPricingAndAvailabilityConfigs[].price.currencyCode`),
+không qua catalog nào. Đối chiếu: bên Apple, census đo được **96/164** mã trong
+`TERRITORY_CATALOG` có currency SAI so với Apple thật — phía Google lớp lỗi đó
+**không tồn tại trên đường export**.
+
+⚠ **Phép so currency đầy đủ thì CHƯA LÀM ĐƯỢC — cần Manager.** M1 có trả
+currency cho từng mã, và Manager đã xác nhận nó khớp Play Console 100%, nhưng
+**173 giá trị currency đó chưa được đưa vào repo**. Muốn đếm chính xác bao
+nhiêu trong 30 mục `COMMON_REGIONS` sai, cần Manager dán lại phần currency của
+M1 (hoặc X4 ghim snapshot có currency — lúc đó phép so là miễn phí).
+
+---
+
+## `[GOOGLE-suite-timeout-flake]` — full suite không xanh tất định trên máy dev
+
+**Trạng thái:** ⚠ **GHI SỐ LIỆU, KHÔNG SỬA TRONG ARC NÀY.** Manager đã chốt
+tiêu chí gate: chấp nhận "xanh khi chạy riêng + full suite chỉ đỏ do timeout,
+không do assertion".
+
+**Số liệu đo 2026-09-01.**
+
+Tại `332c863` (sau X1), 8 lần chạy `npx vitest run` toàn bộ:
+
+| | kết quả |
+|---|---|
+| xanh hoàn toàn | **3** lần (`4885/4885`) |
+| đỏ | **3** lần — 1 đỏ, 1 đỏ, 4 đỏ |
+| *(2 lần còn lại ở trạng thái test khác, không tính)* | |
+
+⚠ **100% các ca đỏ là `Error: Test timed out in 5000ms`. Không một
+AssertionError nào.** Tổng số test luôn là `4885` — chỉ tỉ lệ pass/fail đổi.
+
+Tại `4e4d4ad` (**TRƯỚC** X1, chạy trong worktree riêng), 3 lần:
+
+| run 1 | run 2 | run 3 |
+|---|---|---|
+| 1 đỏ | **37 đỏ** (35 trong đó là timeout) | 1 đỏ |
+
+⇒ **Flake có trước X1 và ở đó nặng hơn.** X1 sửa một module thuần, đồng bộ,
+không I/O / không React / không timer, và `git diff --stat -- components/` qua
+range X1 là **rỗng**.
+
+**Bốn test hay đỏ nhất** (đều xanh 5/5 khi chạy riêng):
+
+| File | Test |
+|---|---|
+| `app/api/store-submissions/sync/gmail/route.test.ts` | `missing X-Cron-Secret header → 401` |
+| `components/google-iap-management/bulk-import/BulkImportWizard.test.tsx:544` | `'Import another' resets the tracking state machine` |
+| `components/google-iap-management/iap-form/IapForm.sc2.test.tsx` | `a pure Sync from Google leaves NOTHING to submit` |
+| `components/iap-management/ExportOptionsDialog.apple-catalog.test.tsx` | `⚠ MUTATION (b) — Select all ticks 175, not 183` |
+
+⚠ Ba module khác nhau (store-submissions, Google IAP, Apple IAP) ⇒ **không phải
+lỗi của một module**, là hành vi dưới tải song song. Không có `testTimeout` khai
+trong `vitest.config` ⇒ đang dùng mặc định 5000ms.
+
+**KHI NÀO PHẢI ĐIỀU TRA** (điều kiện chặn, không phải cảm tính):
+1. một lần đỏ là **AssertionError**, không phải timeout; **hoặc**
+2. một test đỏ **cả khi chạy riêng**; **hoặc**
+3. tỉ lệ đỏ vượt ~50% và chặn được một gate thật (không ai push được).
+
+Hướng đã nghĩ tới, chưa thử: nâng `testTimeout`, hoặc giảm `maxConcurrency` /
+đổi `pool`. **Không đụng cho tới khi một trong ba điều kiện trên xảy ra** — sửa
+config test để đuổi một flake chưa hiểu là cách làm nó im lặng, không phải hết.
+
+---
+
+## `[GUIDE-label-drift]` — Guide §3 khai sai endpoint của Refresh
+
+**Trạng thái:** ⚠ **NGOÀI PHẠM VI arc export, ghi lại.**
+
+`docs/google-iap-management/operational-guide.md` §3 bước 1 viết Refresh đồng bộ
+qua Publisher **`inappproducts.list`** — đó là endpoint **legacy**.
+
+Code hiện tại đi
+[`monetization.onetimeproducts.list`](../../lib/google-iap-management/google/publisher-client.ts#L105)
+trước, **chỉ** rơi về `inappproducts.list` khi API mới lỗi
+([`publisher-client.ts:170-185`](../../lib/google-iap-management/google/publisher-client.ts#L170)).
+
+Cùng lớp với `[GUIDE-label-drift]` bên Apple: guide khẳng định một điều về code
+mà không ai kiểm lại khi code đổi.
+

@@ -29,53 +29,7 @@ import {
   territoryColumnHeader,
 } from "./xlsx-export";
 import { regionNameFromCode } from "./region-name";
-
-/**
- * ⚠ THE 173 REGIONS GOOGLE PLAY ACTUALLY SELLS IN — measured, not invented.
- *
- * Provenance, so the next person can re-derive rather than trust:
- *   • Measurement M1, run by the Manager 2026-09-01 against production:
- *     `GET /api/google-iap-management/regions/catalog?packageName=<cached>`
- *     → 173 `{regionCode, currency}` entries, `regionsVersion: "2025/03"`.
- *     That route makes exactly one `monetization.convertRegionPrices` call
- *     (`google/regions-helper.ts:85`), which is Google's own canonical
- *     "every supported region" answer.
- *   • Census Q7 over `google_iap_mgmt.iap_prices` (308,933 price rows,
- *     1,794 IAPs) returned 173 distinct codes — and the two sets match
- *     100%, 0 codes differing in either direction.
- *   • Reconstructed here from the census arithmetic, which closes exactly:
- *     183 shared-catalog codes − 25 catalog-only + 15 Google-only = 173,
- *     and 158 + 25 = 183, 158 + 15 = 173.
- *
- * ⚠ THIS IS A TEST FIXTURE, NOT THE PRODUCTION CATALOG. It carries codes
- * only — M1 also returned a currency per region, which this chunk does not
- * need. Chunk X4 promotes the measurement to a real pinned snapshot module
- * (codes + currency + `regionsVersion` + the refresh command). When it does,
- * THIS ARRAY MUST BE DELETED and the snapshot imported instead — two copies
- * of a measured set is exactly the drift this arc exists to remove.
- *
- * ⚠ 183 IS NOT THIS LIST AND MUST NOT BE USED HERE. `TERRITORY_CATALOG`
- * (`lib/iap-management/territory-catalog.ts`) is a hand-typed constant in the
- * APPLE module; the Google export dialog reaches it only through an
- * unpassed default parameter, which is the R2 defect X4 removes.
- */
-const GOOGLE_REGIONS_173: readonly string[] = [
-  "AE", "AG", "AL", "AM", "AO", "AR", "AT", "AU", "AW", "AZ", "BA", "BD",
-  "BE", "BF", "BG", "BH", "BJ", "BM", "BO", "BR", "BS", "BW", "BY", "BZ",
-  "CA", "CD", "CF", "CG", "CH", "CI", "CL", "CM", "CO", "CR", "CV", "CY",
-  "CZ", "DE", "DJ", "DK", "DM", "DO", "DZ", "EC", "EE", "EG", "ER", "ES",
-  "FI", "FJ", "FM", "FR", "GA", "GB", "GD", "GE", "GH", "GI", "GM", "GN",
-  "GR", "GT", "GW", "HK", "HN", "HR", "HT", "HU", "ID", "IE", "IL", "IN",
-  "IQ", "IS", "IT", "JM", "JO", "JP", "KE", "KG", "KH", "KM", "KN", "KR",
-  "KW", "KY", "KZ", "LA", "LB", "LC", "LI", "LK", "LR", "LT", "LU", "LV",
-  "LY", "MA", "MC", "MD", "MK", "ML", "MM", "MN", "MO", "MT", "MU", "MV",
-  "MX", "MY", "MZ", "NA", "NE", "NG", "NI", "NL", "NO", "NP", "NZ", "OM",
-  "PA", "PE", "PG", "PH", "PK", "PL", "PT", "PY", "QA", "RO", "RS", "RU",
-  "RW", "SA", "SB", "SC", "SE", "SG", "SI", "SK", "SL", "SM", "SN", "SO",
-  "SR", "SV", "TC", "TD", "TG", "TH", "TJ", "TM", "TN", "TO", "TR", "TT",
-  "TW", "TZ", "UA", "UG", "US", "UY", "UZ", "VA", "VE", "VG", "VN", "VU",
-  "WS", "YE", "ZA", "ZM", "ZW",
-];
+import { GOOGLE_REGIONS_173 } from "./__fixtures__/google-regions-173";
 
 describe("GOOGLE_REGIONS_173 — the fixture is the measured set", () => {
   it("holds exactly 173 distinct codes", () => {
@@ -101,14 +55,15 @@ describe("territoryColumnHeader — the format", () => {
     ["US", "Price in United States (US)"],
     ["KR", "Price in South Korea (KR)"],
     ["TW", "Price in Taiwan (TW)"],
-    ["MO", "Price in Macau (MO)"],
+    ["MO", "Price in Macao (MO)"],
     ["RU", "Price in Russia (RU)"],
   ])("%s renders %s", (code, expected) => {
-    // The first five ride `region-name.ts`'s override map, which exists to
-    // match the labels Play Console renders (ISO would say "United States of
-    // America", "Korea, Republic of", "Taiwan, Province of China", "Macao").
-    // RU is one of the 15 markets Google sells in that the Apple-module
-    // catalog never carried at all.
+    // All six come from `PLAY_CONSOLE_LABELS` — the Console's own Pricing
+    // screen. The library alone would say "United States of America" and
+    // "Taiwan, Province of China" for two of them; ⚠ it would say "Macao" for
+    // MO, which is ALSO what the Console says — the old override map was the
+    // thing insisting on "Macau", and it was wrong. RU is one of the 15
+    // markets Google sells in that the Apple-module catalog never carried.
     expect(territoryColumnHeader(code)).toBe(expected);
   });
 
@@ -119,29 +74,33 @@ describe("territoryColumnHeader — the format", () => {
   });
 });
 
-describe("⚠ ISO names that read awkwardly — pinned as DELIBERATE, not overlooked", () => {
-  // Q-R3.2: the Manager accepted ISO names, because Google publishes no
-  // country-name list of its own — `convertRegionPrices` returns
-  // `regionCode` and a price, nothing else. These four are what that
-  // decision actually looks like in the file, so they are written down
-  // rather than discovered by a Manager opening the spreadsheet.
+describe("⚠ the names the ISO library would have given — now replaced, and pinned as replaced", () => {
+  // WHAT THIS BLOCK USED TO BE. Until 2026-09-01 it pinned four headers as
+  // "deliberately awkward but honest": `Price in Holy See (Vatican City
+  // State) (VA)`, `Virgin Islands, British`, `Micronesia, Federated States
+  // of`, and `Cote d'Ivoire` without its accents. They were the visible cost
+  // of resolving names from `i18n-iso-countries`, which the Manager had
+  // accepted because Google publishes no country-name list through its API.
   //
-  // ⚠ THE FIX FOR ANY OF THESE IS AN OVERRIDE IN `region-name.ts`, AND ONLY
-  // ON A LABEL SOMEONE HAS READ IN PLAY CONSOLE. The 18 overrides that
-  // already exist were verified against a Manager screenshot; inventing a
-  // nineteenth from taste would put a name in the file that Google does not
-  // use, which is worse than an ugly name that is correct.
+  // ⚠ IT TURNED OUT NOT TO BE A COST THAT HAD TO BE PAID. Google publishes no
+  // list through the API, but Play Console SHOWS one, and the Manager
+  // supplied it: 173 rows whose codes and currencies match
+  // `convertRegionPrices` exactly. So the four awkward names are gone.
+  //
+  // ⚠ THE BLOCK STAYS, INVERTED, RATHER THAN BEING DELETED. Deleting it would
+  // leave nothing saying these four are DIFFERENT from the other 169 — they
+  // are the ones where the library and the Console disagree most loudly, so
+  // they are the first to regress if the table is ever bypassed. Pinning both
+  // sides makes a silent fallback loud: the negative assertion fails the
+  // moment the library answers again.
   it.each([
-    // Parentheses INSIDE the name, so the header carries two of them. Ugly,
-    // and still the honest render of the rule.
-    ["VA", "Price in Holy See (Vatican City State) (VA)"],
-    // ISO's inverted forms — the comma is the package's, not ours.
-    ["VG", "Price in Virgin Islands, British (VG)"],
-    ["FM", "Price in Micronesia, Federated States of (FM)"],
-    // No diacritic: i18n-iso-countries' `en` name is plain ASCII here.
-    ["CI", "Price in Cote d'Ivoire (CI)"],
-  ])("%s renders %s", (code, expected) => {
+    ["VA", "Price in Vatican City (VA)", "Holy See (Vatican City State)"],
+    ["VG", "Price in British Virgin Islands (VG)", "Virgin Islands, British"],
+    ["FM", "Price in Micronesia (FM)", "Micronesia, Federated States of"],
+    ["CI", "Price in Côte d’Ivoire (CI)", "Cote d'Ivoire"],
+  ])("%s reads %s, and no longer the library's %s", (code, expected, libraryName) => {
     expect(territoryColumnHeader(code)).toBe(expected);
+    expect(territoryColumnHeader(code)).not.toContain(libraryName);
   });
 
   it("all four are markets Google actually sells in", () => {

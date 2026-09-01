@@ -101,26 +101,28 @@ its ISO 3166-1 alpha-2 code in parentheses. The code is kept because a
 spreadsheet is read away from the tool, where the name alone cannot be matched
 back to the key.
 
-> ⚠ **The country names are ISO names, not Google's names.** Google publishes
-> no country-name list through its API — `convertRegionPrices` returns a
-> region code and a price and nothing else — so the tool resolves names from
-> the `i18n-iso-countries` package, plus 18 hand-checked overrides that match
-> what Google Play Console renders (United States, South Korea, Taiwan,
-> Vietnam, Macau, Russia and 12 more).
+> ⚠ **The country names are the ones Google Play Console shows.** Google
+> publishes no country-name list through its API — `convertRegionPrices`
+> returns a region code and a price and nothing else — so the names come from
+> a table transcribed from the Console's own **Pricing** screen: all 173
+> markets, supplied by the Manager on 2026-09-01. The codes and the currency
+> of every row were compared by machine against the API and match 100%, with
+> none differing in either direction, so the table names exactly the markets
+> the tool can price.
 >
-> Outside those 18, expect the ISO wording, which is sometimes stiffer than
-> Play Console's. Real examples from the current list:
+> Before this, names came from the `i18n-iso-countries` package with 18
+> hand-added corrections, and **16 of the 173 headers read differently** —
+> `Holy See (Vatican City State)` instead of `Vatican City`,
+> `Virgin Islands, British` instead of `British Virgin Islands`,
+> `Cote d'Ivoire` without its accents, and — because one of those 18
+> corrections was simply wrong — `Macau` where both the Console and the
+> standard say **Macao**. If you have an export from before 2026-09-01, those
+> older headers are why it differs.
 >
-> | Code | Header in the file |
-> |---|---|
-> | `VA` | `Price in Holy See (Vatican City State) (VA)` |
-> | `VG` | `Price in Virgin Islands, British (VG)` |
-> | `FM` | `Price in Micronesia, Federated States of (FM)` |
-> | `CI` | `Price in Cote d'Ivoire (CI)` |
->
-> These are correct, not bugs. If one of them should read differently, say
-> which label Play Console shows and it becomes a new override — the override
-> list is only ever extended from a label someone has actually read on screen.
+> If a name still looks wrong, say which label the Console shows on its
+> Pricing screen and the table is corrected there. It is only ever changed
+> from a screen someone has read — never from a name that merely reads
+> better.
 
 If a country code has no name at all, the header shortens to the bare code
 (`Price in ZZ`) rather than repeating it as `Price in ZZ (ZZ)`. No market

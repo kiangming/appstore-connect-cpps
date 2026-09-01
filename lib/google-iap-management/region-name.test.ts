@@ -10,7 +10,15 @@ describe("regionNameFromCode", () => {
     expect(regionNameFromCode("VN")).toBe("Vietnam");
     expect(regionNameFromCode("RU")).toBe("Russia");
     expect(regionNameFromCode("TW")).toBe("Taiwan");
-    expect(regionNameFromCode("MO")).toBe("Macau");
+    // ⚠ WAS `"Macau"` UNTIL 2026-09-01, AND THAT WAS WRONG. The old override
+    // map pinned MO to "Macau" with a comment saying ISO calls it "Macao" —
+    // i.e. it deliberately diverged from ISO to reach the Console's label,
+    // and then got the Console's label wrong. Play Console's Pricing screen
+    // says **Macao**, which is also what the library says, so the entry was
+    // moving the name AWAY from both sources at once. Caught only when the
+    // whole 173-row Console table was diffed against the tool's output; a
+    // patch list has nothing to be diffed against.
+    expect(regionNameFromCode("MO")).toBe("Macao");
   });
 
   it("resolves regions previously falling back to 'US — United States' (the Cycle 35 bug)", () => {
