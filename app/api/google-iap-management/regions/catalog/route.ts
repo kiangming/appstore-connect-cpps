@@ -40,6 +40,7 @@ import {
 } from "@/lib/google-iap-management/active-account";
 import { buildRegionMapFromBasePrice } from "@/lib/google-iap-management/google/regions-helper";
 import { microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
+import { checkRegionsVersion } from "@/lib/google-iap-management/google/play-regions.snapshot";
 
 export const dynamic = "force-dynamic";
 
@@ -101,6 +102,13 @@ export async function GET(req: Request) {
       (baseCurrency || app.default_currency || "USD").trim().toUpperCase(),
     );
     const converted = Boolean(basePriceMicros && /^\d+$/.test(basePriceMicros));
+    const drift = checkRegionsVersion(result.regionsVersion);
+    if (drift.drifted) {
+      console.warn(
+        `[google-iap:regions] regionsVersion drift — pinned=${drift.pinned} live=${drift.live}. ` +
+          "Re-measure lib/google-iap-management/google/play-regions.snapshot.ts",
+      );
+    }
     return NextResponse.json({
       regions: result.regions.map((r) => ({
         regionCode: r.region,
@@ -117,6 +125,22 @@ export async function GET(req: Request) {
       // call (Hotfix 9: the version must match the conversion it came
       // from, and these are different calls).
       regionsVersion: result.regionsVersion,
+      // ── X4 — DRIFT REPORT, PAID FOR BY A CALL THAT ALREADY HAPPENED ───────
+      //
+      // The export dialog now offers a PINNED snapshot of Google's 173 markets
+      // so that opening it costs zero requests. A pin goes stale silently, so
+      // something has to notice — and this route is the cheapest place in the
+      // module to notice from: it has just made the `convertRegionPrices` call
+      // and Google has already told it the catalog version, for free.
+      //
+      // ⚠ REPORTED, NEVER ENFORCED. A newer catalog is normal and usually
+      // harmless; blocking on it would break the tool over a routine Google
+      // update. The point is that somebody is TOLD to re-measure.
+      //
+      // ⚠ AND THE DIALOG STILL NEVER CALLS THIS. Wiring the check into the
+      // export flow would buy a request per open and trade away the lock X2/X3
+      // spent effort establishing.
+      regionsVersionDrift: drift,
     });
   } catch (err) {
     const message =

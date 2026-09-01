@@ -33,6 +33,7 @@ import {
   type BulkStatusMode,
 } from "./BulkStatusModal";
 import { ExportOptionsDialog } from "@/components/iap-management/ExportOptionsDialog";
+import { GOOGLE_TERRITORY_CATALOG } from "@/lib/google-iap-management/export-territory-catalog";
 import { ExportScopeDialog } from "./ExportScopeDialog";
 import {
   countByStatus,
@@ -728,6 +729,15 @@ export function IapListClient({
 
       <ExportOptionsDialog
         open={exportDialogOpen}
+        // ⚠ X4/R2 — THE PROP THAT MUST NEVER GO MISSING AGAIN. Omitting it is
+        // not a smaller call: the shared dialog defaults `catalog` to
+        // `TERRITORY_CATALOG`, 183 hand-typed entries in the APPLE module, and
+        // that default is exactly how this bug shipped the first time. Nothing
+        // in the Google tree imported that constant, so every grep came back
+        // clean while the picker offered 15 fewer markets than Google sells in
+        // and 25 it does not. `export-territory-catalog.test.ts` fails if this
+        // line disappears. KB P34.
+        catalog={GOOGLE_TERRITORY_CATALOG}
         onCancel={() => setExportDialogOpen(false)}
         onExport={handleConfirmExport}
       />

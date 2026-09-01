@@ -99,9 +99,31 @@ describe("buildExportPlan — territory selection (Export options dialog)", () =
     expect(plan.territories).toEqual(["US"]);
   });
 
-  it("a selected territory no item actually has a price for → no column, no crash", () => {
+  it("⚠ a selected territory nobody prices STILL GETS A COLUMN — the selection is the column set", () => {
+    // ⚠ THIS TEST USED TO ASSERT THE OPPOSITE, AND THE OPPOSITE WAS THE BUG.
+    // Until X4 it read `→ no column, no crash` and expected `["US"]`: a
+    // country the operator ticked that no item priced was removed from the
+    // question instead of answered, with nothing in the file saying so
+    // (`[GOOGLE-export-intersection-silent-drop]`; Apple fixed the identical
+    // bug in E2). "No crash" was true and beside the point.
+    //
+    // ⚠ X4 made this mandatory rather than optional: widening the picker to
+    // Google's real 173 puts 15 previously-untickable markets in reach —
+    // exactly the ones most likely to have no price — so keeping the
+    // intersection would have made the drop fire MORE often.
     const plan = buildExportPlan(twoTerritoryProducts, ["US", "DE"]);
-    expect(plan.territories).toEqual(["US"]);
+    expect(plan.territories).toEqual(["DE", "US"]);
+  });
+
+  it("the unpriced column's cells carry the explicit no-price marker, not blanks", () => {
+    // A column of blanks is indistinguishable from a column the writer forgot
+    // to fill. `—` is unmistakably a rendered answer.
+    const plan = buildExportPlan(twoTerritoryProducts, ["US", "DE"]);
+    const ws = buildExportWorkbook(plan).Sheets["IAP Export"];
+    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as unknown[][];
+    // Columns: sku, name, status, DE price, DE currency, US price, US currency…
+    expect(aoa[2][3]).toBe("\u2014");
+    expect(aoa[2][4]).toBe("\u2014");
   });
 
   it("selecting every priced territory explicitly is equivalent to no filter", () => {
@@ -336,7 +358,16 @@ describe("buildExportWorkbook — file structure", () => {
     const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as unknown[][];
     const rowB = aoa[3];
     // Columns: sku, name, status, US price, US currency, loc1 code, loc1 desc, loc2 code, loc2 desc
-    expect(rowB).toEqual(["b", null, "inactive", null, null, null, null, null, null]);
+    //
+    // ⚠ X4 — THE TWO KINDS OF EMPTY ARE NOW DIFFERENT, ON PURPOSE. A territory
+    // cell with no price reads `—`: the item is exported, and the answer for
+    // that market is "no price here". A localization slot stays BLANK: the
+    // item simply has fewer described locales than the widest row, which is a
+    // property of the sheet's shape, not a fact about the item. Rendering `—`
+    // there would assert an answer nobody asked for.
+    expect(rowB).toEqual([
+      "b", null, "inactive", "\u2014", "\u2014", null, null, null, null,
+    ]);
   });
 
   it("handles an empty product list (no territories, no localization groups)", () => {

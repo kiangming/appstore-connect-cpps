@@ -26,6 +26,28 @@ import { regionNameFromCode } from "./region-name";
 const SHEET_NAME = "IAP Export";
 const FIXED_COLUMNS = ["Product ID", "Product Name", "Status"] as const;
 
+/**
+ * What a territory cell says when this item has no price there.
+ *
+ * ⚠ AN EM DASH, NOT A BLANK. Since X4 the ticked set IS the column set, so a
+ * column can be entirely unpriced — and a column of blanks is
+ * indistinguishable from a column the writer forgot to fill. `—` is
+ * unmistakably a rendered answer.
+ *
+ * ⚠ ONE MARKER IS ENOUGH HERE, AND THAT IS A FACT ABOUT GOOGLE, NOT A
+ * SIMPLIFICATION OF APPLE'S. Apple needs several (`—` for not-sold, plus a
+ * failure sheet distinguishing PARTIAL / FAILED / APPLE_ERROR) because its
+ * export reads each item separately and any one of those reads can fail, so a
+ * missing cell is genuinely ambiguous: not sold, or not answered? Google's
+ * export makes ONE list call. It returns every item with its complete regional
+ * pricing, or it throws and the route returns an error with no file at all
+ * (`export/route.ts` catch). There is no partial state to distinguish, so a
+ * missing cell has exactly one meaning: **this item has no price in this
+ * territory.** Adding Apple's second marker would invent a distinction the
+ * data cannot make.
+ */
+const NO_PRICE = "\u2014";
+
 export interface ExportRowPrice {
   price: string;
   currency: string;
@@ -97,12 +119,24 @@ function toExportRow(product: ToolInAppProduct): ExportRow {
  * Two-pass column determination + per-row extraction. Pure — no I/O.
  *
  * `selectedTerritories` (Export options dialog, shared with the Apple
- * export): when provided and non-empty, the territory PRICE columns are
- * narrowed to (union of territories-with-a-price) ∩ (selected codes).
- * Absent or empty means "no filter" — every priced territory, i.e.
- * today's unfiltered behavior. Fixed columns and localization groups are
- * per-item/per-locale, not per-territory, and are never affected by this
- * parameter.
+ * export): when provided and non-empty, **THE SELECTION IS THE COLUMN SET** —
+ * every ticked code gets a column, whether or not any exported item prices it.
+ * Absent or empty still means "no filter": every priced territory, exactly the
+ * pre-X4 unfiltered behaviour. Fixed columns and localization groups are
+ * per-item/per-locale, not per-territory, and are never affected.
+ *
+ * ⚠ IT USED TO INTERSECT, AND THAT WAS A SILENT DROP
+ * (`[GOOGLE-export-intersection-silent-drop]`). The old line was
+ * `allTerritories.filter((t) => selection.has(t))`, so a country the operator
+ * ticked that nobody priced **produced no column at all** — the question was
+ * removed instead of answered, and nothing in the file said so. Apple had the
+ * identical bug and fixed it in E2; the Google twin was never ported.
+ *
+ * ⚠ X4 MADE FIXING IT MANDATORY, NOT OPTIONAL. X4 widens the picker to
+ * Google's real 173, which puts 15 markets in reach that were never tickable
+ * before — precisely the ones most likely to have no price yet. Widening the
+ * list while still intersecting would have made this defect FIRE MORE OFTEN,
+ * so the two ship together or neither does.
  */
 export function buildExportPlan(
   products: ToolInAppProduct[],
@@ -121,13 +155,14 @@ export function buildExportPlan(
   }
 
   const allTerritories = [...territorySet].sort();
-  const selection =
+  // ⚠ THE SELECTION IS THE COLUMN SET — union, not intersection. A ticked
+  // country with no price anywhere still gets a column, and its cells carry
+  // the explicit "no price" marker. See the header for why intersecting was
+  // wrong and why X4 could not ship without this.
+  const territories =
     selectedTerritories && selectedTerritories.length > 0
-      ? new Set(selectedTerritories)
-      : null;
-  const territories = selection
-    ? allTerritories.filter((t) => selection.has(t))
-    : allTerritories;
+      ? [...new Set(selectedTerritories)].sort()
+      : allTerritories;
 
   return {
     territories,
@@ -210,7 +245,7 @@ export function buildExportWorkbook(plan: ExportPlan): XLSX.WorkBook {
     row.status,
     ...territories.flatMap((t) => {
       const cell = row.prices[t];
-      return cell ? [cell.price, cell.currency] : [null, null];
+      return cell ? [cell.price, cell.currency] : [NO_PRICE, NO_PRICE];
     }),
     ...Array.from({ length: localizationGroupCount }, (_, i) => {
       const loc = row.localizations[i];
