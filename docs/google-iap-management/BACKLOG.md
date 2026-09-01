@@ -299,10 +299,40 @@ orchestration/update-iap.ts:190     prices[region]   = { currency: p.currency, �
 
 ⇒ **Không phải chỉ hiển thị. Nó là giá trị được gửi đi.**
 
-**Đường sắc nhất là `applyManagerEdit`, không phải nút Add.** Manager mở một
-dòng override đã có và **đổi nước** sang Đức: `override-merge.ts:87` re-derive
-currency ⇒ `EUR` bị thay bằng `USD`, im lặng. Nút "Add region override"
-(`:335`) cũng dính, nhưng dòng mới còn phải gõ giá mới sống sót.
+### ⚠ ĐÍNH CHÍNH (2026-09-01) — bản đầu của mục này nêu VÍ DỤ SAI và PHẠM VI QUÁ RỘNG
+
+Bản đầu viết *"đổi nước sang **Đức** thì EUR bị thay bằng USD"*. **Sai:** `DE`
+**có** trong `COMMON_REGIONS`, nên `defaultCurrencyForRegion("DE")` trả đúng
+`EUR` (đo bằng code). Ví dụ đúng là các nước EUR **không** nằm trong 30 mục:
+`AT` `BE` `PT` `CH` `NO` `SE` `PL` … — đã đo, đều trả `USD`.
+
+Và phạm vi hẹp hơn bản đầu nói: trình sửa region override nằm trong khối
+**`{!isEdit && (`** ([`IapForm.tsx:1032`](../../components/google-iap-management/iap-form/IapForm.tsx#L1032))
+⇒ **chỉ có ở màn New IAP.** Màn Edit dùng `UnifiedPricingTable`, và bảng đó chỉ
+gửi `{ priceDecimal }`
+([`UnifiedPricingTable.tsx:456`](../../components/google-iap-management/iap-form/UnifiedPricingTable.tsx#L456))
+⇒ **không đổi được nước** ⇒ nhánh re-derive currency của `applyManagerEdit`
+**không bao giờ chạy ở Edit mode**.
+
+Defect không đổi; ví dụ và phạm vi thì đổi. Chi tiết đầy đủ ở báo cáo trả lời
+Manager 2026-09-01 và ở `queries/y1-pre-currency-damage-check.sql`.
+
+**Đường thật sự tới được từ giao diện (đều ở New IAP):**
+1. **Đổi nước của một dòng đã có** — `<select>` mỗi dòng
+   ([`IapForm.tsx:1062-1071`](../../components/google-iap-management/iap-form/IapForm.tsx#L1062))
+   liệt kê **250 mã ISO** từ `getAllRegions()`; đổi nó gọi
+   `updateOverride(i, { region })` → `applyManagerEdit` →
+   `override-merge.ts:87` re-derive currency. **Đây là đường dễ xảy ra nhất.**
+2. **Nút "Add region"** ([`IapForm.tsx:1104`](../../components/google-iap-management/iap-form/IapForm.tsx#L1104))
+   — dòng mới nhận nước **đầu tiên chưa dùng** theo thứ tự alphabet của
+   `getAllRegions()`, tức **`AF` (Afghanistan)**, và `AF` **không** nằm trong
+   173 nước Google bán. Currency điền `USD`.
+
+**Một đường thứ ba, ở Edit mode, KHÔNG qua `defaultCurrencyForRegion`:**
+`UnifiedPricingTable.tsx:467` gọi `onAddOverrideForRegion(region, row.live?.currency ?? "USD")`
+— khi hàng **không có giá live** trên Google, nó đóng cứng `"USD"` bất kể nước
+nào. Cùng hậu quả, nguyên nhân khác; sửa `defaultCurrencyForRegion` **không**
+chạm tới nó.
 
 **Hai điều kiện giảm nhẹ, đã kiểm:**
 1. Dòng không có `priceDecimal` bị **loại** trước khi gửi
