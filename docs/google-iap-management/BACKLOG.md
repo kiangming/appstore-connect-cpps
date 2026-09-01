@@ -149,6 +149,36 @@ docblock của [`xlsx-template-matrix-export.ts`](../../lib/google-iap-managemen
 
 ---
 
+## ✅ Arc `G-EXPORT` — Export item list · ĐÓNG 2026-09-01
+
+Ba yêu cầu Manager, cả ba xong:
+
+| | Yêu cầu | Chunk | Commit |
+|---|---|---|---|
+| **R3** | Header cột `Price in Vietnam (VN)` | X1 | `332c863` |
+| — | Nhãn nước lấy từ Play Console (bỏ bảng vá 18 mục) | — | `96ca745` |
+| **R1a** | Filter Active / Inactive | X2 | `3bc58ba` |
+| **R1b** | Picker chọn item (T1 tách `BulkStatusModal`) | X3 | `3a6ab6f` |
+| **R2** | Dialog dùng 173 nước của Google, bỏ 183 của Apple | X4 | `0955ff1` |
+
+**Hai tag đóng theo:** `[GOOGLE-regions-unmeasured]` (đo ra **173**, ba nguồn
+khớp 100%) và `[GOOGLE-export-intersection-silent-drop]` (tick nước không có
+giá nay ra cột với ô `—`).
+
+**Năm meta-rule mới vào KB:** P34 (rò rỉ qua default parameter) · P35 (override
+thừa và load-bearing nhìn giống hệt nhau) · P36 (test tự nhất quán không bao
+giờ đỏ — cần fingerprint) · P37 (đừng port quy ước nhiều-dấu sang pipeline chỉ
+có một trạng thái) · P38 (một console, hai danh sách nước).
+
+**Bảy tag còn mở** sinh ra từ arc này, không thuộc phạm vi nó:
+`[GOOGLE-common-regions-usd-default]` · `[GOOGLE-promote-hardcoded-usd]` ·
+`[GOOGLE-select-250-regions]` (⚠ ba cái này là **một họ** — xem mục nối ở trên,
+đề xuất gom một arc riêng) · `[GOOGLE-play-console-two-lists]` ·
+`[GOOGLE-suite-timeout-flake]` · `[GUIDE-label-drift]` ·
+`[APPLE-export-wizard-docblock-183]` (TODO.md, module Apple).
+
+---
+
 ## Đã đóng
 
 | Tag | Đóng khi nào | Ghi chú |

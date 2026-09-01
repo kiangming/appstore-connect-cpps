@@ -1088,7 +1088,7 @@
           <a class="nav-item" data-page="google-apps" data-keywords="google apps danh sách play store">
             <span class="nav-item-label">Danh sách apps</span>
           </a>
-          <a class="nav-item" data-page="google-iaps" data-keywords="google iaps items danh sách sku deleted flagged xóa không còn play console refresh export xlsx excel xuất file">
+          <a class="nav-item" data-page="google-iaps" data-keywords="google iaps items danh sách sku deleted flagged xóa không còn play console refresh export xlsx excel xuất file xuat file chọn item chon item picker tick select all show more search tìm kiếm tim kiem filter active inactive INACTIVE_PUBLISHED trạng thái trang thai header tên nước ten nuoc price in vietnam vn 173 nước 173 nuoc nga russia macao macau ô trống o trong gạch ngang gach ngang em dash — chưa có giá chua co gia bỏ qua bo qua skipped live mirror">
             <span class="nav-item-label">Danh sách IAPs</span>
           </a>
           <a class="nav-item" data-page="google-create-iap" data-keywords="google create item tạo mới onetimeproduct">
@@ -2607,7 +2607,8 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <p><strong>File trông thế nào</strong> — 4 điểm đáng biết trước khi mở:</p>
               <ul>
                 <li><strong>Danh sách nước = đúng 175 nước Apple có bán.</strong> Trước đây picker
-                hiện 183 nước dùng chung với Google, trong đó có 19 nước Apple <em>không</em> bán
+                hiện 183 nước — một danh sách dùng chung, hồi đó Google cũng lấy (nay không còn:
+                Google dùng đúng 173 nước Play Console bán) — trong đó có 19 nước Apple <em>không</em> bán
                 (Andorra, Monaco, Bangladesh…) — tick vào chỉ tổ ra 19 cột trống vô nghĩa. Nay chúng
                 không còn trong danh sách. Đổi lại, <strong>11 nước Apple CÓ bán mà trước đây thiếu
                 nay đã tick được — trong đó có Nga (RU)</strong>.</li>
@@ -4625,16 +4626,100 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <div class="step-body"><p>Click SKU/title → <a class="inline-link" data-goto="google-edit-iap">Chỉnh sửa item</a>.</p></div>
           </li>
           <li class="step">
-            <div class="step-title">Export danh sách items (xlsx) — Cycle 44</div>
+            <div class="step-title">Export danh sách items (xlsx) — chọn item rồi chọn nước</div>
             <div class="step-body">
-              <p>Nút <strong>"Export list"</strong> trên toolbar tải về file Excel chứa <strong>toàn bộ items của
-              app hiện có trên Google Play</strong> (không chỉ phần đang filter/hiển thị). Mỗi item là 1 dòng, gồm:
-              Product ID, Product Name, Status, 1 cột giá + tiền tệ cho mỗi territory item đang bán, và các nhóm
-              localization (Locale Code · Description).</p>
-              <p>File tải về tên dạng <code class="inline">IAP-export-&lt;packageName&gt;-YYYYMMDD.xlsx</code>.</p>
+              <p>Nút <strong>"Export list"</strong> trên toolbar mở một <strong>wizard 2 bước</strong>.
+              (Trước Cycle 45 nút này export thẳng toàn bộ app, không hỏi gì.)</p>
+
+              <p><strong>Bước 1 — <em>"Export list — items to include"</em></strong>
+              (dòng phụ <em>"Step 1 of 2 · countries are chosen next"</em>):</p>
+              <ul>
+                <li>Ba lựa chọn kèm số đếm: <strong>All items</strong> · <strong>Active only</strong> ·
+                <strong>Inactive only</strong>.</li>
+                <li>Bên dưới là danh sách tick từng item, tiêu đề
+                <code class="inline">Items (N of M selected)</code>, có <strong>Select all (N)</strong>,
+                bộ đếm <code class="inline">N selected</code> và ô tìm
+                <em>"Search by SKU or name…"</em>. <strong>Mặc định tick hết</strong> — bấm thẳng qua
+                là export cả app y như trước.</li>
+                <li>Danh sách dài hiện 50 dòng một, có nút <strong>Show more</strong>.
+                ⚠ Dòng chưa hiện <strong>vẫn đang được tick và vẫn vào file</strong> — nút nói rõ điều đó.</li>
+                <li>Search chỉ <em>ẩn</em> dòng, không bỏ tick. Nếu có pick bị ẩn, một dòng chữ nói còn
+                bao nhiêu, và bộ đếm <code class="inline">N selected</code> vẫn đếm chúng.</li>
+                <li><strong>Select all</strong> áp cho mọi item <em>khớp tìm kiếm hiện tại</em>,
+                không phải chỉ những dòng đang thấy.</li>
+                <li>Nút đi tiếp ghi <strong>Next — choose countries (N)</strong>, N là số item
+                <em>thực sự sẽ export</em>. Bỏ tick hết thì nút <strong>mờ đi</strong> và đổi thành
+                <strong>Select at least 1 item</strong> — export bị từ chối chứ không âm thầm quay lại
+                "tất cả".</li>
+                <li>Đổi lựa chọn trạng thái sẽ <strong>reset tick</strong> về toàn bộ item của lựa chọn mới.</li>
+              </ul>
+
+              <p><strong>Bước 2 — <em>"Export options"</em></strong>: bảng chọn nước, có
+              <strong>Select all</strong> / <strong>Clear all</strong> và bộ đếm
+              <code class="inline">N of M selected</code>. Nút ghi <strong>Export N countries</strong>.</p>
+
+              <p>File tải về tên dạng <code class="inline">IAP-export-&lt;packageName&gt;-YYYYMMDD.xlsx</code>.
+              Mỗi item 1 dòng: Product ID · Product Name · Status, rồi 1 cặp cột
+              <strong>Price · Currency</strong> cho mỗi nước, rồi các nhóm localization
+              (Locale Code · Description).</p>
             </div>
           </li>
         </ol>
+
+        <div class="callout callout-warn">
+          <div class="callout-title">⚠️ "Active" gộp HAI state của Google — dialog nói thẳng điều đó</div>
+          <p>Ngay cạnh 3 lựa chọn có dòng chữ, nguyên văn:</p>
+          <p><em>"Google calls a purchase option ACTIVE or INACTIVE_PUBLISHED; this tool counts both as
+          &quot;Active&quot;. &quot;Inactive&quot; is everything else."</em></p>
+          <p>Nghĩa là item Google gắn <code class="inline">INACTIVE_PUBLISHED</code> sẽ được lọc là
+          <strong>Active</strong>. Đó là cách toàn bộ tool vẫn phân loại từ trước; dòng chữ có ở đó để
+          chữ "Active" không bị đọc thành riêng <code class="inline">ACTIVE</code> của Google.</p>
+        </div>
+
+        <div class="callout">
+          <div class="callout-title">ℹ️ Header cột nước: <code class="inline">Price in Vietnam (VN)</code> — tên từ Play Console</div>
+          <p>Trước 2026-09-01 header chỉ ghi mã (<code class="inline">Price in VN</code>). Nay là tên nước
+          kèm mã, và tên lấy từ bảng chép nguyên từ màn <strong>Pricing</strong> của Play Console (173 nước,
+          mã và tiền tệ đã đối chiếu máy với API — khớp 100%).</p>
+          <p><strong>16 header đã đổi chữ.</strong> File export cũ đọc khác là vì vậy: ví dụ
+          <code class="inline">Holy See (Vatican City State)</code> nay là <code class="inline">Vatican City</code>,
+          <code class="inline">Virgin Islands, British</code> nay là <code class="inline">British Virgin Islands</code>,
+          <code class="inline">Cote d'Ivoire</code> nay có dấu, và <code class="inline">Macau</code> nay là
+          <strong>Macao</strong> — chữ cũ đó vốn sai, cả Play Console lẫn chuẩn ISO đều ghi Macao.</p>
+        </div>
+
+        <div class="callout callout-warn">
+          <div class="callout-title">⚠️ Danh sách nước nay 173 — trước là 183 và đó KHÔNG phải danh sách của Google</div>
+          <p>Danh sách cũ mượn của module Apple, và sai cả hai chiều:</p>
+          <ul>
+            <li><strong>15 nước Google CÓ bán mà không tick được</strong> — Nga, Belarus, Libya, Gibraltar,
+            Aruba, Bermuda, Cayman Islands, Turks &amp; Caicos, British Virgin Islands, Central African
+            Republic, Eritrea, Somalia, Vatican City, Yemen, Zimbabwe. Nay tick được hết.</li>
+            <li><strong>25 mục là nước Google không bán</strong> — tick vào không bao giờ ra được gì.
+            Nay đã bỏ.</li>
+          </ul>
+        </div>
+
+        <div class="callout callout-warn">
+          <div class="callout-title">⚠️ Tick nước không item nào có giá → CỘT vẫn có, ô ghi <code class="inline">—</code></div>
+          <p>Trước 2026-09-01 <strong>mất hẳn cột</strong>: câu hỏi bị gỡ đi thay vì được trả lời, và
+          không có gì trong file nói vì sao. Nay cột vẫn có và mọi ô ghi <code class="inline">—</code>,
+          nghĩa là "item này không có giá ở thị trường đó".</p>
+          <p><code class="inline">—</code> ở đây chỉ có <strong>một nghĩa</strong>. Export đọc mọi item
+          trong <strong>một</strong> lần gọi, hoặc đủ hoặc không ra file — không có ca "không kiểm được"
+          để lẫn với nó. (Khác export bên Apple: bên đó đọc từng item nên cần thêm sheet lỗi.)</p>
+        </div>
+
+        <div class="callout">
+          <div class="callout-title">ℹ️ Số trên màn vs số trong file — công bố "N item bỏ qua"</div>
+          <p>Số đếm ở bước 1 lấy từ danh sách đang cache (lần <strong>Refresh</strong> gần nhất); file thì
+          dựng <strong>live từ Google</strong>. Nếu một item đổi trạng thái trên Play Console sau lần
+          Refresh đó, <strong>file theo Google</strong> và câu thông báo nói rõ, ví dụ:</p>
+          <p><em>"Exported 8 items. 4 items skipped by the &quot;active&quot; filter. The list on screen
+          showed 9 — Google's live data differs, and the file follows Google. Refresh to update the list."</em></p>
+          <p><strong>Chi phí:</strong> 1 request Google mỗi lần export, bất kể chọn gì. Đổi filter, tìm
+          kiếm, tick item — không tốn request nào.</p>
+        </div>
 
         <h2 class="section-title">Hình ảnh minh họa</h2>
         <div class="screenshot" data-lightbox data-caption="Google IAPs list · Cycle 41 toolbar · 2 bulk action buttons">

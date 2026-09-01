@@ -83,57 +83,113 @@ Reporting access or hasn't been granted any apps in Play Console.
 
 ### 3.1 Export list — download the app's IAPs as .xlsx
 
-Click **Export list** on the app detail page. A dialog opens to pick which
-country price columns to include; **Export** downloads
-`IAP-export-<package>-<YYYYMMDD>.xlsx`.
+Click **Export list** on the app detail page (the button reads **Generating…**
+while it works). Export is a **two-step wizard**:
 
-The file is read **live from Google**, not from the tool's cache — so it
-reflects Google Play at the moment you click, even if the list on screen was
-synced earlier. It costs **one** Google API request regardless of how many
-items the app has.
+**Step 1 — "Export list — items to include"** (`Step 1 of 2 · countries are
+chosen next`)
 
-Layout: one row per SKU. Fixed columns `Product ID · Product Name · Status`,
-then a **Price / Currency** pair for each country, then a **Locale Code /
-Description** pair per localization.
+- **Which items.** Three options with live counts: **All items**,
+  **Active only**, **Inactive only**.
+- **Which of them.** Below the options, a checkbox list headed
+  `Items (N of M selected)`, with **Select all (N)**, an `N selected` counter,
+  and a search box (`Search by SKU or name…`). Everything starts ticked, so
+  clicking straight through exports the whole app exactly as before.
+- Long lists render in pages of 50 with a **Show more** button. ⚠ Rows below
+  the fold are **still selected and still exported** — the button says so.
+- Search hides rows but never unticks them. If picks are hidden, a line says
+  how many, and the `N selected` counter keeps counting them.
+- **Select all** applies to everything matching the current search, not just
+  what is on screen.
+- The button reads **Next — choose countries (N)** where N is what will
+  actually be exported. Untick everything and it greys out and reads
+  **Select at least 1 item** — the export is refused rather than quietly
+  widened back to "everything".
+- Changing the status option **resets the ticks** to all items in the new
+  option. A selection made against a different set is not carried over.
+
+**Step 2 — "Export options"** — the country picker (`Choose which countries &
+currencies to include in the exported file.`), with **Select all** /
+**Clear all** and an `N of M selected` counter. The button reads
+**Export N countries**. Leaving every country ticked means "no filter".
+
+> ⚠ **"Active" here covers TWO of Google's states.** The dialog says so, in
+> these words:
+>
+> > *Google calls a purchase option ACTIVE or INACTIVE_PUBLISHED; this tool
+> > counts both as "Active". "Inactive" is everything else.*
+>
+> An item Google labels `INACTIVE_PUBLISHED` is filtered as **Active**. That
+> is how the whole tool has always classified it, and the note is there so the
+> word "Active" is not read as Google's `ACTIVE` alone.
+
+**Counts on screen vs the file.** The counts in step 1 come from the cached
+list (last **Refresh**). The file is built **live from Google**. If an item
+changed on Play Console since the last Refresh, the file follows Google and
+the result message says so — e.g. *"Exported 8 items. 4 items skipped by the
+"active" filter. The list on screen showed 9 — Google's live data differs, and
+the file follows Google. Refresh to update the list."*
+
+**Cost.** One Google API request per export, whatever you pick. Changing the
+filter, searching, or ticking items costs nothing.
+
+---
+
+#### The file
+
+`IAP-export-<package>-<YYYYMMDD>.xlsx`. One row per SKU. Fixed columns
+`Product ID · Product Name · Status`, then a **Price / Currency** pair per
+country, then a **Locale Code / Description** pair per localization.
 
 **Country column headers read `Price in Vietnam (VN)`** — the market name with
-its ISO 3166-1 alpha-2 code in parentheses. The code is kept because a
+its ISO 3166-1 alpha-2 code in parentheses. The code stays because a
 spreadsheet is read away from the tool, where the name alone cannot be matched
 back to the key.
 
 > ⚠ **The country names are the ones Google Play Console shows.** Google
-> publishes no country-name list through its API — `convertRegionPrices`
-> returns a region code and a price and nothing else — so the names come from
-> a table transcribed from the Console's own **Pricing** screen: all 173
-> markets, supplied by the Manager on 2026-09-01. The codes and the currency
-> of every row were compared by machine against the API and match 100%, with
-> none differing in either direction, so the table names exactly the markets
-> the tool can price.
+> publishes no country-name list through its API, so the names come from a
+> table transcribed from the Console's **Pricing** screen: all 173 markets,
+> supplied by the Manager on 2026-09-01, with codes and currencies matched by
+> machine against the API (100%, none differing).
 >
-> Before this, names came from the `i18n-iso-countries` package with 18
-> hand-added corrections, and **16 of the 173 headers read differently** —
-> `Holy See (Vatican City State)` instead of `Vatican City`,
-> `Virgin Islands, British` instead of `British Virgin Islands`,
-> `Cote d'Ivoire` without its accents, and — because one of those 18
-> corrections was simply wrong — `Macau` where both the Console and the
-> standard say **Macao**. If you have an export from before 2026-09-01, those
-> older headers are why it differs.
+> **16 headers changed on 2026-09-01.** If you have an older export, that is
+> why it reads differently — for example `Holy See (Vatican City State)` is now
+> `Vatican City`, `Virgin Islands, British` is now `British Virgin Islands`,
+> `Cote d'Ivoire` now carries its accents, and `Macau` is now **Macao** (that
+> last one was simply wrong before: both the Console and the standard say
+> Macao).
 >
-> If a name still looks wrong, say which label the Console shows on its
-> Pricing screen and the table is corrected there. It is only ever changed
-> from a screen someone has read — never from a name that merely reads
-> better.
+> If a name still looks wrong, say which label the Console shows and the table
+> is corrected there. It is only ever changed from a screen someone has read.
+
+**Countries offered: 173 — the markets Google Play actually sells in.**
+
+> ⚠ **This was 183 until 2026-09-01, and the old list was not Google's.** It
+> came from the Apple module's catalogue and was wrong in both directions:
+>
+> - **15 markets Google sells in could not be ticked at all** — Russia,
+>   Belarus, Libya, Gibraltar, Aruba, Bermuda, Cayman Islands, Turks & Caicos,
+>   British Virgin Islands, Central African Republic, Eritrea, Somalia, Vatican
+>   City, Yemen, Zimbabwe. They are all selectable now.
+> - **25 entries were markets Google does not sell in** — ticking them could
+>   never produce anything. They are gone.
+
+**A ticked country with no price reads `—`.**
+
+> ⚠ **It used to lose the column entirely.** Tick a country that no exported
+> item prices and, before 2026-09-01, no column appeared at all: the question
+> was removed instead of answered, and nothing in the file said so. Now the
+> column is there and every cell reads `—`, meaning "this item has no price in
+> this market".
+>
+> `—` has exactly one meaning here. The export reads every item in a single
+> call, so there is no "we could not check" case to confuse it with — unlike
+> the Apple export, which reads items one at a time and needs a failure sheet.
 
 If a country code has no name at all, the header shortens to the bare code
 (`Price in ZZ`) rather than repeating it as `Price in ZZ (ZZ)`. No market
-Google currently sells in falls into this case; a test fails loudly if one
-ever starts to.
-
-> ⓘ **Changing shortly.** The item selection and Active/Inactive filter
-> (chunks X2-X3) and the country list in the dialog (chunk X4) are not yet
-> built — today the export always covers every item, and the country picker
-> still offers a list that is not Google's. This section will be extended as
-> each ships.
+Google currently sells in falls into this case; a test fails loudly if one ever
+starts to.
 
 ---
 

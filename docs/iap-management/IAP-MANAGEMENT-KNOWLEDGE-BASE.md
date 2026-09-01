@@ -3714,6 +3714,121 @@ prop is present at the call site, and the mutation that proves it is *remove
 the prop and watch the suite go red* — which is precisely how the defect
 occurred the first time.
 
+**P35 — A "REDUNDANT" OVERRIDE AND A LOAD-BEARING ONE LOOK IDENTICAL FROM THE
+OUTSIDE. WHEN THE LIBRARY UNDER THEM CHANGES, NOTHING GOES RED EITHER WAY.**
+
+A patch list over a third-party table — overrides, exceptions, "the library
+gets this one wrong" entries — is written against one version of that table and
+then silently outlives it. An entry whose upstream value caught up is now dead
+weight; an entry that upstream drifted AWAY from is now the only thing holding
+the behaviour up. Both keep passing every test, because the tests assert the
+OUTPUT, and the output is right in both cases.
+
+Confirmed instance — Google IAP country labels, 2026-09-01. An 18-entry
+override map in `region-name.ts` carried a per-entry comment naming the "ISO
+default" it existed to correct. Measured against `i18n-iso-countries@7.14.0`,
+which is what the repo actually installs:
+
+| | comment claimed the library says | library actually says |
+|---|---|---|
+| `GB` | United Kingdom of Great Britain and Northern Ireland | **United Kingdom** |
+| `KR` | Korea, Republic of | **South Korea** |
+| `BO` | Bolivia, Plurinational State of | **Bolivia** |
+| `VE` | Venezuela, Bolivarian Republic of | **Venezuela** |
+| `VN` | Viet Nam | **Vietnam** |
+
+Five entries doing nothing. And the same audit found the inverse: `CZ` carried
+*"ISO default already 'Czechia' in most builds; pin for stability"* — a comment
+saying the pin was precautionary — while the library returns **"Czech
+Republic"**, making that pin the only reason the label was right.
+
+⚠ **AND ONE ENTRY WAS SIMPLY WRONG.** `MO` was pinned to "Macau" with a comment
+noting ISO says "Macao" — a deliberate divergence — while the authority it
+claimed to be matching (Play Console) *also* says Macao. A patch list is only
+ever as correct as the last person who looked at one line of it.
+
+⇒ **Rule: audit a patch list against its upstream as a SET, not entry by
+entry.** Enumerate every entry, print what upstream returns today, and classify
+each as load-bearing / redundant / wrong. Entry-by-entry review cannot find the
+redundant ones, because a redundant entry reads exactly like a careful one.
+
+⇒ **Corollary: prefer a COMPLETE table to a patch list when a complete source
+exists.** The fix here replaced 18 patches with all 173 rows transcribed from
+the source screen. A full table can be diffed against its source; a patch list
+has nothing to be diffed against. Related: P15/P28 (prose making unchecked
+claims) — here the prose was a claim about a *dependency version*, which rots
+without anyone touching the file.
+
+**P36 — A TEST THAT READS THE SAME SOURCE ON BOTH SIDES IS SELF-CONSISTENT BY
+CONSTRUCTION AND CAN NEVER FAIL. PINNED DATA NEEDS A FINGERPRINT, NOT AN
+ASSERTION.**
+
+When a module's job is to carry measured DATA — a snapshot, a catalogue, a
+pinned table — the natural test is "every row of the built output matches the
+row it came from". That assertion is a tautology: it reads the snapshot on both
+sides, so it holds no matter what the snapshot says. Hand-edit any value and
+the suite stays green.
+
+Confirmed instance — X4 mutation M4, `play-regions.snapshot.ts`. The mutation
+changed `VN` from `VND` to `USD` and left the pinned `regionsVersion` alone —
+exactly the edit the file's own docblock forbids ("NEVER EDIT ONE FIELD
+ALONE"). **The whole suite passed.** Adjudicated as a test with no teeth rather
+than a mutation at the wrong layer: every currency assertion in the arc read
+the snapshot on both sides.
+
+⇒ **Rule: pin measured data with a fingerprint over the whole table, held in
+the TEST file.** A hash covers every row, including the ones nobody thought to
+assert, and updating it is a visible line in a review — which is the moment to
+ask whether the version string and the measurement date moved too. Holding it
+in the source next to the data would let one thoughtless edit regenerate both.
+
+⚠ **A HASH CATCHES EVERYTHING AND NAMES NOTHING.** Pair it with a handful of
+high-traffic values written out longhand, so a failure is readable instead of
+just red. The X4 pin carries seven, including the one row a sibling constant
+had measurably wrong (`AR` — Google bills Argentina in USD; the old
+`COMMON_REGIONS` said ARS).
+
+**P37 — A CONVENTION THAT ENCODES "WE COULD NOT FIND OUT" IS ONLY MEANINGFUL
+WHERE THAT STATE EXISTS. PORTING IT SOMEWHERE IT CANNOT HAPPEN INVENTS A
+DISTINCTION THE DATA CANNOT MAKE.**
+
+Apple's export marks an unsold territory `—` and additionally files
+PARTIAL / FAILED / APPLE_ERROR rows in a failure sheet, because it reads each
+item separately and any one of those reads can fail: a missing cell there is
+genuinely ambiguous — not sold, or not answered?
+
+The Google export makes **one** paginated list call. It returns every item with
+its complete regional pricing, or it throws and the route returns an error with
+no file at all. There is no partial state. A missing cell has exactly one
+meaning: this item has no price in this market.
+
+⇒ X4 gave Google a single marker (`—`) and no failure sheet, and the reasoning
+— not the Apple convention — is what is written next to it. Adding the second
+marker would have asked readers to distinguish two cases the pipeline cannot
+produce.
+
+⇒ **Rule: before porting a "distinguish these states" convention, enumerate the
+states the TARGET pipeline can actually be in.** If it has fewer, the extra
+markers are noise that will eventually be read as signal. Sibling of P1
+(twin-path) inverted: the danger is not divergence, it is FALSE convergence.
+
+**P38 — TWO SCREENS OF THE SAME VENDOR CONSOLE CAN PUBLISH DIFFERENT COUNTRY
+LISTS. THE ONE YOU WERE HANDED IS NOT NECESSARILY THE ONE YOUR FEATURE NEEDS.**
+
+Google Play Console shows **173** countries on its **Pricing** screen (markets
+with a billing currency) and **176** on **country targeting / distribution**
+(markets an app can appear in). The second carries `CN CU IR SD` and a
+non-ISO `"Rest of World"` row, and is missing `CF`.
+
+Confirmed instance — arc G-EXPORT, 2026-09-01: the 176-row list was supplied
+first and was nearly adopted. It was rejected only because it was compared by
+machine against `convertRegionPrices`, which returns 173 — the mismatch, not
+the label on the screenshot, is what identified it as the wrong list.
+
+⇒ **Rule: a vendor list is identified by what the API agrees with, not by where
+it came from.** Diff any supplied list against the API call the feature will
+actually use, before building on it.
+
 **P32 — A CHUNK THAT CREATES AN OPT-IN FLAG MUST NAME, BY CHUNK, WHO TURNS IT
 ON. AN OPT-IN NOBODY OPTS INTO IS DEAD CODE THAT LOOKS ALIVE.**
 
