@@ -248,10 +248,45 @@ trước, và chỉ bị bác bỏ nhờ phép so bằng máy với M1.
 
 ---
 
-## ⚠ `[GOOGLE-common-regions-usd-default]` — `defaultCurrencyForRegion` sai 70/173, và giá trị sai **TỚI ĐƯỢC** lệnh ghi Google
+## `[GOOGLE-common-regions-usd-default]` — `defaultCurrencyForRegion` sai 70/173, tới được lệnh ghi, **nhưng chưa nổ lần nào**
 
-**Trạng thái:** ⚠ **CẦN SỬA — đã nâng mức 2026-09-01 sau khi đo 3b.** Trước đó
-ghi là "backlog, chưa rõ có tới payload không". Đã trace tới nơi, **có tới**.
+**Trạng thái:** ⚠ **CẦN SỬA — XẾP SAU X3/X4.** Đã hạ mức 2026-09-01 sau khi đo
+production. Lịch sử mức: "backlog, chưa rõ có tới payload" → "CẦN SỬA, chen
+trước X3/X4" (khi trace xong đường tới payload) → **"CẦN SỬA, sau X3/X4"** (khi
+đo ra chưa có thiệt hại thật).
+
+### ⚠ CĂN CỨ HẠ MỨC — và HAI ĐIỀU KHÔNG ĐƯỢC KẾT LUẬN TỪ NÓ
+
+Manager chạy `queries/y1-pre-currency-damage-check.sql` trên production
+(2026-09-01):
+
+| | |
+|---|---|
+| dòng giá trong mirror | **308.933** |
+| region ngoài 173 | **0** |
+| **currency lệch** | ⭐ **0** |
+| IAP dính | **0** |
+| Q2 · Q2b · Q3 · Q5 | **0 dòng** |
+| `AF` (đường B) từng xuất hiện trong mirror | **chưa bao giờ** |
+
+Mirror ghi từ **response của Google** (`repository/iaps.ts:287-291`), nên 0 dòng
+nghĩa là **Google chưa từng nhận và giữ một cặp `{region, currency}` sai**.
+
+> ### ⚠ ĐỪNG ĐỌC "0 DÒNG" THÀNH "AN TOÀN RỒI". Hai điều nó KHÔNG chứng minh:
+>
+> **1. Nó KHÔNG chứng minh Google từ chối `{AT, USD}`.** 0 dòng khớp với **cả
+> hai** giả thuyết, và query không phân biệt được: (a) Google từ chối cặp sai,
+> hoặc (b) **chưa ai đi qua đường đó bao giờ**. Muốn biết chắc vẫn phải chạy
+> phép đo **Y1** (1 request ghi trên IAP nháp) — **hoãn, không huỷ**.
+>
+> **2. "0 dòng" chỉ đáng tin tới lần Refresh gần nhất của TỪNG IAP.** Q4 đo:
+> 1.794 IAP, 0 never-synced, mới nhất hôm nay, **cũ nhất 102 ngày**. Với nhóm
+> cũ đó, một lần ghi sai xảy ra sau lần sync cuối **chưa hiện lên**. Chạy
+> Refresh rồi chạy lại Q2 sẽ chặt hơn.
+>
+> ⇒ **Defect vẫn CÓ THẬT trong code** — 70/173 mã sai currency, đường tới
+> payload đã trace đủ 6 mắt. Nó chỉ **CHƯA NỔ**. Hạ mức là xếp lại thứ tự, không
+> phải đóng.
 
 ### Sai bao nhiêu — đo với 173 cặp `{code, currency}` thật của M1
 
@@ -372,6 +407,94 @@ Bỏ hẳn `defaultCurrencyForRegion` khỏi ba đường trên và lấy curren
 ([`IapForm.tsx:428`](../../components/google-iap-management/iap-form/IapForm.tsx#L428)).
 Tức nguồn đúng đã nằm sẵn trong cùng component; ba chỗ kia chỉ đang không dùng.
 ⚠ Cùng hình dạng với lỗi R2: nguồn đúng có sẵn, một đường khác vẫn đọc nguồn cũ.
+
+---
+
+## `[GOOGLE-promote-hardcoded-usd]` — promote-to-override đóng cứng `"USD"` khi hàng không có giá live
+
+**Trạng thái:** ⚠ **CẦN SỬA — XẾP SAU X3/X4.** Lỗi **ĐỘC LẬP**, phát hiện
+2026-09-01 khi trace `[GOOGLE-common-regions-usd-default]`.
+
+[`UnifiedPricingTable.tsx:467`](../../components/google-iap-management/iap-form/UnifiedPricingTable.tsx#L467):
+
+```tsx
+onAddOverrideForRegion(row.region_code, row.live?.currency ?? "USD")
+```
+
+`row.live` là `{ currency, price_micros } | null`
+([`unified-pricing.ts:52`](../../lib/google-iap-management/unified-pricing.ts#L52)).
+Khi **null** — hàng chưa có giá live trên Google — nút "override" stamp
+`"USD"` **bất kể nước nào**.
+
+> ### ⚠ CÙNG HẬU QUẢ, NGUYÊN NHÂN KHÁC — SỬA CÁI KIA KHÔNG CHẠM TỚI NÓ
+> `"USD"` ở đây là **hằng đóng cứng tại chỗ**, không đi qua
+> `defaultCurrencyForRegion`. Thay hàm đó bằng `regions/catalog` sẽ để lại
+> dòng này y nguyên. Một `grep defaultCurrencyForRegion` khi sửa sẽ **không**
+> ra nó — đúng lớp P1 twin-path.
+>
+> ### ⚠ VÀ NÓ Ở MÀN KHÁC. ĐỪNG GỘP KHI SỬA.
+> | | màn | căn cứ |
+> |---|---|---|
+> | `[GOOGLE-common-regions-usd-default]` đường A/B | **New IAP** | trình sửa override nằm trong `{!isEdit && (` — [`IapForm.tsx:1032`](../../components/google-iap-management/iap-form/IapForm.tsx#L1032) |
+> | **mục này** | **Edit IAP** | `UnifiedPricingTable` chỉ render dưới `{isEdit && (` |
+>
+> Hai màn, hai đường code, hai lần sửa. Gộp làm một sẽ sửa được một nửa và
+> tưởng là xong.
+
+**Chưa gây hại tính tới 2026-09-01** — cùng phép đo Y1-PRE, 0/308.933 dòng lệch.
+Mọi cảnh báo về giới hạn của "0 dòng" ở
+`[GOOGLE-common-regions-usd-default]` áp dụng y hệt cho mục này.
+
+---
+
+## `[GOOGLE-select-250-regions]` — `<select>` nước liệt kê 250 mã ISO thay vì 173 nước Google bán
+
+**Trạng thái:** ⚠ **CẦN SỬA — XẾP SAU X3/X4.** Phát hiện 2026-09-01.
+
+[`IapForm.tsx:1062-1071`](../../components/google-iap-management/iap-form/IapForm.tsx#L1062)
+dựng `<option>` từ `getAllRegions()` — **250 mã ISO 3166-1**
+([`region-name.ts:84-94`](../../lib/google-iap-management/region-name.ts#L84)),
+không phải **173** mã Google Play thực sự bán.
+
+**Hệ quả đo được:** `addRegionOverride()`
+([`IapForm.tsx:326-341`](../../components/google-iap-management/iap-form/IapForm.tsx#L326))
+lấy **nước đầu tiên chưa dùng** theo thứ tự alphabet của `getAllRegions()`. Đo
+bằng code: mục đầu là **`AF` — Afghanistan**, và **`AF` không nằm trong 173**.
+
+> ### ⚠ THAO TÁC MẶC ĐỊNH NHẤT CHO RA MỘT NƯỚC KHÔNG BÁN ĐƯỢC.
+> Bấm "Add region" rồi không đổi gì = một dòng override cho một thị trường
+> Google không bán, currency `USD`. Không có gì trên màn nói điều đó.
+
+> ### ⚠ CÙNG HỌ VỚI LỖI R2 — và đó là lý do mục này đáng ghi riêng
+> R2: dialog export tick **183** mã của module Apple thay vì 173 của Google.
+> Mục này: form Edit/New chọn **250** mã ISO thay vì 173 của Google.
+> Cùng một hình dạng: **một danh sách nước rộng hơn thực tế, lấy từ nguồn
+> không phải Google, và không ai đối chiếu.** R2 phải đo mới phát hiện; mục
+> này phát hiện được nhờ đã có con số 173.
+
+---
+
+## ⚠ BA MỤC TRÊN LÀ MỘT HỌ — gom thành MỘT arc sau X4, đừng sửa lẻ
+
+`[GOOGLE-common-regions-usd-default]` · `[GOOGLE-promote-hardcoded-usd]` ·
+`[GOOGLE-select-250-regions]` là **ba triệu chứng của một nguyên nhân**: màn
+Create/Edit IAP dựng danh sách nước và currency từ **nguồn nội bộ cũ**
+(`COMMON_REGIONS` 30 mục · `getAllRegions()` 250 mã ISO · một hằng `"USD"`
+đóng cứng) thay vì từ Google.
+
+**Nguồn đúng đã tồn tại và đã chạy production:**
+[`GET /api/google-iap-management/regions/catalog`](../../app/api/google-iap-management/regions/catalog/route.ts)
+— trả đúng **173 cặp `{regionCode, currency}`** từ `convertRegionPrices`.
+
+⚠ **Và chính hai component đó đã gọi nó rồi**:
+[`CustomPricesDialog.tsx:157`](../../components/google-iap-management/bulk-import/CustomPricesDialog.tsx#L157)
+và [`IapForm.tsx:428`](../../components/google-iap-management/iap-form/IapForm.tsx#L428).
+Nguồn đúng nằm **trong cùng file**; ba đường kia chỉ đang không dùng.
+
+⇒ **Đề xuất: một arc riêng sau X4**, sửa cả ba cùng lúc qua một nguồn.
+Sửa lẻ từng mục thì mỗi lần chỉ đóng một triệu chứng, và cái còn lại vẫn cho
+ra đúng dữ liệu sai đó — như `[GOOGLE-promote-hardcoded-usd]` sẽ sống sót
+nguyên vẹn qua một bản sửa `defaultCurrencyForRegion`.
 
 ---
 
