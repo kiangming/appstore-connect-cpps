@@ -41,11 +41,18 @@ import {
   buildExportWorkbook,
   xlsxExportFilename,
 } from "@/lib/google-iap-management/xlsx-export";
+import {
+  isExportStatusFilter,
+  partitionByStatusFilter,
+  type ExportStatusFilter,
+} from "@/lib/google-iap-management/export-status-filter";
 
 export const dynamic = "force-dynamic";
 
 interface ExportRequestBody {
   territories?: string[] | null;
+  /** X2 — `"all"` / absent / unrecognised all mean "no filter". See below. */
+  statusFilter?: unknown;
 }
 
 export async function POST(
@@ -80,6 +87,18 @@ export async function POST(
 
   const body = (await req.json().catch(() => ({}))) as ExportRequestBody;
   const territories = Array.isArray(body.territories) ? body.territories : null;
+  // X2 — an unrecognised value degrades to "all" rather than 400.
+  //
+  // ⚠ DELIBERATELY UNLIKE `territories`, AND UNLIKE THE `[]`→400 RULE COMING
+  // IN X3. Those two carry a SELECTION: an empty array means the operator
+  // ticked nothing, which is a client bug worth refusing rather than widening
+  // into "everything". This field carries a MODE, and its neutral value is a
+  // real, meaningful mode — exporting every item is exactly what this route
+  // did before X2 existed. Rejecting a typo'd mode would turn a cosmetic
+  // client bug into a failed export of the correct default.
+  const statusFilter: ExportStatusFilter = isExportStatusFilter(body.statusFilter)
+    ? body.statusFilter
+    : "all";
 
   try {
     const encrypted = await getEncryptedCredentials(accountId);
@@ -88,7 +107,19 @@ export async function POST(
     // cast to InAppProduct (see publisher-client.ts) — the adapter already
     // normalised listings + prices into that shape.
     const products = await listInAppProducts(jwt, packageName);
-    const plan = buildExportPlan(products as unknown as ToolInAppProduct[], territories);
+    // ⚠ FILTERED ON THE LIVE FETCH, NOT ON THE CACHE. The dialog counts from
+    // the mirror so changing the filter is free; the FILE has to be true about
+    // Google at the moment it was made. When those disagree, the file follows
+    // Google and the counts below let the client say so out loud.
+    //
+    // ⚠ AND IT COSTS NOTHING EXTRA. `products` is already in hand — the same
+    // single paginated list this route always made. Filtering is an array
+    // operation, so no filter choice can add a request.
+    const { included, skipped } = partitionByStatusFilter(
+      products as unknown as ToolInAppProduct[],
+      statusFilter,
+    );
+    const plan = buildExportPlan(included, territories);
     const workbook = buildExportWorkbook(plan);
     const buffer = XLSX.write(workbook, {
       type: "buffer",
@@ -103,6 +134,12 @@ export async function POST(
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="${filename}"`,
         "X-Export-Item-Count": String(plan.rows.length),
+        // ⚠ ALWAYS PRESENT, even when 0 and even when the filter is "all".
+        // A header that appears only when something was dropped makes its
+        // absence ambiguous — "nothing skipped" and "this build does not
+        // report skips" would look identical to the client.
+        "X-Export-Skipped-Count": String(skipped),
+        "X-Export-Status-Filter": statusFilter,
       },
     });
   } catch (err) {

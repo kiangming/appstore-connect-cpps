@@ -33,6 +33,12 @@ import {
   type BulkStatusMode,
 } from "./BulkStatusModal";
 import { ExportOptionsDialog } from "@/components/iap-management/ExportOptionsDialog";
+import { ExportScopeDialog } from "./ExportScopeDialog";
+import {
+  countByStatus,
+  exportSummaryLine,
+  type ExportStatusFilter,
+} from "@/lib/google-iap-management/export-status-filter";
 
 interface Props {
   packageName: string;
@@ -94,6 +100,11 @@ export function IapListClient({
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportSummary, setExportSummary] = useState<string | null>(null);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  // X2 — step 1 of the export flow. `"all"` reproduces pre-X2 behaviour, and
+  // the state is reset when the flow is opened, never carried between runs:
+  // a filter left over from a previous export is a silent trap.
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<ExportStatusFilter>("all");
   const [bulkMode, setBulkMode] = useState<BulkStatusMode | null>(null);
 
   // Soft-delete: split present-on-Google (live) from flagged deleted-on-Google.
@@ -166,18 +177,35 @@ export function IapListClient({
     }
   }
 
+  function openExportFlow() {
+    setStatusFilter("all");
+    setExportError(null);
+    setExportSummary(null);
+    setScopeOpen(true);
+  }
+
   async function handleConfirmExport(selectedTerritories: string[] | null) {
     setExportDialogOpen(false);
     setExporting(true);
     setExportError(null);
     setExportSummary(null);
+    // What the SCREEN promised, captured before the request. Compared against
+    // what Google actually had so a divergence can be stated rather than left
+    // for the operator to spot. Null when no filter is active — "all" cannot
+    // disagree about which items qualify, only about how many exist, and the
+    // file's own row count already says that.
+    const expectedFromMirror =
+      statusFilter === "all" ? null : countByStatus(liveItems)[statusFilter];
     try {
       const res = await fetchWithTimeout(
         `/api/google-iap-management/apps/${encodeURIComponent(packageName)}/export`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ territories: selectedTerritories }),
+          body: JSON.stringify({
+            territories: selectedTerritories,
+            statusFilter,
+          }),
         },
         REFRESH_TIMEOUT_MS,
       );
@@ -199,8 +227,16 @@ export function IapListClient({
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       const count = res.headers.get("X-Export-Item-Count");
+      const skipped = res.headers.get("X-Export-Skipped-Count");
       setExportSummary(
-        count ? `Exported ${count} item${count === "1" ? "" : "s"}.` : "Export ready.",
+        count === null
+          ? "Export ready."
+          : exportSummaryLine({
+              exported: Number(count),
+              skipped: Number(skipped ?? 0),
+              filter: statusFilter,
+              expectedFromMirror,
+            }),
       );
     } catch (err) {
       setExportError(describeRefreshError(err));
@@ -318,7 +354,7 @@ export function IapListClient({
             {refreshing ? "Refreshing…" : "Refresh"}
           </button>
           <button
-            onClick={() => setExportDialogOpen(true)}
+            onClick={openExportFlow}
             disabled={exporting}
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-lg transition disabled:opacity-50"
           >
@@ -603,6 +639,18 @@ export function IapListClient({
           onComplete={() => router.refresh()}
         />
       )}
+
+      <ExportScopeDialog
+        open={scopeOpen}
+        items={liveItems}
+        value={statusFilter}
+        onChange={setStatusFilter}
+        onCancel={() => setScopeOpen(false)}
+        onNext={() => {
+          setScopeOpen(false);
+          setExportDialogOpen(true);
+        }}
+      />
 
       <ExportOptionsDialog
         open={exportDialogOpen}
