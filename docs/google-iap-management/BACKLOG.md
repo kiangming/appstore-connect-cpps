@@ -248,46 +248,100 @@ trước, và chỉ bị bác bỏ nhờ phép so bằng máy với M1.
 
 ---
 
-## `[GOOGLE-common-regions-usd-default]` — `defaultCurrencyForRegion` trả USD cho 145/173 thị trường
+## ⚠ `[GOOGLE-common-regions-usd-default]` — `defaultCurrencyForRegion` sai 70/173, và giá trị sai **TỚI ĐƯỢC** lệnh ghi Google
 
-**Trạng thái:** ⚠ **ĐÃ ĐO, CHƯA SỬA.** Ngoài phạm vi arc export item.
+**Trạng thái:** ⚠ **CẦN SỬA — đã nâng mức 2026-09-01 sau khi đo 3b.** Trước đó
+ghi là "backlog, chưa rõ có tới payload không". Đã trace tới nơi, **có tới**.
+
+### Sai bao nhiêu — đo với 173 cặp `{code, currency}` thật của M1
 
 [`regions.ts:56-58`](../../lib/google-iap-management/regions.ts) —
-`defaultCurrencyForRegion(code)` tra trong `COMMON_REGIONS` (**30 mục**, docblock
-tự khai "curated subset … v1") và **trả `"USD"` cho mọi mã không có trong đó**.
+`defaultCurrencyForRegion(code)` tra `COMMON_REGIONS` (**30 mục**) và trả
+**`"USD"`** cho mọi mã không có trong đó.
 
-Đo bằng máy (2026-09-01) đối chiếu với tập 173 của M1:
+| | Số |
+|---|---|
+| 173 thị trường Google bán, **có** trong `COMMON_REGIONS` | 28 |
+| **không** có ⇒ hàm trả `USD` | **145** |
+| … trong đó Google thật sự dùng `USD` ⇒ **đúng do may** | 76 |
+| … Google dùng currency **khác** ⇒ **SAI** | **69** |
+| cộng `AR` — có trong bảng nhưng **giá trị sai** (`ARS`, Google tính `USD`) | +1 |
+| **TỔNG SAI** | ⚠ **70 / 173** |
 
-- **145 / 173** thị trường Google bán **không** có trong `COMMON_REGIONS`
-  ⇒ hàm trả `USD`.
-- `COMMON_REGIONS` chứa **2 mã Google KHÔNG bán**: `CN` (Google không bán) và
-  ⚠ **`EU`** — *không phải mã ISO 3166-1 nào cả*, trong khi `InAppProduct.prices`
-  của Google keyed theo **mã quốc gia**.
+69 mã fallback sai, nhóm theo currency thật — **28 nước EUR** là nhóm lớn nhất:
 
-**Ba nơi gọi**, đều ở form Create/Edit:
-[`IapForm.tsx:335`](../../components/google-iap-management/iap-form/IapForm.tsx#L335) ·
-[`:346`](../../components/google-iap-management/iap-form/IapForm.tsx#L346) ·
-[`:392`](../../components/google-iap-management/iap-form/IapForm.tsx#L392)
-(chỗ thứ ba là `currency || defaultCurrencyForRegion(region)` — chỉ chạy khi
-currency rỗng).
+```
+EUR (28)  AT BE BF BG BJ CF CY EE FI GA GR GW HR IE IS LT LU LV
+          MC ML MT NE PT SI SK SM TG VA
+CHF (2) CH LI   ·   XOF (2) CI SN
+41 mã còn lại, mỗi mã một currency riêng: BD BO CL CM CO CR CZ DK DZ EG GE
+GH GI HU IL IQ JO KE KZ LK MA MM MN MO NG NO PE PK PL PY QA RO RS SE TZ UA ZA
+```
 
-⚠ **CHƯA XÁC ĐỊNH ĐƯỢC — cần điều tra riêng:** giá trị `USD` sai đó có bao giờ
-đi tới lệnh ghi Google không, hay luôn bị `regions/catalog` ghi đè trước. Câu
-đó quyết định mục này là lỗi thật hay chỉ là mặc định xấu. **Không kết luận
-khi chưa đo.**
+⚠ `COMMON_REGIONS` còn chứa **2 mã Google KHÔNG bán**: `CN`, và **`EU`** —
+*không phải mã ISO 3166-1 nào cả*, trong khi `InAppProduct.prices` của Google
+keyed theo **mã quốc gia**.
 
-⚠ **File export item KHÔNG dính.** Nó đọc currency thẳng từ Google
-([`xlsx-export.ts:77`](../../lib/google-iap-management/xlsx-export.ts#L77) —
-`currency: p.currency`, nguồn `regionalPricingAndAvailabilityConfigs[].price.currencyCode`),
-không qua catalog nào. Đối chiếu: bên Apple, census đo được **96/164** mã trong
-`TERRITORY_CATALOG` có currency SAI so với Apple thật — phía Google lớp lỗi đó
-**không tồn tại trên đường export**.
+### ⚠ Giá trị sai đó ĐI TỚI ĐÂU — chuỗi đầy đủ, không suy diễn
 
-⚠ **Phép so currency đầy đủ thì CHƯA LÀM ĐƯỢC — cần Manager.** M1 có trả
-currency cho từng mã, và Manager đã xác nhận nó khớp Play Console 100%, nhưng
-**173 giá trị currency đó chưa được đưa vào repo**. Muốn đếm chính xác bao
-nhiêu trong 30 mục `COMMON_REGIONS` sai, cần Manager dán lại phần currency của
-M1 (hoặc X4 ghim snapshot có currency — lúc đó phép so là miễn phí).
+```
+IapForm.tsx:335   addRegionOverride()      currency: defaultCurrencyForRegion(next.code)
+IapForm.tsx:346   updateOverride()      →  applyManagerEdit(…, defaultCurrencyForRegion)
+                                           override-merge.ts:86-88 — ĐỔI REGION ⇒ RE-DERIVE CURRENCY
+        ↓
+iap-save-body.ts:68            currency: r.currency
+        ↓
+app/api/…/iaps/[sku]/route.ts:141   currency: (r.currency ?? "USD").trim()
+        ↓
+orchestration/update-iap.ts:112     prices[r.region] = { currency: r.currency.trim().toUpperCase(), … }
+orchestration/update-iap.ts:190     prices[region]   = { currency: p.currency, … }   ← payload InAppProduct["prices"]
+```
+
+⇒ **Không phải chỉ hiển thị. Nó là giá trị được gửi đi.**
+
+**Đường sắc nhất là `applyManagerEdit`, không phải nút Add.** Manager mở một
+dòng override đã có và **đổi nước** sang Đức: `override-merge.ts:87` re-derive
+currency ⇒ `EUR` bị thay bằng `USD`, im lặng. Nút "Add region override"
+(`:335`) cũng dính, nhưng dòng mới còn phải gõ giá mới sống sót.
+
+**Hai điều kiện giảm nhẹ, đã kiểm:**
+1. Dòng không có `priceDecimal` bị **loại** trước khi gửi
+   (route:138 và [`update-iap.ts:110`](../../lib/google-iap-management/orchestration/update-iap.ts#L110)
+   `if (!r.priceDecimal.trim()) continue;`). Chỉ dòng Manager đã gõ giá mới đi tới Google.
+2. Đường **promote-to-override** KHÔNG dính: `UnifiedPricingTable.tsx:467`
+   truyền `row.live?.currency` — currency **thật của Google** — nên
+   `currency || defaultCurrencyForRegion(region)` ở `IapForm.tsx:392` gần như
+   không bao giờ chạm nhánh phải.
+3. Ô currency **sửa được** trên UI ([`IapForm.tsx:1083`](../../components/google-iap-management/iap-form/IapForm.tsx#L1083))
+   — Manager chữa được, **nếu để ý**. Giá trị tự điền sai mà trông hợp lệ thì
+   không có gì gợi ý phải để ý.
+
+### ⚠ Ghi im lặng hay bị từ chối ồn ào — CHƯA ĐO, và nó quyết định mức độ
+
+Bằng chứng trong repo nghiêng mạnh về **bị từ chối**:
+[`regions-helper.ts:52-54`](../../lib/google-iap-management/google/regions-helper.ts#L52)
+ghi Google **rejects the patch** khi currency của một nước lệch khỏi catalog
+(ca Bulgaria BGN→EUR, Hotfix 9). Nếu đúng vậy thì hậu quả là **Manager bị báo
+lỗi khó hiểu cho một giá trị chính tool tự điền** — tệ, nhưng không phải ghi sai
+dữ liệu âm thầm.
+
+⚠ **Không kết luận khi chưa đo.** Ca của Hotfix 9 là lệch **version**, ca này là
+currency sai thẳng — gần nhau, không đồng nhất.
+
+**PHÉP ĐO ĐỀ XUẤT (chưa chạy, cần Manager duyệt):** trên **một IAP nháp**,
+thêm override `DE` với currency `USD` + một giá, bấm Save, đọc phản hồi Google.
+- Google **từ chối** ⇒ giữ mức "sửa để hết báo lỗi khó hiểu".
+- Google **nhận** ⇒ nâng lên **ghi sai âm thầm**, mức nghiêm trọng nhất.
+1 request ghi, trên item nháp, có thể xoá sau.
+
+### Hướng sửa (chưa làm)
+
+Bỏ hẳn `defaultCurrencyForRegion` khỏi ba đường trên và lấy currency từ
+`/api/google-iap-management/regions/catalog` — route **đã tồn tại**, đã trả
+đúng 173 cặp, và form **đã gọi nó rồi**
+([`IapForm.tsx:428`](../../components/google-iap-management/iap-form/IapForm.tsx#L428)).
+Tức nguồn đúng đã nằm sẵn trong cùng component; ba chỗ kia chỉ đang không dùng.
+⚠ Cùng hình dạng với lỗi R2: nguồn đúng có sẵn, một đường khác vẫn đọc nguồn cũ.
 
 ---
 
