@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -175,6 +175,27 @@ describe("⚠ LOCK — changing the filter costs 0 Google requests", () => {
     expect(src).not.toMatch(/\bawait\b/);
   });
 
+  it("the shared selection list fetches nothing either", () => {
+    // X3 — the picker renders through `IapSelectionList`, so the lock has to
+    // cover it too. A component that looked up live counts per keystroke
+    // would turn a free control into a request per character typed.
+    const src = readFileSync(
+      join(
+        __dirname,
+        "..",
+        "..",
+        "components",
+        "google-iap-management",
+        "iap-list",
+        "IapSelectionList.tsx",
+      ),
+      "utf8",
+    );
+    expect(src).not.toMatch(/\bfetch\s*\(/);
+    expect(src).not.toMatch(/fetchWithTimeout/);
+    expect(src).not.toMatch(/useEffect/);
+  });
+
   it("the scope dialog fetches nothing either — counts come from its props", () => {
     // ⚠ THE DIALOG IS WHERE A FETCH WOULD ACTUALLY GET ADDED: "just look up
     // the live count when they pick a filter" is a one-line change that turns
@@ -195,5 +216,50 @@ describe("⚠ LOCK — changing the filter costs 0 Google requests", () => {
     expect(dlg).not.toMatch(/\bfetch\s*\(/);
     expect(dlg).not.toMatch(/fetchWithTimeout/);
     expect(dlg).not.toMatch(/useEffect/);
+  });
+});
+
+describe("⚠ structural — ONE item-selection surface in the export flow", () => {
+  const listDir = join(
+    __dirname,
+    "..",
+    "..",
+    "components",
+    "google-iap-management",
+    "iap-list",
+  );
+
+  it("the export flow's picker is `IapSelectionList`, used from the scope dialog", () => {
+    // ⚠ THE MUTATION THIS EXISTS FOR: building a second picker — a new dialog,
+    // or a checkbox column on the main table — instead of using the step the
+    // scope dialog already owns. Two selection surfaces means two "select all"
+    // scopes for one behaviour, which is the P1 twin-path this arc keeps
+    // refusing. `BulkStatusModal` and `ExportScopeDialog` are the only two
+    // callers, and both go through the shared component.
+    const dlg = readFileSync(join(listDir, "ExportScopeDialog.tsx"), "utf8");
+    expect(dlg).toMatch(/import \{ IapSelectionList \} from "\.\/IapSelectionList";/);
+    expect(dlg).toMatch(/<IapSelectionList/);
+  });
+
+  it("nothing in the module hand-rolls a second checkbox list", () => {
+    // A row-level `type="checkbox"` outside the shared component is the
+    // fingerprint of a second surface being grown.
+    const offenders: string[] = [];
+    for (const f of readdirSync(listDir)) {
+      if (!/\.tsx$/.test(f) || /\.test\.tsx$/.test(f)) continue;
+      if (f === "IapSelectionList.tsx") continue;
+      if (/type="checkbox"/.test(readFileSync(join(listDir, f), "utf8"))) {
+        offenders.push(f);
+      }
+    }
+    expect(offenders, `hand-rolled checkbox lists: ${offenders.join(", ")}`).toEqual([]);
+  });
+
+  it("`BulkStatusModal` renders through it too — the T1 extraction, pinned", () => {
+    // If someone re-inlines the list into the modal, the export picker and the
+    // modal start drifting again and the parity gate that justified this
+    // refactor stops meaning anything.
+    const modal = readFileSync(join(listDir, "BulkStatusModal.tsx"), "utf8");
+    expect(modal).toMatch(/<IapSelectionList/);
   });
 });

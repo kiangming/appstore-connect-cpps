@@ -21,27 +21,51 @@
  * — see the note's own docblock. A control that quietly means something wider
  * than its label is the defect this note exists to prevent.
  *
- * ⚠ THIS COMPONENT IS THE SEAM FOR X3. The per-item checkbox list lands here,
- * beside the status filter, reusing `BulkStatusModal`'s selection list (T1) —
- * which is why this is a scope dialog and not a "status filter dialog". Do not
- * grow a second selection surface elsewhere.
+ * ⚠ X3 LANDED HERE, AS PLANNED — the per-item checkbox list sits beside the
+ * status filter in this same step, rendered by `IapSelectionList`, the
+ * component extracted from `BulkStatusModal` (T1). There is exactly ONE item
+ * selection surface in the export flow and this is it. A second one would be
+ * P1 twin-path: two "select all" scopes for one behaviour.
+ *
+ * ⚠ THE TWO CONTROLS COMPOSE IN ONE DIRECTION ONLY. The status filter chooses
+ * the CANDIDATE set; the checkboxes narrow it. Changing the filter therefore
+ * resets the selection to "all candidates" — a selection built against a
+ * different candidate set is not a selection the operator made. That reset is
+ * the caller's, since the caller owns the state.
+ *
+ * ⚠ EVERYTHING SELECTED MEANS "NO SELECTION", DELIBERATELY. The caller sends
+ * `null` rather than a list of every SKU, so the untouched path stays exactly
+ * the pre-X3 request. It also means the route's `[]`→400 and unknown-SKU→409
+ * rules only ever fire on a list somebody actually narrowed.
  */
 import { X } from "lucide-react";
 
+import type { IapWithDefaultLocale } from "@/lib/google-iap-management/repository/iaps";
 import {
   countByStatus,
+  matchesStatusFilter,
   STATUS_FILTER_NOTE,
   type ExportStatusFilter,
 } from "@/lib/google-iap-management/export-status-filter";
+import { IapSelectionList } from "./IapSelectionList";
 
 export interface ExportScopeDialogProps {
   open: boolean;
   /** Live (not soft-deleted) items from the mirror — the page's own prop. */
-  items: readonly { status: string | null | undefined }[];
+  items: readonly IapWithDefaultLocale[];
   value: ExportStatusFilter;
   onChange: (next: ExportStatusFilter) => void;
   onCancel: () => void;
   onNext: () => void;
+  /** Controlled selection, by SKU. Owned by the caller so the reset rules
+   *  (open, and filter change) live in one place. */
+  selected: ReadonlySet<string>;
+  onToggleSku: (sku: string) => void;
+  onToggleAll: (matchingSkus: string[]) => void;
+  query: string;
+  onQueryChange: (q: string) => void;
+  windowSize: number;
+  onShowMore: () => void;
 }
 
 const OPTIONS: ReadonlyArray<{ value: ExportStatusFilter; label: string }> = [
@@ -57,10 +81,21 @@ export function ExportScopeDialog({
   onChange,
   onCancel,
   onNext,
+  selected,
+  onToggleSku,
+  onToggleAll,
+  query,
+  onQueryChange,
+  windowSize,
+  onShowMore,
 }: ExportScopeDialogProps) {
   if (!open) return null;
 
   const counts = countByStatus(items);
+  // The candidate set: what the status filter admits. The checkboxes narrow
+  // THIS, never the whole app.
+  const candidates = items.filter((i) => matchesStatusFilter(i.status, value));
+  const selectedInScope = candidates.filter((i) => selected.has(i.sku)).length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -123,6 +158,39 @@ export function ExportScopeDialog({
             an item changed since then the file follows Google — and the result
             message says so.
           </p>
+
+          <div className="mt-4 pt-3 border-t border-slate-200">
+            <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2">
+              Items ({selectedInScope} of {candidates.length} selected)
+            </p>
+            <div className="max-h-[280px] overflow-y-auto pr-1">
+              <IapSelectionList
+                items={candidates}
+                selected={selected}
+                onToggleOne={onToggleSku}
+                onToggleAll={onToggleAll}
+                query={query}
+                onQueryChange={onQueryChange}
+                windowSize={windowSize}
+                onShowMore={onShowMore}
+                selectAllLabel={(n) => `Select all (${n})`}
+                renderTrailing={(iap) => (
+                  <span
+                    className={`inline-flex items-center gap-1.5 text-[11px] font-medium flex-shrink-0 ${
+                      iap.status === "active" ? "text-emerald-700" : "text-slate-500"
+                    }`}
+                  >
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        iap.status === "active" ? "bg-emerald-500" : "bg-slate-400"
+                      }`}
+                    />
+                    {iap.status === "active" ? "active" : "inactive"}
+                  </span>
+                )}
+              />
+            </div>
+          </div>
         </div>
 
         <div className="px-5 py-3 border-t border-slate-100 bg-slate-50 rounded-b-2xl flex items-center justify-end gap-2">
@@ -136,12 +204,17 @@ export function ExportScopeDialog({
           <button
             type="button"
             onClick={onNext}
-            disabled={counts[value] === 0}
+            disabled={selectedInScope === 0}
             className="px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {counts[value] === 0
-              ? "No items match"
-              : `Next — choose countries (${counts[value]})`}
+            {/* ⚠ DISABLED AT ZERO, NOT SILENTLY WIDENED TO "ALL". An empty
+                selection is refused by the route with a 400; letting the
+                operator through here would trade a clear stop for a confusing
+                server error, and widening it to "everything" would export a
+                file they did not ask for. */}
+            {selectedInScope === 0
+              ? "Select at least 1 item"
+              : `Next — choose countries (${selectedInScope})`}
           </button>
         </div>
       </div>

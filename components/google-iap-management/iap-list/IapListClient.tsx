@@ -37,6 +37,7 @@ import { ExportScopeDialog } from "./ExportScopeDialog";
 import {
   countByStatus,
   exportSummaryLine,
+  matchesStatusFilter,
   type ExportStatusFilter,
 } from "@/lib/google-iap-management/export-status-filter";
 
@@ -51,6 +52,10 @@ interface Props {
 }
 
 const PAGE_SIZE = 20;
+
+/** How many picker rows render before "Show more". A RENDER bound only — the
+ *  rows beyond it stay selected and stay in the export (guarantee 2). */
+const PICKER_WINDOW_STEP = 50;
 
 function toneForStatus(status: string): StatusTone {
   if (status === "active") return "success";
@@ -105,6 +110,12 @@ export function IapListClient({
   // a filter left over from a previous export is a silent trap.
   const [scopeOpen, setScopeOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<ExportStatusFilter>("all");
+  // X3 — the item selection, owned here so the two reset rules live together:
+  // opening the flow, and changing the status filter. A selection built
+  // against a different candidate set is not a selection the operator made.
+  const [selectedSkus, setSelectedSkus] = useState<Set<string>>(new Set());
+  const [pickerQuery, setPickerQuery] = useState("");
+  const [pickerWindow, setPickerWindow] = useState(PICKER_WINDOW_STEP);
   const [bulkMode, setBulkMode] = useState<BulkStatusMode | null>(null);
 
   // Soft-delete: split present-on-Google (live) from flagged deleted-on-Google.
@@ -177,11 +188,55 @@ export function IapListClient({
     }
   }
 
+  /** Candidates for a given filter — the set the checkboxes narrow. */
+  function candidatesFor(filter: ExportStatusFilter) {
+    return liveItems.filter((i) => matchesStatusFilter(i.status, filter));
+  }
+
   function openExportFlow() {
     setStatusFilter("all");
+    // ⚠ EVERYTHING SELECTED IS THE DEFAULT, so an operator who opens the flow
+    // and clicks straight through gets exactly the pre-X3 export. Starting
+    // empty would make the untouched path export nothing.
+    setSelectedSkus(new Set(liveItems.map((i) => i.sku)));
+    setPickerQuery("");
+    setPickerWindow(PICKER_WINDOW_STEP);
     setExportError(null);
     setExportSummary(null);
     setScopeOpen(true);
+  }
+
+  function changeStatusFilter(next: ExportStatusFilter) {
+    setStatusFilter(next);
+    // ⚠ RESET, NOT INTERSECT. Keeping the old ticks would leave the operator
+    // with a selection they never made against the new candidate set — and
+    // silently smaller than the count the radio option just showed them.
+    setSelectedSkus(new Set(candidatesFor(next).map((i) => i.sku)));
+    setPickerQuery("");
+    setPickerWindow(PICKER_WINDOW_STEP);
+  }
+
+  function toggleSku(sku: string) {
+    setSelectedSkus((prev) => {
+      const next = new Set(prev);
+      if (next.has(sku)) next.delete(sku);
+      else next.add(sku);
+      return next;
+    });
+  }
+
+  /** ⚠ Scoped to the SKUs currently matching the search, never to the
+   *  rendered window — the list component hands them in for that reason. */
+  function toggleAllSkus(matchingSkus: string[]) {
+    setSelectedSkus((prev) => {
+      const everyMatchSelected = matchingSkus.every((s) => prev.has(s));
+      const next = new Set(prev);
+      for (const sku of matchingSkus) {
+        if (everyMatchSelected) next.delete(sku);
+        else next.add(sku);
+      }
+      return next;
+    });
   }
 
   async function handleConfirmExport(selectedTerritories: string[] | null) {
@@ -194,8 +249,15 @@ export function IapListClient({
     // for the operator to spot. Null when no filter is active — "all" cannot
     // disagree about which items qualify, only about how many exist, and the
     // file's own row count already says that.
-    const expectedFromMirror =
-      statusFilter === "all" ? null : countByStatus(liveItems)[statusFilter];
+    const candidates = candidatesFor(statusFilter);
+    const allCandidatesSelected =
+      candidates.length > 0 && candidates.every((i) => selectedSkus.has(i.sku));
+    const expectedFromMirror = allCandidatesSelected
+      ? statusFilter === "all"
+        ? null
+        : countByStatus(liveItems)[statusFilter]
+      : // A narrowed selection: the screen promised exactly this many rows.
+        candidates.filter((i) => selectedSkus.has(i.sku)).length;
     try {
       const res = await fetchWithTimeout(
         `/api/google-iap-management/apps/${encodeURIComponent(packageName)}/export`,
@@ -205,6 +267,11 @@ export function IapListClient({
           body: JSON.stringify({
             territories: selectedTerritories,
             statusFilter,
+            // ⚠ `null` WHEN EVERY CANDIDATE IS TICKED, not a list of every
+            // SKU. The untouched path then sends exactly the pre-X3 request,
+            // and the route's `[]`→400 / unknown-SKU→409 rules only ever see
+            // a list somebody actually narrowed.
+            selectedSkus: allCandidatesSelected ? null : [...selectedSkus],
           }),
         },
         REFRESH_TIMEOUT_MS,
@@ -644,7 +711,14 @@ export function IapListClient({
         open={scopeOpen}
         items={liveItems}
         value={statusFilter}
-        onChange={setStatusFilter}
+        onChange={changeStatusFilter}
+        selected={selectedSkus}
+        onToggleSku={toggleSku}
+        onToggleAll={toggleAllSkus}
+        query={pickerQuery}
+        onQueryChange={setPickerQuery}
+        windowSize={pickerWindow}
+        onShowMore={() => setPickerWindow((n) => n + PICKER_WINDOW_STEP)}
         onCancel={() => setScopeOpen(false)}
         onNext={() => {
           setScopeOpen(false);

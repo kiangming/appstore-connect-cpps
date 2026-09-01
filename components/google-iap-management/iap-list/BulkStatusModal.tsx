@@ -57,6 +57,7 @@ import {
 } from "lucide-react";
 
 import type { IapWithDefaultLocale } from "@/lib/google-iap-management/repository/iaps";
+import { IapSelectionList } from "./IapSelectionList";
 
 export type BulkStatusMode = "activate" | "deactivate";
 
@@ -353,9 +354,11 @@ export function BulkStatusModal({
     setConfirmOpen(false);
   }
 
-  const allSelected =
-    eligible.length > 0 && eligible.every((e) => selected.has(e.sku));
-  const someSelected = selected.size > 0 && !allSelected;
+  // ⚠ `allSelected` / `someSelected` WERE COMPUTED HERE AND ARE GONE (X3/T1).
+  // `IapSelectionList` derives both from the rows it renders — see the note on
+  // `SelectionState`'s props below. `toggleAll` still does its own
+  // `eligible.every(...)` check because it acts on the modal's eligible set,
+  // not on whatever the list is currently showing.
 
   const title = mode === "activate" ? "Bulk Activate items" : "Bulk Deactivate items";
   const subtitle =
@@ -444,8 +447,6 @@ export function BulkStatusModal({
               filterCopy={filterCopy}
               eligible={eligible}
               selected={selected}
-              allSelected={allSelected}
-              someSelected={someSelected}
               onToggleOne={toggleOne}
               onToggleAll={toggleAll}
             />
@@ -548,8 +549,6 @@ function SelectionState({
   filterCopy,
   eligible,
   selected,
-  allSelected,
-  someSelected,
   onToggleOne,
   onToggleAll,
 }: {
@@ -557,8 +556,12 @@ function SelectionState({
   filterCopy: string;
   eligible: IapWithDefaultLocale[];
   selected: Set<string>;
-  allSelected: boolean;
-  someSelected: boolean;
+  // ⚠ `allSelected` / `someSelected` USED TO BE PROPS HERE AND ARE GONE ON
+  // PURPOSE. `IapSelectionList` derives both from the items it is actually
+  // rendering, which is what makes "Select all" mean every MATCHING item once
+  // a search exists. Passing them in from outside would let the caller's idea
+  // of "all" and the list's idea of "all" disagree — the exact defect the
+  // shared component's guarantee 1 exists to prevent.
   onToggleOne: (sku: string) => void;
   onToggleAll: () => void;
 }) {
@@ -572,62 +575,30 @@ function SelectionState({
         {filterCopy}
       </p>
 
-      <div className="flex items-center justify-between pb-2 border-b border-slate-200 mb-2">
-        <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={allSelected}
-            ref={(el) => {
-              if (el) el.indeterminate = someSelected;
-            }}
-            onChange={onToggleAll}
-            className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
-            aria-label="Select all"
-          />
-          Select all ({eligible.length})
-        </label>
-        <span className="text-[11px] text-slate-400">{selected.size} selected</span>
-      </div>
-
-      <ul className="divide-y divide-slate-100">
-        {eligible.map((iap) => {
-          const checked = selected.has(iap.sku);
-          return (
-            <li
-              key={iap.sku}
-              className="flex items-center gap-3 py-2 text-sm"
-            >
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={() => onToggleOne(iap.sku)}
-                className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer flex-shrink-0"
-                aria-label={`Select ${iap.sku}`}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="text-slate-800 font-medium truncate">
-                  {iap.default_title ?? (
-                    <span className="text-slate-400 italic">— no title —</span>
-                  )}
-                </p>
-                <p className="font-mono text-[11px] text-slate-500 truncate">
-                  {iap.sku}
-                </p>
-              </div>
-              <span
-                className={`inline-flex items-center gap-1.5 text-[11px] font-medium flex-shrink-0 ${
-                  destructive ? "text-emerald-700" : "text-slate-500"
-                }`}
-              >
-                <span
-                  className={`h-2 w-2 rounded-full ${destructive ? "bg-emerald-500" : "bg-slate-400"}`}
-                />
-                {destructive ? "active" : "inactive"}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+      {/* ⚠ X3/T1 — this list now comes from the SHARED component, and the
+          modal deliberately passes NO search and NO windowing: omitting them
+          reproduces the previous markup exactly. Adding either here would be
+          a UI change to a shipped write path riding in on a refactor.
+          `BulkStatusModal.test.tsx` is unchanged and still passes — that is
+          the parity gate for this move. */}
+      <IapSelectionList
+        items={eligible}
+        selected={selected}
+        onToggleOne={onToggleOne}
+        onToggleAll={() => onToggleAll()}
+        renderTrailing={() => (
+          <span
+            className={`inline-flex items-center gap-1.5 text-[11px] font-medium flex-shrink-0 ${
+              destructive ? "text-emerald-700" : "text-slate-500"
+            }`}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${destructive ? "bg-emerald-500" : "bg-slate-400"}`}
+            />
+            {destructive ? "active" : "inactive"}
+          </span>
+        )}
+      />
     </>
   );
 }

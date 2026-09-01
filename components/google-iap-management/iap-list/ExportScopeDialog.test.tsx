@@ -10,13 +10,38 @@ import "@testing-library/jest-dom/vitest";
 
 import { ExportScopeDialog } from "./ExportScopeDialog";
 
+/**
+ * ⚠ X3 — the fixture grew from `{ status }` to whole rows. The dialog now
+ * renders a per-item list, so it needs the fields that list shows (sku,
+ * title). The counts and the disclosure assertions below are UNCHANGED in
+ * meaning; only the shape they read from is fuller.
+ */
+function iap(sku: string, status: string | null, title: string | null = null) {
+  return {
+    id: `id-${sku}`,
+    app_id: "app-1",
+    sku,
+    purchase_type: "managed",
+    status,
+    default_currency: "USD",
+    default_price_micros: "1990000",
+    last_synced_at: null,
+    deleted_on_google_at: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    default_title: title,
+  } as unknown as Parameters<typeof ExportScopeDialog>[0]["items"][number];
+}
+
 const ITEMS = [
-  { status: "active" },
-  { status: "active" },
-  { status: "active" },
-  { status: "inactive" },
-  { status: null },
+  iap("a1", "active", "Alpha"),
+  iap("a2", "active", "Beta"),
+  iap("a3", "active", "Gamma"),
+  iap("i1", "inactive", "Delta"),
+  iap("u1", null, "Epsilon"),
 ];
+
+const ALL_SKUS = new Set(ITEMS.map((i) => i.sku));
 
 function renderDialog(over: Partial<Parameters<typeof ExportScopeDialog>[0]> = {}) {
   const props = {
@@ -26,6 +51,13 @@ function renderDialog(over: Partial<Parameters<typeof ExportScopeDialog>[0]> = {
     onChange: vi.fn(),
     onCancel: vi.fn(),
     onNext: vi.fn(),
+    selected: ALL_SKUS as ReadonlySet<string>,
+    onToggleSku: vi.fn(),
+    onToggleAll: vi.fn(),
+    query: "",
+    onQueryChange: vi.fn(),
+    windowSize: 50,
+    onShowMore: vi.fn(),
     ...over,
   };
   render(<ExportScopeDialog {...props} />);
@@ -34,16 +66,7 @@ function renderDialog(over: Partial<Parameters<typeof ExportScopeDialog>[0]> = {
 
 describe("ExportScopeDialog — visibility", () => {
   it("renders nothing when closed", () => {
-    render(
-      <ExportScopeDialog
-        open={false}
-        items={ITEMS}
-        value="all"
-        onChange={vi.fn()}
-        onCancel={vi.fn()}
-        onNext={vi.fn()}
-      />,
-    );
+    renderDialog({ open: false });
     expect(screen.queryByText("Export list — items to include")).not.toBeInTheDocument();
   });
 });
@@ -59,17 +82,38 @@ describe("ExportScopeDialog — counts come from the props, priced before commit
     expect(group.textContent).toMatch(/Inactive only\s*2/);
   });
 
-  it("the Next button carries the count for the SELECTED filter", () => {
+  it("⚠ X3 — the Next button counts SELECTED items in scope, not just matching ones", () => {
+    // Before X3 this read the filter's match count. Now the checkboxes can
+    // narrow further, so the button has to report what will actually be
+    // exported — a button promising 3 while 1 is ticked is the silent-drop
+    // shape this arc keeps removing.
     renderDialog({ value: "active" });
     expect(
       screen.getByRole("button", { name: "Next — choose countries (3)" }),
     ).toBeInTheDocument();
   });
 
-  it("Next is disabled, and says why, when the filter matches nothing", () => {
-    renderDialog({ items: [{ status: "inactive" }], value: "active" });
-    const btn = screen.getByRole("button", { name: "No items match" });
+  it("deselecting narrows the Next count without touching the filter", () => {
+    renderDialog({ value: "active", selected: new Set(["a1"]) });
+    expect(
+      screen.getByRole("button", { name: "Next — choose countries (1)" }),
+    ).toBeInTheDocument();
+  });
+
+  it("⚠ Next is DISABLED at zero — never silently widened to `all`", () => {
+    // The route answers `[]` with a 400. Letting the operator through would
+    // trade a clear stop for a confusing server error; widening it to
+    // everything would export a file they did not ask for.
+    renderDialog({ value: "active", selected: new Set<string>() });
+    const btn = screen.getByRole("button", { name: "Select at least 1 item" });
     expect(btn).toBeDisabled();
+  });
+
+  it("Next is disabled when the filter itself matches nothing", () => {
+    renderDialog({ items: [iap("i1", "inactive")], value: "active" });
+    expect(
+      screen.getByRole("button", { name: "Select at least 1 item" }),
+    ).toBeDisabled();
   });
 });
 
