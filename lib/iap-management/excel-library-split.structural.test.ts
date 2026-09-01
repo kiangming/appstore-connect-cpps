@@ -125,6 +125,30 @@ const EXCELJS_ALLOWED = new Set<string>([
   // /google-iap-management/settings/pricing-templates/default from 169 kB to
   // 424 kB First Load JS (+255 kB).
   "app/api/google-iap-management/pricing-templates/matrix-export/route.ts",
+  // ── R5 · arc G-EXPORT, 2026-09-01 ─────────────────────────────────────────
+  // ⚠ THE QUESTION THIS LIST ASKS DOES NOT APPLY HERE EITHER, and the
+  // [GOOGLE-TEMPLATE-xlsx] block above already refused to pretend otherwise.
+  // It asks "why is this writing an APPLE export workbook from somewhere that
+  // is not the Apple export writer?" — this is the GOOGLE item-list export,
+  // not an Apple workbook.
+  //
+  // The question that DOES apply is the one the Google test below used to
+  // answer with an absolute "never", and its answer is MEASURED. The Manager
+  // asked for the three identity columns to stay put while scrolling across up
+  // to 173 country pairs. `xlsx@0.18.5` cannot write a freeze pane at all:
+  // four variants were tried on THIS writer (`!freeze` string, `!freeze`
+  // object, `!views`, and a do-nothing control) and every one produced the
+  // identical bare `<sheetView workbookViewId="0"/>` — no `<pane>` anywhere in
+  // sheet1.xml. Upgrading is not a route out: 0.18.5 is the last npm release,
+  // and freeze panes and styling are Pro features.
+  //
+  // ⚠ AND THE BUNDLE OBJECTION DOES NOT APPLY: this writer has always run
+  // server-side. Measured — the export route contributes 0 B of client bundle,
+  // and the sibling page already writing with exceljs through a server route
+  // sits at 171 kB, not the 424 kB an accidental client import produced.
+  "lib/google-iap-management/xlsx-export.ts",
+  // The route that serves the writer above. Same server-only reason.
+  "app/api/google-iap-management/apps/[packageName]/export/route.ts",
 ]);
 
 /**
@@ -139,6 +163,9 @@ const EXCELJS_ALLOWED = new Set<string>([
 const GOOGLE_EXCELJS_ALLOWED = new Set<string>([
   "lib/google-iap-management/xlsx-template-matrix-export.ts",
   "app/api/google-iap-management/pricing-templates/matrix-export/route.ts",
+  // R5 — the item-list export, for the freeze pane. Reason above.
+  "lib/google-iap-management/xlsx-export.ts",
+  "app/api/google-iap-management/apps/[packageName]/export/route.ts",
 ]);
 
 /** Files that legitimately use `xlsx` — the Google writer, both parsers, the
@@ -146,10 +173,16 @@ const GOOGLE_EXCELJS_ALLOWED = new Set<string>([
 const XLSX_ALLOWED = new Set<string>([
   "lib/iap-management/xlsx-export.ts",
   "app/api/iap-management/apps/[appId]/export/route.ts",
-  "lib/google-iap-management/xlsx-export.ts",
+  // ⭐ R5 — THE TWO GOOGLE WRITERS LEFT THIS LIST. After the item-list export
+  // moved to exceljs, the only Google files touching `xlsx` are the two upload
+  // PARSERS and one test helper that reads a written workbook back. That is a
+  // cleaner split than before, not a looser one, and the test below pins it as
+  // a ROLE: in the Google module `xlsx` may READ and may not WRITE.
   "lib/google-iap-management/parsers/pricing-template-parser.ts",
   "lib/google-iap-management/parsers/excel-parser.ts",
-  "app/api/google-iap-management/apps/[packageName]/export/route.ts",
+  // Test helper: writes with exceljs, reads back with xlsx so the assertions
+  // see the FILE rather than an object model that was never serialised.
+  "lib/google-iap-management/__fixtures__/read-workbook.ts",
 ]);
 
 /** Parsers read Manager-uploaded workbooks. These must stay on xlsx. */
@@ -233,15 +266,39 @@ describe("exceljs is confined to the Apple export write path", () => {
     expect(strays).toEqual([]);
   });
 
-  it("⚠ the Google item-list export still writes with xlsx, never exceljs", () => {
-    // The half of "Google's export keeps xlsx" that is still absolute. This
-    // writer needs no cell styling, so nothing about the matrix export's
-    // colour requirement applies to it — and the day someone reaches for the
-    // nearer import here is the day the split stops meaning anything.
-    const f = FILES.find((x) => x.path === "lib/google-iap-management/xlsx-export.ts");
-    expect(f, "lib/google-iap-management/xlsx-export.ts not found").toBeDefined();
-    expect(importsPkg(f!.code, "xlsx")).toBe(true);
-    expect(importsPkg(f!.code, "exceljs")).toBe(false);
+  it("⭐ in the Google module, `xlsx` may READ and may not WRITE", () => {
+    // ⚠ THIS REPLACED "the Google item-list export still writes with xlsx,
+    // never exceljs", AND THAT TEST'S PREMISE HAD BECOME FALSE. It reasoned
+    // "this writer needs no cell styling, so the matrix export's colour
+    // requirement does not apply" — true, and beside the point once R5 asked
+    // for a FREEZE PANE, which this very file's header lists among the things
+    // xlsx@0.18.5 "CANNOT BE WRITTEN AT ALL". A premise that only mentions
+    // colour cannot settle a question about panes.
+    //
+    // ⚠ NARROWED, NOT DELETED — and the narrowing made the fence STRONGER.
+    // Before R5 the Google module wrote workbooks with BOTH libraries. Now
+    // every Google file that touches xlsx only reads with it, so the split is
+    // stated as a ROLE instead of a per-file list somebody has to maintain.
+    const WRITE_CALLS =
+      /XLSX\.(write|writeFile|utils\.(book_new|aoa_to_sheet|book_append_sheet|sheet_add_aoa))\b/;
+    const offenders = FILES.filter(
+      (f) => f.path.includes("google-iap-management") && WRITE_CALLS.test(f.code),
+    ).map((f) => f.path);
+    expect(offenders, `Google files WRITING with xlsx: ${offenders.join(", ")}`).toEqual([]);
+  });
+
+  it("⚠ upgrading `xlsx` is not a route to freeze panes — do not re-propose it", () => {
+    // 0.18.5 is the last npm release of the package; freeze panes and cell
+    // styling are paid (Pro) features. Recorded as an assertion rather than a
+    // comment so a version bump lands here and has to be argued for.
+    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
+      dependencies: Record<string, string>;
+    };
+    // ⚠ MATCHES THE RANGE AS WRITTEN, INCLUDING THE CARET. Asserting the bare
+    // version failed on the first run — package.json says "^0.18.5". Pinning
+    // the literal string is the point: any edit to this line, caret included,
+    // has to be argued for.
+    expect(pkg.dependencies.xlsx).toBe("^0.18.5");
   });
 });
 

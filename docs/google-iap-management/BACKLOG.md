@@ -528,6 +528,50 @@ nguyên vẹn qua một bản sửa `defaultCurrencyForRegion`.
 
 ---
 
+## ❌ `[GOOGLE-export-status-dropdown]` — ĐÃ CÂN NHẮC, ĐÃ LOẠI 2026-09-01
+
+**Trạng thái:** ❌ **KHÔNG LÀM.** Ghi lại để lần sau không ai đề xuất lại.
+
+Đề xuất: đổi 3 radio của filter trạng thái (`ExportScopeDialog`) thành
+**dropdown** cho gọn. Census đo rồi loại, ba lý do:
+
+1. **Chỉ tiết kiệm ~2 dòng.** Phần chiếm chỗ nhất trong khối đó là **block chú
+   thích `INACTIVE_PUBLISHED`**, và block đó **không được bỏ** — X2 dựng nó có
+   test canh, ở cả tầng UI lẫn tầng lib (đối chiếu thẳng source adapter).
+   Đổi control không chạm gì tới phần thực sự chiếm chỗ.
+2. **Mất một tính chất đang có:** 3 radio cho thấy **cả ba số cùng lúc**
+   (60 / 55 / 5 lúc UAT) mà không phải mở gì. Dropdown chỉ hiện số của lựa
+   chọn hiện tại; nhét số vào `<option>` thì phải mở mới thấy — mà đó chính là
+   thông tin Manager dùng để quyết chọn cái nào.
+3. **Tốn 2 test phải sửa** (`radiogroup` role, `getByRole("radio")`) cho một
+   thay đổi không giải quyết vấn đề nó nhắm tới.
+
+⚠ Manager **không nêu được chỗ nào đang chật cụ thể**, nên không thu gọn dialog
+trong arc này. Nếu sau này có chỗ chật thật, hãy nêu **chỗ đó**, đừng bắt đầu
+lại từ control này.
+
+---
+
+## ℹ️ `xlsx` phía Google: nay CHỈ ĐỌC, không ghi (R5, 2026-09-01)
+
+Sau khi export item-list chuyển sang `exceljs`, **không còn file Google nào GHI
+workbook bằng `xlsx`**. Danh sách `XLSX_ALLOWED` phía Google còn đúng:
+
+- `parsers/pricing-template-parser.ts` — đọc file Manager upload
+- `parsers/excel-parser.ts` — đọc file Manager upload
+- `__fixtures__/read-workbook.ts` — test helper, đọc lại file đã ghi
+
+Hàng rào nay phát biểu thành **VAI TRÒ** chứ không phải danh sách file:
+`excel-library-split.structural.test.ts` — *"in the Google module, `xlsx` may
+READ and may not WRITE"*. Chặt hơn trước, không phải lỏng hơn.
+
+⚠ **Nâng version `xlsx` KHÔNG giải quyết được freeze/styling** — `0.18.5` là
+bản npm **cuối cùng**, hai thứ đó là tính năng **Pro**. Đã ghim thành assertion
+(`pkg.dependencies.xlsx === "^0.18.5"`) để một lần bump version rơi đúng vào đó
+và phải được biện minh. **Đừng đề xuất lại.**
+
+---
+
 ## `[GOOGLE-suite-timeout-flake]` — full suite không xanh tất định trên máy dev
 
 **Trạng thái:** ⚠ **GHI SỐ LIỆU, KHÔNG SỬA TRONG ARC NÀY.** Manager đã chốt

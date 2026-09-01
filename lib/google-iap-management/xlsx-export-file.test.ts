@@ -7,23 +7,28 @@
  * through SheetJS's own reader looking fine, and opens in Excel as
  * "CÃ´te dâ€™Ivoire". Only the file can say.
  *
- * ⚠ THIS IS THE APPLE ARC'S LESSON, NOT A NEW ONE — and deliberately not a
- * copy of its test. Apple pinned `—` (U+2014) and `·` (U+00B7) at this layer
- * for exactly this failure. But Apple's writer is **exceljs**, which puts
- * text in `xl/sharedStrings.xml`; the Google writer is **xlsx** (SheetJS),
- * which — measured, not assumed — emits NO sharedStrings part at all and
- * writes `<c t="str"><v>…</v></c>` inline into `xl/worksheets/sheet1.xml`.
- * A ported assertion would have unzipped a part that does not exist, and
- * `unzip` failing is not the same as the characters being wrong.
+ * ⚠ R5 — WHERE THE TEXT LIVES CHANGED, BECAUSE THE WRITER CHANGED. Until R5
+ * the Google writer was SheetJS, which emits NO `sharedStrings.xml` and writes
+ * `<c t="str"><v>…</v></c>` inline into `xl/worksheets/sheet1.xml`; these tests
+ * read that part. The writer is exceljs now (SheetJS cannot write freeze
+ * panes) and exceljs uses a shared-string table, so the same characters live
+ * in `xl/sharedStrings.xml`.
+ *
+ * ⚠ THAT IS A CHANGE OF WHERE TO LOOK, NOT A LOOSENED ASSERTION. Every claim
+ * below is the same claim — the exact UTF-8 byte sequences, no mojibake, no
+ * entities, the curly apostrophe — and the part name is pinned so a future
+ * writer swap fails loudly here instead of reading an empty file and passing.
+ *
+ * ⚠ THE ORIGINAL LESSON IS APPLE'S, and the shape of the trap has now bitten
+ * in both directions: porting Apple's `sharedStrings` assertion to SheetJS
+ * would have unzipped a part that does not exist, and keeping SheetJS's
+ * `sheet1.xml` assertion under exceljs would have searched a part the text is
+ * no longer in. Neither failure looks like an encoding bug.
  */
 import { describe, it, expect, beforeAll } from "vitest";
-import * as XLSX from "xlsx";
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import { buildExportPlan, buildExportWorkbook } from "./xlsx-export";
+import { partBytes, sheetXml } from "./__fixtures__/read-workbook";
 
 /** The only two labels in the 173-row Console table with non-ASCII characters. */
 const NON_ASCII_PRODUCT = {
@@ -38,18 +43,14 @@ const NON_ASCII_PRODUCT = {
 
 let sheetBytes: Buffer;
 let sheetText: string;
+let paneXml: string;
 
-beforeAll(() => {
+beforeAll(async () => {
   const wb = buildExportWorkbook(buildExportPlan([NON_ASCII_PRODUCT]));
-  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
-  const dir = mkdtempSync(join(tmpdir(), "google-iap-export-"));
-  const file = join(dir, "out.xlsx");
-  writeFileSync(file, buf);
-  // `-p` streams one member to stdout; no encoding option, so this is raw.
-  sheetBytes = execFileSync("unzip", ["-p", file, "xl/worksheets/sheet1.xml"], {
-    maxBuffer: 32 * 1024 * 1024,
-  });
+  // ⚠ THE STRINGS ARE IN `sharedStrings.xml` NOW — see the header.
+  sheetBytes = await partBytes(wb, "xl/sharedStrings.xml");
   sheetText = sheetBytes.toString("utf8");
+  paneXml = await sheetXml(wb);
 });
 
 describe("⚠ `Côte d’Ivoire` and `Türkiye` reach the bytes as UTF-8", () => {
@@ -96,11 +97,44 @@ describe("⚠ `Côte d’Ivoire` and `Türkiye` reach the bytes as UTF-8", () =>
 });
 
 describe("the accents do not disturb the file's shape", () => {
-  it("SheetJS still writes the headers inline, with no sharedStrings part", () => {
-    // Pinned because this file's whole approach depends on it. If SheetJS
-    // ever switches to a shared-string table, the assertions above would read
-    // a sheet that no longer contains the text and pass vacuously.
-    expect(sheetText).toContain('t="str"');
-    expect(sheetText).toContain("<v>Price in Côte d’Ivoire (CI)</v>");
+  it("⚠ the text really is in the part this file reads — no vacuous pass", () => {
+    // Pinned because everything above depends on it. If a future writer swap
+    // moves the strings back inline, these assertions would search an empty
+    // (or absent) shared-string table and pass while proving nothing. That is
+    // exactly the failure R5 walked into from the other side.
+    expect(sheetText).toContain("<sst");
+    expect(sheetText).toContain("Price in Côte d’Ivoire (CI)");
+  });
+});
+
+/* ────────────────────────────────────────────────────────────────────────
+ * R5 — the freeze pane, at the level of the file.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+describe("⚠ R5 — the freeze pane reaches the bytes", () => {
+  it("`xl/worksheets/sheet1.xml` carries a frozen pane at 3 columns × 2 rows", () => {
+    // ⚠ THE WHOLE REASON THE WRITER CHANGED. SheetJS produced a bare
+    // `<sheetView workbookViewId="0"/>` with no `<pane>` for all four API
+    // variants tried, which is why this assertion could not exist before.
+    expect(paneXml).toMatch(/<pane\b/);
+    expect(paneXml).toMatch(/xSplit="3"/);
+    expect(paneXml).toMatch(/ySplit="2"/);
+    expect(paneXml).toMatch(/state="frozen"/);
+  });
+
+  it("⚠ 3 columns, not Apple's 4 — this file has no Base Country column", () => {
+    // Copying Apple's number would strand the first country pair inside the
+    // frozen region, where it cannot scroll.
+    expect(paneXml).not.toMatch(/xSplit="4"/);
+  });
+
+  it("⚠ 2 rows, not 1 — the country name and its Price/Currency pair", () => {
+    // Freezing only row 1 leaves a price column scrolled away from the word
+    // saying which half of the pair it is.
+    expect(paneXml).not.toMatch(/ySplit="1"/);
+  });
+
+  it("the frozen top-left cell is D3 — the first scrollable data cell", () => {
+    expect(paneXml).toMatch(/topLeftCell="D3"/);
   });
 });

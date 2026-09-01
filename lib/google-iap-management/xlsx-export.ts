@@ -12,11 +12,38 @@
  * Data source is always the live `listInAppProducts` result (read-only,
  * no DB write) — see the export route. This module is pure: no I/O.
  *
- * xlsx@0.18.5 (SheetJS Community Edition) writes merges + column widths
- * but not cell styling (fills/fonts) — the approved sample's navy header
- * is not reproduced here pending a dependency decision (Part 1 finding).
+ * ─── ⚠ WRITER IS `exceljs`, NOT `xlsx` — CHANGED 2026-09-01 (R5) ──────────
+ *
+ * The Manager asked for the three identity columns to stay put while scrolling
+ * sideways. `xlsx@0.18.5` (SheetJS CE) **cannot write freeze panes at all**,
+ * and that was measured on THIS path rather than read off a doc: four variants
+ * (`!freeze` as a string, `!freeze` as an object, `!views`, and a do-nothing
+ * control) all produced the identical bare `<sheetView workbookViewId="0"/>`
+ * with no `<pane>` element anywhere in `xl/worksheets/sheet1.xml`.
+ *
+ * ⚠ UPGRADING IS NOT A ROUTE OUT. 0.18.5 is the last npm release of `xlsx`;
+ * freeze panes and cell styling are paid (Pro) features. Nobody should
+ * re-propose a version bump.
+ *
+ * ⚠ AND THE USUAL OBJECTION DOES NOT APPLY HERE. `exceljs` is a server-only
+ * dependency (KB §4.17) and pulling it into a browser bundle is what that rule
+ * exists to prevent — but this writer has ALWAYS run server-side: the route
+ * calls it and returns bytes, the client only does `res.blob()`. Measured: the
+ * export route contributes 0 B of client bundle, and the sibling surface that
+ * already writes with exceljs through a server route
+ * (`/settings/pricing-templates/default`) sits at 171 kB, not the 424 kB an
+ * accidental client import once produced. So this swap costs 0 kB.
+ *
+ * ⚠ THE OUTPUT IS UNCHANGED EXCEPT FOR THE FREEZE. Every structural fact of
+ * the old file — sheet name, every cell, all 10 merges, the two header rows —
+ * is pinned against a golden dump captured from the SheetJS writer BEFORE this
+ * change (`__fixtures__/export-golden.json`) and re-asserted after. That
+ * fixture is the parity gate for this rewrite.
+ *
+ * ⚠ `xlsx` IS STILL THE READER. The upload parsers keep it; the Google module
+ * now uses `xlsx` for reading only, pinned by a structural test.
  */
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 import { microsToDecimal } from "./google/price-conversion";
 import { getCurrencyDecimals } from "./google/currency-precision";
@@ -217,8 +244,27 @@ export function territoryColumnHeader(code: string): string {
   return name === code ? `Price in ${code}` : `Price in ${name} (${code})`;
 }
 
+/** Rows of the header block — the fixed columns merge down across both. */
+const HEADER_ROW_COUNT = 2;
+
+/**
+ * ⚠ FREEZE — the three identity columns and both header rows.
+ *
+ * `xSplit: 3` is `FIXED_COLUMNS.length`: Product ID · Product Name · Status
+ * stay put while the operator scrolls across up to 173 country pairs.
+ * `ySplit: 2` is `HEADER_ROW_COUNT` — BOTH header rows, because the country
+ * name lives on row 1 and its Price/Currency sub-header on row 2. Freezing
+ * only row 1 would leave a price column scrolled away from the word telling
+ * you which of the pair it is.
+ *
+ * ⚠ NOT Apple's numbers. The Apple export freezes 4 columns (it has a Base
+ * Country column this file does not). Copying 4 here would strand the first
+ * country pair in the frozen region.
+ */
+const FREEZE = { cols: FIXED_COLUMNS.length, rows: HEADER_ROW_COUNT } as const;
+
 /** Build the two-row merged-header workbook from a plan. */
-export function buildExportWorkbook(plan: ExportPlan): XLSX.WorkBook {
+export function buildExportWorkbook(plan: ExportPlan): ExcelJS.Workbook {
   const { territories, localizationGroupCount, rows } = plan;
 
   const headerRow1: Array<string | null> = [
@@ -254,35 +300,57 @@ export function buildExportWorkbook(plan: ExportPlan): XLSX.WorkBook {
   ]);
 
   const aoa = [headerRow1, headerRow2, ...dataRows];
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
 
-  // Vertical merges for the fixed columns (span both header rows).
-  const merges: XLSX.Range[] = FIXED_COLUMNS.map((_, c) => ({
+  // Vertical merges for the fixed columns (span both header rows), then a
+  // horizontal 2-col merge for every territory + localization group header.
+  // ⚠ 0-BASED HERE, 1-BASED AT `mergeCells` — the +1s below are that shift,
+  // not an off-by-one. Kept in this shape so the rectangles read the same as
+  // they did under SheetJS and the golden fixture can compare them directly.
+  const merges = FIXED_COLUMNS.map((_, c) => ({
     s: { r: 0, c },
-    e: { r: 1, c },
+    e: { r: HEADER_ROW_COUNT - 1, c },
   }));
-  // Horizontal 2-col merges for every territory + localization group header.
   const groupCount = territories.length + localizationGroupCount;
   for (let g = 0; g < groupCount; g += 1) {
     const startCol = FIXED_COLUMNS.length + g * 2;
     merges.push({ s: { r: 0, c: startCol }, e: { r: 0, c: startCol + 1 } });
   }
-  ws["!merges"] = merges;
 
-  ws["!cols"] = [
-    { wch: 40 }, // Product ID
-    { wch: 28 }, // Product Name
-    { wch: 10 }, // Status
-    ...territories.flatMap(() => [{ wch: 10 }, { wch: 10 }]),
-    ...Array.from({ length: localizationGroupCount }, () => [
-      { wch: 12 },
-      { wch: 34 },
-    ]).flat(),
+  const widths = [
+    40, // Product ID
+    28, // Product Name
+    10, // Status
+    ...territories.flatMap(() => [10, 10]),
+    ...Array.from({ length: localizationGroupCount }, () => [12, 34]).flat(),
   ];
 
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, SHEET_NAME);
+  const wb = new ExcelJS.Workbook();
+  // ⚠ Deterministic stamps: without them every write embeds `new Date()` and
+  // two exports of identical data differ byte-for-byte, which makes the
+  // byte-level tests non-reproducible. Same reason the matrix writer does it.
+  const EPOCH = new Date(0);
+  wb.created = EPOCH;
+  wb.modified = EPOCH;
+
+  const ws = wb.addWorksheet(SHEET_NAME);
+  for (const row of aoa) ws.addRow(row);
+  for (const m of merges) {
+    ws.mergeCells(m.s.r + 1, m.s.c + 1, m.e.r + 1, m.e.c + 1);
+  }
+  widths.forEach((w, i) => {
+    // ⚠ Column widths are COUNTED PER COLUMN, never measured from the header
+    // text. "Price in United States (US)" is nearly three times the width of
+    // the old "Price in US"; a builder that sized from text would drift.
+    ws.getColumn(i + 1).width = w;
+  });
+  ws.views = [{ state: "frozen", xSplit: FREEZE.cols, ySplit: FREEZE.rows }];
+
   return wb;
+}
+
+/** Write the workbook to bytes. Async because exceljs is. */
+export async function writeExportBuffer(wb: ExcelJS.Workbook): Promise<Buffer> {
+  return Buffer.from((await wb.xlsx.writeBuffer()) as ArrayBuffer);
 }
 
 /** Manager filename convention: `IAP-export-<packageName>-<YYYYMMDD>.xlsx`. */

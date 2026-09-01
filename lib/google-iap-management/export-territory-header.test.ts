@@ -21,7 +21,8 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import * as XLSX from "xlsx";
+// ⚠ R5 — measurement moved, assertions did not. See __fixtures__/read-workbook.ts.
+import { dumpAoa, columnWidths } from "./__fixtures__/read-workbook";
 
 import {
   buildExportPlan,
@@ -174,19 +175,16 @@ describe("⚠ the header got ~3x longer; the geometry must not have moved", () =
         },
       } as unknown as Parameters<typeof buildExportPlan>[0][number],
     ]);
-    const ws = buildExportWorkbook(plan).Sheets["IAP Export"];
-    const cols = ws["!cols"] ?? [];
+    // ⚠ WIDTHS COME FROM THE exceljs OBJECT, NOT A ROUND TRIP. Measured:
+    // `XLSX.read` of a written file returns `!cols: []`, so reading them back
+    // would pass vacuously on a writer that set none.
     // 3 fixed + 2 territories x 2 + 1 localization group x 2 = 9.
+    const cols = columnWidths(buildExportWorkbook(plan), 9);
     expect(cols).toHaveLength(9);
-    expect(cols.slice(3, 7)).toEqual([
-      { wch: 10 },
-      { wch: 10 },
-      { wch: 10 },
-      { wch: 10 },
-    ]);
+    expect(cols.slice(3, 7)).toEqual([10, 10, 10, 10]);
   });
 
-  it("the two header rows still line up: long label above Price/Currency", () => {
+  it("the two header rows still line up: long label above Price/Currency", async () => {
     const plan = buildExportPlan([
       {
         sku: "sku-1",
@@ -195,11 +193,7 @@ describe("⚠ the header got ~3x longer; the geometry must not have moved", () =
         prices: { VN: { currency: "VND", priceMicros: "49000000000" } },
       } as unknown as Parameters<typeof buildExportPlan>[0][number],
     ]);
-    const ws = buildExportWorkbook(plan).Sheets["IAP Export"];
-    const aoa = XLSX.utils.sheet_to_json(ws, {
-      header: 1,
-      defval: null,
-    }) as unknown[][];
+    const aoa = await dumpAoa(buildExportWorkbook(plan));
     expect(aoa[0][3]).toBe("Price in Vietnam (VN)");
     expect(aoa[0][4]).toBeNull();
     expect(aoa[1][3]).toBe("Price");

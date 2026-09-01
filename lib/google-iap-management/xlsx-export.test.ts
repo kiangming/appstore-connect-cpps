@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import * as XLSX from "xlsx";
+// ⚠ R5 — MEASUREMENT CHANGED, ASSERTIONS DID NOT. The writer is exceljs now
+// (SheetJS cannot write freeze panes), so `XLSX.utils.sheet_to_json` on the
+// returned workbook no longer applies. `dumpAoa`/`dumpWorkbook` write the file
+// and read it back — a STRICTER place to look than the old in-memory object,
+// which had never been serialised. Every expectation below is unchanged.
+import { dumpAoa, dumpWorkbook } from "./__fixtures__/read-workbook";
 
 import {
   buildExportPlan,
@@ -115,12 +120,11 @@ describe("buildExportPlan — territory selection (Export options dialog)", () =
     expect(plan.territories).toEqual(["DE", "US"]);
   });
 
-  it("the unpriced column's cells carry the explicit no-price marker, not blanks", () => {
+  it("the unpriced column's cells carry the explicit no-price marker, not blanks", async () => {
     // A column of blanks is indistinguishable from a column the writer forgot
     // to fill. `—` is unmistakably a rendered answer.
     const plan = buildExportPlan(twoTerritoryProducts, ["US", "DE"]);
-    const ws = buildExportWorkbook(plan).Sheets["IAP Export"];
-    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as unknown[][];
+    const aoa = await dumpAoa(buildExportWorkbook(plan));
     // Columns: sku, name, status, DE price, DE currency, US price, US currency…
     expect(aoa[2][3]).toBe("\u2014");
     expect(aoa[2][4]).toBe("\u2014");
@@ -254,7 +258,7 @@ describe("buildExportPlan — status mapping", () => {
 });
 
 describe("buildExportWorkbook — file structure", () => {
-  it("emits a two-row merged header + one data row per SKU", () => {
+  it("emits a two-row merged header + one data row per SKU", async () => {
     const plan = buildExportPlan([
       product({
         sku: "sku-1",
@@ -267,12 +271,7 @@ describe("buildExportWorkbook — file structure", () => {
         prices: { US: { currency: "USD", priceMicros: "990000" } },
       }),
     ]);
-    const wb = buildExportWorkbook(plan);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const aoa = XLSX.utils.sheet_to_json(ws, {
-      header: 1,
-      defval: null,
-    }) as unknown[][];
+    const aoa = await dumpAoa(buildExportWorkbook(plan));
 
     // ⚠ X1/R3 — this assertion read "Price in US" until 2026-09-01. The
     // header now carries the market name, and the code stays in parentheses
@@ -310,7 +309,7 @@ describe("buildExportWorkbook — file structure", () => {
     ]);
   });
 
-  it("merges the fixed columns vertically and each group header horizontally", () => {
+  it("merges the fixed columns vertically and each group header horizontally", async () => {
     const plan = buildExportPlan([
       product({
         sku: "a",
@@ -321,22 +320,24 @@ describe("buildExportWorkbook — file structure", () => {
         listings: { "en-US": { title: "A", description: "Desc" } },
       }),
     ]);
-    const wb = buildExportWorkbook(plan);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const merges = ws["!merges"] ?? [];
+    const merges = (await dumpWorkbook(buildExportWorkbook(plan))).merges;
 
+    // ⚠ R5 — SAME RECTANGLES, WRITTEN AS `r,c-r,c` STRINGS. The old form was
+    // SheetJS's `{s:{r,c},e:{r,c}}` object; the dump normalises both writers to
+    // one comparable string. The rectangles themselves are unchanged.
+    //
     // Fixed columns: A1:A2, B1:B2, C1:C2 (vertical).
-    expect(merges).toContainEqual({ s: { r: 0, c: 0 }, e: { r: 1, c: 0 } });
-    expect(merges).toContainEqual({ s: { r: 0, c: 1 }, e: { r: 1, c: 1 } });
-    expect(merges).toContainEqual({ s: { r: 0, c: 2 }, e: { r: 1, c: 2 } });
+    expect(merges).toContain("0,0-1,0");
+    expect(merges).toContain("0,1-1,1");
+    expect(merges).toContain("0,2-1,2");
     // Territory group headers: D1:E1 (US), F1:G1 (VN) — alphabetical order.
-    expect(merges).toContainEqual({ s: { r: 0, c: 3 }, e: { r: 0, c: 4 } });
-    expect(merges).toContainEqual({ s: { r: 0, c: 5 }, e: { r: 0, c: 6 } });
+    expect(merges).toContain("0,3-0,4");
+    expect(merges).toContain("0,5-0,6");
     // Localization group header: H1:I1.
-    expect(merges).toContainEqual({ s: { r: 0, c: 7 }, e: { r: 0, c: 8 } });
+    expect(merges).toContain("0,7-0,8");
   });
 
-  it("leaves unused territory/localization slots blank on a given row", () => {
+  it("leaves unused territory/localization slots blank on a given row", async () => {
     const plan = buildExportPlan([
       product({
         sku: "a",
@@ -353,9 +354,7 @@ describe("buildExportWorkbook — file structure", () => {
         listings: null, // no localizations at all
       }),
     ]);
-    const wb = buildExportWorkbook(plan);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as unknown[][];
+    const aoa = await dumpAoa(buildExportWorkbook(plan));
     const rowB = aoa[3];
     // Columns: sku, name, status, US price, US currency, loc1 code, loc1 desc, loc2 code, loc2 desc
     //
@@ -370,13 +369,13 @@ describe("buildExportWorkbook — file structure", () => {
     ]);
   });
 
-  it("handles an empty product list (no territories, no localization groups)", () => {
+  it("handles an empty product list (no territories, no localization groups)", async () => {
     const plan = buildExportPlan([]);
     expect(plan.territories).toEqual([]);
     expect(plan.localizationGroupCount).toBe(0);
-    const wb = buildExportWorkbook(plan);
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1 }) as unknown[][];
+    const aoa = (await dumpAoa(buildExportWorkbook(plan))).map((r) =>
+      r.filter((_, i) => i < r.length),
+    );
     expect(aoa[0]).toEqual(["Product ID", "Product Name", "Status"]);
     expect(aoa.length).toBe(2); // just the two header rows
   });

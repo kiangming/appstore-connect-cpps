@@ -21,7 +21,6 @@
  */
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import * as XLSX from "xlsx";
 
 import { authOptions } from "@/lib/auth";
 import { jwtClientFromEncrypted } from "@/lib/google-iap-management/google/auth";
@@ -39,6 +38,7 @@ import {
 import {
   buildExportPlan,
   buildExportWorkbook,
+  writeExportBuffer,
   xlsxExportFilename,
 } from "@/lib/google-iap-management/xlsx-export";
 import {
@@ -198,10 +198,11 @@ export async function POST(
     const { included, skipped } = partitionByStatusFilter(chosen, statusFilter);
     const plan = buildExportPlan(included, territories);
     const workbook = buildExportWorkbook(plan);
-    const buffer = XLSX.write(workbook, {
-      type: "buffer",
-      bookType: "xlsx",
-    }) as Buffer;
+    // ⚠ AWAITED — the writer is exceljs since R5 (freeze panes; SheetJS cannot
+    // write them). `writeBuffer()` is async, and it MUST stay on the server:
+    // exceljs is a server-only dependency (KB §4.17). This route was already
+    // the only caller, so the swap added no client bytes.
+    const buffer = await writeExportBuffer(workbook);
     const filename = xlsxExportFilename(packageName);
 
     return new NextResponse(new Uint8Array(buffer), {
