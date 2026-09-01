@@ -141,6 +141,14 @@ filter, searching, or ticking items costs nothing.
 `Product ID · Product Name · Status`, then a **Price / Currency** pair per
 country, then a **Locale Code / Description** pair per localization.
 
+**The three fixed columns and both header rows are frozen.** Scroll right
+across all 173 country pairs and `Product ID · Product Name · Status` stay in
+place; scroll down and the country name plus its `Price / Currency` sub-header
+stay in place. Both header rows are frozen, not just the first — the country
+name is on row 1 and the word telling you which half of the pair a column is
+sits on row 2, so freezing one without the other would strand a price column
+away from its own label.
+
 **Country column headers read `Price in Vietnam (VN)`** — the market name with
 its ISO 3166-1 alpha-2 code in parentheses. The code stays because a
 spreadsheet is read away from the tool, where the name alone cannot be matched

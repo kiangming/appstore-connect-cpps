@@ -3829,6 +3829,103 @@ the label on the screenshot, is what identified it as the wrong list.
 it came from.** Diff any supplied list against the API call the feature will
 actually use, before building on it.
 
+**P39 — "IT'S ONLY A TYPE" IS HOW A FENCE STARTS ROTTING. WHEN A GUARD FIRES ON
+YOUR OWN CODE, FIX THE CODE — WIDENING THE GUARD IS THE ONE MOVE THAT CANNOT BE
+UNDONE LATER.**
+
+A structural guard is worth exactly what its absoluteness is worth. The first
+exception is always small, always defensible, and always the reason the second
+one is easy.
+
+Confirmed instance — R5, arc G-EXPORT (2026-09-01). The Excel-library fence's
+first rule is absolute: **no file imports both `xlsx` and `exceljs`**. A new
+test helper — which writes with exceljs and reads back with xlsx so the
+assertions inspect the FILE rather than an object model that was never
+serialised — tripped it, because it named the exceljs type:
+
+```ts
+import type ExcelJS from "exceljs";   // ← the "only a type" import
+import * as XLSX from "xlsx";
+```
+
+The cheap fix was to teach the rule to ignore `import type`. The fix taken was
+to declare the two members the helper actually uses as a **structural
+interface**, so it imports one library and the rule stays absolute:
+
+```ts
+interface WritableWorkbook {
+  xlsx: { writeBuffer(): Promise<ArrayBuffer | Buffer> };
+  worksheets: Array<{ getColumn(i: number): { width?: number } }>;
+}
+```
+
+⚠ **THE ARGUMENT FOR WIDENING WAS CORRECT AND STILL WRONG.** A type import
+genuinely emits nothing and genuinely cannot bundle a library. But the rule was
+not written about bundle bytes — it was written because "someone needs a
+feature, reaches for whichever import is nearest, and six months later both
+libraries are half-used everywhere". A type import is exactly that reach, and
+`import type` is one keystroke from `import`.
+
+⇒ **Rule: when a fence you wrote fires on code you just wrote, the default is
+that the fence is right.** Change the code. Widening is available only when the
+fence's own stated purpose does not cover the case — and then the widening
+carries that argument in a comment, next to the exception.
+
+**P40 — NARROWING A FENCE CAN MAKE IT STRONGER. A RULE STATED AS A ROLE BEATS A
+RULE STATED AS A FILE LIST.**
+
+An allowlist is a fence that needs maintenance: every legitimate new file is a
+line somebody has to add, every added line is an argument nobody re-reads, and
+the list slowly becomes a record of what happened rather than a statement of
+what is allowed.
+
+Confirmed instance — R5. The fence said, absolutely: *"the Google item-list
+export still writes with xlsx, never exceljs"*. R5 had to change it, because
+its premise had quietly expired — the test reasoned "this writer needs no cell
+styling", which was true and beside the point once the Manager asked for a
+FREEZE PANE, a thing the same file's header lists among what `xlsx@0.18.5`
+"CANNOT BE WRITTEN AT ALL".
+
+The obvious move was to delete the test or add two more allowlist lines. What
+replaced it states a ROLE:
+
+> **in the Google module, `xlsx` may READ and may not WRITE**
+
+— enforced by scanning for write calls (`XLSX.write`, `book_new`,
+`aoa_to_sheet`, …) in any Google file. That is **stronger** than what it
+replaced: before R5 the Google module wrote workbooks with both libraries and
+the fence only policed one file; after it, no Google file writes with xlsx at
+all, and a new file needs no allowlist entry to be covered.
+
+⇒ **Rule: when an allowlist entry is about to be added, ask whether the
+underlying rule can be restated as a property of the code instead.** If it can,
+the list stops growing and the guard starts covering files nobody has written
+yet. ⚠ Not always possible — a genuinely per-file exception stays per-file. The
+test is whether the entries share a describable reason.
+
+**P41 — PIN A DEPENDENCY VERSION IN A TEST WHEN A DECISION RESTS ON WHAT THAT
+VERSION CANNOT DO. A COMMENT SAYING "UPGRADING WON'T HELP" DOES NOT SURVIVE A
+DEPENDABOT PR.**
+
+R5 chose a second Excel library because `xlsx@0.18.5` cannot write freeze
+panes, and cannot ever: 0.18.5 is the last npm release and freeze/styling are
+paid features. That reasoning is load-bearing for a design decision, and it is
+invalidated the moment the version moves — silently, by a routine bump.
+
+```ts
+expect(pkg.dependencies.xlsx).toBe("^0.18.5");
+```
+
+⚠ **PIN THE RANGE STRING AS WRITTEN, CARET INCLUDED.** Asserting the bare
+version failed on the first run; the literal is the point, so any edit to that
+line has to be argued for rather than absorbed.
+
+⇒ **Rule: a "we cannot do X because dependency D is at version V" decision
+needs V asserted somewhere a bump will hit.** Related to P35 (a library can
+change under a patch list with nothing going red) — same failure, one layer
+out: there the library moved and the code lied; here the library would move and
+the *reasoning* would lie.
+
 **P32 — A CHUNK THAT CREATES AN OPT-IN FLAG MUST NAME, BY CHUNK, WHO TURNS IT
 ON. AN OPT-IN NOBODY OPTS INTO IS DEAD CODE THAT LOOKS ALIVE.**
 

@@ -1088,7 +1088,7 @@
           <a class="nav-item" data-page="google-apps" data-keywords="google apps danh sách play store">
             <span class="nav-item-label">Danh sách apps</span>
           </a>
-          <a class="nav-item" data-page="google-iaps" data-keywords="google iaps items danh sách sku deleted flagged xóa không còn play console refresh export xlsx excel xuất file xuat file chọn item chon item picker tick select all show more search tìm kiếm tim kiem filter active inactive INACTIVE_PUBLISHED trạng thái trang thai header tên nước ten nuoc price in vietnam vn 173 nước 173 nuoc nga russia macao macau ô trống o trong gạch ngang gach ngang em dash — chưa có giá chua co gia bỏ qua bo qua skipped live mirror">
+          <a class="nav-item" data-page="google-iaps" data-keywords="google iaps items danh sách sku deleted flagged xóa không còn play console refresh export xlsx excel xuất file xuat file chọn item chon item picker tick select all show more search tìm kiếm tim kiem filter active inactive INACTIVE_PUBLISHED trạng thái trang thai header tên nước ten nuoc price in vietnam vn 173 nước 173 nuoc nga russia macao macau ô trống o trong gạch ngang gach ngang em dash — chưa có giá chua co gia bỏ qua bo qua skipped live mirror freeze đóng băng dong bang cố định co dinh cuộn ngang cuon ngang 3 cột trái 3 cot trai">
             <span class="nav-item-label">Danh sách IAPs</span>
           </a>
           <a class="nav-item" data-page="google-create-iap" data-keywords="google create item tạo mới onetimeproduct">
@@ -4662,6 +4662,15 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               Mỗi item 1 dòng: Product ID · Product Name · Status, rồi 1 cặp cột
               <strong>Price · Currency</strong> cho mỗi nước, rồi các nhóm localization
               (Locale Code · Description).</p>
+              <ul>
+                <li><strong>3 cột trái + 2 dòng header bị "đóng băng"</strong> (freeze panes)
+                — cuộn ngang qua 173 cặp cột vẫn thấy <strong>Product ID · Product Name ·
+                Status</strong>; cuộn dọc vẫn thấy tên nước và dòng <code class="inline">Price</code>
+                ‖ <code class="inline">Currency</code> của nó.</li>
+                <li>⚠ Đóng băng <strong>cả hai</strong> dòng header, không chỉ dòng đầu: tên nước
+                nằm ở dòng 1, còn chữ nói cột đó là nửa nào của cặp nằm ở dòng 2 — khoá một dòng
+                thì cột giá trôi khỏi nhãn của chính nó.</li>
+              </ul>
             </div>
           </li>
         </ol>
