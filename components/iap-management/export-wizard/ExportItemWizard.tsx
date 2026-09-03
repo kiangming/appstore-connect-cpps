@@ -70,6 +70,7 @@ import {
 import { ROW_WINDOW_STEP } from "@/lib/iap-management/apple/bulk-item-search";
 import type { DraftItemInput } from "@/lib/iap-management/apple/bulk-item-rows";
 import { BulkItemPicker } from "@/components/iap-management/item-picker/BulkItemPicker";
+import { addRangeToSelection } from "@/lib/iap-management/apple/item-range-select";
 import { ExportOptionsDialog } from "@/components/iap-management/ExportOptionsDialog";
 import { APPLE_TERRITORY_CATALOG } from "@/lib/iap-management/apple/apple-territory-catalog";
 import {
@@ -282,6 +283,24 @@ export function ExportItemWizard({
     });
   }
 
+  /**
+   * [Y1] Apply a shift-click range — **ADDITIVE, never toggling** (Q3).
+   *
+   * ⚠ THE IDS ARRIVE ALREADY BOUNDED BY WHAT WAS ON SCREEN. The picker
+   * computed them from its rendered rows and this function does not widen
+   * them, does not re-derive them from `facetSelectable`, and must never
+   * start doing so — that is the one edit that would let a range reach a row
+   * the Manager never saw, at ~3 Apple requests each.
+   *
+   * ⚠ AND IT DOES NOT CLEAR ANYTHING. M1 is cumulative: a range on one screen
+   * must leave picks made elsewhere alone. Finder/Explorer replace the
+   * selection on shift-click; that model is disqualified here, and this
+   * one-line `addRangeToSelection` is where the disqualification lives.
+   */
+  function selectRange(appleIapIds: string[]) {
+    setSelected((prev) => addRangeToSelection(prev, appleIapIds));
+  }
+
   function reset() {
     setStep("items");
     setSelected(new Set());
@@ -464,6 +483,13 @@ export function ExportItemWizard({
             onShowMore={() => setWindowSize((n) => n + ROW_WINDOW_STEP)}
             onToggleOne={toggleOne}
             onToggleAll={toggleAll}
+            /* ⚠ [Y1] EXPORT ONLY (Q2). A′ leaves this off and keeps the
+               picker it has today: export is a READ path where a wrong pick
+               costs a re-run, A′ is a WRITE path where a wrong pick has
+               already changed what sells where. Turning it on for A′ is a
+               separate Manager decision — TODO `[Y-aprime-paged]`. */
+            paged
+            onSelectRange={selectRange}
             renderRowTrailing={(row) => (
               // ⚠ BOTH AXES ON EVERY ROW, side by side and visibly distinct.
               //   That is the whole reason the availability filter was allowed
