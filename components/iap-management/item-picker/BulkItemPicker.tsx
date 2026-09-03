@@ -82,6 +82,15 @@ import {
   ROW_WINDOW_STEP,
 } from "@/lib/iap-management/apple/bulk-item-search";
 import { resolveRangeIds } from "@/lib/iap-management/apple/item-range-select";
+import { computePageMeta } from "@/lib/iap-management/pagination/page-slice";
+import { PageNav } from "@/components/ui/iap/PageNav";
+
+/**
+ * [Y2, M6] The page sizes the Manager chose. ⚠ EXPORTED so the caller's
+ * default and the dropdown cannot drift — the wizard seeds `pageSize` from
+ * `PAGE_SIZE_OPTIONS[0]` rather than repeating the number.
+ */
+export const PAGE_SIZE_OPTIONS = [20, 30, 50] as const;
 
 /**
  * The minimum a row needs to be tickable: an Apple id to key the checkbox on.
@@ -130,6 +139,44 @@ export interface BulkItemPickerProps<
    */
   onSelectRange?: (appleIapIds: string[]) => void;
 
+  /**
+   * [Y2] Pagination. Read ONLY when `paged` — with the flag off, `windowSize`
+   * + "Show more" is still the whole story and A′ is untouched.
+   *
+   * ⚠ CALLER-OWNED, like `query` and `windowSize` and for the same reason: the
+   * caller resets them together in its own close/reset, and the page must
+   * return to 1 when a FACET changes — something only the caller knows about.
+   * The anchor is the one piece of state this component does own, because its
+   * only rule is re-derived (see `anchorId`).
+   */
+  page?: number;
+  onPageChange?: (next: number) => void;
+  pageSize?: number;
+  onPageSizeChange?: (next: number) => void;
+
+  /**
+   * [Y2, Q5] "Selected only" — a view over the SAME selection set, not a
+   * second selection. `"selected"` narrows the rendered rows to the ticked
+   * ones and then pages them exactly as usual.
+   *
+   * ⚠ IT IS A FILTER, AND THAT IS THE WHOLE DESIGN. It adds no state beyond
+   * this string, no arithmetic, and no second notion of what is selected — so
+   * it cannot drift from the counter or the payload. It exists because M4
+   * makes "12 selected, none of them on screen" a reachable state.
+   */
+  viewMode?: "all" | "selected";
+  onViewModeChange?: (next: "all" | "selected") => void;
+
+  /**
+   * [Y2] (B) — select or clear EVERY row on the current page.
+   *
+   * ⚠ THE IDS ARE THE PAGE'S, COMPUTED HERE, AND THE CALLER MUST NOT WIDEN
+   * THEM. This is the control the design spent most of its risk budget on:
+   * (A) is "all matching, every page" and (B) is "this page", they differ by
+   * up to 10x, and at ~3 Apple requests per item confusing them costs money.
+   */
+  onSelectManyInPage?: (appleIapIds: string[], select: boolean) => void;
+
   /** Rendered between the search box and the list. A′ puts its filter caption
    *  and (in set-territories) the territory picker here. */
   betweenSearchAndList?: ReactNode;
@@ -155,6 +202,13 @@ export function BulkItemPicker<S extends PickableRow, E extends BulkItemRow>({
   onToggleAll,
   paged = false,
   onSelectRange,
+  page = 1,
+  onPageChange,
+  pageSize = ROW_WINDOW_STEP,
+  onPageSizeChange,
+  viewMode = "all",
+  onViewModeChange,
+  onSelectManyInPage,
   betweenSearchAndList,
   renderRowTrailing,
   nothingSelectableSlot,
@@ -181,12 +235,83 @@ export function BulkItemPicker<S extends PickableRow, E extends BulkItemRow>({
       }),
     [selectableRows, rows.length, selected, query],
   );
-  /** The window is a RENDER bound only — never a selection bound. */
-  const windowed = useMemo(
-    () => matchingSelectable.slice(0, windowSize),
-    [matchingSelectable, windowSize],
+  /**
+   * [Y2, Q5] "Selected only" narrows the rows BEFORE paging, so the pages are
+   * pages of the selection. Off — and when `paged` is off — this is identity.
+   */
+  const viewRows = useMemo(
+    () =>
+      paged && viewMode === "selected"
+        ? matchingSelectable.filter((r) => selected.has(r.appleIapId))
+        : matchingSelectable,
+    [paged, viewMode, matchingSelectable, selected],
   );
-  const hiddenByWindow = matchingSelectable.length - windowed.length;
+
+  /**
+   * [Y2] The page's index math, from the module four other surfaces already
+   * use. ⚠ `computePageMeta` CLAMPS the requested page into range
+   * (page-slice.ts:37), which is what keeps a shrinking result set from
+   * leaving the picker on a page that no longer exists.
+   */
+  const pageMeta = useMemo(
+    () => computePageMeta(viewRows.length, page, pageSize),
+    [viewRows.length, page, pageSize],
+  );
+
+  /**
+   * THE RENDERED ROWS — and the single source of that fact.
+   *
+   * ⚠ EVERYTHING THAT MUST AGREE WITH "WHAT IS ON SCREEN" READS THIS ARRAY:
+   * the rows, the shift-click range (Y1), (B)'s tri-state and its ids, and the
+   * "on this page" half of the counter. One array, so they cannot disagree.
+   *
+   * ⚠ AND IT IS A RENDER BOUND ONLY — never a selection bound. That was true
+   * of the window and stays true of the page: nothing here decides what is
+   * exported. What CHANGED in Y2 is that a page is a MIDDLE slice, so a ticked
+   * row can now leave the screen — which is why the counter below reports the
+   * page and the whole set separately, and why the off-page notice exists.
+   */
+  const windowed = useMemo(
+    () =>
+      paged
+        ? viewRows.slice(pageMeta.startIndex, pageMeta.endIndex)
+        : matchingSelectable.slice(0, windowSize),
+    [
+      paged,
+      viewRows,
+      pageMeta.startIndex,
+      pageMeta.endIndex,
+      matchingSelectable,
+      windowSize,
+    ],
+  );
+  const hiddenByWindow = paged
+    ? 0
+    : matchingSelectable.length - windowed.length;
+
+  /** [Y2, M2] The near half of the two-tier counter. */
+  const selectedOnPage = useMemo(
+    () => windowed.filter((r) => selected.has(r.appleIapId)).length,
+    [windowed, selected],
+  );
+  /**
+   * [Y2, M2] ⚠ THE NUMBER THIS WHOLE CHUNK EXISTS FOR. Picks that are still
+   * in the batch but not on this page. Before Y2 it could not be non-zero:
+   * the window only grew, so a row once rendered never left. It can now, and
+   * an unreported divergence between "selected" and "on screen" is the
+   * silent-drop class.
+   */
+  const selectedOffPage = Math.max(0, counts.selectedMatching - selectedOnPage);
+
+  /** [Y2] (B)'s scope — exactly the rows rendered, nothing wider. */
+  const pageIds = useMemo(
+    () => windowed.map((r) => r.appleIapId),
+    [windowed],
+  );
+  const pageAllSelected =
+    pageIds.length > 0 && pageIds.every((id) => selected.has(id));
+  const pageSomeSelected =
+    pageIds.some((id) => selected.has(id)) && !pageAllSelected;
 
   // Scoped to the matching set so the checkbox state and `onToggleAll` cannot
   // disagree — a "checked" box that unticks something else is worse than none.
@@ -197,6 +322,21 @@ export function BulkItemPicker<S extends PickableRow, E extends BulkItemRow>({
   /**
    * [Y1] The last row ticked WITHOUT Shift, by id. Never an index — see
    * `item-range-select.ts` for why a stale index is worse than a missing one.
+   *
+   * ⚠ DELIBERATELY NOT CLEARED AT A BOUNDARY, AND DO NOT "FIX" THAT.
+   * Manager decision, Y1 gate point (4). The spec was worded "a page flip
+   * clears the anchor"; it is implemented instead as `resolveRangeIds`
+   * refusing an anchor that is not among the rendered rows — which produces
+   * the same observable behaviour in every safety-relevant case, out of ONE
+   * definition. The single difference is that coming BACK to the page the
+   * anchor is on re-validates it, and that is safe: every row the range would
+   * contain is on screen again, so the range still means what it looks like.
+   *
+   * Adding `setAnchorId(null)` to the page-flip handler (or the page-size, or
+   * the search, or the facet handlers) would trade one definition for a LIST
+   * OF TRIGGERS SOMEONE HAS TO REMEMBER — which is the failure shape this arc
+   * exists to avoid, and the list is never finished: Y2 adds two more
+   * boundaries, and a future filter would add another.
    */
   const [anchorId, setAnchorId] = useState<string | null>(null);
   /** [Y1] A shift-click that could not form a range. Y1.2: say so. */
@@ -244,8 +384,17 @@ export function BulkItemPicker<S extends PickableRow, E extends BulkItemRow>({
 
   return (
     <>
-      {/* A 1,000-row app needs a way in that is not scrolling. */}
-      {rows.length > ROW_WINDOW_STEP && (
+      {/* A 1,000-row app needs a way in that is not scrolling.
+          ⚠ [Y2] THE THRESHOLD IS THE RENDER BOUND, NOT A CONSTANT — and that
+          correction was forced by a test, not noticed by reading.
+          The rule was `rows.length > ROW_WINDOW_STEP` (60), tuned when the
+          bound WAS 60. Under `paged` the bound is `pageSize`, so a 45-item app
+          at 20 rows/page had three pages to walk and NO SEARCH BOX: strictly
+          worse than before Y2, where the same 45 rows all rendered at once and
+          scrolling was enough. Tying the threshold to the actual bound fixes
+          it for every page size, including ones nobody has picked yet.
+          ⚠ A′ (paged off) keeps the 60 exactly. */}
+      {rows.length > (paged ? pageSize : ROW_WINDOW_STEP) && (
         <input
           type="search"
           value={query}
@@ -263,32 +412,137 @@ export function BulkItemPicker<S extends PickableRow, E extends BulkItemRow>({
         nothingSelectableSlot
       ) : (
         <>
-          <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800 mb-2">
-            <label className="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={allSelected}
-                ref={(el) => {
-                  if (el) el.indeterminate = someSelected;
-                }}
-                onChange={onToggleAll}
-                className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
-                aria-label="Select all"
-              />
-              {/* ⚠ "matching", not a bare count: with a search active this
-                  takes every match, INCLUDING rows the window has not
-                  rendered. The label has to say which set that is. */}
-              Select all ({counts.matching} matching)
-            </label>
-            <span
-              className="text-[11px] text-slate-400 dark:text-slate-500"
-              data-testid="selection-counts"
+          {/* ─── THE TOOLBAR ────────────────────────────────────────────
+              ⚠ TWO SHAPES, GATED, AND THE GATE IS WHY A′ IS BYTE-IDENTICAL.
+
+              paged OFF (A′): the original single checkbox, untouched.
+
+              paged ON (export, Q1/M7): (A) becomes a LABELLED BUTTON here in
+              the toolbar and (B) becomes the only CHECKBOX, down in the
+              tickbox column header. Two controls whose scopes differ by up to
+              10x must not be the same KIND of control — the scope has to be
+              readable from POSITION, because at ~3 Apple requests per item a
+              mis-click is a real bill. Position is what the Manager reads;
+              a longer label on two identical checkboxes is what they would
+              have to remember. */}
+          {paged ? (
+            <div className="flex items-start justify-between gap-3 pb-2 border-b border-slate-200 dark:border-slate-800 mb-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* (A) — ALL MATCHING, EVERY PAGE. Same semantics and the same
+                    `onToggleAll` as before; only the affordance changed. */}
+                <button
+                  type="button"
+                  onClick={onToggleAll}
+                  data-testid="select-all-matching"
+                  className={`px-2.5 py-1 text-[11.5px] font-semibold rounded-md border transition ${
+                    allSelected
+                      ? "border-[#bfdbfe] bg-[#eff6ff] text-[#0c447c] dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-200"
+                      : "border-slate-300 bg-white text-[#0c447c] hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-blue-200"
+                  }`}
+                >
+                  {allSelected
+                    ? `✓ Clear all ${counts.matching}`
+                    : `Select all ${counts.matching} matching`}
+                </button>
+
+                {/* [Q5] The review view for picks that are out of sight. */}
+                <span className="inline-flex rounded-md border border-slate-200 dark:border-slate-700 overflow-hidden text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => onViewModeChange?.("all")}
+                    data-testid="view-all"
+                    aria-pressed={viewMode === "all"}
+                    className={`px-2.5 py-1 ${
+                      viewMode === "all"
+                        ? "bg-[#0c447c] text-white font-semibold"
+                        : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                    }`}
+                  >
+                    All
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onViewModeChange?.("selected")}
+                    data-testid="view-selected"
+                    aria-pressed={viewMode === "selected"}
+                    className={`px-2.5 py-1 ${
+                      viewMode === "selected"
+                        ? "bg-[#0c447c] text-white font-semibold"
+                        : "bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300"
+                    }`}
+                  >
+                    Selected ({counts.selectedMatching})
+                  </button>
+                </span>
+              </div>
+
+              {/* ⚠ [M2] THE TWO-TIER COUNTER IS MANDATORY, NOT DECORATION.
+                  (A) as a button cannot carry the `indeterminate` state the
+                  checkbox used to — that cost was declared when Q1 was taken,
+                  and this is where it is paid back. Both numbers, always:
+                  the batch total AND how much of it is in front of you. */}
+              <span
+                className="text-[11px] text-slate-500 dark:text-slate-400 text-right leading-relaxed shrink-0"
+                data-testid="selection-counts"
+              >
+                <span className="font-semibold text-slate-900 dark:text-slate-100">
+                  {counts.selectedMatching}
+                </span>{" "}
+                selected ·{" "}
+                <span className="font-semibold text-slate-900 dark:text-slate-100">
+                  {selectedOnPage}
+                </span>{" "}
+                on this page
+                <br />
+                <span className="text-slate-400 dark:text-slate-500">
+                  {counts.matching} matching · {counts.total} total
+                </span>
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-800 mb-2">
+              <label className="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someSelected;
+                  }}
+                  onChange={onToggleAll}
+                  className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
+                  aria-label="Select all"
+                />
+                {/* ⚠ "matching", not a bare count: with a search active this
+                    takes every match, INCLUDING rows the window has not
+                    rendered. The label has to say which set that is. */}
+                Select all ({counts.matching} matching)
+              </label>
+              <span
+                className="text-[11px] text-slate-400 dark:text-slate-500"
+                data-testid="selection-counts"
+              >
+                {counts.selectedMatching} selected of {counts.matching}
+                {" · "}
+                {counts.total} total
+              </span>
+            </div>
+          )}
+
+          {/* ⚠ [Y2] THE DIVERGENCE THE WHOLE CHUNK IS ABOUT. Picks that are
+              still in the batch but not on this page. Unreachable before Y2 —
+              the window only grew — and the single most likely way for this
+              feature to lose a Manager's work quietly. */}
+          {paged && selectedOffPage > 0 && (
+            <p
+              data-testid="selection-offpage-notice"
+              className="text-[11px] text-amber-700 dark:text-amber-300 mb-2"
             >
-              {counts.selectedMatching} selected of {counts.matching}
-              {" · "}
-              {counts.total} total
-            </span>
-          </div>
+              + {selectedOffPage} selected{" "}
+              {selectedOffPage === 1 ? "item is" : "items are"} on other pages —
+              still selected, and still part of the export. Use Selected (
+              {counts.selectedMatching}) to review them.
+            </p>
+          )}
 
           {/* ⚠ The divergence must be VISIBLE. Narrowing the search hides
               ticked rows without unticking them; without this line the
@@ -303,6 +557,56 @@ export function BulkItemPicker<S extends PickableRow, E extends BulkItemRow>({
               {counts.selectedHidden === 1 ? "item is" : "items are"} hidden by
               this search — still selected, and still part of the batch.
             </p>
+          )}
+
+          {/* ─── (B) — THE ONLY CHECKBOX IN THE TICKBOX COLUMN ─────────
+              `flex items-center gap-3` mirrors the rows below EXACTLY, so this
+              checkbox sits in the same column as theirs. That alignment IS the
+              scope: a checkbox at the head of the tick column means "this
+              page" in every table anyone has used, which is why (A) had to
+              stop being one.
+
+              ⚠ THE LABEL CHANGES WITH THE STATE, so the click is never
+              ambiguous. And from PARTIAL it FILLS — it never clears (§2.2):
+              from a partial page the intent is overwhelmingly "add the rest",
+              and reading an ambiguous click as the destructive one is how
+              picks get lost. The clear direction stays one click away, from
+              the full state.
+
+              ⚠ NO SPECIAL CASE UNDER "Selected only" (Q5): there every row is
+              ticked, so the state machine below already renders it checked
+              with the Clear label. Nothing to branch on. */}
+          {paged && pageIds.length > 0 && (
+            <div className="flex items-center gap-3 py-2 px-0 border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/30">
+              <input
+                type="checkbox"
+                checked={pageAllSelected}
+                ref={(el) => {
+                  if (el) el.indeterminate = pageSomeSelected;
+                }}
+                onChange={() =>
+                  onSelectManyInPage?.(pageIds, !pageAllSelected)
+                }
+                className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
+                aria-label={
+                  pageAllSelected
+                    ? `Clear ${pageIds.length} on this page`
+                    : `Select all ${pageIds.length} on this page`
+                }
+                data-testid="select-all-in-page"
+              />
+              <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                {pageAllSelected
+                  ? `Clear ${pageIds.length} on this page`
+                  : `Select all ${pageIds.length} on this page`}
+                {pageSomeSelected && (
+                  <span className="font-normal text-slate-400 dark:text-slate-500">
+                    {" "}
+                    — {selectedOnPage} already selected
+                  </span>
+                )}
+              </span>
+            </div>
           )}
 
           <ul className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -347,11 +651,12 @@ export function BulkItemPicker<S extends PickableRow, E extends BulkItemRow>({
                               undiscoverable otherwise, it has no control.
                 • miss      — amber, after a shift-click with no anchor on
                               screen: names what happened AND what to do.
-              ⚠ Y1 WORDING DIFFERS FROM THE MOCKUP ON PURPOSE: the mockup says
-              "within one page" and "raise the page size", and in Y1 there are
-              no pages yet. Promising a control that does not exist is worse
-              than the wording drift. Y2 restores the mockup's exact copy when
-              the pages it names are real. */}
+              ⚠ THE COPY NAMES PAGES AGAIN AS OF Y2, which is the mockup's
+              wording. Y1 shipped a temporary sentence ("within the rows
+              shown", no "raise the page size") because Y1 had no pages, and
+              promising a control that does not exist is worse than wording
+              drift. The pages are real now, so the mockup's copy is restored —
+              Y1 gate point (1). */}
           {paged && (
             <p
               data-testid={rangeMiss ? "range-hint-miss" : "range-hint"}
@@ -363,16 +668,18 @@ export function BulkItemPicker<S extends PickableRow, E extends BulkItemRow>({
             >
               {rangeMiss ? (
                 <>
-                  That Shift-click had no starting row among the rows shown, so
-                  only the one row was selected. Click a row normally first,
-                  then Shift-click another to take everything between them.
+                  That Shift-click had no starting row on this page, so only
+                  the one row was selected. Click a row normally first, then
+                  Shift-click another to take everything between them.
                 </>
               ) : (
                 <>
                   Tip — click a row, then <strong>Shift</strong>-click another
-                  to select everything between them, within the rows shown.
-                  Changing the search or a filter clears the starting row. For
-                  a wider group, use Select all ({counts.matching} matching).
+                  to select everything between them,{" "}
+                  <strong>within one page</strong>. Changing page, page size,
+                  the search or a filter clears the starting row. For a wider
+                  group, raise the page size or use Select all (
+                  {counts.matching} matching).
                 </>
               )}
             </p>
@@ -381,6 +688,62 @@ export function BulkItemPicker<S extends PickableRow, E extends BulkItemRow>({
           {/* ⚠ Never a silent truncation. The window is a render bound; it
               has no effect on what "Select all" takes or what is written,
               and it says so. */}
+          {/* ⚠ [Y2] THE ROWS SELECTOR IS A <select>, NOT A SEGMENTED CONTROL.
+              The mockup drew three buttons in a row; the Manager changed
+              exactly this one thing and nothing else. Label and position are
+              the mockup's.
+              ⚠ AND CHANGING IT ANCHORS THE VIEWPORT (Q7) — the arithmetic is
+              the caller's (`onPageSizeChange`), because the caller owns
+              `page`. See the wizard for why anchoring beats resetting. */}
+          {paged && (
+            <PageNav
+              dense
+              meta={pageMeta}
+              onPageChange={(next) => onPageChange?.(next)}
+              summary={
+                <>
+                  Showing{" "}
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    {pageMeta.displayStart}–{pageMeta.displayEnd}
+                  </span>{" "}
+                  of{" "}
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    {viewRows.length}
+                    {viewMode === "selected" ? " selected" : ""}
+                  </span>
+                  {viewMode === "all" && counts.matching !== counts.total && (
+                    <>
+                      {" "}
+                      <span className="text-slate-400">
+                        (filtered from {counts.total})
+                      </span>
+                    </>
+                  )}
+                </>
+              }
+              leading={
+                <label className="flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                  Rows
+                  <select
+                    value={pageSize}
+                    onChange={(e) =>
+                      onPageSizeChange?.(Number(e.target.value))
+                    }
+                    aria-label="Rows per page"
+                    data-testid="page-size-select"
+                    className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-[11px] px-1.5 py-1 text-slate-700 dark:text-slate-200"
+                  >
+                    {PAGE_SIZE_OPTIONS.map((n) => (
+                      <option key={n} value={n}>
+                        {n}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              }
+            />
+          )}
+
           {hiddenByWindow > 0 && (
             <div className="pt-2 text-center">
               <button

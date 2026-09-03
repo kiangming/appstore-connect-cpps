@@ -59,7 +59,7 @@
  * it is invites the Manager to act on a week-old answer as if it were live.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Search, X } from "lucide-react";
 
 import {
@@ -69,7 +69,10 @@ import {
 } from "@/lib/iap-management/apple/export-item-rows";
 import { ROW_WINDOW_STEP } from "@/lib/iap-management/apple/bulk-item-search";
 import type { DraftItemInput } from "@/lib/iap-management/apple/bulk-item-rows";
-import { BulkItemPicker } from "@/components/iap-management/item-picker/BulkItemPicker";
+import {
+  BulkItemPicker,
+  PAGE_SIZE_OPTIONS,
+} from "@/components/iap-management/item-picker/BulkItemPicker";
 import { addRangeToSelection } from "@/lib/iap-management/apple/item-range-select";
 import { ExportOptionsDialog } from "@/components/iap-management/ExportOptionsDialog";
 import { APPLE_TERRITORY_CATALOG } from "@/lib/iap-management/apple/apple-territory-catalog";
@@ -144,6 +147,10 @@ export function ExportItemWizard({
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [availabilityFilter, setAvailabilityFilter] =
     useState<AvailabilityFilterValue>("ALL");
+  /** [Y2] Pagination. Caller-owned, alongside `query`/`windowSize`. */
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(PAGE_SIZE_OPTIONS[0]);
+  const [viewMode, setViewMode] = useState<"all" | "selected">("all");
 
   /** Apple's raw status values, as they actually occur in THIS app. Derived
    *  rather than hardcoded so a state Apple adds shows up without a release. */
@@ -248,6 +255,28 @@ export function ExportItemWizard({
     return n;
   }, [facetSelectable, selectable, selected]);
 
+  /**
+   * [Y2] BACK TO PAGE 1 WHEN THE RESULT SET CHANGES — one effect, one
+   * dependency array, mirroring the list page's own rule
+   * (IapListClient.tsx:253-260) so the two surfaces behave alike.
+   *
+   * ⚠ WHY A RESET HERE BUT AN ANCHOR ON PAGE-SIZE CHANGE (Q7). They are
+   * different events. A facet or a search change makes a DIFFERENT result set,
+   * and the Manager wants the top of it. Changing the page size changes only
+   * the WINDOW over an identical set, so throwing them to the top is a pure
+   * loss — hence `changePageSize` below.
+   *
+   * ⚠ `computePageMeta` clamps anyway (page-slice.ts:37), so this effect is
+   * about where the Manager LANDS, never about correctness. Nothing breaks if
+   * it is removed; the experience does.
+   *
+   * ⚠ Placed above the `if (!open)` early return, because a hook cannot live
+   * below a conditional return.
+   */
+  useEffect(() => {
+    setPage(1);
+  }, [query, typeFilter, statusFilter, availabilityFilter, viewMode]);
+
   if (!open) return null;
 
   const selectedCount = selected.size;
@@ -301,6 +330,53 @@ export function ExportItemWizard({
     setSelected((prev) => addRangeToSelection(prev, appleIapIds));
   }
 
+  /**
+   * [Y2] (B) — every row on the CURRENT PAGE, in whichever direction the
+   * checkbox's state says.
+   *
+   * ⚠ `appleIapIds` IS THE PAGE'S LIST, COMPUTED BY THE PICKER FROM WHAT IT
+   * RENDERED. Do not widen it to `facetSelectable`, do not re-derive it here:
+   * that edit turns (B) into (A) silently, and (A) can be 10x larger. At ~3
+   * Apple requests an item that is a bill, not a UI nit.
+   *
+   * ⚠ AND IT TOUCHES NOTHING ELSE. M1: selecting this page must leave every
+   * other page's picks exactly as they were, and clearing this page must not
+   * reach past it either.
+   */
+  function selectManyInPage(appleIapIds: string[], select: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of appleIapIds) {
+        if (select) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  /**
+   * [Y2, Q7] CHANGING THE PAGE SIZE ANCHORS THE VIEWPORT — it does not reset
+   * to page 1.
+   *
+   * `floor(oldStartIndex / newPageSize) + 1` keeps the Manager looking at
+   * roughly the rows they were already looking at: at 220 items, page 7 of 11
+   * at size 20 (startIndex 120) becomes page 3 of 5 at size 50.
+   *
+   * ⚠ THE ALTERNATIVE IS NOT "RESET TO 1", IT IS A SILENT JUMP. With no
+   * anchoring, `computePageMeta` clamps the stale page number
+   * (page-slice.ts:37) — page 7 with 5 pages lands on page 5, the wrong END of
+   * the list, with nothing saying so. Choosing the anchor is choosing which of
+   * three behaviours the Manager gets, deliberately.
+   *
+   * ⚠ THE SELECTION IS NOT TOUCHED (M1). It is a set of ids; page boundaries
+   * are a view over it.
+   */
+  function changePageSize(next: number) {
+    const oldStartIndex = (Math.max(1, page) - 1) * pageSize;
+    setPageSize(next);
+    setPage(Math.floor(oldStartIndex / next) + 1);
+  }
+
   function reset() {
     setStep("items");
     setSelected(new Set());
@@ -309,6 +385,11 @@ export function ExportItemWizard({
     setTypeFilter("ALL");
     setStatusFilter("ALL");
     setAvailabilityFilter("ALL");
+    // [Y2] The page state resets with everything else, in the one place that
+    // already owned the reset.
+    setPage(1);
+    setPageSize(PAGE_SIZE_OPTIONS[0]);
+    setViewMode("all");
   }
 
   function handleCancel() {
@@ -490,6 +571,13 @@ export function ExportItemWizard({
                separate Manager decision — TODO `[Y-aprime-paged]`. */
             paged
             onSelectRange={selectRange}
+            page={page}
+            onPageChange={setPage}
+            pageSize={pageSize}
+            onPageSizeChange={changePageSize}
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
+            onSelectManyInPage={selectManyInPage}
             renderRowTrailing={(row) => (
               // ⚠ BOTH AXES ON EVERY ROW, side by side and visibly distinct.
               //   That is the whole reason the availability filter was allowed

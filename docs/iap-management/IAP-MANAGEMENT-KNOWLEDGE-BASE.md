@@ -3926,6 +3926,41 @@ change under a patch list with nothing going red) — same failure, one layer
 out: there the library moved and the code lied; here the library would move and
 the *reasoning* would lie.
 
+**P42 — A CONSUMER'S OWN SUITE CANNOT GUARD A GESTURE IT NEVER USES. WHEN A
+SHARED COMPONENT GAINS A CAPABILITY BEHIND A FLAG, PIN **BOTH BRANCHES AT THE
+SHARED LAYER** — DO NOT DELEGATE THE OFF BRANCH TO THE CONSUMER'S TESTS.**
+
+Y1 added shift-click range selection to `BulkItemPicker`, which has two Apple
+consumers: the export wizard (a READ path) and `AvailabilitiesBulkModal` — A′,
+a **WRITE** path where a mis-scoped bulk select has already changed which
+territories an item sells in. Q2 gated it on `paged`, default `false`, so A′
+was untouched. The obvious place to prove "A′ is untouched" is A′'s own suite.
+
+**Measured during the Y1 gauntlet: flipping the default to `true` left all 77
+of A′'s tests GREEN.** Only a test written at the shared layer — "⚠ DEFAULTS
+to off — an omitted prop must behave like A′, not like export" — went red.
+
+⚠ **The reason is structural, not a gap in A′'s coverage.** A′'s tests
+exercise the behaviours A′ *has*. A newly-added gesture is by definition
+something no existing test performs, so no existing test can notice gaining
+it. The parity signal people reach for — "the other consumer's suite is still
+green" — is **strongest exactly where it is least informative**: the more
+foreign the new capability, the greener the consumer stays.
+
+⚠ **And this is not the same as P32.** P32 is about a flag nobody switches ON
+(dead code that looks alive). This is about a flag whose OFF state nobody
+asserts (a live default that looks guarded). A single arc can hit both: Y1
+named its switch-on site in the commit message (P32) *and* had to write its own
+off-branch test (P42).
+
+⇒ **Rule: the assertion that a flag is off by default belongs in the shared
+component's test file, phrased as an ABSENCE ("the gesture did NOT happen"),
+because that is the only shape that fails when someone turns it on for
+everyone.** Then run the default-flip mutation and confirm which files go red —
+if only the consumer's suite is cited as the guard, the guard does not exist.
+
+Instance: Y1 Q2 (`paged` default), `components/iap-management/item-picker/BulkItemPicker.range.test.tsx`.
+
 **P32 — A CHUNK THAT CREATES AN OPT-IN FLAG MUST NAME, BY CHUNK, WHO TURNS IT
 ON. AN OPT-IN NOBODY OPTS INTO IS DEAD CODE THAT LOOKS ALIVE.**
 

@@ -16,7 +16,6 @@ import {
   RefreshCw,
   Send,
   Loader2,
-  ChevronRight,
   Eye,
   Globe,
   MinusCircle,
@@ -29,6 +28,7 @@ import type {
 import type { IapDbRow } from "@/lib/iap-management/queries/iaps";
 import { useAppIcon, getAvatarColor, getInitials } from "@/lib/use-app-icon";
 import { computePageMeta } from "@/lib/iap-management/pagination/page-slice";
+import { PageNav } from "@/components/ui/iap/PageNav";
 import { SubmitBatchModal } from "@/components/iap-management/SubmitBatchModal";
 import {
   AvailabilitiesBulkModal,
@@ -945,59 +945,41 @@ export function IapListClient({
               })}
             </tbody>
           </table>
-          {/* Pagination footer — IAP.o.7b. Hidden when ≤1 page so small
-              lists stay visually clean (Manager apps with <100 IAPs). */}
+          {/* Pagination footer — IAP.o.7b, and since Y2 the SHARED `PageNav`
+              (design §2.8). ⚠ The `totalPages > 1` guard stays HERE, not
+              inside the component: hiding-when-single-page is this surface's
+              behaviour and predates the extraction, while the picker needs the
+              same bar rendered always because its Rows selector lives in it.
+              Moving the guard in would have changed one of the two.
+              ⚠ NO page-size selector here, on purpose — Q4. The picker offers
+              20/30/50; this table stays at PAGE_SIZE = 100. The two surfaces
+              are asymmetric BY DECISION, so do not "make it consistent"
+              without re-opening Q4. */}
           {pageMeta.totalPages > 1 && (
-            <div className="flex items-center justify-between px-4 py-2.5 border-t border-slate-200 bg-slate-50">
-              <p className="text-xs text-slate-500">
-                Showing{" "}
-                <span className="font-medium text-slate-700">
-                  {pageMeta.displayStart}–{pageMeta.displayEnd}
-                </span>{" "}
-                of{" "}
-                <span className="font-medium text-slate-700">{filtered.length}</span>
-                {filtered.length !== iaps.length && (
-                  <>
-                    {" "}
-                    <span className="text-slate-400">
-                      (filtered from {iaps.length})
-                    </span>
-                  </>
-                )}
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={pageMeta.page <= 1}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
-                  aria-label="Previous page"
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                  Prev
-                </button>
-                <span className="text-xs text-slate-500 tabular-nums">
-                  Page{" "}
-                  <span className="font-medium text-slate-700">{pageMeta.page}</span>{" "}
+            <PageNav
+              meta={pageMeta}
+              onPageChange={setPage}
+              summary={
+                <>
+                  Showing{" "}
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    {pageMeta.displayStart}–{pageMeta.displayEnd}
+                  </span>{" "}
                   of{" "}
-                  <span className="font-medium text-slate-700">
-                    {pageMeta.totalPages}
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    {filtered.length}
                   </span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPage((p) => Math.min(pageMeta.totalPages, p + 1))
-                  }
-                  disabled={pageMeta.page >= pageMeta.totalPages}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition disabled:opacity-40 disabled:cursor-not-allowed"
-                  aria-label="Next page"
-                >
-                  Next
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
+                  {filtered.length !== iaps.length && (
+                    <>
+                      {" "}
+                      <span className="text-slate-400">
+                        (filtered from {iaps.length})
+                      </span>
+                    </>
+                  )}
+                </>
+              }
+            />
           )}
         </div>
       )}

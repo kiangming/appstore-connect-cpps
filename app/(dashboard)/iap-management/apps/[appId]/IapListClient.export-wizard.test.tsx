@@ -16,6 +16,25 @@
  * open the wizard, work it — search, both filters, select all, advance to
  * countries, come back — and `fetch` must never have been called.
  *
+ * ─── [Y2] SEVEN LINES IN THIS FILE CHANGED, AND ONLY THE SELECTOR ─────────
+ *
+ * Q1 turned (A) "Select all N matching" from a CHECKBOX into a labelled
+ * BUTTON, because (A) ("all matching, every page") and the new (B) ("this
+ * page") must not be the same KIND of control — their scopes differ by up to
+ * 10x and at ~3 Apple requests an item a mis-click is a real bill.
+ *
+ * So `getByRole("checkbox", { name: "Select all" })` stopped resolving on this
+ * surface, in 7 places. Each was re-pointed to
+ * `getByTestId("select-all-matching")` — the SAME control, the same click, the
+ * same `onToggleAll`. **No assertion in this file was changed, weakened or
+ * deleted**, and every one of its premises (the zero-fetch absence, Apple's
+ * 175 markets, the facet-hidden count, the scale line, unlinked items) is
+ * asserted exactly as before.
+ *
+ * ⚠ (A)'s lost `indeterminate` state is asserted in
+ * `IapListClient.export-range.test.tsx` instead, against M2's two-tier
+ * counter — that was the declared cost of Q1 and that is where it is paid.
+ *
  * ⚠ The spy is asserted on `fetch` ITSELF, not on a count of Apple URLs. A
  * test that allowlisted "/api/iap-management/territories" would pass a version
  * that fetched the catalogue on open, which is precisely the regression shape
@@ -195,7 +214,7 @@ describe("opening and working the export wizard costs ZERO Apple requests", () =
     renderList();
     openWizard();
 
-    fireEvent.click(wizard().getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(wizard().getByTestId("select-all-matching"));
     fireEvent.click(wizard().getByTestId("wizard-continue"));
 
     // ⚠ COMMENT CORRECTED BY G3, not just reworded: step 2 used to be the
@@ -225,7 +244,7 @@ describe("opening and working the export wizard costs ZERO Apple requests", () =
     renderList();
     openWizard();
 
-    fireEvent.click(wizard().getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(wizard().getByTestId("select-all-matching"));
     fireEvent.click(wizard().getByTestId("wizard-continue"));
     await waitFor(() =>
       expect(screen.getByText("Export options")).toBeInTheDocument(),
@@ -248,7 +267,7 @@ describe("opening and working the export wizard costs ZERO Apple requests", () =
     renderList();
     openWizard();
 
-    fireEvent.click(wizard().getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(wizard().getByTestId("select-all-matching"));
     fireEvent.click(wizard().getByTestId("wizard-continue"));
     await waitFor(() =>
       expect(screen.getByText("Export options")).toBeInTheDocument(),
@@ -318,7 +337,7 @@ describe("a selection hidden by a facet is still counted", () => {
     renderList();
     openWizard();
 
-    fireEvent.click(wizard().getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(wizard().getByTestId("select-all-matching"));
     expect(wizard().getByTestId("export-scale-line")).toHaveTextContent(
       "Export 3 items",
     );
@@ -363,7 +382,7 @@ describe("the scale line", () => {
     renderList(Array.from({ length: 100 }, (_, i) => iap(`n${i}`)));
     openWizard();
 
-    fireEvent.click(wizard().getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(wizard().getByTestId("select-all-matching"));
 
     expect(wizard().getByTestId("export-scale-caution")).toHaveTextContent(
       "About 300 Apple requests",
@@ -377,7 +396,7 @@ describe("the scale line", () => {
     renderList();
     openWizard();
 
-    fireEvent.click(wizard().getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(wizard().getByTestId("select-all-matching"));
 
     expect(wizard().queryByTestId("export-scale-caution")).toBeNull();
   });
@@ -439,7 +458,7 @@ describe("items with no internal UUID are exportable from this page", () => {
     renderList(IAPS, { "apple-a": "i-a" });
     openWizard();
 
-    fireEvent.click(wizard().getByRole("checkbox", { name: "Select all" }));
+    fireEvent.click(wizard().getByTestId("select-all-matching"));
     fireEvent.click(wizard().getByTestId("wizard-continue"));
     await waitFor(() =>
       expect(screen.getByText("Export options")).toBeInTheDocument(),

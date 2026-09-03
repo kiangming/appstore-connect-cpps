@@ -50,6 +50,9 @@ const ROWS: Row[] = [
 interface Opts {
   paged?: boolean;
   windowSize?: number;
+  /** [Y2] When `paged`, THIS is the render bound — not `windowSize`. */
+  pageSize?: number;
+  page?: number;
   query?: string;
   selected?: Set<string>;
   withHandler?: boolean;
@@ -57,33 +60,44 @@ interface Opts {
 }
 
 function setup(opts: Opts = {}) {
-  const {
-    paged = true,
-    windowSize = 60,
-    query = "",
-    selected = new Set<string>(),
-    withHandler = true,
-    rows: rowsIn = ROWS,
-  } = opts;
   const onSelectRange = vi.fn();
   const onToggleOne = vi.fn();
-  const view = render(
-    <BulkItemPicker
-      rows={rowsIn}
-      selectableRows={rowsIn}
-      excludedRows={[]}
-      selected={selected}
-      query={query}
-      onQueryChange={vi.fn()}
-      windowSize={windowSize}
-      onShowMore={vi.fn()}
-      onToggleOne={onToggleOne}
-      onToggleAll={vi.fn()}
-      paged={paged}
-      onSelectRange={withHandler ? onSelectRange : undefined}
-    />,
-  );
-  return { onSelectRange, onToggleOne, view };
+
+  const node = (o: Opts) => {
+    const {
+      paged = true,
+      windowSize = 60,
+      pageSize = 60,
+      page = 1,
+      query = "",
+      selected = new Set<string>(),
+      withHandler = true,
+      rows: rowsIn = ROWS,
+    } = o;
+    return (
+      <BulkItemPicker
+        rows={rowsIn}
+        selectableRows={rowsIn}
+        excludedRows={[]}
+        selected={selected}
+        query={query}
+        onQueryChange={vi.fn()}
+        windowSize={windowSize}
+        onShowMore={vi.fn()}
+        onToggleOne={onToggleOne}
+        onToggleAll={vi.fn()}
+        paged={paged}
+        onSelectRange={withHandler ? onSelectRange : undefined}
+        page={page}
+        pageSize={pageSize}
+      />
+    );
+  };
+
+  const view = render(node(opts));
+  /** Re-render with a changed slice, as the caller would on a page flip. */
+  const repage = (next: Opts) => view.rerender(node({ ...opts, ...next }));
+  return { onSelectRange, onToggleOne, view, repage };
 }
 
 const cb = (productId: string) =>
@@ -204,7 +218,9 @@ describe("⚠ a range can never contain a row the Manager has not seen", () => {
    * red — rows "c".."e" are not rendered, and the range would sweep them.
    */
   it("a range between two rendered rows contains exactly the rows between them", () => {
-    const { onSelectRange, onToggleOne } = setup({ windowSize: 2 });
+    // ⚠ [Y2] `pageSize`, not `windowSize`: with `paged` on, the PAGE is the
+    //   render bound. Re-expressed from the Y1 form for that reason.
+    const { onSelectRange, onToggleOne } = setup({ pageSize: 2 });
     // Only a + b are rendered.
     expect(screen.queryByRole("checkbox", { name: "Select com.x.c" })).toBeNull();
     plainClick("com.x.a");
@@ -214,57 +230,50 @@ describe("⚠ a range can never contain a row the Manager has not seen", () => {
   });
 
   /**
-   * ⚠ THE TEST THAT GIVES THE PREVIOUS ONE ITS TEETH, and it took a mutation
-   * that stayed GREEN to find it.
+   * ⚠ THE CROSS-PAGE TEST — the money test of the whole arc, and the one Y1
+   * could only approximate.
    *
-   * In Y1 the rendered set is a PREFIX (`slice(0, windowSize)`), so two rows
-   * that are both clickable have the same index in `windowed` and in
-   * `matchingSelectable` — computing the range over either one gives the same
-   * answer, and the mutation "use the full matching list" is invisible. It is
-   * only when the anchor is OUTSIDE the rendered set that the two disagree,
-   * and Y1 can reach that state for real: the window SHRINKS back to
-   * `ROW_WINDOW_STEP` whenever the query changes
-   * (ExportItemWizard.tsx:459-462), so a row ticked after "Show more" can stop
-   * being rendered while still being the anchor.
+   * In Y1 the rendered set was a PREFIX (`slice(0, windowSize)`), so two rows
+   * that were both clickable had the same index in `windowed` and in
+   * `matchingSelectable`; the mutation "compute the range over the full
+   * matching list" was therefore invisible, and the Y1 version of this test
+   * had to reach the divergence through a SHRINKING window. With `paged` on
+   * the rendered set is a MIDDLE slice, so the two arrays genuinely disagree
+   * and the assertion is direct.
    *
-   * ⚠ MUTATION: `resolveRangeIds(matchingSelectable, …)` instead of
-   * `resolveRangeIds(windowed, …)`. With the mutation the range becomes
-   * b..d — sweeping "c" and "d", which are NOT ON SCREEN, into an export that
-   * bills ~3 Apple requests each. This test goes red; the one above does not.
+   * The gesture: tick the last row of page 1, flip to page 2, Shift-click.
+   * The rows in between are rows the Manager has NEVER SEEN.
+   *
+   * ⚠ MUTATION (Y2.7, "dải shift-click vươn qua ranh giới trang"):
+   * `resolveRangeIds(matchingSelectable, …)` instead of
+   * `resolveRangeIds(windowed, …)`. This goes red.
    */
-  it("⚠ an anchor OUTSIDE the rendered rows sweeps nothing — not one unseen row", () => {
-    const { onSelectRange, onToggleOne, view } = setup({ windowSize: 60 });
-    plainClick("com.x.d"); // anchor at index 3, rendered right now
+  it("⚠ a Shift-click CANNOT reach across a page boundary — not one unseen row", () => {
+    const { onSelectRange, onToggleOne, repage } = setup({ pageSize: 2 });
+    plainClick("com.x.b"); // last row of page 1, the anchor
     onToggleOne.mockClear();
-    // The window shrinks — exactly what a query change does to it.
-    view.rerender(
-      <BulkItemPicker
-        rows={ROWS}
-        selectableRows={ROWS}
-        excludedRows={[]}
-        selected={new Set(["d"])}
-        query=""
-        onQueryChange={vi.fn()}
-        windowSize={2}
-        onShowMore={vi.fn()}
-        onToggleOne={onToggleOne}
-        onToggleAll={vi.fn()}
-        paged
-        onSelectRange={onSelectRange}
-      />,
-    );
-    expect(screen.queryByRole("checkbox", { name: "Select com.x.d" })).toBeNull();
-    shiftClick("com.x.b");
+    repage({ page: 2, selected: new Set(["b"]) });
+    // Page 2 shows c + d. The anchor is no longer rendered.
+    expect(screen.queryByRole("checkbox", { name: "Select com.x.b" })).toBeNull();
+    shiftClick("com.x.d");
     expect(onSelectRange).not.toHaveBeenCalled();
-    expect(onToggleOne).toHaveBeenCalledWith("b");
+    expect(onToggleOne).toHaveBeenCalledWith("d");
     expect(screen.getByTestId("range-hint-miss")).toBeInTheDocument();
   });
 
   /**
-   * ⚠ MUTATION (Y1.3, the surviving-anchor one): make the anchor an INDEX, or
-   * resolve it against the unfiltered list. This goes red: "a" is a real row
-   * of the app, it is simply not on screen once the search narrows.
+   * ⚠ AND THE RANGE STILL WORKS WITHIN A MIDDLE PAGE — the vacuity guard for
+   * the test above. Without this, "no range across pages" would also pass on
+   * a build where ranges never worked at all.
    */
+  it("⚠ vacuity guard — a range WITHIN a middle page still resolves", () => {
+    const { onSelectRange } = setup({ pageSize: 3, page: 2 });
+    // Page 2 of [a..e] at size 3 is d + e.
+    plainClick("com.x.d");
+    shiftClick("com.x.e");
+    expect(onSelectRange).toHaveBeenCalledWith(["d", "e"]);
+  });
+
   it("an anchor the SEARCH has hidden does not resolve — plain tick + the miss hint", () => {
     const { onSelectRange, onToggleOne, view } = setup();
     plainClick("com.x.a"); // anchor on a row that is about to be hidden

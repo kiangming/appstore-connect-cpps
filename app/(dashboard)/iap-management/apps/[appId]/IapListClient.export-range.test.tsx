@@ -229,26 +229,44 @@ describe("⚠ THERE IS NO 'all' SENTINEL, and there must never be one", () => {
     stubFetch();
     renderList();
     openWizard();
-    fireEvent.click(wizard().getByRole("checkbox", { name: "Select all" }));
+    // ⚠ [Y2/Q1] (A) is a BUTTON now, not a checkbox. Re-targeted, same act.
+    fireEvent.click(wizard().getByTestId("select-all-matching"));
     fireEvent.click(cb("com.x.d"));
     const ids = await exportNow();
     expect(ids).toHaveLength(IAPS.length - 1);
     expect(ids).not.toContain("apple-d");
   });
 
-  it("and (A) reports itself as PARTIAL once one row is out", () => {
+  /**
+   * ⚠ RE-EXPRESSED IN Y2, AND THE REASON IS THE POINT OF M2.
+   *
+   * The Y1 form asserted `indeterminate` on (A)'s checkbox. Q1 turned (A) into
+   * a labelled button, and a button has no indeterminate state — that cost was
+   * DECLARED when Q1 was taken, and M2's two-tier counter is what pays it
+   * back. So the same fact ("the batch is now partial") is asserted where it
+   * actually lives: on the counter and on (A)'s own label.
+   *
+   * ⚠ This is a stronger assertion than the original, not a weaker one: it
+   * pins that the counter really does carry the signal the checkbox used to,
+   * which is the whole justification for allowing Q1.
+   */
+  it("⚠ once one row is out, (A)'s LABEL and the M2 counter both say partial", () => {
     stubFetch();
     renderList();
     openWizard();
-    const all = wizard().getByRole("checkbox", {
-      name: "Select all",
-    }) as HTMLInputElement;
-    fireEvent.click(all);
-    expect(all.checked).toBe(true);
-    expect(all.indeterminate).toBe(false);
+    const all = () => wizard().getByTestId("select-all-matching");
+    const counts = () => wizard().getByTestId("selection-counts").textContent;
+
+    fireEvent.click(all());
+    expect(all().textContent).toContain(`Clear all ${IAPS.length}`);
+    expect(counts()).toContain(`${IAPS.length} selected`);
+
     fireEvent.click(cb("com.x.d"));
-    expect(all.checked).toBe(false);
-    expect(all.indeterminate).toBe(true);
+    // The label flips back to the "select" direction — it is no longer "all".
+    expect(all().textContent).toContain(
+      `Select all ${IAPS.length} matching`,
+    );
+    expect(counts()).toContain(`${IAPS.length - 1} selected`);
   });
 });
 
