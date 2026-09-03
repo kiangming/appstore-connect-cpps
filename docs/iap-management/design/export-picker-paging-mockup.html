@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Export picker — pagination + shift-click range (design mockup)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Palette read from the SHIPPED Apple components, not assumed.
+       #0c447c  primary button      ExportItemWizard.tsx:553
+       #0071E3  link / accent-color BulkItemPicker.tsx:248
+       amber    divergence notice   BulkItemPicker.tsx:204
+       emerald  BADGE ONLY          ExportItemWizard.tsx:585
+       ⚠ Google's picker leads with emerald. Apple's does not. */
+    body { font-family:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif; background:#f1f5f9; }
+    .state-shell { background:#f8fafc; border:1px solid #e2e8f0; border-radius:16px; padding:24px; }
+    .state-title { font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:#64748b; margin-bottom:4px; }
+    .state-sub { font-size:12px; color:#64748b; margin-bottom:16px; }
+    .surface { background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
+    .mono { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .btn-primary { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; font-size:13px; font-weight:500; background:#0c447c; color:#fff; border-radius:8px; }
+    .btn-primary-off { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; font-size:13px; font-weight:500; background:#0c447c; color:#fff; border-radius:8px; opacity:.4; }
+    .btn-cancel { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; font-size:13px; font-weight:500; background:#fff; color:#475569; border:1px solid #e2e8f0; border-radius:8px; }
+    /* (A) — the RE-SHAPED control: a labelled BUTTON, never a checkbox. §2.1 */
+    .btn-selectall { display:inline-flex; align-items:center; gap:6px; padding:5px 11px; font-size:11.5px; font-weight:600; background:#fff; color:#0c447c; border:1px solid #cbd5e1; border-radius:7px; }
+    .btn-selectall-on { display:inline-flex; align-items:center; gap:6px; padding:5px 11px; font-size:11.5px; font-weight:600; background:#eff6ff; color:#0c447c; border:1px solid #bfdbfe; border-radius:7px; }
+    .pagebar { display:flex; align-items:center; justify-content:space-between; padding:9px 14px; background:#f8fafc; border-top:1px solid #e2e8f0; }
+    .pgbtn { display:inline-flex; align-items:center; gap:4px; padding:4px 10px; font-size:11px; font-weight:500; border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:6px; }
+    .pgbtn-off { display:inline-flex; align-items:center; gap:4px; padding:4px 10px; font-size:11px; font-weight:500; border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:6px; opacity:.4; }
+    .selbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 14px; border-bottom:1px solid #e2e8f0; background:#fff; }
+    .row { display:grid; grid-template-columns:26px 190px 1fr 168px; align-items:center; gap:10px; padding:7px 14px; border-bottom:1px solid #f1f5f9; font-size:13px; }
+    .row-sel { background:#f0f7ff; }
+    .row-range { background:#e0edfb; box-shadow:inset 3px 0 0 #0071E3; }
+    .row-anchor { background:#e0edfb; box-shadow:inset 3px 0 0 #0c447c; }
+    .counts { font-size:11px; color:#64748b; text-align:right; line-height:1.5; }
+    .counts b { color:#0f172a; font-weight:600; }
+    .amber { background:#fffbeb; border:1px solid #fde68a; color:#92400e; border-radius:8px; padding:8px 11px; font-size:11.5px; }
+    .info { background:#eff6ff; border:1px solid #bfdbfe; color:#1e40af; border-radius:8px; padding:10px 12px; font-size:12px; }
+    .hint { font-size:11px; color:#64748b; padding:8px 14px; background:#f8fafc; border-top:1px dashed #cbd5e1; }
+    .badge-av { font-size:10px; font-weight:500; color:#047857; }
+    .badge-rm { font-size:10px; font-weight:600; color:#dc2626; }
+    .badge-un { font-size:10px; color:#94a3b8; font-style:italic; }
+    .st { font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:10px; color:#94a3b8; }
+    .facet { font-size:12px; padding:5px 9px; border:1px solid #e2e8f0; background:#fff; color:#334155; border-radius:7px; }
+    .facet-on { font-size:12px; padding:5px 9px; border:1px solid #bfdbfe; background:#eff6ff; color:#1e40af; border-radius:7px; font-weight:500; }
+    .seg { display:inline-flex; border:1px solid #e2e8f0; border-radius:7px; overflow:hidden; font-size:11px; }
+    .seg span { padding:4px 10px; background:#fff; color:#475569; }
+    .seg span.on { background:#0c447c; color:#fff; font-weight:600; }
+    input[type=checkbox] { width:14px; height:14px; accent-color:#0071E3; }
+    .cb-ind { position:relative; width:14px; height:14px; border:1px solid #94a3b8; border-radius:3px; background:#0071E3; display:inline-block; vertical-align:middle; }
+    .cb-ind::after { content:""; position:absolute; left:2px; right:2px; top:6px; height:2px; background:#fff; border-radius:1px; }
+    .note { font-size:11.5px; color:#64748b; }
+    .flag { display:inline-block; font-size:10px; font-weight:700; letter-spacing:.05em; color:#92400e; background:#fef3c7; border:1px solid #fde68a; border-radius:4px; padding:1px 6px; vertical-align:middle; }
+  </style>
+</head>
+<body class="p-8">
+<div class="max-w-5xl mx-auto space-y-8">
+
+  <header>
+    <h1 class="text-2xl font-semibold text-slate-900">Export picker — pagination + shift-click range</h1>
+    <p class="text-sm text-slate-500 mt-1">
+      Mockup for <span class="mono">docs/iap-management/design-export-picker-paging-range.md</span>.
+      <strong>Apple IAP Management only.</strong> Step 2 (countries) is the shared
+      <span class="mono">ExportOptionsDialog</span> — P8-locked, not redesigned, not shown.
+    </p>
+    <div class="info mt-3">
+      <strong>Cost model (P1.6).</strong> Every exported item costs <strong>~3 Apple requests</strong>
+      (detail + price-schedule stage 1 + stage 2). Selecting fewer items <strong>saves real requests</strong> —
+      the opposite of Google, whose export is one list call. Every control on this screen costs <strong>0</strong> requests;
+      only the final Export reads Apple.
+    </div>
+    <div class="amber mt-3">
+      <strong>⚠ THE ONE THING THIS MOCKUP IS DESIGNED AROUND.</strong>
+      Three bulk-select scopes coexist, and two of them used to look identical.
+      <span class="mono">(A)</span> = <em>all matching, every page</em> — now a <strong>labelled button in the toolbar</strong>.
+      <span class="mono">(B)</span> = <em>this page only</em> — the <strong>only checkbox in the tickbox column</strong>.
+      <span class="mono">(C)</span> = shift-click range, <em>within one page</em>, no control of its own.
+      Scope is read from <strong>position</strong>, not from memory.
+    </div>
+  </header>
+
+  <!-- ══ STATE 1 — PAGE 1 ══════════════════════════════════════════════ -->
+  <section class="state-shell">
+    <div class="state-title">State 1 — page 1 of 5 · nothing selected yet</div>
+    <div class="state-sub">220-item app, page size 50. Today this screen renders 60 rows and a “Show more”.</div>
+
+    <div class="surface">
+      <div class="px-5 pt-4 pb-3 border-b border-slate-100">
+        <div class="flex items-start justify-between">
+          <div>
+            <h3 class="text-base font-semibold text-slate-900">Export list — choose items</h3>
+            <p class="text-xs text-slate-500 mt-0.5">Step 1 of 2. Nothing is read from Apple until you export.</p>
+          </div>
+          <button class="text-slate-400 text-sm">✕</button>
+        </div>
+      </div>
+
+      <div class="px-5 pt-3 pb-2 flex items-center gap-2 flex-wrap">
+        <select class="facet"><option>All types</option></select>
+        <select class="facet mono"><option>All Apple statuses</option></select>
+        <select class="facet"><option>All availability</option></select>
+        <span class="note">Filters are local — they cost no Apple requests.</span>
+      </div>
+      <div class="px-5 pb-3">
+        <input type="search" placeholder="Search product ID or name…" class="w-full px-3 py-2 text-sm rounded-lg border border-slate-200" />
+      </div>
+
+      <!-- toolbar: (A) is a BUTTON. (B) lives below, in the column header. -->
+      <div class="selbar">
+        <div class="flex items-center gap-2">
+          <button class="btn-selectall">Select all 220 matching</button>
+          <span class="seg"><span class="on">All</span><span>Selected (0)</span></span>
+        </div>
+        <div class="counts"><b>0</b> selected · <b>0</b> on this page<br /><span class="text-slate-400">220 matching · 224 total</span></div>
+      </div>
+
+      <!-- (B) — the ONLY checkbox in the tickbox column -->
+      <div class="row" style="background:#f8fafc; border-bottom:1px solid #e2e8f0;">
+        <div><input type="checkbox" /></div>
+        <div class="text-[11px] font-semibold text-slate-600">Select all 50 on this page</div>
+        <div></div>
+        <div class="text-[10px] text-slate-400 text-right">Availability · Apple status</div>
+      </div>
+
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.gem.60</div><div class="text-slate-800">60 Gems</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.gem.300</div><div class="text-slate-800">300 Gems</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.gem.980</div><div class="text-slate-800">980 Gems</div><div class="text-right"><span class="badge-un">Unknown</span> <span class="st">READY_TO_SUBMIT</span></div></div>
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.pass.week</div><div class="text-slate-800">Weekly Pass</div><div class="text-right"><span class="badge-rm">Removed</span> <span class="st">DEVELOPER_REMOVED_FROM_SALE</span></div></div>
+      <div class="text-center text-[11px] text-slate-400 py-1.5">⋮ 46 more rows on this page</div>
+
+      <div class="pagebar">
+        <div class="note">Showing <b class="text-slate-700">1–50</b> of <b class="text-slate-700">220</b></div>
+        <div class="flex items-center gap-2">
+          <span class="note">Rows</span>
+          <span class="seg"><span>20</span><span>30</span><span class="on">50</span></span>
+          <span class="pgbtn-off">‹ Prev</span>
+          <span class="note tabular-nums">Page <b class="text-slate-700">1</b> of <b class="text-slate-700">5</b></span>
+          <span class="pgbtn">Next ›</span>
+        </div>
+      </div>
+
+      <div class="px-5 py-3 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between">
+        <p class="text-[11px] text-slate-600">Export <b>0</b> items · about <b>0</b> Apple requests</p>
+        <div class="flex gap-2"><button class="btn-cancel">Cancel</button><button class="btn-primary-off">Select at least 1 item</button></div>
+      </div>
+    </div>
+    <p class="note mt-3">⚠ <span class="flag">Q1</span> (A) is a button here. Keeping it as a checkbox is the Manager’s call — but then two identical checkboxes differ in scope by 4.4×, which is the M7 mis-click that costs ~3 requests per wrongly-added item.</p>
+  </section>
+
+  <!-- ══ STATE 2 — MIDDLE PAGE, page fully ticked by (B) ═══════════════ -->
+  <section class="state-shell">
+    <div class="state-title">State 2 — a middle page · (B) used, page fully ticked</div>
+    <div class="state-sub">(B) clicked once on page 3. Note the label has flipped to <span class="mono">Clear</span> — the click is never ambiguous.</div>
+    <div class="surface">
+      <div class="selbar">
+        <div class="flex items-center gap-2">
+          <button class="btn-selectall">Select all 220 matching</button>
+          <span class="seg"><span class="on">All</span><span>Selected (50)</span></span>
+        </div>
+        <div class="counts"><b>50</b> selected · <b>50</b> on this page<br /><span class="text-slate-400">220 matching · 224 total</span></div>
+      </div>
+      <div class="row" style="background:#f0f7ff; border-bottom:1px solid #e2e8f0;">
+        <div><input type="checkbox" checked /></div>
+        <div class="text-[11px] font-semibold text-slate-700">Clear 50 on this page</div>
+        <div></div>
+        <div class="text-[10px] text-slate-400 text-right">Availability · Apple status</div>
+      </div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.chest.01</div><div class="text-slate-800">Bronze Chest</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.chest.02</div><div class="text-slate-800">Silver Chest</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.chest.03</div><div class="text-slate-800">Gold Chest</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="text-center text-[11px] text-slate-400 py-1.5">⋮ 47 more rows, all ticked</div>
+      <div class="pagebar">
+        <div class="note">Showing <b class="text-slate-700">101–150</b> of <b class="text-slate-700">220</b></div>
+        <div class="flex items-center gap-2">
+          <span class="note">Rows</span><span class="seg"><span>20</span><span>30</span><span class="on">50</span></span>
+          <span class="pgbtn">‹ Prev</span><span class="note tabular-nums">Page <b class="text-slate-700">3</b> of <b class="text-slate-700">5</b></span><span class="pgbtn">Next ›</span>
+        </div>
+      </div>
+      <div class="px-5 py-3 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between">
+        <p class="text-[11px] text-slate-600">Export <b>50</b> items · about <b>150</b> Apple requests</p>
+        <div class="flex gap-2"><button class="btn-cancel">Cancel</button><button class="btn-primary">Continue to countries →</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ STATE 3 — LAST PAGE, short ════════════════════════════════════ -->
+  <section class="state-shell">
+    <div class="state-title">State 3 — the last page · a short page</div>
+    <div class="state-sub">20 rows, not 50. (B)’s label says <strong>20</strong>, never the page size — the number must be the rows that exist.</div>
+    <div class="surface">
+      <div class="selbar">
+        <div class="flex items-center gap-2"><button class="btn-selectall">Select all 220 matching</button><span class="seg"><span class="on">All</span><span>Selected (50)</span></span></div>
+        <div class="counts"><b>50</b> selected · <b>0</b> on this page<br /><span class="text-slate-400">220 matching · 224 total</span></div>
+      </div>
+      <div class="px-5 pt-2.5"><div class="amber">+ <b>50</b> selected items are on other pages — still selected, and still part of the export. Use <span class="mono">Selected (50)</span> to review them.</div></div>
+      <div class="row" style="background:#f8fafc; border-bottom:1px solid #e2e8f0; margin-top:8px;">
+        <div><input type="checkbox" /></div><div class="text-[11px] font-semibold text-slate-600">Select all 20 on this page</div><div></div><div class="text-[10px] text-slate-400 text-right">Availability · Apple status</div>
+      </div>
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.starter.pack</div><div class="text-slate-800">Starter Pack</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.vip.month</div><div class="text-slate-800">VIP Monthly</div><div class="text-right"><span class="badge-un">Unknown</span> <span class="st">MISSING_METADATA</span></div></div>
+      <div class="text-center text-[11px] text-slate-400 py-1.5">⋮ 18 more rows on this page</div>
+      <div class="pagebar">
+        <div class="note">Showing <b class="text-slate-700">201–220</b> of <b class="text-slate-700">220</b></div>
+        <div class="flex items-center gap-2"><span class="note">Rows</span><span class="seg"><span>20</span><span>30</span><span class="on">50</span></span><span class="pgbtn">‹ Prev</span><span class="note tabular-nums">Page <b class="text-slate-700">5</b> of <b class="text-slate-700">5</b></span><span class="pgbtn-off">Next ›</span></div>
+      </div>
+      <div class="px-5 py-3 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between">
+        <p class="text-[11px] text-slate-600">Export <b>50</b> items · about <b>150</b> Apple requests</p>
+        <div class="flex gap-2"><button class="btn-cancel">Cancel</button><button class="btn-primary">Continue to countries →</button></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ STATE 4 — PARTIAL PAGE (indeterminate) ════════════════════════ -->
+  <section class="state-shell">
+    <div class="state-title">State 4 — page partially ticked · (B) indeterminate</div>
+    <div class="state-sub">7 of 50 ticked on this page. §2.2: clicking <strong>fills the rest</strong> — it never clears. The destructive reading of an ambiguous click is how picks get lost.</div>
+    <div class="surface">
+      <div class="selbar">
+        <div class="flex items-center gap-2"><button class="btn-selectall">Select all 220 matching</button><span class="seg"><span class="on">All</span><span>Selected (7)</span></span></div>
+        <div class="counts"><b>7</b> selected · <b>7</b> on this page<br /><span class="text-slate-400">220 matching · 224 total</span></div>
+      </div>
+      <div class="row" style="background:#f8fafc; border-bottom:1px solid #e2e8f0;">
+        <div><span class="cb-ind"></span></div>
+        <div class="text-[11px] font-semibold text-slate-600">Select all 50 on this page <span class="text-slate-400 font-normal">— 7 already selected</span></div>
+        <div></div><div class="text-[10px] text-slate-400 text-right">Availability · Apple status</div>
+      </div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.gem.60</div><div class="text-slate-800">60 Gems</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.gem.300</div><div class="text-slate-800">300 Gems</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.gem.980</div><div class="text-slate-800">980 Gems</div><div class="text-right"><span class="badge-un">Unknown</span> <span class="st">READY_TO_SUBMIT</span></div></div>
+      <div class="text-center text-[11px] text-slate-400 py-1.5">⋮ 47 more rows · 5 of them ticked</div>
+      <div class="pagebar">
+        <div class="note">Showing <b class="text-slate-700">1–50</b> of <b class="text-slate-700">220</b></div>
+        <div class="flex items-center gap-2"><span class="note">Rows</span><span class="seg"><span>20</span><span>30</span><span class="on">50</span></span><span class="pgbtn-off">‹ Prev</span><span class="note tabular-nums">Page <b class="text-slate-700">1</b> of <b class="text-slate-700">5</b></span><span class="pgbtn">Next ›</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ STATE 5 — THE COUNTERS DIVERGE ════════════════════════════════ -->
+  <section class="state-shell">
+    <div class="state-title">State 5 — ⚠ picks are on ANOTHER page · the two counters diverge</div>
+    <div class="state-sub">
+      <strong>This is the state the whole design exists for.</strong> 12 selected, <strong>0</strong> of them on screen.
+      Today’s window can never produce this — it only grows, so a row once seen never leaves. Pagination makes it reachable, so the counter must be unmissable.
+    </div>
+    <div class="surface">
+      <div class="selbar">
+        <div class="flex items-center gap-2"><button class="btn-selectall">Select all 220 matching</button><span class="seg"><span class="on">All</span><span>Selected (12)</span></span></div>
+        <div class="counts"><b>12</b> selected · <b>0</b> on this page<br /><span class="text-slate-400">220 matching · 224 total</span></div>
+      </div>
+      <div class="px-5 pt-2.5"><div class="amber">
+        + <b>12</b> selected items are on other pages — still selected, and still part of the export.
+        Click <span class="mono font-semibold">Selected (12)</span> to see exactly which.
+      </div></div>
+      <div class="row" style="background:#f8fafc; border-bottom:1px solid #e2e8f0; margin-top:8px;">
+        <div><input type="checkbox" /></div><div class="text-[11px] font-semibold text-slate-600">Select all 50 on this page</div><div></div><div class="text-[10px] text-slate-400 text-right">Availability · Apple status</div>
+      </div>
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.skin.01</div><div class="text-slate-800">Ranger Skin</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.skin.02</div><div class="text-slate-800">Mage Skin</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="text-center text-[11px] text-slate-400 py-1.5">⋮ 48 more rows, none ticked</div>
+      <div class="pagebar">
+        <div class="note">Showing <b class="text-slate-700">151–200</b> of <b class="text-slate-700">220</b></div>
+        <div class="flex items-center gap-2"><span class="note">Rows</span><span class="seg"><span>20</span><span>30</span><span class="on">50</span></span><span class="pgbtn">‹ Prev</span><span class="note tabular-nums">Page <b class="text-slate-700">4</b> of <b class="text-slate-700">5</b></span><span class="pgbtn">Next ›</span></div>
+      </div>
+      <div class="px-5 py-3 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between">
+        <p class="text-[11px] text-slate-600">Export <b>12</b> items · about <b>36</b> Apple requests</p>
+        <div class="flex gap-2"><button class="btn-cancel">Cancel</button><button class="btn-primary">Continue to countries →</button></div>
+      </div>
+    </div>
+    <p class="note mt-3">⚠ Acceptance #3 is a <strong>vacuity guard</strong>: the counter must render “<b>0</b> on this page”, not omit the clause. An absent number reads as “nothing is selected”.</p>
+  </section>
+
+  <!-- ══ STATE 6 — SEARCH ON ═══════════════════════════════════════════ -->
+  <section class="state-shell">
+    <div class="state-title">State 6 — search active · M3 + M4 + M5</div>
+    <div class="state-sub">
+      M3: search filters <strong>all 224 items first</strong>, then pages the result — never “within the current page”.
+      M4: the 12 picks made before the search are untouched. M5: (B) ticks the <strong>filtered</strong> page.
+      <span class="text-slate-500">(All three are already the shipped behaviour — P1.4. Paging must not break them.)</span>
+    </div>
+    <div class="surface">
+      <div class="px-5 pt-3 pb-3">
+        <input type="search" value="chest" class="w-full px-3 py-2 text-sm rounded-lg border border-slate-300" />
+      </div>
+      <div class="selbar">
+        <div class="flex items-center gap-2"><button class="btn-selectall">Select all 34 matching</button><span class="seg"><span class="on">All</span><span>Selected (12)</span></span></div>
+        <div class="counts"><b>3</b> selected of <b>34</b> matching · <b>3</b> on this page<br /><span class="text-slate-400">224 total</span></div>
+      </div>
+      <div class="px-5 pt-2.5"><div class="amber">+ <b>9</b> more selected items are hidden by this search — still selected, and still part of the export.</div></div>
+      <div class="row" style="background:#f8fafc; border-bottom:1px solid #e2e8f0; margin-top:8px;">
+        <div><span class="cb-ind"></span></div><div class="text-[11px] font-semibold text-slate-600">Select all 20 on this page <span class="text-slate-400 font-normal">— of the 34 matching “chest”</span></div><div></div><div class="text-[10px] text-slate-400 text-right">Availability · Apple status</div>
+      </div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.chest.01</div><div class="text-slate-800">Bronze Chest</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.chest.02</div><div class="text-slate-800">Silver Chest</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.chest.mega</div><div class="text-slate-800">Mega Chest</div><div class="text-right"><span class="badge-rm">Removed</span> <span class="st">DEVELOPER_REMOVED_FROM_SALE</span></div></div>
+      <div class="text-center text-[11px] text-slate-400 py-1.5">⋮ 17 more matching rows on this page</div>
+      <div class="pagebar">
+        <div class="note">Showing <b class="text-slate-700">1–20</b> of <b class="text-slate-700">34</b> <span class="text-slate-400">(filtered from 224)</span></div>
+        <div class="flex items-center gap-2"><span class="note">Rows</span><span class="seg"><span class="on">20</span><span>30</span><span>50</span></span><span class="pgbtn-off">‹ Prev</span><span class="note tabular-nums">Page <b class="text-slate-700">1</b> of <b class="text-slate-700">2</b></span><span class="pgbtn">Next ›</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ STATE 7 — (A) FULLY SELECTED ══════════════════════════════════ -->
+  <section class="state-shell">
+    <div class="state-title">State 7 — (A) “Select all matching” active · all 220 selected</div>
+    <div class="state-sub">
+      §2.3: there is <strong>no “all” sentinel</strong> in the code — (A) writes real ids into a Set
+      (<span class="mono">ExportItemWizard.tsx:139</span>), so its own state is <em>derived</em>.
+      Untick one row and it becomes partial automatically, with nothing to convert and nothing to lose.
+    </div>
+    <div class="surface">
+      <div class="selbar">
+        <div class="flex items-center gap-2"><button class="btn-selectall-on">✓ Clear all 220</button><span class="seg"><span class="on">All</span><span>Selected (220)</span></span></div>
+        <div class="counts"><b>220</b> selected · <b>50</b> on this page<br /><span class="text-slate-400">220 matching · 224 total</span></div>
+      </div>
+      <div class="row" style="background:#f0f7ff; border-bottom:1px solid #e2e8f0;">
+        <div><input type="checkbox" checked /></div><div class="text-[11px] font-semibold text-slate-700">Clear 50 on this page</div><div></div><div class="text-[10px] text-slate-400 text-right">Availability · Apple status</div>
+      </div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.gem.60</div><div class="text-slate-800">60 Gems</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.gem.300</div><div class="text-slate-800">300 Gems</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="text-center text-[11px] text-slate-400 py-1.5">⋮ 48 more rows on this page, all ticked</div>
+      <div class="px-5 pt-3"><div class="amber">
+        ⚠ About <b>660</b> Apple requests. Large exports can reach Apple’s hourly limit. If that happens the export stops,
+        you still get the file with everything that succeeded, and the items it missed are listed inside it.
+      </div></div>
+      <div class="px-5 py-3 mt-2 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between">
+        <p class="text-[11px] text-slate-600">Export <b>220</b> items · about <b>660</b> Apple requests</p>
+        <div class="flex gap-2"><button class="btn-cancel">Cancel</button><button class="btn-primary">Continue to countries →</button></div>
+      </div>
+    </div>
+    <p class="note mt-3">The caution above <b>250</b> requests is existing behaviour (<span class="mono">CAUTION_REQUEST_THRESHOLD</span>, ExportItemWizard.tsx:92-95) — a caution, never a block.</p>
+  </section>
+
+  <!-- ══ STATE 8 — SHIFT-CLICK RANGE ═══════════════════════════════════ -->
+  <section class="state-shell">
+    <div class="state-title">State 8 — (C) shift-click range · 2 actions for 30 adjacent items</div>
+    <div class="state-sub">
+      Ticked <span class="mono">com.game.bundle.03</span> (the anchor, dark bar), then <strong>Shift</strong>-ticked
+      <span class="mono">com.game.bundle.32</span>. Everything between is added. §2.6: <strong>additive, never toggling</strong> —
+      a row already ticked inside the range stays ticked.
+    </div>
+    <div class="surface">
+      <div class="selbar">
+        <div class="flex items-center gap-2"><button class="btn-selectall">Select all 220 matching</button><span class="seg"><span class="on">All</span><span>Selected (30)</span></span></div>
+        <div class="counts"><b>30</b> selected · <b>30</b> on this page<br /><span class="text-slate-400">220 matching · 224 total</span></div>
+      </div>
+      <div class="row" style="background:#f8fafc; border-bottom:1px solid #e2e8f0;">
+        <div><span class="cb-ind"></span></div><div class="text-[11px] font-semibold text-slate-600">Select all 50 on this page <span class="text-slate-400 font-normal">— 30 already selected</span></div><div></div><div class="text-[10px] text-slate-400 text-right">Availability · Apple status</div>
+      </div>
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.bundle.02</div><div class="text-slate-800">Bundle 02</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row row-anchor"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-600 font-semibold">com.game.bundle.03</div><div class="text-slate-900">Bundle 03 <span class="text-[10px] font-semibold text-[#0c447c]">← anchor (clicked without Shift)</span></div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row row-range"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.bundle.04</div><div class="text-slate-800">Bundle 04</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row row-range"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.bundle.05</div><div class="text-slate-800">Bundle 05 <span class="text-[10px] text-slate-500">(was already ticked — stays ticked, never toggled)</span></div><div class="text-right"><span class="badge-un">Unknown</span> <span class="st">READY_TO_SUBMIT</span></div></div>
+      <div class="text-center text-[11px] text-[#0071E3] py-1.5" style="background:#e0edfb;">⋮ 26 more rows in the range, all added</div>
+      <div class="row row-range" style="box-shadow:inset 3px 0 0 #0071E3;"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-600 font-semibold">com.game.bundle.32</div><div class="text-slate-900">Bundle 32 <span class="text-[10px] font-semibold text-[#0071E3]">← Shift-clicked</span></div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row"><div><input type="checkbox" /></div><div class="mono text-[11px] text-slate-500">com.game.bundle.33</div><div class="text-slate-800">Bundle 33</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="hint">
+        ⚠ Shift-click selects a range <strong>within one page</strong> (§2.5). Changing page, page size, search or a filter
+        clears the anchor. For a bigger group, raise the page size or use <span class="mono">Select all 220 matching</span>.
+      </div>
+      <div class="pagebar">
+        <div class="note">Showing <b class="text-slate-700">1–50</b> of <b class="text-slate-700">220</b></div>
+        <div class="flex items-center gap-2"><span class="note">Rows</span><span class="seg"><span>20</span><span>30</span><span class="on">50</span></span><span class="pgbtn-off">‹ Prev</span><span class="note tabular-nums">Page <b class="text-slate-700">1</b> of <b class="text-slate-700">5</b></span><span class="pgbtn">Next ›</span></div>
+      </div>
+      <div class="px-5 py-3 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between">
+        <p class="text-[11px] text-slate-600">Export <b>30</b> items · about <b>90</b> Apple requests</p>
+        <div class="flex gap-2"><button class="btn-cancel">Cancel</button><button class="btn-primary">Continue to countries →</button></div>
+      </div>
+    </div>
+    <p class="note mt-3">
+      ⚠ <span class="flag">Q3</span> Additive means you cannot undo a range with a second shift-click.
+      The undo is <span class="mono">Clear 50 on this page</span> — one click, in the column header.
+      Toggling instead would make the outcome depend on rows in the middle the Manager may never have looked at.
+    </p>
+  </section>
+
+  <!-- ══ STATE 9 — SELECTED ONLY (proposal) ════════════════════════════ -->
+  <section class="state-shell">
+    <div class="state-title">State 9 — <span class="flag">Q5</span> “Selected only” review view <em>(proposal, §2.7)</em></div>
+    <div class="state-sub">
+      M4’s mandatory consequence: the counter can read <b>12 selected</b> with none of them on screen (State 5).
+      This is the answer — a <strong>filter over the same selection set</strong>. No new state beyond a boolean, no new arithmetic, same pagination.
+    </div>
+    <div class="surface">
+      <div class="selbar">
+        <div class="flex items-center gap-2"><button class="btn-selectall">Select all 220 matching</button><span class="seg"><span>All</span><span class="on">Selected (12)</span></span></div>
+        <div class="counts"><b>12</b> selected · <b>12</b> on this page<br /><span class="text-slate-400">220 matching · 224 total</span></div>
+      </div>
+      <div class="row" style="background:#f0f7ff; border-bottom:1px solid #e2e8f0;">
+        <div><input type="checkbox" checked /></div><div class="text-[11px] font-semibold text-slate-700">Clear 12 on this page</div><div></div><div class="text-[10px] text-slate-400 text-right">Availability · Apple status</div>
+      </div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.gem.60</div><div class="text-slate-800">60 Gems</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.chest.01</div><div class="text-slate-800">Bronze Chest</div><div class="text-right"><span class="badge-av">Available</span> <span class="st">APPROVED</span></div></div>
+      <div class="row row-sel"><div><input type="checkbox" checked /></div><div class="mono text-[11px] text-slate-500">com.game.pass.week</div><div class="text-slate-800">Weekly Pass</div><div class="text-right"><span class="badge-rm">Removed</span> <span class="st">DEVELOPER_REMOVED_FROM_SALE</span></div></div>
+      <div class="text-center text-[11px] text-slate-400 py-1.5">⋮ 9 more selected items</div>
+      <div class="pagebar">
+        <div class="note">Showing <b class="text-slate-700">1–12</b> of <b class="text-slate-700">12 selected</b></div>
+        <div class="flex items-center gap-2"><span class="note">Rows</span><span class="seg"><span>20</span><span>30</span><span class="on">50</span></span><span class="pgbtn-off">‹ Prev</span><span class="note tabular-nums">Page <b class="text-slate-700">1</b> of <b class="text-slate-700">1</b></span><span class="pgbtn-off">Next ›</span></div>
+      </div>
+      <div class="px-5 py-3 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between">
+        <p class="text-[11px] text-slate-600">Export <b>12</b> items · about <b>36</b> Apple requests</p>
+        <div class="flex gap-2"><button class="btn-cancel">Cancel</button><button class="btn-primary">Continue to countries →</button></div>
+      </div>
+    </div>
+    <p class="note mt-3">
+      ⚠ With this view on, every row is already ticked, so (B) can only mean <em>clear</em>.
+      Shown here as option (i): (B) renders checked with the label <span class="mono">Clear 12 on this page</span> — consistent with §2.2’s state table, zero special-casing.
+      Option (ii) is to disable (B) here instead. <span class="flag">Q5</span>
+    </p>
+  </section>
+
+  <!-- ══ WHAT IS NOT SHOWN ═════════════════════════════════════════════ -->
+  <section class="state-shell">
+    <div class="state-title">Not redesigned here</div>
+    <ul class="text-[12px] text-slate-600 space-y-1.5 mt-2">
+      <li>• <strong>Step 2 (countries)</strong> — the shared <span class="mono">ExportOptionsDialog</span>, P8-locked, Google’s too. Untouched.</li>
+      <li>• <strong>The “Cannot be exported” tail</strong> — local drafts, shown-but-disabled with a per-surface reason. Unchanged, and still rendered below the list.</li>
+      <li>• <strong>The three facets</strong> (Type · Apple status raw · Availability) and the <span class="mono">as-of</span> staleness line. Unchanged.</li>
+      <li>• <strong>The export route</strong> — <span class="mono">selectedIds: string[]</span>, <span class="mono">[]</span> ⇒ 400, dead ids ⇒ failure sheet not 409. Unchanged.</li>
+      <li>• ⚠ <strong>The A′ availability bulk modal</strong> shares this exact picker. Whether it gets the same treatment is <span class="flag">Q2</span> — and it is a <em>write</em> path.</li>
+    </ul>
+  </section>
+
+</div>
+</body>
+</html>
