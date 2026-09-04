@@ -614,6 +614,49 @@ range X1 là **rỗng**.
 lỗi của một module**, là hành vi dưới tải song song. Không có `testTimeout` khai
 trong `vitest.config` ⇒ đang dùng mặc định 5000ms.
 
+**Số liệu bổ sung 2026-09-04 — arc APPLE `arc-apple-export-picker-paging` (Y1+Y2).**
+
+6 lần chạy toàn bộ suite tại `d3a3106`/`b6ca37f` (`5105` test, `361` file):
+
+| # | điều kiện | thời lượng | đỏ |
+|---|---|---|---|
+| 1 | có vitest khác chạy chồng | 116s | 4 |
+| 2 | có vitest khác chạy chồng | 103s | 1 |
+| 3 | có vitest khác chạy chồng | 67s | 10 |
+| 4 | chạy một mình | **44.7s** | **0** |
+| 5 | chạy một mình, **ngay sau `npm run build`** | 98.4s | 2 |
+| 6 | chạy một mình, không build trước | 57.0s | 1 |
+
+⚠ **100% vẫn là `Test timed out in 5000ms`. 0 AssertionError, cả 6 lần.**
+Test đỏ hay gặp nhất vẫn đúng cái #1 của bảng trên:
+`store-submissions/sync/gmail > missing X-Cron-Secret header → 401` (4/6 lần).
+`IapForm.sc2.test.tsx` cũng xuất hiện — cũng đã có tên trong bảng.
+
+**Một tên MỚI vào nhóm nhạy tải, ghi để biết chứ KHÔNG để đuổi:**
+`IapListClient.export-paging.test.tsx > ⚠ Y2.4 … the page-1 id is in the payload`
+— đỏ **1/6** lần (lần 5). Chạy riêng: **390ms** trên hạn mức 5000ms, tức còn
+**12.8×** dư địa. Nó là test integration nặng nhất arc này (render cả trang +
+45 dòng + dialog 175 nước), nên nó là ứng viên tự nhiên cho một hạn mức 5s bị
+tải làm trượt — không phải một test chậm.
+
+⚠ **CẢI CHÍNH BÁO CÁO Y2.** Báo cáo Y2 kết luận nguyên nhân là "các process
+vitest chạy chồng nhau" và nói suite "xanh hoàn toàn khi chạy sạch". **Sai, và
+sai vì kết luận từ MỘT lần chạy** (lần 4). Lần 5 và 6 đều chạy một mình mà vẫn
+đỏ. Nguyên nhân thật vẫn **chưa xác định** — chồng process chỉ làm nó nặng
+thêm. Đây đúng là flake đã được ghi ở đây từ 2026-09-01, không phải phát hiện
+mới.
+
+⚠ Dấu hiệu `[vitest-pool]: Failed to start forks worker` mà
+`TODO.md [VITEST-coldstart-flake-recurrence]` trích **KHÔNG xuất hiện** trong
+cả 3 log đã lưu của arc này (`grep -c` = 0). Cùng *hình dạng* (timeout 5s,
+không assertion, cùng tên test), **khác dấu hiệu** ⇒ chưa đủ cơ sở nói là cùng
+một cơ chế. Ghi lại đúng như đo được.
+
+**Đối chiếu 3 điều kiện chặn bên dưới: KHÔNG điều kiện nào thoả.**
+(1) không có AssertionError nào; (2) `Y2.4` xanh 390ms và `gmail` xanh 19/19
+khi chạy riêng; (3) tỉ lệ đỏ không quá ~50% và không chặn gate nào.
+⇒ **Không sửa `vitest.config`, không sửa test.** Theo đúng luật đã ghi ở dưới.
+
 **KHI NÀO PHẢI ĐIỀU TRA** (điều kiện chặn, không phải cảm tính):
 1. một lần đỏ là **AssertionError**, không phải timeout; **hoặc**
 2. một test đỏ **cả khi chạy riêng**; **hoặc**
