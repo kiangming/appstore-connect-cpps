@@ -704,3 +704,79 @@ bằng etag, và **không thể** hiển thị "Google sửa item này lúc nào
 tool**, không phải của Google.
 
 Chi tiết + cách đo: `design-export-picker-paging.md` Phần B.
+
+---
+
+## `[GOOGLE-dark-mode-gap]` — module Google chưa làm dark mode
+
+**Trạng thái:** 📌 GHI NHẬN, **KHÔNG mở arc.**
+
+Dark mode là thật trong repo (`next-themes` + `tailwind.config.ts:4`
+`darkMode: ["class"]` + `components/layout/ThemeToggle.tsx`), nhưng cả 4 file
+luồng export Google có **0 `dark:`**; `ExportScopeDialog.tsx:107` đặt `bg-white`
+cứng ⇒ dialog trắng trong dark mode.
+
+⚠ Luồng export Google **hôm nay đã trộn** dark-aware với dark-blind:
+`ExportOptionsDialog` — bước 2 của chính luồng này, import ở
+`IapListClient.tsx:35` — có **31 `dark:`**. `PageNav` (dùng từ chunk 2) có 10.
+Nên PageNav **không tạo lớp lỗi mới**, nó chỉ làm một lệch đã tồn tại dễ thấy
+hơn. Sửa đúng chỗ là làm dark mode cho module Google, không phải né PageNav.
+
+---
+
+## `[SHARED-lib-extraction]` — nếu sau này muốn `lib/shared/`
+
+**Trạng thái:** 📌 GHI NHẬN. **Arc kiến trúc riêng, ĐỘC LẬP với quyết định
+PageNav** (việc 1 đã chốt dùng lại PageNav, không nâng).
+
+Chi phí đo được: **8 file** — 6 import site + 2 file di chuyển
+(`page-slice.ts` + `page-slice.test.ts`). **0 test ghim đường dẫn** (không có
+structural test nào `readFileSync` trên đường dẫn này), nên là refactor cơ học.
+
+6 import site: `app/(dashboard)/iap-management/apps/[appId]/IapListClient.tsx:30`
+· `components/ui/iap/PageNav.tsx:36` · `components/ui/iap/PageNav.test.tsx:19`
+· `components/iap-management/item-picker/BulkItemPicker.tsx:85`
+· `components/google-iap-management/apps/AppsListClient.tsx:23`
+· `components/google-iap-management/iap-list/IapListClient.tsx:23`
+
+⚠ Nâng `page-slice` **không** trả lời gì cho `PageNav` — PageNav là React
+component, không vào `lib/` được. Đừng gộp hai câu hỏi làm một lần nữa.
+
+---
+
+## `[RANGE-SELECT-two-implementations]` — hai bản shift-click cùng phép cắt
+
+**Trạng thái:** 📌 GHI NHẬN. **KHÔNG gộp trong arc này** — chunk 2 đang mở,
+gộp giữa chừng là đổi nền dưới chân.
+
+Hai file tính **cùng một phép cắt bao gồm hai đầu**:
+`lib/iap-management/apple/item-range-select.ts` (25 dòng code) và
+`lib/google-iap-management/item-range-select.ts` (22 dòng code).
+
+**Khác nhau ở đâu — đọc và liệt kê, không mô tả chung:**
+
+| | Apple | Google |
+|---|---|---|
+| Tên hàm | `resolveRangeIds` | `resolveRangeSkus` |
+| Tham số 1 | `readonly RangeSelectableRow[]` (mảng **object**) | `readonly string[]` (mảng **id trần**) |
+| Kiểu phụ trợ | `export interface RangeSelectableRow { appleIapId: string }` | **không có** |
+| Tra vị trí | `.findIndex((r) => r.appleIapId === …)` ×2 | `.indexOf(…)` ×2 |
+| Trả về | `.slice(...).map((r) => r.appleIapId)` | `.slice(...)` (đã là string) |
+| `addRangeToSelection` | **giống hệt** — cùng chữ ký, cùng thân | **giống hệt** |
+| Test kèm | `item-range-select.test.ts` + `.order.test.ts` | `item-range-select.test.ts` + `.structural.test.ts` |
+
+⇒ Khác biệt thực chất **chỉ là hình dạng đầu vào** (object có trường
+`appleIapId` vs string trần). Toán học (min/max/slice bao gồm hai đầu, ba nhánh
+`null`) **trùng khít**. `addRangeToSelection` **đã trùng byte-for-byte về logic**.
+
+**Điều kiện gộp — gộp khi CẢ BA đúng:**
+1. Chunk 2 đã gate xong (không còn arc nào đang sửa hai file này);
+2. Bản gộp nhận **id trần** (`readonly string[]`) và Apple map `appleIapId` ở
+   call site — vì đó là phía có thể đổi mà không mất thông tin, chiều ngược lại
+   ép Google bọc string vào object cho không;
+3. Cả `.order.test.ts` (Apple) lẫn `.structural.test.ts` (Google) chạy được trên
+   bản gộp **mà không nới assertion nào** — nới một assertion để gộp cho gọn là
+   đổi bằng chứng lấy sự gọn gàng.
+
+⚠ Nếu (3) không đạt thì **đừng gộp**: hai bản 22-25 dòng sống cạnh nhau rẻ hơn
+một bản dùng chung mà không ai dám sửa.

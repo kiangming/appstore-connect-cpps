@@ -64,8 +64,6 @@ export interface ExportScopeDialogProps {
   onToggleAll: (matchingSkus: string[]) => void;
   query: string;
   onQueryChange: (q: string) => void;
-  windowSize: number;
-  onShowMore: () => void;
   /** Chunk 1 — shift-click ranges. Threaded through rather than defaulted
    *  here, so the ONE place that decides the write path stays plain is the
    *  caller (C2). */
@@ -90,8 +88,6 @@ export function ExportScopeDialog({
   onToggleAll,
   query,
   onQueryChange,
-  windowSize,
-  onShowMore,
   onSelectionChange,
 }: ExportScopeDialogProps) {
   if (!open) return null;
@@ -176,8 +172,7 @@ export function ExportScopeDialog({
                 onToggleAll={onToggleAll}
                 query={query}
                 onQueryChange={onQueryChange}
-                windowSize={windowSize}
-                onShowMore={onShowMore}
+                paged
                 rangeSelect
                 onSelectionChange={onSelectionChange}
                 selectAllLabel={(n) => `Select all (${n})`}

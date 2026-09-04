@@ -53,10 +53,10 @@ describe("without the opt-in props — the BulkStatusModal shape, unchanged", ()
     expect(screen.queryByLabelText("Search items")).not.toBeInTheDocument();
   });
 
-  it("renders every row, with no `Show more`", () => {
+  it("renders every row, and no pager", () => {
     renderList();
     expect(screen.getAllByRole("checkbox")).toHaveLength(ITEMS.length + 1); // +select-all
-    expect(screen.queryByText(/Show more/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("page-nav")).not.toBeInTheDocument();
   });
 
   it("keeps the existing select-all copy and the selected counter", () => {
@@ -67,10 +67,11 @@ describe("without the opt-in props — the BulkStatusModal shape, unchanged", ()
 });
 
 describe("⚠ guarantee 1 — `Select all` means every MATCHING item, not the window", () => {
-  it("hands back every matching SKU even when the window shows fewer", () => {
-    // THE DEFECT THIS PREVENTS: scoping select-all to the rendered window
-    // hands back 2 of 3 under a label that says "all".
-    const props = renderList({ windowSize: 2, onShowMore: vi.fn() });
+  it("hands back every matching SKU — the un-paged modal path, unchanged", () => {
+    // THE DEFECT THIS PREVENTS: scoping select-all to the rendered rows hands
+    // back a subset under a label that says "all". This is the write path's
+    // shape (no `paged`), so it must keep going through `onToggleAll`.
+    const props = renderList();
     fireEvent.click(screen.getByLabelText("Select all"));
     expect(props.onToggleAll).toHaveBeenCalledWith([
       "gem.small",
@@ -93,28 +94,6 @@ describe("⚠ guarantee 1 — `Select all` means every MATCHING item, not the wi
       selected: new Set(["gem.small", "gem.medium"]),
     });
     expect(screen.getByLabelText("Select all")).toBeChecked();
-  });
-});
-
-describe("⚠ guarantee 2 — the window announces itself and says rows are still included", () => {
-  it("`Show more` names how many are hidden AND that they are not excluded", () => {
-    renderList({ windowSize: 1, onShowMore: vi.fn() });
-    const btn = screen.getByRole("button", { name: /Show more/ });
-    expect(btn).toHaveTextContent("2 more");
-    // A silent truncation is indistinguishable from a shorter list; this
-    // sentence is what makes the difference visible.
-    expect(btn).toHaveTextContent(/still\s+included in the export/);
-  });
-
-  it("no `Show more` when nothing is hidden", () => {
-    renderList({ windowSize: 99, onShowMore: vi.fn() });
-    expect(screen.queryByText(/Show more/)).not.toBeInTheDocument();
-  });
-
-  it("clicking it asks the caller to widen — the list owns no window state", () => {
-    const props = renderList({ windowSize: 1, onShowMore: vi.fn() });
-    fireEvent.click(screen.getByRole("button", { name: /Show more/ }));
-    expect(props.onShowMore).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -189,6 +168,25 @@ const FIVE = [
 /** Tick a row the way a mouse does: a change event whose NATIVE event carries
  *  `shiftKey`. React's synthetic change event does not have it, so this is
  *  also the measurement that reading `nativeEvent` is the right call. */
+/** 45 rows — three pages at size 20, a single page at the default 50. */
+const MANY = Array.from({ length: 45 }, (_, i) =>
+  iap(`sku.${String(i).padStart(2, "0")}`, `Item ${i}`),
+);
+
+/** The paged picker as the export dialog wires it. */
+function renderPaged(over: Partial<Parameters<typeof IapSelectionList>[0]> = {}) {
+  return renderList({ paged: true, rangeSelect: true, ...over });
+}
+
+/** Drive the real Rows control rather than reaching into state — page size is
+ *  owned by the component, so the control IS the only way in, and exercising
+ *  it keeps these tests honest about what the operator can actually do. */
+function setRows(n: number) {
+  fireEvent.change(screen.getByLabelText("Rows per page"), {
+    target: { value: String(n) },
+  });
+}
+
 function shiftClick(sku: string) {
   fireEvent.click(screen.getByLabelText(`Select ${sku}`), { shiftKey: true });
 }
@@ -281,58 +279,40 @@ describe("⚠ shift-click is ADDITIVE across the window (M1/M8)", () => {
 });
 
 describe("⚠ M8 — the range never leaves the RENDERED rows, and the boundary drops the anchor", () => {
-  it("⭐ a range cannot contain a row the window is hiding", () => {
-    // windowSize 3 renders a/b/c only. Even though d and e MATCH, no gesture
-    // available on screen can pull them into a range.
+  it("⭐ a range cannot contain a row another PAGE is hiding", () => {
+    // Page size 20 over 45 rows: page 1 is rows 00–19. Even though rows 20–44
+    // match, no gesture available on screen can pull them into a range.
     const onSelectionChange = vi.fn();
-    renderList({
-      items: FIVE,
-      windowSize: 3,
-      onShowMore: vi.fn(),
-      rangeSelect: true,
-      onSelectionChange,
-    });
-    plainClick("a.one");
-    shiftClick("c.three");
-    const applied = [...onSelectionChange.mock.calls[0][0]];
-    expect(applied).toEqual(["a.one", "b.two", "c.three"]);
-    expect(applied).not.toContain("d.four");
-    expect(applied).not.toContain("e.five");
+    renderPaged({ items: MANY, onSelectionChange });
+    setRows(20);
+    plainClick("sku.00");
+    shiftClick("sku.19");
+    const applied = [...onSelectionChange.mock.calls.at(-1)![0]];
+    expect(applied).toHaveLength(20);
+    expect(applied).not.toContain("sku.20");
+    expect(applied).not.toContain("sku.44");
   });
 
   it("⭐ the anchor does NOT survive a window change — plain tick + a hint instead", () => {
     // THE MUTATION THIS FAILS: keeping the anchor across the boundary. M8 says
-    // a boundary drops it; here that is re-derived from the `windowSize` the
-    // anchor was set under, not watched with an effect.
+    // a boundary drops it; here that is re-derived from the page and page size
+    // the anchor was set under, not watched with an effect hook.
     //
-    // ⚠ `rerender` on the SAME instance, not a second `render`. A second
-    // render mounts a second component with fresh state, so the anchor would
-    // be absent for a reason that has nothing to do with the boundary — the
-    // test would pass while proving nothing.
+    // ⚠ Same instance throughout — the page is flipped with the real Next
+    // button. Re-mounting would reset the anchor for a reason that has nothing
+    // to do with the boundary, and the test would pass while proving nothing.
     const onSelectionChange = vi.fn();
     const onToggleOne = vi.fn();
-    const base = {
-      items: FIVE,
-      selected: new Set<string>() as ReadonlySet<string>,
-      onToggleAll: vi.fn(),
-      onShowMore: vi.fn(),
-      rangeSelect: true,
-      onSelectionChange,
-      onToggleOne,
-    };
-    const { rerender } = render(
-      <IapSelectionList {...base} windowSize={3} />,
-    );
-    plainClick("a.one"); // anchor set at windowSize 3
-    expect(onToggleOne).toHaveBeenCalledWith("a.one");
+    renderPaged({ items: MANY, onSelectionChange, onToggleOne });
+    setRows(20);
+    plainClick("sku.00"); // anchor set on page 1
+    onSelectionChange.mockClear();
 
-    // Same instance, wider window — the boundary the anchor was set under is
-    // gone, so the anchor must be gone with it.
-    rerender(<IapSelectionList {...base} windowSize={5} />);
-    shiftClick("c.three");
+    fireEvent.click(screen.getByRole("button", { name: /Next/ })); // page 2
+    shiftClick("sku.25");
 
     expect(onSelectionChange).not.toHaveBeenCalled();
-    expect(onToggleOne).toHaveBeenLastCalledWith("c.three");
+    expect(onToggleOne).toHaveBeenLastCalledWith("sku.25");
     expect(screen.getByTestId("range-hint")).toBeInTheDocument();
   });
 
@@ -341,26 +321,46 @@ describe("⚠ M8 — the range never leaves the RENDERED rows, and the boundary 
     // render the feature would never work at all, and the boundary test would
     // still be green. Both directions, or neither is proven.
     const onSelectionChange = vi.fn();
-    const base = {
-      items: FIVE,
-      selected: new Set<string>() as ReadonlySet<string>,
-      onToggleOne: vi.fn(),
-      onToggleAll: vi.fn(),
-      onShowMore: vi.fn(),
-      rangeSelect: true,
-      onSelectionChange,
-    };
-    const { rerender } = render(
-      <IapSelectionList {...base} windowSize={5} />,
-    );
-    plainClick("a.one");
-    rerender(<IapSelectionList {...base} windowSize={5} />);
-    shiftClick("c.three");
+    renderPaged({ items: MANY, onSelectionChange });
+    setRows(20);
+    plainClick("sku.00");
+    onSelectionChange.mockClear();
+    shiftClick("sku.03"); // same page, same size ⇒ anchor still valid
     expect([...onSelectionChange.mock.calls[0][0]]).toEqual([
-      "a.one",
-      "b.two",
-      "c.three",
+      "sku.00",
+      "sku.01",
+      "sku.02",
+      "sku.03",
     ]);
+  });
+
+  it("⭐⭐ changing PAGE SIZE drops the anchor even though it is STILL ON SCREEN", () => {
+    // ⚠ THIS TEST EXISTS BECAUSE A MUTATION SURVIVED WITHOUT IT.
+    //
+    // Deleting the anchor's boundary check entirely left the suite green: with
+    // the anchor on page 1 and the shift-click on page 2, `resolveRangeSkus`
+    // already refuses, because the anchor is not among the rendered rows —
+    // the helper's guarantee (2), which holds even when (1) is forgotten.
+    //
+    // The gap that mutation exposed is the case where the TWO GUARANTEES
+    // DISAGREE: keep the anchor on screen and change only the page SIZE.
+    // Row 00 is rendered at size 20 AND at size 30, so (2) has nothing to
+    // object to — only the anchor's own stamp knows the boundary moved. This
+    // is the one gesture that proves rule (1) is real and not decoration.
+    const onSelectionChange = vi.fn();
+    const onToggleOne = vi.fn();
+    renderPaged({ items: MANY, onSelectionChange, onToggleOne });
+    setRows(20);
+    plainClick("sku.00"); // anchor stamped at page 1 / size 20
+    onSelectionChange.mockClear();
+
+    setRows(30); // M9 keeps us on page 1, so sku.00 is still rendered…
+    expect(screen.getByLabelText("Select sku.00")).toBeInTheDocument();
+
+    shiftClick("sku.05"); // …but the boundary moved, so no range may form.
+    expect(onSelectionChange).not.toHaveBeenCalled();
+    expect(onToggleOne).toHaveBeenLastCalledWith("sku.05");
+    expect(screen.getByTestId("range-hint")).toBeInTheDocument();
   });
 
   it("⭐ a shift-click with no usable anchor ticks plainly AND SAYS SO", () => {
@@ -391,27 +391,25 @@ describe("⚠ C3 — the counter has TWO tiers and they are allowed to disagree"
     // THE MUTATION THIS FAILS: collapsing the two tiers into one number. With
     // Google's tick-everything default the two routinely disagree, and one
     // number cannot be both without lying about one of them.
-    renderList({
-      items: FIVE,
-      windowSize: 2,
-      onShowMore: vi.fn(),
-      rangeSelect: true,
-      selected: new Set(["a.one", "d.four", "e.five"]),
+    renderPaged({
+      items: MANY,
+      selected: new Set(["sku.00", "sku.30", "sku.44"]),
     });
+    setRows(20);
     expect(screen.getByText("3 selected")).toBeInTheDocument();
-    expect(screen.getByTestId("tier-on-screen")).toHaveTextContent("1 of 2 shown");
+    expect(screen.getByTestId("tier-on-screen")).toHaveTextContent(
+      "1 of 20 on this page",
+    );
   });
 
   it("names the picks the WINDOW is hiding", () => {
-    renderList({
-      items: FIVE,
-      windowSize: 2,
-      onShowMore: vi.fn(),
-      rangeSelect: true,
-      selected: new Set(["a.one", "d.four", "e.five"]),
+    renderPaged({
+      items: MANY,
+      selected: new Set(["sku.00", "sku.30", "sku.44"]),
     });
-    expect(screen.getByTestId("hidden-by-window")).toHaveTextContent(
-      /2 selected items are not shown yet/,
+    setRows(20);
+    expect(screen.getByTestId("hidden-by-page")).toHaveTextContent(
+      /2 selected items are not on this page/,
     );
   });
 
@@ -419,20 +417,18 @@ describe("⚠ C3 — the counter has TWO tiers and they are allowed to disagree"
     // Items a,b (match "a"/"b"? no) — use the query to hide e.five, and the
     // window to hide c/d. Each line must count its OWN cause only, so a reader
     // can add them and land on the total.
-    renderList({
-      items: FIVE,
-      query: ".",
-      onQueryChange: vi.fn(), // matches all five (every sku has a dot)
-      windowSize: 2,
-      onShowMore: vi.fn(),
-      rangeSelect: true,
-      selected: new Set(["a.one", "c.three", "e.five"]),
+    renderPaged({
+      items: MANY,
+      query: "sku.",
+      onQueryChange: vi.fn(), // matches all 45
+      selected: new Set(["sku.00", "sku.30", "sku.44"]),
     });
-    // All five match, so nothing is search-hidden…
+    setRows(20);
+    // All 45 match, so nothing is search-hidden…
     expect(screen.queryByText(/hidden by the current search/)).not.toBeInTheDocument();
-    // …and the window hides two of the three picks.
-    expect(screen.getByTestId("hidden-by-window")).toHaveTextContent(
-      /2 selected items are not shown yet/,
+    // …and the page hides two of the three picks.
+    expect(screen.getByTestId("hidden-by-page")).toHaveTextContent(
+      /2 selected items are not on this page/,
     );
     expect(screen.getByText("3 selected")).toBeInTheDocument();
   });
@@ -443,6 +439,199 @@ describe("⚠ C3 — the counter has TWO tiers and they are allowed to disagree"
       rangeSelect: true,
       selected: new Set(["a.one"]),
     });
-    expect(screen.queryByTestId("hidden-by-window")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("hidden-by-page")).not.toBeInTheDocument();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CHUNK 2 — paging, the tri-state header, and "Selected only".
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("⚠ C2 — `paged` DEFAULTS OFF; the write path keeps the flat list", () => {
+  it("⭐ without the flag there is no pager, no toolbar button, no view switch", () => {
+    // THE MUTATION THIS FAILS: flipping the default to `true`, which would put
+    // a pager into Bulk Activate/Deactivate — a shipped WRITE surface — with
+    // nobody deciding to.
+    renderList({ items: MANY });
+    expect(screen.queryByTestId("page-nav")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("select-all-matching")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("view-selected")).not.toBeInTheDocument();
+    // …and every one of the 45 rows renders.
+    expect(screen.getAllByRole("checkbox")).toHaveLength(MANY.length + 1);
+  });
+
+  it("⭐ without the flag the header checkbox is still ALL-MATCHING via onToggleAll", () => {
+    // The modal's contract: one checkbox, whole-list scope, through the old
+    // callback. Chunk 2 must not re-point it at a page that does not exist.
+    const onToggleAll = vi.fn();
+    renderList({ items: MANY, onToggleAll });
+    fireEvent.click(screen.getByLabelText("Select all"));
+    expect(onToggleAll).toHaveBeenCalledTimes(1);
+    expect(onToggleAll.mock.calls[0][0]).toHaveLength(45);
+  });
+});
+
+describe("⚠ C4 — Rows selector: 20/30/50, default 50, and the single-page case", () => {
+  it("⭐ defaults to 50 — 45 items is therefore ONE page", () => {
+    renderPaged({ items: MANY });
+    expect(screen.getByLabelText("Rows per page")).toHaveValue("50");
+    expect(screen.getByText(/Showing 1–45 of 45/)).toBeInTheDocument();
+  });
+
+  it("⭐ a single page shows NO Prev/Next — but the Rows selector stays reachable", () => {
+    // C4's explicit requirement. `PageNav` hides only the prev/next cluster,
+    // so the bar itself survives to carry the selector.
+    renderPaged({ items: MANY });
+    expect(screen.getByTestId("page-nav")).toBeInTheDocument();
+    expect(screen.getByLabelText("Rows per page")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Prev/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Next/ })).not.toBeInTheDocument();
+  });
+
+  it("⭐ on a single page the two counter tiers AGREE (total = on this page)", () => {
+    renderPaged({ items: MANY, selected: new Set(["sku.00", "sku.44"]) });
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+    expect(screen.getByTestId("tier-on-screen")).toHaveTextContent(
+      "2 of 45 on this page",
+    );
+    expect(screen.queryByTestId("hidden-by-page")).not.toBeInTheDocument();
+  });
+
+  it("offers exactly 20 / 30 / 50", () => {
+    renderPaged({ items: MANY });
+    expect(
+      [...screen.getByLabelText("Rows per page").querySelectorAll("option")].map(
+        (o) => o.textContent,
+      ),
+    ).toEqual(["20", "30", "50"]);
+  });
+
+  it("dropping to 20 splits 45 rows into three pages", () => {
+    renderPaged({ items: MANY });
+    setRows(20);
+    expect(screen.getByTestId("page-nav-position")).toHaveTextContent("Page 1 of 3");
+  });
+});
+
+describe("⚠ M9 — changing the page size ANCHORS THE VIEWPORT", () => {
+  it("⭐ does NOT reset to page 1", () => {
+    // THE MUTATION THIS FAILS: `setPage(1)` on a size change. Rows 40–44 are
+    // on page 3 at size 20; at size 30 they sit on page 2 — floor(40/30)+1.
+    renderPaged({ items: MANY });
+    setRows(20);
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    expect(screen.getByTestId("page-nav-position")).toHaveTextContent("Page 3 of 3");
+    setRows(30);
+    expect(screen.getByTestId("page-nav-position")).toHaveTextContent("Page 2 of 2");
+    expect(screen.getByText(/Showing 31–45 of 45/)).toBeInTheDocument();
+  });
+
+  it("keeps the operator looking at the rows they were looking at", () => {
+    renderPaged({ items: MANY });
+    setRows(20);
+    fireEvent.click(screen.getByRole("button", { name: /Next/ })); // rows 20–39
+    setRows(30);
+    // floor(20/30)+1 = 1 ⇒ rows 1–30, which still contains row 20.
+    expect(screen.getByLabelText("Select sku.20")).toBeInTheDocument();
+  });
+});
+
+describe("⚠ C1/M7 — (A) the toolbar button vs (B) the header checkbox", () => {
+  it("⭐ (B) the header checkbox scopes to THIS PAGE, not the whole list", () => {
+    // THE MUTATION THIS FAILS: pointing (B) at the matching set. The label
+    // says "on this page"; a control that quietly means more than its label is
+    // the whole defect this split exists to prevent.
+    const onSelectionChange = vi.fn();
+    renderPaged({ items: MANY, onSelectionChange });
+    setRows(20);
+    fireEvent.click(screen.getByLabelText("Select all on this page"));
+    expect([...onSelectionChange.mock.calls[0][0]]).toHaveLength(20);
+  });
+
+  it("⭐ (A) the toolbar button scopes to EVERYTHING MATCHING, not the page", () => {
+    // THE MUTATION THIS FAILS: scoping (A) to the current page — 20 rows under
+    // a label that reads "Select all 45 matching".
+    const onSelectionChange = vi.fn();
+    renderPaged({ items: MANY, onSelectionChange });
+    setRows(20);
+    fireEvent.click(screen.getByTestId("select-all-matching"));
+    expect([...onSelectionChange.mock.calls[0][0]]).toHaveLength(45);
+  });
+
+  it("⭐⛔ (B) FULL ⇒ CLEARS THE PAGE — the deliberate divergence from Apple", () => {
+    // ⛔ DO NOT "fix for consistency with Apple". Apple's never-clear rule is
+    // built on a picker that opens EMPTY; Google opens with everything ticked
+    // (IapListClient.tsx:199-202), so clearing is the operator's FIRST move.
+    // Porting Apple's rule here deletes the most useful gesture on the surface.
+    const onSelectionChange = vi.fn();
+    renderPaged({
+      items: MANY,
+      selected: new Set(MANY.map((i) => i.sku)), // G1: everything ticked
+      onSelectionChange,
+    });
+    setRows(20);
+    expect(screen.getByLabelText("Select all on this page")).toBeChecked();
+    fireEvent.click(screen.getByLabelText("Select all on this page"));
+    const next = onSelectionChange.mock.calls[0][0];
+    expect(next.size).toBe(25); // 45 − the 20 on this page
+    expect(next.has("sku.00")).toBe(false);
+    expect(next.has("sku.20")).toBe(true); // page 2 untouched
+  });
+
+  it("⭐ (B) PARTIAL ⇒ fills the page, never clears", () => {
+    const onSelectionChange = vi.fn();
+    renderPaged({
+      items: MANY,
+      selected: new Set(["sku.00"]),
+      onSelectionChange,
+    });
+    setRows(20);
+    fireEvent.click(screen.getByLabelText("Select all on this page"));
+    expect(onSelectionChange.mock.calls[0][0].size).toBe(20);
+  });
+
+  it("(B) is indeterminate when the page is partly ticked", () => {
+    renderPaged({ items: MANY, selected: new Set(["sku.00"]) });
+    setRows(20);
+    expect(
+      (screen.getByLabelText("Select all on this page") as HTMLInputElement)
+        .indeterminate,
+    ).toBe(true);
+  });
+
+  it("(A) flips its label to Clear when everything matching is ticked", () => {
+    renderPaged({ items: MANY, selected: new Set(MANY.map((i) => i.sku)) });
+    expect(screen.getByTestId("select-all-matching")).toHaveTextContent(
+      "Clear all 45",
+    );
+  });
+});
+
+describe("⚠ C5 — Selected only", () => {
+  it("⭐ shows only the ticked rows, and pages THEM", () => {
+    renderPaged({
+      items: MANY,
+      selected: new Set(["sku.00", "sku.30", "sku.44"]),
+    });
+    fireEvent.click(screen.getByTestId("view-selected"));
+    expect(screen.getByText(/Showing 1–3 of 3 selected/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Select sku.30")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Select sku.01")).not.toBeInTheDocument();
+  });
+
+  it("⭐ the header checkbox reads checked + Clear there — NO special case", () => {
+    // C5 says it explicitly: in this view every rendered row is by definition
+    // selected, so the ordinary tri-state rule already produces checked+Clear.
+    // Special-casing it would be a second rule doing the first rule's job.
+    renderPaged({ items: MANY, selected: new Set(["sku.00", "sku.30"]) });
+    fireEvent.click(screen.getByTestId("view-selected"));
+    expect(screen.getByLabelText("Select all on this page")).toBeChecked();
+    expect(screen.getByText("Clear 2 on this page")).toBeInTheDocument();
+  });
+
+  it("the switch names how many are selected", () => {
+    renderPaged({ items: MANY, selected: new Set(["sku.00", "sku.30"]) });
+    expect(screen.getByTestId("view-selected")).toHaveTextContent("Selected (2)");
   });
 });

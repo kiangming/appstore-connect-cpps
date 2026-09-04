@@ -22,9 +22,10 @@
  *
  * ─── WHAT IS OPT-IN, AND WHY IT DEFAULTS OFF ───────────────────────────────
  *
- * `search` and `windowSize` are OPTIONAL. Omit them and this renders exactly
- * what `SelectionState` rendered: a select-all bar and every row. The modal
- * omits them, so it is untouched; the export picker passes them.
+ * `search`, `rangeSelect` and `paged` are OPTIONAL and every one of them
+ * defaults OFF. Omit them and this renders exactly what `SelectionState`
+ * rendered: a select-all bar and every row. The modal omits them, so it is
+ * untouched; the export picker passes them.
  *
  * ⚠ THIS IS NOT LAZINESS ABOUT THE MODAL. Adding a search box to Bulk
  * Activate would be a UI change to a shipped write path, decided by nobody,
@@ -37,9 +38,12 @@
  *      The callback receives the filtered set, not the sliced one. Scoping it
  *      to the window hands back 20 of 200 under a label that says "all".
  *
- * ⚠ 2. THE WINDOW IS A RENDER BOUND AND IT SAYS SO. "Show more" states how
- *      many are not shown AND that not-shown is not excluded. A silent
- *      truncation is indistinguishable from a shorter list.
+ * ⚠ 2. WHAT IS NOT ON SCREEN IS STILL SELECTED, AND THE SCREEN SAYS SO. Up to
+ *      chunk 2 this was a growing window plus a "Show more" that named the
+ *      remainder. Chunk 2 replaced it with real paging, so the same promise is
+ *      now kept by the two-tier counter and the "not on this page" line —
+ *      a silent truncation is indistinguishable from a shorter list, whichever
+ *      mechanism does the truncating.
  *
  * ⚠ 3. A SELECTION HIDDEN BY THE SEARCH IS STILL A SELECTION, AND IS COUNTED
  *      ON SCREEN. Without that line the count appears to drop when the query
@@ -71,9 +75,9 @@
  *      exactly the knowledge guarantee 4 exists to withhold from it.
  *
  * ⚠ 6. THE BOUNDARY IS RE-DERIVED, NOT WATCHED. The anchor is stored WITH the
- *      `windowSize` it was set under, and a resolve under a different window
- *      is refused (M8: a boundary drops the anchor). This is deliberately not
- *      an effect hook watching `windowSize`: guarantee "NO FETCHING, EVER" is
+ *      page AND page size it was set under, and a resolve under a different
+ *      one is refused (M8: a boundary drops the anchor). This is deliberately
+ *      not an effect hook watching them: guarantee "NO FETCHING, EVER" is
  *      enforced by a structural test that bans effect hooks in this file
  *      outright, so reaching for one here would trade one guarantee away to
  *      buy another. Re-derivation costs nothing and breaks neither.
@@ -81,11 +85,41 @@
  * ⚠ 7. THE COUNTER HAS TWO TIERS AND THE TWO HIDE-REASONS ARE DISJOINT. Total
  *      picks, then picks among the rendered rows. The two "…is hidden" lines
  *      partition the gap: one counts picks the SEARCH hides, the other counts
- *      picks the WINDOW hides. They never double-count, so a reader can add
- *      them and land on the total.
+ *      picks the PAGE hides. They never double-count, so a reader can add them
+ *      and land on the total.
+ *
+ * ─── CHUNK 2: PAGING, AND THE ONE RULE THAT IS NOT APPLE'S ─────────────────
+ *
+ * ⚠ 8. THE HEADER CHECKBOX IS A FULL TRI-STATE AND *DOES* CLEAR THE PAGE.
+ *      ⛔ DO NOT "FIX THIS FOR CONSISTENCY WITH APPLE." Apple's picker rules
+ *      that the header checkbox never clears — and that rule is correct THERE
+ *      because Apple's picker opens with NOTHING ticked, so the only useful
+ *      direction is adding.
+ *
+ *      Google opens with EVERYTHING ticked (`IapListClient.tsx:199-202`,
+ *      deliberate: an operator who clicks straight through gets the pre-X3
+ *      export). The operator's actual job is therefore SUBTRACTIVE — "give me
+ *      30 of these 200" starts by clearing. Porting Apple's never-clear rule
+ *      would delete the single most useful gesture on this surface and leave
+ *      the operator un-ticking 170 rows by hand.
+ *
+ *      Scope still reads from POSITION, which is the part that IS shared with
+ *      Apple: the checkbox at the head of the tick column means THIS PAGE, the
+ *      labelled button in the toolbar means EVERYTHING MATCHING.
+ *
+ * ⚠ 9. PAGE / PAGE SIZE / "SELECTED ONLY" ARE OWNED HERE, UNLIKE `query`.
+ *      They are view state with no meaning to the caller, and the reset rules
+ *      that made `query` controlled do not apply: `computePageMeta` CLAMPS an
+ *      out-of-range page, so a narrowing search or filter self-corrects, and
+ *      the scope dialog unmounts on close (`ExportScopeDialog.tsx:97`), so
+ *      reopening starts at page 1 for free. Lifting them to the caller would
+ *      add three props and two reset rules to buy nothing.
  */
 import { useState, type ReactNode } from "react";
 import { Search } from "lucide-react";
+
+import { computePageMeta } from "@/lib/iap-management/pagination/page-slice";
+import { PageNav } from "@/components/ui/iap/PageNav";
 
 import {
   resolveRangeSkus,
@@ -109,9 +143,9 @@ export interface IapSelectionListProps {
   /** Opt-in search. Omit both and no box renders. */
   query?: string;
   onQueryChange?: (q: string) => void;
-  /** Opt-in windowing. Omit and every matching row renders. */
-  windowSize?: number;
-  onShowMore?: () => void;
+  /** Opt-in paging (chunk 2). Omit and every matching row renders — which is
+   *  what the write path (`BulkStatusModal`) must keep getting, C2. */
+  paged?: boolean;
   /** Copy for the select-all row; defaults to the modal's existing string. */
   selectAllLabel?: (matching: number) => string;
   /** Opt-in shift-click ranges. Omit and every tick is a plain tick, which is
@@ -121,6 +155,12 @@ export interface IapSelectionListProps {
   rangeSelect?: boolean;
   onSelectionChange?: (next: Set<string>) => void;
 }
+
+/** C4 — Manager's decision. 20/30/50 are the offered sizes; 50 is the default
+ *  so an app under 50 items is a single page and the pager stays out of the
+ *  way. */
+const DEFAULT_PAGE_SIZE = 50;
+const PAGE_SIZE_OPTIONS = [20, 30, 50] as const;
 
 function matches(iap: IapWithDefaultLocale, q: string): boolean {
   if (!q) return true;
@@ -137,17 +177,29 @@ export function IapSelectionList({
   renderTrailing,
   query,
   onQueryChange,
-  windowSize,
-  onShowMore,
+  paged = false,
   selectAllLabel,
   rangeSelect = false,
   onSelectionChange,
 }: IapSelectionListProps) {
+  // ⚠ Guarantee 9 — view state, owned here. See the docblock for why this one
+  // is not controlled like `query` is.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [selectedOnly, setSelectedOnly] = useState(false);
+
   const searchable = typeof query === "string" && Boolean(onQueryChange);
   const matching = searchable ? items.filter((i) => matches(i, query!)) : items;
-  const visible =
-    typeof windowSize === "number" ? matching.slice(0, windowSize) : matching;
-  const hidden = matching.length - visible.length;
+
+  // ⚠ M3 — the search narrows the WHOLE list, and only then is it paged. The
+  // "Selected only" view narrows the same way, so every count below is
+  // measured against what the operator asked to look at.
+  const inView = paged && selectedOnly
+    ? matching.filter((i) => selected.has(i.sku))
+    : matching;
+
+  const meta = computePageMeta(inView.length, page, pageSize);
+  const visible = paged ? inView.slice(meta.startIndex, meta.endIndex) : inView;
 
   const matchingSkus = matching.map((i) => i.sku);
   // ⚠ Guarantee 1: "all" is measured against MATCHING, never against VISIBLE.
@@ -166,23 +218,69 @@ export function IapSelectionList({
   // whole point of the second tier.
   const visibleSkus = visible.map((i) => i.sku);
   const selectedOnScreen = visibleSkus.filter((sku) => selected.has(sku)).length;
-  // ⚠ Guarantee 7, disjointness: this counts picks the WINDOW hides, measured
+  // ⚠ Guarantee 7, disjointness: this counts picks the PAGE hides, measured
   // against MATCHING — never against the whole list — so it cannot overlap
   // `selectedHiddenByQuery`, which counts the ones the SEARCH hides.
-  const selectedHiddenByWindow =
+  const selectedHiddenByPage =
     matchingSkus.filter((s) => selected.has(s)).length - selectedOnScreen;
+
+  // ⚠ C1 — (B)'s scope is THIS PAGE. Full tri-state: partial fills the page,
+  // full CLEARS it. See docblock guarantee 8 before "fixing" this.
+  const pageAllSelected =
+    visibleSkus.length > 0 && visibleSkus.every((sku) => selected.has(sku));
+  const pageSomeSelected =
+    !pageAllSelected && visibleSkus.some((sku) => selected.has(sku));
 
   // ⚠ Guarantee 5/6: the anchor is owned here and carries the `windowSize` it
   // was set under. A resolve under a different window is refused, which is M8
   // ("a boundary drops the anchor") expressed as a re-derivation instead of
   // the effect hook this file is structurally forbidden to have.
-  const [anchor, setAnchor] = useState<{ sku: string; atWindow: number } | null>(
-    null,
-  );
+  const [anchor, setAnchor] = useState<
+    { sku: string; atPage: number; atPageSize: number } | null
+  >(null);
   const [rangeRefused, setRangeRefused] = useState(false);
 
+  // ⚠ M8 — the boundary is the PAGE now. Flipping the page OR changing the
+  // page size invalidates the anchor, because either one changes which rows a
+  // range could legally contain.
   const anchorSku =
-    anchor !== null && anchor.atWindow === (windowSize ?? -1) ? anchor.sku : null;
+    anchor !== null &&
+    anchor.atPage === meta.page &&
+    anchor.atPageSize === pageSize
+      ? anchor.sku
+      : null;
+  const anchorStamp = { atPage: meta.page, atPageSize: pageSize };
+
+  /** (A) — the labelled TOOLBAR button: scope is EVERYTHING MATCHING. */
+  function handleToggleAllMatching() {
+    if (!onSelectionChange) return;
+    const next = new Set(selected);
+    if (allSelected) for (const sku of matchingSkus) next.delete(sku);
+    else for (const sku of matchingSkus) next.add(sku);
+    onSelectionChange(next);
+  }
+
+  /** (B) — the HEADER CHECKBOX: scope is THIS PAGE, full tri-state.
+   *
+   * ⛔ `pageAllSelected` ⇒ CLEAR the page. This is the deliberate divergence
+   * from Apple (docblock guarantee 8): Google opens with everything ticked, so
+   * clearing is the operator's first move, not an afterthought. */
+  function handleTogglePage() {
+    if (!onSelectionChange) return;
+    const next = new Set(selected);
+    if (pageAllSelected) for (const sku of visibleSkus) next.delete(sku);
+    else for (const sku of visibleSkus) next.add(sku);
+    onSelectionChange(next);
+  }
+
+  /** M9 — changing the page size ANCHORS THE VIEWPORT: the operator keeps
+   *  looking at roughly the rows they were looking at. Resetting to page 1
+   *  throws away where they had scrolled to, at exactly the moment they were
+   *  comparing rows. */
+  function handlePageSizeChange(nextSize: number) {
+    setPage(Math.floor(meta.startIndex / nextSize) + 1);
+    setPageSize(nextSize);
+  }
 
   /** One handler for every row tick, plain or shifted.
    *
@@ -210,12 +308,12 @@ export function IapSelectionList({
       // No usable anchor: a plain tick, and SAY SO (M8 — never a silent
       // degrade).
       setRangeRefused(true);
-      setAnchor({ sku, atWindow: windowSize ?? -1 });
+      setAnchor({ sku, ...anchorStamp });
       onToggleOne(sku);
       return;
     }
     setRangeRefused(false);
-    if (rangeSelect) setAnchor({ sku, atWindow: windowSize ?? -1 });
+    if (rangeSelect) setAnchor({ sku, ...anchorStamp });
     onToggleOne(sku);
   }
 
@@ -235,31 +333,76 @@ export function IapSelectionList({
         </div>
       )}
 
+      {/* ⚠ M7 — SCOPE IS READ FROM POSITION. (A) is a labelled BUTTON in the
+          toolbar and means everything matching; (B) is the CHECKBOX at the head
+          of the tick column and means this page. Same wording on both would
+          make the operator remember which is which instead of see it. */}
+      {paged && (
+        <div className="flex items-center gap-2 flex-wrap mb-2.5">
+          <button
+            type="button"
+            onClick={handleToggleAllMatching}
+            data-testid="select-all-matching"
+            className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[11.5px] font-medium text-emerald-700 hover:bg-emerald-100 transition"
+          >
+            {allSelected
+              ? `Clear all ${matching.length}`
+              : `Select all ${matching.length} matching`}
+          </button>
+          <div className="ml-auto inline-flex overflow-hidden rounded-lg border border-slate-200">
+            {([false, true] as const).map((mode) => (
+              <button
+                key={String(mode)}
+                type="button"
+                onClick={() => {
+                  setSelectedOnly(mode);
+                  setPage(1);
+                }}
+                data-testid={mode ? "view-selected" : "view-all"}
+                className={`px-2.5 py-1 text-[11px] transition ${
+                  selectedOnly === mode
+                    ? "bg-emerald-600 font-semibold text-white"
+                    : "bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {mode ? `Selected (${selectedTotal})` : "All"}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between pb-2 border-b border-slate-200 mb-2">
         <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
           <input
             type="checkbox"
-            checked={allSelected}
+            checked={paged ? pageAllSelected : allSelected}
             ref={(el) => {
-              if (el) el.indeterminate = someSelected;
+              if (el) el.indeterminate = paged ? pageSomeSelected : someSelected;
             }}
-            onChange={() => onToggleAll(matchingSkus)}
+            onChange={() => (paged ? handleTogglePage() : onToggleAll(matchingSkus))}
             className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer"
-            aria-label="Select all"
+            aria-label={paged ? "Select all on this page" : "Select all"}
           />
-          {(selectAllLabel ?? ((n: number) => `Select all (${n})`))(matching.length)}
+          {paged
+            ? pageAllSelected
+              ? `Clear ${visibleSkus.length} on this page`
+              : `Select all ${visibleSkus.length} on this page`
+            : (selectAllLabel ?? ((n: number) => `Select all (${n})`))(
+                matching.length,
+              )}
         </label>
         {/* ⚠ Guarantee 7 — TWO TIERS. Collapsing these into one number is the
             mutation this design exists to fail: with Google's tick-everything
             default (C3) the total and the on-screen count routinely disagree,
             and one number cannot be both. */}
-        {rangeSelect ? (
+        {rangeSelect || paged ? (
           <span className="text-right text-[10.5px] leading-tight tabular-nums">
             <span className="block text-[11px] font-bold text-emerald-700">
               {selectedTotal} selected
             </span>
             <span className="block text-slate-400" data-testid="tier-on-screen">
-              {selectedOnScreen} of {visibleSkus.length} shown
+              {selectedOnScreen} of {visibleSkus.length} on this page
             </span>
           </span>
         ) : (
@@ -280,11 +423,11 @@ export function IapSelectionList({
           "shown", not "on this page": chunk 1 has a window, not pages, and a
           hint that promises a control which does not exist yet is worse than
           a hint whose wording differs from the mockup. */}
-      {rangeSelect && selectedHiddenByWindow > 0 && (
-        <p className="text-[11px] text-slate-500 mb-2" data-testid="hidden-by-window">
-          {selectedHiddenByWindow} selected item
-          {selectedHiddenByWindow === 1 ? " is" : "s are"} not shown yet — still
-          selected, still exported.
+      {(rangeSelect || paged) && selectedHiddenByPage > 0 && (
+        <p className="text-[11px] text-slate-500 mb-2" data-testid="hidden-by-page">
+          {selectedHiddenByPage} selected item
+          {selectedHiddenByPage === 1 ? " is" : "s are"} not on this page —
+          still selected, still exported.
         </p>
       )}
 
@@ -339,17 +482,44 @@ export function IapSelectionList({
         </p>
       )}
 
-      {hidden > 0 && (
-        <button
-          type="button"
-          onClick={onShowMore}
-          className="mt-2 w-full rounded-lg border border-slate-200 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 transition"
-        >
-          {/* ⚠ Guarantee 2: says the number AND that they are not excluded. */}
-          Show more — {hidden} more match
-          {hidden === 1 ? "es" : ""} and {hidden === 1 ? "is" : "are"} still
-          included in the export
-        </button>
+      {/* ⚠ C4 — the bar renders even on a SINGLE page, because the Rows
+          selector lives in it and must stay reachable. `PageNav` hides only
+          the prev/next cluster on its own (`PageNav.tsx:75`), so a small app
+          gets the selector with no dead arrows beside it. */}
+      {paged && (
+        <div className="-mx-1 mt-2 overflow-hidden rounded-lg border border-slate-200">
+          <PageNav
+            meta={meta}
+            onPageChange={setPage}
+            dense
+            summary={
+              inView.length === 0
+                ? "Nothing to show"
+                : `Showing ${meta.displayStart}–${meta.displayEnd} of ${inView.length}${
+                    selectedOnly ? " selected" : ""
+                  }`
+            }
+            leading={
+              /* ⚠ C4 — Rows selector sits in the RIGHT cluster, immediately
+                 BEFORE Prev. `PageNav.leading` is exactly that slot. */
+              <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-600">
+                Rows
+                <select
+                  value={pageSize}
+                  onChange={(e) => handlePageSizeChange(Number(e.target.value))}
+                  aria-label="Rows per page"
+                  className="rounded-md border border-slate-200 bg-white px-1 py-0.5 text-[11px] text-slate-700"
+                >
+                  {PAGE_SIZE_OPTIONS.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            }
+          />
+        </div>
       )}
     </>
   );

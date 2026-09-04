@@ -54,10 +54,6 @@ interface Props {
 
 const PAGE_SIZE = 20;
 
-/** How many picker rows render before "Show more". A RENDER bound only — the
- *  rows beyond it stay selected and stay in the export (guarantee 2). */
-const PICKER_WINDOW_STEP = 50;
-
 function toneForStatus(status: string): StatusTone {
   if (status === "active") return "success";
   return "neutral";
@@ -116,7 +112,6 @@ export function IapListClient({
   // against a different candidate set is not a selection the operator made.
   const [selectedSkus, setSelectedSkus] = useState<Set<string>>(new Set());
   const [pickerQuery, setPickerQuery] = useState("");
-  const [pickerWindow, setPickerWindow] = useState(PICKER_WINDOW_STEP);
   const [bulkMode, setBulkMode] = useState<BulkStatusMode | null>(null);
 
   // Soft-delete: split present-on-Google (live) from flagged deleted-on-Google.
@@ -201,7 +196,6 @@ export function IapListClient({
     // empty would make the untouched path export nothing.
     setSelectedSkus(new Set(liveItems.map((i) => i.sku)));
     setPickerQuery("");
-    setPickerWindow(PICKER_WINDOW_STEP);
     setExportError(null);
     setExportSummary(null);
     setScopeOpen(true);
@@ -214,7 +208,6 @@ export function IapListClient({
     // silently smaller than the count the radio option just showed them.
     setSelectedSkus(new Set(candidatesFor(next).map((i) => i.sku)));
     setPickerQuery("");
-    setPickerWindow(PICKER_WINDOW_STEP);
   }
 
   function toggleSku(sku: string) {
@@ -718,8 +711,6 @@ export function IapListClient({
         onToggleAll={toggleAllSkus}
         query={pickerQuery}
         onQueryChange={setPickerQuery}
-        windowSize={pickerWindow}
-        onShowMore={() => setPickerWindow((n) => n + PICKER_WINDOW_STEP)}
         onSelectionChange={setSelectedSkus}
         onCancel={() => setScopeOpen(false)}
         onNext={() => {

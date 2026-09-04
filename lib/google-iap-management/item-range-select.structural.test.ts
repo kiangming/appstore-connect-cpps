@@ -46,11 +46,13 @@ describe("⚠ §2.1 — the range is resolved over the RENDERED rows, structural
     expect(src).not.toMatch(/resolveRangeSkus\(\s*matching\b/);
   });
 
-  it("`visibleSkus` is derived from `visible`, which is the sliced array", () => {
+  it("`visibleSkus` is derived from `visible`, which is the PAGE slice", () => {
     // If `visibleSkus` were re-pointed at `matching`, assertion 1 would still
     // pass while the guarantee was gone.
     expect(src).toMatch(/const visibleSkus = visible\.map\(/);
-    expect(src).toMatch(/const visible =[\s\S]{0,120}?matching\.slice\(0, windowSize\)/);
+    expect(src).toMatch(
+      /const visible = paged \? inView\.slice\(meta\.startIndex, meta\.endIndex\) : inView/,
+    );
   });
 
   it("there is exactly ONE call site — a second one is a second scope to audit", () => {
@@ -100,6 +102,38 @@ describe("⚠ §2.5 — opening the picker and changing the selection cost 0 req
   });
 });
 
+describe("⚠ chunk 2 — the pager is REUSED, not re-implemented", () => {
+  it("⭐ the picker imports the shared `PageNav` and `computePageMeta`", () => {
+    // Việc 1's decision, pinned. Google already had 2 of page-slice's 5
+    // consumers; a second pager written here would be P1 twin-path — two
+    // disabled rules, two "Showing X–Y of Z" wordings, drifting at the first
+    // fix. `StatusDot` and `ExportOptionsDialog` cross the same boundary from
+    // this very directory, so this is precedent, not a new door.
+    const src = read(...PICKER);
+    expect(src).toMatch(
+      /import \{ computePageMeta \} from "@\/lib\/iap-management\/pagination\/page-slice"/,
+    );
+    expect(src).toMatch(/import \{ PageNav \} from "@\/components\/ui\/iap\/PageNav"/);
+  });
+
+  it("⭐ the picker does NOT compute its own page indices", () => {
+    // The math lives in `page-slice` and is separately unit-tested; a second
+    // implementation here is the thing the reuse decision exists to prevent.
+    const src = read(...PICKER);
+    expect(src).not.toMatch(/Math\.ceil\([^)]*pageSize/);
+    expect(src).not.toMatch(/totalPages\s*=/);
+  });
+
+  it("⭐ M9 — the page-size handler anchors the viewport, it does not reset", () => {
+    // `setPage(1)` inside the size handler is the mutation; it is also the
+    // single most tempting "simplification" for a future reader.
+    const src = read(...PICKER);
+    expect(src).toMatch(
+      /function handlePageSizeChange[\s\S]{0,200}?Math\.floor\(meta\.startIndex \/ nextSize\) \+ 1/,
+    );
+  });
+});
+
 describe("⚠ C2 — the write path's props are absent at ITS call site", () => {
   it("⭐ `BulkStatusModal` passes neither `rangeSelect` nor `onSelectionChange`", () => {
     // The behavioural default-off test lives in the picker's own suite; this
@@ -113,10 +147,12 @@ describe("⚠ C2 — the write path's props are absent at ITS call site", () => 
     );
     expect(src).not.toMatch(/rangeSelect/);
     expect(src).not.toMatch(/onSelectionChange/);
+    expect(src).not.toMatch(/\bpaged\b/);
   });
 
   it("the export dialog DOES opt in — so the flag is not dead code", () => {
     expect(read(...DIALOG)).toMatch(/rangeSelect/);
     expect(read(...DIALOG)).toMatch(/onSelectionChange=\{onSelectionChange\}/);
+    expect(read(...DIALOG)).toMatch(/\bpaged\b/);
   });
 });
