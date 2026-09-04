@@ -66,6 +66,10 @@ export interface ExportScopeDialogProps {
   onQueryChange: (q: string) => void;
   windowSize: number;
   onShowMore: () => void;
+  /** Chunk 1 — shift-click ranges. Threaded through rather than defaulted
+   *  here, so the ONE place that decides the write path stays plain is the
+   *  caller (C2). */
+  onSelectionChange: (next: Set<string>) => void;
 }
 
 const OPTIONS: ReadonlyArray<{ value: ExportStatusFilter; label: string }> = [
@@ -88,6 +92,7 @@ export function ExportScopeDialog({
   onQueryChange,
   windowSize,
   onShowMore,
+  onSelectionChange,
 }: ExportScopeDialogProps) {
   if (!open) return null;
 
@@ -173,6 +178,8 @@ export function ExportScopeDialog({
                 onQueryChange={onQueryChange}
                 windowSize={windowSize}
                 onShowMore={onShowMore}
+                rangeSelect
+                onSelectionChange={onSelectionChange}
                 selectAllLabel={(n) => `Select all (${n})`}
                 renderTrailing={(iap) => (
                   <span

@@ -58,6 +58,7 @@ function renderDialog(over: Partial<Parameters<typeof ExportScopeDialog>[0]> = {
     onQueryChange: vi.fn(),
     windowSize: 50,
     onShowMore: vi.fn(),
+    onSelectionChange: vi.fn(),
     ...over,
   };
   render(<ExportScopeDialog {...props} />);

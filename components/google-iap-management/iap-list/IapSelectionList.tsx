@@ -54,9 +54,43 @@
  * ⚠ NO FETCHING, EVER. Both callers price their options from data already on
  * the page. `export-status-filter.test.ts` asserts structurally that neither
  * this file nor the scope dialog can reach the network.
+ *
+ * ─── CHUNK 1 ADDITIONS: SHIFT-CLICK RANGE + THE TWO-TIER COUNTER ───────────
+ *
+ * ⚠ 4. THE RANGE IS COMPUTED OVER `visible`, AND THAT CHOICE IS THE FEATURE.
+ *      `resolveRangeSkus` is handed the RENDERED array, so a range that
+ *      reaches past what is on screen is unrepresentable rather than guarded
+ *      (§2.1). `item-range-select.structural.test.ts` pins the argument, so
+ *      swapping it for `matching` or `items` goes red.
+ *
+ * ⚠ 5. THE ANCHOR IS OWNED HERE, WHICH BREAKS THE "CONTROLLED" RULE ABOVE ON
+ *      PURPOSE. Selection state stays the caller's; the anchor does not,
+ *      because only this component knows what is RENDERED, and the anchor's
+ *      whole meaning is "a row in the current rendered set". Handing it to the
+ *      caller would force the caller to know the rendered set — which is
+ *      exactly the knowledge guarantee 4 exists to withhold from it.
+ *
+ * ⚠ 6. THE BOUNDARY IS RE-DERIVED, NOT WATCHED. The anchor is stored WITH the
+ *      `windowSize` it was set under, and a resolve under a different window
+ *      is refused (M8: a boundary drops the anchor). This is deliberately not
+ *      an effect hook watching `windowSize`: guarantee "NO FETCHING, EVER" is
+ *      enforced by a structural test that bans effect hooks in this file
+ *      outright, so reaching for one here would trade one guarantee away to
+ *      buy another. Re-derivation costs nothing and breaks neither.
+ *
+ * ⚠ 7. THE COUNTER HAS TWO TIERS AND THE TWO HIDE-REASONS ARE DISJOINT. Total
+ *      picks, then picks among the rendered rows. The two "…is hidden" lines
+ *      partition the gap: one counts picks the SEARCH hides, the other counts
+ *      picks the WINDOW hides. They never double-count, so a reader can add
+ *      them and land on the total.
  */
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Search } from "lucide-react";
+
+import {
+  resolveRangeSkus,
+  addRangeToSelection,
+} from "@/lib/google-iap-management/item-range-select";
 
 import type { IapWithDefaultLocale } from "@/lib/google-iap-management/repository/iaps";
 
@@ -80,6 +114,12 @@ export interface IapSelectionListProps {
   onShowMore?: () => void;
   /** Copy for the select-all row; defaults to the modal's existing string. */
   selectAllLabel?: (matching: number) => string;
+  /** Opt-in shift-click ranges. Omit and every tick is a plain tick, which is
+   *  what the write path (`BulkStatusModal`) must keep getting — C2. Receives
+   *  the WHOLE next selection, already merged, so the caller cannot widen a
+   *  range it did not compute. */
+  rangeSelect?: boolean;
+  onSelectionChange?: (next: Set<string>) => void;
 }
 
 function matches(iap: IapWithDefaultLocale, q: string): boolean {
@@ -100,6 +140,8 @@ export function IapSelectionList({
   windowSize,
   onShowMore,
   selectAllLabel,
+  rangeSelect = false,
+  onSelectionChange,
 }: IapSelectionListProps) {
   const searchable = typeof query === "string" && Boolean(onQueryChange);
   const matching = searchable ? items.filter((i) => matches(i, query!)) : items;
@@ -118,6 +160,64 @@ export function IapSelectionList({
   const selectedTotal = selected.size;
   const selectedHiddenByQuery =
     searchable ? selectedTotal - matchingSkus.filter((s) => selected.has(s)).length : 0;
+
+  // ⚠ Guarantee 7, tier 2: picks among the rows ACTUALLY RENDERED. Derived
+  // from `visible`, so it drops as the window truncates — that gap is the
+  // whole point of the second tier.
+  const visibleSkus = visible.map((i) => i.sku);
+  const selectedOnScreen = visibleSkus.filter((sku) => selected.has(sku)).length;
+  // ⚠ Guarantee 7, disjointness: this counts picks the WINDOW hides, measured
+  // against MATCHING — never against the whole list — so it cannot overlap
+  // `selectedHiddenByQuery`, which counts the ones the SEARCH hides.
+  const selectedHiddenByWindow =
+    matchingSkus.filter((s) => selected.has(s)).length - selectedOnScreen;
+
+  // ⚠ Guarantee 5/6: the anchor is owned here and carries the `windowSize` it
+  // was set under. A resolve under a different window is refused, which is M8
+  // ("a boundary drops the anchor") expressed as a re-derivation instead of
+  // the effect hook this file is structurally forbidden to have.
+  const [anchor, setAnchor] = useState<{ sku: string; atWindow: number } | null>(
+    null,
+  );
+  const [rangeRefused, setRangeRefused] = useState(false);
+
+  const anchorSku =
+    anchor !== null && anchor.atWindow === (windowSize ?? -1) ? anchor.sku : null;
+
+  /** One handler for every row tick, plain or shifted.
+   *
+   * ⚠ `shiftKey` IS READ OFF `nativeEvent`. React's synthetic `change` event
+   * carries no `shiftKey`; the underlying native event for a checkbox click
+   * does. The test fires a change with a shifted nativeEvent and asserts a
+   * range forms — that assertion IS the measurement, not a comment.
+   *
+   * ⚠ Keyboard activation (Space) produces a nativeEvent with no `shiftKey`,
+   * which is falsy, which is a plain tick. Shift+Space is not a range gesture
+   * and is not being invented here. */
+  function handleRowToggle(sku: string, shiftKey: boolean) {
+    if (rangeSelect && shiftKey && onSelectionChange) {
+      // ⚠ §2.1 — `visibleSkus`, NEVER `matchingSkus` or `items`. The range is
+      // computed over what is on screen, so reaching past it is
+      // unrepresentable rather than clamped.
+      const rangeSkus = resolveRangeSkus(visibleSkus, anchorSku, sku);
+      if (rangeSkus !== null) {
+        onSelectionChange(addRangeToSelection(selected, rangeSkus));
+        // ⚠ The anchor does NOT move to the target — Gmail keeps it, so a
+        // second shift-click re-aims the same range instead of chaining.
+        setRangeRefused(false);
+        return;
+      }
+      // No usable anchor: a plain tick, and SAY SO (M8 — never a silent
+      // degrade).
+      setRangeRefused(true);
+      setAnchor({ sku, atWindow: windowSize ?? -1 });
+      onToggleOne(sku);
+      return;
+    }
+    setRangeRefused(false);
+    if (rangeSelect) setAnchor({ sku, atWindow: windowSize ?? -1 });
+    onToggleOne(sku);
+  }
 
   return (
     <>
@@ -149,7 +249,22 @@ export function IapSelectionList({
           />
           {(selectAllLabel ?? ((n: number) => `Select all (${n})`))(matching.length)}
         </label>
-        <span className="text-[11px] text-slate-400">{selectedTotal} selected</span>
+        {/* ⚠ Guarantee 7 — TWO TIERS. Collapsing these into one number is the
+            mutation this design exists to fail: with Google's tick-everything
+            default (C3) the total and the on-screen count routinely disagree,
+            and one number cannot be both. */}
+        {rangeSelect ? (
+          <span className="text-right text-[10.5px] leading-tight tabular-nums">
+            <span className="block text-[11px] font-bold text-emerald-700">
+              {selectedTotal} selected
+            </span>
+            <span className="block text-slate-400" data-testid="tier-on-screen">
+              {selectedOnScreen} of {visibleSkus.length} shown
+            </span>
+          </span>
+        ) : (
+          <span className="text-[11px] text-slate-400">{selectedTotal} selected</span>
+        )}
       </div>
 
       {searchable && selectedHiddenByQuery > 0 && (
@@ -157,6 +272,31 @@ export function IapSelectionList({
           {selectedHiddenByQuery} selected item
           {selectedHiddenByQuery === 1 ? " is" : "s are"} hidden by the current
           search — still selected, still exported.
+        </p>
+      )}
+
+      {/* ⚠ Guarantee 7 — the WINDOW's share of the gap, named separately from
+          the SEARCH's share above so the two add up to the total. Says
+          "shown", not "on this page": chunk 1 has a window, not pages, and a
+          hint that promises a control which does not exist yet is worse than
+          a hint whose wording differs from the mockup. */}
+      {rangeSelect && selectedHiddenByWindow > 0 && (
+        <p className="text-[11px] text-slate-500 mb-2" data-testid="hidden-by-window">
+          {selectedHiddenByWindow} selected item
+          {selectedHiddenByWindow === 1 ? " is" : "s are"} not shown yet — still
+          selected, still exported.
+        </p>
+      )}
+
+      {/* M8 — a shift-click that could not form a range degrades to a plain
+          tick, and that degrade is ANNOUNCED. */}
+      {rangeSelect && rangeRefused && (
+        <p
+          className="text-[11px] mb-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-emerald-700"
+          data-testid="range-hint"
+        >
+          Shift-click selects a range from the last row you ticked, within the
+          rows shown. Ticked this one on its own.
         </p>
       )}
 
@@ -168,7 +308,12 @@ export function IapSelectionList({
               <input
                 type="checkbox"
                 checked={checked}
-                onChange={() => onToggleOne(iap.sku)}
+                onChange={(e) =>
+                  handleRowToggle(
+                    iap.sku,
+                    Boolean((e.nativeEvent as MouseEvent).shiftKey),
+                  )
+                }
                 className="h-3.5 w-3.5 rounded border-slate-300 cursor-pointer flex-shrink-0"
                 aria-label={`Select ${iap.sku}`}
               />

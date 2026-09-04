@@ -720,6 +720,7 @@ export function IapListClient({
         onQueryChange={setPickerQuery}
         windowSize={pickerWindow}
         onShowMore={() => setPickerWindow((n) => n + PICKER_WINDOW_STEP)}
+        onSelectionChange={setSelectedSkus}
         onCancel={() => setScopeOpen(false)}
         onNext={() => {
           setScopeOpen(false);
