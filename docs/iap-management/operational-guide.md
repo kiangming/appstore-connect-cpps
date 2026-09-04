@@ -322,3 +322,101 @@ The IAP list toolbar carries **three** buttons: *Set Availabilities* (all),
 by the button you press — the modal has no tab switcher, so changing mode means
 closing and pressing a different button, and the territory selection is not
 carried over between opens.
+
+---
+
+## 5. Export list — picking the items (Cycle 46)
+
+The user-facing walkthrough lives in the **served** guide,
+`docs/user-docs/index.html` (route `/user-guide`, read at
+[`app/user-guide/route.ts:27`](../../app/user-guide/route.ts#L27)). ⚠ **Both
+files are part of "the guide" — editing only one means the Manager opens the
+tool and still reads the old instructions.** This section carries what an
+operator needs when something looks wrong, not the walkthrough.
+
+### 5.1 Three bulk-select controls, and why they are different SHAPES
+
+| Control | Shape | Scope |
+|---|---|---|
+| `Select all N matching` | **text button**, toolbar | every item passing the filters + search, **all pages** |
+| `Select all N on this page` | the **only checkbox** in the tick column | **the current page only** |
+| Shift-click | no control of its own | the rows **between two clicks, within one page** |
+
+⚠ **The shapes are load-bearing, not cosmetic.** Apple costs **~3 requests per
+exported item**, so a control that selects 10× more than intended is a bill.
+Two identical checkboxes differing only in scope is the mis-click that produces
+it, so scope is readable from **position**: a checkbox at the head of the tick
+column means "this page" on every table anyone has used, and everything wider
+lives in the toolbar with words on it.
+
+⚠ The page checkbox from a **partly-ticked** page **fills the rest** — it never
+clears. Reading an ambiguous click as the destructive one is how picks get lost.
+Clearing is available from the full state, where the label reads
+`Clear N on this page`.
+
+### 5.2 Shift-click is additive, and stops at the page edge
+
+The range **adds**; nothing is ever un-ticked, including a row inside the range
+that was already ticked. Finder/Explorer *replace* the selection on shift-click
+— that model is deliberately not used here, because picks on other pages must
+survive.
+
+⚠ **A range can never contain a row the operator has not seen.** It is computed
+from the rendered rows only, so it cannot cross a page boundary — that is
+structural, not a guard. Shift-clicking with no starting row on the page ticks
+the one row **and says so**; it never silently degrades.
+
+Consequence to know: a range cannot be undone with a second shift-click. The
+undo is `Clear N on this page`.
+
+### 5.3 ⚠ "What is on screen" is no longer "what is selected"
+
+Before this cycle the list only ever grew ("Show more"), so a row once seen
+could not leave the screen. With pages, **a ticked row can travel off-screen.**
+
+- The counter reports **two tiers**: `12 selected · 3 on this page`. The first
+  number is what goes in the file.
+- When they diverge, an amber line names it: *"+ N selected items are on other
+  pages — still selected, and still part of the export."*
+- `Selected (N)` shows only ticked rows, from any page. It is a **view over the
+  same selection** — it selects and unselects nothing.
+- The footer line `Export N items · about 3N Apple requests` is the
+  authoritative pre-flight number. **Counting ticked rows by eye undercounts.**
+
+### 5.4 Changing Rows (20 / 30 / 50) keeps your place
+
+The page is re-anchored on the first row you were already looking at
+(`floor(oldStartIndex / newPageSize) + 1`) rather than reset to page 1: the
+result set did not change, only the window over it. The selection is untouched.
+
+⚠ If this is ever "simplified" to reset-to-page-1, note what the third
+behaviour is: with no anchoring the stale page number is *clamped*, which lands
+the operator on the wrong **end** of the list with nothing saying so.
+
+### 5.5 Search, filters, and the selection are independent
+
+Search filters **all** items and then pages the result — never "within the
+current page". Clearing the search does **not** unselect anything. Same for the
+three filters (Type · Apple status · Availability); when a filter hides a pick,
+the count of hidden picks is shown rather than the number silently dropping.
+
+### 5.6 Reopening the dialog always starts over
+
+Closing and reopening *Export list* gives a clean step 1 with nothing ticked —
+including after a completed export. ⚠ Until Cycle 46 it did not: a finished
+export left the wizard on **step 2** with the previous selection intact, so the
+next open skipped item selection entirely and was one click from re-billing the
+previous batch. The reset is keyed on the dialog **opening**, not on each close
+path, so an exit added later cannot reintroduce it.
+
+### 5.7 What did NOT change
+
+- The export route: `selectedIds` absent ⇒ export all · `[]` ⇒ **400** · an
+  unknown id ⇒ it is **attempted** and lands in the workbook's failure sheet as
+  `APPLE_ERROR`, never a 409 and never silently dropped.
+- Step 2 (countries) — the shared dialog, untouched.
+- **The availability bulk modal keeps the old picker** (no pages, no
+  shift-click). That is a decision, not an oversight: export is a read path
+  where a wrong pick costs a re-run, availability is a **write** path where a
+  wrong pick has already changed where an item sells. Turning it on there is a
+  separate decision with its own UAT — backlog `[Y-aprime-paged]`.

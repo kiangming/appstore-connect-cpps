@@ -277,6 +277,35 @@ export function ExportItemWizard({
     setPage(1);
   }, [query, typeFilter, statusFilter, availabilityFilter, viewMode]);
 
+  /**
+   * [Y3] ⚠ A FRESH DIALOG EVERY TIME IT OPENS.
+   *
+   * The defect this closes ([EXPORT-wizard-reopen-lands-on-step-2]): this
+   * component is PERMANENTLY MOUNTED — `open` is a prop
+   * (IapListClient.tsx:1036) — and `handleConfirmExport` only flips that prop
+   * to false (IapListClient.tsx:427). It never called `reset()`. So after a
+   * successful export `step` was still `"countries"` (set at the Continue
+   * button), and clicking "Export list" again re-opened **step 2** with the
+   * previous selection still ticked — skipping item selection entirely, on a
+   * surface that bills ~3 Apple requests per ticked item.
+   *
+   * ⚠ RESET ON **OPEN**, NOT ON CLOSE, AND THAT IS THE WHOLE POINT OF THE FIX.
+   * Resetting in each close path fixes the close paths that exist today: the ✕
+   * and Cancel already called `reset()`, and export was the one that did not.
+   * A third exit added later (an Esc handler, a route change, a parent
+   * unmount-and-remount) would reintroduce the same defect, and it would look
+   * exactly like this one. Keying off the transition INTO open covers every
+   * exit that has ever existed and every one that has not been written yet.
+   *
+   * ⚠ It does NOT interfere with step 2 → step 1 ("Back"), because that
+   * changes `step`, not `open` — pinned by the existing test "going back from
+   * countries to items issues no fetch and keeps the selection".
+   */
+  useEffect(() => {
+    if (open) reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
   if (!open) return null;
 
   const selectedCount = selected.size;

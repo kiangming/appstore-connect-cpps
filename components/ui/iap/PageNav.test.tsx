@@ -93,6 +93,51 @@ describe("⚠ the single-page rule is SPLIT, on purpose", () => {
     expect(screen.queryByTestId("page-nav-position")).toBeNull();
   });
 
+  /**
+   * ⚠ [Y3] THE ASSERTION WHOSE ABSENCE LET TWO REPORTS DISAGREE.
+   *
+   * Two arbitration write-ups gave different answers for WHERE the Rows
+   * selector sits — one said footer-left, one said footer-right-before-Prev —
+   * and the tests could not settle it, because they pinned the control's
+   * IDENTITY (`<select>`, 20/30/50) and its CONTAINMENT (inside `page-nav`)
+   * and never its ORDER. A position that nothing asserts is a position that
+   * gets described from memory.
+   *
+   * ⚠ MUTATION: move `{leading}` after the prev/next cluster in PageNav, or
+   * into the summary `<p>` on the left. This goes red.
+   */
+  it("⚠ `leading` sits in the RIGHT cluster, BEFORE Prev — order, not just presence", () => {
+    render(
+      <PageNav
+        meta={computePageMeta(220, 2, 100)}
+        onPageChange={vi.fn()}
+        summary={<span data-testid="sum">Showing 101–200 of 220</span>}
+        leading={<span data-testid="rows-slot">Rows</span>}
+      />,
+    );
+    const bar = screen.getByTestId("page-nav");
+    const order = [...bar.querySelectorAll("[data-testid], [aria-label]")]
+      .map(
+        (el) =>
+          el.getAttribute("data-testid") ?? el.getAttribute("aria-label"),
+      )
+      .filter(
+        (t): t is string =>
+          t === "sum" ||
+          t === "rows-slot" ||
+          t === "Previous page" ||
+          t === "page-nav-position" ||
+          t === "Next page",
+      );
+    expect(order).toEqual([
+      "sum",
+      "rows-slot",
+      "Previous page",
+      "page-nav-position",
+      "Next page",
+    ]);
+  });
+
   it("an empty list is a single empty page, not a crash", () => {
     render(
       <PageNav

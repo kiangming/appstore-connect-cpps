@@ -3926,6 +3926,59 @@ change under a patch list with nothing going red) — same failure, one layer
 out: there the library moved and the code lied; here the library would move and
 the *reasoning* would lie.
 
+**P43 — A REPLACEMENT COUNT IS NOT A CORRECTNESS PROOF. "8 SUBSTITUTIONS" AND
+"8 CORRECT SUBSTITUTIONS" ARE DIFFERENT CLAIMS, AND THE FIRST ONE IS THE ONE
+YOUR SCRIPT REPORTS.**
+
+Y2 converted the design mockup's "Rows 20/30/50" segmented control into a
+`<select>` with a regex:
+
+```python
+re.compile(r'<span class="seg">(.*?)</span>')
+```
+
+`.*?` is non-greedy, so it stopped at the **first** `</span>` — the inner
+`<span>20</span>`'s closer, not the `.seg` wrapper's. Every one of the 8 sites
+shipped with orphaned markup trailing the new control:
+
+```html
+…</select></label><span>30</span><span class="on">50</span></span>
+```
+
+and because the "which size is active" detection read the truncated capture, 7
+of the 8 also lost their `selected` attribute. The script printed
+`Rows -> dropdown in 8 places`, the count was **true**, and the Y2 report
+asserted "mockup updated to as-built, 8 places" on the strength of it. The
+claim was false. It was caught two turns later, by an arbitration that read the
+file, not by anything that ran.
+
+⚠ **THE AGGRAVATING FACTOR IS THE FILE TYPE.** A `.ts` change gets typecheck,
+lint and tests. **An HTML mockup, a Markdown guide and a doc table have
+nothing that goes red** — the only feedback is a human opening the file. That
+is exactly where a count gets mistaken for a verification, because it is the
+only number available.
+
+⇒ **Rule: for a file with no test, a bulk edit is not done until a STRUCTURAL
+PROPERTY has been checked.** Cheap, scriptable, and it actually fails:
+
+```
+tag balance:      <span> 152/152 · <div> 305/305 · <label> 8/8 · <select> 11/11
+expected counts:  <option selected> → 7×50 + 1×20
+negative check:   grep for the orphan shape the edit could leave behind
+```
+
+⚠ **And prefer rebuilding each site over patching the regex's output.** The
+repair regenerated all 8 from scratch, taking the active value from the
+pre-edit file — patching the damage would have left the same class of partial
+result, one layer down.
+
+⚠ Related to P35/P41 (a dependency moves and nothing goes red) but the failure
+is one step earlier: here **nothing was ever capable of going red**, and the
+report substituted a count for the missing signal.
+
+Instance: Y2 `d3a3106` → repaired in `b6ca37f`,
+`docs/iap-management/design/export-picker-paging-mockup.html`.
+
 **P42 — A CONSUMER'S OWN SUITE CANNOT GUARD A GESTURE IT NEVER USES. WHEN A
 SHARED COMPONENT GAINS A CAPABILITY BEHIND A FLAG, PIN **BOTH BRANCHES AT THE
 SHARED LAYER** — DO NOT DELEGATE THE OFF BRANCH TO THE CONSUMER'S TESTS.**

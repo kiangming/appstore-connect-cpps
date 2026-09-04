@@ -2528,12 +2528,68 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
                 trong tool, <strong>không gọi Apple</strong>.</li>
                 <li>Ô <strong>search</strong> theo Product ID / tên</li>
               </ul>
-              <p>Tick từng dòng, hoặc dùng nút chọn tất cả — nút này <strong>chỉ áp cho danh sách đang lọc</strong>.
-              Nếu bạn đã chọn item rồi mới đổi filter, tool hiện dòng nhắc
+              <p>Nếu bạn đã chọn item rồi mới đổi filter, tool hiện dòng nhắc
               <em>"+ N more selected items are hidden by the current filters — still selected, and
               still part of the export."</em> — nghĩa là item đó <strong>vẫn nằm trong file</strong>, chỉ đang bị
               ẩn khỏi tầm nhìn. Chưa chọn gì thì nút bị khoá với nhãn
               <code class="inline">Select at least 1 item</code>.</p>
+
+              <p><strong>Chọn item: ba cách, phân biệt bằng HÌNH DẠNG của nút.</strong>
+              App 200+ item thì tick từng cái rất lâu, nên bước 1 có ba cơ chế chọn nhanh.
+              ⚠ Ba cái này <strong>khác nhau về PHẠM VI</strong>, và Apple tốn <strong>~3 request cho mỗi
+              item</strong> — chọn thừa là tốn tiền thật. Vì vậy tool cố ý làm chúng
+              <em>khác loại control</em>, để bạn đọc phạm vi từ <strong>vị trí</strong> chứ không phải từ trí nhớ:</p>
+              <ul>
+                <li><strong>Nút chữ ở thanh trên</strong> —
+                <code class="inline">Select all N matching</code> ⇒ <strong>TOÀN BỘ</strong> item khớp filter
+                + search, <em>mọi trang</em>. Khi đã chọn hết, nhãn đổi thành
+                <code class="inline">✓ Clear all N</code>.</li>
+                <li><strong>Checkbox duy nhất ở đầu cột tick</strong> —
+                <code class="inline">Select all N on this page</code> ⇒ <strong>CHỈ TRANG ĐANG XEM</strong>.
+                Trang tick dở thì checkbox ở trạng thái gạch ngang, và bấm là
+                <strong>tick nốt phần còn lại</strong> — nó <em>không bao giờ</em> xoá. Muốn xoá thì tick đủ
+                trang trước, nhãn sẽ đổi thành <code class="inline">Clear N on this page</code> rồi bấm.</li>
+                <li><strong>Shift-click chọn cả dải</strong> — click một dòng, giữ <strong>Shift</strong> rồi
+                click dòng khác ⇒ chọn hết đoạn giữa. 30 item liền nhau = <strong>2 thao tác</strong>.
+                Dải <strong>cộng thêm</strong>, không bao giờ bỏ tick cái gì (kể cả dòng ở giữa dải đã tick sẵn).
+                ⚠ Dải <strong>chỉ trong MỘT trang</strong>: đổi trang / đổi số dòng / đổi search / đổi filter là
+                mất dòng bắt đầu. Shift-click mà không có dòng bắt đầu trên trang thì tool chỉ tick một dòng
+                <strong>và nói rõ ra</strong>, không im lặng.</li>
+              </ul>
+
+              <p><strong>Phân trang.</strong> Cuối danh sách có thanh
+              <code class="inline">Showing 1–50 of 220</code>, dropdown <strong>Rows</strong>
+              (<code class="inline">20</code> · <code class="inline">30</code> · <code class="inline">50</code>)
+              và <strong>Prev / Page X of Y / Next</strong>.</p>
+              <ul>
+                <li><strong>Lựa chọn CỘNG DỒN qua các trang.</strong> Tick ở trang 1, sang trang 3 tick thêm ⇒
+                file có cả hai. Đổi trang <strong>không bao giờ</strong> làm mất tick.</li>
+                <li><strong>Bộ đếm nói HAI tầng</strong> — <code class="inline">12 selected · 3 on this page</code>.
+                ⚠ Đây không phải trang trí: sau khi lật trang, item bạn đã tick có thể <em>không còn trên màn</em>.
+                Con số thứ nhất là tổng sẽ export, con số thứ hai là phần đang thấy. Khi hai số lệch nhau, tool
+                thêm một dòng vàng <em>"+ N selected items are on other pages — still selected, and still part of
+                the export."</em></li>
+                <li><strong>Xem lại đã chọn những gì:</strong> bấm <code class="inline">Selected (N)</code> cạnh
+                nút chọn-tất-cả để chỉ hiện những dòng đang tick, ở bất kỳ trang nào. Bấm
+                <code class="inline">All</code> để quay lại. Đây chỉ là <em>cách xem</em> — nó không chọn thêm và
+                không bỏ chọn gì.</li>
+                <li><strong>Đổi Rows giữ nguyên tầm nhìn</strong>, không nhảy về trang 1: đang ở trang 3 với
+                20 dòng/trang mà đổi sang 30 thì bạn ở trang 2 — vẫn là quanh những dòng vừa xem. Lựa chọn
+                không đổi.</li>
+                <li>Search lọc <strong>toàn bộ</strong> item rồi mới chia trang — không phải lọc trong trang
+                đang xem. Xoá search thì item vừa tick <strong>vẫn được tick</strong>.</li>
+              </ul>
+
+              <div class="callout callout-warning">
+                <div class="callout-title">⚠️ "Đang thấy" không phải "đang chọn" — đọc bộ đếm, đừng đếm mắt</div>
+                <p>
+                  Trước Cycle 46 danh sách chỉ dài thêm ("Show more"), nên dòng đã thấy không bao giờ rời màn.
+                  Có phân trang rồi thì <strong>item đã tick có thể trôi sang trang khác</strong>. Trước khi bấm
+                  <em>Continue to countries</em>, hãy đọc <strong>con số đầu</strong> của bộ đếm và dòng
+                  <em>"Export N items · about 3N Apple requests"</em> ở đáy — đó là những gì thực sự vào file và
+                  số request thực sự phải trả. Đếm số dòng đang tick trên màn hình sẽ ra thiếu.
+                </p>
+              </div>
 
               <p><strong>Bước 2 — chọn nước.</strong> Cùng dialog chọn territory bạn đã gặp ở
               <a class="inline-link" data-goto="apple-bulk-availabilities">Bulk Availabilities</a>. Mỗi nước chọn
