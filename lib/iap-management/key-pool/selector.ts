@@ -213,6 +213,47 @@ export async function selectKey(
   return { creds: poolKeyToCredentials(account, eligible[next]), fromPool: true };
 }
 
+/**
+ * [#5] Drop the IN-MEMORY cooldown markers for one account (or all).
+ *
+ * ⚠ THIS EXISTS BECAUSE CLEARING THE DATABASE IS NOT ENOUGH, and that is not
+ * obvious from the outside. `isCoolingDown` checks this Map FIRST and returns
+ * `true` on a live local marker **without ever consulting the row** (:124-125).
+ * So an operator who clears `cooldown_until` in SQL and reloads the page sees
+ * a clean table while the running instance keeps refusing every key for the
+ * rest of the hour. That is precisely what happened in the misattribution
+ * incident, and it is why the fix is a button that clears both halves rather
+ * than a SQL snippet in a runbook.
+ *
+ * ⚠ PROCESS-LOCAL, AND THE CALLER MUST SAY SO. This clears the Map of the
+ * instance that serves the request and no other. On a multi-instance deploy a
+ * sibling keeps its own markers until they expire — `repository.ts:86-88`
+ * records that the Railway instance count is still an open question
+ * (Manager-Verify #3). The route's response states the limitation instead of
+ * implying a global effect.
+ *
+ * ⚠ DELIBERATELY NOT `__resetSelectorForTests`. That one also clears the
+ * round-robin `cursors`, which is test-fixture hygiene, not an operator
+ * action: resetting the cursor would re-bias rotation toward the first key
+ * for no reason. Same Map, different intent, separate function.
+ */
+export function clearInMemoryCooldowns(accountId?: string): number {
+  if (accountId === undefined) {
+    const n = cooldowns.size;
+    cooldowns.clear();
+    return n;
+  }
+  const prefix = `${accountId}::`;
+  let n = 0;
+  for (const k of [...cooldowns.keys()]) {
+    if (k.startsWith(prefix)) {
+      cooldowns.delete(k);
+      n++;
+    }
+  }
+  return n;
+}
+
 /** Test-only — module-scoped state leaks across specs otherwise. */
 export function __resetSelectorForTests(): void {
   cooldowns.clear();

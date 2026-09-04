@@ -177,6 +177,46 @@ export function poolKeyToCredentials(
   };
 }
 
+/**
+ * [#5] Clear `cooldown_until` for one key, returning its account id.
+ *
+ * ⚠ WRITES NULL, NOT A PAST TIMESTAMP. `isCoolingDown` treats a past deadline
+ * as "not cooling" either way, but NULL is the column's own word for "never
+ * cooled down" (see the migration's note on why this is a timestamp and not a
+ * flag) and it keeps `cooldown_until IS NOT NULL` usable as "has been parked
+ * at least once" in an audit query.
+ *
+ * ⚠ THE ERROR IS RETURNED, NOT SWALLOWED — the opposite of `persistCooldown`,
+ * on purpose. That one must never throw because it runs inside a 429 handler
+ * that is already reporting a failure. This one is an operator pressing a
+ * button and waiting for an answer: a failed clear that reported success
+ * would send them back to export against a pool that is still locked.
+ */
+export async function clearCooldownForKey(
+  rowId: string,
+): Promise<{ accountId: string; keyId: string }> {
+  const { data, error } = await iapDb()
+    .from("asc_account_keys")
+    .update({ cooldown_until: null, updated_at: new Date().toISOString() })
+    .eq("id", rowId)
+    .select("account_id, key_id")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to clear cooldown for key "${rowId}": ${error.message}`);
+  }
+  if (!data) {
+    throw new Error(`Pool key "${rowId}" not found.`);
+  }
+
+  const row = data as Record<string, unknown>;
+  const accountId = String(row.account_id);
+  // The hot path caches for 30s; an operator clearing a cooldown must take
+  // effect now, not "within half a minute".
+  invalidatePoolKeyCache(accountId);
+  return { accountId, keyId: String(row.key_id) };
+}
+
 /** Test-only — the module-scoped cache leaks across specs otherwise. */
 export function __resetPoolKeyCacheForTests(): void {
   cache.clear();

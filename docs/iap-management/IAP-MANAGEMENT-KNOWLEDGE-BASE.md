@@ -464,6 +464,60 @@ that phrasing suggests:
 | `GET /v1/territories` | ✅ present |
 | `GET /v2/inAppPurchases/{id}` | ❌ **absent** |
 | `GET /v1/inAppPurchasePriceSchedules/{id}/manualPrices` | ❌ **absent** |
+| `GET /v1/inAppPurchasePriceSchedules/{id}/automaticPrices` | ❌ **absent** — measured 2026-09-04, third case |
+
+**Third case, and it settled `Retry-After` too (2026-09-04).** A natural 429 on
+`automaticPrices` was captured by the K3.4 header dump. The full header list
+Apple returned:
+
+```
+[iap-apple] [key-pool] 429-headers GET /v1/inAppPurchasePriceSchedules/1538724661/automaticPrices
+  retry-after=ABSENT x-rate-limit=ABSENT
+  all=[connection,content-length,content-type,date,server,strict-transport-security,
+       x-apple-jingle-correlation-key,x-daiquiri-debug-worker-pid,x-daiquiri-instance]
+```
+
+⇒ **On a 429 from an IAP endpoint, Apple sends NEITHER header.** The open
+question in `cooldownDurationMs` — *"whether Apple attaches `Retry-After` to a
+429 whose response carries no `x-rate-limit` has never been observed on this
+system"* — is now **answered: it does not.** So the one-hour fallback is not the
+exception on this path, it is the **only** path, and the K3.4 DEBUG line was
+removed per its own instruction (`apple-fetch.ts`, 429 branch).
+
+⚠ **AND THAT ANSWER EXPOSED A DEFECT, recorded as
+`[POOL-cooldown-misattribution]` in TODO.md.** With no header ever arriving,
+the 429 branch cannot distinguish "hourly budget exhausted" from any other 429
+— and it does not try: it never reads `budget` at all. Every 429 parks the key
+for an hour. On 2026-09-04 that parked **7 keys in 394ms** on `vng-corp` while
+Apple's budget was untouched. Do not treat the absence of these headers as
+merely an observability gap; it is load-bearing for the cooldown policy.
+
+**D1 — PER-KEY OR PER-TEAM: ✅ RESOLVED BY MEASUREMENT ON THIS SYSTEM
+(2026-09-04). VERDICT: PER-KEY.**
+
+Two `Test key` clicks seconds apart on the same account, read per the procedure
+in `app/api/iap-management/pool-keys/[keyId]/test/route.ts:29-53`:
+
+```
+[key-pool-test] account=vng-corp key=V88M899HTZ status=200 rem=3599 lim=3600
+[key-pool-test] account=vng-corp key=68J8RLGLS9 status=200 rem=3599 lim=3600
+```
+
+Both keys report `rem = lim − 1`. Under a per-TEAM budget the second key would
+have read **3598**, already charged for the first key's request. It read 3599.
+
+⇒ **Each ASC key carries its own hourly budget. Adding keys adds real
+headroom, and the pool's architecture is sound.** This closes the condition
+`[RATELIMIT-keypool-design]` had been waiting on since 2026-08-26, and it
+retires `[Q-RATELIMIT.per-key-confirmed]`'s status as *"the Manager's operating
+experience on a different tool: strong evidence, not a measurement of this
+system"* — it is now a measurement of this system.
+
+⚠ **PER-KEY DOES NOT MEAN THE POOL CURRENTLY HELPS.** The verdict says extra
+keys have extra budget; it says nothing about the 429 the export actually hits.
+`[POOL-cooldown-misattribution]` is open precisely because that 429 arrived
+with the budget full, so it was not a budget refusal at all — and rotating onto
+a fresh key does not help with a limit that is not per-key-budget-shaped.
 
 Verified by dumping the full response header list, not by a parser returning
 null — the other 18 headers arrive normally on all three; `x-rate-limit` is

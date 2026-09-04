@@ -339,6 +339,33 @@ export async function appleFetch<T>(
     : { creds: account, fromPool: false };
   const creds = selection.creds;
 
+  /**
+   * [#6] WHICH KEY, AND WHETHER IT CAME FROM THE POOL — on every request.
+   *
+   * ⚠ THE SILENT CASE WAS THE DANGEROUS ONE. `selectKey` returns
+   * `missReason:"empty"` with NO LOG AT ALL (selector.ts:198-200), which is
+   * exactly the state "the Manager seeded a key but this account is not the
+   * one it landed under". From the logs that was indistinguishable from a
+   * working pool, and it is why the cooldown incident could not be diagnosed
+   * from Railway alone.
+   *
+   * ⚠ APPENDED TO THE EXISTING PER-REQUEST LINE, NOT A NEW ONE. A separate
+   * line would fire hundreds of times per export for no extra information —
+   * the line below already runs once per request and already carries the key
+   * id. Same convention as the `key=` field on the budget line (§4.9): new
+   * field at the end, every existing grep keeps matching.
+   *
+   * ⚠ AND IT NAMES THE MISS REASON, not just yes/no. "no pool keys for this
+   * account" and "the pool read failed" are different operator problems with
+   * different fixes; collapsing them to `pool=no` would need a second
+   * investigation to tell them apart.
+   */
+  const poolField = opts?.keyPool
+    ? selection.fromPool
+      ? "pool=key"
+      : `pool=off(${selection.missReason ?? "unknown"})`
+    : "pool=n/a";
+
   if (opts?.keyPool && !selection.fromPool && selection.missReason === "exhausted") {
     // ⚠ THROWN BEFORE ANY REQUEST IS SENT. K2 fell back to the account key
     // here and logged a warning, explicitly as a stopgap. Now that cooldowns
@@ -382,7 +409,10 @@ export async function appleFetch<T>(
   });
   const durationMs = Date.now() - startedAt;
 
-  await log(logTag, `[${creds.keyId}] ${method} ${endpoint} → ${res.status}`);
+  await log(
+    logTag,
+    `[${creds.keyId}] ${method} ${endpoint} → ${res.status} ${poolField}`,
+  );
 
   const budget = parseRateLimit(res.headers);
   // ⚠ GUARDED, AND IT IS NOT DEFENSIVE HABIT. This is an OBSERVER on a path
@@ -433,34 +463,39 @@ export async function appleFetch<T>(
       if (opts?.keyPool && selection.fromPool) {
         await opts.keyPool.onRateLimited(account.id, creds.keyId, retryAfterMs);
       }
-      await log(
-        logTag,
-        `[${creds.keyId}] ${method} ${endpoint} rate-limited (retry-after=${retryAfterMs}ms)`,
-        "WARN",
-      );
-      // ⚠ K3.4 — A MEASUREMENT WAITING FOR ITS EVENT, not decoration.
-      // The cooldown policy falls back to a conservative rolling hour
-      // because nobody has yet seen whether Apple sends `Retry-After` on a
-      // 429 from the IAP endpoints. Those endpoints are known NOT to send
-      // `x-rate-limit` at all (KB §4.9, measured), so assuming they send the
-      // other header would be exactly the Hotfix-25 mistake again.
+      // ⚠ [#4] APPLE'S OWN WORDS ON THE 429, WHICH THIS LINE USED TO DROP.
+      // The non-429 branch below has always logged `errBody` (:477-481); only
+      // this branch left it out — and it is the branch where the body is the
+      // whole diagnosis. Apple answers a 429 with a JSON `errors[]` carrying
+      // `code` and `detail`, and without it "rate limited" cannot be told
+      // apart from a per-second/concurrency refusal. That distinction is
+      // exactly what the cooldown misattribution incident turned on: seven
+      // keys were parked for an hour on a signal nobody had read.
       //
-      // Forcing a 429 to find out means deliberately burning an hour of a
-      // real key's budget. Instead this prints the full header list the
-      // first time a 429 happens naturally, and the answer arrives free.
-      // Grep Railway for `[key-pool] 429-headers`. Once it has appeared:
-      // record it in KB §4.9 and this line can go.
+      // ⚠ `errBody` was ALREADY IN SCOPE (:425). Nothing new is read, no
+      // extra request is made, and the response was consumed either way.
+      //
+      // ⚠ Truncated at 500. Enough for `errors[0].code` + `detail`; short
+      // enough that a burst of 429s cannot flood Railway. The untruncated
+      // body still reaches the export workbook's failure sheet via
+      // `AppleApiError.message` (:37 → export-fetch.ts:162).
       await log(
         logTag,
-        `[key-pool] 429-headers ${method} ${endpoint} retry-after=${
-          res.headers.get("retry-after") ?? "ABSENT"
-        } x-rate-limit=${res.headers.get("x-rate-limit") ?? "ABSENT"} all=[${[
-          ...res.headers.keys(),
-        ]
-          .sort()
-          .join(",")}]`,
+        `[${creds.keyId}] ${method} ${endpoint} rate-limited (retry-after=${retryAfterMs}ms) ${poolField} body=${errBody.slice(0, 500)}`,
         "WARN",
       );
+      // ⚠ K3.4's ONE-OFF HEADER DUMP HAS BEEN REMOVED — its event happened.
+      // It printed the full header list on the first natural 429 so we could
+      // learn, for free, whether Apple sends `Retry-After` on an endpoint that
+      // omits `x-rate-limit`. It fired on 2026-09-04 and the answer is in
+      // KB §4.9: BOTH headers absent on
+      // `/v1/inAppPurchasePriceSchedules/{id}/automaticPrices`. The line said
+      // "once it has appeared: record it in KB §4.9 and this line can go", so
+      // it is gone rather than left printing an answer we already have.
+      //
+      // ⚠ WHAT REPLACED IT IS NOT NOTHING. The 429 line above now carries
+      // Apple's `body=` (#4) and `pool=` (#6), which is strictly more than the
+      // header dump gave and is useful on every 429, not just the first.
       // ⚠ THE BACKOFF SLEEP IS NOW ARGUABLY UNNECESSARY, AND STAYS ANYWAY.
       // `withRetry`'s curve was tuned for same-key recovery: wait, then ask
       // the SAME key again. With a pool the next attempt uses a DIFFERENT

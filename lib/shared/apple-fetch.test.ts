@@ -512,12 +512,20 @@ describe("appleFetch — key pool (K2)", () => {
     expect(warned).toBe(true);
   });
 
-  it("⚠ K3.4 — a real 429 dumps its header list, so Retry-After can be settled for free", async () => {
-    // The cooldown policy falls back to a conservative hour because nobody
-    // has seen whether Apple sends Retry-After on a 429 from the IAP
-    // endpoints — which are known NOT to send x-rate-limit at all. Forcing a
-    // 429 would burn an hour of a real key's budget; this captures the answer
-    // the first time one happens naturally.
+  /**
+   * ⚠ RETARGETED IN #7, NOT DELETED. This was
+   * "⚠ K3.4 — a real 429 dumps its header list, so Retry-After can be settled
+   * for free", asserting the one-off `[key-pool] 429-headers` DEBUG line.
+   *
+   * That line's event HAPPENED (2026-09-04, `automaticPrices`: both headers
+   * absent — KB §4.9), and the line itself said "once it has appeared… this
+   * line can go", so #7 removed it. Deleting the test with it would have
+   * dropped a behaviour that still matters and is still live: when Apple DOES
+   * send `Retry-After`, the surviving rate-limited line must report it, because
+   * that value is what shortens the cooldown from the default hour
+   * (`cooldownDurationMs`). Same assertion, moved to the line that survived.
+   */
+  it("⚠ a 429 that DOES carry Retry-After reports it — that value shortens the cooldown", async () => {
     const { log } = await import("@/lib/logger");
     (log as ReturnType<typeof vi.fn>).mockClear();
     const { pool } = makePool(["K1"]);
@@ -532,13 +540,38 @@ describe("appleFetch — key pool (K2)", () => {
 
     const line = (log as ReturnType<typeof vi.fn>).mock.calls
       .map((c) => c[1] as string)
-      .find((m) => typeof m === "string" && m.includes("[key-pool] 429-headers"));
+      .find((m) => typeof m === "string" && m.includes("rate-limited"));
     expect(line).toBeDefined();
-    expect(line).toContain("retry-after=7");
-    expect(line).toContain("x-rate-limit=ABSENT");
+    expect(line).toContain("retry-after=7000ms");
+    // ⚠ And the pool got the parsed value, not the default hour.
+    expect(pool.onRateLimited).toHaveBeenCalledWith(creds.id, "K1", 7000);
   });
 
-  it('an "empty" pool falls back SILENTLY — most accounts are simply not pooled', async () => {
+  it("⚠ the removed DEBUG line is GONE — its event happened (#7)", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const { pool } = makePool(["K1"]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(429, "x")));
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", {
+      keyPool: pool,
+    }).catch(() => {});
+
+    const dump = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("429-headers"));
+    expect(dump).toBeUndefined();
+  });
+
+  /**
+   * ⚠ RENAMED IN #6, ASSERTION UNCHANGED. The old title was
+   * 'an "empty" pool falls back SILENTLY'. Its assertion was always narrower
+   * than that — it checks only that the EXHAUSTED warn does not fire — and #6
+   * deliberately made the empty path speak on the per-request line
+   * (`pool=off(empty)`). Leaving the old title would have documented silence
+   * as a guarantee, which is the opposite of what #6 exists to fix.
+   */
+  it('an "empty" pool does NOT raise the exhausted warn — most accounts are simply not pooled', async () => {
     const { log } = await import("@/lib/logger");
     (log as ReturnType<typeof vi.fn>).mockClear();
     const pool = {
@@ -556,6 +589,156 @@ describe("appleFetch — key pool (K2)", () => {
       (c) => typeof c[1] === "string" && c[1].includes("ALL POOL KEYS COOLING DOWN"),
     );
     expect(warned).toBe(false);
+  });
+
+  // ─── #4 — Apple's own words on the 429 ──────────────────────────────────
+
+  /**
+   * ⚠ MUTATION: drop `body=${errBody.slice(0,500)}` from the rate-limited log
+   * line. This goes red — and that mutation is the state HEAD was in when
+   * seven keys got parked for an hour on a signal nobody had read.
+   */
+  it("#4 — the 429 log line carries Apple's response BODY", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const { pool } = makePool(["K1"]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        mockResponse(429, '{"errors":[{"code":"RATE_LIMIT","detail":"too fast"}]}'),
+      ),
+    );
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", {
+      keyPool: pool,
+      // No retry wrapper here — one attempt, one line to inspect.
+    }).catch(() => {});
+
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("rate-limited"));
+    expect(line).toBeDefined();
+    expect(line).toContain('"code":"RATE_LIMIT"');
+    expect(line).toContain('"detail":"too fast"');
+  });
+
+  it("#4 — the body is truncated so a 429 burst cannot flood the log", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const { pool } = makePool(["K1"]);
+    const huge = "x".repeat(5000);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(429, huge)));
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", {
+      keyPool: pool,
+    }).catch(() => {});
+
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("rate-limited"))!;
+    expect(line).toContain("x".repeat(500));
+    expect(line).not.toContain("x".repeat(501));
+  });
+
+  // ─── #6 — which key, and whether it came from the pool ──────────────────
+
+  /**
+   * ⚠ THE ASSERTION THAT MATTERS IS THE `empty` ONE. That path returned with
+   * NO LOG AT ALL (selector.ts:198-200), so "the Manager seeded a key under
+   * the wrong account" looked identical in Railway to a working pool. That
+   * indistinguishability is why the cooldown incident could not be diagnosed
+   * from logs.
+   *
+   * ⚠ MUTATION: drop ` ${poolField}` from the per-request log line → all four
+   * below go red.
+   */
+  it("#6 — a pool key is attributed as pool=key", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const { pool } = makePool(["K1"]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200, { data: {} })));
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", {
+      keyPool: pool,
+    });
+
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("→ 200"))!;
+    expect(line).toContain("pool=key");
+  });
+
+  it("⚠ #6 — an EMPTY pool says so: pool=off(empty), never nothing", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const pool = {
+      select: vi.fn(async (a: typeof creds) => ({
+        creds: a,
+        fromPool: false,
+        missReason: "empty" as const,
+      })),
+      onRateLimited: vi.fn(async () => {}),
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200, { data: {} })));
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", { keyPool: pool });
+
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("→ 200"))!;
+    expect(line).toContain("pool=off(empty)");
+  });
+
+  it("#6 — an unreadable pool is a DIFFERENT reason: pool=off(error)", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const pool = {
+      select: vi.fn(async (a: typeof creds) => ({
+        creds: a,
+        fromPool: false,
+        missReason: "error" as const,
+      })),
+      onRateLimited: vi.fn(async () => {}),
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200, { data: {} })));
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", { keyPool: pool });
+
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("→ 200"))!;
+    expect(line).toContain("pool=off(error)");
+    expect(line).not.toContain("pool=off(empty)");
+  });
+
+  it("#6 — CPP's un-pooled path is pool=n/a, not a miss", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200, { data: {} })));
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "asc-client");
+
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("→ 200"))!;
+    expect(line).toContain("pool=n/a");
+  });
+
+  it("⚠ #6 — the 429 line carries the attribution too, so a parked key is traceable", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const { pool } = makePool(["K1"]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(429, "nope")));
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", {
+      keyPool: pool,
+    }).catch(() => {});
+
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("rate-limited"))!;
+    expect(line).toContain("pool=key");
+    expect(line).toContain("[K1]");
   });
 
   it("⚠ WITHOUT a pool, the selector is never consulted — this is CPP's path", async () => {

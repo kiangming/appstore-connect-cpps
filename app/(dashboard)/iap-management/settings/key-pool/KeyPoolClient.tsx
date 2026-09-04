@@ -85,6 +85,8 @@ export function KeyPoolClient({ isAdmin }: Props) {
   const [submitting, setSubmitting] = useState(false);
 
   const [busyRow, setBusyRow] = useState<string | null>(null);
+  /** [#5] The clear's own outcome — it carries caveats a toast would truncate. */
+  const [clearNote, setClearNote] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [rowError, setRowError] = useState<string | null>(null);
@@ -234,6 +236,48 @@ export function KeyPoolClient({ isAdmin }: Props) {
     }
   }
 
+  /**
+   * [#5] Put a parked key back into rotation.
+   *
+   * ⚠ The route clears the row AND this instance's in-memory markers — the DB
+   * alone is not enough (see the route's docstring). The count it returns is
+   * surfaced verbatim because "0 markers dropped" is a real and different
+   * answer from "3 dropped": it means the parked state was durable-only, i.e.
+   * another instance recorded it, or this one restarted since.
+   */
+  async function handleClearCooldown(row: PoolKeyAdminRow) {
+    setBusyRow(row.id);
+    setRowError(null);
+    setClearNote(null);
+    try {
+      const res = await fetch(`${API}/${row.id}/clear-cooldown`, {
+        method: "POST",
+      });
+      const data = (await res.json()) as {
+        keys?: PoolKeyAdminRow[];
+        error?: string;
+        inMemoryMarkersDropped?: number;
+      };
+      if (!res.ok) {
+        setRowError(data.error ?? `HTTP ${res.status}`);
+        return;
+      }
+      if (data.keys) setKeys(data.keys);
+      setClearNote(
+        `Đã bỏ cooldown cho ${row.keyId} — xoá ${data.inMemoryMarkersDropped ?? 0} mốc ` +
+          `in-memory trên instance vừa phục vụ request này. ` +
+          `⚠ Nếu Railway đang chạy nhiều instance, các instance khác vẫn giữ mốc ` +
+          `của riêng chúng cho tới khi hết giờ. ` +
+          `⚠ Việc này chỉ GỠ KẸT, không sửa nguyên nhân — export lần sau vẫn có ` +
+          `thể khoá lại.`,
+      );
+    } catch (err) {
+      setRowError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyRow(null);
+    }
+  }
+
   async function handleTest(row: PoolKeyAdminRow) {
     setTesting(row.id);
     setRowError(null);
@@ -323,6 +367,18 @@ export function KeyPoolClient({ isAdmin }: Props) {
           className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700"
         >
           {rowError}
+        </div>
+      )}
+      {/* ⚠ [#5] AMBER, NOT GREEN, AND IT STAYS ON SCREEN. Clearing a cooldown
+          is a stopgap with two caveats the operator has to carry away with
+          them (other instances; the cause is unfixed). A green toast that
+          fades would deliver "done" and drop both. */}
+      {clearNote && (
+        <div
+          data-testid="clear-cooldown-note"
+          className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+        >
+          {clearNote}
         </div>
       )}
 
@@ -446,7 +502,24 @@ export function KeyPoolClient({ isAdmin }: Props) {
                                 className="inline-flex items-center gap-1 px-3 py-1.5 text-[11px] font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition disabled:opacity-50"
                               >
                                 {row.enabled ? "Disable" : "Enable"}
-                              </button>
+                              </button>{" "}
+                              {/* ⚠ [#5] RENDERED ONLY WHILE THE KEY IS PARKED.
+                                  A permanently-visible "Clear cooldown" invites
+                                  clicking it as routine hygiene; the button
+                                  should exist exactly when there is something
+                                  to clear, which is the same predicate the
+                                  Cooldown column already renders from. */}
+                              {cd.cooling && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleClearCooldown(row)}
+                                  disabled={busyRow === row.id}
+                                  data-testid={`clear-cooldown-${row.keyId}`}
+                                  className="inline-flex items-center gap-1 px-3 py-1.5 text-[11px] font-medium bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-lg transition disabled:opacity-50"
+                                >
+                                  {busyRow === row.id ? "Đang bỏ…" : "Clear cooldown"}
+                                </button>
+                              )}
                               {result && (
                                 <div className="mt-2 text-left">
                                   <TestResultBox result={result} />
