@@ -69,9 +69,34 @@ export class AppleRateLimitError extends AppleApiError {
  * ⚠ IT EXTENDS `AppleRateLimitError` SO THE SHIPPED LATCHES KEEP WORKING.
  * `export-fetch`, `bulk-availability`, `submit-batch` and `retry-counters`
  * all decide "stop dispatching" with `err instanceof AppleRateLimitError`.
- * A pool with nothing left to hand out is the same fact those predicates
- * exist to catch — the budget is gone — so it must satisfy them. Not one
- * predicate changes, and none of their tests do either.
+ * A pool with nothing left to hand out cannot serve the next request either
+ * way, so it must satisfy them. Not one predicate changes, and none of their
+ * tests do either.
+ *
+ * ⚠⚠ THE ORIGINAL JUSTIFICATION FOR THIS INHERITANCE WAS **MEASURED FALSE ON
+ * 2026-09-04**, AND THE SENTENCE HAS BEEN REMOVED RATHER THAN SOFTENED.
+ * It read: *"A pool with nothing left to hand out is the same fact those
+ * predicates exist to catch — **the budget is gone** — so it must satisfy
+ * them."* The premise does not hold: in the incident the pool had nothing
+ * left to hand out while Apple's budget was **full**. Two keys read
+ * `rem=3599 lim=3600` at 15:31:31, 34m42s after the 429 at 14:56:49 —
+ * inside Apple's rolling hour, so that is a real reading, not recovery. The
+ * pool was empty because our own cooldown parked 7 keys in 394ms, not
+ * because Apple had run out.
+ *
+ * ⇒ **"Pool empty" and "budget gone" are DIFFERENT FACTS.** The inheritance
+ * survives on the narrower, still-true ground stated above — nothing can be
+ * sent, so stopping is right — and NOT on the budget claim.
+ *
+ * ⚠ THIS DISTINCTION IS LOAD-BEARING, AND IT IS WHY THIS NOTE EXISTS RATHER
+ * THAN A QUIET EDIT. Because the two facts were treated as one, 6 consumers
+ * report a pool exhaustion as Apple rate-limiting us — including the export
+ * workbook's failure sheet, where an operator read our own message believing
+ * it was Apple's 429 body, and `retry-counters.ts` which adds 3 to
+ * `rate429_count` with zero requests sent. Tracked as
+ * `[POOL-exhaustion-reported-as-apple-429]`. **Do NOT "restore" the removed
+ * sentence, and do NOT remove the inheritance** — the first is false, the
+ * second silently un-latches four stop predicates.
  *
  * ⚠ AND `retryAfterMs` IS 0 ON PURPOSE. THIS IS THE FAST EXIT.
  * Because it IS an `AppleRateLimitError`, `withRetry` retries it. Each of

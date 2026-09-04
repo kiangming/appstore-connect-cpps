@@ -158,6 +158,80 @@ describe("fetchExportSources", () => {
     expect(maxInFlight).toBeLessThanOrEqual(CONCURRENCY);
   });
 
+  /**
+   * ⚠ THE DEFAULT WIDTH, MEASURED — NOT `expect(CONST).toBe(3)`.
+   *
+   * An assertion on the constant is a copy of the source: it passes for any
+   * value the source happens to hold, so it cannot fail when someone raises
+   * the width back to 8. This test injects NO `concurrency`, so
+   * `fetchExportSources` uses its own default, and it counts how many
+   * `getIapDetail` calls are genuinely overlapping at the peak.
+   *
+   * That is the same instrument the sibling test above uses; the difference —
+   * and the whole point — is that this one does not tell it what to expect.
+   *
+   * ⚠ 12 items on purpose. With 3 workers that forces four full waves, so a
+   * regression to 8 shows up as a peak of 8, not as a fluke of too few items.
+   *
+   * ⚠ MUTATION: `EXPORT_FETCH_CONCURRENCY = 8` → this goes red with
+   * `maxInFlight` = 8.
+   *
+   * Context: lowered from 8 on 2026-09-04. 8 did not cause the incident's 429
+   * (556 of 632 items completed at that width first) but it amplified one 429
+   * into 7 parked keys in 394ms. See the constant's comment.
+   */
+  it("⚠ the DEFAULT concurrency is 3 — measured in flight, not read off the constant", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const getIapDetail = vi.fn().mockImplementation(async (_c, id: string) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return { iap: iap(id, `com.x.${id}`), localizations: [], screenshot: null };
+    });
+    const getPriceScheduleForIap = vi.fn().mockResolvedValue(scheduleResponse("USA"));
+
+    const items = Array.from({ length: 12 }, (_, i) => iap(`id-${i}`, `com.x.${i}`));
+    const result = await fetchExportSources(creds, items, {
+      getIapDetail,
+      getPriceScheduleForIap,
+      // ⚠ `concurrency` DELIBERATELY NOT PASSED — the default is under test.
+    });
+
+    expect(result.sources).toHaveLength(12);
+    expect(maxInFlight).toBe(3);
+  });
+
+  /**
+   * ⚠ THE VACUITY GUARD for the test above. If `withConcurrency` were broken
+   * such that it ran everything sequentially, `maxInFlight` would be 1 and a
+   * `toBe(3)` assertion would fail loudly — but a `toBeLessThanOrEqual(3)`
+   * one would pass. This pins that the width is genuinely USED, so the
+   * measurement above means "3 at the peak", not "at most 3".
+   */
+  it("⚠ vacuity guard — the width is really used, so 3 means 3 and not ≤3", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const getIapDetail = vi.fn().mockImplementation(async (_c, id: string) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return { iap: iap(id, `com.x.${id}`), localizations: [], screenshot: null };
+    });
+    const getPriceScheduleForIap = vi.fn().mockResolvedValue(scheduleResponse("USA"));
+
+    const items = Array.from({ length: 6 }, (_, i) => iap(`id-${i}`, `com.x.${i}`));
+    await fetchExportSources(creds, items, {
+      getIapDetail,
+      getPriceScheduleForIap,
+      concurrency: 5,
+    });
+
+    expect(maxInFlight).toBe(5);
+  });
+
   it("isolates multiple failures — every other IAP still exports", async () => {
     const getIapDetail = vi.fn().mockImplementation(async (_c, id: string) => {
       if (id === "bad-1" || id === "bad-2") {

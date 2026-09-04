@@ -62,15 +62,75 @@ cooldown**) and repeat step 1.
 | `pool=key` and **no** 429 at all | pool is working on a small read | The 429 is burst-shaped — supports (A) |
 | `ALL POOL KEYS COOLING DOWN` | our own latch, no Apple call | Clear cooldown, retry step 1 |
 
-## 4. Two numbers still needed (not blocking)
+## 3b. Reading the run that already failed (632 items, 556 ok, 76 failed)
 
-1. **What time was `Test key` clicked?** Apple's window is a rolling hour, so
-   `rem=3599` only proves the budget was untouched if the click landed *within*
-   the hour after the 429 burst (`~07:56:47`–`08:56:47`).
-2. **How many items did the failed export select?** At ~4 requests/item, under
-   ~900 items **cannot** reach the 3,600/hour cap — which would rule out
-   "budget exhausted" by arithmetic alone and leave the concurrency burst as
-   the only remaining explanation.
+⚠ **That run predates `d6cff65`, so its logs have NO `body=` and NO `pool=`.**
+These greps work on the OLD format only. They cannot produce Apple's 429 body —
+only §1-2 above can, on a NEW run.
+
+```
+# WHEN it started, and how fast it was going.
+# One line per item, so the count also tells you which item number the 429 hit.
+[get-schedule] stage1 fetching
+
+# The 429 itself — expect the timestamp 14:56:49
+rate-limited (retry-after=
+
+# ⭐ HOW MANY 429s LANDED TOGETHER. 8 lines at the same second = the burst
+# amplification is confirmed on this run. Fewer = the burst was narrower.
+[key-pool] 429-headers
+
+# our own latch firing (no request sent) — everything after this is NOT_ATTEMPTED
+ALL POOL KEYS COOLING DOWN
+```
+
+**What to compute, and what it is worth:**
+
+| From | Number | Meaning |
+|---|---|---|
+| first `stage1 fetching` → `14:56:49` | elapsed | with 556 items ≈ 2,224 requests ⇒ **requests/minute** |
+| count of `429-headers` at 14:56:49 | 1-8 | **8 ⇒ amplification confirmed** |
+| count of `stage1 fetching` before 14:56:49 | item index | where in the run it broke |
+
+⚠ **The requests/minute figure is an OBSERVATION, not a verdict.** This repo
+documents **no** Apple per-minute or per-second limit — `grep` for a 429 error
+taxonomy returns nothing, and KB §4.9 only ever measured the **hourly**
+`user-hour-lim:3600`. Do not compare the number against an invented threshold.
+Its only use is as a data point to hand Apple, or to compare against a *future*
+run at the lower concurrency.
+
+## 3c. Counting the 76 failures from the sheet
+
+Open **"Export Failures"** → column **`Reason`**:
+
+| `Reason` | Meaning | Re-exportable? |
+|---|---|---|
+| **Rate limited** | a 429 that survived all 4 attempts (`export-fetch.ts:102-103`) | yes |
+| **Not attempted** | the latch had already stopped the run; **nothing was sent** (`export-fetch.ts:207`) | yes — this is the count that is always safe |
+| Apple refused / Unknown / Incomplete prices / Base territory unreadable | unrelated to rate limiting | case by case |
+
+⚠ **"Rate limited" here does NOT prove Apple said so.** Our own
+`ApplePoolExhaustedError` is reported under the same label
+(`[POOL-exhaustion-reported-as-apple-429]`), and its `Detail` column reads
+`429: All ASC pool keys for account "…" are cooling down` — that string is
+**ours**. A row whose Detail mentions "pool keys" never reached Apple. Split
+the 76 by that before drawing any conclusion.
+
+## 4. Both outstanding numbers are now ANSWERED — and one refuted a diagnosis
+
+~~1. What time was `Test key` clicked?~~ ✅ **15:31:31, i.e. 34m42s after the
+   429 at 14:56:49 — INSIDE Apple's rolling hour.** So `rem=3599 lim=3600` is a
+   genuine reading of an **unspent** budget, not a post-recovery one.
+
+~~2. How many items did the failed export select?~~ ✅ **632 selected, 556
+   completed, 76 failed.** ⇒ ≈2,224 requests over 7 keys ≈ **318/key** against
+   3,600/hour ⇒ **hourly budget ruled out by arithmetic too.**
+
+⚠ **AND IT REFUTED "the export died on the first burst".** 556 items went
+through at concurrency 8 *before* any 429, so width 8 was **not the trigger** —
+it was the **amplifier** (one 429 with 8 in flight ⇒ 7 keys parked in 394ms).
+A window **shorter than an hour** (per-minute / per-second / burst) is the only
+surviving hypothesis and has **no evidence yet**. §1-2 is how to get it.
 
 ## 5. What is NOT being changed yet
 

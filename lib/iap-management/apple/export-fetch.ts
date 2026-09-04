@@ -43,11 +43,48 @@ import type {
   PriceReadFailure,
 } from "@/lib/iap-management/xlsx-export";
 
-/** Each IAP costs ~2-3 Apple calls (IAP+localizations, price-schedule
- *  stage 1, price-schedule stage 2). 8 concurrent workers keeps a
- *  large app (hundreds of IAPs) within a few minutes without
- *  saturating Apple's per-hour rate limit budget. */
-const EXPORT_FETCH_CONCURRENCY = 8;
+/**
+ * Each IAP costs ~3-4 Apple calls (IAP+localizations, price-schedule stage 1,
+ * stage 2 manualPrices, stage 2b automaticPrices when `includeAutomatic`).
+ *
+ * ─── WAS 8 UNTIL 2026-09-04. LOWERED TO 3 AFTER A REAL INCIDENT. ───────────
+ *
+ * ⚠ THIS IS RISK REDUCTION, NOT A FIX. The cause of the 429 is still unread —
+ * see TODO `[POOL-cooldown-misattribution]`. Do not raise this number back on
+ * the assumption that the cause was found; it was not.
+ *
+ * ⚠ AND 8 DID NOT CAUSE THE 429 — that was the first diagnosis and the data
+ * refuted it. The failing run selected **632 items and completed 556** before
+ * any 429 (≈2,224 requests at ~4/item). A concurrency limit hit at request
+ * 8 would have killed item ONE. So concurrency has two roles and only the
+ * second is established:
+ *
+ *   ✗ NOT the trigger.  556 items went through at this width, fine.
+ *   ✓ THE AMPLIFIER.    8 workers select 8 keys via round-robin
+ *                       (`selector.ts:211-212`), so ONE 429 arriving while 8
+ *                       requests are in flight parks **7 distinct keys inside
+ *                       394ms** — measured — and the pool then refuses
+ *                       everything for an hour (`selector.ts:53`).
+ *                       At 3 the same single 429 parks at most 3.
+ *   ~ AND A RATE MULTIPLIER, on a hypothesis not yet tested: Apple's HOURLY
+ *     budget is ruled out (2,224 requests over 7 keys ≈ 318/key against a
+ *     measured 3,600/hour limit, and `rem` read 3599/3600 on two keys 34m42s
+ *     after the 429 — inside the rolling window, so the budget genuinely was
+ *     untouched). A shorter window (per-minute / per-second / burst) is NOT
+ *     ruled out, and if that is what we are hitting, lower width lowers the
+ *     request rate directly.
+ *
+ * ⚠ WHY 3 AND NOT A NUMBER PICKED FOR FEEL: it is what the rest of this
+ * module already uses on Apple. Export was the outlier by 2.7-4x —
+ * `availability-sweep.ts:78` = 2, `bulk-availability.ts:93` = 2,
+ * `submit-batch/route.ts:101` = 2, `availability-read-phase.ts:92` = 3.
+ * Bringing export in line needs no new justification; staying at 8 did.
+ *
+ * Cost, so nobody is surprised: a 632-item export goes from ~79 to ~211
+ * sequential-item-slots. At the ~1.6s/item the failing run averaged that is
+ * roughly 2 minutes → 6 minutes.
+ */
+const EXPORT_FETCH_CONCURRENCY = 3;
 
 export interface ExportFetchFailure {
   productId: string;
