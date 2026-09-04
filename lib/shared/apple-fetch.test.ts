@@ -176,8 +176,18 @@ describe("appleFetch", () => {
     expect(line).toMatch(/\[asc-client\] .* budget=/);
 
     // Field order is part of the contract for anyone parsing with awk.
+    //
+    // ⚠ EXTENDED IN N2 (2026-09-04), AND THE `$` ANCHOR IS DELIBERATELY KEPT.
+    // N2 appended ` pool=…` after `key=`, so this assertion went red — which is
+    // exactly what it exists for (see the note above: "a future edit that
+    // reorders the line fails here"). The guard was NOT loosened to a substring
+    // match: it still pins the WHOLE line end-to-end, now describing the field
+    // order including the new tail. Appending stays the only safe edit; moving
+    // or removing a field still fails here.
+    //
+    // `pool=n/a` because this call passes no `keyPool` — the CPP shape.
     expect(line).toMatch(
-      /^\[asc-client\] GET \/v1\/apps\/x → 200 budget=1234\/3600 duration=\d+ms key=TESTKEY12$/,
+      /^\[asc-client\] GET \/v1\/apps\/x → 200 budget=1234\/3600 duration=\d+ms key=TESTKEY12 pool=n\/a$/,
     );
   });
 
@@ -709,6 +719,73 @@ describe("appleFetch — key pool (K2)", () => {
       .find((m) => typeof m === "string" && m.includes("→ 200"))!;
     expect(line).toContain("pool=off(error)");
     expect(line).not.toContain("pool=off(empty)");
+  });
+
+  /**
+   * [N2] ⚠ ONE LINE MUST ANSWER ALL THREE QUESTIONS: which key, pooled or not,
+   * and how much budget is left.
+   *
+   * Before N2, `pool=` was only on the per-request line and `budget=` only on
+   * this one, so an operator had to join two lines by endpoint+timestamp. That
+   * cost a full round of the cooldown investigation: a `/v1/territories`
+   * budget line was read as "the pool field is missing" when the pooled line
+   * was simply a different line.
+   *
+   * ⚠ MUTATION: drop ` ${poolField}` from the budget line → red.
+   */
+  it("⚠ N2 — the budget line carries key=, budget= AND pool= together", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const { pool } = makePool(["K1"]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        mockResponse(200, { data: {} }, {
+          "x-rate-limit": "user-hour-lim:3600;user-hour-rem:3599;",
+        }),
+      ),
+    );
+
+    await appleFetch(creds, "GET", "/v1/territories?limit=200", undefined, "iap-apple", {
+      keyPool: pool,
+    });
+
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("budget="))!;
+    expect(line).toContain("budget=3599/3600");
+    expect(line).toContain("key=K1");
+    expect(line).toContain("pool=key");
+  });
+
+  it("⚠ N2 — and it says pool=off(empty) on the same line when the pool is bypassed", async () => {
+    const { log } = await import("@/lib/logger");
+    (log as ReturnType<typeof vi.fn>).mockClear();
+    const pool = {
+      select: vi.fn(async (a: typeof creds) => ({
+        creds: a,
+        fromPool: false,
+        missReason: "empty" as const,
+      })),
+      onRateLimited: vi.fn(async () => {}),
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        mockResponse(200, { data: {} }, {
+          "x-rate-limit": "user-hour-lim:3600;user-hour-rem:3459;",
+        }),
+      ),
+    );
+
+    await appleFetch(creds, "GET", "/v1/apps/x", undefined, "iap-apple", { keyPool: pool });
+
+    const line = (log as ReturnType<typeof vi.fn>).mock.calls
+      .map((c) => c[1] as string)
+      .find((m) => typeof m === "string" && m.includes("budget="))!;
+    expect(line).toContain("budget=3459/3600");
+    expect(line).toContain(`key=${creds.keyId}`);
+    expect(line).toContain("pool=off(empty)");
   });
 
   it("#6 — CPP's un-pooled path is pool=n/a, not a miss", async () => {

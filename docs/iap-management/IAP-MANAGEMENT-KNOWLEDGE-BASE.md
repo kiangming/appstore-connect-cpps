@@ -492,6 +492,58 @@ for an hour. On 2026-09-04 that parked **7 keys in 394ms** on `vng-corp` while
 Apple's budget was untouched. Do not treat the absence of these headers as
 merely an observability gap; it is load-bearing for the cooldown policy.
 
+**TWO KEYS, TWO BUDGETS, AND THE POOL SEES ONLY ONE OF THEM (measured
+2026-09-04).**
+
+Budgets are per-key (D1, below). This module therefore spends **two separate
+3,600/hour budgets**, and the pool observes only its own:
+
+| Path | Signs with | Pooled? |
+|---|---|---|
+| `iapFetch` → `appleFetch(..., { keyPool })` (`apple/fetch.ts`) | a **pool key** from `iap_mgmt.asc_account_keys` | ✅ |
+| `ascFetch` → `appleFetch(..., "asc-client")` (`lib/asc-client.ts:57-64`) | the **account key** from `public.asc_accounts` | ❌ |
+
+⚠ **AND THE SECOND PATH IS NOT "JUST CPP".** Eleven Apple IAP Management entry
+points import `@/lib/asc-client`, including the IAP **list page itself** on
+every load (`app/(dashboard)/iap-management/apps/[appId]/page.tsx:81`). The
+full list is in `apple/fetch.ts`'s corrected docstring. The comment there used
+to claim *"every Apple call made by IAP Management routes through this
+function"* — false, and corrected on the same day.
+
+**The numbers as measured, in one Railway sample:**
+
+```
+[iap-apple]  [asc-client] GET /v1/territories?limit=200 → 200
+                 budget=3599/3600  key=WYMNPMQBT4     ← pool key, untouched
+[asc-client] [asc-client] GET /v1/apps/6739695237     → 200
+                 budget=3459/3600  key=F28D5J857Z     ← ACCOUNT key, 141 spent
+```
+
+⇒ The account key had already spent **141 requests** while every pool key sat
+at `lim − 1`. A 632-item export costs ≈**2,528** requests (~4/item). 141 + 2,528
+≈ **2,669 of 3,600** — comfortable on its own, and *not* comfortable if the
+account key has been accumulating page loads all day.
+
+⚠ **WHY THAT ARITHMETIC MATTERS: THE TWO PATHS MEET AT THE FALLBACK.**
+`selectKey` returns the ACCOUNT's credentials when the pool is `empty`
+(`selector.ts:198-200`) or unreadable (`error`, `:190-196`). An account with no
+pool keys — **the normal state, the pool is opt-in per account** — runs its
+whole export on the very key the eleven entry points are spending, and nothing
+warns anyone. The pool cannot help: it reads only
+`iap_mgmt.asc_account_keys` (`repository.ts:141-146`) and never learns what is
+left of the account key's own budget.
+
+⇒ **Rules that follow.** (a) "Is the pool live?" is answered per REQUEST by the
+`pool=` field, not per account. (b) A 429 on the `asc-client` path is a
+**different failure** from a 429 on the pooled path and must not be diagnosed
+with the pool's tools. (c) Seeding pool keys does not reduce `asc-client`
+traffic at all — it is a separate budget that only shrinks by making fewer page
+loads.
+
+⚠ **NO EVIDENCE this path caused the 2026-09-04 incident** — that export was
+demonstrably on a pool key (`pool=key`, `68J8RLGLS9`). Tracked separately as
+`[ASC-CLIENT-outside-pool]`; **do not merge the two investigations.**
+
 **D1 — PER-KEY OR PER-TEAM: ✅ RESOLVED BY MEASUREMENT ON THIS SYSTEM
 (2026-09-04). VERDICT: PER-KEY.**
 

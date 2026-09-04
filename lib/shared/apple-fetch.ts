@@ -470,9 +470,22 @@ export async function appleFetch<T>(
     // in full as `[${creds.keyId}]`, and a 10-char ASC key id abbreviated to
     // a prefix stops being an identifier — which is the entire point of
     // logging it. Attribution per key is unusable if two keys share a prefix.
+    //
+    // ⚠ [N2, 2026-09-04] `pool=` IS APPENDED HERE TOO, and the reason is a
+    // real diagnostic seam rather than tidiness. `budget=` only exists on
+    // endpoints that send `x-rate-limit`, and `pool=` used to live ONLY on the
+    // per-request line above — so answering "which key, from the pool or not,
+    // with how much budget left" meant JOINING TWO LOG LINES by endpoint and
+    // timestamp. During the cooldown investigation a `/v1/territories` line
+    // was read as evidence that the pool field was missing, when in fact the
+    // pooled line was simply a different line. One line now answers all three.
+    //
+    // ⚠ Still appended at the END, after `key=`, for the same reason `key=`
+    // was: the established audit grep is `[asc-client] … budget=`, and every
+    // existing pattern keeps matching when new fields go on the tail.
     await log(
       logTag,
-      `[asc-client] ${method} ${endpoint} → ${res.status} budget=${budget.remaining}/${budget.limit} duration=${durationMs}ms key=${creds.keyId}`,
+      `[asc-client] ${method} ${endpoint} → ${res.status} budget=${budget.remaining}/${budget.limit} duration=${durationMs}ms key=${creds.keyId} ${poolField}`,
     );
   }
 
