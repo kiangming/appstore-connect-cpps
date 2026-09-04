@@ -1,0 +1,460 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Google IAP — Export picker: phân trang + shift-click</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  /* Palette đọc từ components/google-iap-management/iap-list/*.tsx — Tailwind slate + emerald.
+     KHÔNG dùng navy #0c447c / #0071E3 của module Apple. */
+  --em50:#ecfdf5;--em200:#a7f3d0;--em500:#10b981;--em600:#059669;--em700:#047857;
+  --s50:#f8fafc;--s100:#f1f5f9;--s200:#e2e8f0;--s300:#cbd5e1;--s400:#94a3b8;
+  --s500:#64748b;--s600:#475569;--s700:#334155;--s800:#1e293b;--s900:#0f172a;
+  --am50:#fffbeb;--am200:#fde68a;--am800:#92400e;
+}
+body{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  background:var(--s100);color:var(--s900);padding:28px 20px 80px}
+.wrap{max-width:1180px;margin:0 auto}
+h1{font-size:21px;font-weight:700;margin-bottom:6px}
+.sub{color:var(--s500);font-size:13px;margin-bottom:18px}
+.warn{background:var(--am50);border:1px solid var(--am200);color:var(--am800);
+  border-radius:10px;padding:12px 14px;font-size:12.5px;line-height:1.6;margin-bottom:26px}
+.warn b{font-weight:700}
+h2{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--s500);margin:34px 0 4px;padding-top:16px;border-top:1px solid var(--s200)}
+.why{font-size:12.5px;color:var(--s600);margin-bottom:12px;max-width:860px}
+.why code{background:var(--s200);padding:1px 5px;border-radius:4px;font-size:11.5px}
+.grid{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start}
+
+/* ── dialog ── */
+.dlg{width:452px;background:#fff;border:1px solid var(--s200);border-radius:16px;
+  box-shadow:0 10px 26px rgba(15,23,42,.11);overflow:hidden;flex-shrink:0}
+.dh{padding:18px 20px 14px;border-bottom:1px solid var(--s100);display:flex;
+  justify-content:space-between;align-items:flex-start;gap:12px}
+.dh h3{font-size:15.5px;font-weight:600;color:var(--s900)}
+.dh p{font-size:11.5px;color:var(--s500);margin-top:2px}
+.x{color:var(--s400);font-size:16px;line-height:1;cursor:default}
+.db{padding:16px 20px}
+
+.radios{border:1px solid var(--s200);border-radius:9px;overflow:hidden}
+.radio{display:flex;align-items:center;gap:10px;padding:9px 12px;font-size:13px}
+.radio+.radio{border-top:1px solid var(--s100)}
+.radio .lb{flex:1}
+.radio .ct{font-size:11px;font-weight:600;color:var(--s500);font-variant-numeric:tabular-nums}
+.dot{width:13px;height:13px;border:1.5px solid var(--s300);border-radius:50%;flex-shrink:0;position:relative}
+.dot.on{border-color:var(--em600);border-width:4px}
+.note{margin-top:10px;background:var(--am50);border:1px solid var(--am200);color:var(--am800);
+  border-radius:9px;padding:8px 11px;font-size:10.5px;line-height:1.55}
+.mirror{margin-top:8px;font-size:10.5px;color:var(--s500);line-height:1.55}
+
+.sect{margin-top:16px;padding-top:13px;border-top:1px solid var(--s200)}
+.sect>.cap{font-size:10.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--s500);margin-bottom:8px}
+
+/* toolbar — (A) NÚT có nhãn = toàn bộ matching */
+.tools{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:9px}
+.btn{font-size:11.5px;font-weight:500;padding:4px 10px;border-radius:7px;
+  border:1px solid var(--s200);background:#fff;color:var(--s700);cursor:default;white-space:nowrap}
+.btn.pri{border-color:var(--em200);background:var(--em50);color:var(--em700)}
+.seg{display:inline-flex;border:1px solid var(--s200);border-radius:7px;overflow:hidden;margin-left:auto}
+.seg span{font-size:11px;padding:4px 9px;color:var(--s600);background:#fff;white-space:nowrap}
+.seg span+span{border-left:1px solid var(--s200)}
+.seg span.on{background:var(--em600);color:#fff;font-weight:600}
+
+.search{position:relative;margin-bottom:10px}
+.search input{width:100%;border:1px solid var(--s300);border-radius:9px;
+  padding:7px 11px 7px 29px;font-size:12.5px;color:var(--s900);font-family:inherit}
+.search input:focus{outline:2px solid var(--em500);outline-offset:-1px;border-color:transparent}
+.search .ic{position:absolute;left:9px;top:50%;transform:translateY(-50%);
+  color:var(--s400);font-size:12px}
+
+/* (B) CHECKBOX đầu cột tickbox = trang hiện tại, tri-state */
+.selbar{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding-bottom:8px;border-bottom:1px solid var(--s200);margin-bottom:7px}
+.selbar label{display:flex;align-items:center;gap:8px;font-size:11.5px;
+  font-weight:500;color:var(--s600)}
+.cb{width:14px;height:14px;border:1.5px solid var(--s300);border-radius:3.5px;
+  background:#fff;flex-shrink:0;position:relative}
+.cb.on{background:var(--em600);border-color:var(--em600)}
+.cb.on::after{content:"";position:absolute;left:3.6px;top:1px;width:4px;height:7.5px;
+  border:solid #fff;border-width:0 1.8px 1.8px 0;transform:rotate(45deg)}
+.cb.ind{background:var(--em600);border-color:var(--em600)}
+.cb.ind::after{content:"";position:absolute;left:2.4px;top:5.4px;width:7px;height:0;
+  border-top:1.8px solid #fff}
+
+/* ⚠ M2 — BỘ ĐẾM HAI TẦNG */
+.cnt2{text-align:right;font-size:10.5px;line-height:1.35;font-variant-numeric:tabular-nums}
+.cnt2 b{display:block;font-size:11.5px;font-weight:700;color:var(--em700)}
+.cnt2 i{font-style:normal;color:var(--s400)}
+
+.hint{font-size:10.5px;color:var(--s500);margin-bottom:7px;line-height:1.5}
+.hint.k{background:var(--em50);border:1px solid var(--em200);color:var(--em700);
+  border-radius:7px;padding:6px 9px}
+
+ul.rows{list-style:none;border-top:1px solid transparent}
+ul.rows li{display:flex;align-items:center;gap:11px;padding:7px 2px;font-size:13px}
+ul.rows li+li{border-top:1px solid var(--s100)}
+ul.rows li.rng{background:var(--em50);margin:0 -6px;padding-left:8px;padding-right:8px;border-radius:5px}
+ul.rows li.anch{box-shadow:inset 2px 0 0 var(--em600)}
+.meta{min-width:0;flex:1}
+.meta .t{font-weight:500;color:var(--s800);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta .k{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10.5px;
+  color:var(--s500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.st{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:500;flex-shrink:0}
+.st.a{color:var(--em700)}.st.i{color:var(--s500)}
+.st .d{width:7px;height:7px;border-radius:50%}
+.st.a .d{background:var(--em500)}.st.i .d{background:var(--s400)}
+
+/* footer — Rows dropdown ở CỤM PHẢI, NGAY TRƯỚC Prev (M6) */
+.pnav{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  flex-wrap:wrap;border-top:1px solid var(--s200);background:var(--s50);padding:8px 14px}
+.pnav .sum{font-size:11.5px;color:var(--s500)}
+.pnav .cluster{display:flex;align-items:center;gap:8px}
+.rows-dd{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--s600)}
+.rows-dd select{font:inherit;font-size:11px;border:1px solid var(--s200);border-radius:6px;
+  background:#fff;color:var(--s700);padding:3px 4px}
+.pbtn{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:500;
+  padding:3.5px 9px;border-radius:6px;border:1px solid var(--s200);background:#fff;color:var(--s700)}
+.pbtn.off{opacity:.4}
+.ppos{font-size:11.5px;color:var(--s500);font-variant-numeric:tabular-nums}
+.ppos b{color:var(--s700);font-weight:600}
+
+.dfoot{padding:11px 20px;border-top:1px solid var(--s100);background:var(--s50);
+  display:flex;justify-content:flex-end;gap:8px}
+.fbtn{font-size:13px;font-weight:500;padding:7px 14px;border-radius:9px;border:none;color:var(--s600)}
+.fbtn.go{background:var(--em600);color:#fff;padding:7px 16px}
+.fbtn.go.dis{opacity:.4}
+.cardnote{font-size:11.5px;color:var(--s600);width:452px;flex-shrink:0;line-height:1.6;
+  background:#fff;border:1px solid var(--s200);border-left:3px solid var(--em500);
+  border-radius:9px;padding:11px 13px}
+.cardnote b{color:var(--s800)}
+</style></head><body><div class="wrap">
+
+<h1>Google IAP — Export picker: phân trang + shift-click</h1>
+<p class="sub">Mockup thiết kế · arc <code>arc-google-export-picker-paging</code> · CHỜ MANAGER DUYỆT</p>
+
+<div class="warn">
+<b>⚠ DỮ LIỆU TRONG MOCKUP LÀ GIẢ ĐỊNH.</b> Repo không chứa SKU / packageName production nào
+(đã grep <code>docs/**/*.md</code> và <code>lib/google-iap-management/__fixtures__/</code> → không có).
+SKU dưới đây <b>đúng hình dạng</b> reverse-DNS mà Google dùng, nhưng tên và con số
+<b>n = 197 item</b> là <b>bịa để minh hoạ</b>.<br>
+→ Số thật lấy bằng <b>Q5</b> trong <code>docs/google-iap-management/queries/census-google-export-item-list.sql</code>
+(READ-ONLY, đã có sẵn). <b>Đừng chốt page size mặc định trước khi có số đó</b> — xem P6-Q4.
+<br><br>
+<b>⚠ Palette:</b> emerald + slate, đọc từ component thật. Không có màu navy
+<code>#0c447c</code> / <code>#0071E3</code> của module Apple.
+</div>
+
+<!-- ══════════ 1. TRANG 1 + ĐANG "SELECT ALL" ══════════ -->
+<h2>State 1 + 7 — Trang đầu · đang "select all" (mặc định khi mở)</h2>
+<p class="why">Mở picker → <b>tick hết 197</b> (<code>IapListClient.tsx:199-202</code>). Đây là mặc định
+của Google, <b>ngược Apple</b> (Apple mở ra rỗng). Nút <b>(A)</b> ở toolbar đang ở nhãn
+<code>Clear all 197</code> vì mọi item đang được tick; checkbox <b>(B)</b> đầu cột hiện
+<b>checked</b> cho trang này.</p>
+<div class="grid">
+<div class="dlg">
+  <div class="dh"><div><h3>Export list — items to include</h3>
+    <p>Step 1 of 2 · countries are chosen next</p></div><div class="x">✕</div></div>
+  <div class="db">
+    <div class="radios">
+      <div class="radio"><div class="dot on"></div><span class="lb">All items</span><span class="ct">197</span></div>
+      <div class="radio"><div class="dot"></div><span class="lb">Active only</span><span class="ct">164</span></div>
+      <div class="radio"><div class="dot"></div><span class="lb">Inactive only</span><span class="ct">33</span></div>
+    </div>
+    <p class="note">“Active” ở tool gộp <b>hai</b> state của Google (<code>ACTIVE</code> và
+      <code>INACTIVE_PUBLISHED</code>). Filter theo cột này không phân biệt được hai state đó.</p>
+    <p class="mirror">Các con số này lấy từ danh sách trên màn, đồng bộ lần cuối bằng Refresh.
+      File được dựng từ Google live, nên nếu item đã đổi thì file theo Google — và thông báo kết quả sẽ nói rõ.</p>
+
+    <div class="sect"><div class="cap">Items (197 of 197 selected)</div>
+      <div class="tools">
+        <button class="btn pri">Clear all 197</button>
+        <div class="seg"><span class="on">All</span><span>Selected (197)</span></div>
+      </div>
+      <div class="search"><span class="ic">⌕</span><input placeholder="Search by SKU or name…"></div>
+      <div class="selbar">
+        <label><span class="cb on"></span> Clear 20 on this page</label>
+        <div class="cnt2"><b>197 selected</b><i>20 of 20 on this page</i></div>
+      </div>
+      <ul class="rows">
+        <li><span class="cb on"></span><div class="meta"><div class="t">Gói Kim Cương Nhỏ</div>
+          <div class="k">com.vng.arena.gem.pack01</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">Gói Kim Cương Vừa</div>
+          <div class="k">com.vng.arena.gem.pack02</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">Gói Kim Cương Lớn</div>
+          <div class="k">com.vng.arena.gem.pack03</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">— no title —</div>
+          <div class="k">com.vng.arena.gem.pack04_legacy</div></div><span class="st i"><span class="d"></span>inactive</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">Thẻ Tháng VIP</div>
+          <div class="k">com.vng.arena.pass.monthly</div></div><span class="st a"><span class="d"></span>active</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="pnav"><p class="sum">Showing 1–20 of 197</p>
+    <div class="cluster">
+      <span class="rows-dd">Rows <select><option>20</option><option>30</option><option>50</option></select></span>
+      <span class="pbtn off">‹ Prev</span><span class="ppos">Page <b>1</b> of <b>10</b></span><span class="pbtn">Next ›</span>
+    </div></div>
+  <div class="dfoot"><button class="fbtn">Cancel</button>
+    <button class="fbtn go">Next — choose countries (197)</button></div>
+</div>
+<div class="cardnote"><b>Ba cơ chế, phân biệt bằng LOẠI CONTROL (M7).</b><br>
+<b>(A) NÚT có nhãn</b>, ở toolbar → <b>toàn bộ matching</b>. Đọc phạm vi từ nhãn: “all 197”.<br>
+<b>(B) CHECKBOX</b> ở đầu cột tickbox → <b>trang hiện tại</b>, tri-state.<br>
+<b>(C) shift-click</b> → dải trong trang, <b>không có control riêng</b>.<br><br>
+<b>⚠ Rows dropdown</b> đặt ở <b>footer, cụm phải, ngay trước Prev</b> — Manager đã chốt (M6).<br><br>
+<b>⚠ Cái giá của (A):</b> nút không có trạng thái indeterminate ⇒ <b>bộ đếm hai tầng (M2) là bắt buộc</b>,
+không phải trang trí.</div>
+</div>
+
+<!-- ══════════ 2. TRANG GIỮA + TICK MỘT PHẦN + ĐẾM LỆCH ══════════ -->
+<h2>State 2 + 4 + 5 — Trang giữa · tick một phần (indeterminate) · hai tầng đếm LỆCH</h2>
+<p class="why">Đây là <b>state quan trọng nhất của cả thiết kế</b>. Operator đã bỏ tick bớt và đang ở trang 4.
+Tổng là <b>31</b>, nhưng trên trang đang xem chỉ <b>6</b> ⇒ hai tầng <b>lệch nhau</b>.
+Không có tầng thứ hai thì “31 selected” cạnh một trang có 6 dấu tick đọc như một lỗi.
+Checkbox (B) ở <b>indeterminate</b>; bấm nó <b>tick nốt 14 dòng còn lại của trang</b>, <b>không bao giờ xoá</b>.</p>
+<div class="grid">
+<div class="dlg">
+  <div class="dh"><div><h3>Export list — items to include</h3>
+    <p>Step 1 of 2 · countries are chosen next</p></div><div class="x">✕</div></div>
+  <div class="db">
+    <div class="sect" style="margin-top:0;padding-top:0;border-top:none">
+      <div class="cap">Items (31 of 197 selected)</div>
+      <div class="tools">
+        <button class="btn">Select all 197</button>
+        <div class="seg"><span class="on">All</span><span>Selected (31)</span></div>
+      </div>
+      <div class="search"><span class="ic">⌕</span><input placeholder="Search by SKU or name…"></div>
+      <div class="selbar">
+        <label><span class="cb ind"></span> Select all 20 on this page</label>
+        <div class="cnt2"><b>31 selected</b><i>6 of 20 on this page</i></div>
+      </div>
+      <p class="hint">25 item đã chọn <b>không nằm trên trang này</b> — vẫn được chọn, vẫn được export.</p>
+      <ul class="rows">
+        <li><span class="cb on"></span><div class="meta"><div class="t">Túi Vàng 1.000</div>
+          <div class="k">com.vng.arena.gold.1k</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb"></span><div class="meta"><div class="t">Túi Vàng 5.000</div>
+          <div class="k">com.vng.arena.gold.5k</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">Túi Vàng 10.000</div>
+          <div class="k">com.vng.arena.gold.10k</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb"></span><div class="meta"><div class="t">Túi Vàng 50.000</div>
+          <div class="k">com.vng.arena.gold.50k</div></div><span class="st i"><span class="d"></span>inactive</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">Quà Tân Thủ</div>
+          <div class="k">com.vng.arena.bundle.newbie</div></div><span class="st a"><span class="d"></span>active</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="pnav"><p class="sum">Showing 61–80 of 197</p>
+    <div class="cluster">
+      <span class="rows-dd">Rows <select><option>20</option><option>30</option><option>50</option></select></span>
+      <span class="pbtn">‹ Prev</span><span class="ppos">Page <b>4</b> of <b>10</b></span><span class="pbtn">Next ›</span>
+    </div></div>
+  <div class="dfoot"><button class="fbtn">Cancel</button>
+    <button class="fbtn go">Next — choose countries (31)</button></div>
+</div>
+<div class="cardnote"><b>⚠ RỦI RO LỚN NHẤT CỦA ARC, ở đúng state này.</b><br>
+Hôm nay window <b>chỉ nở ra</b> nên dòng đã thấy không bao giờ rời màn. Phân trang cho phép
+dòng <b>ĐÃ TICK trôi khỏi màn</b> ⇒ “đang thấy ≠ đang chọn” thành <b>hai chiều</b>.
+Đúng lớp lỗi <code>[GOOGLE-export-intersection-silent-drop]</code> vừa dọn.<br><br>
+<b>Sắc thái riêng của Google:</b> vì mặc định <b>tick hết</b>, chiều nguy hiểm hơn
+(<i>đang chọn mà chưa từng thấy</i>) <b>đã mở sẵn từ hôm nay</b> — 147/197 dòng.
+Phân trang mở nốt chiều còn lại.<br><br>
+⇒ Ba thứ chống lại nó, <b>không thứ nào là tuỳ chọn</b>: bộ đếm hai tầng ·
+dòng nhắc “25 item không nằm trên trang này” · chế độ <b>Selected only</b>.</div>
+</div>
+
+<!-- ══════════ 3. DẢI SHIFT-CLICK ══════════ -->
+<h2>State 8 — Dải shift-click (M8)</h2>
+<p class="why">Click <code>gold.1k</code> rồi <b>shift-click</b> <code>bundle.newbie</code> → tick cả dải.
+<b>CỘNG DỒN kiểu Gmail, không đảo.</b> Anchor là <b>ID (SKU)</b>, không phải index — an toàn vì thứ tự
+ổn định và toàn phần (DB <code>.order("sku")</code> trên cột UNIQUE, mọi hop sau đều <code>.filter()</code>/<code>.slice()</code>,
+<b>không có <code>.sort()</code> nào</b>). <b>Không qua ranh giới trang</b>, và <b>nói rõ bằng hint</b> — không im lặng thoái hoá.</p>
+<div class="grid">
+<div class="dlg">
+  <div class="db" style="padding-top:18px">
+    <div class="sect" style="margin-top:0;padding-top:0;border-top:none">
+      <div class="cap">Items (36 of 197 selected)</div>
+      <div class="tools"><button class="btn">Select all 197</button>
+        <div class="seg"><span class="on">All</span><span>Selected (36)</span></div></div>
+      <div class="selbar">
+        <label><span class="cb ind"></span> Select all 20 on this page</label>
+        <div class="cnt2"><b>36 selected</b><i>11 of 20 on this page</i></div>
+      </div>
+      <p class="hint k">↕ Đã chọn dải 5 item. <b>Shift-click chỉ chạy trong trang đang xem</b> —
+        chuyển trang sẽ xoá điểm neo.</p>
+      <ul class="rows">
+        <li class="rng anch"><span class="cb on"></span><div class="meta"><div class="t">Túi Vàng 1.000</div>
+          <div class="k">com.vng.arena.gold.1k</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li class="rng"><span class="cb on"></span><div class="meta"><div class="t">Túi Vàng 5.000</div>
+          <div class="k">com.vng.arena.gold.5k</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li class="rng"><span class="cb on"></span><div class="meta"><div class="t">Túi Vàng 10.000</div>
+          <div class="k">com.vng.arena.gold.10k</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li class="rng"><span class="cb on"></span><div class="meta"><div class="t">Túi Vàng 50.000</div>
+          <div class="k">com.vng.arena.gold.50k</div></div><span class="st i"><span class="d"></span>inactive</span></li>
+        <li class="rng"><span class="cb on"></span><div class="meta"><div class="t">Quà Tân Thủ</div>
+          <div class="k">com.vng.arena.bundle.newbie</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb"></span><div class="meta"><div class="t">Quà Hồi Server</div>
+          <div class="k">com.vng.arena.bundle.comeback</div></div><span class="st a"><span class="d"></span>active</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="pnav"><p class="sum">Showing 61–80 of 197</p>
+    <div class="cluster">
+      <span class="rows-dd">Rows <select><option>20</option><option>30</option><option>50</option></select></span>
+      <span class="pbtn">‹ Prev</span><span class="ppos">Page <b>4</b> of <b>10</b></span><span class="pbtn">Next ›</span>
+    </div></div>
+</div>
+<div class="cardnote"><b>Đây là chỗ arc thắng lớn nhất.</b><br>
+30 item <b>liền nhau</b>: ~32 thao tác → <b>3</b>.<br><br>
+<b>⚠ KHÔNG NHẬN CÔNG LỐ:</b> 30 item <b>rải rác</b> vẫn là ~30 tick —
+<b>không hướng nào giảm được</b>. Cái cải thiện là <b>tìm</b> (search, vốn đã có)
+và <b>định hướng</b> (biết mình ở đâu trong bao nhiêu).<br><br>
+<b>Vì sao làm shift-click TRƯỚC:</b> rủi ro thấp nhất — không thể chạm dòng chưa render
+⇒ <b>không thể chọn cái chưa thấy</b>. 2 file thay vì 4, không cần <code>PageNav</code>,
+không cần quyết định import chéo module.</div>
+</div>
+
+<!-- ══════════ 4. SEARCH BẬT ══════════ -->
+<h2>State 6 — Search đang bật (M3 · M4 · M5)</h2>
+<p class="why">Search lọc <b>TOÀN BỘ 197</b> rồi <b>mới chia trang</b> (M3) — 12 kết quả, 1 trang.
+Lọc theo <b>tên + SKU</b> (<code>IapSelectionList.tsx:85-90</code>).
+<b>⚠ Google không có gate số-dòng cho ô search</b> — bẫy Apple từng gặp
+(<code>rows.length &gt; 60</code>) <b>không tồn tại ở đây, và đừng nhập khẩu vào</b>.
+Checkbox (B) khi đang search = tick <b>trang đã lọc</b> (M5).</p>
+<div class="grid">
+<div class="dlg">
+  <div class="db" style="padding-top:18px">
+    <div class="sect" style="margin-top:0;padding-top:0;border-top:none">
+      <div class="cap">Items (31 of 197 selected)</div>
+      <div class="tools"><button class="btn">Select all 12 matching</button>
+        <div class="seg"><span class="on">All</span><span>Selected (31)</span></div></div>
+      <div class="search"><span class="ic">⌕</span><input value="gem" style="color:var(--s900)"></div>
+      <div class="selbar">
+        <label><span class="cb ind"></span> Select all 12 on this page</label>
+        <div class="cnt2"><b>31 selected</b><i>3 of 12 matching</i></div>
+      </div>
+      <p class="hint">28 item đã chọn bị <b>search hiện tại che</b> — vẫn được chọn, vẫn được export.</p>
+      <ul class="rows">
+        <li><span class="cb on"></span><div class="meta"><div class="t">Gói Kim Cương Nhỏ</div>
+          <div class="k">com.vng.arena.gem.pack01</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb"></span><div class="meta"><div class="t">Gói Kim Cương Vừa</div>
+          <div class="k">com.vng.arena.gem.pack02</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">Gói Kim Cương Lớn</div>
+          <div class="k">com.vng.arena.gem.pack03</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">— no title —</div>
+          <div class="k">com.vng.arena.gem.pack04_legacy</div></div><span class="st i"><span class="d"></span>inactive</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="pnav"><p class="sum">Showing 1–12 of 12 <span style="color:var(--s400)">(filtered from 197)</span></p>
+    <div class="cluster">
+      <span class="rows-dd">Rows <select><option>20</option><option>30</option><option>50</option></select></span>
+    </div></div>
+</div>
+<div class="cardnote"><b>M4 — gõ search → tick → xoá search: tick VẪN CÒN.</b><br>
+Đây là lý do <b>M2 bắt buộc</b>: bộ đếm có thể hiện “31 selected” trong lúc chỉ 3 dòng trên màn có dấu tick.
+Hôm nay code đã đúng chuyện này (<code>IapSelectionList.tsx:155-161</code>) — arc chỉ thêm tầng đếm thứ hai.<br><br>
+<b>⚠ Thanh nav vẫn hiện dù chỉ 1 trang</b>, vì <b>Rows dropdown sống trong thanh đó</b>
+và phải luôn với tới được. Cụm Prev/Next thì tự ẩn.
+(<code>PageNav</code> đã tách đúng như vậy sẵn: <code>PageNav.tsx:23-30</code>.)</div>
+</div>
+
+<!-- ══════════ 5. SELECTED ONLY ══════════ -->
+<h2>State 9 — “Selected only” (M10)</h2>
+<p class="why">Van an toàn thật sự cho rủi ro ở State 2: nó biến “cái tôi đã chọn” thành một danh sách
+<b>duyệt được</b> — thứ hôm nay hoàn toàn không có. Checkbox (B) ở chế độ này hiện
+<b>checked + nhãn Clear</b>, <b>không special-case</b> (Manager đã chốt).</p>
+<div class="grid">
+<div class="dlg">
+  <div class="db" style="padding-top:18px">
+    <div class="sect" style="margin-top:0;padding-top:0;border-top:none">
+      <div class="cap">Items (31 of 197 selected)</div>
+      <div class="tools"><button class="btn">Clear all 31</button>
+        <div class="seg"><span>All</span><span class="on">Selected (31)</span></div></div>
+      <div class="search"><span class="ic">⌕</span><input placeholder="Search by SKU or name…"></div>
+      <div class="selbar">
+        <label><span class="cb on"></span> Clear 20 on this page</label>
+        <div class="cnt2"><b>31 selected</b><i>20 of 20 on this page</i></div>
+      </div>
+      <ul class="rows">
+        <li><span class="cb on"></span><div class="meta"><div class="t">Gói Kim Cương Nhỏ</div>
+          <div class="k">com.vng.arena.gem.pack01</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">Gói Kim Cương Lớn</div>
+          <div class="k">com.vng.arena.gem.pack03</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">— no title —</div>
+          <div class="k">com.vng.arena.gem.pack04_legacy</div></div><span class="st i"><span class="d"></span>inactive</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">Túi Vàng 1.000</div>
+          <div class="k">com.vng.arena.gold.1k</div></div><span class="st a"><span class="d"></span>active</span></li>
+        <li><span class="cb on"></span><div class="meta"><div class="t">Quà Tân Thủ</div>
+          <div class="k">com.vng.arena.bundle.newbie</div></div><span class="st a"><span class="d"></span>active</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="pnav"><p class="sum">Showing 1–20 of 31 selected</p>
+    <div class="cluster">
+      <span class="rows-dd">Rows <select><option>20</option><option>30</option><option>50</option></select></span>
+      <span class="pbtn off">‹ Prev</span><span class="ppos">Page <b>1</b> of <b>2</b></span><span class="pbtn">Next ›</span>
+    </div></div>
+</div>
+<div class="cardnote"><b>⚠ Đổi page size NEO VIEWPORT, không reset về trang 1 (M9).</b><br>
+<code>floor(oldStartIndex / newPageSize) + 1</code>. Đang xem dòng 61–80 ở page size 20,
+đổi sang 50 → nhảy tới <b>trang 2</b> (dòng 51–100), <b>không</b> về trang 1.
+Reset về trang 1 làm mất chỗ operator vừa cuộn tới — đúng lúc họ đang đối chiếu.</div>
+</div>
+
+<!-- ══════════ 6. TRANG CUỐI NGẮN ══════════ -->
+<h2>State 3 — Trang cuối (trang ngắn)</h2>
+<p class="why">197 item / 20 = 10 trang, trang cuối chỉ có <b>17</b> dòng. Nhãn checkbox (B) phải nói
+<b>17</b>, không phải 20 — nó mô tả <b>trang thật</b>, không mô tả page size. Nút Next <b>disabled</b>.</p>
+<div class="grid">
+<div class="dlg">
+  <div class="db" style="padding-top:18px">
+    <div class="sect" style="margin-top:0;padding-top:0;border-top:none">
+      <div class="cap">Items (31 of 197 selected)</div>
+      <div class="tools"><button class="btn">Select all 197</button>
+        <div class="seg"><span class="on">All</span><span>Selected (31)</span></div></div>
+      <div class="selbar">
+        <label><span class="cb"></span> Select all 17 on this page</label>
+        <div class="cnt2"><b>31 selected</b><i>0 of 17 on this page</i></div>
+      </div>
+      <p class="hint">Cả 31 item đã chọn <b>không nằm trên trang này</b> — vẫn được chọn, vẫn được export.</p>
+      <ul class="rows">
+        <li><span class="cb"></span><div class="meta"><div class="t">Vé Sự Kiện Tết</div>
+          <div class="k">com.vng.arena.ticket.tet2026</div></div><span class="st i"><span class="d"></span>inactive</span></li>
+        <li><span class="cb"></span><div class="meta"><div class="t">Vé Sự Kiện Trung Thu</div>
+          <div class="k">com.vng.arena.ticket.midautumn</div></div><span class="st i"><span class="d"></span>inactive</span></li>
+        <li><span class="cb"></span><div class="meta"><div class="t">Skin Giới Hạn — Hắc Long</div>
+          <div class="k">com.vng.arena.skin.blackdragon</div></div><span class="st a"><span class="d"></span>active</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="pnav"><p class="sum">Showing 181–197 of 197</p>
+    <div class="cluster">
+      <span class="rows-dd">Rows <select><option>20</option><option>30</option><option>50</option></select></span>
+      <span class="pbtn">‹ Prev</span><span class="ppos">Page <b>10</b> of <b>10</b></span><span class="pbtn off">Next ›</span>
+    </div></div>
+  <div class="dfoot"><button class="fbtn">Cancel</button>
+    <button class="fbtn go">Next — choose countries (31)</button></div>
+</div>
+<div class="cardnote"><b>⚠ Chọn ít item TIẾT KIỆM 0 REQUEST — ngược Apple hoàn toàn.</b><br>
+Export Google = <b>1 request</b> cho app ≤1000 item
+(<code>pageSize: 1000</code>, <code>publisher-client.ts:102</code>; route lấy <b>cả app</b> rồi
+lọc client-side ở <code>export/route.ts:195-197</code>).<br><br>
+⇒ Giá trị của việc chọn ít là <b>thu hẹp file</b> + <b>giảm công tick tay</b>.
+<b>Mọi copy “ước tính ~N request” của Apple phải bỏ</b> — và hiện đã bỏ sẵn, giữ nguyên thế.<br><br>
+<b>LOCK:</b> mở picker · đổi trang · đổi lựa chọn · đổi page size = <b>0 request</b>,
+ghim bằng <b>test cấu trúc</b> đã có (<code>export-status-filter.test.ts:178-219</code> cấm
+<code>fetch</code>/<code>useEffect</code> trong picker + dialog), không bằng ý định.</div>
+</div>
+
+<div class="warn" style="margin-top:36px">
+<b>⚠ CÒN HAI CÂU CHẶN CỬA CHƯA CHỐT — xem P6 trong</b>
+<code>docs/google-iap-management/design-export-picker-paging.md</code><b>:</b><br>
+<b>Q1</b> — checkbox select-all đổi phạm vi (all-matching + có xoá → page-scoped + không xoá).
+Đây là <b>đổi hành vi một control đã ship</b>. Chặn Chunk 2.<br>
+<b>Q2</b> — cờ <code>paged?</code> / <code>rangeSelect?</code> mặc định <b>TẮT</b> cho
+<code>BulkStatusModal</code> — consumer thứ hai của picker, và nó là <b>ĐƯỜNG GHI</b> thật
+(<code>batchUpdateStates</code> lên Google Play). Chặn cả hai chunk.
+</div>
+
+</div></body></html>

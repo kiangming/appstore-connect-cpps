@@ -683,3 +683,24 @@ trước, **chỉ** rơi về `inappproducts.list` khi API mới lỗi
 Cùng lớp với `[GUIDE-label-drift]` bên Apple: guide khẳng định một điều về code
 mà không ai kiểm lại khi code đổi.
 
+
+---
+
+## `[GOOGLE-no-item-last-update]` — Google KHÔNG trả "last update" cho từng IAP
+
+**Trạng thái:** 📌 **GHI NHẬN, KHÔNG ĐỀ XUẤT ARC.** Manager hỏi "có hay không";
+đáp án là **KHÔNG**, và không có việc gì phải làm tiếp trừ khi Manager mở.
+
+Android Publisher v3 (`revision 20260520`) không có `updateTime` /
+`lastModified` / `etag` trên `InAppProduct` (13 prop), `OneTimeProduct` (8),
+`Subscription` (7), `OneTimeProductPurchaseOption` (8) — không ở LIST, không ở
+GET, không ở response của WRITE. Gần nhất là `OneTimeProduct.regionsVersion`
+nhưng đó là version **catalog vùng bán toàn cục** (`"2025/03"`), không phải dấu
+vết sửa item.
+
+⇒ Không thể xây "sync thông minh chỉ kéo item đã đổi", không thể conditional-GET
+bằng etag, và **không thể** hiển thị "Google sửa item này lúc nào".
+`iaps.last_synced_at` / `updated_at` / `created_at` đều là thời gian **của
+tool**, không phải của Google.
+
+Chi tiết + cách đo: `design-export-picker-paging.md` Phần B.
