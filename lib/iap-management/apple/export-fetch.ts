@@ -75,10 +75,27 @@ import type {
  *     request rate directly.
  *
  * ⚠ WHY 3 AND NOT A NUMBER PICKED FOR FEEL: it is what the rest of this
- * module already uses on Apple. Export was the outlier by 2.7-4x —
- * `availability-sweep.ts:78` = 2, `bulk-availability.ts:93` = 2,
- * `submit-batch/route.ts:101` = 2, `availability-read-phase.ts:92` = 3.
- * Bringing export in line needs no new justification; staying at 8 did.
+ * module already uses on Apple. Export was the outlier by 2.7-4x. Every Apple
+ * path, grepped 2026-09-04:
+ *
+ *     availability-sweep.ts:78          = 2
+ *     bulk-availability.ts:93           = 2
+ *     submit-batch/route.ts:101         = 2
+ *     bulk-import/execute/route.ts:128  = 2
+ *     availability-read-phase.ts:92     = 3
+ *     THIS FILE                         = 3   (was 8)
+ *
+ * Four paths at 2, two at 3. Bringing export in line needs no new
+ * justification; staying at 8 did.
+ *
+ * ⚠ DO NOT REACH FOR GOOGLE'S NUMBER. Every Google path uses 5
+ * (`publisher-client.ts:1019`, `orchestration/bulk-import.ts:79`,
+ * `orchestration/bulk-status.ts:88`,
+ * `google-iap-management/.../bulk-import/preview/route.ts:48`,
+ * `google-iap-management/apps/refresh/route.ts:44`). Different API, different
+ * per-request cost, different limits — Google's export is a single list call
+ * where Apple's is ~4 requests per item. That 5 is not evidence about Apple
+ * and must not be copied across.
  *
  * Cost, so nobody is surprised: a 632-item export goes from ~79 to ~211
  * sequential-item-slots. At the ~1.6s/item the failing run averaged that is

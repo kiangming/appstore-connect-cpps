@@ -3980,6 +3980,48 @@ change under a patch list with nothing going red) — same failure, one layer
 out: there the library moved and the code lied; here the library would move and
 the *reasoning* would lie.
 
+**P44 — A `file:line` IN A REPORT IS A CLAIM, NOT EVIDENCE. RE-GREP EVERY
+CITATION BEFORE ACTING ON IT — INCLUDING YOUR OWN FROM AN EARLIER TURN.**
+
+One incident produced **two** citations that pointed at nothing:
+
+| Claim in a report | What was actually there |
+|---|---|
+| *"cooldown is 60s, hard floor, `store.ts:118`"* | **`store.ts` does not exist in this repo.** `find . -name store.ts` (excluding `.next`) → empty. The real value is one HOUR, `selector.ts:53`. |
+| *"`bulk-availability.ts:322` and `availability-sweep.ts:64` declare `CONCURRENCY = 4`"* | `:322` is **prose inside a docstring**; `:64` is **`import {`**. `grep` for any concurrency of 4 → **empty**. |
+
+⚠ **THE SECOND ONE WAS LOAD-BEARING.** Chunk 1 lowered export concurrency to 3
+on the argument *"3 is the number this module already uses on Apple"*. If the
+siblings had really been 4, that argument was **false** and the shipped comment
+would have been wrong. The arbitration measured 2·2·2·2·3·3 and the argument
+survived — but it survived by one grep, not by being checked when written.
+
+⚠ **THE FAILURE MODE IS SPECIFIC AND WORTH NAMING: a line number that is
+plausible is indistinguishable from one that is correct.** Both bad citations
+named real files at real line numbers in the right neighbourhood. Nothing about
+reading the report reveals the problem — only re-running the grep does. And a
+docstring hit is the nastiest shape, because `grep CONCURRENCY` **does** match
+prose that discusses the constant, so a careless grep *confirms* the wrong
+answer.
+
+⇒ **Rules that follow, all cheap:**
+1. **Grep the DECLARATION, not the word.** `grep -n "CONCURRENCY\s*=\s*[0-9]"`,
+   not `grep -n "CONCURRENCY"`. An assignment pattern cannot match a sentence.
+2. **Print the cited line before believing it.** `sed -n '322p' <file>` is one
+   command and settles it outright.
+3. **Assert the absence too.** "No value of 4 exists" is a grep that returns
+   empty, and it is stronger than any positive citation.
+4. **A citation inherited from an earlier turn of the same session gets
+   re-checked, not trusted.** Both bad ones here came from prior reports in
+   this conversation, where they read as already-established fact.
+
+⚠ Distinct from P43 (a *count* mistaken for a correctness proof): there the
+number was true and the claim false; here the **coordinates** were false while
+looking exactly like every true one in the same document.
+
+Instances: `[POOL-cooldown-60s-claim-CORRECTION]`,
+`[POOL-report-citation-CORRECTION]` (TODO.md).
+
 **P43 — A REPLACEMENT COUNT IS NOT A CORRECTNESS PROOF. "8 SUBSTITUTIONS" AND
 "8 CORRECT SUBSTITUTIONS" ARE DIFFERENT CLAIMS, AND THE FIRST ONE IS THE ONE
 YOUR SCRIPT REPORTS.**
