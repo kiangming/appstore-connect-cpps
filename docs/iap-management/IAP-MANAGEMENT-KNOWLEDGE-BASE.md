@@ -4071,8 +4071,48 @@ answer.
 number was true and the claim false; here the **coordinates** were false while
 looking exactly like every true one in the same document.
 
+⚠ **INSTANCE 3 — A PROBE CAN BE A PHANTOM TOO, AND ITS OUTPUT LOOKS EXACTLY
+LIKE A REAL ONE.** (Google export picker arc, chunk 2 arbitration.) A report
+claimed a live defect — *"changing the status filter while the dialog is open
+does not clear `selectedSkus`; `ExportScopeDialog.tsx:107` has an effect with
+dep `[open]`; probe gives payload `["act.0","act.1"]`"* — and backed it with a
+**probe that ran and printed output**. Every part of it was false:
+
+| Claim | Measured |
+|---|---|
+| path `components/google-iap-management/export/ExportScopeDialog.tsx` | **no `export/` directory exists**; the file lives in `iap-list/` |
+| `:107` is an effect with dep `[open]` | `:107` is the JSX text `Export list — items to include`. `grep -n 'useEffect\|useState'` on the file → **empty, exit 1**. The dialog is fully controlled: 225 lines, zero hooks |
+| filter change leaves ticks stale | the reset is explicit in `IapListClient.changeStatusFilter` → `setSelectedSkus(new Set(candidatesFor(next)...))`, wired at the radio's `onChange` |
+| payload `["act.0","act.1"]` | real path: `statusFilter:"inactive"`, `selectedSkus:null`, zero `act.*` |
+
+⚠ **THE NEW LESSON: A PROBE INHERITS THE AUTHORITY OF "I RAN IT", BUT ONLY
+MEASURES THE SUBSTRATE IT WAS GIVEN.** Rebuilding that probe showed how such a
+number gets produced: render the controlled dialog directly, wire `onChange` to
+a bare `setValue` in the *test*, and the reset never happens — because the
+reset was never in the dialog. The probe then faithfully reports a defect **in
+the test harness**, formatted identically to a defect in the product.
+
+⚠ And the rebuild found a second guard the phantom had to climb over and could
+not: with stale cross-filter ticks, `selectedInScope === 0`, so the footer
+button reads **"Select at least 1 item"** and is `disabled`. Even the naive
+harness could not produce a payload — `getByRole("button", {name: /Next/})`
+threw. **A defect that cannot be reached through the UI is a defect in the
+harness by construction.**
+
+⇒ **Rules 1–4 extend to probes:**
+5. **A probe that renders a CONTROLLED component must import the real wiring,
+   not re-invent it.** If the caller owns the state, the probe must drive the
+   caller. Anything else measures a component that does not ship.
+6. **Before believing a probe, ask what it had to stub.** Every stub is an
+   assumption the probe is no longer testing — and the reset lived in exactly
+   the seam that got stubbed.
+7. **Reach the finding the way a user would.** If no click path gets there, the
+   finding is about the harness. Here the disabled button said so out loud.
+
 Instances: `[POOL-cooldown-60s-claim-CORRECTION]`,
-`[POOL-report-citation-CORRECTION]` (TODO.md).
+`[POOL-report-citation-CORRECTION]` (TODO.md),
+`[GOOGLE-export-filter-reset-PHANTOM]` (this arc; 3 broken citations + 1
+non-reproducible defect, arbitrated W1-W5).
 
 **P43 — A REPLACEMENT COUNT IS NOT A CORRECTNESS PROOF. "8 SUBSTITUTIONS" AND
 "8 CORRECT SUBSTITUTIONS" ARE DIFFERENT CLAIMS, AND THE FIRST ONE IS THE ONE
