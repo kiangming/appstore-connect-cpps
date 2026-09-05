@@ -923,20 +923,49 @@ the migration comment.
 
 - [ ] **[BACKLOG-latch-bulk-write] `bulk-import/execute` and `submit-batch` have `withRetry` but NO stop latch.** Census C1: `export` and `bulk-availability` both stop dispatching when a 429 survives retry (`runStoppablePool`); these two do not — the row fails and the orchestrator keeps firing the rest of the batch into an API that is already refusing. ⚠ **This is a live gap at any cap figure** — it does not depend on E2, on the 3,600 measurement, or on anything else in this section. Highest priority of the group.
 
-- [ ] **[APPLE-picker-A-scope-under-selected-only] — nút (A) ở `BulkItemPicker` không ẩn dưới "Selected only", nhãn lệch cái đang hiện.** Phát hiện khi kiểm chéo trong arc Google export picker (chunk sửa V4); **KHÔNG sửa chéo module ở arc đó** — ghi lại ở đây để Apple tự quyết.
+- [ ] **[APPLE-picker-A-scope-under-selected-only] — GHI CHÚ, CHƯA XÁC ĐỊNH. Nút (A) của `BulkItemPicker` dưới "Selected only": phạm vi/nhãn có lệch không?**
 
-  **Đo thật, không đọc suy ra** (probe render `BulkItemPicker` với 5 row, 2 đã tick, `viewMode="selected"`, `paged`):
+  ⚠ **ĐÂY LÀ GHI CHÚ, KHÔNG PHẢI DEFECT ĐANG CẮN AI.** Không chặn UAT, không chặn arc nào. Nó chỉ quyết định **cách ghi backlog**, không đụng code module nào.
 
+  ⚠ **Trạng thái: CHƯA XÁC ĐỊNH.** Hai lượt báo cáo cho kết luận **ngược nhau** về cùng một thứ. Ghi kèm **cả hai bằng chứng** dưới đây để lần sau khỏi điều tra lại từ đầu. Cần **X1–X5** phân xử.
+
+  **Bằng chứng A — probe chạy thật** (render `BulkItemPicker`, 5 row, 2 đã tick, `viewMode="selected"`, `paged`):
   ```
   nutA_ton_tai = true
   nhan         = "Select all 5 matching"
-  so_checkbox  = 3          ← 1 header + 2 dòng đang hiện
+  so_checkbox  = 3        ← 1 header + 2 dòng đang hiện
+  ```
+  ⇒ đọc như: nhãn nói **5** trong khi màn chỉ **2** dòng — cùng lệch với V4 bên Google.
+
+  **Bằng chứng B — trích code:** *"`BulkItemPicker.tsx:230-233` có nhánh `selectedOnly` ⇒ Apple làm khác CÓ CHỦ Ý, không phải defect."*
+
+  **Đo lại bằng chứng B trên HEAD** (`0007c23`) — nguyên văn `:228-237`:
+  ```js
+  const counts = useMemo(
+    () =>
+      selectionCounts({
+        selectableRows,        // :231
+        totalRows: rows.length,// :232
+        selected,              // :233
+        query,
+      }),
+    [selectableRows, rows.length, selected, query],
+  );
+  ```
+  ⇒ `:230-233` là **danh sách tham số của `selectionCounts`**, **không có** `viewMode`/`selectedOnly` nào ở đó.
+
+  Nhánh `viewMode` **có thật**, nhưng ở **`:242-248`**, và nó tính `viewRows`:
+  ```js
+  const viewRows = useMemo(
+    () => paged && viewMode === "selected"
+      ? matchingSelectable.filter((r) => selected.has(r.appleIapId))
+      : matchingSelectable, ...);
   ```
 
-  Tức nhãn nói **5** trong khi trên màn chỉ **2** dòng. Không phải silent-drop — bấm thì được đúng 5 như nhãn hứa — nhưng là hai con số mâu thuẫn cạnh nhau, ở đúng chế độ sinh ra để **soi lại** lựa chọn.
+  ⇒ **Điểm mấu chốt để X1–X5 kiểm:** `viewMode` narrow **`viewRows`** (thứ nuôi phần **render danh sách**), còn nhãn của (A) đọc từ **`counts.matching`** (`:228-237`) — mà `counts` **không nhận `viewMode`** làm đầu vào. Hai bằng chứng có thể **cùng đúng** mà không mâu thuẫn: Apple *có* xử lý "Selected only" một cách có chủ ý cho **danh sách**, nhưng điều đó **không tự động** kéo theo nhãn của (A). Bằng chứng B có thể là đọc đúng vùng code nhưng gán cho sai consumer.
 
-  **Nguyên nhân:** nút (A) chỉ gate theo `paged` ([`BulkItemPicker.tsx:428`](components/iap-management/item-picker/BulkItemPicker.tsx#L428)), không gate theo `viewMode`; và `counts.matching` tính từ `selectableRows` + `query`, không đụng `viewMode` ([:228-236](components/iap-management/item-picker/BulkItemPicker.tsx#L228)).
+  ⚠ Chưa kết luận ở đây — X1–X5 mới là chỗ phân xử.
 
-  **Bên Google đã chốt phương án β** — ẩn (A) khi `selectedOnly`, vì "Selected only" là chế độ **rà soát / bỏ bớt**, không phải để thêm. ⛔ Phương án γ (cho (A) chạy theo chế độ xem) **bị loại**: nó phá M7 — phạm vi của (A) phải cố định và đọc được từ **vị trí**, không suy ra từ ngữ cảnh. Giá của β: mất đường một-click "lấy nốt phần còn lại" từ chế độ đó.
+  ⚠ **Ghi chú lịch sử:** tag `[APPLE-selected-only-scope-differs]` **chưa từng tồn tại trong repo** (`grep` toàn bộ `*.md` chỉ ra đúng tag này). Nó chỉ sống trong một bản báo cáo. Nên đây **không phải** gộp hai mục có sẵn — mà là ghi khẳng định của bản báo cáo kia **vào** mục duy nhất đang có, để hai lời không còn trôi nổi tách rời.
 
-  ⚠ **Không mặc định port β sang Apple.** Picker Apple có `nothingSelectableSlot`, `excludedRows` và ô "Not shown is not excluded" mà Google không có; và mặc định tick của Apple là **RỖNG** (Google là TICK HẾT), nên phép tính "operator cần gì nhất" ở hai bên **không giống nhau** — đó chính là lý do C1 của Google cố ý không port luật Apple theo chiều ngược lại. Quyết định riêng cho Apple.
+  ⚠ **ĐỪNG PORT β SANG APPLE MÀ KHÔNG NGHĨ.** Picker Apple mở ra **RỖNG**, Google mở ra **TICK HẾT** — nên "operator cần gì nhất" ở hai bên **không giống nhau**. Đó đúng là lý do C1 bên Google **cố ý không** port luật Apple theo chiều ngược lại; port ngược lại mà không nghĩ là lặp lại chính sai lầm đó. Apple còn có `nothingSelectableSlot`, `excludedRows` và ô "Not shown is not excluded" mà Google không có.
