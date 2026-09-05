@@ -2,7 +2,7 @@
 
 /**
  * The shared per-item selection list for the Google IAP module: select-all
- * bar, checkbox rows, and (opt-in) a search box plus a windowed "Show more".
+ * bar, checkbox rows, and (opt-in) a search box, shift-click ranges and paging.
  *
  * ─── WHY THIS EXISTS ───────────────────────────────────────────────────────
  *
@@ -49,8 +49,9 @@
  *      ON SCREEN. Without that line the count appears to drop when the query
  *      narrows, and the operator concludes the tool lost their picks.
  *
- * ⚠ STATE IS CONTROLLED, NOT OWNED — `selected`, `query` and `windowSize` all
- * come from the caller, matching how `SelectionState` already worked. The
+ * ⚠ SELECTION STATE IS CONTROLLED, NOT OWNED — `selected` and `query` come
+ * from the caller, matching how `SelectionState` already worked. (Paging state
+ * and the anchor are the documented exceptions — guarantees 5 and 9.) The
  * modal resets its own state on close; moving that in here would make reset
  * timing a new question at exactly the moment this extraction must prove it
  * changed nothing.
@@ -231,8 +232,8 @@ export function IapSelectionList({
   const pageSomeSelected =
     !pageAllSelected && visibleSkus.some((sku) => selected.has(sku));
 
-  // ⚠ Guarantee 5/6: the anchor is owned here and carries the `windowSize` it
-  // was set under. A resolve under a different window is refused, which is M8
+  // ⚠ Guarantee 5/6: the anchor is owned here and carries the page and page
+  // size it was set under. A resolve under a different one is refused — M8
   // ("a boundary drops the anchor") expressed as a re-derivation instead of
   // the effect hook this file is structurally forbidden to have.
   const [anchor, setAnchor] = useState<
