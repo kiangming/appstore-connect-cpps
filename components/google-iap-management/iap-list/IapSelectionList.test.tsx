@@ -630,6 +630,39 @@ describe("⚠ C5 — Selected only", () => {
     expect(screen.getByText("Clear 2 on this page")).toBeInTheDocument();
   });
 
+  it("⭐⛔ (A) IS NOT RENDERED at all under 'Selected only'", () => {
+    // ⚠ ASSERTS ABSENCE, ON PURPOSE. A test shaped "the label matches what is
+    // on screen" would stay GREEN if someone switched to option γ — making
+    // (A) follow the view — because γ also produces a label that matches. Only
+    // "there is no such control" distinguishes β from γ.
+    //
+    // ⛔ γ is the move a future reader will reach for. It breaks M7: (A)'s
+    // scope must be readable from its POSITION, not from which view is on.
+    renderPaged({ items: MANY, selected: new Set(["sku.00", "sku.30"]) });
+    expect(screen.getByTestId("select-all-matching")).toBeInTheDocument(); // All
+    fireEvent.click(screen.getByTestId("view-selected"));
+    expect(screen.queryByTestId("select-all-matching")).not.toBeInTheDocument();
+  });
+
+  it("⭐ (A) comes back — with the ALL-MATCHING count — on returning to All", () => {
+    // The other half: hiding it must be scoped to the view, not a one-way
+    // door, and its scope must be unchanged when it returns.
+    renderPaged({ items: MANY, selected: new Set(["sku.00", "sku.30"]) });
+    fireEvent.click(screen.getByTestId("view-selected"));
+    fireEvent.click(screen.getByTestId("view-all"));
+    expect(screen.getByTestId("select-all-matching")).toHaveTextContent(
+      "Select all 45 matching",
+    );
+  });
+
+  it("⭐ under a search, (A) still counts MATCHING — not the page, not the view", () => {
+    // Guards the count that (A) reports while it IS visible: status ∩ search.
+    renderPaged({ items: MANY, query: "sku.1", onQueryChange: vi.fn() });
+    expect(screen.getByTestId("select-all-matching")).toHaveTextContent(
+      "Select all 10 matching", // sku.10 … sku.19
+    );
+  });
+
   it("the switch names how many are selected", () => {
     renderPaged({ items: MANY, selected: new Set(["sku.00", "sku.30"]) });
     expect(screen.getByTestId("view-selected")).toHaveTextContent("Selected (2)");

@@ -922,3 +922,21 @@ the migration comment.
 - [x] ~~**[BULKIMPORT-dead-ternary] `import_batches.status` writes `failed === 0 ? "COMPLETE" : "COMPLETE"`**~~ ✅ **closed as a DECISION, not as a fix — the ternary is deliberately left exactly as it is.** [Q-C3.tracking-frozen]: the Manager froze every tracking/batch-level status for C3, so `status` is *supposed* to be constant here and the new truth travels through `partial_count` instead. Collapsing the ternary to a plain `"COMPLETE"` would be harmless in itself but would remove the visible oddity that prompts a reader to look up WHY — and the next person who "finishes the job" by making it a real status change breaks the freeze. **This is no longer a defect. Do not open it again without the Manager reopening [Q-C3.tracking-frozen].**
 
 - [ ] **[BACKLOG-latch-bulk-write] `bulk-import/execute` and `submit-batch` have `withRetry` but NO stop latch.** Census C1: `export` and `bulk-availability` both stop dispatching when a 429 survives retry (`runStoppablePool`); these two do not — the row fails and the orchestrator keeps firing the rest of the batch into an API that is already refusing. ⚠ **This is a live gap at any cap figure** — it does not depend on E2, on the 3,600 measurement, or on anything else in this section. Highest priority of the group.
+
+- [ ] **[APPLE-picker-A-scope-under-selected-only] — nút (A) ở `BulkItemPicker` không ẩn dưới "Selected only", nhãn lệch cái đang hiện.** Phát hiện khi kiểm chéo trong arc Google export picker (chunk sửa V4); **KHÔNG sửa chéo module ở arc đó** — ghi lại ở đây để Apple tự quyết.
+
+  **Đo thật, không đọc suy ra** (probe render `BulkItemPicker` với 5 row, 2 đã tick, `viewMode="selected"`, `paged`):
+
+  ```
+  nutA_ton_tai = true
+  nhan         = "Select all 5 matching"
+  so_checkbox  = 3          ← 1 header + 2 dòng đang hiện
+  ```
+
+  Tức nhãn nói **5** trong khi trên màn chỉ **2** dòng. Không phải silent-drop — bấm thì được đúng 5 như nhãn hứa — nhưng là hai con số mâu thuẫn cạnh nhau, ở đúng chế độ sinh ra để **soi lại** lựa chọn.
+
+  **Nguyên nhân:** nút (A) chỉ gate theo `paged` ([`BulkItemPicker.tsx:428`](components/iap-management/item-picker/BulkItemPicker.tsx#L428)), không gate theo `viewMode`; và `counts.matching` tính từ `selectableRows` + `query`, không đụng `viewMode` ([:228-236](components/iap-management/item-picker/BulkItemPicker.tsx#L228)).
+
+  **Bên Google đã chốt phương án β** — ẩn (A) khi `selectedOnly`, vì "Selected only" là chế độ **rà soát / bỏ bớt**, không phải để thêm. ⛔ Phương án γ (cho (A) chạy theo chế độ xem) **bị loại**: nó phá M7 — phạm vi của (A) phải cố định và đọc được từ **vị trí**, không suy ra từ ngữ cảnh. Giá của β: mất đường một-click "lấy nốt phần còn lại" từ chế độ đó.
+
+  ⚠ **Không mặc định port β sang Apple.** Picker Apple có `nothingSelectableSlot`, `excludedRows` và ô "Not shown is not excluded" mà Google không có; và mặc định tick của Apple là **RỖNG** (Google là TICK HẾT), nên phép tính "operator cần gì nhất" ở hai bên **không giống nhau** — đó chính là lý do C1 của Google cố ý không port luật Apple theo chiều ngược lại. Quyết định riêng cho Apple.

@@ -340,6 +340,26 @@ export function IapSelectionList({
           make the operator remember which is which instead of see it. */}
       {paged && (
         <div className="flex items-center gap-2 flex-wrap mb-2.5">
+          {/* ⚠ (A) IS HIDDEN UNDER "Selected only", AND THAT IS THE WHOLE FIX
+              FOR THE LABEL-vs-VIEW MISMATCH. In that view the list shows only
+              the ticked rows, but (A)'s scope is EVERYTHING MATCHING — so it
+              would read "Select all 45 matching" directly above a summary
+              reading "Showing 1–3 of 3 selected". Two numbers, adjacent,
+              disagreeing, in the one view that exists to let the operator
+              CHECK their selection.
+
+              ⛔ DO NOT "FIX" THIS BY MAKING (A) FOLLOW THE VIEW. That is the
+              obvious-looking move and it breaks M7: (A)'s scope must be FIXED
+              and readable from its POSITION in the toolbar, never inferred
+              from which view happens to be on. A control that means "all
+              matching" here and "all selected" there is exactly the
+              read-it-from-memory defect this whole split exists to kill.
+
+              The accepted cost, stated: from "Selected only" there is no
+              one-click way to take the rest — switch back to All first. That
+              is honest about what this view is for: REVIEWING and REMOVING,
+              not adding. */}
+          {!selectedOnly && (
           <button
             type="button"
             onClick={handleToggleAllMatching}
@@ -350,6 +370,7 @@ export function IapSelectionList({
               ? `Clear all ${matching.length}`
               : `Select all ${matching.length} matching`}
           </button>
+          )}
           <div className="ml-auto inline-flex overflow-hidden rounded-lg border border-slate-200">
             {([false, true] as const).map((mode) => (
               <button

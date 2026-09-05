@@ -369,7 +369,7 @@ và phải luôn với tới được. Cụm Prev/Next thì tự ẩn.
   <div class="db" style="padding-top:18px">
     <div class="sect" style="margin-top:0;padding-top:0;border-top:none">
       <div class="cap">Items (31 of 197 selected)</div>
-      <div class="tools"><button class="btn">Clear all 31</button>
+      <div class="tools">
         <div class="seg"><span>All</span><span class="on">Selected (31)</span></div></div>
       <div class="search"><span class="ic">⌕</span><input placeholder="Search by SKU or name…"></div>
       <div class="selbar">
@@ -396,7 +396,18 @@ và phải luôn với tới được. Cụm Prev/Next thì tự ẩn.
       <span class="pbtn off">‹ Prev</span><span class="ppos">Page <b>1</b> of <b>2</b></span><span class="pbtn">Next ›</span>
     </div></div>
 </div>
-<div class="cardnote"><b>⚠ Đổi page size NEO VIEWPORT, không reset về trang 1 (M9).</b><br>
+<div class="cardnote"><b>⛔ NÚT (A) BIẾN MẤT Ở CHẾ ĐỘ NÀY — có chủ đích.</b><br>
+Phạm vi của (A) là <b>toàn bộ matching</b>; ở đây danh sách chỉ hiện phần đã tick.
+Để nguyên thì nhãn sẽ đọc "Select all 197 matching" ngay trên một dòng summary
+đọc "Showing 1–20 of 31 selected" — <b>hai con số cạnh nhau mâu thuẫn, ở đúng
+chế độ sinh ra để SOI LẠI lựa chọn</b>.<br>
+⛔ <b>Đừng "sửa" bằng cách cho (A) chạy theo chế độ xem.</b> Đó là nước đi trông
+hợp lý nhất và nó phá M7: phạm vi của (A) phải <b>CỐ ĐỊNH</b> và đọc được từ
+<b>VỊ TRÍ</b>, không suy ra từ chế độ nào đang bật.<br>
+Giá phải trả, nói thẳng: từ đây không có đường một-click để lấy nốt phần còn
+lại — quay về <b>All</b> trước. Đúng bản chất chế độ này: <b>rà soát và bỏ
+bớt</b>, không phải để thêm.<br><br>
+<b>⚠ Đổi page size NEO VIEWPORT, không reset về trang 1 (M9).</b><br>
 <code>floor(oldStartIndex / newPageSize) + 1</code>. Đang xem dòng 61–80 ở page size 20,
 đổi sang 50 → nhảy tới <b>trang 2</b> (dòng 51–100), <b>không</b> về trang 1.
 Reset về trang 1 làm mất chỗ operator vừa cuộn tới — đúng lúc họ đang đối chiếu.</div>
