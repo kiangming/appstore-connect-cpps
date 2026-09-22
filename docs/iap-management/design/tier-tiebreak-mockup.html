@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tier tie-break — Apple IAP Bulk Import</title>
+<style>
+  /* Palette lấy từ component thật: BulkImportWizard.tsx + IapForm.tsx.
+     Apple blue #0071E3 / hover #0077ED / đậm #0062c4. Amber = trạng thái
+     mơ hồ (chính là màu TierCell đang dùng cho ambiguous). KHÔNG emerald —
+     emerald là của module Google. */
+  :root{
+    --bg:#f8fafc; --surface:#ffffff; --border:#e2e8f0; --border-strong:#cbd5e1;
+    --text:#0f172a; --text-muted:#475569; --text-subtle:#64748b;
+    --apple:#0071E3; --apple-hover:#0077ED; --apple-deep:#0062c4; --apple-bg:#eff6ff;
+    --amber:#b45309; --amber-border:#fcd34d; --amber-bg:#fffbeb; --amber-text:#78350f;
+    --danger:#b91c1c; --danger-bg:#fef2f2; --danger-border:#fecaca;
+    --ok:#166534; --ok-bg:#f0fdf4; --ok-border:#bbf7d0;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#020617; --surface:#0f172a; --border:#1e293b; --border-strong:#334155;
+      --text:#f1f5f9; --text-muted:#cbd5e1; --text-subtle:#94a3b8;
+      --apple-bg:#172554;
+      --amber:#fbbf24; --amber-border:#78350f; --amber-bg:#251803; --amber-text:#fde68a;
+      --danger:#fca5a5; --danger-bg:#2a0d0d; --danger-border:#7f1d1d;
+      --ok:#86efac; --ok-bg:#052e16; --ok-border:#166534;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#020617; --surface:#0f172a; --border:#1e293b; --border-strong:#334155;
+    --text:#f1f5f9; --text-muted:#cbd5e1; --text-subtle:#94a3b8;
+    --apple-bg:#172554;
+    --amber:#fbbf24; --amber-border:#78350f; --amber-bg:#251803; --amber-text:#fde68a;
+    --danger:#fca5a5; --danger-bg:#2a0d0d; --danger-border:#7f1d1d;
+    --ok:#86efac; --ok-bg:#052e16; --ok-border:#166534;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:32px 20px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:22px;font-weight:600;margin:0 0 4px}
+  h2{font-size:15px;font-weight:600;margin:36px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+  .sub{color:var(--text-subtle);font-size:13px;margin:0 0 8px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:14px}
+  .card-h{padding:14px 18px 10px}
+  .card-t{font-size:13px;font-weight:600;margin:0}
+  .card-d{font-size:11px;color:var(--text-subtle);margin:3px 0 0}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;font-weight:500;font-size:10px;text-transform:uppercase;letter-spacing:.04em;
+    color:var(--text-subtle);padding:8px 12px;border-bottom:1px solid var(--border);background:var(--bg)}
+  td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:middle}
+  tr:last-child td{border-bottom:none}
+  .mono{font-family:var(--mono);font-size:11px}
+  .scroll{overflow-x:auto}
+  /* TierCell states — khớp className thật ở BulkImportWizard.tsx:1513-1522 */
+  .tier-plain{font-family:var(--mono);font-size:11px;color:var(--text-muted)}
+  .sel{font-family:var(--mono);font-size:11px;border-radius:6px;padding:3px 24px 3px 7px;
+    border:1px solid;appearance:none;background-repeat:no-repeat;background-position:right 6px center;
+    background-size:9px;width:100%;max-width:190px}
+  .sel-amb{border-color:var(--amber-border);background-color:var(--amber-bg);color:var(--amber-text);
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%23b45309' stroke-width='1.5' fill='none' stroke-linecap='round'/></svg>")}
+  .sel-ovr{border-color:var(--apple);background-color:var(--apple-bg);color:var(--apple);
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%230071E3' stroke-width='1.5' fill='none' stroke-linecap='round'/></svg>")}
+  .pill{display:inline-flex;align-items:center;padding:1px 7px;border-radius:99px;font-size:10px;
+    font-weight:500;border:1px solid}
+  .p-ovr{background:var(--apple-bg);color:var(--apple);border-color:var(--apple)}
+  .p-amb{background:var(--amber-bg);color:var(--amber-text);border-color:var(--amber-border)}
+  .p-ok{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-border)}
+  .p-bad{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-border)}
+  .bar{display:flex;align-items:center;gap:10px;padding:9px 18px;
+    background:var(--amber-bg);border-bottom:1px solid var(--amber-border);font-size:12px;color:var(--amber-text)}
+  .bar b{font-weight:600}
+  .toggle{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:11px;cursor:pointer}
+  .btn{display:inline-flex;align-items:center;gap:6px;background:var(--apple);color:#fff;border:none;
+    border-radius:8px;padding:7px 15px;font-size:12px;font-weight:500;cursor:pointer}
+  .btn:hover{background:var(--apple-hover)}
+  .btn-g{background:transparent;color:var(--apple);border:1px solid var(--apple)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:760px){.two{grid-template-columns:1fr}}
+  .note{border-left:3px solid var(--apple);background:var(--apple-bg);padding:10px 14px;
+    border-radius:0 8px 8px 0;font-size:12px;margin:10px 0}
+  .warn{border-left-color:var(--amber-border);background:var(--amber-bg);color:var(--amber-text)}
+  code{font-family:var(--mono);font-size:11px;background:var(--bg);border:1px solid var(--border);
+    border-radius:4px;padding:1px 4px}
+  .lbl{font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-subtle);
+    font-weight:600;margin:0 0 6px}
+  .strike{text-decoration:line-through;opacity:.55}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Tier tie-break — khi một giá khớp nhiều tier</h1>
+<p class="sub">Apple IAP Management · Bulk Import Step 3 (Preview) · arc <code>[TIER-TIEBREAK-priority]</code> · <strong>mockup, chưa code</strong></p>
+
+<div class="note warn">
+  <strong>⚠ Dropdown chọn tier KHÔNG phải tính năng mới.</strong> Nó đã chạy —
+  <code>BulkImportWizard.tsx:1476-1531</code>, render tại <code>:1426</code>. Arc này đổi
+  <em>giá trị mặc định</em> mà nó mở ra, và làm <em>thứ tự option</em> trở nên xác định.
+</div>
+
+<!-- ─── 1 + 2 + 3 ─────────────────────────────────────────────── -->
+<h2>State 1-3 · Bảng preview Step 3 sau khi đổi quy tắc</h2>
+
+<div class="card">
+  <div class="bar">
+    <span>⚠ <b>3</b> dòng có giá khớp nhiều tier — đã chọn Tier thường, đổi nếu cần</span>
+    <label class="toggle"><input type="checkbox" checked> Chỉ hiện dòng cần chọn tier</label>
+  </div>
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th style="width:30%">Product ID</th><th style="width:12%">Price</th>
+      <th style="width:30%">Tier</th><th style="width:14%">Nguồn</th><th style="width:14%">Disposition</th>
+    </tr></thead>
+    <tbody>
+      <!-- STATE 1: không trùng → text thường, không control -->
+      <tr>
+        <td class="mono">com.vng.game.pack99</td>
+        <td class="mono">$0.99</td>
+        <td><span class="tier-plain">Tier 1 ($0.99)</span></td>
+        <td><span class="pill p-ok">auto</span></td>
+        <td><span class="pill p-ok">create</span></td>
+      </tr>
+      <!-- STATE 2: trùng giá, mặc định = Tier thường (SAU khi đổi) -->
+      <tr>
+        <td class="mono">com.vng.game.pack499</td>
+        <td class="mono">$4.99</td>
+        <td>
+          <select class="sel sel-amb" title="Same USD price matches 2 tiers — pick one">
+            <option selected>Tier 5 ($4.99)</option>
+            <option>Alt Tier 5 ($4.99)</option>
+          </select>
+        </td>
+        <td><span class="pill p-amb">mặc định</span></td>
+        <td><span class="pill p-ok">create</span></td>
+      </tr>
+      <!-- STATE 3: người dùng đã đổi sang Alt → viền xanh Apple -->
+      <tr>
+        <td class="mono">com.vng.game.starter499</td>
+        <td class="mono">$4.99</td>
+        <td>
+          <select class="sel sel-ovr" title="Manager đã chọn thủ công">
+            <option>Tier 5 ($4.99)</option>
+            <option selected>Alt Tier 5 ($4.99)</option>
+          </select>
+        </td>
+        <td><span class="pill p-ovr">đã chọn</span></td>
+        <td><span class="pill p-amb">overwrite</span></td>
+      </tr>
+      <!-- nhóm toàn Alt: đổi ưu tiên không giúp, vẫn cần tie-break -->
+      <tr>
+        <td class="mono">com.vng.game.promo069</td>
+        <td class="mono">$0.69</td>
+        <td>
+          <select class="sel sel-amb" title="Same USD price matches 2 tiers — pick one">
+            <option selected>Alt Tier 1 ($0.69)</option>
+            <option>Alt Tier A ($0.69)</option>
+          </select>
+        </td>
+        <td><span class="pill p-amb">mặc định</span></td>
+        <td><span class="pill p-ok">create</span></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="note">
+  <strong>Dòng 4 là ca <code>ALT-ALT</code>.</strong> Đổi ưu tiên Tier-trước-Alt không giúp gì ở đây —
+  vẫn cần một thứ hạng. <code>sortTierId</code> (<code>price-tiers.ts:270-287</code>) xếp
+  <code>ALT_&lt;số&gt;</code> trước <code>ALT_&lt;chữ&gt;</code> ⇒ <code>Alt Tier 1</code>.
+  Quy tắc cũ (so chuỗi) cũng ra <code>ALT_1</code> ở ca này, nhưng vì lý do khác và không đảm bảo.
+</div>
+
+<!-- ─── 4 ─────────────────────────────────────────────── -->
+<h2>State 4 · Cùng một dòng, hai quy tắc</h2>
+
+<div class="two">
+  <div class="card">
+    <div class="card-h">
+      <p class="card-t">TRƯỚC — <code>localeCompare</code> ASC</p>
+      <p class="card-d"><code>price-tiers.ts:179-181</code> · "ALT_" &lt; "TIER_" theo chữ cái</p>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>Giá</th><th>Nhóm khớp</th><th>Chọn</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">$4.99</td><td class="mono">TIER_5, ALT_5</td>
+            <td><span class="pill p-bad">ALT_5</span></td></tr>
+        <tr><td class="mono">$0.69</td><td class="mono">ALT_1, ALT_A</td>
+            <td><span class="pill p-amb">ALT_1</span></td></tr>
+        <tr><td class="mono">$19.99</td><td class="mono">TIER_2, TIER_10</td>
+            <td><span class="pill p-bad">TIER_10</span></td></tr>
+      </tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <div class="card-h">
+      <p class="card-t">SAU — <code>sortTierId</code></p>
+      <p class="card-d">Thứ hạng tường minh: FREE → TIER_&lt;n&gt; → ALT_&lt;số&gt; → ALT_&lt;chữ&gt;</p>
+    </div>
+    <div class="scroll"><table>
+      <thead><tr><th>Giá</th><th>Nhóm khớp</th><th>Chọn</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">$4.99</td><td class="mono">TIER_5, ALT_5</td>
+            <td><span class="pill p-ok">TIER_5</span></td></tr>
+        <tr><td class="mono">$0.69</td><td class="mono">ALT_1, ALT_A</td>
+            <td><span class="pill p-ok">ALT_1</span></td></tr>
+        <tr><td class="mono">$19.99</td><td class="mono">TIER_2, TIER_10</td>
+            <td><span class="pill p-ok">TIER_2</span></td></tr>
+      </tbody>
+    </table></div>
+  </div>
+</div>
+
+<div class="note">
+  <strong>Dòng thứ ba là thứ PA-1 không sửa được.</strong> Đảo điều kiện "ưu tiên non-ALT" bỏ được
+  tác dụng phụ ALT, nhưng tie-break vẫn so chuỗi ⇒ <code>TIER_10</code> vẫn thắng <code>TIER_2</code>.
+  <code>sortTierId</code> vốn numeric-aware nên sửa luôn, miễn phí. (Câu hỏi <strong>Q4</strong>.)
+</div>
+
+<!-- ─── 5 ─────────────────────────────────────────────── -->
+<h2>State 5 · Bộ lọc cho batch lớn — phương án 3.4-B</h2>
+
+<div class="card">
+  <div class="bar">
+    <span>⚠ <b>3</b> / 88 dòng có giá khớp nhiều tier</span>
+    <label class="toggle"><input type="checkbox"> Chỉ hiện dòng cần chọn tier</label>
+  </div>
+  <div class="card-h" style="padding-top:12px">
+    <p class="card-d" style="margin:0">
+      Không bật lọc → 88 dòng, 3 dòng viền amber nằm rải rác.
+      Bật lọc → còn 3 dòng. Client-side, trên dữ liệu <code>resolved</code> đã có trong state.
+    </p>
+  </div>
+  <div style="padding:0 18px 16px;display:flex;gap:8px">
+    <button class="btn btn-g">← Back</button>
+    <button class="btn" style="margin-left:auto">Next →</button>
+  </div>
+</div>
+
+<div class="note warn">
+  <strong>⚠ Thứ tự option trong dropdown hiện KHÔNG xác định.</strong>
+  <code>candidates</code> là <code>usdTiers.filter(...)</code> (<code>:1495</code>), mà
+  <code>usdTiers</code> chỉ <code>.order("customer_price")</code>
+  (<code>price-tiers.ts:155</code>, <code>templates.ts:320</code>) — trong một nhóm cùng giá,
+  thứ tự Postgres trả về là tuỳ ý. Đây mới đúng là "hệ quả ngẫu nhiên của thứ tự DB":
+  nó nằm ở <em>dropdown</em>, không phải ở <em>bộ giải</em>. PA-3 đóng luôn chỗ này.
+</div>
+
+<h2>Chưa quyết — chờ Manager</h2>
+<div class="card"><div class="card-h">
+  <p class="card-d" style="margin:0;line-height:1.9">
+    <strong>Q1</strong> áp cho đường nào (chỉ bulk import có dùng) ·
+    <strong>Q2</strong> item đã tạo có re-resolve không — <em>cần SQL 3 + SQL 4 trước</em> ·
+    <strong>Q3</strong> 3.4-A / B / C ·
+    <strong>Q4</strong> có sửa luôn <code>TIER_10 &gt; TIER_2</code> không.<br>
+    Chi tiết + SQL: <code>docs/iap-management/design-tier-tiebreak-priority.md</code>
+  </p>
+</div></div>
+
+</div>
+</body>
+</html>
