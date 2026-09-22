@@ -28,6 +28,15 @@ import {
 import { DownloadTemplateButton } from "@/components/ui/shared/DownloadTemplateButton";
 import type { ParsedIapItem, IapItemsParseResult } from "@/lib/iap-management/parsers/iap-items";
 import { summarizeAppleError } from "@/lib/iap-management/bulk-import/apple-error-summary";
+import {
+  isExecuteSummary,
+  faultFromUnreadableBody,
+  faultFromRejected,
+  faultFromUnexpectedShape,
+  faultFromTransport,
+  EXECUTE_FAULT_ADVICE,
+  type ExecuteFault,
+} from "@/lib/iap-management/bulk-import/execute-fault";
 import { TerritoryAvailabilityPicker } from "@/components/iap-management/territory/TerritoryAvailabilityPicker";
 import { bulkSurfaceDefaultSelection } from "@/lib/iap-management/apple/availability-surface-defaults";
 import type { TerritorySelection } from "@/lib/iap-management/apple/territory-selection";
@@ -284,6 +293,22 @@ export function BulkImportWizard({
   const [submitOnCreate, setSubmitOnCreate] = useState(false);
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<ExecuteResult | null>(null);
+  /**
+   * ⚠ THE SIGNAL THAT REPLACES A SELF-DISMISSING TOAST. Three batches on
+   * 2026-09-21 ran to completion server-side while the Manager, five minutes
+   * into a wait, saw step 4 come back with nothing to read — a sonner toast
+   * in the bottom-right corner had already timed out (no `duration` override
+   * at iap-management/layout.tsx). Non-null renders a block that STAYS in
+   * step 4 until it is acknowledged; see execute-fault.ts for the rules.
+   */
+  const [executeFault, setExecuteFault] = useState<ExecuteFault | null>(null);
+  /**
+   * ⚠ THE RE-RUN GUARD. The Manager re-ran the same 88-row import twice
+   * because nothing on screen said the first pass might already have landed.
+   * Execute stays disabled until this is ticked, so the second pass is a
+   * decision rather than the obvious thing to try.
+   */
+  const [faultAcknowledged, setFaultAcknowledged] = useState(false);
 
   // Hub tracking (VNGGames Hub run-tracking integration). RUN_ID lives only
   // in wizard client state — no server-side persistence. null means either
@@ -434,6 +459,10 @@ export function BulkImportWizard({
     // a sufficient guard).
     executeStartedRef.current = true;
     setExecuting(true);
+    // A fresh attempt clears the previous verdict — but NOT `executeStartedRef`,
+    // which is permanent by design (see its declaration).
+    setExecuteFault(null);
+    setFaultAcknowledged(false);
     try {
       const fd = new FormData();
       fd.append("excel", excelFile);
@@ -463,24 +492,55 @@ export function BulkImportWizard({
         `/api/iap-management/apps/${appId}/bulk-import/execute`,
         { method: "POST", body: fd },
       );
-      const data = (await res.json()) as ExecuteResult | { error: string };
-      if (!res.ok) {
-        toast.error("error" in data ? data.error : `Execute failed (${res.status})`);
+
+      // ⚠ STATUS FIRST, BODY SECOND — AND THE BODY AS TEXT.
+      //
+      // This used to be `await res.json()` on the line BEFORE the `!res.ok`
+      // check, which meant a gateway page (502/504 HTML, the shape a
+      // five-minute request gets when a proxy gives up) threw a SyntaxError
+      // before the status was ever looked at. The throw landed in the catch
+      // below and the Manager's only signal was `Unexpected token '<'` in a
+      // toast that then timed out. Reading the status off the response first,
+      // and the body as text, means every branch below can name the real
+      // event: which status, and what actually came back.
+      const status = res.status;
+      const raw = await res.text();
+      let data: unknown;
+      try {
+        data = JSON.parse(raw);
+      } catch {
+        setExecuteFault(faultFromUnreadableBody(status, raw));
         return;
       }
-      if ("succeeded" in data) {
-        setResult(data);
+
+      if (!res.ok) {
+        setExecuteFault(faultFromRejected(status, data));
+        return;
+      }
+
+      if (isExecuteSummary(data)) {
+        const summary = data as ExecuteResult;
+        setResult(summary);
         setStep(5);
-        const msg = `${data.succeeded} created · ${data.skipped} skipped · ${data.failed} failed`;
+        const msg = `${summary.succeeded} created · ${summary.skipped} skipped · ${summary.failed} failed`;
         // IAP.o.7c — failed rows now escalate to error toast (previously
         // .warning, which Manager missed during MV30). Success path
         // unchanged when no rows failed.
-        if (bulkImportToastSeverity(data) === "success") toast.success(msg);
+        if (bulkImportToastSeverity(summary) === "success") toast.success(msg);
         else toast.error(msg);
         router.refresh();
+        return;
       }
+
+      // ⚠ THE BRANCH THAT DID NOT EXIST. A 2xx body without `succeeded` used
+      // to fall straight through to `finally`: no toast, no log, no state
+      // change — the wizard simply sat back down on step 4 as if the click
+      // had never happened. It is the one exit with NO signal at all, so it
+      // is the one most likely to be read as "nothing ran", which is exactly
+      // the reading that produced a blind re-run.
+      setExecuteFault(faultFromUnexpectedShape(status, data, raw));
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Network error");
+      setExecuteFault(faultFromTransport(err));
     } finally {
       setExecuting(false);
     }
@@ -659,6 +719,18 @@ export function BulkImportWizard({
               />
             </div>
           )}
+
+          {/* ⚠ INSIDE STEP 4, NOT A TOAST. The whole failure mode this
+              closes is "the signal disappeared while the Manager was doing
+              something else for five minutes". A block that stays put until
+              it is acknowledged is the only kind that survives that. */}
+          {executeFault && (
+            <ExecuteFaultPanel
+              fault={executeFault}
+              acknowledged={faultAcknowledged}
+              onAcknowledge={setFaultAcknowledged}
+            />
+          )}
         </div>
       )}
 
@@ -713,7 +785,13 @@ export function BulkImportWizard({
               // ⚠ No catalogue ⇒ no execute. Posting without a real selection
               // would fall back to a list nobody chose.
               !availabilitySelection ||
-              territoriesError !== null
+              territoriesError !== null ||
+              // ⚠ THE RE-RUN GUARD. A previous attempt ended without a result
+              // screen, which does NOT mean it ended without doing the work —
+              // there is no abort signal on that request. Re-running blind is
+              // the thing that actually happened twice on 2026-09-21, so the
+              // second pass costs one deliberate tick.
+              (executeFault !== null && !faultAcknowledged)
             }
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-40"
           >
@@ -724,9 +802,94 @@ export function BulkImportWizard({
             )}
             {executing
               ? "Importing…"
-              : `Execute (${(resolved?.counts.create ?? 0) + (resolved?.counts.overwrite ?? 0)} IAPs)`}
+              : `${executeFault ? "Run again" : "Execute"} (${(resolved?.counts.create ?? 0) + (resolved?.counts.overwrite ?? 0)} IAPs)`}
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Execute fault panel ────────────────────────────────────────────────────
+
+/**
+ * ⚠ THE BLOCK THAT DOES NOT GO AWAY.
+ *
+ * Every other failure signal in this wizard is a sonner toast, and for a
+ * click that returns in under a second that is fine. Execute is not that
+ * click: 88 items measured ~5 minutes on 2026-09-21, and the Manager was not
+ * watching the corner of the screen when the toast fired and expired. So this
+ * renders in the step-4 card, stays until acknowledged, and gates the button.
+ *
+ * ⚠ THE HEADLINE IS THE *DIAGNOSIS*, THE ADVICE IS THE *ACTION*, and they are
+ * separate on purpose. Which fault it was decides nothing about what to do
+ * next — "check App Store Connect before re-running" is the same sentence for
+ * all four — so it is a constant rather than four near-identical strings that
+ * can drift apart.
+ */
+function ExecuteFaultPanel({
+  fault,
+  acknowledged,
+  onAcknowledge,
+}: {
+  fault: ExecuteFault;
+  acknowledged: boolean;
+  onAcknowledge: (v: boolean) => void;
+}) {
+  return (
+    <div
+      role="alert"
+      data-testid="execute-fault"
+      data-fault-kind={fault.kind}
+      className="mx-5 mb-5 rounded-lg border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/40 p-4"
+    >
+      <div className="flex items-start gap-2">
+        <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0 text-red-600 dark:text-red-400" />
+        <div className="min-w-0 space-y-2">
+          <p className="text-sm font-semibold text-red-900 dark:text-red-200">
+            The import did not return a result screen
+          </p>
+          <p className="text-[13px] text-red-900/90 dark:text-red-200/90">
+            {fault.headline}
+          </p>
+
+          {/* ⚠ THE SENTENCE THE WHOLE PANEL EXISTS FOR. */}
+          <p className="text-[13px] font-medium text-red-900 dark:text-red-200">
+            {EXECUTE_FAULT_ADVICE}
+          </p>
+
+          {fault.batchId && (
+            <p className="text-[11px] text-red-900/80 dark:text-red-200/80">
+              Batch id:{" "}
+              <span
+                data-testid="execute-fault-batch-id"
+                className="font-mono select-all"
+              >
+                {fault.batchId}
+              </span>{" "}
+              — quote this when asking for the run&apos;s audit rows.
+            </p>
+          )}
+
+          {fault.bodyExcerpt && (
+            <pre className="max-h-32 overflow-auto rounded border border-red-200 dark:border-red-900 bg-white/60 dark:bg-slate-900/60 p-2 text-[11px] font-mono text-red-900 dark:text-red-200 whitespace-pre-wrap break-all">
+              {fault.bodyExcerpt}
+            </pre>
+          )}
+
+          <label className="flex items-start gap-2 pt-1 text-[13px] text-red-900 dark:text-red-200">
+            <input
+              type="checkbox"
+              data-testid="execute-fault-ack"
+              checked={acknowledged}
+              onChange={(e) => onAcknowledge(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              I have checked App Store Connect — let me run this import again.
+            </span>
+          </label>
+        </div>
       </div>
     </div>
   );

@@ -76,7 +76,14 @@ describe("the locale loop breaks on an exhausted budget", () => {
     const catchIdx = loop.indexOf("} catch (err) {");
     expect(catchIdx).toBeGreaterThan(-1);
     const afterCatch = loop.slice(catchIdx);
-    expect(afterCatch).toContain("failedLocales.push");
+    // ⚠ MARKER RENAMED, ASSERTION UNCHANGED. This line asserted
+    // `failedLocales.push` — the pre-[BULK-IMPORT-locale-reason] shape, where
+    // the catch kept the locale CODE and handed Apple's reason to `log()`,
+    // which is the hole that arc closed. It was only ever standing in for
+    // "the catch body records the failure and carries on"; the recorder is
+    // now what does that. The assertion that is this test's actual subject —
+    // no `break` in the catch — is untouched below.
+    expect(afterCatch).toContain("recordLocaleFailure(localeFailures,");
     expect(afterCatch).not.toContain("break;");
   });
 

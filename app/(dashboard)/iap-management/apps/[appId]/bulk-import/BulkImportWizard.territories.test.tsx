@@ -90,7 +90,15 @@ function installFetch(opts?: { territories?: unknown }) {
       } as Response;
     }
     // hub-tracking start/cancel and anything else.
-    return { ok: true, status: 200, json: async () => ({}) } as Response;
+    // ⚠ `text` alongside `json` — handleExecute reads the body as text now
+    // (execute-fault.ts). A catch-all that answers only `json()` would make a
+    // future test that clicks Execute fail on the STUB, not on the code.
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+      text: async () => "{}",
+    } as unknown as Response;
   });
   vi.stubGlobal("fetch", impl);
   return { posted };

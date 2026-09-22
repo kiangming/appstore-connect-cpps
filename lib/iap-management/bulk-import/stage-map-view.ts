@@ -65,6 +65,33 @@ export function formatLocalizationCounts(
 }
 
 /**
+ * ⚠ THE REASON, ONE LINE PER FAILED LOCALE — the thing `formatLocalizationCounts`
+ * has never been able to say.
+ *
+ * It renders `vi` and the count and stops there, because `failed` is a list of
+ * CODES. A Manager reading "1 failed: vi" learns which locale and nothing
+ * else, which is precisely the dead end the 2026-09-21 batch hit: 20 rows,
+ * all `failed: ["vi"]`, and the only copy of Apple's objection was in a
+ * Railway log. This renders `failedDetail` instead — Apple's own words, kept
+ * on the row.
+ *
+ * Returns "" when there is nothing to add, so `formatStageMap` can append it
+ * unconditionally without growing a branch.
+ */
+export function formatLocalizationFailures(
+  loc: RowStages["localizations"],
+): string {
+  const detail = loc.failedDetail;
+  if (!detail || detail.length === 0) return "";
+  return detail
+    .map((f) => {
+      const status = f.httpStatus !== undefined ? ` (HTTP ${f.httpStatus})` : "";
+      return `    ${f.locale}${status} — ${f.message}`;
+    })
+    .join("\n");
+}
+
+/**
  * ⚠ THE ONE NOTE THAT HAS TO SPELL ITSELF OUT.
  *
  * The results table used to carry this sentence in the Notes column, but W2
@@ -107,7 +134,16 @@ export function formatStageMap(stages: RowStages): string {
     const state = STATE_TITLE[stages[key].state];
     const detail = stageDetail(key, stages);
     const head = `${STAGE_TITLE[key].padEnd(width)}  ${state}`;
-    return detail ? `${head}  —  ${detail}` : head;
+    const line = detail ? `${head}  —  ${detail}` : head;
+    // ⚠ Reasons go BELOW the localizations line, not inline. One row can fail
+    // many locales for many different reasons; folding them into the same
+    // clause as the counts produced an unreadable run-on the moment more than
+    // one locale broke, which is the common case, not the edge case.
+    if (key === "localizations") {
+      const why = formatLocalizationFailures(stages.localizations);
+      if (why) return `${line}\n${why}`;
+    }
+    return line;
   }).join("\n");
 }
 

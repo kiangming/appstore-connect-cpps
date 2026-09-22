@@ -96,6 +96,12 @@ import {
   type StageState,
 } from "@/lib/iap-management/bulk-import/row-outcome";
 import {
+  recordLocaleFailure,
+  recordAllLocalesFailed,
+  localeCodes,
+  type LocaleFailure,
+} from "@/lib/iap-management/bulk-import/locale-failures";
+import {
   createRetryCounters,
   trackedWithRetry,
   rowExhaustedRateLimitBudget,
@@ -929,7 +935,11 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   }
 
   // 2. Localizations
-  const failedLocales: string[] = [];
+  // ⚠ ONE LIST CARRYING BOTH FACTS. `failed` (the codes) is derived from this
+  // at the stage map below via `localeCodes`, so "which locale" and "why"
+  // cannot drift apart — see locale-failures.ts for why the reason used to
+  // reach a Railway log and nothing else.
+  const localeFailures: LocaleFailure[] = [];
   let localesDone = 0;
   let localesStoppedByStop = 0;
   for (const [locIndex, loc] of item.localizations.entries()) {
@@ -973,10 +983,13 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
       );
       localesDone += 1;
     } catch (err) {
-      failedLocales.push(loc.locale);
+      // ⚠ PERSISTED, not just logged. The log line below still goes to
+      // Railway for live tailing; `recordLocaleFailure` is what survives into
+      // actions_log so "why did vi fail?" is answerable next week.
+      const failure = recordLocaleFailure(localeFailures, loc.locale, err);
       await log(
         "iap-bulk-execute",
-        `locale fail ${loc.locale} on product=${item.product_id}: ${errMsg(err)}`,
+        `locale fail ${loc.locale} on product=${item.product_id}: ${failure.message}`,
         "WARN",
       );
     }
@@ -1167,7 +1180,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
   let submitError: string | undefined;
   let submitErrorFull: string | undefined;
   let submitErrorHttpStatus: number | undefined;
-  if (submit && screenshotOk && failedLocales.length === 0) {
+  if (submit && screenshotOk && localeFailures.length === 0) {
     console.log(
       `[bulk-execute] Stage 4→5 submit-readiness poll starting product_id=${item.product_id} apple_iap_id=${appleIapId}`,
     );
@@ -1228,12 +1241,13 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
           ? "NOT_APPLICABLE"
           : localesStoppedByStop > 0
             ? "SKIPPED_BY_STOP"
-            : failedLocales.length > 0
+            : localeFailures.length > 0
               ? "FAILED"
               : "OK",
       done: localesDone,
       total: item.localizations.length,
-      failed: failedLocales,
+      failed: localeCodes(localeFailures),
+      ...(localeFailures.length > 0 ? { failedDetail: localeFailures } : {}),
       skippedByStop: localesStoppedByStop,
     },
     pricing: {
@@ -1295,7 +1309,7 @@ async function runCreate(args: OrchestrateArgs): Promise<PerIapResult> {
     stages,
     summary: rollUp.summary,
     apple_iap_id: appleIapId,
-    failed_locales: failedLocales,
+    failed_locales: localeCodes(localeFailures),
     screenshot_uploaded: screenshotOk,
     submitted,
     ...(submitOutcome ? { submit_outcome: submitOutcome } : {}),
@@ -1357,7 +1371,8 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
   //    new ones, DELETE only genuinely-removed ones — and run PATCH+POST
   //    BEFORE DELETE so the desired locales already exist when leftovers are
   //    removed (never drops the IAP to zero localizations).
-  const failedLocales: string[] = [];
+  // Twin of the CREATE path's list — same single-source rule, same reason.
+  const localeFailures: LocaleFailure[] = [];
   try {
     const existing = await trackedWithRetry(args.rateCounters, () =>
       listInAppPurchaseLocalizations(creds, appleIapId),
@@ -1384,10 +1399,10 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
           }),
         );
       } catch (err) {
-        failedLocales.push(p.locale);
+        const failure = recordLocaleFailure(localeFailures, p.locale, err);
         await log(
           "iap-bulk-execute",
-          `patch loc ${p.locale} on ${item.product_id}: ${errMsg(err)}`,
+          `patch loc ${p.locale} on ${item.product_id}: ${failure.message}`,
           "WARN",
         );
       }
@@ -1405,10 +1420,10 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
           }),
         );
       } catch (err) {
-        failedLocales.push(c.locale);
+        const failure = recordLocaleFailure(localeFailures, c.locale, err);
         await log(
           "iap-bulk-execute",
-          `create loc ${c.locale} on ${item.product_id}: ${errMsg(err)}`,
+          `create loc ${c.locale} on ${item.product_id}: ${failure.message}`,
           "WARN",
         );
       }
@@ -1430,6 +1445,18 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
       }
     }
   } catch (err) {
+    // ⚠ A THROW HERE MEANS ZERO LOCALIZATION WRITES HAPPENED — the LIST call,
+    // the plan and the suppressed-deletions log all run in front of the
+    // PATCH/POST/DELETE loops. Before this the block only logged, which left
+    // `failed` empty and `done` equal to `total`: the stage read **OK** for a
+    // row Apple was never told anything about. A stage map that lies, in the
+    // safe-looking direction.
+    recordAllLocalesFailed(
+      localeFailures,
+      item.localizations,
+      err,
+      "could not list existing localizations",
+    );
     await log(
       "iap-bulk-execute",
       `list locales failed on ${item.product_id}: ${errMsg(err)}`,
@@ -1571,12 +1598,13 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
       state:
         owTotalLocales === 0
           ? "NOT_APPLICABLE"
-          : failedLocales.length > 0
+          : localeFailures.length > 0
             ? "FAILED"
             : "OK",
-      done: Math.max(0, owTotalLocales - failedLocales.length),
+      done: Math.max(0, owTotalLocales - localeFailures.length),
       total: owTotalLocales,
-      failed: failedLocales,
+      failed: localeCodes(localeFailures),
+      ...(localeFailures.length > 0 ? { failedDetail: localeFailures } : {}),
       skippedByStop: 0,
     },
     pricing: {
@@ -1626,7 +1654,7 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     stages: owStages,
     summary: owRollUp.summary,
     apple_iap_id: appleIapId,
-    failed_locales: failedLocales,
+    failed_locales: localeCodes(localeFailures),
     screenshot_uploaded: screenshotOk,
     screenshot_note: screenshotNote,
     ...(pricing

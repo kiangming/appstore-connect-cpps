@@ -2,6 +2,21 @@
 
 Format: `- [ ] [PR-X] description — file path — rationale`
 
+## From [BULK-IMPORT-no-result-recovery] (Apple Bulk Import — kết quả không về được UI, 2026-09-22)
+
+**Trạng thái arc: chunk 1 code xong (lỗ quan sát + đường im lặng UI), chờ
+Manager UAT.** Không có migration ⇒ đường lui là Railway Rollback. Điều tra
+gốc: 3 batch ngày 2026-09-21 đều `status=COMPLETE`, `accounted=total_rows`,
+`rate429_count=0`; Manager thấy bước 4 cả 3 lần và **chạy lại 2 lần**.
+
+- [x] [BULK-IMPORT-locale-reason] **Lý do một locale hỏng nay được LƯU, không chỉ log** — ✅ chunk 1. `lib/iap-management/bulk-import/locale-failures.ts` (mới) là choke point duy nhất; cả 3 catch (CREATE loop + OVERWRITE PATCH + OVERWRITE POST) gọi `recordLocaleFailure`, `stages.localizations.failedDetail` mang `message`/`full`/`httpStatus`, `failed` **dẫn xuất** từ cùng một mảng qua `localeCodes()` nên không thể lệch nhau. Kèm: cú throw tiền-trạm của OVERWRITE (LIST/plan) nay đánh dấu **mọi** locale hỏng — trước đó nó để `failed` rỗng và `done === total`, tức stage đọc là **OK** cho một dòng Apple chưa từng được bảo gì.
+- [x] [BULK-IMPORT-no-result-recovery] **Ba đường thoát im lặng của `handleExecute` đã bịt** — ✅ chunk 1. `res.status`/`res.text()` đọc TRƯỚC khi parse (gateway page 502/504 nay nêu status thay vì `Unexpected token '<'`); nhánh `else` cho body 2xx sai shape (trước đó rơi thẳng xuống `finally`, **không một tín hiệu nào**); panel cố định trong bước 4 thay toast tự tắt; Execute bị khoá tới khi Manager tick "đã kiểm tra App Store Connect".
+- [ ] [BULK-IMPORT-no-result-recovery] ⚠ **CHƯA LÀM — route GET `batch/[id]` + màn kết quả đọc lại.** Bằng chứng cứng: **22 dòng PARTIAL/ERROR nằm đủ trong `iap_mgmt.actions_log`** (`BULK_IMPORT_CREATE`, payload là nguyên `PerIapResult` gồm `stages` + `summary`) mà Manager **không có đường nào xem**. Đó là lý do họ tưởng mọi thứ ổn và chạy lại 2 lần. ⚠ `import_batches` cũng **không UI nào đọc** — chính route tự khai ở `execute/route.ts:699` ("NOTHING IN THE APP READS `import_batches`"). Panel ở chunk 1 chỉ *báo* rằng kết quả có thể tồn tại; nó không *lấy* được kết quả về.
+- [ ] [BULK-IMPORT-long-request-no-background-job] ⚠ **Kiến trúc: 88 item = ~5 phút qua MỘT HTTP request.** Đo thật 2026-09-21: 04:33 / 05:53 / 04:56 wall-clock. Không `maxDuration` (grep toàn repo → 0), không `AbortSignal` truyền xuống, không poll. Server **không biết** client đã rớt nên chạy tiếp tới hết — đó là lý do item vẫn lên Apple. **Việc này sẽ hỏng lại với n lớn hơn bất kể sửa UI thế nào**; đường đúng là batch job + poll, không phải nới timeout.
+- [ ] [BULK-IMPORT-rerun-blind] **Chống chạy-lại-mù (đã hạ mức).** Chunk 1 thêm checkbox xác nhận, nhưng nó chỉ chặn khi wizard CÒN mở — reload trang là mất. Đã xác nhận **an toàn về dữ liệu**: 86/88 dòng đi đường OVERWRITE nên chạy lại ghi đè, **không tạo trùng** (`conflict_counts: create=2 · overwrite=86`). Còn lại là chi phí: mỗi lần chạy lại tốn thêm một lượt đầy ~5 phút và một lượt quota Apple.
+- [ ] [BULK-IMPORT-created-count-mislabel] ⚠ **`import_batches.created_count` đang đếm "dòng có ghi lên Apple", không phải "dòng được TẠO".** `execute/route.ts:725` ghi `succeeded + partial` **không lọc theo disposition**, trong khi `overwritten_count` (`:726-730`) có lọc. Batch 85f86454 vì thế ghi `created_count=86` **và** `overwritten_count=86` cho một batch tạo mới **0** item (conflict_counts: create=2, cả 2 đều ERROR 409). Hệ quả: hai cột cộng lại 172 > `total_rows`=88, và bất kỳ báo cáo nào đọc `created_count` sẽ nói sai. Đây đúng **nguyên tắc status** ở KB §9 — một cột theo dõi phải phản ánh kết quả thật. ⚠ Sửa cần đọc `disposition === "CREATE"`; **đừng** đụng `partial_count`/`status` (đã bị `[Q-C3.tracking-frozen]` khoá).
+- [ ] [BULK-IMPORT-stale-docblock] **Docblock `execute/route.ts:25` nói dối.** Nó viết "Insert `iap_mgmt.iaps` + `iap_localizations` + `iap_screenshots` audit rows" — nhưng `persistResult` **chỉ** ghi `iaps` và `actions_log`. Grep xác nhận bulk-import **không hề** chạm `iap_localizations` (chỉ `update-on-apple/route.ts` và `queries/iaps.ts` ghi bảng đó). Hệ quả thật: điều tra 2026-09-22 phải đi hỏi Manager mở file Excel vì **nội dung localization đã gửi không được lưu ở đâu cả**.
+
 ## From [TEMPLATE-xlsx-export] (export ma trận Pricing Template ra .xlsx, 2026-08-30)
 
 **Trạng thái arc: code xong C1–C6, chờ Manager UAT trên production.** Kiến

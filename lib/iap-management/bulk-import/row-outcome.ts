@@ -11,6 +11,7 @@
  * type now lives where both sides can import it.
  */
 import type { PricingOutcome } from "@/lib/iap-management/apple/pricing-orchestration";
+import type { LocaleFailure } from "./locale-failures";
 
 /**
  * ⚠ FOUR STATES, AND `SKIPPED_BY_STOP` IS NOT A FAILURE.
@@ -62,6 +63,19 @@ export interface RowStages {
     done: number;
     total: number;
     failed: string[];
+    /**
+     * ⚠ WHY each entry of `failed` failed — the field whose ABSENCE cost a
+     * whole investigation. On 2026-09-21 a batch returned 20 rows all reading
+     * `failed: ["vi"]` with `error: null`, and nothing anywhere said what
+     * Apple had objected to; the reason had gone to a Railway log line and
+     * nowhere else. Every sibling stage below already carries an `error`.
+     *
+     * ⚠ DERIVED-FROM, NOT PARALLEL-TO. `failed` is built by `localeCodes()`
+     * over this same list at the one place the map is assembled, so the two
+     * cannot drift apart. Optional only so a response predating this field
+     * still renders — same reason `not_attempted` and `partial` are.
+     */
+    failedDetail?: LocaleFailure[];
     /** Remainder after a rate-limit break — never sent, safe to re-run. */
     skippedByStop: number;
   };

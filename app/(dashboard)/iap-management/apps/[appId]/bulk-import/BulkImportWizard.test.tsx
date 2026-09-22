@@ -89,31 +89,54 @@ const EMPTY_TIERS: Record<PricingSourceKind, UsdTierEntry[]> = {
 const TERRITORIES_URL = "/api/iap-management/territories";
 const CATALOGUE = ["USA", "VNM", "BRA", "KAZ"];
 
-function successExecuteResponse() {
+/**
+ * ⚠ `text`, NOT `json` — AND THE STUB MUST MATCH THE SEAM THE CLIENT USES.
+ *
+ * [BULK-IMPORT-no-result-recovery] moved `handleExecute` off `res.json()` and
+ * onto `res.text()` + `JSON.parse`, because the old order parsed the body
+ * BEFORE reading `res.status`, so a 502/504 gateway page threw
+ * `Unexpected token '<'` instead of naming the status. These helpers were the
+ * two stubs that still only answered `json()`, which made both cancel-guard
+ * tests below fail with a message that read exactly like a product defect
+ * (P44: a probe on the wrong seam reports a harness bug in a product bug's
+ * clothing).
+ *
+ * Both members are derived from ONE body object so the stub cannot drift
+ * from itself the way the real hole did.
+ */
+function jsonResponse(body: unknown, init?: { ok?: boolean; status?: number }) {
+  const raw = JSON.stringify(body);
   return {
-    ok: true,
-    json: async () => ({
-      batch_id: "batch-1",
-      total: 1,
-      succeeded: 1,
-      failed: 0,
-      skipped: 0,
-      results: [{ product_id: "com.vng.test.item", status: "SUCCESS", disposition: "CREATE" }],
-    }),
+    ok: init?.ok ?? true,
+    status: init?.status ?? 200,
+    json: async () => JSON.parse(raw),
+    text: async () => raw,
   };
 }
 
+function successExecuteResponse() {
+  return jsonResponse({
+    batch_id: "batch-1",
+    total: 1,
+    succeeded: 1,
+    failed: 0,
+    skipped: 0,
+    results: [{ product_id: "com.vng.test.item", status: "SUCCESS", disposition: "CREATE" }],
+  });
+}
+
 function failureExecuteResponse() {
-  return {
-    ok: false,
-    status: 502,
-    json: async () => ({ error: "Apple sync failed" }),
-  };
+  return jsonResponse({ error: "Apple sync failed" }, { ok: false, status: 502 });
 }
 
 interface FetchScenario {
   runId: string | null;
-  executeResponse: () => { ok: boolean; status?: number; json: () => Promise<unknown> };
+  executeResponse: () => {
+    ok: boolean;
+    status?: number;
+    json: () => Promise<unknown>;
+    text?: () => Promise<string>;
+  };
 }
 
 function installFetchMock(scenario: FetchScenario) {
@@ -356,7 +379,22 @@ describe("BulkImportWizard — Hub tracking cancel-on-exit guard", () => {
     await goToStep3();
     await clickExecuteAndSettle();
 
-    expect(toastError).toHaveBeenCalled();
+    // ⚠ WAS `expect(toastError).toHaveBeenCalled()`, AND THE CHANGE IS A
+    // STRENGTHENING, NOT A RELAXATION.
+    //
+    // This assertion is not this test's subject — the subject is the cancel
+    // guard on the line below. It was standing in for "the failure reached
+    // the Manager", and a toast is precisely the mechanism
+    // [BULK-IMPORT-no-result-recovery] had to remove: sonner is mounted with
+    // no `duration` override (iap-management/layout.tsx), so the signal for a
+    // five-minute request expired on its own while the Manager was elsewhere.
+    // The non-2xx branch now raises the persistent panel instead, so the
+    // stand-in asserts the thing that actually stays on screen.
+    expect(screen.getByTestId("execute-fault")).toBeInTheDocument();
+    expect(screen.getByTestId("execute-fault")).toHaveAttribute(
+      "data-fault-kind",
+      "rejected",
+    );
 
     fireEvent.click(screen.getByRole("button", { name: /^IAPs ·/ }));
 
