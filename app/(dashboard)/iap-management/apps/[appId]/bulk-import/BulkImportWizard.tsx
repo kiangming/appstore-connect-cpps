@@ -72,6 +72,10 @@ import {
   type UsdTierEntry,
 } from "@/lib/iap-management/queries/price-tiers";
 import {
+  candidateTiersForPrice,
+  isAmbiguousPrice,
+} from "@/lib/iap-management/tier-order";
+import {
   PricingSourceSelector,
   defaultPricingSource,
 } from "@/components/iap-management/iap-form/PricingSourceSelector";
@@ -1269,6 +1273,40 @@ export function Step3Preview({
   appTemplateEntryCount?: number;
   defaultTemplateAccountName?: string;
 }) {
+  /**
+   * 3.4-B — show only the rows whose price matches more than one tier.
+   *
+   * ⚠ A BATCH IS 88 ROWS AND THE AMBIGUOUS ONES ARE 3 OF THEM. The amber
+   * `TierCell` dropdown has always been there, but finding it meant scrolling
+   * a 420px-tall scroller looking for a colour — which is exactly the job the
+   * export picker arc existed to delete. This filter is the same answer:
+   * let the surface say how many there are, and let one click show only them.
+   */
+  const [onlyAmbiguousTier, setOnlyAmbiguousTier] = useState(false);
+
+  /**
+   * ⚠ COUNTED IN TWO TIERS, AND NEITHER IS SPECIAL-CASED (picker convention).
+   * `ambiguousCount` is how many rows need a decision; `decisions.length` is
+   * the denominator. The filtered list is derived from the same predicate the
+   * cell uses (`isAmbiguousPrice`), so the count and what the table shows can
+   * never be two different numbers.
+   */
+  const ambiguousCount = useMemo(
+    () =>
+      decisions.filter((d) => isAmbiguousPrice(d.source.price_usd, usdTiers))
+        .length,
+    [decisions, usdTiers],
+  );
+  const visibleDecisions = useMemo(
+    () =>
+      onlyAmbiguousTier
+        ? decisions.filter((d) =>
+            isAmbiguousPrice(d.source.price_usd, usdTiers),
+          )
+        : decisions,
+    [onlyAmbiguousTier, decisions, usdTiers],
+  );
+
   const matchedProductIds = new Set(
     screenshots
       .filter((s) => s.match.kind === "matched")
@@ -1360,6 +1398,35 @@ export function Step3Preview({
         </p>
       )}
 
+      {/* 3.4-B — the count is stated whether or not the filter is on, so the
+          Manager learns there IS something to decide without clicking. Hidden
+          entirely at zero: a row of "0 rows need a tier choice" on every
+          unambiguous batch is noise, not reassurance. */}
+      {ambiguousCount > 0 && (
+        <div
+          data-testid="ambiguous-tier-bar"
+          className="flex items-center gap-3 mb-3 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-3 py-2 text-[11px] text-amber-900 dark:text-amber-200"
+        >
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span>
+            <span data-testid="ambiguous-tier-count" className="font-semibold">
+              {ambiguousCount}
+            </span>{" "}
+            of {decisions.length} rows match more than one tier — a standard
+            Tier is pre-selected; change it per row if you want the Alternate.
+          </span>
+          <label className="ml-auto flex shrink-0 items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              data-testid="ambiguous-tier-filter"
+              checked={onlyAmbiguousTier}
+              onChange={(e) => setOnlyAmbiguousTier(e.target.checked)}
+            />
+            Only rows needing a tier choice
+          </label>
+        </div>
+      )}
+
       <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden max-h-[420px] overflow-y-auto">
         <table className="w-full text-xs">
           <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-800 sticky top-0">
@@ -1375,7 +1442,7 @@ export function Step3Preview({
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-            {decisions.map((d) => {
+            {visibleDecisions.map((d) => {
               const localesFilled = d.source.localizations.length;
               const screenshotPresent = matchedProductIds.has(d.product_id);
               const isConflict = existingSet.has(d.product_id);
@@ -1487,13 +1554,20 @@ function TierCell({
   usdTiers: UsdTierEntry[];
   onChange: (tier_id: string) => void;
 }) {
-  // Candidates = all tiers matching the row's price.
-  const candidates = useMemo(() => {
-    if (priceUsd === 0) {
-      return usdTiers.filter((t) => t.tier_id === "FREE");
-    }
-    return usdTiers.filter((t) => t.customer_price === priceUsd);
-  }, [priceUsd, usdTiers]);
+  // ⚠ THE SAME ORDERED LIST THE RESOLVER TOOK `[0]` OF — not a second filter.
+  //
+  // This used to be a local `usdTiers.filter(...)` with no sort, while
+  // `resolveTierByUsdPrice` filtered AND sorted. Two expressions answering one
+  // question: "which tiers match this price, and which comes first?" The
+  // dropdown's first option was therefore ordered by whatever Postgres
+  // returned — the USD lists are `.order("customer_price")` only, which says
+  // nothing about ties — so the option at the top and the value pre-selected
+  // in it could disagree. Reading both from `candidateTiersForPrice` makes
+  // them one fact.
+  const candidates = useMemo(
+    () => candidateTiersForPrice(priceUsd, usdTiers),
+    [priceUsd, usdTiers],
+  );
 
   const selected = overrideTierId ?? autoTierId;
   const ambiguous = candidates.length > 1;

@@ -1,6 +1,29 @@
 # Thứ tự ưu tiên khi một giá khớp NHIỀU tier — census + thiết kế
 
-**Arc:** `[TIER-TIEBREAK-priority]` · **Ngày:** 2026-09-22 · **Trạng thái:** CENSUS XONG, chờ Manager duyệt · **CHƯA CODE**
+**Arc:** `[TIER-TIEBREAK-priority]` · **Ngày:** 2026-09-22 · **Trạng thái:** ✅ ĐÃ SHIP chunk PA-3, chờ gate push
+
+> ### Kết quả 4 SQL (Manager đã chạy) + quyết định
+>
+> - **SQL 1:** 5 nhóm trùng giá (`$0.99 · $1.99 · $2.99 · $3.99 · $4.99`),
+>   **TẤT CẢ đều TIER-vs-ALT**, **không** ca TIER-vs-TIER nào. Lặp ở cả 6
+>   account template lẫn 4 app template. ⚠ `$0.99` có **BỐN** tier
+>   (`TIER_1, ALT_1, ALT_A, ALT_B`).
+> - **SQL 3 — câu định đoạt:** ALT và TIER **KHÔNG tương đương**. Trùng USD
+>   nhưng lệch giá ở nước khác: `$0.99 → 75/175 nước · $1.99 → 13 · $2.99 → 8
+>   · $3.99 → 11 · $4.99 → 9`. ⇒ Câu "KHÔNG ĐỌC ĐƯỢC TỪ REPO" ở cuối file này
+>   **nay đã có câu trả lời** — ghi ở **KB §26.1**.
+> - **SQL 4:** 26 item đang dùng ALT (`ALT_2:8 · ALT_1:6 · ALT_3:5 · ALT_5:4
+>   · ALT_4:2 · ALT_B:1 · ALT_A:0`).
+>
+> **Chốt:** PA-3 · Q1=(a) chỉ bulk import · Q2=(a) để nguyên 26 item,
+> không backfill · Q3=(b) bộ lọc 3.4-B · Q4=(a) có, sửa luôn
+> `TIER_10 > TIER_2`.
+>
+> ⚠ **CẢI CHÍNH.** Bản census đầu viết *"26 item sẽ âm thầm đổi giá khi import
+> lại"* — **sai về mức độ**. Chúng không tự đổi gì (không có đường re-resolve);
+> và khi có import lại thì dropdown nằm ở **Step 3 Preview, TRƯỚC Execute**, nên
+> không có gì âm thầm. Yêu cầu "cảnh báo chống rủi ro tự động" đã **bỏ** — không
+> có rủi ro tự động. Xem KB §26.3.
 
 Yêu cầu Manager: *"khi price của item trùng với nhiều tier, tool đang ưu tiên Alternate Tier. Muốn ưu tiên Tier thường trước; cần Alt thì tự chọn lại."*
 
@@ -456,6 +479,6 @@ Tie-break hiện tại so **chuỗi**, nên trong một nhóm toàn tier thườ
 
 | Câu | Cần gì |
 |---|---|
-| Alternate Tier khác Tier thường ở chỗ nào về **nghiệp vụ**? | Repo chỉ ghi cách mã hoá (`parsers/price-tiers.ts:17-19`), không ghi ý nghĩa. ⇒ **SQL 3** đo thẳng thay cho tài liệu. |
-| Có bao nhiêu ca trùng giá trong dữ liệu thật? | **SQL 1 + SQL 2** — Manager chạy. |
-| Bao nhiêu item sẽ đổi tier nếu import lại? | **SQL 4** — Manager chạy. |
+| Alternate Tier khác Tier thường ở chỗ nào về **nghiệp vụ**? | ✅ **ĐÃ TRẢ LỜI** bằng SQL 3 — lệch giá ở nước khác, `$0.99` lệch 75/175. Ghi vĩnh viễn ở **KB §26.1** để không phải hỏi lần hai. |
+| Có bao nhiêu ca trùng giá trong dữ liệu thật? | ✅ **5 nhóm, tất cả TIER-vs-ALT** (SQL 1). KB §26.2. |
+| Bao nhiêu item sẽ đổi tier nếu import lại? | ✅ **26 item** (SQL 4) — và chỉ đổi nếu Manager import lại VÀ không chọn lại ở dropdown. KB §26.3. |

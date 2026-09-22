@@ -10,6 +10,10 @@
  */
 
 import { iapDb } from "../db";
+import {
+  candidateTiersForPrice,
+  compareTierId,
+} from "../tier-order";
 import type { PriceTiersParseResult } from "../parsers/price-tiers";
 
 const TERRITORY_BATCH_SIZE = 1000;
@@ -164,22 +168,46 @@ export async function listUsdTiers(): Promise<UsdTierEntry[]> {
  *
  * Rule (Manager IAP.h2 lock):
  *   - Price 0 → "FREE" (whether or not the cache has the row).
- *   - Else: exact-match against customer_price. Multiple matches resolved
- *     by tier_id ASC (Manager's SQL: ORDER BY tier_id ASC LIMIT 1).
+ *   - Else: exact-match against customer_price. Multiple matches resolved by
+ *     the tier RANKING in `../tier-order` — `FREE` → `TIER_<n>` →
+ *     `ALT_<số>` → `ALT_<chữ>`, numeric-aware.
  *   - No match → null (caller surfaces "Price doesn't match any tier" error).
+ *
+ * ⚠ THE TIE-BREAK CHANGED, AND IT CHANGED BACK TOWARD THE ORIGINAL INTENT.
+ * This used to sort with `a.tier_id.localeCompare(b.tier_id)` under a comment
+ * reading "Manager spec: ORDER BY tier_id ASC LIMIT 1". That spec is about
+ * DETERMINISM and it delivered determinism — there was a real `.sort()` here,
+ * so the answer never depended on Postgres row order. What it never decided
+ * is which KIND of tier wins, and the answer it produced was an accident of
+ * the naming scheme: `"ALT_"` sorts before `"TIER_"`, so an Alternate Tier
+ * beat the standard tier at every shared price.
+ *
+ * ⚠ THE OLD TEST IS THE EVIDENCE THAT `TIER` WAS THE INTENT. `price-tiers.
+ * test.ts` carried a case titled "returns TIER_5 …" whose assertion read
+ * `toBe("ALT_5")`: the author expected the standard tier, met the alternate,
+ * and corrected the assertion rather than the rule. See that file for the
+ * full note.
+ *
+ * ⚠ WHY THIS MATTERS IN MONEY, measured 2026-09-22 (KB §26): two tiers that
+ * tie on USD are NOT interchangeable — they diverge in OTHER territories.
+ * $0.99 differs in 75 of 175 countries; $1.99 in 13; $2.99 in 8; $3.99 in 11;
+ * $4.99 in 9. Picking the wrong one is not cosmetic.
+ *
+ * ⚠ THE LIST COMES FROM `candidateTiersForPrice`, NOT FROM A LOCAL FILTER,
+ * so the wizard's dropdown renders the same ordered array this returns `[0]`
+ * of. The default and the first option are one fact, not two.
  */
 export function resolveTierByUsdPrice(
   priceUsd: number,
   tiers: readonly UsdTierEntry[],
 ): string | null {
+  // IAP.h2 lock — unchanged, and deliberately NOT delegated: price 0 resolves
+  // to FREE even when the cache has no FREE row, which is not what a dropdown
+  // should render. `candidateTiersForPrice` reports the list; this reports the
+  // lock.
   if (priceUsd === 0) return "FREE";
-  const matches = tiers.filter((t) => t.customer_price === priceUsd);
-  if (matches.length === 0) return null;
-  // Manager spec: ORDER BY tier_id ASC LIMIT 1
-  const sorted = [...matches].sort((a, b) =>
-    a.tier_id.localeCompare(b.tier_id),
-  );
-  return sorted[0].tier_id;
+  const candidates = candidateTiersForPrice(priceUsd, tiers);
+  return candidates.length > 0 ? candidates[0].tier_id : null;
 }
 
 export async function listTiers(): Promise<PriceTierRow[]> {
@@ -211,7 +239,7 @@ export async function listTiers(): Promise<PriceTierRow[]> {
       is_alternate: r.tier_id.startsWith("ALT_"),
       usd_price: usdMap.get(r.tier_id) ?? null,
     }))
-    .sort((a, b) => sortTierId(a.tier_id, b.tier_id));
+    .sort((a, b) => compareTierId(a.tier_id, b.tier_id));
 }
 
 /**
@@ -263,28 +291,9 @@ export async function listTiersWithTerritories(): Promise<TierTerritoryDetail[]>
       is_alternate: r.tier_id.startsWith("ALT_"),
       territories: byTier.get(r.tier_id) ?? [],
     }))
-    .sort((a, b) => sortTierId(a.tier_id, b.tier_id));
+    .sort((a, b) => compareTierId(a.tier_id, b.tier_id));
 }
 
-/** Sort: FREE → TIER_<n> (numeric) → ALT_<n or X> (numeric first, then letters). */
-function sortTierId(a: string, b: string): number {
-  const rank = (id: string): [number, number, string] => {
-    if (id === "FREE") return [0, 0, ""];
-    const tier = /^TIER_(\d+)$/.exec(id);
-    if (tier) return [1, Number(tier[1]), ""];
-    const alt = /^ALT_(.+)$/.exec(id);
-    if (alt) {
-      const n = Number(alt[1]);
-      return Number.isFinite(n) ? [2, n, ""] : [3, 0, alt[1]];
-    }
-    return [9, 0, id];
-  };
-  const [aBucket, aNum, aStr] = rank(a);
-  const [bBucket, bNum, bStr] = rank(b);
-  if (aBucket !== bBucket) return aBucket - bBucket;
-  if (aNum !== bNum) return aNum - bNum;
-  return aStr.localeCompare(bStr);
-}
 
 export interface ReplaceResult {
   batch_id: string;

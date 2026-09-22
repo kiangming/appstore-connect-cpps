@@ -14,6 +14,7 @@
  */
 
 import { iapDb } from "../db";
+import { compareTierId } from "../tier-order";
 import type {
   FlatTemplateEntry,
   PriceTiersParseResult,
@@ -549,7 +550,7 @@ export async function getTemplateOverview(
     tier.entries.sort((a, b) => a.territory_code.localeCompare(b.territory_code));
   }
   const tiers = Array.from(byTier.values()).sort((a, b) =>
-    sortTierId(a.tier_id, b.tier_id),
+    compareTierId(a.tier_id, b.tier_id),
   );
 
   return {
@@ -562,27 +563,6 @@ export async function getTemplateOverview(
   };
 }
 
-/** Same ranking as queries/price-tiers.ts. Inlined here to keep templates.ts
- *  self-contained — once price-tiers.ts retires, can be lifted to a shared
- *  util. */
-function sortTierId(a: string, b: string): number {
-  const rank = (id: string): [number, number, string] => {
-    if (id === "FREE") return [0, 0, ""];
-    const tier = /^TIER_(\d+)$/.exec(id);
-    if (tier) return [1, Number(tier[1]), ""];
-    const alt = /^ALT_(.+)$/.exec(id);
-    if (alt) {
-      const n = Number(alt[1]);
-      return Number.isFinite(n) ? [2, n, ""] : [3, 0, alt[1]];
-    }
-    return [9, 0, id];
-  };
-  const [aBucket, aNum, aStr] = rank(a);
-  const [bBucket, bNum, bStr] = rank(b);
-  if (aBucket !== bBucket) return aBucket - bBucket;
-  if (aNum !== bNum) return aNum - bNum;
-  return aStr.localeCompare(bStr);
-}
 
 /**
  * Replace-only upload (Q-A): wipe any existing template for the scope and

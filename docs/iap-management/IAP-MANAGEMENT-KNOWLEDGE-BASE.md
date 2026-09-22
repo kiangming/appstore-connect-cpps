@@ -6696,3 +6696,132 @@ grep showing 22/22 table accesses inside the two `queries/` files. Averaging
 the two reports, or trusting the more detailed one, would have shipped a fix
 for a defect that did not exist — and, worse, would have missed 25.1, which
 neither report contained.
+
+---
+
+## §26 — Alternate Tier vs Tier: đo được 2026-09-22 (arc `[TIER-TIEBREAK-priority]`)
+
+### 26.1 ⭐ CÂU TRẢ LỜI REPO CHƯA BAO GIỜ CÓ: hai loại tier khác nhau ở đâu
+
+Trước arc này, repo chỉ ghi **cách mã hoá** Alternate Tier
+(`parsers/price-tiers.ts:17-19`, CHECK ở migration `20260515010000:47`) và
+**không một dòng nào** về ý nghĩa nghiệp vụ. Census ngày 2026-09-22 đã khai
+thẳng ra giấy *"KHÔNG ĐỌC ĐƯỢC TỪ REPO — cần Manager"*. Manager chạy SQL, và
+đây là câu trả lời — **ghi lại để không phải hỏi lần thứ hai**:
+
+> **Một Alternate Tier và một Tier thường có thể TRÙNG giá USD mà LỆCH giá ở
+> các nước khác. Chúng KHÔNG thay thế được cho nhau.**
+
+Số đo thật, trên 175 nước (SQL 3 của census):
+
+| Giá USD | Số nước LỆCH giá giữa các tier cùng trùng giá |
+|---|---|
+| **$0.99** | **75 / 175** |
+| $1.99 | 13 |
+| $2.99 | 8 |
+| $3.99 | 11 |
+| $4.99 | 9 |
+
+⚠ **Hệ quả cho mọi arc sau này:** chọn nhầm tier trong một nhóm trùng giá
+**không phải** chuyện thẩm mỹ. Ở $0.99 nó làm lệch giá ở **43% số thị trường**.
+Bất kỳ đoạn code nào "tự chọn hộ" một tier trong nhóm trùng giá đều đang quyết
+định chuyện tiền bạc — phải có người xác nhận, hoặc phải có lý do ghi rõ.
+
+### 26.2 Hình dạng va chạm trong dữ liệu thật
+
+- **5 nhóm trùng giá**: `$0.99 · $1.99 · $2.99 · $3.99 · $4.99`.
+- **TẤT CẢ đều là TIER-vs-ALT.** Không có một ca TIER-vs-TIER nào.
+- `$0.99` là nhóm rộng nhất: **BỐN** tier — `TIER_1`, `ALT_1`, `ALT_A`, `ALT_B`
+  ⇒ dropdown ở giá đó có 4 option, không phải 2.
+- Lặp lại ở **cả 6 account template lẫn 4 app template** — không phải đặc thù
+  của một template.
+
+⚠ Vì vậy quy tắc numeric-aware `TIER_2` trước `TIER_10` (ship trong arc này)
+là **hợp đồng phòng xa**, KHÔNG phải bản vá cho lỗi đang cắn ai. Đừng khai
+ngược.
+
+### 26.3 26 item đang dùng ALT — và vì sao chúng KHÔNG tự đổi
+
+Phân bố (SQL 4): `ALT_2:8 · ALT_1:6 · ALT_3:5 · ALT_5:4 · ALT_4:2 · ALT_B:1 ·
+ALT_A:0` — **tổng 26**.
+
+Manager chốt **ĐỂ NGUYÊN**: không backfill, không re-resolve. Lý do là dữ kiện,
+không phải sở thích:
+
+1. **Không có đường tự re-resolve.** `sync-states` không đụng `tier_id`
+   (`grep tier` = 0). `IapForm` / `update-on-apple` lấy tier từ form.
+   ⇒ 26 item này **không đổi gì** nếu không ai import lại.
+2. **Khi CÓ import lại, không có gì âm thầm.** Dropdown nằm ở **Step 3
+   Preview — TRƯỚC nút Execute**. Manager nhìn thấy `TIER_2` đã chọn sẵn và
+   đổi về `ALT_2` nếu muốn, trên chính màn hình đó.
+
+⚠ **CẢI CHÍNH MỘT KHẲNG ĐỊNH SAI TRONG CENSUS.** Bản census đầu viết *"26 item
+sẽ âm thầm đổi giá khi import lại"*. **Sai về mức độ** — Manager chỉ ra và
+Manager đúng. Có preview trước khi ghi thì không có gì âm thầm. Ghi lại ở đây
+vì sai lầm đó suýt sinh ra một yêu cầu "cảnh báo chống rủi ro tự động" cho một
+rủi ro **không tồn tại**.
+
+**Quy tắc rút ra:** trước khi gọi một thay đổi là "âm thầm", hãy tìm màn hình
+mà người dùng nhìn thấy nó. Nếu quyết định nằm sau một bước preview thì nó
+không âm thầm — nó chỉ là mặc định, và mặc định có thể sửa.
+
+### 26.4 Tie-break là HỢP ĐỒNG, không phải hệ quả của `localeCompare`
+
+Trước arc: `resolveTierByUsdPrice` phá hoà bằng
+`a.tier_id.localeCompare(b.tier_id)` dưới comment *"Manager spec: ORDER BY
+tier_id ASC LIMIT 1"*.
+
+⚠ **Tách hai tầng — đây là phần đáng nhớ:**
+
+- **Tính xác định LÀ quyết định.** Có `.sort()` tường minh ⇒ kết quả không bao
+  giờ phụ thuộc thứ tự Postgres trả về.
+- **Việc ALT thắng là TÁC DỤNG PHỤ.** Quy tắc được ghi nói về *tính xác định*,
+  không nói *loại tier nào ưu tiên*. `"ALT_"` tình cờ đứng trước `"TIER_"`
+  theo bảng chữ cái.
+
+Một hành vi có thể **vừa xác định vừa ngoài ý muốn**. Câu hỏi "quyết định hay
+ngẫu nhiên?" là câu hỏi sai nếu chỉ cho phép một câu trả lời.
+
+**Ba bằng chứng ý định gốc là TIER**, tất cả đều có trước arc:
+
+1. `queries/price-tiers.test.ts` có một ca **TỰ MÂU THUẪN**: tiêu đề
+   *"returns TIER_5 …"* nằm ngay trên `expect(...).toBe("ALT_5")`, kèm comment
+   *"So per literal spec, the answer is ALT_5. Verify the actual rule"*. Người
+   viết mong TIER_5, gặp ALT_5, **sửa assertion thay vì sửa quy tắc**.
+2. `queries/template-matrix.ts:87-88` đã xếp primary trước alternate.
+3. `sortTierId` — **hai bản y hệt từng byte** (md5
+   `189add34c9624162970206b101e1c501`) ở `price-tiers.ts` và `templates.ts` —
+   đã xếp `FREE → TIER → ALT`, numeric-aware. **Resolver chưa bao giờ gọi nó**,
+   dù nó nằm cách đó 87 dòng trong cùng file.
+
+⚠ **Một test tự mâu thuẫn giữa tiêu đề và assertion là hồ sơ của một tác dụng
+phụ bị phát hiện rồi chấp nhận.** Khi gặp, đừng đọc assertion là "ý định" —
+đọc tiêu đề. Tiêu đề viết trước, assertion sửa sau.
+
+### 26.5 "Ngẫu nhiên theo thứ tự DB" có thật — nhưng ở dropdown, không ở resolver
+
+Census suýt kết luận sai chỗ. Resolver **có** sort. Chỗ thật sự không xác định
+là **danh sách option của dropdown**: `TierCell` lọc `usdTiers` mà không sort,
+và `usdTiers` chỉ `.order("customer_price")` (`price-tiers.ts`,
+`templates.ts`) — *trong một nhóm cùng giá, Postgres trả về thứ tự nào cũng
+được*.
+
+⇒ Option đầu tiên và giá trị chọn sẵn là **hai câu trả lời cho một câu hỏi**.
+Arc đóng bằng `lib/iap-management/tier-order.ts`: resolver lấy `[0]`, dropdown
+render cả mảng, **cùng một `candidateTiersForPrice`**.
+
+**Quy tắc:** khi nghi "thứ tự do DB quyết định", đừng dừng ở đường ghi — hỏi cả
+đường ĐỌC. Ở đây đường ghi sạch và đường đọc mới là chỗ hở.
+
+### 26.6 Phạm vi hẹp hơn tưởng: chỉ MỘT đường dùng resolver
+
+| Đường | Dùng `resolveTierByUsdPrice`? |
+|---|---|
+| Bulk import (preview + execute) | ✅ cùng một `enrichWithTiers` |
+| `IapForm` tạo/sửa IAP | ❌ `<select>` toàn bộ tier, user chọn thẳng |
+| `update-on-apple` | ❌ `form.tier_id ?? cached.tier_id` |
+| `sync-states` | ❌ không đụng tier |
+
+⚠ Câu hỏi "áp cho đường nào?" ban đầu nghe như một lựa chọn phạm vi. Census cho
+thấy nó **không có đối tượng**: chỉ tồn tại một đường. Trả lời "tất cả" và
+"chỉ bulk import" là cùng một câu.
