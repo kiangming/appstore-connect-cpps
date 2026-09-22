@@ -2,6 +2,21 @@
 
 Format: `- [ ] [PR-X] description — file path — rationale`
 
+## From [LOC-ACTIVE-state] (Apple từ chối sửa localization đang ACTIVE, 2026-09-22)
+
+**Trạng thái: W1-W3 xong (quan sát + tài liệu), luồng version CHƯA làm — chờ
+Manager chốt B3.** Nguyên nhân gốc đã đóng: Apple trả `409
+ENTITY_ERROR.ATTRIBUTE.INVALID.UNMODIFIABLE · "Cannot edit
+InAppPurchaseLocalization when it is in ACTIVE state"`. Mô hình + số đo: **KB §28**.
+
+- [x] [LOC-ACTIVE-state] **Ngừng vứt `state`** — ✅ W1. `execute/route.ts` từng map Apple's response về `{id, locale}` ngay dòng TRƯỚC khi gọi planner, bỏ đúng trường giải thích được 20 dòng hỏng. Nay `ExistingLocalization.state` có mặt, `toPatch` mang theo, thông báo lỗi nói được "…vì đang ở state ACTIVE". **0 request thêm** — lượt GET đã chạy sẵn. Phân loại qua `lib/iap-management/apple/localization-state.ts`, **ALLOW-list** (deny-list dựng từ enum OAS sẽ bỏ lọt `ACTIVE`, vì enum không có nó).
+- [x] [LOC-ACTIVE-state] **Sửa `apple-api-reference.md:270-281`** — ✅ W2. Tách **hai tầng state** (IAP vs LOCALIZATION); ghi nguyên văn lỗi Apple; ghi rõ `ACTIVE` không có trong enum OAS; đánh dấu `isStateEditLikelyBlocked` chỉ bắt Tầng 1.
+- [x] [OAS-two-snapshots] **Thêm `docs/iap-management/OPENAPI-VERSIONS.md`** — ✅ W3 phần rủi ro-0.
+- [ ] [OAS-two-snapshots] ⚠ **CHỜ MANAGER: xử lý bản 4.3.1 thế nào.** Không có consumer runtime (grep toàn repo: 0 dòng code/test đọc file, chỉ `price-points.ts:46` nhắc trong comment), nhưng **~10 tài liệu tham chiếu tên file** nên xoá/đổi tên sẽ làm hỏng link. Ba phương án: (a) giữ + file trỏ đường đã thêm *(đang áp dụng)*; (b) đổi tên thành `openapi.oas.v4.3.1.json` + sửa ~10 tham chiếu; (c) xoá hẳn, chấp nhận mất đường đối chiếu lịch sử. **Đề xuất (b)** — tên tự khai version thì bẫy biến mất vĩnh viễn, và đó là sửa nguyên nhân chứ không phải dán cảnh báo lên nó.
+- [ ] [LOC-ACTIVE-state-flow] ⚠ **CHƯA LÀM — luồng sửa localization cho IAP đang live.** Thiết kế trong báo cáo (VIỆC B). Chặn ở **quyết định nghiệp vụ**, không phải ở kỹ thuật: sửa localization của item live **bắt buộc** tạo version mới ⇒ review lại ⇒ tên mới KHÔNG hiển thị với người mua cho tới khi Apple duyệt. ⚠⚠ Và **không có DELETE cho `inAppPurchaseVersion`** (xác minh mục A) — một lần chạy hỏng để lại tới 20 version mồ côi không gỡ được.
+- [ ] [LOC-ACTIVE-state-single] **Đường IAP đơn lẻ có CÙNG lỗ.** `update-orchestration.ts:387` gọi đúng `updateInAppPurchaseLocalization` → `PATCH /v1/...`. Manager chưa gặp chỉ vì chưa thử sửa localization của item đang live qua form. W1 **chưa phủ** đường này — nó sửa planner của bulk-import, còn `update-orchestration` có đường riêng.
+- [ ] [LOC-ACTIVE-state-probe] **Hai probe chỉ-đọc, 2 request, đóng nốt phần chưa biết.** (1) `GET /v2/inAppPurchases/{id}/versions` trên 1 item live — xác nhận chỉ có 1 version APPROVED. (2) `GET /v1/inAppPurchaseVersions/{newId}/localizations` trên version ASC vừa tạo — version mới **kế thừa** localization (⇒ PATCH) hay rỗng (⇒ POST). Không ghi gì lên Apple.
+
 ## From [BULK-IMPORT-no-result-recovery] (Apple Bulk Import — kết quả không về được UI, 2026-09-22)
 
 **Trạng thái arc: chunk 1 code xong (lỗ quan sát + đường im lặng UI), chờ

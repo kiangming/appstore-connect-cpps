@@ -195,7 +195,16 @@ describe("execute/route.ts persists the reason at EVERY locale catch", () => {
   it("⚠ records at all three write catches — CREATE, PATCH, POST", () => {
     // Three call sites, one choke point (CLAUDE.md meta-rule P1: the project
     // has repeatedly hardened one sibling and left the other).
-    const calls = routeSrc.match(/recordLocaleFailure\(localeFailures,/g) ?? [];
+    // ⚠ WHITESPACE-TOLERANT, AND THAT IS A FIX TO THE MEASUREMENT, NOT A
+    // RELAXATION OF THE CLAIM. The original regex was
+    // `/recordLocaleFailure\(localeFailures,/` — one physical line. When the
+    // PATCH catch grew a fourth argument (`describeLocalizationState`, so the
+    // failure can name the locale's Apple state) prettier wrapped the call
+    // across lines and the count fell to 2. The claim being pinned is "all
+    // three write catches record a reason", which did not change; only the
+    // formatting did. A structural test that breaks on a line wrap is
+    // measuring the wrong thing.
+    const calls = routeSrc.match(/recordLocaleFailure\(\s*localeFailures\s*,/g) ?? [];
     expect(calls).toHaveLength(3);
   });
 

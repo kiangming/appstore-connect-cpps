@@ -268,18 +268,60 @@ The full editable surface Apple's public OpenAPI exposes for a synced IAP:
 | Bucket | Endpoint | Patchable fields |
 |---|---|---|
 | IAP attributes | `PATCH /v2/inAppPurchases/{id}` | `name`, `reviewNote`, `familySharable` |
-| Localization (per locale) | `PATCH /v1/inAppPurchaseLocalizations/{id}` | `name`, `description` |
+| Localization (per locale) | `PATCH /v1/inAppPurchaseLocalizations/{id}` | `name`, `description` — ⚠ **chỉ khi localization chưa ACTIVE**, xem "Localization state" bên dưới |
 | Locale add | `POST /v1/inAppPurchaseLocalizations` | full create payload |
 | Locale remove | `DELETE /v1/inAppPurchaseLocalizations/{id}` | — |
 | Screenshot | IAP.o.8a `replaceScreenshotOnApple` (GET + DELETE + 3-step upload). UI exposed at IAP.o.13a — drop a new file onto the edit form to stage a replace. | — |
 | Pricing schedule | IAP.o.11d `applyPricingSchedule` → `POST /v1/inAppPurchasePriceSchedules` | replace-all; tier change ⇒ full schedule replace |
 
-State-edit constraints (not enumerated in OpenAPI — observed behavior):
+### ⚠⚠ HAI TẦNG STATE, ĐỪNG GỘP LÀM MỘT
+
+Bảng dưới đây từng chỉ mô tả **state của IAP**, và điều đó đã gây hiểu nhầm
+thật: nó liệt kê `READY_FOR_SALE` vào nhóm "PATCH accepted" mà không nói gì về
+dòng Localization, nên người đọc kết luận "IAP đang bán thì vẫn sửa
+localization được". **Sai.** Ràng buộc chặn thật nằm ở **state của chính
+LOCALIZATION**, một tầng khác.
+
+**Tầng 1 — state của IAP** (`InAppPurchaseState`), chi phối `PATCH /v2/inAppPurchases/{id}`:
 - `MISSING_METADATA`, `READY_TO_SUBMIT`, `REJECTED`, `READY_FOR_SALE` —
   PATCH accepted at the attribute level.
 - `WAITING_FOR_REVIEW`, `IN_REVIEW` — PATCH typically rejected with 409 /
   422 `STATE_ERROR.*`. Tool surfaces a pre-warn banner via
   `isStateEditLikelyBlocked` but does NOT pre-block (Q-IAP.o.12.C).
+  ⚠ Helper này nhận `InAppPurchaseState` — **state của IAP**. Nó **không**
+  bắt được ca ở Tầng 2.
+
+**Tầng 2 — state của LOCALIZATION** (`InAppPurchaseLocalization.attributes.state`),
+chi phối `PATCH /v1/inAppPurchaseLocalizations/{id}`:
+
+⚠ **Apple từ chối sửa localization đang ACTIVE.** Nguyên văn, đo được
+2026-09-22 trên 20/88 dòng bulk import:
+
+```
+HTTP 409
+code:           ENTITY_ERROR.ATTRIBUTE.INVALID.UNMODIFIABLE
+title:          "The provided entity contains a field that can not be modified
+                 in the current state"
+detail:         "Cannot edit InAppPurchaseLocalization when it is in ACTIVE state"
+source.pointer: /data/attributes/state
+```
+
+⚠⚠ **`ACTIVE` KHÔNG CÓ trong enum của OpenAPI.**
+`InAppPurchaseLocalization.attributes.state` ở `docs/openapi.oas.v20260717.json`
+(v4.4.1) chỉ liệt kê `PREPARE_FOR_SUBMISSION · WAITING_FOR_REVIEW · APPROVED ·
+REJECTED`. Quét máy toàn bộ enum trong file: chuỗi `"ACTIVE"` xuất hiện đúng 2
+chỗ — `Profile.profileState` và `PhasedReleaseState` — **không chỗ nào thuộc
+nhánh in-app purchase**. Apple trả về một state mà spec của chính Apple không
+liệt kê.
+
+⇒ **Vì vậy `lib/iap-management/apple/localization-state.ts` dùng ALLOW-LIST,
+không dùng deny-list.** Một deny-list dựng từ enum đó sẽ bỏ lọt đúng cái state
+đã gây sự cố.
+
+⚠ **Sửa localization của item đang live BẮT BUỘC đi qua một VERSION MỚI.** ASC
+cũng làm đúng thế: sửa Display Name của item live tạo thêm một dòng cùng locale
+ở trạng thái "Prepare for Submission" bên cạnh dòng "Approved" — hai
+`inAppPurchaseVersion` khác nhau. Retry không bao giờ giúp. Xem **KB §28**.
 
 Diff strategy (Q-IAP.o.12.B): per-field. `detectIapChanges` trims text
 fields, collapses null vs empty, and emits nullable buckets so the

@@ -29,6 +29,26 @@
 export interface ExistingLocalization {
   id: string;
   locale: string;
+  /**
+   * ⚠ APPLE'S STATE FOR THIS LOCALIZATION — the field whose ABSENCE here cost
+   * a 20-row investigation.
+   *
+   * Apple returns it (`GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations`
+   * answers with the V1 shape, which carries `state`), and the repo's own type
+   * models it (`types/iap-management/apple.ts`). The execute route simply did
+   * not carry it across: it mapped the response to `{ id, locale }` on the
+   * line immediately before calling this planner, so the planner could not
+   * have consulted the state even if it wanted to — the type did not have it.
+   *
+   * ⚠ COSTS ZERO EXTRA REQUESTS. The LIST call that produces it already runs
+   * on the OVERWRITE path; this is a field that was being fetched and thrown
+   * away.
+   *
+   * Optional because a caller with no state information must stay able to
+   * plan — see `classifyLocalizationState`, where absent reads as UNKNOWN and
+   * never as "fine".
+   */
+  state?: string;
 }
 
 export interface DesiredLocalization {
@@ -38,8 +58,22 @@ export interface DesiredLocalization {
 }
 
 export interface LocalizationSyncPlan {
-  /** Shared locales — PATCH content in place (id is the Apple localization id). */
-  toPatch: Array<{ id: string; locale: string; name: string; description: string }>;
+  /**
+   * Shared locales — PATCH content in place (id is the Apple localization id).
+   *
+   * ⚠ `state` RIDES ALONG, AND THE PLAN DOES NOT ACT ON IT — YET. Manager has
+   * not decided whether a blocked locale should be skipped or still attempted
+   * (Apple's refusal is authoritative; a stale local read is not). Carrying it
+   * is what lets the FAILURE say "…because it is in ACTIVE state" instead of
+   * "failed: [vi]". Deciding to skip is a separate, Manager-gated change.
+   */
+  toPatch: Array<{
+    id: string;
+    locale: string;
+    name: string;
+    description: string;
+    state?: string;
+  }>;
   /** New locales — POST. */
   toCreate: Array<{ locale: string; name: string; description: string }>;
   /** Genuinely-removed locales — DELETE (only after toPatch/toCreate applied). */
@@ -70,6 +104,7 @@ export function planLocalizationSync(
         locale: d.locale,
         name: d.display_name,
         description: d.description,
+        ...(ex.state !== undefined ? { state: ex.state } : {}),
       });
     } else {
       toCreate.push({

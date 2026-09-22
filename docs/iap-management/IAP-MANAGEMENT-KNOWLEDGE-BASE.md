@@ -6884,3 +6884,144 @@ không có trong commit.
 
 ⇒ Liên hệ §23 (*một công cụ đo phải chứng minh nó đang đọc đúng thứ nó khai*):
 ở đây công cụ "khôi phục" cũng phải chứng minh nó khôi phục đúng thứ nó khai.
+
+---
+
+## §28 — Localization của IAP đang live: mô hình Apple, và bốn phép đo không tốn một request nào (2026-09-22)
+
+**Arc `[LOC-ACTIVE-state]`.** Triệu chứng: bulk import 88 item → 66 ok · 20 PARTIAL · 2 ERROR. 20 dòng PARTIAL **giống hệt nhau**: pricing OK, `localizations {done:0, total:1, failed:["vi"]}`.
+
+### 28.1 ⭐ `ACTIVE` không có trong enum của OAS, dù Apple trả về nó
+
+Apple nói nguyên văn:
+
+```
+HTTP 409
+code:           ENTITY_ERROR.ATTRIBUTE.INVALID.UNMODIFIABLE
+detail:         "Cannot edit InAppPurchaseLocalization when it is in ACTIVE state"
+source.pointer: /data/attributes/state
+```
+
+`InAppPurchaseLocalization.attributes.state` trong `docs/openapi.oas.v20260717.json` (v4.4.1) chỉ có `PREPARE_FOR_SUBMISSION · WAITING_FOR_REVIEW · APPROVED · REJECTED`. Quét máy **toàn bộ** enum trong file: chuỗi `"ACTIVE"` xuất hiện đúng **2** chỗ — `Profile.profileState`, `PhasedReleaseState` — **không chỗ nào thuộc nhánh IAP**.
+
+⚠ **Tiền lệ THỨ HAI** cho quy tắc *"OpenAPI của Apple không mô tả ràng buộc nghiệp vụ"* (lần đầu: 409 duplicate product-id, §26 arc trước). Và giờ có **tiền lệ thứ BA, ngược chiều**: `DELETE /v1/reviewSubmissions/{id}` — endpoint mà `lib/shared/review-submission.ts:187` đang gọi thật và CPP rollback (`lib/asc-client.ts:430`) dựa vào — **không được liệt kê ở cả 4.3.1 lẫn 4.4.1**.
+
+⇒ **Spec im lặng không chứng minh gì cả** — không chứng minh có ràng buộc, cũng không chứng minh endpoint không tồn tại.
+
+⇒ ⚠⚠ **Vì vậy `localization-state.ts` dùng ALLOW-LIST.** Deny-list chỉ đúng bằng enum dựng ra nó, và enum ở đây **đã chứng minh là thiếu đúng cái state gây sự cố**. Allow-list sai về phía an toàn: state chưa ai thấy đọc ra `UNKNOWN`, không đọc ra "ổn".
+
+### 28.2 Tài liệu mô tả SAI TẦNG — một lớp lỗi, không phải một lỗi đánh máy
+
+`apple-api-reference.md:270-281` (trước khi sửa) liệt kê `READY_FOR_SALE` vào nhóm *"PATCH accepted"*, và dòng `Localization (per locale)` **không có một cảnh báo state nào**.
+
+Bảng đó mô tả **state của IAP**. Ràng buộc chặn thật nằm ở **state của LOCALIZATION**. Hai tài nguyên khác nhau, hai vòng đời khác nhau, cùng chữ "state".
+
+⚠ **Lớp lỗi đáng nhớ: tài liệu nói về state của A trong khi ràng buộc nằm ở state của B.** Nó nguy hiểm hơn tài liệu thiếu, vì tài liệu thiếu khiến người ta đi tra; tài liệu sai tầng khiến người ta **ngừng** tra. Bằng chứng: `isStateEditLikelyBlocked` (`state-edit-blocked.ts:18-21`) nhận `InAppPurchaseState` — nó **về mặt kiểu** không thể bắt được ca này, và không ai nhận ra suốt nhiều cycle.
+
+### 28.3 V1 và V2 localization là hai MÔ HÌNH, không phải hai phiên bản
+
+| | `InAppPurchaseLocalization` (V1) | `InAppPurchaseLocalizationV2` |
+|---|---|---|
+| Gắn vào | **IAP** — `relationships.inAppPurchaseV2` | **VERSION** — `relationships.version`, **required** |
+| Có `state`? | **CÓ** (`PREPARE_FOR_SUBMISSION/WAITING_FOR_REVIEW/APPROVED/REJECTED`) | **KHÔNG** |
+| Tạo | `POST /v1/inAppPurchaseLocalizations` | `POST /v2/inAppPurchaseLocalizations` |
+| Sửa | `PATCH /v1/inAppPurchaseLocalizations/{id}` | `PATCH /v2/inAppPurchaseLocalizations/{id}` |
+| Body update | **Y HỆT NHAU** (so bằng máy, chỉ khác trường `title`) |
+
+⭐ **Việc V2 KHÔNG có `state` chính là lời giải.** Ở mô hình V2, state không thuộc về localization — nó thuộc về **version**. Muốn sửa nội dung đang live thì không sửa bản đang live, mà **tạo version mới** rồi sửa localization của version đó. Enum `InAppPurchaseVersion.state` có `REPLACED_WITH_NEW_VERSION` — Apple mô hình hoá đúng chuyện này.
+
+⇒ Chuyển sang V2 **chỉ đổi path**, không viết lại payload.
+
+### 28.4 ⚠ BẪY TRA CỨU: hai bản OAS lệch version, bản trong thư mục module là bản CŨ
+
+| File | `info.version` |
+|---|---|
+| `docs/openapi.oas.v20260717.json` | **4.4.1** ⭐ chuẩn |
+| `docs/iap-management/openapi.oas.json` | **4.3.1** |
+
+Bản 4.3.1 **thiếu hoàn toàn**: `/v2/inAppPurchaseLocalizations*` · cả **8** path `/v1/inAppPurchaseVersions*` · `/v2/inAppPurchases/{id}/versions` · và cả `InAppPurchaseV2.relationships.versions`.
+
+⇒ **Toàn bộ mô hình version của IAP được Apple thêm ở 4.4.1.**
+
+⚠ **Đây là bẫy TRA CỨU, không phải bẫy code** — không dòng code nào đọc hai file lúc chạy, nên **không test nào bắt được**. Nó chỉ cắn người, và cắn theo hướng tệ nhất: cho ra một câu trả lời **phủ định tự tin** ("Apple không có API này"). Đã thêm `docs/iap-management/OPENAPI-VERSIONS.md`; phương án đổi tên kèm version còn treo ở `TODO.md [OAS-two-snapshots]`.
+
+### 28.5 `/v1/inAppPurchases/{id}` chỉ còn GET trong 4.4.1
+
+Không còn **đường nào tạo một IAP "v1"**. `/v2/inAppPurchases` có POST là đường tạo duy nhất; `InAppPurchase` (v1) chỉ còn `relationships: ['apps']`. Không có endpoint migrate v1→v2 (0 path chứa `migrate`/`upgrade`).
+
+⇒ Đây là căn cứ mạnh nhất để đọc cụm *"configured with the v2 API"* trong tài liệu Apple: **mọi IAP tạo qua API ngày nay đều là v2**, vì không còn đường nào khác.
+
+### 28.6 ⭐ Ảnh chụp ASC trả lời được câu OpenAPI không trả lời
+
+OAS của Apple **không có một dòng prose nào** — đã kiểm: `description` và `summary` của `GET /v2/inAppPurchases/{id}/versions` và `POST /v1/inAppPurchaseVersions` đều là `None`. (Design doc v2-submission đã ghi nhận: *"this generated spec has zero description text anywhere (0/1263 ops, 0/1393 schemas)"*.)
+
+Manager sửa Display Name một IAP live trên ASC → hiện **HAI dòng cùng locale "Vietnamese"**:
+
+```
+Vietnamese · "188 Vàng"   · ✅ Approved
+Vietnamese · "188 Vàng."  · 🟡 Prepare for Submission
+```
+
+⇒ **ASC KHÔNG sửa tại chỗ bản Approved. Nó tạo bản mới.**
+
+⚠ **Quy tắc: khi schema im lặng, hành vi quan sát được của ASC là nguồn HẠNG NHẤT, không phải nguồn hạng hai.** ASC là client đầu tiên của chính API đó; nó làm gì thì API cho phép làm thế.
+
+### 28.7 ⭐ URL của ASC tiết lộ CẤU TRÚC, không chỉ hành vi
+
+Manager bấm vào từng dòng, hai URL khác nhau:
+
+```
+Approved  → /iris/v1/inAppPurchaseVersions/2e404063-…/?include=inAppPurchase,image
+Vừa edit  → /iris/v1/inAppPurchaseVersions/a9adf1dd-…/localizations?include=version
+```
+
+⇒ Hai **VERSION ID KHÁC NHAU**. Hai dòng trông như "cùng locale bị trùng" thực ra thuộc **hai version khác nhau**, mỗi version có bộ localization riêng. Đây là xác nhận trực tiếp mô hình ở §28.3 — không phải suy luận từ schema.
+
+⚠⚠ **`/iris/v1` là API NỘI BỘ của Apple. Dùng làm BẰNG CHỨNG VỀ MÔ HÌNH. TUYỆT ĐỐI KHÔNG dùng trong production.** Không có hợp đồng, không có cam kết tương thích.
+
+### 28.8 ⭐ `failedDetail[].full` đã làm đúng việc nó sinh ra — trong ĐÚNG MỘT vòng import
+
+Arc trước (`[BULK-IMPORT-locale-reason]`) thêm việc **lưu nguyên body lỗi của Apple** vào `stages.localizations.failedDetail`. Lý do khi đó: *"một lỗi được log mà không được PERSIST là một lỗi không tồn tại vào sáng hôm sau."*
+
+Đối chiếu hai lần điều tra **cùng một triệu chứng**:
+
+| | Trước khi có `failedDetail` | Sau |
+|---|---|---|
+| Thông tin trên dòng | `failed: ["vi"]`, `error: null` | nguyên `code` + `detail` + `source.pointer` |
+| Cách tìm nguyên nhân | đề nghị Manager **mở file Excel**, dựng 5 giả thuyết (trùng tên / độ dài / ký tự lạ / ô trống / encoding) — **tất cả đều sai** | Apple **tự khai**, câu hỏi tự trả lời |
+| Số vòng | chưa đóng được | **1** |
+
+⚠ **Đây là lý lẽ cho việc lưu nguyên body lỗi, không phải chỉ lưu message đã cắt.** Cụm quyết định — `"when it is in ACTIVE state"` — nằm trong `detail`, không nằm trong status code, không nằm trong tiêu đề.
+
+### 28.9 ⭐ Khuôn phân xử: bốn phép đo, KHÔNG phép nào tốn một request API
+
+Chuỗi này đáng nhớ như một khuôn dùng lại được:
+
+| # | Nguồn | Trả lời được gì |
+|---|---|---|
+| 1 | **Schema** (OAS 4.4.1) | V1 gắn vào IAP + có `state`; V2 gắn vào VERSION + không có `state` |
+| 2 | **Ảnh ASC** | ASC không sửa tại chỗ — nó tạo bản mới |
+| 3 | **URL ASC** (`/iris/v1/...`) | hai dòng đó là hai **version** khác nhau |
+| 4 | **Manager mở item CHƯA sửa** | chỉ **MỘT** dòng Approved ⇒ IAP live **không** có version mở sẵn ⇒ tool **phải tạo** |
+
+⭐ Phép đo số 4 là phép đo rẻ nhất và quyết định nhất: **một nhóm đối chứng.** Mở một item chưa bị can thiệp và đếm số dòng. Nó loại bỏ khả năng "version mở vốn có sẵn" mà không cần gọi API lần nào.
+
+⚠ **Khi một câu hỏi về API có vẻ cần probe, hãy hỏi trước: có nhóm đối chứng nào quan sát được không?**
+
+### 28.10 Vòng đời + ràng buộc cứng về DELETE
+
+**Đo được:**
+- IAP live có đúng **MỘT** version `APPROVED`, **không** có version mở sẵn.
+- Sửa localization ⇒ **bắt buộc tạo version mới** ⇒ **review lại**.
+- ⚠ Tên mới **KHÔNG hiển thị với người mua** cho tới khi Apple duyệt.
+
+⚠⚠ **KHÔNG CÓ DELETE CHO `inAppPurchaseVersion` — ràng buộc CỨNG.**
+
+Chứng minh bằng sự vắng mặt, ba lớp độc lập:
+1. Toàn bộ **8** path `inAppPurchaseVersion*` trong 4.4.1: `POST` (1) + `GET` (7). Không `DELETE`, không `PATCH`.
+2. Không có schema `InAppPurchaseVersionUpdateRequest` ⇒ **không có đường ghi attribute nào** lên version, nên cũng không đổi được `state` sang `REPLACED_WITH_NEW_VERSION`/`DEVELOPER_REJECTED` bằng tay.
+3. ⭐ **Nhóm đối chứng:** trong cùng file có **13** operation DELETE trên các resource version *anh em* (`appStoreVersions`, `appStoreVersionLocalizations`, `appStoreVersionSubmissions`, `gameCenter*`…). **Không một cái nào** là `inAppPurchaseVersions`. DELETE tồn tại dồi dào cho hàng xóm ⇒ vắng mặt ở đây là **thiết kế API**, không phải thiếu sót của snapshot.
+
+Cộng thêm, `design-iap-v2-submission-migration.md` §0 Q3 đã tra tài liệu chính thức: *"No DELETE endpoint exists (**confirmed via official docs, not just the spec**)"*.
+
+⇒ **Mọi thiết kế phải sống chung với nó.** Một lần chạy hỏng giữa chừng trên lô 20 item để lại tới **20 version mồ côi không gỡ được**. Hệ quả thiết kế: tạo version **càng muộn càng tốt**, đọc-hết-rồi-mới-ghi, và mỗi version đã tạo phải được **ghi lại** để Manager biết có artifact.

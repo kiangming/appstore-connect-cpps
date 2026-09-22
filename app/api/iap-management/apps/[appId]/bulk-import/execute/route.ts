@@ -95,6 +95,7 @@ import {
   type RowStages,
   type StageState,
 } from "@/lib/iap-management/bulk-import/row-outcome";
+import { describeLocalizationState } from "@/lib/iap-management/apple/localization-state";
 import {
   recordLocaleFailure,
   recordAllLocalesFailed,
@@ -1378,7 +1379,17 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
       listInAppPurchaseLocalizations(creds, appleIapId),
     );
     const plan = planLocalizationSync(
-      (existing.data ?? []).map((l) => ({ id: l.id, locale: l.attributes.locale })),
+      // ⚠ `state` IS CARRIED NOW. This line used to be `{ id, locale }` —
+      // and the field it dropped is the one that explained twenty identical
+      // failed rows on 2026-09-22 ("Cannot edit InAppPurchaseLocalization
+      // when it is in ACTIVE state"). Apple was returning it all along; the
+      // planner could not see it because this map did not pass it on.
+      // Zero extra requests: the LIST above already fetched it.
+      (existing.data ?? []).map((l) => ({
+        id: l.id,
+        locale: l.attributes.locale,
+        ...(l.attributes.state !== undefined ? { state: l.attributes.state } : {}),
+      })),
       item.localizations,
     );
     if (plan.deletionsSuppressed) {
@@ -1399,7 +1410,17 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
           }),
         );
       } catch (err) {
-        const failure = recordLocaleFailure(localeFailures, p.locale, err);
+        // ⚠ THE STATE IS THE ANSWER, SO IT GOES IN THE RECORD.
+        // Apple's body already says "…when it is in ACTIVE state", but only
+        // to whoever reads the raw body. Prefixing the locale's own state
+        // turns the row itself into the explanation — which is the whole
+        // point of having carried `state` this far.
+        const failure = recordLocaleFailure(
+          localeFailures,
+          p.locale,
+          err,
+          describeLocalizationState(p.locale, p.state),
+        );
         await log(
           "iap-bulk-execute",
           `patch loc ${p.locale} on ${item.product_id}: ${failure.message}`,
