@@ -6825,3 +6825,62 @@ render cả mảng, **cùng một `candidateTiersForPrice`**.
 ⚠ Câu hỏi "áp cho đường nào?" ban đầu nghe như một lựa chọn phạm vi. Census cho
 thấy nó **không có đối tượng**: chỉ tồn tại một đường. Trả lời "tất cả" và
 "chỉ bulk import" là cùng một câu.
+
+---
+
+## §27 — `git checkout --` không khôi phục mutation, nó XOÁ CÔNG VIỆC
+
+**Lặp lần thứ HAI trong cùng một phiên (2026-09-22). Nâng thành luật.**
+
+### 27.1 Luật
+
+> ⚠ **`git checkout -- <file>` khôi phục file về HEAD, KHÔNG về trạng thái
+> trước khi bẻ.** Với một thay đổi **chưa commit** — hoặc một file **chưa
+> track** — nó xoá sạch công việc chưa lưu, không phải xoá đột biến.
+>
+> **Cách duy nhất đúng khi chạy mutation trên code chưa commit:**
+> ```
+> cp <file> /tmp/<file>.bak     # TRƯỚC khi bẻ
+> …bẻ, chạy test, chép output…
+> cp /tmp/<file>.bak <file>     # khôi phục
+> ```
+> `git checkout --` chỉ an toàn khi thay đổi **đã** nằm trong commit.
+
+### 27.2 Hai lần vấp, cùng một hình dạng
+
+| | Arc | Lệnh | Hậu quả |
+|---|---|---|---|
+| Lần 1 | X1 | `git checkout -- xlsx-export.ts` | xoá sạch công việc X1 |
+| Lần 2 | `[TIER-TIEBREAK-priority]` | `git checkout -- templates.ts` sau mutation M5 | xoá phần gộp twin `sortTierId` vừa làm ở file đó |
+
+Cùng một cái bẫy: các file khác trong lượt đó **đã** được backup ra `/tmp`, nên
+`cp` khôi phục đúng. Riêng file bị bẻ ở bước cuối được "dọn" bằng
+`git checkout --` cho nhanh — và nó về HEAD, tức về **trước cả arc**.
+
+### 27.3 ⭐ Phần đáng nhớ nhất: cả hai lần đều KHÔNG phát hiện bằng mắt
+
+- **Lần 1** — phát hiện khi test đỏ.
+- **Lần 2** — phát hiện khi một test structural vẫn đỏ **sau khi đã khôi phục**
+  (`no module re-declares sortTierId`), rồi `grep` xác nhận bản cũ đã quay về.
+
+`git status` **không** giúp: nó chỉ nói file "đã đổi so với HEAD" hoặc không —
+đúng cái nó vừa bị ép về. Đọc lại diff cũng không giúp, vì file trông hoàn toàn
+hợp lệ: **nó là phiên bản đúng của ngày hôm qua.**
+
+⇒ **Thứ bắt được nó là một khẳng định tự động chạy sau mỗi lần khôi phục.**
+Cho nên: **luôn chạy lại toàn bộ suite sau khi khôi phục mutation cuối cùng, và
+coi "vẫn còn đỏ sau khôi phục" là dấu hiệu mất công việc, không phải dấu hiệu
+test hỏng.** P33 (xác nhận đột biến đã áp bằng md5/grep) có một người anh em ở
+chiều ngược lại: **xác nhận đột biến đã GỠ**, cũng bằng md5/grep.
+
+### 27.4 Vì sao nó nguy hiểm hơn một lỗi gõ nhầm thông thường
+
+Một mutation run kết thúc bằng câu "khôi phục xanh" — và đó chính là câu người
+ta tin để đi tiếp sang commit. Nếu bước khôi phục **vừa gỡ đột biến vừa gỡ bản
+sửa**, thì suite có thể xanh trở lại (đột biến đi rồi) trong khi một phần arc
+đã biến mất. Ở lần 2, thứ cứu là test structural **của chính arc đó** còn đỏ;
+nếu arc không có test structural thì suite đã xanh và bản gộp twin sẽ lặng lẽ
+không có trong commit.
+
+⇒ Liên hệ §23 (*một công cụ đo phải chứng minh nó đang đọc đúng thứ nó khai*):
+ở đây công cụ "khôi phục" cũng phải chứng minh nó khôi phục đúng thứ nó khai.
