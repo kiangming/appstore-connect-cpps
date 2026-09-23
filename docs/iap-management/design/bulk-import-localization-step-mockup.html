@@ -82,6 +82,20 @@
   .btn.s{background:transparent;color:var(--muted);border:1px solid var(--border-strong)}
   .foot{display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--border)}
   /* popover */
+  /* M-1 — tách Display Name / Description thành hai dòng có nhãn */
+  .fields{display:flex;flex-direction:column;gap:3px;min-width:250px;white-space:normal}
+  .f{display:grid;grid-template-columns:34px 1fr;gap:6px;align-items:baseline}
+  .f .k{font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--subtle);text-transform:uppercase;padding-top:1px}
+  .f.chg .k{color:var(--amber-tx)}
+  .f .v{font-size:11.5px;line-height:1.45}
+  .f.chg .v{background:var(--amber-bg);border-radius:4px;padding:1px 4px;margin:-1px -4px}
+  .f.same .v{color:var(--subtle)}
+  .arrow{color:var(--amber);font-weight:700;padding:0 2px}
+  .same-tag{font-size:9.5px;color:var(--subtle);font-style:italic}
+  .warn-line{display:flex;gap:4px;align-items:flex-start;margin-top:4px;font-size:9.5px;
+    line-height:1.35;color:var(--amber-tx);background:var(--amber-bg);border-left:2px solid var(--amber-br);
+    padding:3px 5px;border-radius:0 4px 4px 0}
+  .untick-row{opacity:.5}
   .pop-wrap{position:relative;display:inline-block}
   .pop{position:absolute;z-index:60;top:18px;left:0;width:330px;background:var(--surface);
     border:1px solid var(--border-strong);border-radius:10px;box-shadow:0 10px 32px rgba(0,0,0,.16);padding:11px 13px}
@@ -117,26 +131,29 @@
 </div>
 
 <!-- ─── stepper ─── -->
-<h2>Stepper 6 bước — step mới nằm sau Preview</h2>
+<h2>Stepper 6 bước — step mới nằm sau <em>Preview itemID &amp; Price</em></h2>
 <div class="card"><div class="pad">
   <div class="stp">
     <div class="done" style="display:flex;gap:7px;align-items:center"><span class="n">✓</span><span class="lb">Excel</span></div><span class="ln"></span>
     <div class="done" style="display:flex;gap:7px;align-items:center"><span class="n">✓</span><span class="lb">Screenshots</span></div><span class="ln"></span>
-    <div class="done" style="display:flex;gap:7px;align-items:center"><span class="n">✓</span><span class="lb">Preview</span></div><span class="ln"></span>
+    <div class="done" style="display:flex;gap:7px;align-items:center"><span class="n">✓</span><span class="lb">Preview itemID &amp; Price</span></div><span class="ln"></span>
     <div class="act new" style="display:flex;gap:7px;align-items:center"><span class="n">4</span><span class="lb">Localization ←&nbsp;MỚI</span></div><span class="ln"></span>
     <div style="display:flex;gap:7px;align-items:center"><span class="n">5</span><span class="lb">Territories</span></div><span class="ln"></span>
     <div style="display:flex;gap:7px;align-items:center"><span class="n">6</span><span class="lb">Result</span></div>
   </div>
   <p class="sub" style="margin:0">
-    Step <strong>Preview</strong> (price) giữ nguyên, chỉ thôi không đọc data localization.
+    Step <strong>Preview itemID &amp; Price</strong> giữ nguyên, chỉ thôi không đọc data localization.
     Territories <code>4→5</code>, Result <code>5→6</code>.
   </p>
 </div></div>
 
 <!-- ─── STATE 1: mặc định ─── -->
-<h2>State 1 — Mặc định (Ignore all KHÔNG tick · mọi cột tick)</h2>
+<h2>State 1 — Mặc định · M-1 tách rõ Display Name vs Description</h2>
 <div class="note">
-  ⭐ <strong>Mặc định = hành vi y hệt hôm nay.</strong> Đây là parity gate của arc — có test ghim.
+  ⭐ <strong>Q3 đã bật: ô GIỐNG HỆT Apple ⇒ MẶC ĐỊNH UNTICK.</strong> Đây là thứ giải đúng ca của
+  Manager — file chứa sẵn data cũ, không định sửa. Quan trọng hơn cả checkbox.<br>
+  ⚠ Nên mặc định <em>không còn</em> là "tick all" mà là <strong>"tick những ô THẬT SỰ đổi"</strong>.
+  Parity gate D4 vì thế đo ở tầng khác — xem ghi chú dưới bảng.
 </div>
 
 <div class="card">
@@ -146,7 +163,8 @@
     </label>
     <span style="color:var(--subtle);font-size:11.5px">— bỏ qua toàn bộ, chỉ update price</span>
     <span style="margin-left:auto;font-size:11.5px;color:var(--muted)">
-      <strong style="color:var(--accent)">28</strong> / 30 localization sẽ xử lý
+      <strong style="color:var(--accent)">4</strong> / 8 ô sẽ xử lý
+      <span style="color:var(--subtle)">· 4 ô giống Apple đã tự untick</span>
     </span>
   </div>
   <div class="scroll">
@@ -154,43 +172,82 @@
     <thead>
       <tr>
         <th class="stick">Product ID</th>
-        <th><div class="colhead"><span class="t"><input type="checkbox" checked> Vietnamese</span><span class="m">Display Name + Description · 10/10 ô</span></div></th>
-        <th><div class="colhead"><span class="t"><input type="checkbox" checked> English (U.S.) <em style="font-weight:400;color:var(--subtle)">· minh hoạ</em></span><span class="m">Display Name + Description · 10/10 ô</span></div></th>
-        <th><div class="colhead"><span class="t"><input type="checkbox" checked> Thai <em style="font-weight:400;color:var(--subtle)">· minh hoạ</em></span><span class="m">Display Name + Description · 8/10 ô</span></div></th>
+        <th><div class="colhead"><span class="t"><input type="checkbox" checked style="accent-color:var(--amber)"> Vietnamese</span><span class="m" style="color:var(--amber-tx)">dở dang — 2/3 ô</span></div></th>
+        <th><div class="colhead"><span class="t"><input type="checkbox" checked style="accent-color:var(--amber)"> English (U.S.) <em style="font-weight:400;color:var(--subtle)">· minh hoạ</em></span><span class="m" style="color:var(--amber-tx)">dở dang — 1/3 ô</span></div></th>
+        <th><div class="colhead"><span class="t"><input type="checkbox" checked> Thai <em style="font-weight:400;color:var(--subtle)">· minh hoạ</em></span><span class="m">2/2 ô</span></div></th>
       </tr>
     </thead>
     <tbody>
+      <!-- row 1: vi ĐỔI (chỉ display name) + ACTIVE -->
       <tr>
         <td class="stick"><div class="mono">com.vng.nikki.pack199ak</div><div style="font-size:10.5px;color:var(--subtle)">Item box ingame</div></td>
         <td><div class="cell"><input type="checkbox" checked>
-          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-chg">đổi</span>
-            <div class="val"><span class="old">188 Vàng</span> → <span class="new2">188 Vàng.</span></div>
-            <a class="lnk">detail</a></div></div></td>
+          <div class="fields">
+            <div><span class="pill p-act">ACTIVE</span> <span class="pill p-chg">đổi Display Name</span></div>
+            <div class="f chg"><span class="k">Name</span><span class="v"><span class="old">188 Vàng</span> <span class="arrow">→</span> <strong>188 Vàng.</strong></span></div>
+            <div class="f same"><span class="k">Desc</span><span class="v">Gói 188 Vàng dùng trong game <span class="same-tag">· không đổi</span></span></div>
+            <div class="warn-line">⚠ Ô ACTIVE — sửa sẽ tạo version mới trên Apple và item phải duyệt lại. Tên mới chưa hiển thị với người mua cho tới khi Apple duyệt.</div>
+            <a class="lnk">detail</a>
+          </div></div></td>
+        <td class="untick-row"><div class="cell"><input type="checkbox">
+          <div class="fields">
+            <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">giống hệt Apple</span></div>
+            <div class="f same"><span class="k">Name</span><span class="v">188 Gold <span class="same-tag">· không đổi</span></span></div>
+            <div class="f same"><span class="k">Desc</span><span class="v">188 Gold pack for in-game use <span class="same-tag">· không đổi</span></span></div>
+            <a class="lnk">detail</a>
+          </div></div></td>
         <td><div class="cell"><input type="checkbox" checked>
-          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">không đổi</span>
-            <div class="val">188 Gold</div><a class="lnk">detail</a></div></div></td>
-        <td><div class="cell"><input type="checkbox" checked>
-          <div><span class="pill p-new">chưa có</span>
-            <div class="val new2">188 ทอง</div><a class="lnk">detail</a></div></div></td>
+          <div class="fields">
+            <div><span class="pill p-new">chưa có trên Apple</span></div>
+            <div class="f chg"><span class="k">Name</span><span class="v"><strong>188 ทอง</strong></span></div>
+            <div class="f chg"><span class="k">Desc</span><span class="v"><strong>แพ็ก 188 ทองสำหรับใช้ในเกม</strong></span></div>
+            <a class="lnk">detail</a>
+          </div></div></td>
       </tr>
+      <!-- row 2: vi ĐỔI CẢ HAI -->
       <tr>
         <td class="stick"><div class="mono">com.vng.nikki.pack199u</div><div style="font-size:10.5px;color:var(--subtle)">Item box ingame</div></td>
         <td><div class="cell"><input type="checkbox" checked>
-          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">không đổi</span>
-            <div class="val">588 Vàng</div><a class="lnk">detail</a></div></div></td>
+          <div class="fields">
+            <div><span class="pill p-act">ACTIVE</span> <span class="pill p-chg">đổi cả hai</span></div>
+            <div class="f chg"><span class="k">Name</span><span class="v"><span class="old">588 Vàng</span> <span class="arrow">→</span> <strong>588 Vàng</strong></span></div>
+            <div class="f chg"><span class="k">Desc</span><span class="v"><span class="old">Gói 588 Vàng</span> <span class="arrow">→</span> <strong>Gói 588 Vàng dùng trong game</strong></span></div>
+            <div class="warn-line">⚠ Ô ACTIVE — sửa sẽ tạo version mới + duyệt lại.</div>
+            <a class="lnk">detail</a>
+          </div></div></td>
+        <td class="untick-row"><div class="cell"><input type="checkbox">
+          <div class="fields">
+            <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">giống hệt Apple</span></div>
+            <div class="f same"><span class="k">Name</span><span class="v">588 Gold <span class="same-tag">· không đổi</span></span></div>
+            <div class="f same"><span class="k">Desc</span><span class="v">588 Gold pack <span class="same-tag">· không đổi</span></span></div>
+            <a class="lnk">detail</a>
+          </div></div></td>
         <td><div class="cell"><input type="checkbox" checked>
-          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">không đổi</span>
-            <div class="val">588 Gold</div><a class="lnk">detail</a></div></div></td>
-        <td><div class="cell"><input type="checkbox" checked>
-          <div><span class="pill p-new">chưa có</span><div class="val new2">588 ทอง</div><a class="lnk">detail</a></div></div></td>
+          <div class="fields">
+            <div><span class="pill p-new">chưa có trên Apple</span></div>
+            <div class="f chg"><span class="k">Name</span><span class="v"><strong>588 ทอง</strong></span></div>
+            <div class="f chg"><span class="k">Desc</span><span class="v"><strong>แพ็ก 588 ทอง</strong></span></div>
+            <a class="lnk">detail</a>
+          </div></div></td>
       </tr>
+      <!-- row 3: item mới hoàn toàn + ô trống -->
       <tr>
-        <td class="stick"><div class="mono">com.vng.nikki.pack499</div><div style="font-size:10.5px;color:var(--subtle)">Item box ingame</div></td>
+        <td class="stick"><div class="mono">com.vng.nikki.pack499</div><div style="font-size:10.5px;color:var(--subtle)">Item box ingame</div><div style="font-size:9.5px;color:var(--ok)">item mới — CREATE</div></td>
+        <td class="untick-row"><div class="cell"><input type="checkbox">
+          <div class="fields">
+            <div><span class="pill p-new">chưa có trên Apple</span> <span class="pill p-same">giống hệt file trước</span></div>
+            <div class="f same"><span class="k">Name</span><span class="v">1188 Vàng <span class="same-tag">· không đổi</span></span></div>
+            <div class="f same"><span class="k">Desc</span><span class="v">Gói 1188 Vàng <span class="same-tag">· không đổi</span></span></div>
+            <a class="lnk">detail</a>
+          </div></div></td>
         <td><div class="cell"><input type="checkbox" checked>
-          <div><span class="pill p-new">chưa có</span><div class="val new2">1188 Vàng</div><a class="lnk">detail</a></div></div></td>
-        <td><div class="cell"><input type="checkbox" checked>
-          <div><span class="pill p-new">chưa có</span><div class="val new2">1188 Gold</div><a class="lnk">detail</a></div></div></td>
-        <td><div class="cell"><span style="color:var(--subtle);font-size:11px">— ô trống trong file</span></div></td>
+          <div class="fields">
+            <div><span class="pill p-new">chưa có trên Apple</span></div>
+            <div class="f chg"><span class="k">Name</span><span class="v"><strong>1188 Gold</strong></span></div>
+            <div class="f chg"><span class="k">Desc</span><span class="v"><strong>1188 Gold pack</strong></span></div>
+            <a class="lnk">detail</a>
+          </div></div></td>
+        <td><div class="cell"><span style="color:var(--subtle);font-size:11px">— ô trống trong file<br><span style="font-size:9.5px">parser bỏ cặp thiếu một nửa (<code>:389</code>) ⇒ không tính vào mẫu số</span></span></div></td>
       </tr>
     </tbody>
   </table>
@@ -199,10 +256,23 @@
 </div>
 
 <div class="note w">
-  ⚠ <strong>Nhãn <code>ACTIVE</code> / <code>không đổi</code> chỉ có nếu chốt Q3(a).</strong>
-  Chúng đến từ <code>include=inAppPurchaseLocalizations</code> trên lượt gọi Apple ĐANG CHẠY sẵn
-  ⇒ <strong>0 request thêm</strong>. Bản tối giản Q3(b) mất cả hai nhãn — và mất luôn
-  "ô không đổi mặc định untick", chính là ca của Manager.
+  <strong>⚠ M-1 — đánh đổi phải Manager chốt.</strong> Cách trình bày trên đặt <code>Name</code> và
+  <code>Desc</code> thành <strong>hai dòng có nhãn</strong>; chỉ trường THẬT SỰ đổi mới được tô nền
+  amber + mũi tên <span class="arrow">→</span>, trường không đổi thu về một dòng mờ.<br>
+  <strong>Giá:</strong> mỗi hàng cao gấp ~2,5 lần (3 → 7-8 dòng). Với 88 item thì cuộn dọc nhiều hơn hẳn.<br>
+  <strong>Hai lựa chọn thay thế</strong> nếu Manager thấy quá cao:
+  <strong>(b)</strong> chỉ hiện trường ĐỔI, trường không đổi ẩn hẳn vào popover <em>detail</em> —
+  gọn nhất nhưng mất ngữ cảnh "cái kia vẫn nguyên";
+  <strong>(c)</strong> tách thành hai cột con <code>Name</code> / <code>Desc</code> dưới mỗi locale —
+  hàng thấp lại nhưng <strong>gấp đôi</strong> số cột phải cuộn ngang (3 locale ⇒ 6 cột).
+</div>
+
+<div class="note">
+  ⚠ <strong>Parity gate D4 đo ở đâu khi mặc định KHÔNG còn là "tick all".</strong>
+  Q3 bật "ô giống Apple ⇒ untick" nên mặc định hôm nay ≠ hành vi hôm qua — <em>đó là cả mục đích của arc</em>.
+  Nên parity gate phải ghim ở <strong>tầng dưới</strong>: khi selection phủ TOÀN BỘ (mọi ô tick),
+  bộ lọc ở choke point là <strong>no-op</strong> và <code>item.localizations</code> y hệt input.
+  Hành vi mặc định mới được ghim bằng một test RIÊNG, không trộn vào parity gate.
 </div>
 
 <!-- ─── STATE 2: Ignore all ─── -->
@@ -213,7 +283,7 @@
       <input type="checkbox" checked> <strong>Ignore all localizations</strong>
     </label>
     <span style="font-size:11.5px">— sẽ KHÔNG gọi API localization cho bất kỳ item nào</span>
-    <span style="margin-left:auto;font-size:11.5px"><strong>0</strong> / 30 sẽ xử lý</span>
+    <span style="margin-left:auto;font-size:11.5px"><strong>0</strong> / 8 ô sẽ xử lý</span>
   </div>
   <div class="scroll dim">
   <table>
@@ -222,16 +292,26 @@
       <th><div class="colhead"><span class="t"><input type="checkbox" checked disabled> English (U.S.)</span><span class="m">Display Name + Description</span></div></th></tr></thead>
     <tbody><tr>
       <td class="stick"><div class="mono">com.vng.nikki.pack199ak</div></td>
-      <td><div class="cell"><input type="checkbox" checked disabled><div><span class="pill p-act">ACTIVE</span><div class="val"><span class="old">188 Vàng</span> → 188 Vàng.</div></div></div></td>
-      <td><div class="cell"><input type="checkbox" checked disabled><div><span class="pill p-act">ACTIVE</span><div class="val">188 Gold</div></div></div></td>
+      <td><div class="cell"><input type="checkbox" checked disabled>
+        <div class="fields">
+          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-chg">đổi Display Name</span></div>
+          <div class="f chg"><span class="k">Name</span><span class="v"><span class="old">188 Vàng</span> <span class="arrow">→</span> 188 Vàng.</span></div>
+          <div class="f same"><span class="k">Desc</span><span class="v">Gói 188 Vàng dùng trong game <span class="same-tag">· không đổi</span></span></div>
+        </div></div></td>
+      <td><div class="cell"><input type="checkbox" checked disabled>
+        <div class="fields">
+          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">giống hệt Apple</span></div>
+          <div class="f same"><span class="k">Name</span><span class="v">188 Gold <span class="same-tag">· không đổi</span></span></div>
+          <div class="f same"><span class="k">Desc</span><span class="v">188 Gold pack <span class="same-tag">· không đổi</span></span></div>
+        </div></div></td>
     </tr></tbody>
   </table>
   </div>
   <div class="foot"><button class="btn s">← Back</button><button class="btn" style="margin-left:auto">Next →</button></div>
 </div>
 <div class="note">
-  ⭐ <strong>Step vẫn hiện, không skip (D8).</strong> Hậu quả của việc bỏ qua một bước là
-  không nhìn thấy nó — đúng lớp lỗi arc này sinh ra để diệt. Dòng đếm "0 / 30" là lời nhắc rẻ nhất.
+  ⭐ <strong>Step vẫn hiện, không skip (Q5).</strong> Hậu quả của việc bỏ qua một bước là
+  không nhìn thấy nó — đúng lớp lỗi arc này sinh ra để diệt. Dòng đếm "0 / 8" là lời nhắc rẻ nhất.
 </div>
 
 <!-- ─── STATE 3: untick cột ─── -->
@@ -269,8 +349,10 @@
 </div>
 <div class="note w">
   ⚠ <strong>Cột "Thai" ở trạng thái DỞ DANG</strong> — không tick-all, không untick-all.
-  Đây là khuôn <em>header tri-state</em> đã ship ở arc picker. Nếu Manager chốt Q2(b) (chỉ cấp cột)
-  thì trạng thái này <strong>không tồn tại</strong> và ô lẻ không untick được.
+  Khuôn <em>header tri-state</em> đã ship ở arc picker.<br>
+  ⚠⚠ <strong>KHÔNG port luật Apple "không bao giờ xoá".</strong> Ở đây mặc định là có tick sẵn,
+  nên việc thật của Manager là <strong>TRỪ ĐI</strong> — giống ca Google, không giống ca Apple picker.
+  ⇒ Header ở trạng thái FULL, bấm vào ⇒ <strong>clear cả cột</strong>.
 </div>
 
 <!-- ─── STATE 4: popover ─── -->
@@ -311,9 +393,9 @@ Description:  Gói 188 Vàng dùng trong game</pre>
   <div class="dlg">
     <div class="h"><h3>Xác nhận xử lý localization</h3></div>
     <div class="rows">
-      <div class="row"><span class="k">Sẽ xử lý<div class="sm">9 item × locale đã chọn</div></span><span class="v" style="color:var(--accent)">9</span></div>
-      <div class="row"><span class="k">Sẽ bỏ qua<div class="sm">10 ô cột English + 1 ô lẻ Thai + 10 ô "không đổi"</div></span><span class="v" style="color:var(--muted)">21</span></div>
-      <div class="row"><span class="k" style="color:var(--amber-tx)">⚠ Trong đó ACTIVE<div class="sm">phải tạo version mới ⇒ Apple duyệt lại</div></span><span class="v" style="color:var(--amber-tx)">6</span></div>
+      <div class="row"><span class="k">Sẽ xử lý<div class="sm">ô = item × locale, đếm từ số ô THẬT (parser bỏ cặp thiếu một nửa)</div></span><span class="v" style="color:var(--accent)">4</span></div>
+      <div class="row"><span class="k">Sẽ bỏ qua<div class="sm">4 ô giống hệt Apple (tự untick) — không có ô nào Manager untick tay</div></span><span class="v" style="color:var(--muted)">4</span></div>
+      <div class="row"><span class="k" style="color:var(--amber-tx)">⚠ Trong đó ACTIVE<div class="sm">mỗi ô này tạo một version mới trên Apple ⇒ item phải duyệt lại</div></span><span class="v" style="color:var(--amber-tx)">2</span></div>
     </div>
     <div class="foot" style="justify-content:flex-end">
       <button class="btn s">Cancel</button><button class="btn">Confirm</button>
@@ -325,18 +407,17 @@ Description:  Gói 188 Vàng dùng trong game</pre>
   ⚠ Mẫu số là <strong>số ô THẬT</strong>, không phải <code>item × locale_pair_count</code> — parser bỏ cặp
   có ô trống (<code>iap-items.ts:389</code>).<br>
   Cancel ⇒ về lại bảng · Confirm ⇒ sang <strong>Territories</strong> (step 5).
-  <br>⚠ Dòng "Trong đó ACTIVE" chỉ có nếu chốt <strong>Q3(a)</strong>.
+  <br>⭐ Dòng "Trong đó ACTIVE" là cảnh báo <strong>trước khi chạy</strong> — thứ mà sự cố 2026-09-22 không có, nên Manager chỉ biết sau 20 dòng PARTIAL.
 </div>
 
-<h2>Chưa quyết — chờ Manager</h2>
+<h2>Đã chốt · còn chờ duyệt mockup</h2>
 <div class="card"><div class="pad">
   <p class="sub" style="margin:0;line-height:1.95">
-    <strong>Q1</strong> checkbox cho cả CẶP hay tách Name/Description ·
-    <strong>Q2</strong> cấp cột hay cột + untick lẻ ·
-    <strong>Q3</strong> có hiện state + so sánh Apple không (0 request thêm) ·
-    <strong>Q4</strong> đơn vị đếm ·
-    <strong>Q5</strong> "Ignore all" có skip step không ·
-    <strong>Q6</strong> probe <code>included[]</code> trước khi code.<br>
+    ✅ <strong>Q1</strong> tick theo CẶP (locale) · ✅ <strong>Q2</strong> cột + untick lẻ, header FULL ⇒ clear cột ·
+    ✅ <strong>Q3</strong> hiện state, 0 request, <strong>ô giống Apple tự untick</strong> ·
+    ✅ <strong>Q4</strong> đơn vị = ô · ✅ <strong>Q5</strong> vẫn hiện mờ · ✅ <strong>Q6</strong> probe trước khi code.<br>
+    ⏳ <strong>Còn chờ:</strong> M-1 chọn cách trình bày (a) hai dòng có nhãn <em>(đang vẽ)</em> /
+    (b) ẩn trường không đổi / (c) hai cột con.<br>
     Chi tiết: <code>docs/iap-management/design-bulk-import-localization-step.md</code>
   </p>
 </div></div>

@@ -2,6 +2,32 @@
 
 Format: `- [ ] [PR-X] description — file path — rationale`
 
+## From [BULKIMPORT-loc-step] (step Localization cho Bulk Import, 2026-09-23)
+
+**Trạng thái: census + thiết kế ĐÃ DUYỆT, 6 câu ĐÃ CHỐT, chờ Manager duyệt
+cách trình bày M-1 rồi mới code.** Thiết kế + mockup:
+`docs/iap-management/design-bulk-import-localization-step.md`.
+
+- [ ] [BULKIMPORT-loc-step] **Chunk chính — chưa code.** Step mới đặt SAU `Preview itemID & Price`. Chốt: tick theo CẶP (locale) · cột + untick lẻ tri-state, **header FULL ⇒ clear cột** (KHÔNG port luật Apple "không bao giờ xoá" — ở đây việc thật là TRỪ ĐI, giống ca Google) · hiện state + so Apple **0 request thêm** · **ô giống hệt Apple ⇒ mặc định UNTICK** · đơn vị đếm = ô (item × locale) · "Ignore all" vẫn hiện mờ.
+- [ ] [BULKIMPORT-loc-step-probe] ⚠ **Probe `included[]` TRƯỚC khi code** (Q6). 1 GET, chỉ đọc: `GET /v1/apps/{id}/inAppPurchasesV2?limit=200&include=inAppPurchaseLocalizations`. Lệnh + dòng KỲ VỌNG ở §Probe Q6 của design doc. ⚠ Chạy trên app THẬT nhiều locale — app test 1 locale sẽ cho kết quả "ổn" cho tình huống không tồn tại. Nếu Apple cap `included` ⇒ Q3 phải lùi về bản tối giản và **mất** tính năng "ô giống Apple tự untick".
+- [ ] [BULKIMPORT-loc-step-M1] ⏳ **Chờ Manager chọn cách trình bày M-1**: (a) hai dòng có nhãn Name/Desc *(đang vẽ, đề xuất)* · (b) ẩn trường không đổi vào popover · (c) hai cột con. ⚠ Chỉ (c) không đảo ngược rẻ.
+- [ ] [BULKIMPORT-loc-step-choke] **Choke point:** lọc `item.localizations` MỘT LẦN ngay sau `parseIapItemsXlsx`, trước `resolveConflicts`. Cả **8** chỗ đọc (`route.ts:946·968·971·1241·1249` CREATE + `1393·1477·1615` OVERWRITE) thấy list đã lọc ⇒ **không sửa chỗ nào trong 8**. Cùng hình dạng `resolveBatchAvailabilitySelection` (`:565`). ⚠ Ghim bằng **structural test**: không chỗ nào được đọc localization chưa lọc. Lựa chọn đi qua `config` (route `:391` tự khai *"Re-parse Excel server-side (don't trust the client)"* ⇒ client KHÔNG gửi localization); khuôn `tier_overrides` (`:364` → áp `:464-476`).
+- [ ] [CLICKOUTSIDE-3-copies] ⚠ **click-outside đã có BA bản sao — rút hook chung, ĐỪNG viết bản thứ tư.** `components/layout/AccountSwitcher.tsx:42-46` · `components/cpp/CppList.tsx:488-492` · `components/google-iap-management/layout/GoogleAccountSwitcher.tsx:59-63`. Cả ba cùng một hình dạng (`mousedown` + `ref.contains(e.target)`). Arc này cần cái thứ tư cho popover *detail* ⇒ đúng lúc gộp. ⚠ Google là module khác — gộp phải giữ được cả hai, hoặc để Google dùng bản sao của nó và chỉ gộp hai bản Apple. Cần census riêng trước khi động vào file Google.
+
+### ⚠ Bug CÓ SẴN, sửa kèm — KHÔNG phải hệ quả của arc
+
+Cả ba cùng một gốc: **SC7 chèn step `Territories` vào giữa mà không cập nhật
+những chỗ ĐẾM bước bằng hằng số.**
+
+- [ ] [WIZARD-stepper-connector] `BulkImportWizard.tsx:930` — `{n < 4 && …}` vẽ gạch nối nhưng có **5** nhãn ⇒ chỉ vẽ 3 gạch, **thiếu 1**. Sửa thành `n < labels.length` thì đúng cho cả hôm nay lẫn mai.
+- [ ] [WIZARD-result-heading] `BulkImportWizard.tsx:1712` — `<h2>Step 4 — Result</h2>` nhưng Result render ở `{step === 5 …}` (`:741`) ⇒ **lệch một**, hiển thị sai với người dùng.
+- [ ] [KB-stepper-stale] `IAP-MANAGEMENT-KNOWLEDGE-BASE.md:1350` — `Excel → Screenshots → Preview → Result`, **thiếu hẳn Territories**.
+
+⭐ **Bài học:** chèn một step vào giữa wizard thì thứ vỡ **không phải logic** —
+nó là mọi chỗ **đếm bước bằng hằng số**. Arc này đang chèn một step nữa, nên
+nó là ứng viên số một để lặp lại đúng lỗi đó; bảng P1.1 của design doc tồn
+tại chính vì thế.
+
 ## From [LOC-ACTIVE-state] (Apple từ chối sửa localization đang ACTIVE, 2026-09-22)
 
 **Trạng thái: W1-W3 xong (quan sát + tài liệu), luồng version CHƯA làm — chờ

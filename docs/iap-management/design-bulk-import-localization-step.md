@@ -1,6 +1,21 @@
 # Step mới: chọn localization nào xử lý — census + thiết kế
 
-**Arc:** `[BULKIMPORT-loc-step]` · **Ngày:** 2026-09-23 · **Trạng thái:** CENSUS + THIẾT KẾ XONG, chờ Manager duyệt · **CHƯA CODE**
+**Arc:** `[BULKIMPORT-loc-step]` · **Ngày:** 2026-09-23 · **Trạng thái:** census + thiết kế **ĐÃ DUYỆT**, 6 câu **ĐÃ CHỐT**; chờ Manager duyệt cách trình bày M-1 · **CHƯA CODE**
+
+> ### ✅ Manager chốt (2026-09-23)
+>
+> | | Chốt | Ghi chú |
+> |---|---|---|
+> | **Q1** | **CẶP** — tick theo locale | Parser bắt buộc cặp (`:301-306` throw nếu lệch), và "sửa tên giữ mô tả cũ" **không** phải nhu cầu thật. ⚠ M-1 là yêu cầu **NHÌN THẤY** cái gì đổi, **không** phải để tick riêng. Nếu sau này cần tách: Apple **cho** (`V2UpdateRequest` cả hai `nullable`) nhưng **parser phải đổi trước**. |
+> | **Q2** | **Cột + untick lẻ (tri-state)** | ⚠ **KHÔNG port luật Apple "không bao giờ xoá"** từ arc picker. Ở đây mặc định có tick sẵn ⇒ việc thật là **TRỪ ĐI**, giống ca Google. **Header FULL ⇒ clear cả cột.** |
+> | **Q3** | **CÓ** — hiện state + so Apple, 0 request | ⭐ **VÀ: ô giống hệt Apple ⇒ MẶC ĐỊNH UNTICK.** Đây mới là thứ giải đúng ca Manager, quan trọng hơn cả checkbox. Ô ACTIVE hiện rõ "sửa sẽ tạo version mới + duyệt lại". |
+> | **Q4** | **Ô (item × locale)** | Mẫu số từ **số ô THẬT** — `items[i].localizations` chỉ chứa cặp có **cả hai** ô non-empty (`iap-items.ts:389`), nên **không** phải `rows × pairs`. |
+> | **Q5** | **Vẫn hiện, mờ** | |
+> | **Q6** | **CÓ** — probe `included[]` trước khi code | Xem §Probe Q6 cuối file. |
+>
+> ### Manager chỉnh mockup
+> - **M-1** — tách rõ **Display Name** vs **Description** trong phần hiển thị thay đổi. ⏳ *còn chờ chọn cách trình bày, xem §M-1.*
+> - **M-2** — nhãn step 3: `"Preview"` → **`"Preview itemID & Price"`**. ✅ *chỉ đổi nhãn.*
 
 ## Vấn đề
 
@@ -32,7 +47,7 @@ Ca thật 2026-09-22: Manager chỉ muốn update **price**. Tool xử lý cả 
 | 10 | `:756` | `disabled={step === 1 \|\| step === 5 \|\| executing}` | → `step === 6` |
 | 11 | `:763` | `{step < 4 && (` — nút Next | → `step < 5` |
 | 12 | `:781` | `{step === 4 && (` — nút Execute | → `step === 5` |
-| 13 | `:905` | `labels = ["Excel","Screenshots","Preview","Territories","Result"]` | → chèn `"Localization"` sau `"Preview"` |
+| 13 | `:905` | `labels = ["Excel","Screenshots","Preview","Territories","Result"]` | **M-2** → `["Excel","Screenshots","Preview itemID & Price","Localization","Territories","Result"]` |
 | 14 | `:930` | `{n < 4 && (` — đường nối giữa các bước | → `n < 5` |
 
 ⚠ **`:930` là chỗ dễ sót nhất.** Nó không phải so sánh `step`, nó so `n` (chỉ số nhãn) để quyết định vẽ gạch nối — với 5 nhãn thì `n < 4` đã SAI SẴN (nhãn thứ 5 "Result" không có gạch trước nó nhưng nhãn thứ 4 thì có… thực ra `n<4` nghĩa là chỉ vẽ 3 gạch cho 5 nhãn ⇒ **thiếu 1 gạch từ trước arc này**). Sửa thành `n < labels.length` thì đúng cho cả hôm nay lẫn mai.
@@ -293,6 +308,77 @@ Dữ liệu thật: `com.vng.nikki.*` · "Item box ingame" · Vietnamese · `"18
 
 ### ❓ Q6 *(census sinh ra)* — Probe `included` trước khi code?
 1 request `GET /v1/apps/{id}/inAppPurchasesV2?limit=200&include=inAppPurchaseLocalizations` trên app thật, đo kích thước + đếm `included[]`. **Không ghi gì.** Nếu Apple cap hoặc payload quá lớn thì Q3 phải là (b), và biết trước rẻ hơn biết sau.
+
+---
+
+## §M-1 — Tách Display Name vs Description: ba cách, một đánh đổi
+
+Manager: *"nhìn vào KHÔNG BIẾT cái đổi là display name hay description."*
+
+⚠ Đây là yêu cầu về **HIỂN THỊ**, không phải về độ mịn tick — Q1 đã chốt tick theo **cặp**.
+
+| | Cách | Được | Mất |
+|---|---|---|---|
+| **(a)** ⭐ *đang vẽ* | Hai dòng có nhãn `Name` / `Desc`. Chỉ trường **thật sự đổi** được tô nền amber + mũi tên `→`; trường không đổi thu về một dòng mờ kèm `· không đổi` | Trả lời thẳng câu của Manager. Vẫn thấy trường kia **còn nguyên** — ngữ cảnh quan trọng khi quyết định có tick hay không | ⚠ Hàng cao gấp **~2,5×** (3 → 7-8 dòng). 88 item ⇒ cuộn dọc nhiều hơn hẳn |
+| **(b)** | Chỉ hiện trường ĐỔI; trường không đổi ẩn vào popover `detail` | Gọn nhất, hàng thấp | Mất ngữ cảnh "cái kia vẫn nguyên". Ô "đổi cả hai" và ô "chỉ đổi Name" trông **giống nhau** cho tới khi bấm detail |
+| **(c)** | Hai **cột con** `Name` / `Desc` dưới mỗi locale | Hàng thấp lại, so sánh theo cột dễ | ⚠ **Gấp đôi số cột** phải cuộn ngang — 3 locale ⇒ 6 cột, 39 locale ⇒ **78 cột**. Đi ngược đúng vấn đề D7 |
+
+⭐ **Đề xuất (a).** Không phải vì nó gọn — nó là cách **tốn chiều cao nhất**. Mà vì ba lý do:
+1. Nó trả lời đúng câu Manager hỏi, ngay trên bảng, **không cần bấm gì**.
+2. Ô "đổi cả hai" và ô "chỉ đổi Name" **phải phân biệt được bằng mắt** — đó là cả nội dung của M-1, và (b) làm mất điều đó.
+3. Với Q3 đã bật, **rất nhiều ô sẽ ở trạng thái "giống hệt Apple"** và thu về 2 dòng mờ. Chiều cao trung bình thật sẽ thấp hơn 2,5× khá nhiều — ⚠ nhưng **KHÔNG ĐỌC ĐƯỢC** tỉ lệ thật cho tới khi có dữ liệu của Manager.
+
+⚠ **Chỉ (c) là không đảo ngược rẻ** (nó đổi hình dạng bảng). (a) ↔ (b) đổi qua lại chỉ là CSS + một điều kiện render.
+
+---
+
+## §Bug CÓ SẴN được sửa kèm — KHÔNG phải hệ quả của arc này
+
+Census tìm ra **BA** chỗ prose/đếm bị lệch, **tất cả cùng một gốc**: SC7 chèn step `Territories` vào giữa mà không cập nhật những chỗ đếm bước.
+
+| # | Vị trí | Sai gì |
+|---|---|---|
+| 1 | `BulkImportWizard.tsx:930` | `{n < 4 && …}` vẽ gạch nối, nhưng có **5** nhãn ⇒ chỉ vẽ **3** gạch, **thiếu 1** |
+| 2 | `BulkImportWizard.tsx:1712` | `<h2>Step 4 — Result</h2>` — nhưng Result render ở `{step === 5 …}` (`:741`) ⇒ **lệch một** |
+| 3 | `IAP-MANAGEMENT-KNOWLEDGE-BASE.md:1350` | `Excel → Screenshots → Preview → Result` — **thiếu hẳn Territories** |
+
+⚠ **Arc này sửa cả ba** (`n < labels.length`, sửa tiêu đề, sửa KB) — nhưng **ghi rõ trong commit message và backlog rằng đây là bug CÓ SẴN được sửa kèm**, không phải hệ quả của arc. Nếu không, một lần `git blame` về sau sẽ đổ lỗi nhầm.
+
+⭐ **Bài học dùng lại được:** *chèn một step vào giữa wizard thì thứ vỡ không phải logic — nó là mọi chỗ ĐẾM bước bằng hằng số.* Arc này **đang chèn một step nữa**, nên nó là ứng viên số một để lặp lại đúng lỗi đó. Bảng P1.1 tồn tại chính vì thế.
+
+---
+
+## §Probe Q6 — cách chạy cho Manager
+
+**Mục tiêu:** trước khi code, biết `include=inAppPurchaseLocalizations` trả về bao nhiêu resource và payload lớn cỡ nào. **1 request, chỉ đọc, không ghi gì.**
+
+⚠ Cần JWT ASC — repo ký server-side (`lib/asc-jwt.ts`), không lộ ra client, nên **KHÔNG ĐỌC ĐƯỢC cách lấy token từ repo cho một lệnh curl thủ công**. Hai đường:
+
+**Đường A — qua chính tool** (thêm tạm route chỉ-đọc, chạy một lần, xoá). ⚠ Là code sản phẩm ⇒ **ngoài phạm vi lượt này**, cần Manager cho phép riêng.
+
+**Đường B — Manager tự chạy với token ASC sẵn có** (⭐ khuyến nghị):
+
+```
+APP_ID=<apple numeric app id>
+TOKEN=<ASC JWT>
+
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://api.appstoreconnect.apple.com/v1/apps/$APP_ID/inAppPurchasesV2?limit=200&include=inAppPurchaseLocalizations" \
+  -o /tmp/probe.json
+
+wc -c /tmp/probe.json
+jq '{iap: (.data|length), included: (.included|length), has_next: (.links.next != null)}' /tmp/probe.json
+jq '[.included[].type] | group_by(.) | map({type: .[0], n: length})' /tmp/probe.json
+jq '.included[0].attributes | keys' /tmp/probe.json
+```
+
+> **KỲ VỌNG — cách đọc:**
+> - `included` ≈ `iap × số locale/item`, và `.included[0].attributes | keys` **có `"state"`** ⇒ **Q3 chạy được, 0 request thêm.** Code tiếp bình thường.
+> - `included` **nhỏ hơn nhiều** so với kỳ vọng, hoặc `has_next: true` xuất hiện sớm ⇒ ⚠ **Apple đang cap `included`.** Khi đó Q3 phải lùi về bản tối giản (chỉ so file vs file) — và **ô giống Apple sẽ KHÔNG tự untick được**, tức mất đúng thứ Q3 sinh ra để có.
+> - `keys` **thiếu `state`** ⇒ thêm `&fields[inAppPurchaseLocalizations]=name,locale,description,state` rồi chạy lại.
+> - `wc -c` — con số để quyết có cần `fields[...]` thu hẹp không.
+
+⚠ **Chạy trên app THẬT có nhiều locale**, đừng chạy trên app test 1 locale — app test sẽ cho kết quả "ổn" cho một tình huống không tồn tại.
 
 ---
 
