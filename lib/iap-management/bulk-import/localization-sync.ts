@@ -26,6 +26,8 @@
  * decideOverwritePricing patterns).
  */
 
+import { classifyLocalizationState } from "../apple/localization-state";
+
 export interface ExistingLocalization {
   id: string;
   locale: string;
@@ -84,6 +86,55 @@ export interface LocalizationSyncPlan {
 }
 
 /**
+ * Choose WHICH row to PATCH when Apple returns MORE THAN ONE localization for
+ * the same locale. `[LOCSYNC-duplicate-locale]`
+ *
+ * ⚠ THE BUG THIS REPLACES. The planner used to build its lookup with
+ * `new Map(existing.map((e) => [e.locale, e]))`. A `Map` built from pairs keeps
+ * the LAST entry for a duplicated key, so the row that got PATCHed was
+ * whichever one Apple happened to list last — and `route.ts` passes Apple's
+ * list through unfiltered. Nothing in JSON:API promises an order, so the tool
+ * was depending on an UNWRITTEN CONTRACT.
+ *
+ * ⚠ THE SHAPE IS REAL, THE HARM IS NOT MEASURED — say which is which.
+ *   · REAL: an IAP can carry two rows for one locale — one live, one draft.
+ *     Observed on ASC 2026-09-22 (KB §28.6) and confirmed structurally by the
+ *     two different version ids in ASC's own URLs (KB §28.7).
+ *   · NOT MEASURED: whether Apple's LIST actually returns BOTH rows, and in
+ *     what order. No fixture, log or run in this repo shows a two-row
+ *     response (KB §28.11.b).
+ *   ⇒ So this is a fix for a contract we should never have leaned on, NOT a
+ *     fix for a failure anyone has been observed to hit. Do not let the next
+ *     reader inherit it as "this was breaking imports".
+ *
+ * THE RULE: prefer a row Apple's own state says is editable, per the
+ * ALLOW-list in `localization-state.ts` (`PREPARE_FOR_SUBMISSION` is the state
+ * ASC puts a freshly-opened draft in). That is the draft — the row that can be
+ * overwritten without creating a version and without a re-review.
+ *
+ * ⚠ AND WHEN NO ROW IS PATCHABLE, IT STILL RETURNS ONE — deliberately.
+ * Skipping here would be a behaviour change this module explicitly defers to
+ * the Manager (see `LocalizationSyncPlan.toPatch`: *"the plan does not act on
+ * it — YET"*). Apple's refusal is authoritative; a local state read is not. So
+ * the attempt still goes out, and when Apple refuses, `describeLocalizationState`
+ * already turns the failure into "…is in ACTIVE state — the product is live.
+ * Changing it requires a new in-app purchase version and another review."
+ * The Manager gets the sentence either way; this function only stops the tool
+ * from picking the blocked row while an editable one was sitting right there.
+ */
+function pickPatchTarget(
+  candidates: ReadonlyArray<ExistingLocalization>,
+): ExistingLocalization {
+  const patchable = candidates.find(
+    (c) => classifyLocalizationState(c.state) === "PATCHABLE",
+  );
+  // Fallback is the FIRST row, not the last: an explicit, stated choice rather
+  // than whatever `Map` overwrite order produced. It is still arbitrary among
+  // equally-blocked rows — but it is arbitrary ON PURPOSE and written down.
+  return patchable ?? candidates[0];
+}
+
+/**
  * Compute the localization delta. `existing` is what Apple currently has;
  * `desired` is the parsed import's localizations.
  */
@@ -91,14 +142,22 @@ export function planLocalizationSync(
   existing: ReadonlyArray<ExistingLocalization>,
   desired: ReadonlyArray<DesiredLocalization>,
 ): LocalizationSyncPlan {
-  const existingByLocale = new Map(existing.map((e) => [e.locale, e]));
+  // ⚠ GROUPED, NOT `new Map(existing.map(e => [e.locale, e]))`. That one-liner
+  // silently kept the LAST row for a duplicated locale — see `pickPatchTarget`.
+  const existingByLocale = new Map<string, ExistingLocalization[]>();
+  for (const e of existing) {
+    const bucket = existingByLocale.get(e.locale);
+    if (bucket) bucket.push(e);
+    else existingByLocale.set(e.locale, [e]);
+  }
   const desiredLocales = new Set(desired.map((d) => d.locale));
 
   const toPatch: LocalizationSyncPlan["toPatch"] = [];
   const toCreate: LocalizationSyncPlan["toCreate"] = [];
   for (const d of desired) {
-    const ex = existingByLocale.get(d.locale);
-    if (ex) {
+    const candidates = existingByLocale.get(d.locale);
+    if (candidates && candidates.length > 0) {
+      const ex = pickPatchTarget(candidates);
       toPatch.push({
         id: ex.id,
         locale: d.locale,

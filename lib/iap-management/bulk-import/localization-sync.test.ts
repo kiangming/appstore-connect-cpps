@@ -23,6 +23,83 @@ const want = (locale: string, n = `${locale} name`, d = `${locale} desc`): Desir
   description: d,
 });
 
+/**
+ * `[LOCSYNC-duplicate-locale]` — two rows, one locale.
+ *
+ * ⚠ BOTH ORDERS ARE TESTED, AND THAT IS THE ENTIRE POINT. Apple promises no
+ * ordering, so a test that pins only one order would pass for the wrong
+ * reason — it would still pass against a planner that simply takes the first
+ * row, or one that simply takes the last. The pair together says: the choice
+ * is made from `state`, NOT from position.
+ *
+ * ⚠ ON WHAT IS AND IS NOT MEASURED: the two-row SHAPE is observed (ASC, KB
+ * §28.6/§28.7). Whether Apple's LIST returns both rows, and in which order, is
+ * NOT measured anywhere in this repo (KB §28.11.b). These tests therefore pin
+ * a DECISION RULE, not a reproduction of a seen failure.
+ */
+describe("planLocalizationSync — duplicate locale (live row + draft row)", () => {
+  const live = (id: string, locale: string): ExistingLocalization => ({
+    id,
+    locale,
+    // Apple's word for the live row, quoted back at us in the 409 that started
+    // all this. NOT in Apple's published enum — see KB §28.1.
+    state: "ACTIVE",
+  });
+  const draft = (id: string, locale: string): ExistingLocalization => ({
+    id,
+    locale,
+    state: "PREPARE_FOR_SUBMISSION",
+  });
+
+  it("picks the DRAFT row when the live row is listed LAST", () => {
+    const plan = planLocalizationSync(
+      [draft("draft-vi", "vi"), live("live-vi", "vi")],
+      [want("vi")],
+    );
+    expect(plan.toPatch).toHaveLength(1);
+    expect(plan.toPatch[0].id).toBe("draft-vi");
+    expect(plan.toPatch[0].state).toBe("PREPARE_FOR_SUBMISSION");
+  });
+
+  it("picks the DRAFT row when the live row is listed FIRST", () => {
+    const plan = planLocalizationSync(
+      [live("live-vi", "vi"), draft("draft-vi", "vi")],
+      [want("vi")],
+    );
+    expect(plan.toPatch).toHaveLength(1);
+    expect(plan.toPatch[0].id).toBe("draft-vi");
+  });
+
+  it("emits ONE patch for a duplicated locale, not one per row", () => {
+    const plan = planLocalizationSync(
+      [live("live-vi", "vi"), draft("draft-vi", "vi")],
+      [want("vi")],
+    );
+    expect(plan.toPatch.filter((pp) => pp.locale === "vi")).toHaveLength(1);
+    expect(plan.toCreate).toEqual([]);
+  });
+
+  it("when NO row is patchable it still attempts one — Apple's refusal is the authority, not a local read", () => {
+    const plan = planLocalizationSync(
+      [live("live-a", "vi"), live("live-b", "vi")],
+      [want("vi")],
+    );
+    expect(plan.toPatch).toHaveLength(1);
+    // The attempt goes out and carries the state, so the failure can say WHY
+    // (`describeLocalizationState`) instead of just "failed: [vi]".
+    expect(plan.toPatch[0].state).toBe("ACTIVE");
+  });
+
+  it("a row with NO state does not outrank an explicitly patchable one", () => {
+    const stateless: ExistingLocalization = { id: "unknown-vi", locale: "vi" };
+    const plan = planLocalizationSync(
+      [stateless, draft("draft-vi", "vi")],
+      [want("vi")],
+    );
+    expect(plan.toPatch[0].id).toBe("draft-vi");
+  });
+});
+
 describe("planLocalizationSync", () => {
   it("PATCHes locales present in both old and new — never deletes them", () => {
     const plan = planLocalizationSync(

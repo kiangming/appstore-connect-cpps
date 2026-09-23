@@ -7058,10 +7058,43 @@ nhau, trước nay bị gộp làm một:
 | Chỉ có bản **live/ACTIVE** (không có version mở) | ⛔ **409** `Cannot edit … ACTIVE state` | **có** — bắt buộc, rồi duyệt lại (§28.10) |
 | **Đã có** version mở (`PREPARE_FOR_SUBMISSION`) | ✅ **thành công** | **không** — ghi đè tại chỗ |
 
-⇒ ⭐ **Lời giải đầy đủ cho sự cố 2026-09-22:** 20 dòng hỏng **không** vì chúng
-"live", mà vì chúng **chỉ có bản ACTIVE và không có version mở nào**. 66 dòng
-còn lại chạy được vì chúng **có** một bản đang ở `PREPARE_FOR_SUBMISSION`.
-Cùng một câu lệnh PATCH, khác nhau ở chỗ **có sẵn chỗ để ghi hay không**.
+⇒ ⭐ **GIẢ THUYẾT hàng đầu cho sự cố 2026-09-22** — ⚠ *đọc kỹ mức chắc chắn*:
+20 dòng hỏng **không** vì chúng "live", mà vì chúng **chỉ có bản ACTIVE và
+không có version mở nào**. Cùng một câu lệnh PATCH, khác nhau ở chỗ **có sẵn
+chỗ để ghi hay không**.
+
+⚠⚠ **HẠ TỪ KHẲNG ĐỊNH XUỐNG GIẢ THUYẾT (2026-09-23).** Bản đầu của mục này
+viết thêm *"66 dòng còn lại chạy được vì chúng **có** một bản đang ở
+`PREPARE_FOR_SUBMISSION`"*. **Câu đó KHÔNG có bằng chứng và đã bị gỡ.** Lô 88
+dòng chạy chế độ hỗn hợp; một dòng đi đường **CREATE** thì localization của nó
+là `POST` mới tinh — **không có bản cũ nào để PATCH**, nên nó thành công vì một
+lý do **hoàn toàn khác**. Repo **không** lưu lại dòng nào đi CREATE, dòng nào đi
+OVERWRITE trong lô đó.
+
+| Mệnh đề | Mức |
+|---|---|
+| 88 dòng → 66 ok · 20 PARTIAL · 2 ERROR | **ĐÃ ĐO** |
+| 20 `product_id` lỗi **giống hệt nhau** qua 2 batch (13:44 và 13:52) | **ĐÃ ĐO** (SQL) |
+| Apple từ chối vì `ACTIVE` | **ĐÃ ĐO** — nguyên văn 409 trong `failedDetail[].full` |
+| 20 dòng đó chỉ có bản ACTIVE, không có version mở | **GIẢ THUYẾT** — khớp mọi dữ kiện, chưa đo trực tiếp |
+| 66 dòng kia có sẵn bản `PREPARE_FOR_SUBMISSION` | ⛔ **ĐÃ GỠ** — không bằng chứng, và CREATE-path giải thích được mà không cần nó |
+
+#### ⚠ 28.11.c Tập lỗi ỔN ĐỊNH **không** chứng minh Apple trả về thứ tự ổn định
+
+Lập luận hấp dẫn nhưng **sai**: *"20 product_id giống hệt nhau qua hai lần chạy
+⇒ kết quả không phụ thuộc thứ tự Apple trả ⇒ API chắc chỉ trả MỘT bản."*
+
+⚠ **Nó không suy ra được, vì một PATCH THẤT BẠI KHÔNG TẠO RA GÌ CẢ.** Lần chạy
+1 bị 409 ⇒ không có bản nháp nào được sinh ra ⇒ sang lần chạy 2 những item đó
+**vẫn đúng một bản** như cũ. Tập lỗi ổn định là hệ quả của **thất bại có tính
+idempotent**, không phải bằng chứng về thứ tự hay về số bản Apple trả về.
+
+⇒ Câu *"một locale trả về mấy bản"* vẫn **CHƯA BIẾT** (§28.11.b). Đừng dùng tính
+ổn định của tập 20 để đóng nó.
+
+⭐ **Lớp lỗi đáng nhớ: một câu chuyện gọn gàng giải thích được dữ liệu KHÔNG
+phải là bằng chứng rằng nó đúng** — nhất là khi một cơ chế tầm thường hơn
+(thất bại idempotent) giải thích **cùng** dữ liệu đó.
 
 ⇒ Hệ quả nghiệp vụ: **dòng Approved là bản người mua đang thấy; dòng pending là
 bản nháp ghi đè tự do được.** Muốn so sánh "file có khác Apple không" thì mốc so
