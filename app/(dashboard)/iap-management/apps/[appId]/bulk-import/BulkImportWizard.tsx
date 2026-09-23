@@ -110,8 +110,58 @@ interface Props {
   appTemplateEntryCount?: number;
 }
 
-/** SC7 inserted "Territories" as step 4; Result moved to 5. */
-type Step = 1 | 2 | 3 | 4 | 5;
+/* ─── STEP NUMBERING — SINGLE SOURCE OF TRUTH ──────────────────────────────
+ *
+ * ⚠ Inserting a step into the MIDDLE of this wizard does not break the logic.
+ * It breaks every place that counts steps with a BARE NUMBER. SC7 inserted
+ * "Territories" as step 4 and left three such places behind — the stepper
+ * connector, the Result heading, and the KB's stepper list. All three were
+ * still wrong when [BULKIMPORT-loc-step] C1 found them; they are PRE-EXISTING
+ * bugs fixed alongside this refactor, not caused by it.
+ *
+ * ⇒ Derive every step number from STEP / STEP_LABELS / STEP_ORDER. Never write
+ *   a bare step number — `BulkImportWizard.steps.structural.test.tsx` fails if
+ *   one reappears. That test is the guard; this comment is only the reason.
+ */
+const STEP = {
+  EXCEL: 1,
+  SCREENSHOTS: 2,
+  PREVIEW: 3,
+  TERRITORIES: 4,
+  RESULT: 5,
+} as const;
+
+type Step = (typeof STEP)[keyof typeof STEP];
+
+/**
+ * Stepper labels. `satisfies` is load-bearing: adding a member to STEP without
+ * a label here is a COMPILE error, so the two cannot drift.
+ *
+ * M-2 ([BULKIMPORT-loc-step]): step 3 reads "Preview itemID & Price" rather
+ * than "Preview" — it previews itemID + price, and the localization data it
+ * used to fold in moves to its own step.
+ */
+const STEP_LABELS = {
+  [STEP.EXCEL]: "Excel",
+  [STEP.SCREENSHOTS]: "Screenshots",
+  [STEP.PREVIEW]: "Preview itemID & Price",
+  [STEP.TERRITORIES]: "Territories",
+  [STEP.RESULT]: "Result",
+} as const satisfies Record<Step, string>;
+
+/** Wizard order — derived, so the stepper needs no edit when a step is added. */
+const STEP_ORDER: readonly Step[] = Object.values(STEP);
+const FIRST_STEP: Step = STEP_ORDER[0];
+const LAST_STEP: Step = STEP_ORDER[STEP_ORDER.length - 1];
+
+/**
+ * Section heading for a step. The NUMBER is derived from where the step
+ * actually renders, so it cannot drift — the exact bug this fixes is the
+ * Result heading, which read "Step 4 — Result" while rendering at step 5.
+ */
+function stepHeading(n: Step, title: string): string {
+  return `Step ${n} — ${title}`;
+}
 
 interface ScreenshotEntry {
   file: File;
@@ -223,7 +273,7 @@ export function BulkImportWizard({
   defaultTemplateAccountName,
 }: Props) {
   const router = useRouter();
-  const [step, setStep] = useState<Step>(1);
+  const [step, setStep] = useState<Step>(FIRST_STEP);
   /**
    * SC7 — the batch's territory selection. ONE selection for every row: the
    * Manager's decision was batch-level, so there is deliberately no per-row
@@ -244,7 +294,7 @@ export function BulkImportWizard({
    * "N of 175" describes the same list Apple receives.
    */
   useEffect(() => {
-    if (step !== 4 || territoryIds || territoriesError) return;
+    if (step !== STEP.TERRITORIES || territoryIds || territoriesError) return;
     let cancelled = false;
     (async () => {
       try {
@@ -331,8 +381,9 @@ export function BulkImportWizard({
   // `executing`: `executing` is transient and flips back to false in
   // handleExecute's `finally` regardless of outcome — success, failure, OR
   // a client-side hiccup reading/parsing the response AFTER the server has
-  // already closed the run. Using `executing` (or `step < 4`, which only
-  // ever reaches 4 via the success branch) as the cancel-on-exit guard left
+  // already closed the run. Using `executing` (or `step < STEP.TERRITORIES`,
+  // which only reaches Territories via the success branch) as the
+  // cancel-on-exit guard left
   // a window open: once the execute request settled for ANY reason,
   // `executing` went back to `false` while `step` could still be < 4 (any
   // non-success response, or a response the client failed to parse) — and
@@ -362,7 +413,7 @@ export function BulkImportWizard({
   }, []);
 
   function handleNext() {
-    if (step === 1) {
+    if (step === STEP.EXCEL) {
       // Fires on the step 1→2 transition. Best-effort, never awaited —
       // never delays advancing the wizard. Config unconfigured/disabled or
       // any Hub failure both resolve server-side to `{ run_id: null }`.
@@ -525,7 +576,7 @@ export function BulkImportWizard({
       if (isExecuteSummary(data)) {
         const summary = data as ExecuteResult;
         setResult(summary);
-        setStep(5);
+        setStep(LAST_STEP);
         const msg = `${summary.succeeded} created · ${summary.skipped} skipped · ${summary.failed} failed`;
         // IAP.o.7c — failed rows now escalate to error toast (previously
         // .warning, which Manager missed during MV30). Success path
@@ -618,7 +669,7 @@ export function BulkImportWizard({
 
       <Stepper step={step} />
 
-      {step === 1 && (
+      {step === STEP.EXCEL && (
         <Step1Excel
           file={excelFile}
           parsed={parsed}
@@ -634,7 +685,7 @@ export function BulkImportWizard({
         />
       )}
 
-      {step === 2 && parsed && (
+      {step === STEP.SCREENSHOTS && parsed && (
         <Step2Screenshots
           parsedItems={parsed.items}
           screenshots={screenshots}
@@ -656,7 +707,7 @@ export function BulkImportWizard({
         />
       )}
 
-      {step === 3 && resolved && parsed && (
+      {step === STEP.PREVIEW && resolved && parsed && (
         <Step3Preview
           decisions={resolved.decisions}
           counts={resolved.counts}
@@ -686,7 +737,7 @@ export function BulkImportWizard({
       )}
 
       {/* SC7 — step 4 is Territories; the batch's ONE selection. */}
-      {step === 4 && (
+      {step === STEP.TERRITORIES && (
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
           <div className="px-5 pt-5 pb-2">
             <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
@@ -738,7 +789,7 @@ export function BulkImportWizard({
         </div>
       )}
 
-      {step === 5 && result && (
+      {step === LAST_STEP && result && (
         <Step4Result
           result={result}
           appId={appId}
@@ -752,23 +803,23 @@ export function BulkImportWizard({
       <div className="flex items-center justify-between pt-2">
         <button
           type="button"
-          onClick={() => setStep((s) => (s > 1 ? ((s - 1) as Step) : s))}
-          disabled={step === 1 || step === 5 || executing}
+          onClick={() => setStep((s) => (s > FIRST_STEP ? ((s - 1) as Step) : s))}
+          disabled={step === FIRST_STEP || step === LAST_STEP || executing}
           className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-slate-500 hover:text-slate-700 disabled:opacity-40 transition"
         >
           <ArrowLeft className="h-4 w-4" />
           Back
         </button>
 
-        {step < 4 && (
+        {step < STEP.TERRITORIES && (
           <button
             type="button"
             onClick={handleNext}
             disabled={
               // items.length === 0 covers the unedited-template case: all
               // rows were skipped as samples — nothing to import.
-              (step === 1 && (!parsed || parsed.items.length === 0)) ||
-              // Step 3 → 4 always allowed; the Territories step gates Execute.
+              (step === STEP.EXCEL && (!parsed || parsed.items.length === 0)) ||
+              // Preview → Territories always allowed; Territories gates Execute.
               executing
             }
             className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#0071E3] hover:bg-[#0077ED] text-white rounded-lg transition disabled:opacity-40"
@@ -778,7 +829,7 @@ export function BulkImportWizard({
           </button>
         )}
 
-        {step === 4 && (
+        {step === STEP.TERRITORIES && (
           <button
             type="button"
             onClick={handleExecute}
@@ -902,15 +953,14 @@ function ExecuteFaultPanel({
 // ─── Stepper ────────────────────────────────────────────────────────────────
 
 function Stepper({ step }: { step: Step }) {
-  const labels = ["Excel", "Screenshots", "Preview", "Territories", "Result"];
   return (
     <div className="flex items-center gap-2">
-      {labels.map((label, idx) => {
-        const n = (idx + 1) as Step;
+      {STEP_ORDER.map((n, idx) => {
+        const label = STEP_LABELS[n];
         const active = step === n;
         const done = step > n;
         return (
-          <div key={label} className="flex items-center gap-2">
+          <div key={n} className="flex items-center gap-2">
             <div
               className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold transition ${
                 done
@@ -927,7 +977,7 @@ function Stepper({ step }: { step: Step }) {
             >
               {label}
             </span>
-            {n < 4 && (
+            {idx < STEP_ORDER.length - 1 && (
               <span className="h-px w-8 bg-slate-200 ml-1" aria-hidden />
             )}
           </div>
@@ -979,7 +1029,7 @@ function Step1Excel({
   return (
     <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
       <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-        Step 1 — Upload Excel template
+        {stepHeading(STEP.EXCEL, "Upload Excel template")}
       </h2>
       <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
         Get the template via <strong>Download template</strong> (top right,
@@ -1099,7 +1149,7 @@ function Step2Screenshots({
   return (
     <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
       <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-        Step 2 — Upload review screenshots
+        {stepHeading(STEP.SCREENSHOTS, "Upload review screenshots")}
       </h2>
       <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
         Multi-file drop. Filenames auto-match to productId — both literal and
@@ -1320,7 +1370,7 @@ export function Step3Preview({
   return (
     <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6">
       <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-        Step 3 — Preview &amp; conflict resolution
+        {stepHeading(STEP.PREVIEW, "Preview & conflict resolution")}
       </h2>
       <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">
         Toggle per-row to override the global conflict policy. Validation
@@ -1620,7 +1670,7 @@ function DispositionBadge({ disposition }: { disposition: string }) {
   );
 }
 
-// ─── Step 4: Result ─────────────────────────────────────────────────────────
+// ─── Result step ────────────────────────────────────────────────────────────
 
 /**
  * ⚠ Exported for tests only — the wizard renders it internally. The tile
@@ -1709,7 +1759,7 @@ export function Step4Result({
       <div className="flex items-start justify-between gap-4 mb-4">
         <div className="min-w-0">
           <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-1">
-            Step 4 — Result
+            {stepHeading(LAST_STEP, "Result")}
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
             Batch{" "}

@@ -4,14 +4,30 @@ Format: `- [ ] [PR-X] description — file path — rationale`
 
 ## From [BULKIMPORT-loc-step] (step Localization cho Bulk Import, 2026-09-23)
 
-**Trạng thái: census + thiết kế ĐÃ DUYỆT, 6 câu ĐÃ CHỐT, chờ Manager duyệt
-cách trình bày M-1 rồi mới code.** Thiết kế + mockup:
-`docs/iap-management/design-bulk-import-localization-step.md`.
+**Trạng thái: PHẠM VI ĐÃ THU HẸP (Manager, 2026-09-23).** Step mới chỉ hiển
+thị data **TỪ FILE**, **KHÔNG** join với Apple. Tính năng so sánh với Apple
+("ô giống hệt Apple ⇒ tự untick", 4 trạng thái ô, probe `included[]`) **ĐỂ
+DÀNH** — xem `[BULKIMPORT-loc-compare-apple]` bên dưới. Lý do Manager:
+*"tại thời điểm này để user tự check tự xử lý."*
+⭐ **Hệ quả tốt:** mặc định **tick-all** = đúng hành vi hôm nay ⇒ parity gate
+đo ở **tầng bình thường**, bỏ phần "đổi tầng đo" của design doc.
+Thiết kế + mockup: `docs/iap-management/design-bulk-import-localization-step.md`.
 
-- [ ] [BULKIMPORT-loc-step] **Chunk chính — chưa code.** Step mới đặt SAU `Preview itemID & Price`. Chốt: tick theo CẶP (locale) · cột + untick lẻ tri-state, **header FULL ⇒ clear cột** (KHÔNG port luật Apple "không bao giờ xoá" — ở đây việc thật là TRỪ ĐI, giống ca Google) · hiện state + so Apple **0 request thêm** · **ô giống hệt Apple ⇒ mặc định UNTICK** · đơn vị đếm = ô (item × locale) · "Ignore all" vẫn hiện mờ.
-- [ ] [BULKIMPORT-loc-step-probe] ⚠ **Probe `included[]` TRƯỚC khi code** (Q6). 1 GET, chỉ đọc: `GET /v1/apps/{id}/inAppPurchasesV2?limit=200&include=inAppPurchaseLocalizations`. Lệnh + dòng KỲ VỌNG ở §Probe Q6 của design doc. ⚠ Chạy trên app THẬT nhiều locale — app test 1 locale sẽ cho kết quả "ổn" cho tình huống không tồn tại. Nếu Apple cap `included` ⇒ Q3 phải lùi về bản tối giản và **mất** tính năng "ô giống Apple tự untick".
-- [ ] [BULKIMPORT-loc-step-M1] ⏳ **Chờ Manager chọn cách trình bày M-1**: (a) hai dòng có nhãn Name/Desc *(đang vẽ, đề xuất)* · (b) ẩn trường không đổi vào popover · (c) hai cột con. ⚠ Chỉ (c) không đảo ngược rẻ.
+- [ ] [BULKIMPORT-loc-step] **Chunk chính.** Step mới đặt SAU `Preview itemID & Price`. Chốt: tick theo CẶP (locale) · cột + untick lẻ tri-state, **header FULL ⇒ clear cột** (KHÔNG port luật Apple "không bao giờ xoá" — ở đây việc thật là TRỪ ĐI, giống ca Google) · đơn vị đếm = ô (item × locale) · "Ignore all" vẫn hiện mờ · **mặc định TICK-ALL** (chỉ hiển thị data từ file, không so Apple). C1 ✅ xong (đánh số bước tập trung + 3 bug có sẵn + M-2). Còn C2 choke point · C3 UI · C4 docs.
+- [ ] [BULKIMPORT-loc-step-M1] **M-1 CHỐT = (a)** hai dòng có nhãn `Name` / `Desc` mỗi ô locale — yêu cầu gốc của Manager. ⚠ **KHÔNG** còn mũi tên `cũ → mới` và **không** còn nền amber (cả hai cần so Apple — đã bỏ khỏi arc). Chỉ hiển thị **giá trị trong file**.
 - [ ] [BULKIMPORT-loc-step-choke] **Choke point:** lọc `item.localizations` MỘT LẦN ngay sau `parseIapItemsXlsx`, trước `resolveConflicts`. Cả **8** chỗ đọc (`route.ts:946·968·971·1241·1249` CREATE + `1393·1477·1615` OVERWRITE) thấy list đã lọc ⇒ **không sửa chỗ nào trong 8**. Cùng hình dạng `resolveBatchAvailabilitySelection` (`:565`). ⚠ Ghim bằng **structural test**: không chỗ nào được đọc localization chưa lọc. Lựa chọn đi qua `config` (route `:391` tự khai *"Re-parse Excel server-side (don't trust the client)"* ⇒ client KHÔNG gửi localization); khuôn `tier_overrides` (`:364` → áp `:464-476`).
+- [ ] [BULKIMPORT-loc-compare-apple] ⏸ **ĐỂ DÀNH — so sánh localization với Apple.** Manager thu hẹp phạm vi 2026-09-23: *"tại thời điểm này để user tự check tự xử lý"*. Gồm: `include=inAppPurchaseLocalizations` · **ô giống hệt Apple ⇒ tự untick** · 4 trạng thái ô (giống / khác / ACTIVE / chưa có trên Apple) · probe `included[]`. Mockup **đã vẽ sẵn** 4 trạng thái — giữ nguyên, đánh dấu "để dành". **Census đã đo, đừng điều tra lại:**
+  - ⭐ **0 request thêm nếu làm.** `GET /v1/apps/{id}/inAppPurchasesV2` **đã gọi sẵn** ở `page.tsx:54` (và `route.ts:414`), chấp nhận `include=inAppPurchaseLocalizations`; `fields[inAppPurchaseLocalizations]` có `state`. Type `InAppPurchaseLocalizationAttributes` (`types/iap-management/apple.ts:59-64`) **đã có** `state?: string`.
+  - Khuôn: `client.ts:77` `opts?: { includeAvailability?: boolean }`. ⚠ **NHƯNG** query `:81-83` là **ternary chỉ diễn đạt được MỘT include** ⇒ thêm localizations phải đổi sang **ghép mảng**, không phải thêm một cờ. Không thuần cộng thêm.
+  - ⭐ Vòng paging **đã tự cộng dồn `included[]` qua MỌI trang** (`client.ts:96-98`, `:107-109`) ⇒ rủi ro `has_next` / cap **giảm đáng kể**.
+  - ⚠⚠ **RỦI RO CHƯA VERIFY — đây là lý do phải probe.** Design doc bản đầu khẳng định *"đã verify schema CÓ `data`"* — **KHÔNG ĐÚNG**. `types/asc.ts:26` là `relationships?: Record<string, unknown>`, **không type gì cả**. Và tiền lệ `availabilities.ts:317-326` **KHÔNG bảo chứng** ca này: availability là quan hệ **to-ONE** (`.data` = object có `.id`), localizations là **to-MANY** (`.data` = **mảng**) ⇒ hình dạng không chuyển 1:1. Bản thân tiền lệ đó cũng narrow phòng thủ và `return null` khi thiếu — tức repo coi sự tồn tại của `data` là **không đảm bảo**.
+  - ⚠⚠ **Hỏng thì hỏng IM LẶNG theo cách tệ nhất:** join rỗng ⇒ mọi ô đọc thành "chưa có trên Apple" ⇒ **tick hết** ⇒ **tái sinh đúng bug 409** mà arc này sinh ra để diệt.
+  - **Probe trước khi làm** — app **THẬT nhiều locale** (app test 1 locale cho kết quả "ổn" cho tình huống không tồn tại). `GET /v1/apps/{id}/inAppPurchasesV2?limit=200&include=inAppPurchaseLocalizations` → 4 dòng `jq`:
+    1. `jq '{iap:(.data|length), included:(.included|length), has_next:(.links.next != null)}'`
+    2. `jq '.included[0].attributes | keys'` — phải có `"state"`; thiếu thì thêm `&fields[inAppPurchaseLocalizations]=name,locale,description,state`
+    3. `jq '.data[0].relationships.inAppPurchaseLocalizations'` — **dòng quyết định**, có `data` không
+    4. `jq '[.data[]|select(.relationships.inAppPurchaseLocalizations.data!=null)]|length'` — bao nhiêu item thật sự có join
+  - ⚠ **QUY TẮC FAIL-SAFE bắt buộc khi làm:** không join được Apple ⇒ ô **MẶC ĐỊNH UNTICK** + nhãn *"không đọc được trạng thái trên Apple"*. **Khi không biết, chọn cái KHÔNG GHI.**
 - [ ] [CLICKOUTSIDE-3-copies] ⚠ **click-outside đã có BA bản sao — rút hook chung, ĐỪNG viết bản thứ tư.** `components/layout/AccountSwitcher.tsx:42-46` · `components/cpp/CppList.tsx:488-492` · `components/google-iap-management/layout/GoogleAccountSwitcher.tsx:59-63`. Cả ba cùng một hình dạng (`mousedown` + `ref.contains(e.target)`). Arc này cần cái thứ tư cho popover *detail* ⇒ đúng lúc gộp. ⚠ Google là module khác — gộp phải giữ được cả hai, hoặc để Google dùng bản sao của nó và chỉ gộp hai bản Apple. Cần census riêng trước khi động vào file Google.
 
 ### ⚠ Bug CÓ SẴN, sửa kèm — KHÔNG phải hệ quả của arc

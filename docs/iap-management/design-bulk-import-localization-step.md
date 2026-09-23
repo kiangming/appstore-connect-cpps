@@ -1,6 +1,31 @@
 # Step mới: chọn localization nào xử lý — census + thiết kế
 
-**Arc:** `[BULKIMPORT-loc-step]` · **Ngày:** 2026-09-23 · **Trạng thái:** census + thiết kế **ĐÃ DUYỆT**, 6 câu **ĐÃ CHỐT**; chờ Manager duyệt cách trình bày M-1 · **CHƯA CODE**
+**Arc:** `[BULKIMPORT-loc-step]` · **Ngày:** 2026-09-23 · **Trạng thái:** census + thiết kế **ĐÃ DUYỆT** · **PHẠM VI ĐÃ THU HẸP** (Manager, 2026-09-23) · C1 **ĐÃ SHIP**
+
+> ## ⚠⚠ PHẠM VI THU HẸP — đọc trước mọi mục khác
+>
+> Manager thu hẹp phạm vi 2026-09-23, **sau** khi census + mockup đã viết xong:
+> *"KHÔNG cần tính năng 'ô giống Apple ⇒ tự untick'. Tại thời điểm này để user
+> tự check tự xử lý."*
+>
+> **Step mới chỉ hiển thị data TỪ FILE. KHÔNG join với Apple.**
+>
+> **Bỏ khỏi arc này** (chuyển backlog `[BULKIMPORT-loc-compare-apple]`):
+> | Bỏ | Mục bị ảnh hưởng trong file này |
+> |---|---|
+> | Q3 — `include` + `fields[...state]` + so sánh Apple | §D3 · §Q3 |
+> | "ô giống hệt Apple ⇒ mặc định untick" | §D3 · §D4 · §M-1 |
+> | 4 trạng thái ô (giống / khác / ACTIVE / chưa có) | mockup — **giữ nguyên, đánh dấu ĐỂ DÀNH** |
+> | Probe Q6 + chunk C4 cũ | §Probe Q6 · §Q6 |
+>
+> ⭐ **HỆ QUẢ TỐT — parity gate quay về tầng bình thường.** Vì mặc định nay là
+> **tick-all**, hành vi mặc định **giống hệt hôm nay**. Phần "⚠ PARITY GATE PHẢI
+> ĐỔI TẦNG ĐO" từng ghi ở §D4 và trong mockup **không còn cần thiết** — đo
+> thẳng ở tầng hành vi mặc định như bình thường.
+>
+> ⚠ **M-1 điều chỉnh:** mỗi ô locale **vẫn HAI DÒNG CÓ NHÃN** `Name` / `Desc`
+> (yêu cầu gốc của Manager, vẫn đúng). Nhưng **không còn** mũi tên `cũ → mới`
+> và **không còn** nền amber — cả hai cần so Apple. Chỉ hiện **giá trị file**.
 
 > ### ✅ Manager chốt (2026-09-23)
 >
@@ -8,10 +33,10 @@
 > |---|---|---|
 > | **Q1** | **CẶP** — tick theo locale | Parser bắt buộc cặp (`:301-306` throw nếu lệch), và "sửa tên giữ mô tả cũ" **không** phải nhu cầu thật. ⚠ M-1 là yêu cầu **NHÌN THẤY** cái gì đổi, **không** phải để tick riêng. Nếu sau này cần tách: Apple **cho** (`V2UpdateRequest` cả hai `nullable`) nhưng **parser phải đổi trước**. |
 > | **Q2** | **Cột + untick lẻ (tri-state)** | ⚠ **KHÔNG port luật Apple "không bao giờ xoá"** từ arc picker. Ở đây mặc định có tick sẵn ⇒ việc thật là **TRỪ ĐI**, giống ca Google. **Header FULL ⇒ clear cả cột.** |
-> | **Q3** | **CÓ** — hiện state + so Apple, 0 request | ⭐ **VÀ: ô giống hệt Apple ⇒ MẶC ĐỊNH UNTICK.** Đây mới là thứ giải đúng ca Manager, quan trọng hơn cả checkbox. Ô ACTIVE hiện rõ "sửa sẽ tạo version mới + duyệt lại". |
+> | **Q3** | ~~CÓ~~ → ⏸ **ĐỂ DÀNH** *(Manager đảo quyết định 2026-09-23)* | Ban đầu chốt CÓ. Sau thu hẹp phạm vi: **KHÔNG** so Apple trong arc này — *"để user tự check tự xử lý"*. ⇒ backlog `[BULKIMPORT-loc-compare-apple]`. Kéo theo: **bỏ** "ô giống Apple tự untick", **bỏ** 4 trạng thái ô, **bỏ** probe Q6. |
 > | **Q4** | **Ô (item × locale)** | Mẫu số từ **số ô THẬT** — `items[i].localizations` chỉ chứa cặp có **cả hai** ô non-empty (`iap-items.ts:389`), nên **không** phải `rows × pairs`. |
 > | **Q5** | **Vẫn hiện, mờ** | |
-> | **Q6** | **CÓ** — probe `included[]` trước khi code | Xem §Probe Q6 cuối file. |
+> | **Q6** | ⏸ **ĐỂ DÀNH cùng Q3** | Arc này **không còn phụ thuộc probe nào**. Lệnh probe giữ ở §Probe Q6 cho lần làm `[BULKIMPORT-loc-compare-apple]`. |
 >
 > ### Manager chỉnh mockup
 > - **M-1** — tách rõ **Display Name** vs **Description** trong phần hiển thị thay đổi. ⏳ *còn chờ chọn cách trình bày, xem §M-1.*
@@ -166,7 +191,9 @@ Manager nói "checkbox ở từng cột". Nhưng cấp cột áp cho **mọi dò
 
 ⚠ **Đánh đổi phải nói rõ:** tri-state cột là thứ đã có tiền lệ trong repo nhưng **chưa từng làm trên ma trận 2 chiều**. Chi phí cao hơn cột-thuần một chunk.
 
-### D3 — ⭐⭐ HIỂN THỊ STATE: hoá ra MIỄN PHÍ
+### D3 — ⏸ ĐỂ DÀNH (`[BULKIMPORT-loc-compare-apple]`) — HIỂN THỊ STATE: hoá ra MIỄN PHÍ
+
+> ⏸ **KHÔNG làm trong arc này** — Manager thu hẹp phạm vi. Census dưới đây **giữ nguyên** để lần sau không phải điều tra lại; đọc kèm cảnh báo *chưa verify* ở cuối mục.
 
 Đây là phát hiện lớn nhất của census.
 
@@ -187,7 +214,21 @@ fields[inAppPurchaseLocalizations]: ['name', 'locale', 'description', 'state', '
 
 ⚠ **Hai cảnh báo phải nêu:**
 
-1. **Bẫy JSON:API (CLAUDE.md invariant).** Map localization → IAP phải đi từ phía **primary**: `iap.relationships.inAppPurchaseLocalizations.data` — đã verify schema **có `data`**. **KHÔNG** map ngược từ `included[]` (resource trong `included` chỉ có `links`). Tiền lệ đọc `included[]` đã có: `availabilities.ts:330-341`.
+1. **Bẫy JSON:API (CLAUDE.md invariant).** Map localization → IAP phải đi từ phía **primary**: `iap.relationships.inAppPurchaseLocalizations.data`. **KHÔNG** map ngược từ `included[]` (resource trong `included` chỉ có `links`). Tiền lệ đọc `included[]` đã có: `availabilities.ts:337`.
+
+   ⚠⚠ **SỬA KHẲNG ĐỊNH SAI CỦA BẢN ĐẦU.** Bản đầu file này viết *"đã verify schema **có `data`**"* — **KHÔNG ĐÚNG, và đã bị gỡ.** Sự thật:
+
+   | | |
+   |---|---|
+   | `types/asc.ts:26` | `relationships?: Record<string, unknown>` — **không type gì cả**. Không có gì trong repo "verify" được `data` tồn tại. |
+   | Tiền lệ `availabilities.ts:317-326` | `availabilityIdFromListedIap` narrow **phòng thủ từng bước** và `return null` khi thiếu ⇒ repo coi sự tồn tại của `data` là **KHÔNG đảm bảo**. Nó chứng minh *khuôn* (map từ phía primary), **không** chứng minh *sự tồn tại*. |
+   | ⚠ Hình dạng **không chuyển 1:1** | availability là quan hệ **to-ONE** — `.data` là **object** có `.id`. localizations là **to-MANY** — `.data` là **MẢNG**. Tiền lệ không bảo chứng ca này. |
+
+   ⇒ **CHƯA VERIFY. Phải probe** (§Probe Q6, dòng `jq` số 3 và 4) trước khi viết code join.
+
+   ⚠⚠ **Vì sao rủi ro này nghiêm trọng hơn vẻ ngoài:** nếu Apple không trả `relationships.inAppPurchaseLocalizations.data` ở endpoint LIST thì join **rỗng** — và hỏng **im lặng theo cách tệ nhất**: mọi ô đọc thành *"chưa có trên Apple"* ⇒ **tick hết** ⇒ **tái sinh đúng bug 409** mà arc này sinh ra để diệt.
+
+   ⚠ **QUY TẮC FAIL-SAFE bắt buộc khi làm:** không join được Apple ⇒ ô **MẶC ĐỊNH UNTICK** + nhãn *"không đọc được trạng thái trên Apple"*. **Khi không biết, chọn cái KHÔNG GHI.**
 2. **Payload lớn hơn.** N item × M locale trong `included[]`. Với 88 item × 39 locale = ~3.400 resource. **KHÔNG ĐỌC ĐƯỢC từ repo** Apple có cap `included` không — **cần probe thật 1 lần**.
 
 **Bản tối giản (nếu Manager không muốn rủi ro payload):** chỉ so **file vs file** — không hỏi Apple. Mất: không biết ô nào ACTIVE, không biết ô nào **không đổi**. ⇒ Mất luôn tính năng giá trị nhất: **ô không đổi thì mặc định untick** — chính là ca của Manager.
@@ -197,6 +238,16 @@ fields[inAppPurchaseLocalizations]: ['name', 'locale', 'description', 'state', '
 "Ignore all" **không tick** + mọi cột **tick** ⇒ `localizationSelection` phủ toàn bộ ⇒ bộ lọc ở P1.6 là **no-op** ⇒ `item.localizations` không đổi một phần tử nào.
 
 ⭐ **Đây là parity gate của arc**, và nó ghim được bằng test: cùng input, `resolveConflicts` + `planLocalizationSync` cho ra **kết quả y hệt** khi selection ở mặc định.
+
+⭐ **Sau khi thu hẹp phạm vi, gate này đo ở TẦNG BÌNH THƯỜNG — đơn giản hơn hẳn.**
+Bản trước của file này (và của mockup) có một mục *"⚠ PARITY GATE PHẢI ĐỔI TẦNG
+ĐO"*: vì Q3 bật "ô giống Apple ⇒ untick" nên **mặc định hôm nay không còn giống
+hôm qua**, buộc phải ghim gate ở tầng dưới (selection phủ toàn bộ ⇒ no-op) và
+tách hành vi mặc định ra một test riêng.
+
+**Q3 đã bỏ ⇒ mặc định quay lại TICK-ALL ⇒ hành vi mặc định giống hệt hôm nay.**
+Không còn cần đổi tầng đo, không còn cần tách test riêng. Đo thẳng: mặc định ⇒
+kết quả y hệt hôm nay.
 
 ### D5 — Đơn vị đếm ở confirm dialog
 
@@ -260,6 +311,10 @@ Sẽ bỏ qua:      64 localization  (1 locale bị untick toàn bộ + 2 ô l�
 
 ### ⚠ PARITY GATE — flow price KHÔNG được đổi hành vi
 
+> ⭐ **Sau thu hẹp phạm vi: đo ở tầng bình thường.** Mặc định là **tick-all** nên
+> hành vi mặc định **giống hệt hôm nay** — xem §D4. Ba cách dưới đây vẫn đúng
+> nguyên văn, chỉ **không còn** cần tách "hành vi mặc định mới" ra test riêng.
+
 Ba cách chứng minh, dùng cả ba:
 
 1. **Test hiện có PASS không sửa assertion** — chỉ sửa **cách lái** (bấm Next thêm 1 lần). Mọi assertion về price/tier/territory giữ nguyên **nguyên văn**. Sửa assertion nào = khai đích danh.
@@ -313,6 +368,14 @@ Dữ liệu thật: `com.vng.nikki.*` · "Item box ingame" · Vietnamese · `"18
 
 ## §M-1 — Tách Display Name vs Description: ba cách, một đánh đổi
 
+> ✅ **CHỐT = (a)** hai dòng có nhãn `Name` / `Desc`.
+> ⚠ **Điều chỉnh sau thu hẹp phạm vi:** vẫn hai dòng có nhãn, nhưng **KHÔNG còn**
+> mũi tên `cũ → mới` và **KHÔNG còn** nền amber — cả hai cần so Apple, đã bỏ.
+> Mỗi ô chỉ hiện **giá trị trong file**, hai dòng, mỗi dòng một nhãn.
+> ⇒ Bảng so sánh ba cách dưới đây giữ lại vì lý lẽ chọn (a) vẫn đúng; nhưng cột
+> "Được / Mất" nói về việc *thấy cái gì đổi so với Apple* nay thuộc backlog
+> `[BULKIMPORT-loc-compare-apple]`.
+
 Manager: *"nhìn vào KHÔNG BIẾT cái đổi là display name hay description."*
 
 ⚠ Đây là yêu cầu về **HIỂN THỊ**, không phải về độ mịn tick — Q1 đã chốt tick theo **cặp**.
@@ -349,6 +412,20 @@ Census tìm ra **BA** chỗ prose/đếm bị lệch, **tất cả cùng một g
 ---
 
 ## §Probe Q6 — cách chạy cho Manager
+
+> ⏸ **KHÔNG cần cho arc này** — Q3 đã để dành, arc **không còn phụ thuộc probe
+> nào**. Giữ nguyên cho lần làm `[BULKIMPORT-loc-compare-apple]`.
+>
+> ⚠⚠ **Khi chạy, PHẢI thêm hai dòng `jq` mà bản đầu thiếu** — chúng mới là dòng
+> quyết định, vì khẳng định *"đã verify schema có `data`"* là **SAI** (xem §D3):
+>
+> ```
+> jq '.data[0].relationships.inAppPurchaseLocalizations' /tmp/probe.json
+> jq '[.data[]|select(.relationships.inAppPurchaseLocalizations.data!=null)]|length' /tmp/probe.json
+> ```
+>
+> Không có `data` ở phía primary ⇒ **không join được** ⇒ Q3 phải lùi bản tối
+> giản. Đừng đọc ngược từ `included[]` để lách.
 
 **Mục tiêu:** trước khi code, biết `include=inAppPurchaseLocalizations` trả về bao nhiêu resource và payload lớn cỡ nào. **1 request, chỉ đọc, không ghi gì.**
 

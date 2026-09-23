@@ -123,6 +123,31 @@
 <h1>Step mới — Localization</h1>
 <p class="sub">Apple IAP Bulk Import · arc <code>[BULKIMPORT-loc-step]</code> · <strong>mockup, chưa code</strong></p>
 
+<div class="note w" style="border-left-width:5px">
+  <strong>⏸⏸ PHẠM VI THU HẸP — Manager 2026-09-23. ĐỌC TRƯỚC KHI DÙNG MOCKUP NÀY.</strong><br>
+  <em>"KHÔNG cần tính năng 'ô giống Apple ⇒ tự untick'. Tại thời điểm này để user tự check tự xử lý."</em><br><br>
+  Step mới <strong>chỉ hiển thị data TỪ FILE</strong>, <strong>KHÔNG</strong> join với Apple.
+  Những thứ dưới đây <strong>ĐÃ VẼ nhưng ĐỂ DÀNH</strong>, chuyển backlog
+  <code>[BULKIMPORT-loc-compare-apple]</code> — <strong>giữ lại trong mockup, KHÔNG làm trong arc này:</strong>
+  <ul style="margin:6px 0 0;padding-left:20px">
+    <li><strong>4 trạng thái ô</strong> — pill <em>giống hệt Apple</em> / <em>đổi Display Name</em> /
+        <em>đổi cả hai</em> / <em>ACTIVE</em> / <em>chưa có trên Apple</em></li>
+    <li><strong>"ô giống hệt Apple ⇒ mặc định untick"</strong> + hàng mờ <code>untick-row</code></li>
+    <li><strong>Mũi tên <code>cũ → mới</code> và nền amber</strong> ở dòng <code>Name</code>/<code>Desc</code> —
+        cả hai cần so Apple</li>
+    <li>Dòng cảnh báo <strong>ACTIVE</strong> trong ô, và dòng <em>"Trong đó ACTIVE"</em> ở confirm dialog</li>
+    <li>Các con số <em>"4 ô giống Apple đã tự untick"</em> ở thanh trên bảng</li>
+  </ul>
+  <br>
+  <strong>⇒ Arc này làm gì:</strong> vẫn <strong>hai dòng có nhãn</strong> <code>Name</code> /
+  <code>Desc</code> mỗi ô (M-1 = (a), yêu cầu gốc của Manager), nhưng chỉ in
+  <strong>giá trị trong file</strong> — không so sánh, không tô màu.
+  <strong>Mặc định TICK-ALL.</strong><br>
+  ⭐ <strong>Hệ quả tốt:</strong> mặc định tick-all = đúng hành vi hôm nay ⇒
+  <strong>parity gate quay về đo ở tầng bình thường</strong>; ghi chú "PARITY GATE PHẢI ĐỔI TẦNG ĐO"
+  dưới State 1 <strong>không còn áp dụng</strong>.
+</div>
+
 <div class="note w">
   <strong>⚠ Dữ liệu trong mockup.</strong> Thật: <code>com.vng.nikki.*</code> · "Item box ingame" ·
   locale <strong>Vietnamese</strong> · <code>"188 Vàng"</code> (Apple đang có) vs <code>"188 Vàng."</code>
@@ -149,8 +174,13 @@
 
 <!-- ─── STATE 1: mặc định ─── -->
 <h2>State 1 — Mặc định · M-1 tách rõ Display Name vs Description</h2>
-<div class="note">
-  ⭐ <strong>Q3 đã bật: ô GIỐNG HỆT Apple ⇒ MẶC ĐỊNH UNTICK.</strong> Đây là thứ giải đúng ca của
+<div class="note w">
+  <strong>⏸ Bảng dưới vẽ theo phạm vi CŨ.</strong> Arc này giữ <strong>hai dòng có nhãn</strong>
+  <code>Name</code>/<code>Desc</code> và bố cục bảng; <strong>bỏ</strong> pill trạng thái, mũi tên
+  <code>→</code>, nền amber, hàng mờ tự-untick và dòng cảnh báo ACTIVE. Mặc định <strong>TICK-ALL</strong>.
+</div>
+<div class="note" style="opacity:.6">
+  ⏸ <em>để dành</em> — ⭐ <strong>Q3 đã bật: ô GIỐNG HỆT Apple ⇒ MẶC ĐỊNH UNTICK.</strong> Đây là thứ giải đúng ca của
   Manager — file chứa sẵn data cũ, không định sửa. Quan trọng hơn cả checkbox.<br>
   ⚠ Nên mặc định <em>không còn</em> là "tick all" mà là <strong>"tick những ô THẬT SỰ đổi"</strong>.
   Parity gate D4 vì thế đo ở tầng khác — xem ghi chú dưới bảng.
@@ -267,7 +297,10 @@
   hàng thấp lại nhưng <strong>gấp đôi</strong> số cột phải cuộn ngang (3 locale ⇒ 6 cột).
 </div>
 
-<div class="note">
+<div class="note" style="opacity:.6">
+  <strong>⏸ KHÔNG CÒN ÁP DỤNG sau khi thu hẹp phạm vi (2026-09-23).</strong> Q3 đã bỏ ⇒ mặc định
+  quay lại <strong>tick-all</strong> ⇒ hành vi mặc định giống hệt hôm nay ⇒ parity gate đo ở
+  <strong>tầng bình thường</strong>. Giữ đoạn dưới cho lần làm <code>[BULKIMPORT-loc-compare-apple]</code>.<br><br>
   ⚠ <strong>Parity gate D4 đo ở đâu khi mặc định KHÔNG còn là "tick all".</strong>
   Q3 bật "ô giống Apple ⇒ untick" nên mặc định hôm nay ≠ hành vi hôm qua — <em>đó là cả mục đích của arc</em>.
   Nên parity gate phải ghim ở <strong>tầng dưới</strong>: khi selection phủ TOÀN BỘ (mọi ô tick),

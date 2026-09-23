@@ -1344,13 +1344,28 @@ iaps/[iapId]/route.ts                                GET/PATCH/DELETE single IAP
    4. `POST /v1/inAppPurchasePriceSchedules` (pricing per `pricing_source`)
 6. Manager then clicks "Submit" — `POST /v1/inAppPurchaseSubmissions` after Apple state validation (Cycle 32 guard)
 
-### 7.2 Bulk import workflow (4-step wizard)
+### 7.2 Bulk import workflow (5-step wizard)
 
 `/iap-management/apps/[appId]/bulk-import` → stepper labels
-`Excel → Screenshots → Preview → Result` (BulkImportWizard.tsx). (This
-list previously said "Step 1 — Pricing source / Step 2 — Upload Excel" —
-stale vs the shipped stepper; corrected during the template-download
-work, which found the drift.)
+`Excel → Screenshots → Preview itemID & Price → Territories → Result`
+(BulkImportWizard.tsx).
+
+⚠ **This list has now gone stale TWICE, both times the same way** — a step was
+inserted in the middle and the places that COUNT steps were not updated:
+
+1. it once said "Step 1 — Pricing source / Step 2 — Upload Excel"; corrected
+   during the template-download work, which found the drift.
+2. it then said `Excel → Screenshots → Preview → Result` — **missing
+   `Territories` entirely**, which SC7 had inserted as step 4. Corrected in
+   `[BULKIMPORT-loc-step]` C1, together with two sibling bugs of the same
+   origin in the component itself (stepper connector count, Result heading).
+
+⭐ **The reusable lesson:** inserting a step into the middle of a wizard does
+not break the logic — it breaks every place that counts steps with a CONSTANT,
+including prose like this list. The component now derives every step number
+from a single `STEP` / `STEP_LABELS` / `STEP_ORDER` block, guarded by
+`BulkImportWizard.steps.structural.test.tsx`. **This KB list is NOT covered by
+that guard — it is prose.** If you add a step, update it here by hand.
 
 1. **Step 1 — Excel**: upload/parse of the 84-column template
    client-side. Template download is offered in the wizard HEADER (every
@@ -1377,10 +1392,13 @@ work, which found the drift.)
    Google, operational-guide §6 — this KB entry deliberately stays a
    summary.
 2. **Step 2 — Screenshots** (screenshot folder matching)
-3. **Step 3 — Preview + validate** (two-pass conflict resolution:
+3. **Step 3 — Preview itemID & Price** (two-pass conflict resolution:
    resolve + enrich; batch-level pricing source Q-E and submit-on-create
-   live HERE, not in a separate step)
-4. **Step 4 — Execute/Result** with `withConcurrency<T,R>` of 5; per-row result hints
+   live HERE, not in a separate step). Renamed from "Preview" in
+   `[BULKIMPORT-loc-step]` M-2 — it previews itemID + price.
+4. **Step 4 — Territories** (per-territory availability selection; SC7).
+   Execute is triggered from THIS step, not from Result.
+5. **Step 5 — Result** with `withConcurrency<T,R>` of 5; per-row result hints
 
 Execute orchestrator at `app/api/iap-management/apps/[appId]/bulk-import/execute/route.ts`. Each row is independently audited; failures don't abort the batch.
 
