@@ -1,6 +1,6 @@
 # Step mới: chọn localization nào xử lý — census + thiết kế
 
-**Arc:** `[BULKIMPORT-loc-step]` · **Ngày:** 2026-09-23 · **Trạng thái:** census + thiết kế **ĐÃ DUYỆT** · **PHẠM VI ĐÃ THU HẸP** (Manager, 2026-09-23) · C1 **ĐÃ SHIP**
+**Arc:** `[BULKIMPORT-loc-step]` · **Ngày:** 2026-09-23 · **Trạng thái:** ✅ **ĐÃ SHIP TOÀN BỘ** (C1→C4) · chờ Manager UAT · **PHẠM VI ĐÃ THU HẸP** (xem khối dưới)
 
 > ## ⚠⚠ PHẠM VI THU HẸP — đọc trước mọi mục khác
 >
@@ -466,3 +466,70 @@ jq '.included[0].attributes | keys' /tmp/probe.json
 | "Sửa tên mà giữ mô tả" có phải nhu cầu thật? | **Manager** (Q1) |
 | Apple có cap `included[]` không? | **Probe 1 request** (Q6) |
 | Nội dung ô thật của 10 dòng trong file NIKKI | Chỉ có: `com.vng.nikki.*`, "Item box ingame", Vietnamese, `"188 Vàng"`. Mockup dùng đúng chừng đó, phần còn lại đánh dấu minh hoạ. |
+
+---
+
+## §AS-BUILT — cái đã ship, và chỗ nó lệch thiết kế
+
+*(2026-09-23 — viết sau khi C1→C4 xong. Phần trên là THIẾT KẾ; phần này là SỰ THẬT.)*
+
+### Bốn chunk
+
+| Chunk | Commit | Nội dung |
+|---|---|---|
+| **C1** | `a90e8fd` | Đánh số bước tập trung (`STEP` / `STEP_LABELS` / `STEP_ORDER` / `stepHeading`) + **3 bug CÓ SẴN** + M-2 |
+| **C2** | `613e123` | Choke point `applyLocalizationSelection` + field `localization_selection` trong `config` |
+| **C3** | `4bb5b37` | UI step: bảng sticky · tri-state cột · untick lẻ · popover · confirm dialog · Q7 |
+| **C4** | *(commit này)* | docs + KB §29/§30 + backlog + user guide |
+
+Ngoài arc nhưng sinh ra từ nó: `b5606b4` (`[LOCSYNC-duplicate-locale]`) và
+`01e35d1` (`LOC-STATE-PROBE` + KB §29).
+
+### Lệch thiết kế — khai rõ
+
+| Thiết kế nói | Đã ship | Lý do |
+|---|---|---|
+| D6: mở rộng `ExpandableErrorCell` thêm `variant="popover"` | **Không** — popover viết trong `LocalizationStep.tsx`, dùng hook `useClickOutside` mới | `ExpandableErrorCell` mở **inline** và gắn với ngữ nghĩa "lỗi"; ô localization không phải lỗi. Nhét variant vào sẽ làm component đó mang hai nghĩa |
+| D6: rút hook click-outside **và** gộp 3 bản sao | Rút hook, **migrate 0 bản cũ** | Ba bản nằm ở file layout **dùng chung** + module CPP + module Google. CLAUDE.md cấm động file shared không cân nhắc cross-module, và đòi census riêng cho Google. Còn ở `[CLICKOUTSIDE-3-copies]` |
+| Bảng P1.1 liệt kê **14** chỗ đếm bước | Thực tế **21** phép thay | Census sót `:247` `:621` `:637` `:659` `:770`. Chính là lý do C1 ghim bằng **structural test** chứ không bằng bảng |
+| Q3 + 4 trạng thái ô + "giống Apple ⇒ untick" | **Không làm** | Manager thu hẹp phạm vi. Backlog `[BULKIMPORT-loc-compare-apple]` |
+
+### ⭐ Giá trị thêm không có trong thiết kế gốc: `items[i].warnings` lần đầu có người đọc
+
+`iap-items.ts` bỏ một cặp locale khi **chỉ một nửa** được điền (Display Name có,
+Description trống — hoặc ngược lại) và ghi lý do vào `items[i].warnings`.
+
+⚠ **Grep toàn repo: mảng đó KHÔNG CÓ MỘT CONSUMER SẢN PHẨM NÀO** trước arc này.
+Nó không được gộp vào `parsed.warnings` (top-level), và wizard chỉ render
+`parsed.warnings` — mà cũng chỉ render **con số đếm**. Nghĩa là cặp thiếu một nửa
+bị bỏ **hoàn toàn im lặng**.
+
+⇒ **Nay hiện ở đâu:** khối vàng `data-testid="localization-dropped-pairs"` ngay
+dưới bảng ở step Localization, kèm Product ID + nguyên văn lý do của parser.
+Hiện **cả khi** file không có localization nào dùng được (ca Q7.1), vì đó chính
+là lúc Manager cần biết vì sao bảng trống.
+
+⭐ Đây là mẫu đáng nhớ: **arc này không thêm dữ liệu mới, nó chỉ cho một dữ liệu
+đã tồn tại một chỗ để xuất hiện.** Bỏ qua im lặng → bỏ qua có báo.
+
+### Hợp đồng `config.localization_selection`
+
+```jsonc
+{
+  "localization_selection": {
+    "ignore_all": false,                       // true ⇒ chỉ update price
+    "selected": { "com.vng.x": ["vi"] }        // productId → locale được phép ghi
+  }
+}
+```
+
+| Trường hợp | Server làm gì |
+|---|---|
+| Field **vắng mặt** | Giữ **toàn bộ** localization — hành vi trước arc. **Đây là parity gate** |
+| `ignore_all: true` | Bỏ **mọi** ô, có đếm |
+| Item **không có** trong `selected` | **GIỮ** localization của nó **+ ghi anomaly**. ⚠ Chiều ngược lại (không nhắc ⇒ bỏ) sẽ biến lệch phiên bản client/server thành mass-skip **im lặng** — đúng failure mode của sự cố, ngược hướng |
+| `selected` sai kiểu | Giữ hết + ghi anomaly. Khác hẳn "vắng mặt": vắng là *không ý kiến*, sai kiểu là *client lỗi* |
+| Mảng **rỗng** tường minh | Bỏ ô của item đó — rỗng là một **quyết định** |
+
+⚠ Mẫu số luôn đếm **ô THẬT** (`items[i].localizations.length`), **không** phải
+`rows × locale_pair_count`.

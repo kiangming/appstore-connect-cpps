@@ -7191,3 +7191,127 @@ Một dòng log vô điều kiện, **0 request thêm**, trả lời dứt đi�
 lời câu gì, viết kết quả vào đâu, và xoá khi nào. Tiền lệ: dòng DEBUG
 429-header của arc key-pool — thêm để đóng một câu, gỡ khi đã đóng. Một dòng log
 "cho có thông tin" giữ mãi là cách một file log trở nên không đọc được.
+
+### 29.3 ⚠ Lớp lỗi này KHÔNG chỉ nằm trong code và doc — nó nằm cả trong cách GỌI TÊN
+
+Instance thứ **tư**, và nó đến từ tầng chỉ đạo chứ không phải từ code: W1 được
+gọi là *"allow-list **chặn** PATCH"*.
+
+**Sai ở chữ "chặn".** `PATCHABLE_LOCALIZATION_STATES` đúng là một allow-list, và
+`localization-state.ts` đúng là phải giữ nó là allow-list (§28.1). Nhưng nó
+**không chặn gì cả**. Đo bằng grep, toàn bộ consumer của nó:
+
+| Nơi dùng | Dùng để làm gì |
+|---|---|
+| `localization-sync.ts` → `pickPatchTarget` | **CHỌN** dòng nào trong nhiều dòng cùng locale |
+| `execute/route.ts` (nhánh `catch`) → `describeLocalizationState` | **DIỄN ĐẠT** lý do khi Apple đã từ chối |
+
+Vòng lặp PATCH gửi **mọi** phần tử `plan.toPatch`, bất kể state. Đúng như
+`LocalizationSyncPlan.toPatch` tự khai: *"the plan does not act on it — YET"*.
+
+⚠ **Vì sao đáng ghi:** chữ "allow-list" **gợi ý một cơ chế cưỡng chế không tồn
+tại**. Một người đọc tin vào cái tên sẽ kết luận "tool đã tự tránh ô ACTIVE rồi"
+— và thôi không hỏi tiếp. Đó **chính xác** là cơ chế gây hại ở §29.1: một câu
+đúng nội dung nhưng sai mức làm người sau **ngừng tra**.
+
+⭐ **Mở rộng quy tắc:** nhãn mức chắc chắn không chỉ áp cho *"API hành xử thế
+nào"*, mà cho cả *"code của mình hành xử thế nào"*. **Một cái tên là một khẳng
+định.** Trước khi gọi thứ gì là "guard", "gate", "chặn", "enforce" — hỏi đúng
+câu ở §29.2: *chỉ ra được dòng nào thực thi điều đó?* Không chỉ ra được thì nó
+là **phân loại**, không phải **cưỡng chế**, và phải gọi đúng tên.
+
+⚠ Ghi nhận: instance này do **chính người chỉ đạo tự đính chính**, không phải do
+audit tìm ra. Đó là cách rẻ nhất để lớp lỗi này được bắt.
+
+---
+
+## §30 — Năm giá trị `state` của localization, và tool làm gì với từng cái (2026-09-23)
+
+**Arc `[BULKIMPORT-loc-step]`.** Manager chốt sau khi bảng này được dựng:
+**(A) GIỮ NGUYÊN** — vẫn gửi mọi phần tử `toPatch`, **Apple là trọng tài, không
+skip** — cộng phần **(C) cảnh báo ở UI CHỈ cho giá trị ĐÃ ĐO**.
+
+### 30.1 Bảng năm giá trị
+
+| Giá trị | Nguồn | PATCH được? | **Mức chắc chắn** |
+|---|---|---|---|
+| `PREPARE_FOR_SUBMISSION` | OAS enum | ✅ **CÓ** | **ĐÃ ĐO** — ASC đặt đúng state này cho bản nháp vừa mở khi Manager sửa một IAP live (2026-09-22, §28.6). CHỐT 1.3 xác nhận thêm: sửa bản này thì **update tại chỗ**, không tạo version mới (§28.11) |
+| `ACTIVE` | ⚠ **NGOÀI** enum của Apple | ⛔ **KHÔNG** | **ĐÃ ĐO** — Apple trả 409 nguyên văn *"Cannot edit InAppPurchaseLocalization when it is in ACTIVE state"* |
+| `APPROVED` | OAS enum | ❓ | **CHƯA BIẾT** |
+| `WAITING_FOR_REVIEW` | OAS enum | ❓ | **CHƯA BIẾT** |
+| `REJECTED` | OAS enum | ❓ | **CHƯA BIẾT** |
+
+⇒ **2 ĐÃ ĐO / 3 CHƯA BIẾT.** Allow-list có đúng **một** thành viên.
+
+### 30.2 ⚠ Vì sao KHÔNG chọn phương án "dùng allow-list để SKIP"
+
+Nghe hợp lý: biết ô nào không sửa được thì đừng gửi, tiết kiệm request và tránh
+409. **Nhưng 3/5 giá trị đang CHƯA BIẾT**, mà allow-list chỉ có một thành viên —
+nên hôm nay skip-theo-allow-list sẽ **bỏ qua gần như mọi thứ**, kể cả những ô
+sửa được hoàn toàn bình thường.
+
+⚠ Và hướng hỏng của nó là hướng tệ: **bỏ nhầm thì IM LẶNG** (Manager không thấy
+gì xảy ra), còn **gửi nhầm thì Apple nói thẳng** — và từ arc `[LOC-ACTIVE-state]`
+thì câu Apple nói đã được giữ lại nguyên văn trong `failedDetail[].full`, kèm một
+câu tiếng người từ `describeLocalizationState`.
+
+⭐ **Nguyên tắc rút ra: khi phân loại của mình còn nhiều ô trống, hãy để hệ thống
+có thẩm quyền phán xử, đừng đoán hộ nó.** Apple từ chối là dữ liệu; một lượt đọc
+state ở local mà chưa verify thì không.
+
+### 30.3 SUY LUẬN (chưa đo): dòng "Approved" trên ASC nhiều khả năng trả `ACTIVE`
+
+⚠ **Đây là SUY LUẬN, không phải phép đo.** Ghi lại vì nó đổi cách đọc kết quả
+probe, nhưng **không được dùng làm căn cứ để code**.
+
+Lập luận: 409 của Apple nói *"…is in **ACTIVE** state"* cho đúng những item đang
+live — tức là những dòng mà **ASC hiển thị là "Approved"**. Nếu API gọi dòng live
+đó là `APPROVED` thì thông điệp 409 hẳn đã nói `APPROVED`.
+
+⇒ Nhiều khả năng **chữ trên UI ≠ chữ trong API**: ASC "Approved" ↔ API `ACTIVE`.
+Nếu đúng, `APPROVED` trong enum của OAS có thể là một state **khác** (hoặc không
+bao giờ xuất hiện trên đường này).
+
+⚠⚠ **ĐỪNG map "Approved" → `APPROVED` cho tới khi probe nói.** `LOC-STATE-PROBE`
+(§30.5) in ra giá trị thật; điền bảng §30.1 bằng nó, không bằng mục này.
+
+### 30.4 ⚠ Bẫy §28.2 đã tránh được một lần nữa — cùng chữ, khác TÀI NGUYÊN
+
+`state-edit-blocked.ts:19` **có** chặn `WAITING_FOR_REVIEW`. Rất dễ kết luận
+"vậy localization `WAITING_FOR_REVIEW` cũng không sửa được".
+
+⛔ **Không suy ra được.** Hàm đó nhận `InAppPurchaseState` — **state của IAP**,
+không phải của localization. Hai tài nguyên, hai vòng đời, **trùng tên trường**.
+Đó đúng là lớp lỗi §28.2 ("tài liệu mô tả sai tầng") đã mất nhiều cycle mới nhận
+ra. ⇒ `WAITING_FOR_REVIEW` của localization ở lại ô **CHƯA BIẾT**.
+
+### 30.5 `LOC-STATE-PROBE` — tồn tại để trả lời ĐÚNG HAI CÂU, rồi bị xoá
+
+Log **vô điều kiện**, ngay sau `listInAppPurchaseLocalizations`, **0 request thêm**:
+
+```
+LOC-STATE-PROBE product=<id> total=<n> rows=[vi=ACTIVE, vi=PREPARE_FOR_SUBMISSION] dupes=[vi x2]
+```
+
+**Grep:** `LOC-STATE-PROBE`
+
+| # | Câu hỏi | Đọc ở đâu trong dòng log |
+|---|---|---|
+| 1 | Apple có **ĐIỀN** `state` không? | `rows=[…]` — `ABSENT` nghĩa là Apple **không gửi** field; `EMPTY` nghĩa là gửi nhưng rỗng; `NULL` / `NON_STRING(...)` là các ca riêng. **Bốn kết quả khác nhau, cố ý không gộp** |
+| 2 | Một locale Apple có trả **HAI dòng** không? | `dupes=[]` ⇒ không; `dupes=[vi x2]` ⇒ có, và `rows` in cả hai state để thấy cặp |
+
+⚠ **Vì sao phải là log, không phải SQL và không phải OAS.** `state` hôm nay chỉ
+được đụng trong nhánh `catch` của PATCH ⇒ **dòng thành công không ghi gì**; và ba
+batch thật (2026-09-22 13:44 / 13:52) chạy **trước** đoạn code đó ~9 tiếng. OAS
+thì **khai** field nhưng không nói Apple có điền. Cả hai đường đều câm.
+
+⚠⚠ **ĐƯỜNG GỠ — là một phần của việc, không phải tuỳ chọn:**
+
+1. Chạy một lần import thật (đường OVERWRITE, app có item live).
+2. `grep LOC-STATE-PROBE` trong log Railway.
+3. Ghi kết quả vào **§28.11.b** và điền bảng **§30.1**.
+4. **XOÁ** `localization-state-probe.ts` + test + call site trong `execute/route.ts`.
+
+Tiền lệ: dòng DEBUG 429-header của arc key-pool — thêm để đóng một câu, gỡ khi đã
+đóng. Một dòng log "cho có thông tin" giữ mãi là cách một file log trở nên không
+đọc được.

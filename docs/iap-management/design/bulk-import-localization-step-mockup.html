@@ -121,7 +121,24 @@
 <div class="wrap">
 
 <h1>Step mới — Localization</h1>
-<p class="sub">Apple IAP Bulk Import · arc <code>[BULKIMPORT-loc-step]</code> · <strong>mockup, chưa code</strong></p>
+<p class="sub">Apple IAP Bulk Import · arc <code>[BULKIMPORT-loc-step]</code> · <strong>✅ ĐÃ SHIP</strong> — xem §AS-BUILT trong design doc</p>
+
+<div class="note" style="border-left-width:5px;border-left-color:var(--ok)">
+  <strong>✅ ĐÃ SHIP (2026-09-23) — mockup này giờ là TÀI LIỆU LỊCH SỬ, không phải spec.</strong><br>
+  Cái đã build: bảng sticky · hai dòng có nhãn <code>Name</code>/<code>Desc</code> (M-1) ·
+  tri-state cột (<strong>header FULL ⇒ clear cả cột</strong>) · untick lẻ · popover <em>detail</em> ·
+  confirm dialog đếm theo ô · "Ignore all" làm mờ chứ không skip · Q7.1 file không có localization.
+  <br><br>
+  <strong>Khác mockup, khai rõ:</strong>
+  <ul style="margin:6px 0 0;padding-left:20px">
+    <li><strong>Không có pill trạng thái, mũi tên <code>→</code>, nền amber, hàng tự-untick</strong> —
+        tất cả cần so sánh với Apple, đã hoãn.</li>
+    <li><strong>Thêm một thứ mockup không vẽ:</strong> khối vàng liệt kê <em>cặp locale thiếu một nửa</em>
+        bị parser bỏ. Dữ liệu đó (<code>items[i].warnings</code>) trước arc này
+        <strong>không có một consumer nào</strong> trong cả repo.</li>
+  </ul>
+  ⇒ Chi tiết đầy đủ: <code>design-bulk-import-localization-step.md</code> §AS-BUILT.
+</div>
 
 <div class="note w" style="border-left-width:5px">
   <strong>⏸⏸ PHẠM VI THU HẸP — Manager 2026-09-23. ĐỌC TRƯỚC KHI DÙNG MOCKUP NÀY.</strong><br>

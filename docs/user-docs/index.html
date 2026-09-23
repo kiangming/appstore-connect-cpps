@@ -1191,7 +1191,7 @@
         <div class="quick-grid">
           <div class="quick-card" data-goto="apple-bulk-import">
             <div class="quick-card-title">Nhập hàng loạt IAP (Apple)</div>
-            <div class="quick-card-desc">Wizard 5 bước · Excel template · chọn territory cho cả batch</div>
+            <div class="quick-card-desc">Wizard 6 bước · Excel template · chọn localization + territory cho cả batch</div>
           </div>
           <div class="quick-card" data-goto="apple-pricing-matrix">
             <div class="quick-card-title">Pricing matrix</div>
@@ -1279,12 +1279,12 @@
       <section class="page" data-page="apple-bulk-import">
         <div class="meta-strip">
           <span class="meta-chip module-apple">Apple IAP Management</span>
-          <span class="meta-chip">Wizard · 5 bước</span>
+          <span class="meta-chip">Wizard · 6 bước</span>
           <span class="meta-chip cycle">Hotfix 26 · 27 · 28</span>
         </div>
         <h1 class="page-title">Bulk Import wizard</h1>
         <p class="page-lede">
-          Tạo nhiều IAP cùng lúc trên App Store Connect bằng Excel template. Wizard 5 bước
+          Tạo nhiều IAP cùng lúc trên App Store Connect bằng Excel template. Wizard 6 bước
           với validate per-row, preview trước khi commit, và auto-retry khi gặp rate-limit
           từ Apple API.
         </p>
@@ -1354,7 +1354,7 @@
           <li class="step">
             <div class="step-title">Mở wizard và upload file (Step 1 — Excel)</div>
             <div class="step-body">
-              <p>Từ <code class="inline">/iap-management/apps/[appId]</code>, click nút <strong>Bulk Import</strong> ở góc phải bảng IAPs. Wizard mở với 5 bước: <strong>Excel → Screenshots → Preview → Territories → Result</strong>. Ở Step 1, drag &amp; drop file <code class="inline">.xlsx</code> vào dropzone — tool parse ngay tại chỗ và hiển thị card xanh: số IAP đọc được + số cặp locale. Warning "example row(s) skipped" (nếu còn dòng sample) cũng hiện ở đây.</p>
+              <p>Từ <code class="inline">/iap-management/apps/[appId]</code>, click nút <strong>Bulk Import</strong> ở góc phải bảng IAPs. Wizard mở với <strong>6 bước</strong>: <strong>Excel → Screenshots → Preview itemID &amp; Price → Localization → Territories → Result</strong>. Ở Step 1, drag &amp; drop file <code class="inline">.xlsx</code> vào dropzone — tool parse ngay tại chỗ và hiển thị card xanh: số IAP đọc được + số cặp locale. Warning "example row(s) skipped" (nếu còn dòng sample) cũng hiện ở đây.</p>
             </div>
           </li>
           <li class="step">
@@ -1364,7 +1364,7 @@
             </div>
           </li>
           <li class="step">
-            <div class="step-title">Preview &amp; conflict resolution (Step 3)</div>
+            <div class="step-title">Preview itemID &amp; Price (Step 3)</div>
             <div class="step-body">
               <p>Per-row validation trước khi commit:</p>
               <ul>
@@ -1384,7 +1384,57 @@
             </div>
           </li>
           <li class="step">
-            <div class="step-title">Chọn territory cho cả batch (Step 4 — Territories)</div>
+            <div class="step-title">Chọn localization nào được ghi (Step 4 — Localization) <span class="meta-chip">MỚI</span></div>
+            <div class="step-body">
+              <p><strong>Bước này quyết định tool có đụng vào Display Name / Description trên Apple hay không.</strong>
+              File template chứa <em>sẵn mọi thứ</em> — cả giá lẫn localization, vì nó là bản chụp đúng những gì
+              App Store Connect đang có. Nhưng phần lớn công việc thật chỉ sửa <em>một phần</em>. Trước khi có bước
+              này, tool luôn ghi cả localization, kể cả khi bạn chỉ định đổi giá.</p>
+              <div class="callout callout-warning">
+                <div class="callout-title">⚠️ Đây là bước sinh ra từ một sự cố thật</div>
+                <p>Một lần import 88 dòng chỉ nhằm đổi giá: 20 dòng trả về lỗi
+                <code class="inline">Cannot edit InAppPurchaseLocalization when it is in ACTIVE state</code>.
+                Những dòng đó <strong>lẽ ra không cần đụng tới localization chút nào</strong> — nhưng màn preview
+                cũ chỉ hiện <em>một con số</em> đếm locale, nên không có cách nào thấy trước, và cũng không có
+                cách nào từ chối.</p>
+              </div>
+              <p><strong>Bảng hiển thị đúng nội dung trong FILE.</strong> Mỗi ô là một
+              <em>item × locale</em>, và mỗi ô hiện <strong>hai dòng có nhãn</strong>:
+              <code class="inline">Name</code> (Display Name) và <code class="inline">Desc</code> (Description) —
+              để nhìn vào là biết ngay trường nào mang nội dung gì. Bấm <strong>detail</strong> để xem đầy đủ khi
+              nội dung bị cắt.</p>
+              <ul>
+                <li><strong>Mặc định tick hết</strong> — tức giữ nguyên hành vi cũ. Việc của bạn là <em>trừ đi</em>
+                những ô không muốn ghi.</li>
+                <li><strong>Checkbox ở đầu cột</strong> bật/tắt cả locale đó cho mọi dòng. Cột đang tick đầy đủ mà
+                bấm lần nữa thì <strong>xoá sạch cả cột</strong>. Khi chỉ một số ô được tick, ô vuông đầu cột hiện
+                trạng thái <em>dở dang</em>.</li>
+                <li><strong>Untick lẻ từng ô</strong> nếu chỉ muốn chừa vài item.</li>
+                <li><strong>Ignore all localizations</strong> — bỏ qua toàn bộ, <em>chỉ cập nhật giá</em>. Bảng mờ
+                đi nhưng <strong>vẫn hiện</strong>, để bạn luôn thấy mình đang bỏ qua cái gì.</li>
+              </ul>
+              <p>Góc phải thanh trên cùng luôn hiện <strong>N / M ô sẽ được xử lý</strong>. Bấm <strong>Next</strong>
+              sẽ mở hộp xác nhận kèm hai con số: <em>sẽ ghi</em> và <em>để nguyên trên Apple</em>. Bấm
+              <strong>Cancel</strong> để ở lại sửa tiếp.</p>
+              <div class="callout">
+                <div class="callout-title">Cặp thiếu một nửa — giờ được báo</div>
+                <p>Một locale chỉ được nhận khi <strong>cả Display Name lẫn Description</strong> đều có nội dung.
+                Nếu file chỉ điền một nửa, parser bỏ qua cặp đó — trước đây <strong>bỏ qua im lặng</strong>, không
+                ai biết. Giờ chúng hiện thành một khối vàng ngay dưới bảng, kèm Product ID và lý do.</p>
+              </div>
+              <p><strong>File không có cột localization?</strong> Bước này vẫn hiện, kèm dòng giải thích rằng không
+              có gì để xử lý, và <strong>Next</strong> đi thẳng — không hỏi xác nhận, vì không có gì để đếm.</p>
+              <div class="callout callout-warning">
+                <div class="callout-title">⚠️ Bước này KHÔNG so sánh với Apple</div>
+                <p>Bảng hiện nội dung <strong>trong file</strong>, không đối chiếu với giá trị đang có trên App
+                Store Connect. Tool <em>chưa</em> tự bỏ tick những ô trùng khớp — việc kiểm tra "cái này có thật sự
+                cần đổi không" hiện vẫn thuộc về bạn. Nếu một localization đang ở trạng thái live, Apple sẽ từ chối
+                sửa và dòng kết quả sẽ nói rõ lý do đó.</p>
+              </div>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Chọn territory cho cả batch (Step 5 — Territories)</div>
             <div class="step-body">
               <p>Bước này quyết định <strong>các IAP mới sẽ được bán ở đâu</strong>. Mặc định là
               <strong>All countries or regions</strong> — mọi territory Apple có, cộng thêm thị trường
@@ -1416,7 +1466,7 @@
             </div>
           </li>
           <li class="step">
-            <div class="step-title">Execute và đọc kết quả (Step 5 — Result)</div>
+            <div class="step-title">Execute và đọc kết quả (Step 6 — Result)</div>
             <div class="step-body">
               <p>Tool tạo IAP lên App Store Connect với concurrency có kiểm soát và tự thử lại khi Apple
               chặn tạm thời. Đầu màn kết quả là dãy ô đếm — <strong>tổng các ô luôn bằng tổng số dòng</strong>,
@@ -1541,23 +1591,28 @@
               <!-- header download button (visible at every step) -->
               <rect class="wf-primary" x="470" y="28" width="134" height="24" rx="4"/>
               <text x="537" y="44" fill="#fff" text-anchor="middle" font-size="10" font-weight="600">⬇ Download template</text>
-              <!-- step indicator: Excel → Screenshots → Preview → Territories → Result -->
-              <g transform="translate(24, 80)">
-                <circle class="wf-primary" cx="12" cy="14" r="12"/>
-                <text x="12" y="18" fill="#fff" text-anchor="middle" font-size="10" font-weight="600">1</text>
-                <text class="wf-text" x="30" y="18" font-size="10">Excel</text>
-                <rect class="wf-soft" x="66" y="13" width="34" height="2"/>
-                <circle class="wf-soft" cx="112" cy="14" r="12"/>
-                <text class="wf-text" x="130" y="18" font-size="10">Screenshots</text>
-                <rect class="wf-soft" x="196" y="13" width="34" height="2"/>
-                <circle class="wf-soft" cx="242" cy="14" r="12"/>
-                <text class="wf-text" x="260" y="18" font-size="10">Preview</text>
-                <rect class="wf-soft" x="318" y="13" width="34" height="2"/>
-                <circle class="wf-soft" cx="364" cy="14" r="12"/>
-                <text class="wf-text" x="382" y="18" font-size="10">Territories</text>
-                <rect class="wf-soft" x="454" y="13" width="34" height="2"/>
-                <circle class="wf-soft" cx="500" cy="14" r="12"/>
-                <text class="wf-text" x="518" y="18" font-size="10">Result</text>
+              <!-- step indicator: Excel → Screenshots → Preview itemID & Price → Localization → Territories → Result
+                   ⚠ SIX steps since [BULKIMPORT-loc-step]. Kept compact (shorter
+                   labels + tighter spacing) so it still fits the 604-wide frame. -->
+              <g transform="translate(18, 80)">
+                <circle class="wf-primary" cx="10" cy="14" r="10"/>
+                <text x="10" y="17" fill="#fff" text-anchor="middle" font-size="9" font-weight="600">1</text>
+                <text class="wf-text" x="24" y="17" font-size="9">Excel</text>
+                <rect class="wf-soft" x="52" y="13" width="18" height="2"/>
+                <circle class="wf-soft" cx="80" cy="14" r="10"/>
+                <text class="wf-text" x="94" y="17" font-size="9">Screenshots</text>
+                <rect class="wf-soft" x="150" y="13" width="18" height="2"/>
+                <circle class="wf-soft" cx="178" cy="14" r="10"/>
+                <text class="wf-text" x="192" y="17" font-size="9">Preview itemID &amp; Price</text>
+                <rect class="wf-soft" x="310" y="13" width="18" height="2"/>
+                <circle class="wf-soft" cx="338" cy="14" r="10"/>
+                <text class="wf-text" x="352" y="17" font-size="9" font-weight="600">Localization</text>
+                <rect class="wf-soft" x="422" y="13" width="18" height="2"/>
+                <circle class="wf-soft" cx="450" cy="14" r="10"/>
+                <text class="wf-text" x="464" y="17" font-size="9">Territories</text>
+                <rect class="wf-soft" x="524" y="13" width="18" height="2"/>
+                <circle class="wf-soft" cx="552" cy="14" r="10"/>
+                <text class="wf-text" x="566" y="17" font-size="9">Result</text>
               </g>
               <!-- dropzone -->
               <rect class="wf-card" x="60" y="130" width="520" height="180" rx="8" stroke-dasharray="4 4"/>
