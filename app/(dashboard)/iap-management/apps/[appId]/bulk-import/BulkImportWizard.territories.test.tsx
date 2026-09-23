@@ -149,7 +149,9 @@ async function dropExcel(container: HTMLElement) {
 /** Excel → Screenshots → Preview → Territories. */
 async function goToTerritories(container: HTMLElement) {
   await dropExcel(container);
-  for (let i = 0; i < 3; i++) {
+  // ⚠ FOUR since [BULKIMPORT-loc-step] added the Localization step. The
+  // fixture has no localizations, so no confirm dialog interrupts the walk.
+  for (let i = 0; i < 4; i++) {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Next/ })).not.toBeDisabled(),
     );

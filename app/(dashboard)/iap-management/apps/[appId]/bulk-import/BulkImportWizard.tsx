@@ -20,6 +20,10 @@ import {
   Info,
   RefreshCw,
 } from "lucide-react";
+import {
+  LocalizationStep,
+  type LocalizationSelectionState,
+} from "./LocalizationStep";
 import { parseIapItemsXlsx } from "@/lib/iap-management/parsers/iap-items";
 import {
   appleIapTemplateSpec,
@@ -127,8 +131,9 @@ const STEP = {
   EXCEL: 1,
   SCREENSHOTS: 2,
   PREVIEW: 3,
-  TERRITORIES: 4,
-  RESULT: 5,
+  LOCALIZATION: 4,
+  TERRITORIES: 5,
+  RESULT: 6,
 } as const;
 
 type Step = (typeof STEP)[keyof typeof STEP];
@@ -145,6 +150,7 @@ const STEP_LABELS = {
   [STEP.EXCEL]: "Excel",
   [STEP.SCREENSHOTS]: "Screenshots",
   [STEP.PREVIEW]: "Preview itemID & Price",
+  [STEP.LOCALIZATION]: "Localization",
   [STEP.TERRITORIES]: "Territories",
   [STEP.RESULT]: "Result",
 } as const satisfies Record<Step, string>;
@@ -274,6 +280,20 @@ export function BulkImportWizard({
 }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>(FIRST_STEP);
+  /**
+   * [BULKIMPORT-loc-step] — which localization cells this run may write.
+   * ⚠ DEFAULT IS EVERYTHING. `ignoreAll: false` + an empty `selected` means
+   * "no cell was ever unticked", which the server reads as "process them all"
+   * — byte-for-byte the pre-arc behaviour. That is the arc's parity gate, and
+   * it is why the default is an EMPTY object rather than a fully-populated one.
+   */
+  const [localizationSelection, setLocalizationSelection] =
+    useState<LocalizationSelectionState>({ ignoreAll: false, selected: {} });
+  /** Confirm-before-leaving-the-step dialog; null when closed. */
+  const [locConfirm, setLocConfirm] = useState<{
+    willProcess: number;
+    willSkip: number;
+  } | null>(null);
   /**
    * SC7 — the batch's territory selection. ONE selection for every row: the
    * Manager's decision was batch-level, so there is deliberately no per-row
@@ -441,6 +461,18 @@ export function BulkImportWizard({
           // Swallowed — tracking is purely additive instrumentation.
         });
     }
+    // ⚠ [BULKIMPORT-loc-step] — leaving the Localization step asks first.
+    // The count is the thing worth confirming: the 2026-09-22 incident was
+    // not a wrong value, it was 20 writes nobody knew were going to happen.
+    // ⚠ Q7.3: with nothing to process there is nothing to confirm, so a file
+    // with no localization content walks straight through.
+    if (step === STEP.LOCALIZATION) {
+      const counts = countLocalizationCells(parsed?.items ?? [], localizationSelection);
+      if (counts.total > 0) {
+        setLocConfirm({ willProcess: counts.ticked, willSkip: counts.total - counts.ticked });
+        return;
+      }
+    }
     setStep((s) => ((s + 1) as Step));
   }
 
@@ -535,6 +567,13 @@ export function BulkImportWizard({
           // SC7 — the batch's ONE selection, ids verbatim. Absent would make
           // the route fall back to ALL, so it is always sent explicitly.
           availability_selection: availabilitySelection,
+          // [BULKIMPORT-loc-step] — the Manager's localization choice. The
+          // server re-parses the spreadsheet itself, so this carries only the
+          // SELECTION, never localization content.
+          localization_selection: {
+            ignore_all: localizationSelection.ignoreAll,
+            selected: localizationSelection.selected,
+          },
         }),
       );
       // Threaded to the execute route's `finally` block, which closes the
@@ -736,7 +775,76 @@ export function BulkImportWizard({
         />
       )}
 
-      {/* SC7 — step 4 is Territories; the batch's ONE selection. */}
+      {step === STEP.LOCALIZATION && parsed && (
+        <LocalizationStep
+          items={parsed.items}
+          value={localizationSelection}
+          onChange={setLocalizationSelection}
+        />
+      )}
+
+      {locConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          data-testid="localization-confirm"
+        >
+          <div className="w-full max-w-md rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xl p-5">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100 mb-3">
+              Confirm localization changes
+            </h3>
+            <div className="space-y-2 text-xs">
+              <div className="flex items-baseline justify-between gap-4">
+                <span className="text-slate-600 dark:text-slate-300">
+                  Will be written
+                  <span className="block text-[10px] text-slate-400">
+                    one cell = one item × one locale
+                  </span>
+                </span>
+                <span
+                  data-testid="localization-confirm-process"
+                  className="text-base font-semibold text-[#0071E3]"
+                >
+                  {locConfirm.willProcess}
+                </span>
+              </div>
+              <div className="flex items-baseline justify-between gap-4">
+                <span className="text-slate-600 dark:text-slate-300">
+                  Left untouched on Apple
+                </span>
+                <span
+                  data-testid="localization-confirm-skip"
+                  className="text-base font-semibold text-slate-500"
+                >
+                  {locConfirm.willSkip}
+                </span>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                data-testid="localization-confirm-cancel"
+                onClick={() => setLocConfirm(null)}
+                className="px-3 py-1.5 text-xs rounded-md border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                data-testid="localization-confirm-ok"
+                onClick={() => {
+                  setLocConfirm(null);
+                  setStep((s) => ((s + 1) as Step));
+                }}
+                className="px-3 py-1.5 text-xs rounded-md bg-[#0071E3] hover:bg-[#0077ED] text-white"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SC7 — Territories; the batch's ONE selection. */}
       {step === STEP.TERRITORIES && (
         <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
           <div className="px-5 pt-5 pb-2">
@@ -948,6 +1056,31 @@ function ExecuteFaultPanel({
       </div>
     </div>
   );
+}
+
+/**
+ * Cells (item × locale) in the file, and how many this run will write.
+ *
+ * ⚠ THE DENOMINATOR IS REAL CELLS, NOT `rows × locale_pair_count`. The parser
+ * keeps a locale only when BOTH its Display Name and Description are filled
+ * (`iap-items.ts`), so a file with 39 locale columns and one filled pair has a
+ * denominator of 1, not 39. Counting the header would overstate every run.
+ */
+export function countLocalizationCells(
+  items: ReadonlyArray<{ product_id: string; localizations: ReadonlyArray<{ locale: string }> }>,
+  selection: LocalizationSelectionState,
+): { total: number; ticked: number } {
+  let total = 0;
+  let ticked = 0;
+  for (const it of items) {
+    for (const l of it.localizations) {
+      total++;
+      if (selection.ignoreAll) continue;
+      const row = selection.selected[it.product_id];
+      if (!row || row.includes(l.locale)) ticked++;
+    }
+  }
+  return { total, ticked };
 }
 
 // ─── Stepper ────────────────────────────────────────────────────────────────

@@ -160,8 +160,11 @@ async function driveToExecute(executeResponse: ExecuteStub) {
     await Promise.resolve();
   });
 
-  // Excel → Screenshots → Preview → Territories.
-  for (let i = 0; i < 3; i++) {
+  // Excel → Screenshots → Preview → Localization → Territories.
+  // ⚠ FOUR clicks since [BULKIMPORT-loc-step] inserted the Localization step.
+  // This fixture's items carry `localizations: []`, so the step's confirm
+  // dialog does not open (nothing to confirm) and Next walks straight through.
+  for (let i = 0; i < 4; i++) {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Next/ })).not.toBeDisabled(),
     );

@@ -211,7 +211,11 @@ async function goToStep2AndAdoptRun(container: HTMLElement, fetchMock: ReturnTyp
 async function goToStep3() {
   await waitFor(() => expect(screen.getByRole("button", { name: /Next/ })).toBeInTheDocument());
   fireEvent.click(screen.getByRole("button", { name: /Next/ }));
-  // Preview → Territories.
+  // Preview → Localization.
+  await waitFor(() => expect(screen.getByRole("button", { name: /Next/ })).toBeInTheDocument());
+  fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+  // Localization → Territories. ⚠ Added by [BULKIMPORT-loc-step]. The fixture
+  // has `localizations: []`, so there is nothing to confirm and no dialog.
   await waitFor(() => expect(screen.getByRole("button", { name: /Next/ })).toBeInTheDocument());
   fireEvent.click(screen.getByRole("button", { name: /Next/ }));
   await waitFor(() =>
