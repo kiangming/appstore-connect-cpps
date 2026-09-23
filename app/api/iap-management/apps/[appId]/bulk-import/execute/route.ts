@@ -97,6 +97,10 @@ import {
 } from "@/lib/iap-management/bulk-import/row-outcome";
 import { describeLocalizationState } from "@/lib/iap-management/apple/localization-state";
 import {
+  applyLocalizationSelection,
+  type RawLocalizationSelection,
+} from "@/lib/iap-management/bulk-import/localization-selection";
+import {
   recordLocaleFailure,
   recordAllLocalesFailed,
   localeCodes,
@@ -372,6 +376,12 @@ async function runExecute(
     /** IAP.p1.g: batch-level pricing source per Q-E. APP_TEMPLATE resolves
      *  to the bulk-import's app_id server-side; client only sends the kind. */
     pricing_source?: PricingSource["kind"];
+    /** [BULKIMPORT-loc-step] — which localizations this run may write.
+     *  ⚠ A SELECTION, NOT DATA: the server re-parses the spreadsheet itself
+     *  (below), so the client never sends localization content — only which
+     *  cells the Manager ticked. Absent ⇒ every localization is processed,
+     *  which is the pre-arc behaviour. */
+    localization_selection?: RawLocalizationSelection;
   };
   try {
     config = JSON.parse(
@@ -396,6 +406,35 @@ async function runExecute(
     const msg = err instanceof Error ? err.message : "Parse failed";
     tracking.errorMessage = msg;
     return NextResponse.json({ error: msg }, { status: 422 });
+  }
+
+  // ── [BULKIMPORT-loc-step] THE LOCALIZATION CHOKE POINT ───────────────────
+  //
+  // ⚠⚠ THIS LINE IS THE WHOLE MECHANISM. `item.localizations` is read in EIGHT
+  // places further down (five on CREATE, three on OVERWRITE). Narrowing the
+  // list HERE — once, before `resolveConflicts`, on the server's own parse —
+  // means all eight see the selection and not one of them needs a guard. A
+  // guard per read site would be eight chances to miss one, and a missed one
+  // fails by WRITING. `BulkImportWizard`'s Localization step produces the
+  // selection; `localization-selection.ts` states the rules and the defaults.
+  //
+  // ⚠ DEFAULT IS A NO-OP. No `localization_selection` in the config ⇒ every
+  // localization is kept ⇒ byte-for-byte the pre-arc behaviour.
+  const locSelection = applyLocalizationSelection(
+    parsed.items,
+    config.localization_selection,
+  );
+  parsed = { ...parsed, items: locSelection.items };
+  if (locSelection.dropped > 0 || locSelection.anomalies.length > 0) {
+    await log(
+      "iap-bulk-execute",
+      `localization selection: ${locSelection.kept} cell(s) to process, ` +
+        `${locSelection.dropped} skipped by the Manager's choice` +
+        (locSelection.anomalies.length > 0
+          ? ` — ${locSelection.anomalies.join(" | ")}`
+          : ""),
+      locSelection.anomalies.length > 0 ? "WARN" : "INFO",
+    );
   }
 
   // ── Resolve Apple appleAppId → internal UUID + fetch existing IAPs ──────
