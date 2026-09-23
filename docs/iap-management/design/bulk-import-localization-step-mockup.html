@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Step Localization — Apple IAP Bulk Import</title>
+<style>
+  /* Palette Apple, lấy từ component thật: BulkImportWizard.tsx (#0071E3 /
+     #0077ED), mockup iap-management (#0c447c primary), amber = divergence.
+     KHÔNG emerald — emerald là của module Google. */
+  :root{
+    --bg:#f8fafc; --surface:#fff; --border:#e2e8f0; --border-strong:#cbd5e1;
+    --text:#0f172a; --muted:#475569; --subtle:#64748b;
+    --primary:#0c447c; --accent:#0071E3; --accent-hover:#0077ED; --accent-bg:#eff6ff;
+    --amber:#b45309; --amber-br:#fcd34d; --amber-bg:#fffbeb; --amber-tx:#78350f;
+    --danger:#b91c1c; --danger-bg:#fef2f2; --danger-br:#fecaca;
+    --ok:#166534; --ok-bg:#f0fdf4; --ok-br:#bbf7d0;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+    --bg:#020617;--surface:#0f172a;--border:#1e293b;--border-strong:#334155;
+    --text:#f1f5f9;--muted:#cbd5e1;--subtle:#94a3b8;--accent-bg:#172554;
+    --amber:#fbbf24;--amber-br:#78350f;--amber-bg:#251803;--amber-tx:#fde68a;
+    --danger:#fca5a5;--danger-bg:#2a0d0d;--danger-br:#7f1d1d;
+    --ok:#86efac;--ok-bg:#052e16;--ok-br:#166534;}}
+  :root[data-theme="dark"]{--bg:#020617;--surface:#0f172a;--border:#1e293b;
+    --text:#f1f5f9;--muted:#cbd5e1;--subtle:#94a3b8;--accent-bg:#172554;
+    --amber:#fbbf24;--amber-br:#78350f;--amber-bg:#251803;--amber-tx:#fde68a;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);padding:28px 18px;
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  .wrap{max-width:1060px;margin:0 auto}
+  h1{font-size:21px;font-weight:600;margin:0 0 3px}
+  h2{font-size:14px;font-weight:600;margin:34px 0 9px;padding-bottom:6px;border-bottom:1px solid var(--border)}
+  .sub{color:var(--subtle);font-size:12.5px;margin:0 0 6px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:14px}
+  .pad{padding:14px 18px}
+  .note{border-left:3px solid var(--accent);background:var(--accent-bg);padding:9px 13px;border-radius:0 8px 8px 0;font-size:12px;margin:10px 0}
+  .note.w{border-left-color:var(--amber-br);background:var(--amber-bg);color:var(--amber-tx)}
+  code{font-family:var(--mono);font-size:11px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:1px 4px}
+  /* stepper */
+  .stp{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+  .stp .n{width:26px;height:26px;border-radius:99px;display:flex;align-items:center;justify-content:center;
+    font-size:11px;font-weight:600;background:#e2e8f0;color:var(--subtle)}
+  .stp .done .n{background:#10b981;color:#fff}
+  .stp .act .n{background:var(--accent);color:#fff}
+  .stp .lb{font-size:11.5px;color:var(--subtle)}
+  .stp .act .lb{color:var(--text);font-weight:600}
+  .stp .new .lb{color:var(--accent);font-weight:600}
+  .stp .ln{height:1px;width:26px;background:var(--border-strong)}
+  /* table */
+  .scroll{overflow:auto;max-height:440px}
+  table{border-collapse:separate;border-spacing:0;width:max-content;min-width:100%;font-size:12px}
+  th,td{padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap;vertical-align:top}
+  thead th{position:sticky;top:0;z-index:20;background:var(--bg);border-bottom:1px solid var(--border-strong);
+    font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--subtle);text-align:left}
+  .stick{position:sticky;left:0;background:var(--surface);border-right:2px solid var(--border-strong);
+    width:210px;min-width:210px;max-width:210px;white-space:normal}
+  thead .stick{z-index:30;background:var(--bg)}
+  .mono{font-family:var(--mono);font-size:11px}
+  .cell{display:flex;gap:6px;align-items:flex-start;min-width:230px;white-space:normal}
+  .val{font-size:11.5px;line-height:1.45}
+  .old{color:var(--subtle);text-decoration:line-through}
+  .new2{color:var(--amber-tx);font-weight:500}
+  .pill{display:inline-flex;align-items:center;padding:0 6px;border-radius:99px;font-size:9.5px;
+    font-weight:600;border:1px solid;letter-spacing:.02em}
+  .p-act{background:var(--danger-bg);color:var(--danger);border-color:var(--danger-br)}
+  .p-new{background:var(--ok-bg);color:var(--ok);border-color:var(--ok-br)}
+  .p-same{background:var(--bg);color:var(--subtle);border-color:var(--border-strong)}
+  .p-chg{background:var(--amber-bg);color:var(--amber-tx);border-color:var(--amber-br)}
+  .lnk{color:var(--accent);font-size:10.5px;cursor:pointer;text-decoration:none;font-weight:500}
+  .lnk:hover{text-decoration:underline}
+  .colhead{display:flex;flex-direction:column;gap:3px}
+  .colhead .t{display:flex;align-items:center;gap:6px;font-size:11px;text-transform:none;color:var(--text);font-weight:600}
+  .colhead .m{font-size:9.5px;color:var(--subtle);text-transform:none;letter-spacing:0}
+  .bar{display:flex;align-items:center;gap:10px;padding:10px 18px;border-bottom:1px solid var(--border);font-size:12.5px}
+  .bar.ig{background:var(--amber-bg);color:var(--amber-tx);border-bottom-color:var(--amber-br)}
+  .dim{opacity:.4;pointer-events:none;filter:grayscale(.6)}
+  .btn{display:inline-flex;align-items:center;gap:6px;background:var(--accent);color:#fff;border:none;
+    border-radius:8px;padding:7px 15px;font-size:12px;font-weight:500;cursor:pointer}
+  .btn.g{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+  .btn.s{background:transparent;color:var(--muted);border:1px solid var(--border-strong)}
+  .foot{display:flex;gap:8px;padding:12px 18px;border-top:1px solid var(--border)}
+  /* popover */
+  .pop-wrap{position:relative;display:inline-block}
+  .pop{position:absolute;z-index:60;top:18px;left:0;width:330px;background:var(--surface);
+    border:1px solid var(--border-strong);border-radius:10px;box-shadow:0 10px 32px rgba(0,0,0,.16);padding:11px 13px}
+  .pop h4{margin:0 0 6px;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--subtle)}
+  .pop pre{margin:0 0 9px;white-space:pre-wrap;word-break:break-word;font-family:var(--mono);
+    font-size:11px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:7px 9px;max-height:130px;overflow:auto}
+  .pop .hint{font-size:10px;color:var(--subtle)}
+  /* dialog */
+  .scrim{background:rgba(15,23,42,.45);border-radius:12px;padding:30px 16px;display:flex;justify-content:center}
+  .dlg{background:var(--surface);border-radius:14px;width:100%;max-width:440px;
+    box-shadow:0 18px 48px rgba(0,0,0,.28);overflow:hidden}
+  .dlg .h{padding:16px 20px 10px}
+  .dlg .h h3{margin:0;font-size:15px;font-weight:600}
+  .rows{padding:0 20px 8px}
+  .row{display:flex;justify-content:space-between;align-items:baseline;padding:9px 0;border-bottom:1px solid var(--border)}
+  .row:last-child{border-bottom:none}
+  .row .k{font-size:12.5px}
+  .row .v{font-family:var(--mono);font-size:15px;font-weight:600}
+  .row .sm{font-size:10.5px;color:var(--subtle);font-family:-apple-system,sans-serif;font-weight:400}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Step mới — Localization</h1>
+<p class="sub">Apple IAP Bulk Import · arc <code>[BULKIMPORT-loc-step]</code> · <strong>mockup, chưa code</strong></p>
+
+<div class="note w">
+  <strong>⚠ Dữ liệu trong mockup.</strong> Thật: <code>com.vng.nikki.*</code> · "Item box ingame" ·
+  locale <strong>Vietnamese</strong> · <code>"188 Vàng"</code> (Apple đang có) vs <code>"188 Vàng."</code>
+  (trong file) — từ ảnh ASC của Manager. Hai locale <em>English</em> / <em>Thai</em> là
+  <strong>MINH HOẠ</strong> để thấy vấn đề scroll ngang; file mẫu chỉ có 1 cặp.
+</div>
+
+<!-- ─── stepper ─── -->
+<h2>Stepper 6 bước — step mới nằm sau Preview</h2>
+<div class="card"><div class="pad">
+  <div class="stp">
+    <div class="done" style="display:flex;gap:7px;align-items:center"><span class="n">✓</span><span class="lb">Excel</span></div><span class="ln"></span>
+    <div class="done" style="display:flex;gap:7px;align-items:center"><span class="n">✓</span><span class="lb">Screenshots</span></div><span class="ln"></span>
+    <div class="done" style="display:flex;gap:7px;align-items:center"><span class="n">✓</span><span class="lb">Preview</span></div><span class="ln"></span>
+    <div class="act new" style="display:flex;gap:7px;align-items:center"><span class="n">4</span><span class="lb">Localization ←&nbsp;MỚI</span></div><span class="ln"></span>
+    <div style="display:flex;gap:7px;align-items:center"><span class="n">5</span><span class="lb">Territories</span></div><span class="ln"></span>
+    <div style="display:flex;gap:7px;align-items:center"><span class="n">6</span><span class="lb">Result</span></div>
+  </div>
+  <p class="sub" style="margin:0">
+    Step <strong>Preview</strong> (price) giữ nguyên, chỉ thôi không đọc data localization.
+    Territories <code>4→5</code>, Result <code>5→6</code>.
+  </p>
+</div></div>
+
+<!-- ─── STATE 1: mặc định ─── -->
+<h2>State 1 — Mặc định (Ignore all KHÔNG tick · mọi cột tick)</h2>
+<div class="note">
+  ⭐ <strong>Mặc định = hành vi y hệt hôm nay.</strong> Đây là parity gate của arc — có test ghim.
+</div>
+
+<div class="card">
+  <div class="bar">
+    <label style="display:flex;gap:7px;align-items:center;cursor:pointer">
+      <input type="checkbox"> <strong>Ignore all localizations</strong>
+    </label>
+    <span style="color:var(--subtle);font-size:11.5px">— bỏ qua toàn bộ, chỉ update price</span>
+    <span style="margin-left:auto;font-size:11.5px;color:var(--muted)">
+      <strong style="color:var(--accent)">28</strong> / 30 localization sẽ xử lý
+    </span>
+  </div>
+  <div class="scroll">
+  <table>
+    <thead>
+      <tr>
+        <th class="stick">Product ID</th>
+        <th><div class="colhead"><span class="t"><input type="checkbox" checked> Vietnamese</span><span class="m">Display Name + Description · 10/10 ô</span></div></th>
+        <th><div class="colhead"><span class="t"><input type="checkbox" checked> English (U.S.) <em style="font-weight:400;color:var(--subtle)">· minh hoạ</em></span><span class="m">Display Name + Description · 10/10 ô</span></div></th>
+        <th><div class="colhead"><span class="t"><input type="checkbox" checked> Thai <em style="font-weight:400;color:var(--subtle)">· minh hoạ</em></span><span class="m">Display Name + Description · 8/10 ô</span></div></th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="stick"><div class="mono">com.vng.nikki.pack199ak</div><div style="font-size:10.5px;color:var(--subtle)">Item box ingame</div></td>
+        <td><div class="cell"><input type="checkbox" checked>
+          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-chg">đổi</span>
+            <div class="val"><span class="old">188 Vàng</span> → <span class="new2">188 Vàng.</span></div>
+            <a class="lnk">detail</a></div></div></td>
+        <td><div class="cell"><input type="checkbox" checked>
+          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">không đổi</span>
+            <div class="val">188 Gold</div><a class="lnk">detail</a></div></div></td>
+        <td><div class="cell"><input type="checkbox" checked>
+          <div><span class="pill p-new">chưa có</span>
+            <div class="val new2">188 ทอง</div><a class="lnk">detail</a></div></div></td>
+      </tr>
+      <tr>
+        <td class="stick"><div class="mono">com.vng.nikki.pack199u</div><div style="font-size:10.5px;color:var(--subtle)">Item box ingame</div></td>
+        <td><div class="cell"><input type="checkbox" checked>
+          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">không đổi</span>
+            <div class="val">588 Vàng</div><a class="lnk">detail</a></div></div></td>
+        <td><div class="cell"><input type="checkbox" checked>
+          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">không đổi</span>
+            <div class="val">588 Gold</div><a class="lnk">detail</a></div></div></td>
+        <td><div class="cell"><input type="checkbox" checked>
+          <div><span class="pill p-new">chưa có</span><div class="val new2">588 ทอง</div><a class="lnk">detail</a></div></div></td>
+      </tr>
+      <tr>
+        <td class="stick"><div class="mono">com.vng.nikki.pack499</div><div style="font-size:10.5px;color:var(--subtle)">Item box ingame</div></td>
+        <td><div class="cell"><input type="checkbox" checked>
+          <div><span class="pill p-new">chưa có</span><div class="val new2">1188 Vàng</div><a class="lnk">detail</a></div></div></td>
+        <td><div class="cell"><input type="checkbox" checked>
+          <div><span class="pill p-new">chưa có</span><div class="val new2">1188 Gold</div><a class="lnk">detail</a></div></div></td>
+        <td><div class="cell"><span style="color:var(--subtle);font-size:11px">— ô trống trong file</span></div></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="foot"><button class="btn s">← Back</button><button class="btn" style="margin-left:auto">Next →</button></div>
+</div>
+
+<div class="note w">
+  ⚠ <strong>Nhãn <code>ACTIVE</code> / <code>không đổi</code> chỉ có nếu chốt Q3(a).</strong>
+  Chúng đến từ <code>include=inAppPurchaseLocalizations</code> trên lượt gọi Apple ĐANG CHẠY sẵn
+  ⇒ <strong>0 request thêm</strong>. Bản tối giản Q3(b) mất cả hai nhãn — và mất luôn
+  "ô không đổi mặc định untick", chính là ca của Manager.
+</div>
+
+<!-- ─── STATE 2: Ignore all ─── -->
+<h2>State 2 — "Ignore all" ĐÃ tick → toàn bộ mờ</h2>
+<div class="card">
+  <div class="bar ig">
+    <label style="display:flex;gap:7px;align-items:center;cursor:pointer">
+      <input type="checkbox" checked> <strong>Ignore all localizations</strong>
+    </label>
+    <span style="font-size:11.5px">— sẽ KHÔNG gọi API localization cho bất kỳ item nào</span>
+    <span style="margin-left:auto;font-size:11.5px"><strong>0</strong> / 30 sẽ xử lý</span>
+  </div>
+  <div class="scroll dim">
+  <table>
+    <thead><tr><th class="stick">Product ID</th>
+      <th><div class="colhead"><span class="t"><input type="checkbox" checked disabled> Vietnamese</span><span class="m">Display Name + Description</span></div></th>
+      <th><div class="colhead"><span class="t"><input type="checkbox" checked disabled> English (U.S.)</span><span class="m">Display Name + Description</span></div></th></tr></thead>
+    <tbody><tr>
+      <td class="stick"><div class="mono">com.vng.nikki.pack199ak</div></td>
+      <td><div class="cell"><input type="checkbox" checked disabled><div><span class="pill p-act">ACTIVE</span><div class="val"><span class="old">188 Vàng</span> → 188 Vàng.</div></div></div></td>
+      <td><div class="cell"><input type="checkbox" checked disabled><div><span class="pill p-act">ACTIVE</span><div class="val">188 Gold</div></div></div></td>
+    </tr></tbody>
+  </table>
+  </div>
+  <div class="foot"><button class="btn s">← Back</button><button class="btn" style="margin-left:auto">Next →</button></div>
+</div>
+<div class="note">
+  ⭐ <strong>Step vẫn hiện, không skip (D8).</strong> Hậu quả của việc bỏ qua một bước là
+  không nhìn thấy nó — đúng lớp lỗi arc này sinh ra để diệt. Dòng đếm "0 / 30" là lời nhắc rẻ nhất.
+</div>
+
+<!-- ─── STATE 3: untick cột ─── -->
+<h2>State 3 — Một cột bị untick + một ô lẻ untick (tri-state header)</h2>
+<div class="card">
+  <div class="bar">
+    <label style="display:flex;gap:7px;align-items:center"><input type="checkbox"> <strong>Ignore all localizations</strong></label>
+    <span style="margin-left:auto;font-size:11.5px"><strong style="color:var(--accent)">9</strong> / 30 sẽ xử lý</span>
+  </div>
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th class="stick">Product ID</th>
+      <th><div class="colhead"><span class="t"><input type="checkbox" checked> Vietnamese</span><span class="m">10/10 ô</span></div></th>
+      <th style="opacity:.45"><div class="colhead"><span class="t"><input type="checkbox"> English (U.S.)</span><span class="m">bỏ qua toàn cột</span></div></th>
+      <th><div class="colhead"><span class="t"><input type="checkbox" ref="i" checked style="accent-color:var(--amber)"> Thai</span><span class="m" style="color:var(--amber-tx)">dở dang — 7/8 ô</span></div></th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td class="stick"><div class="mono">com.vng.nikki.pack199ak</div></td>
+        <td><div class="cell"><input type="checkbox" checked><div><span class="pill p-chg">đổi</span><div class="val"><span class="old">188 Vàng</span> → <span class="new2">188 Vàng.</span></div></div></div></td>
+        <td style="opacity:.45"><div class="cell"><input type="checkbox"><div class="val">188 Gold</div></div></td>
+        <td><div class="cell"><input type="checkbox" checked><div class="val new2">188 ทอง</div></div></td>
+      </tr>
+      <tr>
+        <td class="stick"><div class="mono">com.vng.nikki.pack199u</div></td>
+        <td><div class="cell"><input type="checkbox" checked><div><span class="pill p-same">không đổi</span><div class="val">588 Vàng</div></div></div></td>
+        <td style="opacity:.45"><div class="cell"><input type="checkbox"><div class="val">588 Gold</div></div></td>
+        <td style="background:var(--amber-bg)"><div class="cell"><input type="checkbox"><div class="val" style="color:var(--amber-tx)">588 ทอง <em style="font-size:10px">← ô lẻ untick</em></div></div></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="foot"><button class="btn s">← Back</button><button class="btn" style="margin-left:auto">Next →</button></div>
+</div>
+<div class="note w">
+  ⚠ <strong>Cột "Thai" ở trạng thái DỞ DANG</strong> — không tick-all, không untick-all.
+  Đây là khuôn <em>header tri-state</em> đã ship ở arc picker. Nếu Manager chốt Q2(b) (chỉ cấp cột)
+  thì trạng thái này <strong>không tồn tại</strong> và ô lẻ không untick được.
+</div>
+
+<!-- ─── STATE 4: popover ─── -->
+<h2>State 4 — Popover "detail" đang mở</h2>
+<div class="card"><div class="pad" style="min-height:220px">
+  <div style="display:flex;gap:8px;align-items:flex-start">
+    <input type="checkbox" checked style="margin-top:3px">
+    <div>
+      <span class="pill p-act">ACTIVE</span> <span class="pill p-chg">đổi</span>
+      <div class="val" style="max-width:230px"><span class="old">188 Vàng</span> → <span class="new2">188 Vàng.</span></div>
+      <div class="pop-wrap">
+        <a class="lnk">detail</a>
+        <div class="pop">
+          <h4>Apple hiện có · Vietnamese</h4>
+          <pre>Display Name: 188 Vàng
+Description:  Gói 188 Vàng dùng trong game
+State:        ACTIVE</pre>
+          <h4>Trong file import</h4>
+          <pre>Display Name: 188 Vàng.
+Description:  Gói 188 Vàng dùng trong game</pre>
+          <p class="hint">⚠ ACTIVE ⇒ sửa được nhưng phải tạo version mới trên Apple ⇒ duyệt lại. Click ra ngoài để đóng.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div></div>
+<div class="note">
+  ⭐ Tái dùng <code>ExpandableErrorCell</code> (đã có, cùng màu <code>#0071E3</code>, cùng nút "Detail"/"Close")
+  thêm <code>variant="popover"</code> — <strong>đừng viết component thứ hai</strong>.
+  Click-outside đã có <strong>3 bản sao</strong> (<code>AccountSwitcher:42</code> ·
+  <code>CppList:488</code> · <code>GoogleAccountSwitcher:59</code>) ⇒ rút thành hook chung,
+  đừng viết bản thứ tư.
+</div>
+
+<!-- ─── STATE 5: confirm ─── -->
+<h2>State 5 — Confirm dialog</h2>
+<div class="scrim">
+  <div class="dlg">
+    <div class="h"><h3>Xác nhận xử lý localization</h3></div>
+    <div class="rows">
+      <div class="row"><span class="k">Sẽ xử lý<div class="sm">9 item × locale đã chọn</div></span><span class="v" style="color:var(--accent)">9</span></div>
+      <div class="row"><span class="k">Sẽ bỏ qua<div class="sm">10 ô cột English + 1 ô lẻ Thai + 10 ô "không đổi"</div></span><span class="v" style="color:var(--muted)">21</span></div>
+      <div class="row"><span class="k" style="color:var(--amber-tx)">⚠ Trong đó ACTIVE<div class="sm">phải tạo version mới ⇒ Apple duyệt lại</div></span><span class="v" style="color:var(--amber-tx)">6</span></div>
+    </div>
+    <div class="foot" style="justify-content:flex-end">
+      <button class="btn s">Cancel</button><button class="btn">Confirm</button>
+    </div>
+  </div>
+</div>
+<div class="note">
+  <strong>Đơn vị đếm = Ô (item × locale)</strong>, nhất quán với đơn vị chọn (Q4).
+  ⚠ Mẫu số là <strong>số ô THẬT</strong>, không phải <code>item × locale_pair_count</code> — parser bỏ cặp
+  có ô trống (<code>iap-items.ts:389</code>).<br>
+  Cancel ⇒ về lại bảng · Confirm ⇒ sang <strong>Territories</strong> (step 5).
+  <br>⚠ Dòng "Trong đó ACTIVE" chỉ có nếu chốt <strong>Q3(a)</strong>.
+</div>
+
+<h2>Chưa quyết — chờ Manager</h2>
+<div class="card"><div class="pad">
+  <p class="sub" style="margin:0;line-height:1.95">
+    <strong>Q1</strong> checkbox cho cả CẶP hay tách Name/Description ·
+    <strong>Q2</strong> cấp cột hay cột + untick lẻ ·
+    <strong>Q3</strong> có hiện state + so sánh Apple không (0 request thêm) ·
+    <strong>Q4</strong> đơn vị đếm ·
+    <strong>Q5</strong> "Ignore all" có skip step không ·
+    <strong>Q6</strong> probe <code>included[]</code> trước khi code.<br>
+    Chi tiết: <code>docs/iap-management/design-bulk-import-localization-step.md</code>
+  </p>
+</div></div>
+
+</div>
+</body>
+</html>
