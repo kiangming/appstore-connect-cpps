@@ -100,6 +100,7 @@ import {
   applyLocalizationSelection,
   type RawLocalizationSelection,
 } from "@/lib/iap-management/bulk-import/localization-selection";
+import { describeLocalizationStatesForLog } from "@/lib/iap-management/bulk-import/localization-state-probe";
 import {
   recordLocaleFailure,
   recordAllLocalesFailed,
@@ -1417,12 +1418,26 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     const existing = await trackedWithRetry(args.rateCounters, () =>
       listInAppPurchaseLocalizations(creds, appleIapId),
     );
+    // ⏳ TEMPORARY — see `localization-state-probe.ts`. Unconditional on
+    // purpose: `state` is otherwise touched only in the PATCH catch below, so
+    // a successful row tells us nothing, and "does Apple populate state?" has
+    // stayed unanswerable. Zero extra requests — the LIST already ran.
+    // ⚠ DELETE THIS (and the module) once the next real import has answered
+    // it and the answer is written into KB §28.11.b.
+    await log(
+      "iap-bulk-execute",
+      describeLocalizationStatesForLog(item.product_id, existing.data ?? []),
+    );
     const plan = planLocalizationSync(
-      // ⚠ `state` IS CARRIED NOW. This line used to be `{ id, locale }` —
-      // and the field it dropped is the one that explained twenty identical
-      // failed rows on 2026-09-22 ("Cannot edit InAppPurchaseLocalization
-      // when it is in ACTIVE state"). Apple was returning it all along; the
-      // planner could not see it because this map did not pass it on.
+      // ⚠ `state` IS CARRIED HERE. This line used to be `{ id, locale }`, and
+      // the field it dropped is the one that would have explained twenty
+      // identical failed rows on 2026-09-22 ("Cannot edit
+      // InAppPurchaseLocalization when it is in ACTIVE state").
+      //
+      // ⚠ MỨC CHẮC CHẮN: OAS 4.4.1 declares `state` on this response shape.
+      // Whether Apple POPULATES it has never been observed in this repo — no
+      // fixture, log or test carries one. The probe line above exists to
+      // settle exactly that. Do not restate this as "Apple returns it".
       // Zero extra requests: the LIST above already fetched it.
       (existing.data ?? []).map((l) => ({
         id: l.id,

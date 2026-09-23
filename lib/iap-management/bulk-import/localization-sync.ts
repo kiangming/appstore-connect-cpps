@@ -35,12 +35,28 @@ export interface ExistingLocalization {
    * ⚠ APPLE'S STATE FOR THIS LOCALIZATION — the field whose ABSENCE here cost
    * a 20-row investigation.
    *
-   * Apple returns it (`GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations`
-   * answers with the V1 shape, which carries `state`), and the repo's own type
-   * models it (`types/iap-management/apple.ts`). The execute route simply did
-   * not carry it across: it mapped the response to `{ id, locale }` on the
-   * line immediately before calling this planner, so the planner could not
-   * have consulted the state even if it wanted to — the type did not have it.
+   * ⚠⚠ MỨC CHẮC CHẮN — đọc kỹ, câu này TỪNG BỊ VIẾT QUÁ.
+   * An earlier version of this comment said "Apple returns it … answers with
+   * the V1 shape, which carries `state`" — stated as an observation. It was
+   * not one. What is actually known:
+   *
+   *   CÓ TRONG SCHEMA — OAS 4.4.1 declares
+   *     `GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations` →
+   *     `InAppPurchaseLocalization[]`, whose `attributes.state` enumerates
+   *     PREPARE_FOR_SUBMISSION / WAITING_FOR_REVIEW / APPROVED / REJECTED.
+   *     The repo's own type models it (`types/iap-management/apple.ts`).
+   *   ĐÃ ĐO — Apple's 409 quotes an `ACTIVE` state back at us, so a state
+   *     certainly EXISTS server-side (and `ACTIVE` is outside Apple's own
+   *     enum, KB §28.1).
+   *   CHƯA ĐO — that this GET response actually CARRIES the field. A machine
+   *     scan of this repo finds no fixture, log or test in which Apple ever
+   *     returned one. See `localization-state-probe.ts`, which exists purely
+   *     to settle it on the next real import.
+   *
+   * The execute route did not carry the field across regardless: it mapped the
+   * response to `{ id, locale }` on the line immediately before calling this
+   * planner, so the planner could not have consulted the state even if Apple
+   * had sent one — the type did not have it.
    *
    * ⚠ COSTS ZERO EXTRA REQUESTS. The LIST call that produces it already runs
    * on the OVERWRITE path; this is a field that was being fetched and thrown

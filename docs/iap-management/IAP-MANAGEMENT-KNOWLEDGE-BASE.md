@@ -7139,3 +7139,55 @@ sánh: nó sai ngay cả khi không bao giờ làm `[BULKIMPORT-loc-compare-appl
 KHÔNG cài được ở đường 0-request** — phải rơi về `/v2/inAppPurchases/{id}/…`
 **mỗi item một request**, tức tiền đề "0 request thêm" sụp. Đó là lý do probe
 phải đo **sự CÓ MẶT của `state`**, không chỉ đo giá trị của nó.
+
+---
+
+## §29 — Comment và doc phải mang MỨC CHẮC CHẮN, không chỉ mang nội dung (2026-09-23)
+
+**Arc `[BULKIMPORT-loc-step]`.** Trong **một phiên làm việc** đã bắt được **BA**
+instance của cùng một lớp lỗi: một câu **suy ra** được viết xuống bằng giọng của
+một câu **đã đo**. Ba lần, ba tác giả khác nhau, ba file khác nhau.
+
+| # | Ở đâu | Viết là | Sự thật |
+|---|---|---|---|
+| 1 | `design-bulk-import-localization-step.md` §D3 | *"đã **verify** schema **có** `data`"* | Không ai verify. Kiểu của repo là `relationships?: Record<string, unknown>` (`types/asc.ts:26`) — **không chứng minh gì**. *(Về sau OAS 4.4.1 hoá ra CÓ khai `data` là mảng — nhưng đó là một nguồn KHÁC, tìm ra ở lượt sau; câu gốc vẫn là khẳng định không có căn cứ tại thời điểm viết.)* |
+| 2 | KB §28.11 (bản đầu) | *"66 dòng còn lại chạy được **vì** chúng có bản `PREPARE_FOR_SUBMISSION`"* | Không bằng chứng. Lô chạy chế độ hỗn hợp; dòng đi CREATE thì localization là `POST` mới tinh — thành công vì lý do **hoàn toàn khác**. |
+| 3 | `localization-sync.ts:36-38` | *"**Apple returns it** … answers with the V1 shape, which carries `state`"* | Quét máy toàn repo: **không một** fixture/log/test nào có `state` trên response localization. OAS **khai** field đó; chưa ai **thấy** Apple điền. |
+
+### 29.1 Vì sao lớp lỗi này nguy hiểm hơn một câu sai thường
+
+Một câu **sai** thì người sau đi tra và sửa. Một câu **đúng nội dung nhưng sai
+mức chắc chắn** thì người sau **NGỪNG tra** — nó đọc như việc đã xong.
+
+⇒ Cả ba instance đều **chặn đứng** đúng phép đo lẽ ra phải làm:
+- #1 suýt khiến C4 được code trên một giả định, và nó hỏng **im lặng** (join
+  rỗng ⇒ mọi ô đọc thành "chưa có trên Apple" ⇒ tick hết ⇒ **tái sinh bug 409**).
+- #2 suýt đóng lại câu hỏi "một locale trả về mấy bản" bằng một câu chuyện gọn.
+- #3 khiến `pickPatchTarget` được viết cho một hình dạng mà **không ai xác nhận
+  API có sinh ra**.
+
+### 29.2 Quy tắc
+
+⭐ **Mọi khẳng định về hành vi của một API ngoài phải mang một trong ba nhãn:**
+
+| Nhãn | Nghĩa | Được phép xây lên trên? |
+|---|---|---|
+| **ĐÃ ĐO** | có log / test / response thật / ảnh chụp | ✅ |
+| **CÓ TRONG SCHEMA** | OAS hoặc tài liệu Apple nói thế | ⚠ có, nhưng phải ghi rõ là chưa thấy — §28.1 đã chứng minh schema của Apple **thiếu** đúng giá trị gây sự cố (`ACTIVE`) |
+| **CHƯA BIẾT** | không nguồn nào | ⛔ không — phải đo trước |
+
+⚠ **Câu kiểm tra rẻ nhất, dùng được mọi lúc:** *"nếu có người hỏi **ở đâu**, tôi
+chỉ ra được cái gì?"* Chỉ ra được **log/test/ảnh** ⇒ ĐÃ ĐO. Chỉ ra được **dòng
+trong OAS** ⇒ CÓ TRONG SCHEMA. Chỉ ra được **suy luận của chính mình** ⇒ CHƯA
+BIẾT, và phải viết đúng như thế.
+
+⚠ **Và khi không đo được: `log()` một dòng rẻ hơn một câu đoán.**
+`localization-state-probe.ts` ra đời đúng vì thế — SQL không trả lời được (state
+chỉ được đụng trong nhánh `catch`, và ba batch thật có **trước** đoạn code đó
+~9 tiếng), OAS không trả lời được (nó khai field, không nói Apple có điền).
+Một dòng log vô điều kiện, **0 request thêm**, trả lời dứt điểm ở lần chạy sau.
+
+⚠⚠ **Instrumentation tạm PHẢI có đường gỡ ghi ngay trong nó.** Ghi rõ: nó trả
+lời câu gì, viết kết quả vào đâu, và xoá khi nào. Tiền lệ: dòng DEBUG
+429-header của arc key-pool — thêm để đóng một câu, gỡ khi đã đóng. Một dòng log
+"cho có thông tin" giữ mãi là cách một file log trở nên không đọc được.
