@@ -112,16 +112,24 @@ export interface LocalizationSyncPlan {
  * list through unfiltered. Nothing in JSON:API promises an order, so the tool
  * was depending on an UNWRITTEN CONTRACT.
  *
- * ⚠ THE SHAPE IS REAL, THE HARM IS NOT MEASURED — say which is which.
- *   · REAL: an IAP can carry two rows for one locale — one live, one draft.
- *     Observed on ASC 2026-09-22 (KB §28.6) and confirmed structurally by the
- *     two different version ids in ASC's own URLs (KB §28.7).
- *   · NOT MEASURED: whether Apple's LIST actually returns BOTH rows, and in
- *     what order. No fixture, log or run in this repo shows a two-row
- *     response (KB §28.11.b).
- *   ⇒ So this is a fix for a contract we should never have leaned on, NOT a
- *     fix for a failure anyone has been observed to hit. Do not let the next
- *     reader inherit it as "this was breaking imports".
+ * ⚠⚠ UPGRADED 2026-09-24 — THIS IS A REAL BUG, NOT A PRECAUTION.
+ * An earlier version of this comment said the two-row shape was real but "the
+ * harm is NOT measured", because no fixture or log in the repo had ever shown
+ * Apple returning two rows. That caveat is now WRONG and has been removed:
+ *
+ *   · The Manager opened View Detail on a live IAP and the tool rendered TWO
+ *     rows for the SAME locale — `🟠 Prepare For Submission` and `🟢 Approved`
+ *     (2026-09-24). That view is fed by Apple's own response
+ *     (`client.ts:169` → `splitIncluded`), rendered with no sort, no dedup and
+ *     no filter — so Apple genuinely returned both.
+ *   ⇒ The `Map` last-wins lookup this function replaced COULD therefore have
+ *     PATCHed the live row instead of the draft, and that is exactly the
+ *     request Apple answers with `409 … ACTIVE state`.
+ *
+ * ⚠ Still NOT measured: whether the endpoint BULK IMPORT uses
+ * (`client.ts:242`, the sub-resource list) returns both rows too, and in which
+ * order. The observation above came through a different endpoint. Order was
+ * never promised by anything, which is why this function does not rely on it.
  *
  * THE RULE: prefer a row Apple's own state says is editable, per the
  * ALLOW-list in `localization-state.ts` (`PREPARE_FOR_SUBMISSION` is the state

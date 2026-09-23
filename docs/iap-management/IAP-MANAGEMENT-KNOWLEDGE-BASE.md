@@ -7118,9 +7118,25 @@ hình dạng §28.6/§28.7), planner sẽ PATCH **dòng nào Apple liệt kê SA
 trên đúng lớp item này phụ thuộc vào thứ tự Apple trả — trúng bản pending thì
 chạy, trúng bản ACTIVE thì 409.
 
-⚠ **Đây là bug TIỀM TÀNG, không phải giả thuyết:** Manager đã chạy lại **3 lần**
-trong sự cố 2026-09-22, tức lớp item "đã có cả hai dòng" **chắc chắn đã tồn tại**
-từ lần chạy thứ hai trở đi.
+⚠⚠ **NÂNG MỨC 2026-09-24 — BUG THẬT, KHÔNG PHẢI PHÒNG XA.** Bản đầu mục này
+(và comment trong code) ghi *"hình dạng có thật, tác hại CHƯA ĐO"*, vì chưa
+fixture/log nào cho thấy Apple trả hai dòng. **Câu đó nay SAI và đã gỡ:**
+
+Manager mở **View Detail** một IAP đang live → tool render **HAI dòng cùng một
+locale**: `🟠 Prepare For Submission` và `🟢 Approved`. Màn đó lấy thẳng từ
+response của Apple (`client.ts:169` → `splitIncluded`) và render **không sort,
+không dedup, không filter** (`IapLocalizationSection.tsx` — grep xác nhận).
+⇒ **Apple thật sự trả cả hai dòng.**
+
+⇒ Lookup `Map` last-wins cũ **thật sự đã có thể** PATCH nhầm vào dòng **live**
+thay vì dòng nháp — và đó đúng là request mà Apple trả `409 … ACTIVE state`.
+
+⚠ **Vẫn CHƯA ĐO:** endpoint mà **bulk import** dùng (`client.ts:242`, sub-resource
+list) có trả cả hai dòng không, và theo thứ tự nào. Quan sát trên đi qua
+**endpoint khác** (`client.ts:169`).
+
+⚠ Và Manager đã chạy lại **3 lần** trong sự cố 2026-09-22, tức lớp item "đã có
+cả hai dòng" **chắc chắn đã tồn tại** từ lần chạy thứ hai trở đi.
 
 ⇒ Phải chọn dòng **có chủ đích** (theo `state`), không để `Map` chọn hộ. Ghi
 backlog `[LOCSYNC-duplicate-locale]`. ⚠ Việc này **độc lập** với tính năng so
@@ -7131,9 +7147,20 @@ sánh: nó sai ngay cả khi không bao giờ làm `[BULKIMPORT-loc-compare-appl
 | Câu | Trạng thái |
 |---|---|
 | `GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations` có trả `state` không? | ✅ **CÓ** — đo ở arc trước, ghi tại `localization-sync.ts:36-38` (*"answers with the V1 shape, which carries `state`"*) |
-| `GET /v1/apps/{id}/inAppPurchasesV2?include=inAppPurchaseLocalizations` (lượt LIST, đường "0 request thêm") có trả `state` không? | ⚠ **CHƯA VERIFY** — endpoint **khác**, `include` có thể trả hình dạng V2 (**không có `state`**, §28.3) |
-| Một locale trả về **mấy** bản trong lượt LIST đó? | ⚠ **CHƯA VERIFY** |
-| Dòng "Approved" trên ASC map sang giá trị `state` nào của API? | ⚠ **CHƯA VERIFY.** ⚠⚠ **ĐỪNG đoán là `APPROVED`** — OAS *có* `APPROVED`, nhưng Apple đã chứng minh trả cả `ACTIVE` (một giá trị **ngoài** enum, §28.1). Chữ trên UI **không** là chữ trong API. |
+| `GET /v1/apps/{id}/inAppPurchasesV2?include=inAppPurchaseLocalizations` (lượt LIST, đường "0 request thêm") có trả `state` không? | ⚠ **VẪN CHƯA VERIFY** — endpoint **khác** với cả hai đường đã đo |
+| Một locale trả về **mấy** bản? | ✅ **ĐÃ TRẢ LỜI 2026-09-24: HAI.** Ảnh View Detail hiện hai dòng Vietnamese cho một item (§28.11.a) — nhưng đo trên `client.ts:169`, **chưa** đo trên lượt LIST |
+| Dòng "Approved" trên ASC map sang giá trị `state` nào của API? | ✅ **ĐÃ TRẢ LỜI: `APPROVED`.** ⚠ Cảnh báo cũ *"đừng đoán là APPROVED"* hoá ra thận trọng quá tay — nhưng thận trọng **đúng chỗ**: nó giữ cho không dòng code nào dựa vào phỏng đoán. Chi tiết + cách bác: §30.3 |
+
+⭐ **Điểm danh 2026-09-24: 2/3 câu ĐÃ TRẢ LỜI, còn 1.**
+
+| # | Câu | Trạng thái |
+|---|---|---|
+| 1 | Apple có **điền** `state` không? | ✅ **CÓ** — đo qua View Detail |
+| 2 | Một locale có **hai** dòng không? | ✅ **CÓ** — đo qua View Detail |
+| 3 | Endpoint **bulk import** (`client.ts:242`) có mang `state` không? | ❌ **CHƯA** — ảnh đi đường `client.ts:169` |
+
+⇒ `LOC-STATE-PROBE` (§30.5) **vẫn cần**, nhưng thu hẹp còn **đúng câu 3**. Đó là
+câu quyết định `pickPatchTarget` có hoạt động thật hay chỉ hoạt động trên giấy.
 
 ⇒ ⭐ **Nếu lượt LIST không trả `state`, toàn bộ quy tắc "so với bản Approved"
 KHÔNG cài được ở đường 0-request** — phải rơi về `/v2/inAppPurchases/{id}/…`
@@ -7223,6 +7250,49 @@ là **phân loại**, không phải **cưỡng chế**, và phải gọi đúng 
 ⚠ Ghi nhận: instance này do **chính người chỉ đạo tự đính chính**, không phải do
 audit tìm ra. Đó là cách rẻ nhất để lớp lỗi này được bắt.
 
+### 29.4 ⚠⚠ Dạng NGUY HIỂM NHẤT của lớp lỗi này: một GUARD KHÔNG BAO GIỜ BẮN
+
+Ba instance trước là **câu văn** sai mức. Instance này khác hẳn về hậu quả: nó
+suýt trở thành **code chạy được, không crash, và không làm gì cả** — canh một
+giá trị chỉ tồn tại ở **tầng khác**.
+
+**Ca cụ thể.** `[LOC-ACTIVE-ui-warning]` được đặc tả là *"cảnh báo cho ô
+`ACTIVE`"*, dựa trên phép đo duy nhất có lúc đó: 409 của Apple nói *"is in
+**ACTIVE** state"*. Hoàn toàn hợp lý — cho tới 2026-09-24:
+
+| Tầng | Giá trị cho **cùng một dòng live** |
+|---|---|
+| **ĐỌC** — `GET /v2/inAppPurchases/{id}?include=…` | **`APPROVED`** |
+| **GHI** — `PATCH /v1/inAppPurchaseLocalizations/{id}` | thông điệp lỗi nói **`ACTIVE`** |
+
+⇒ Cảnh báo là tính năng **đọc**, nhưng giá trị lấy từ tầng **ghi**. Một
+`if (state === "ACTIVE")` đặt trên dữ liệu đọc **không bao giờ đúng**.
+
+⚠⚠ **Vì sao nó nguy hơn mọi instance trước:**
+
+| | Câu văn sai mức (§29.1-29.3) | Guard không bao giờ bắn |
+|---|---|---|
+| Ai phát hiện | người đọc tiếp theo, khi tra | **không ai** |
+| Triệu chứng | một câu đáng ngờ | **im lặng tuyệt đối** — test xanh, không lỗi, không log |
+| Tệ nhất | ngừng tra cứu | **tin rằng đã được bảo vệ, trong khi không** |
+
+Một tính năng an toàn **không chạy** trông y hệt một tính năng an toàn **chạy và
+không tìm thấy gì**. Test cũng không cứu được: một test mock `state: "ACTIVE"`
+rồi assert cảnh báo hiện ra sẽ **XANH** — nó chứng minh hàm hoạt động, không
+chứng minh giá trị đó **có tồn tại trên đường dữ liệu thật**.
+
+⭐ **Quy tắc rút ra — thêm một câu vào §29.2:** khi so sánh một giá trị lấy từ
+API, hỏi thêm *"tôi thấy giá trị này ở ĐƯỜNG NÀO, và code sẽ so nó ở ĐƯỜNG NÀO?"*
+**Cùng khái niệm, khác đường, có thể khác TỪ VỰNG.** Nếu hai đường khác nhau thì
+phép so sánh chưa có căn cứ — dù cả hai giá trị đều đã được ĐO.
+
+⚠ Đây là họ hàng gần của §28.2 (*tài liệu mô tả state của A trong khi ràng buộc ở
+state của B*). §28.2 là **sai tài nguyên**; §29.4 là **sai chiều đọc/ghi trên
+cùng một tài nguyên**. Cả hai đều lọt qua vì "cùng tên trường".
+
+⇒ Phòng: bảng §30.1 nay có **hai cột riêng** cho đường đọc và đường ghi, và
+**cấm gộp**.
+
 ---
 
 ## §30 — Năm giá trị `state` của localization, và tool làm gì với từng cái (2026-09-23)
@@ -7231,17 +7301,31 @@ audit tìm ra. Đó là cách rẻ nhất để lớp lỗi này được bắt.
 **(A) GIỮ NGUYÊN** — vẫn gửi mọi phần tử `toPatch`, **Apple là trọng tài, không
 skip** — cộng phần **(C) cảnh báo ở UI CHỈ cho giá trị ĐÃ ĐO**.
 
-### 30.1 Bảng năm giá trị
+### 30.1 Bảng năm giá trị — ⚠ HAI CỘT, ĐỪNG GỘP
 
-| Giá trị | Nguồn | PATCH được? | **Mức chắc chắn** |
+⚠⚠ **Cột "thấy khi ĐỌC" và cột "Apple nói khi GHI" là hai thứ khác nhau, và
+2026-09-24 đã chứng minh chúng KHÔNG trùng nhau.** Gộp hai cột là cách tạo ra
+một guard không bao giờ bắn — xem §29.4.
+
+| Giá trị | Thấy trên đường **ĐỌC** (`GET /v2/…?include=…`) | Apple nói trên đường **GHI** (`PATCH /v1/…`) | PATCH được? |
 |---|---|---|---|
-| `PREPARE_FOR_SUBMISSION` | OAS enum | ✅ **CÓ** | **ĐÃ ĐO** — ASC đặt đúng state này cho bản nháp vừa mở khi Manager sửa một IAP live (2026-09-22, §28.6). CHỐT 1.3 xác nhận thêm: sửa bản này thì **update tại chỗ**, không tạo version mới (§28.11) |
-| `ACTIVE` | ⚠ **NGOÀI** enum của Apple | ⛔ **KHÔNG** | **ĐÃ ĐO** — Apple trả 409 nguyên văn *"Cannot edit InAppPurchaseLocalization when it is in ACTIVE state"* |
-| `APPROVED` | OAS enum | ❓ | **CHƯA BIẾT** |
-| `WAITING_FOR_REVIEW` | OAS enum | ❓ | **CHƯA BIẾT** |
-| `REJECTED` | OAS enum | ❓ | **CHƯA BIẾT** |
+| `PREPARE_FOR_SUBMISSION` | ✅ **ĐÃ ĐO** — ảnh View Detail 2026-09-24 | — | ✅ **ĐÃ ĐO** (ASC sửa tại chỗ, §28.11) |
+| `APPROVED` | ✅ **ĐÃ ĐO** — ảnh View Detail 2026-09-24, dòng live | — | ❓ **CHƯA BIẾT** — xem §30.3, hai ứng viên |
+| `ACTIVE` | ❌ **CHƯA TỪNG THẤY** trên đường đọc | ✅ **ĐÃ ĐO** — 409 nguyên văn | ⛔ **ĐÃ ĐO: KHÔNG** |
+| `WAITING_FOR_REVIEW` | CHƯA BIẾT | — | CHƯA BIẾT |
+| `REJECTED` | CHƯA BIẾT | — | CHƯA BIẾT |
 
-⇒ **2 ĐÃ ĐO / 3 CHƯA BIẾT.** Allow-list có đúng **một** thành viên.
+⇒ **Đường đọc: 2 giá trị ĐÃ ĐO** (`PREPARE_FOR_SUBMISSION`, `APPROVED`).
+⇒ **Đường ghi: 1 giá trị ĐÃ ĐO** (`ACTIVE`), và nó **chưa từng xuất hiện ở cột
+đọc**.
+
+⚠ **Điều kiện của phép đo, ghi rõ để không bị đọc rộng ra:** ảnh đi qua
+`client.ts:169` (`GET /v2/inAppPurchases/{id}?include=…`). Endpoint mà **bulk
+import** dùng là `client.ts:242`
+(`GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations?limit=200`) — **khác
+endpoint**, chưa đo trực tiếp. Cả hai đều **không** dùng `fields[...]` (grep:
+`client.ts` không có một `fields[` nào), nên không có gì phải thêm; nhưng
+"không phải thêm gì" ≠ "đã đo".
 
 ### 30.2 ⚠ Vì sao KHÔNG chọn phương án "dùng allow-list để SKIP"
 
@@ -7259,21 +7343,54 @@ câu tiếng người từ `describeLocalizationState`.
 có thẩm quyền phán xử, đừng đoán hộ nó.** Apple từ chối là dữ liệu; một lượt đọc
 state ở local mà chưa verify thì không.
 
-### 30.3 SUY LUẬN (chưa đo): dòng "Approved" trên ASC nhiều khả năng trả `ACTIVE`
+### 30.3 ⛔ SUY LUẬN NÀY ĐÃ BỊ BÁC BỎ (2026-09-24) — giữ lại làm hồ sơ
 
-⚠ **Đây là SUY LUẬN, không phải phép đo.** Ghi lại vì nó đổi cách đọc kết quả
-probe, nhưng **không được dùng làm căn cứ để code**.
+> **Bản đầu viết:** *"409 nói ACTIVE cho đúng những item ASC hiển thị 'Approved'
+> ⇒ nhiều khả năng chữ trên UI ≠ chữ trong API: ASC 'Approved' ↔ API `ACTIVE`.
+> ĐỪNG map 'Approved' → `APPROVED` cho tới khi probe nói."*
+>
+> ⛔ **SAI. Đường đọc v2 trả đúng `APPROVED`.**
 
-Lập luận: 409 của Apple nói *"…is in **ACTIVE** state"* cho đúng những item đang
-live — tức là những dòng mà **ASC hiển thị là "Approved"**. Nếu API gọi dòng live
-đó là `APPROVED` thì thông điệp 409 hẳn đã nói `APPROVED`.
+**Bác bằng gì** — bằng chứng màn hình của Manager cộng ba lớp đọc code, không
+phải bằng một suy luận khác:
 
-⇒ Nhiều khả năng **chữ trên UI ≠ chữ trong API**: ASC "Approved" ↔ API `ACTIVE`.
-Nếu đúng, `APPROVED` trong enum của OAS có thể là một state **khác** (hoặc không
-bao giờ xuất hiện trên đường này).
+1. Manager mở View Detail một item đang live, tool hiện hai dòng cùng locale:
+   `🟠 Prepare For Submission` và `🟢 Approved`.
+2. ⭐ **`humanizeState` là transform CƠ HỌC, không phải bảng tra**
+   (`components/ui/iap/StatusDot.tsx:85-90`): `toLowerCase` → `_`→space → Title
+   Case. Không có lookup nào. ⇒ nhãn **đảo ngược được** về giá trị gốc:
+   `"Approved"` ⟸ **`APPROVED`**, `"Prepare For Submission"` ⟸
+   **`PREPARE_FOR_SUBMISSION`**. Nếu API trả `ACTIVE` thì màn đã hiện `"Active"`.
+3. **Xác nhận độc lập bằng MÀU:** `statusToneForState` (`StatusDot.tsx:74-82`)
+   map `APPROVED`→`success` (🟢) và `PREPARE_FOR_SUBMISSION`→`warning` (🟠) —
+   khớp đúng ảnh. `ACTIVE` sẽ rơi `default: neutral`.
+4. **Xác nhận thứ ba bằng giá trị mặc định:**
+   `IapLocalizationSection.tsx:101` đọc `loc.attributes.state ?? "READY_TO_SUBMIT"`
+   — nếu Apple **không điền**, màn đã hiện `"Ready To Submit"`. Không phải.
 
-⚠⚠ **ĐỪNG map "Approved" → `APPROVED` cho tới khi probe nói.** `LOC-STATE-PROBE`
-(§30.5) in ra giá trị thật; điền bảng §30.1 bằng nó, không bằng mục này.
+⚠ **Mâu thuẫn thật sự KHÔNG biến mất, nó chỉ đổi chỗ.** Nay là:
+
+| | Đường ĐỌC | Đường GHI |
+|---|---|---|
+| Endpoint | `GET /v2/inAppPurchases/{id}?include=…` (`client.ts:169`) | `PATCH /v1/inAppPurchaseLocalizations/{id}` (`client.ts:283`) |
+| Apple nói | **`APPROVED`** | *"…is in **ACTIVE** state"*, `source.pointer: /data/attributes/state` |
+
+**Hai ứng viên, CHƯA PHÂN XỬ:**
+
+- **(a) Hai MÔ HÌNH, hai TỪ VỰNG.** §28.3 đã chứng minh V1 và V2 localization là
+  hai *mô hình*, không phải hai phiên bản. Đọc v2 và ghi v1 có thể gọi cùng một
+  dòng bằng hai chữ khác nhau. ⇒ `APPROVED` khi đọc **=** `ACTIVE` khi ghi ⇒
+  **không PATCH được**.
+- **(b) Hai THỜI ĐIỂM.** 409 xảy ra 2026-09-22 khi item **chưa có** bản nháp;
+  ảnh chụp **sau** khi đã có. Trạng thái dòng live có thể đã đổi. ⇒ `APPROVED`
+  **có thể PATCH được**.
+
+⇒ Phân xử bằng **một** lần import thật — xem §30.6.
+
+⭐ **Bài học (§29 lần nữa):** mục này được viết ĐÚNG mức ngay từ đầu — dán nhãn
+SUY LUẬN, và ghi thẳng *"không được dùng làm căn cứ để code"*. Nhờ thế khi nó
+sai, **không một dòng code nào phải sửa theo.** Đó chính là công dụng của nhãn
+mức chắc chắn: không phải để đúng, mà để **sai một cách rẻ**.
 
 ### 30.4 ⚠ Bẫy §28.2 đã tránh được một lần nữa — cùng chữ, khác TÀI NGUYÊN
 
@@ -7315,3 +7432,80 @@ thì **khai** field nhưng không nói Apple có điền. Cả hai đường đ�
 Tiền lệ: dòng DEBUG 429-header của arc key-pool — thêm để đóng một câu, gỡ khi đã
 đóng. Một dòng log "cho có thông tin" giữ mãi là cách một file log trở nên không
 đọc được.
+
+### 30.6 ⭐ MỘT lần import trả lời CẢ HAI câu còn lại
+
+Sau 2026-09-24 chỉ còn đúng hai câu chưa biết, và **một** lần chạy đóng được cả
+hai — vì cả hai đều nằm trên **cùng một request**.
+
+| # | Câu | Đọc ở đâu |
+|---|---|---|
+| 1 | Endpoint bulk import (`client.ts:242`) có mang `state` không? | dòng `LOC-STATE-PROBE` |
+| 2 | (a) hai từ vựng, hay (b) hai thời điểm? (§30.3) | thân lỗi Apple trả về |
+
+**Cách chạy:**
+
+1. Chọn **một item ĐANG LIVE** và **ÍT QUAN TRỌNG** — xem cảnh báo dưới.
+2. Bulk Import file chứa item đó, ở step **Localization** **TICK** locale của nó
+   (mặc định đã tick sẵn; chỉ cần đừng untick).
+3. Chạy Execute.
+
+**Đọc kết quả — câu 1:**
+
+```
+grep LOC-STATE-PROBE   (log Railway)
+```
+
+| Thấy | Nghĩa |
+|---|---|
+| `rows=[vi=APPROVED]` hoặc bất kỳ giá trị nào | ✅ endpoint bulk import **CÓ** mang `state` ⇒ `pickPatchTarget` hoạt động thật ⇒ **gỡ probe** theo §30.5 |
+| `rows=[vi=ABSENT]` | ⛔ endpoint này **KHÔNG** mang `state` ⇒ `pickPatchTarget` luôn rơi vào nhánh fallback ⇒ phải đổi sang `client.ts:169` hoặc thêm một read |
+| `dupes=[vi x2]` | Apple trả cả hai dòng trên **chính endpoint này** — xác nhận lần cuối cho §28.11.a |
+
+**Đọc kết quả — câu 2:** mở dòng kết quả, đọc `failedDetail[].full` (hoặc
+`actions_log.payload.stages.localizations.failedDetail`):
+
+| Thấy | Kết luận |
+|---|---|
+| 409, thân lỗi vẫn nói **`ACTIVE`** | ⇒ **ứng viên (a)**: đọc và ghi khác **TỪ VỰNG**. `APPROVED` khi đọc **=** blocked khi ghi ⇒ thêm `APPROVED` vào blocked-list, và `[LOC-ACTIVE-ui-warning]` canh `APPROVED` là đúng |
+| **KHÔNG 409**, PATCH thành công | ⇒ **ứng viên (b)**: state đã đổi theo thời gian; `APPROVED` **patch được** ⇒ **KHÔNG** thêm vào blocked-list; cảnh báo UI phải mềm hơn ("có thể bị từ chối") |
+| 409 nhưng nói một giá trị **KHÁC** | ⇒ **dữ kiện mới**, cả hai ứng viên đều sai — dừng và báo lại |
+
+> ## ⚠⚠ CẢNH BÁO TRƯỚC KHI CHẠY — ĐÂY LÀ MỘT LẦN GHI THẬT
+>
+> **Nếu rơi vào ứng viên (b) thì PATCH sẽ THÀNH CÔNG, và nó ghi thật lên Apple.**
+> Display Name / Description của item đó sẽ đổi theo đúng nội dung trong file, và
+> theo §28.11 việc đó có thể **tạo một version mới** ⇒ item phải **duyệt lại** ⇒
+> ⚠ tên mới **không hiển thị với người mua** cho tới khi Apple duyệt xong.
+>
+> ⇒ **Chọn item ít quan trọng**, và để nội dung localization trong file **giống
+> hệt** giá trị đang có trên Apple — như vậy dù ghi thành công thì nội dung cũng
+> không đổi, chỉ có vòng đời version là đổi.
+>
+> ⚠⚠ Và **KHÔNG CÓ ĐƯỜNG NÀO ĐỌC-THUẦN** trả lời được câu 2. Nói thẳng: câu hỏi
+> *"PATCH lên dòng `APPROVED` thì Apple làm gì"* **chỉ** trả lời được bằng cách
+> PATCH thật. Câu 1 thì đọc-thuần được — nhưng nó đi kèm cùng một lần chạy.
+>
+> ### ⭐ CÓ đường lấy câu 1 mà KHÔNG ghi gì — đã verify bằng code
+>
+> Chạy Bulk Import, ở step Localization **tick "Ignore all localizations"**.
+>
+> **Vì sao nó vẫn in ra `LOC-STATE-PROBE`** (đọc code, không phải suy đoán):
+> khối localization của đường OVERWRITE **không có guard `length > 0`** —
+> `listInAppPurchaseLocalizations` + dòng log chạy **vô điều kiện**
+> (`execute/route.ts:1417-1431`). "Ignore all" chỉ làm `item.localizations`
+> rỗng **sau choke point**, nên:
+>
+> | | |
+> |---|---|
+> | LIST chạy → probe in ra | ✅ **có** |
+> | `planLocalizationSync(existing, [])` | `toPatch` = [] · `toCreate` = [] |
+> | `toDelete` | **[]** — `deletionsSuppressed` bật vì desired rỗng (`localization-sync.ts`), đúng guard never-delete-last |
+>
+> ⇒ **Không một request ghi nào xảy ra.** Đánh đổi: trả lời được **câu 1**,
+> **không** trả lời được câu 2.
+>
+> ⚠ **Bắt buộc:** item phải là item **đã tồn tại** và dòng đó phải đi đường
+> **OVERWRITE** (không phải SKIP, không phải CREATE). Đường CREATE **không** gọi
+> `listInAppPurchaseLocalizations` (grep: chỉ **một** call site, `:1419`) nên
+> không có probe nào in ra.

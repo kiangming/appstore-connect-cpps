@@ -51,10 +51,57 @@ export const PATCHABLE_LOCALIZATION_STATES: ReadonlySet<string> = new Set([
 /**
  * States Apple has REFUSED, in its own words. Used only to phrase the reason
  * — never to decide editability (that is `PATCHABLE_LOCALIZATION_STATES`).
+ *
+ * ⚠⚠ `ACTIVE` HAS ONLY EVER BEEN SEEN ON THE **WRITE** PATH.
+ * It comes from the body of a `409` answering
+ * `PATCH /v1/inAppPurchaseLocalizations/{id}`. On the **READ** path
+ * (`GET /v2/inAppPurchases/{id}?include=…`) the same live row comes back as
+ * `APPROVED` — measured 2026-09-24, KB §30.1.
+ *
+ * ⇒ Matching this set against a state READ from Apple will essentially never
+ *   hit. That is not a bug here — this set exists to phrase a refusal Apple has
+ *   already sent, and at that moment `ACTIVE` is exactly the word in hand. But
+ *   do NOT build a read-side guard on it (KB §29.4: a guard that never fires).
  */
 export const KNOWN_BLOCKED_LOCALIZATION_STATES: ReadonlySet<string> = new Set([
   "ACTIVE",
 ]);
+
+/**
+ * ⚠ WHY `APPROVED` IS DELIBERATELY IN NEITHER SET — do not "fix" this.
+ *
+ * Measured 2026-09-24: the live row of a live IAP reads back as `APPROVED`
+ * (KB §30.1). The tempting next step is to add it to the blocked set, since the
+ * live row is the one Apple refused. ⛔ There is not enough evidence yet, and
+ * the gap is a real fork, not a formality:
+ *
+ *   (a) READ and WRITE use different VOCABULARIES for one row — `APPROVED` when
+ *       read IS `ACTIVE` when written (V1 and V2 are different MODELS, KB
+ *       §28.3). Then `APPROVED` belongs in the blocked set.
+ *   (b) The two observations are from different TIMES — the 409 predates the
+ *       draft row existing; the state may simply have changed. Then `APPROVED`
+ *       may be perfectly patchable, and blocking it would refuse work that
+ *       would have succeeded.
+ *
+ * ⇒ Until one import settles it (KB §30.6), `APPROVED` classifies as `UNKNOWN`,
+ *   which is the honest answer and the safe one: `UNKNOWN` never claims a row is
+ *   fine, and never claims it is blocked.
+ *
+ * ⭐ AND THE ALLOW-LIST DESIGN IS CORRECT UNDER **BOTH** BRANCHES — this is why
+ * the fork does not block shipping. `pickPatchTarget` (localization-sync.ts)
+ * prefers a `PATCHABLE` row and otherwise falls back to the first candidate:
+ *
+ *   · two rows (live + draft) → the draft is `PREPARE_FOR_SUBMISSION`, so the
+ *     draft is chosen. Right under (a) — it dodges the blocked row — and right
+ *     under (b) too, since the draft is the correct target regardless (edited in
+ *     place, no new version, no re-review).
+ *   · one row only (live, `APPROVED`) → nothing is PATCHABLE, the attempt still
+ *     goes out, and Apple decides. Right under (a) (refusal, explained) and
+ *     right under (b) (it succeeds, which is what was wanted).
+ *
+ * A DENY-list would NOT have this property: it would have to guess which branch
+ * is true before either could be observed.
+ */
 
 /**
  * ⚠ THREE OUTCOMES, AND `UNKNOWN` IS NOT A SYNONYM FOR EITHER OTHER ONE.
