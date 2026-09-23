@@ -7043,3 +7043,66 @@ Chứng minh bằng sự vắng mặt, ba lớp độc lập:
 Cộng thêm, `design-iap-v2-submission-migration.md` §0 Q3 đã tra tài liệu chính thức: *"No DELETE endpoint exists (**confirmed via official docs, not just the spec**)"*.
 
 ⇒ **Mọi thiết kế phải sống chung với nó.** Một lần chạy hỏng giữa chừng trên lô 20 item để lại tới **20 version mồ côi không gỡ được**. Hệ quả thiết kế: tạo version **càng muộn càng tốt**, đọc-hết-rồi-mới-ghi, và mỗi version đã tạo phải được **ghi lại** để Manager biết có artifact.
+
+### 28.11 ⭐ Version MỞ SẴN thì sửa TẠI CHỖ — và đó mới là lời giải đầy đủ cho 20 dòng 409 (2026-09-23)
+
+**Manager đo trên ASC** (arc `[BULKIMPORT-loc-step]`): sửa một localization đang ở
+**Prepare for Submission** rồi Save ⇒ nó **UPDATE nội dung của chính dòng đó**,
+**KHÔNG** sinh dòng mới, **KHÔNG** tạo version mới.
+
+⚠ **Đây KHÔNG mâu thuẫn với §28.10 — nó làm §28.10 CHÍNH XÁC HƠN.** Hai ca khác
+nhau, trước nay bị gộp làm một:
+
+| Trạng thái item | PATCH localization | Tạo version mới? |
+|---|---|---|
+| Chỉ có bản **live/ACTIVE** (không có version mở) | ⛔ **409** `Cannot edit … ACTIVE state` | **có** — bắt buộc, rồi duyệt lại (§28.10) |
+| **Đã có** version mở (`PREPARE_FOR_SUBMISSION`) | ✅ **thành công** | **không** — ghi đè tại chỗ |
+
+⇒ ⭐ **Lời giải đầy đủ cho sự cố 2026-09-22:** 20 dòng hỏng **không** vì chúng
+"live", mà vì chúng **chỉ có bản ACTIVE và không có version mở nào**. 66 dòng
+còn lại chạy được vì chúng **có** một bản đang ở `PREPARE_FOR_SUBMISSION`.
+Cùng một câu lệnh PATCH, khác nhau ở chỗ **có sẵn chỗ để ghi hay không**.
+
+⇒ Hệ quả nghiệp vụ: **dòng Approved là bản người mua đang thấy; dòng pending là
+bản nháp ghi đè tự do được.** Muốn so sánh "file có khác Apple không" thì mốc so
+là **dòng Approved** (`[BULKIMPORT-loc-compare-apple]` CHỐT 1.3).
+
+#### ⚠⚠ 28.11.a Hệ quả CHƯA AI ĐỂ Ý: `planLocalizationSync` gộp hai dòng cùng locale, LẤY DÒNG CUỐI
+
+`localization-sync.ts:94`:
+
+```ts
+const existingByLocale = new Map(existing.map((e) => [e.locale, e]));
+```
+
+`new Map()` dựng từ mảng cặp ⇒ **khoá trùng thì phần tử SAU ĐÈ phần tử TRƯỚC**.
+Và `route.ts:1388` truyền vào **toàn bộ** danh sách Apple trả về, **không dedup**.
+
+⇒ Với item có **hai** dòng cùng locale (ACTIVE + PREPARE_FOR_SUBMISSION — đúng
+hình dạng §28.6/§28.7), planner sẽ PATCH **dòng nào Apple liệt kê SAU CÙNG**.
+
+⚠ **Thứ tự đó không có hợp đồng nào bảo đảm.** Nghĩa là hôm nay hành vi của tool
+trên đúng lớp item này phụ thuộc vào thứ tự Apple trả — trúng bản pending thì
+chạy, trúng bản ACTIVE thì 409.
+
+⚠ **Đây là bug TIỀM TÀNG, không phải giả thuyết:** Manager đã chạy lại **3 lần**
+trong sự cố 2026-09-22, tức lớp item "đã có cả hai dòng" **chắc chắn đã tồn tại**
+từ lần chạy thứ hai trở đi.
+
+⇒ Phải chọn dòng **có chủ đích** (theo `state`), không để `Map` chọn hộ. Ghi
+backlog `[LOCSYNC-duplicate-locale]`. ⚠ Việc này **độc lập** với tính năng so
+sánh: nó sai ngay cả khi không bao giờ làm `[BULKIMPORT-loc-compare-apple]`.
+
+#### ⚠ 28.11.b Điều VẪN CHƯA verify — đừng tưởng §28.11 đã đóng hết
+
+| Câu | Trạng thái |
+|---|---|
+| `GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations` có trả `state` không? | ✅ **CÓ** — đo ở arc trước, ghi tại `localization-sync.ts:36-38` (*"answers with the V1 shape, which carries `state`"*) |
+| `GET /v1/apps/{id}/inAppPurchasesV2?include=inAppPurchaseLocalizations` (lượt LIST, đường "0 request thêm") có trả `state` không? | ⚠ **CHƯA VERIFY** — endpoint **khác**, `include` có thể trả hình dạng V2 (**không có `state`**, §28.3) |
+| Một locale trả về **mấy** bản trong lượt LIST đó? | ⚠ **CHƯA VERIFY** |
+| Dòng "Approved" trên ASC map sang giá trị `state` nào của API? | ⚠ **CHƯA VERIFY.** ⚠⚠ **ĐỪNG đoán là `APPROVED`** — OAS *có* `APPROVED`, nhưng Apple đã chứng minh trả cả `ACTIVE` (một giá trị **ngoài** enum, §28.1). Chữ trên UI **không** là chữ trong API. |
+
+⇒ ⭐ **Nếu lượt LIST không trả `state`, toàn bộ quy tắc "so với bản Approved"
+KHÔNG cài được ở đường 0-request** — phải rơi về `/v2/inAppPurchases/{id}/…`
+**mỗi item một request**, tức tiền đề "0 request thêm" sụp. Đó là lý do probe
+phải đo **sự CÓ MẶT của `state`**, không chỉ đo giá trị của nó.

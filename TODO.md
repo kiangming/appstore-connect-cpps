@@ -28,6 +28,16 @@ Thiết kế + mockup: `docs/iap-management/design-bulk-import-localization-step
     3. `jq '.data[0].relationships.inAppPurchaseLocalizations'` — **dòng quyết định**, có `data` không
     4. `jq '[.data[]|select(.relationships.inAppPurchaseLocalizations.data!=null)]|length'` — bao nhiêu item thật sự có join
   - ⚠ **QUY TẮC FAIL-SAFE bắt buộc khi làm:** không join được Apple ⇒ ô **MẶC ĐỊNH UNTICK** + nhãn *"không đọc được trạng thái trên Apple"*. **Khi không biết, chọn cái KHÔNG GHI.**
+  - ⭐ **CHỐT 1.3 (Manager, 2026-09-23): mốc so sánh là dòng có trạng thái APPROVED.** Căn cứ: Manager test trên ASC — sửa localization đang ở *Prepare for Submission* thì Save **update tại chỗ**, không tạo dòng mới ⇒ dòng Approved là bản người mua đang thấy, dòng pending là bản nháp ghi đè tự do. Mô hình + hệ quả ghi ở **KB §28.11**.
+  - **QUY TẮC ĐẦY ĐỦ (dự thảo — chốt sau probe):**
+    1. Có bản **Approved** → so với bản Approved
+    2. Không có Approved, có bản **pending** → so với bản pending *(CA A — chờ Manager chốt)*
+    3. **Không có localization nào** cho locale đó → **TICK** (add mới)
+    4. **Không hỏi được Apple** → **UNTICK** + nhãn "không đọc được trạng thái" *(fail-safe)*
+    5. Trùng **CẢ HAI** trường → UNTICK; trùng **một** hoặc **không** trùng → TICK
+    ⚠ **Ghim MỖI ca một test riêng.** Ca 3 và ca 4 cho kết quả **NGƯỢC nhau** ⇒ phải phân biệt rõ *"Apple nói không có"* với *"không hỏi được Apple"*. Gộp hai ca này là đúng lớp lỗi `UNKNOWN ≠ PATCHABLE` mà `localization-state.ts` đã phải dựng allow-list để tránh.
+  - ⚠ **CA B — item có CẢ HAI dòng (chạy lại lần hai).** File "188 Vàng." · Approved "188 Vàng" · pending "188 Vàng." ⇒ theo quy tắc 1 thì KHÁC ⇒ TICK ⇒ PATCH **thừa**. Không hại (update tại chỗ), chỉ tốn request + làm Manager tưởng còn việc. ⏳ chờ Manager chốt cách xử. ⚠ **Và CA B chạm đúng `[LOCSYNC-duplicate-locale]`** — hôm nay tool còn chưa chọn đúng dòng để PATCH.
+- [ ] [LOCSYNC-duplicate-locale] ⚠⚠ **BUG TIỀM TÀNG, độc lập với mọi tính năng mới.** `localization-sync.ts:94` dựng `new Map(existing.map((e) => [e.locale, e]))` ⇒ **khoá trùng thì phần tử SAU ĐÈ phần tử TRƯỚC**, và `route.ts:1388` truyền **toàn bộ** danh sách Apple trả về **không dedup**. Item có **hai** dòng cùng locale (Approved + Prepare for Submission — hình dạng đã quan sát, KB §28.6/§28.7) ⇒ tool PATCH **dòng Apple liệt kê SAU CÙNG**, mà thứ tự đó **không có hợp đồng nào bảo đảm**. Trúng bản pending thì chạy, trúng bản ACTIVE thì **409**. ⚠ Manager đã chạy lại **3 lần** trong sự cố 2026-09-22 ⇒ lớp item này **chắc chắn đã tồn tại**. ⇒ Chọn dòng **có chủ đích theo `state`**, đừng để `Map` chọn hộ. Chi tiết: KB §28.11.a.
 - [ ] [CLICKOUTSIDE-3-copies] ⚠ **click-outside đã có BA bản sao — rút hook chung, ĐỪNG viết bản thứ tư.** `components/layout/AccountSwitcher.tsx:42-46` · `components/cpp/CppList.tsx:488-492` · `components/google-iap-management/layout/GoogleAccountSwitcher.tsx:59-63`. Cả ba cùng một hình dạng (`mousedown` + `ref.contains(e.target)`). Arc này cần cái thứ tư cho popover *detail* ⇒ đúng lúc gộp. ⚠ Google là module khác — gộp phải giữ được cả hai, hoặc để Google dùng bản sao của nó và chỉ gộp hai bản Apple. Cần census riêng trước khi động vào file Google.
 
 ### ⚠ Bug CÓ SẴN, sửa kèm — KHÔNG phải hệ quả của arc
