@@ -208,3 +208,39 @@ export type InAppPurchaseVersion = AscResource<
   "inAppPurchaseVersions",
   InAppPurchaseVersionAttributes
 >;
+
+// ─── IAP Localization, V2 MODEL — arc `[LOC-V2-model]` ───────────────────────
+//
+// ⚠⚠ THIS IS A DIFFERENT MODEL FROM `InAppPurchaseLocalization` ABOVE, NOT A
+// NEWER VERSION OF IT. Both are live in OAS 4.4.1 and they disagree about two
+// things that matter:
+//
+//   | | V1 (`InAppPurchaseLocalization`) | V2 (this type) |
+//   |---|---|---|
+//   | `attributes.state` | PRESENT | ⚠ **ABSENT** |
+//   | relationship | `inAppPurchaseV2` → the IAP | `version` → an IAP VERSION |
+//
+// OAS 4.4.1, `#/components/schemas/InAppPurchaseLocalizationV2` — machine-read
+// 2026-09-24: `attributes` = {name, locale, description}; `relationships` =
+// {version: {data: {type: "inAppPurchaseVersions", id}}}.
+//
+// ⚠ `type` IS THE SAME STRING IN BOTH MODELS (`"inAppPurchaseLocalizations"`).
+// Apple did not give the V2 resource its own type name, so a JSON:API
+// `included[]` discriminator CANNOT tell them apart — only the ENDPOINT that
+// produced the document can. That is exactly the trap `client.ts:242` sits in:
+// a path containing "v2" that answers with the V1 shape (KB §28.3, §30.4).
+//
+// ⚠ WHERE THE STATE WENT — do not go looking for it on this type. Under the V2
+// model a localization has no lifecycle of its own; the lifecycle belongs to
+// the VERSION that owns it (`InAppPurchaseVersionState`, 9 values). That is a
+// simplification, not a loss.
+export interface InAppPurchaseLocalizationV2Attributes {
+  locale: string;
+  name: string;
+  description?: string;
+}
+
+export type InAppPurchaseLocalizationV2 = AscResource<
+  "inAppPurchaseLocalizations",
+  InAppPurchaseLocalizationV2Attributes
+>;

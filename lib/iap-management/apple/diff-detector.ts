@@ -18,6 +18,10 @@
  */
 import type { FormLocalization, IapFormState } from "../validation";
 import {
+  normalizeLocalizationText,
+  localizationTextEquals,
+} from "../localization-compare";
+import {
   selectionsEqual,
   type TerritorySelection,
 } from "./territory-selection";
@@ -126,14 +130,16 @@ export interface IapDiff {
   } | null;
 }
 
-const normalize = (s: string | null | undefined): string =>
-  (s ?? "").trim();
-
-/** True when both sides normalize to the same string. */
-const eqText = (
-  a: string | null | undefined,
-  b: string | null | undefined,
-): boolean => normalize(a) === normalize(b);
+/**
+ * ⚠ THESE TWO MOVED TO `lib/iap-management/localization-compare.ts` — they are
+ * ALIASES now, not definitions. Bulk import needs the identical rule to decide
+ * "this cell already matches Apple, untick it", and two implementations of one
+ * comparison is how the two surfaces come to disagree about whether a product
+ * changed. Behaviour is unchanged: trim both ends, case-sensitive, no Unicode
+ * normalization. The reasoning behind each half now lives in that module.
+ */
+const normalize = normalizeLocalizationText;
+const eqText = localizationTextEquals;
 
 export interface DetectIapChangesArgs {
   form: IapFormState;

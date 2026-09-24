@@ -418,6 +418,62 @@ export async function listInAppPurchaseVersions(
 }
 
 /**
+ * ⭐ THE V2 READ — versions of one IAP, each with the localizations it owns.
+ * Arc `[LOC-V2-model]`, chunk V0-snapshot. **GET only. Writes nothing.**
+ *
+ * ⚠⚠ WHY THIS EXISTS WHEN `listInAppPurchaseLocalizations` ALREADY READS
+ * LOCALIZATIONS. They are not two ways to fetch one thing — they are two
+ * MODELS, and only this one can answer the question the arc turns on.
+ *
+ *   `client.ts:242`  GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations
+ *                    → `InAppPurchaseLocalizationsResponse` — the **V1** shape
+ *                      (carries `state`, relates to the IAP). A path with "v2"
+ *                      in it that answers with the V1 model (KB §28.3).
+ *                    ⚠ Apple marks this endpoint **deprecated as of 4.4.1**
+ *                      ("This relationship is deprecated") — read from
+ *                      `metadata.platforms[].deprecatedAt` on
+ *                      developer.apple.com's own operation page, 2026-09-24.
+ *                      ⚠ The OAS file does NOT carry that flag (it flags 159
+ *                      other operations, not this one) — same class of gap as
+ *                      `ACTIVE` missing from the enum (KB §28.1).
+ *
+ *   THIS ONE         GET /v2/inAppPurchases/{id}/versions?include=localizations
+ *                    → `InAppPurchaseVersionsResponse` — versions in `data[]`,
+ *                      their localizations in `included[]` in the **V2** shape.
+ *                      Tells you WHICH VERSION each localization belongs to.
+ *                      That mapping is the whole point.
+ *
+ * ⚠ READ THE JOIN FROM THE PRIMARY SIDE, NEVER FROM `included[]`.
+ * `version.relationships.localizations.data[]` (the version is in `data[]`) is
+ * the edge to trust. `localization.relationships.version.data` comes off a
+ * resource in `included[]`, where Apple ships `links` and omits `data` — the
+ * quirk CLAUDE.md records for CPP. ⚠ MỨC: that omission is **ĐÃ ĐO on the CPP
+ * branch**, and **CHƯA ĐO here** — which is one of the things the V0 snapshot
+ * exists to settle. `summarizeVersionSnapshot` therefore reports the join it
+ * could build AND whether the primary-side edge was present at all.
+ *
+ * ⚠ `limit[localizations]=200` mirrors the existing `?limit=200` on the V1
+ * list. Apple's cap for this sub-limit is not documented in the OAS; 200 is
+ * the same number the sibling read already uses, not a measured ceiling.
+ */
+export async function listInAppPurchaseVersionsWithLocalizations(
+  creds: AscCredentials,
+  iapId: string,
+): Promise<AscApiResponse<InAppPurchaseVersion[]>> {
+  const query = [
+    "include=localizations",
+    "fields[inAppPurchaseVersions]=version,state,localizations",
+    "fields[inAppPurchaseLocalizations]=name,locale,description,version",
+    "limit[localizations]=200",
+  ].join("&");
+  return iapFetch<AscApiResponse<InAppPurchaseVersion[]>>(
+    creds,
+    "GET",
+    `/v2/inAppPurchases/${iapId}/versions?${query}`,
+  );
+}
+
+/**
  * Rare defensive fallback for the v2 submit flow — only called when
  * `listInAppPurchaseVersions` returns no submittable version (should be
  * rare-to-never given the empirical finding above). The created version

@@ -7509,3 +7509,193 @@ grep LOC-STATE-PROBE   (log Railway)
 > **OVERWRITE** (không phải SKIP, không phải CREATE). Đường CREATE **không** gọi
 > `listInAppPurchaseLocalizations` (grep: chỉ **một** call site, `:1419`) nên
 > không có probe nào in ra.
+
+---
+
+## §31 — Mô hình V2 của localization: bốn dữ kiện Apple, một câu viết ẩu, và một bài học phương pháp (2026-09-24)
+
+**Arc `[LOC-V2-model]`.** Mục này ghi **những gì đã đủ chắc**. Câu quyết định
+của arc — *PATCH `/v2/inAppPurchaseLocalizations/{id}` lên localization thuộc
+version APPROVED thì Apple làm gì* — **VẪN CHƯA BIẾT** và **không có mục nào
+dưới đây kết luận thay nó**.
+
+⚠⚠ **KHÔNG CÓ MỤC NÀO Ở ĐÂY NÓI "TOOL PHẢI TỰ TẠO VERSION".** Đó vẫn là CHƯA
+BIẾT. Xem §31.5.
+
+### 31.1 ⭐ Nguồn THỨ HAI, độc lập với OAS: Apple có trang liệt kê status của localization — và `ACTIVE` KHÔNG có trong đó
+
+`developer.apple.com/help/app-store-connect/reference/in-app-purchases-and-subscriptions/in-app-purchase-localization-statuses`
+(tải bằng `curl`, HTTP 200, đọc từ byte — không qua tóm tắt). **Nguyên văn toàn
+bộ bảng:**
+
+| Status | Description |
+|---|---|
+| **Prepare for Submission** | You have created your localization but it is not yet submitted to App Review. |
+| **Waiting for Review** | Your localization is currently being reviewed by App Review. |
+| **Approved** | Your localization has been approved. |
+| **Rejected** | Your localization has been rejected. |
+
+**Bốn status. Trùng KHÍT enum OAS 4.4.1** (`InAppPurchaseLocalization.attributes
+.state`). `grep -w Active` trên trang: **0 hit**.
+
+⇒ **HAI nguồn Apple ĐỘC LẬP** cùng liệt kê đúng bốn, **không nguồn nào có
+`ACTIVE`**. Trước đây §28.1 chỉ có một nguồn (OAS), nên "Apple trả về một state
+mà spec của chính nó không liệt kê" còn có thể đọc là *spec thiếu sót*. Nay nó
+khó đọc như thế hơn.
+
+⚠ **MỨC: nghiêng mạnh về nhánh (a) của §30.3** (`ACTIVE` là **từ vựng nội bộ
+của đường GHI**, không phải status công bố) — **NHƯNG VẪN CHƯA PHẢI BẰNG
+CHỨNG.** Một trang help không liệt kê `ACTIVE` không chứng minh server không
+dùng nó; nó chỉ chứng minh Apple **không công bố** nó. Hai câu khác nhau.
+⛔ **Không được dùng mục này làm căn cứ để thêm `APPROVED` vào blocked-list.**
+Phép phân xử vẫn là §30.6 / §31.5.
+
+⭐ Và trang này xác nhận thêm một điều đã ngầm giả định: trong model V1,
+**localization CÓ vòng đời riêng**, và `Approved` là status của **chính
+localization**, không phải của IAP cha. (⚠ Bẫy §28.2/§30.4 — cùng chữ, khác tài
+nguyên — vẫn phải cảnh giác ở chiều ngược lại.)
+
+### 31.2 Ca "đang review" của ma trận tình huống nay CÓ CĂN CỨ TÀI LIỆU
+
+`…/reference/in-app-purchases-and-subscriptions/in-app-purchase-statuses`,
+nguyên văn, lặp lại **ba lần** cho `Ready for Review`, `Waiting for Review`,
+`In Review`:
+
+> “While your product is in this state, **you can edit only the reference name,
+> pricing, and availability.**”
+
+⇒ Ca **N** của ma trận (*item đang ở `Vinflight`, không có version mở*) không
+còn là phòng xa: Apple **nói thẳng** localization không nằm trong tập sửa được
+lúc đó. Tool phải **UNTICK + nhãn "đang chờ Apple duyệt"**, không phải thử rồi
+nhận lỗi.
+
+⚠ **Giới hạn của trích dẫn này, ghi rõ để không bị đọc rộng:** đây là status của
+**IAP**, không phải của **localization** hay của **version**. Nó nói *"lúc IAP ở
+trạng thái này thì bạn sửa được ngần này"* — đủ để quyết ca N, **không** đủ để
+suy ra bất cứ điều gì về ca APPROVED.
+
+### 31.3 ⚠⚠ Trang `working-with-in-app-purchase-versions` TỰ MÂU THUẪN — đừng đặt kết luận kiến trúc lên nó mà không đối chiếu phép đo
+
+Cùng một section (“Understand the version lifecycle”), cách nhau bảy khối:
+
+| | Nguyên văn |
+|---|---|
+| **[05]** | “`PREPARE_FOR_SUBMISSION`: The version is **open for editing**. You can add, change, or remove localizations and images.” |
+| **[12]** | “**Versions are read-only after creation.** To change a version’s contents, create a new version.” |
+
+**Hai câu này không thể cùng đúng như chữ.** Và **[12] đọc chữ thì MÂU THUẪN VỚI
+PHÉP ĐO CỦA CHÍNH CHÚNG TA**: §28.11 (ĐÃ ĐO trên ASC) — sửa localization của bản
+`Prepare for Submission` thì **update tại chỗ**, không sinh dòng mới.
+
+⇒ **[12] là câu viết ẩu.** Cách đọc dung hoà (⚠ **SUY LUẬN**): "read-only" áp cho
+version **đã rời** `PREPARE_FOR_SUBMISSION`.
+
+⭐ **QUY TẮC RÚT RA — dùng lại được ngoài arc này:**
+> Khi một trang tài liệu **tự mâu thuẫn một lần**, mọi câu khác trên trang đó
+> **tụt một bậc chắc chắn**. Không phải vì câu nào cũng sai, mà vì **không còn
+> căn cứ để phân biệt câu viết chặt với câu viết ẩu**. ⇒ Đối chiếu phép đo
+> trước khi xây lên bất kỳ câu nào của nó.
+
+⚠ Đây **không** phải lý do bỏ trang. Bốn khối của trang (`POST /v1/
+inAppPurchaseVersions` body, `POST /v2/inAppPurchaseLocalizations` body với
+relationship `version`, `GET /v1/inAppPurchaseVersions/{id}/localizations`,
+`GET /v2/inAppPurchases/{id}/versions`) **khớp KHÍT với OAS 4.4.1 đọc bằng
+máy** — những chỗ đó có nguồn thứ hai và đứng vững.
+
+### 31.4 Hai cách đọc câu [02] của trang `migrating-in-app-purchase-metadata-to-v2` — và vì sao KHÔNG chọn bên nào
+
+**Nguyên văn, cả đoạn** (section Overview, đoạn 2/2):
+
+> “The version model separates a product’s stable properties (product ID, type,
+> pricing) from its reviewable metadata (localized names, descriptions, review
+> images). Each review cycle produces one version. **When you need to change any
+> localization or image, you create a new version rather than editing the live
+> product.**”
+
+| | Cách đọc | Dựa vào |
+|---|---|---|
+| **A** | “đổi localization ⇒ phải tạo version mới” ⇒ PATCH lên bản approved không phải đường đi ⇒ **tool phải tự tạo version** | “Each review cycle produces one version” + [12] |
+| **B** | “**editing the live product**” = **kiểu cũ v1**: gắn/sửa localization **thẳng vào resource IAP cha**. Câu này đối lập **hai MÔ HÌNH** (gắn vào product ↔ gắn vào version), **không** phát biểu gì về việc PATCH một localization thuộc version đã approved | cả trang là hướng dẫn **di trú**; đoạn ngay trước dựng đúng phép đối lập đó (“Before 4.4.1, localizations … attached directly to an In-App Purchase”) |
+
+⇒ **KHÔNG CHỌN.** Lý do không chọn quan trọng hơn lựa chọn: **[12] — chân đỡ
+duy nhất của cách đọc A ngoài văn cảnh — chính là câu viết ẩu ở §31.3.** Dựng
+kiến trúc lên A là dựng lên một câu đã hỏng một lần.
+
+⚠ **ĐÃ BÁC MỘT NGHI VẤN, ghi lại để không phải kiểm lần nữa:** có nghi ngờ câu
+[02] thuộc ngữ cảnh **app version** (v1.0 → v1.0.1) chứ không phải **IAP
+version** — tức bẫy §28.2 "tài liệu mô tả sai tầng". **Bác bỏ bằng byte**, bốn
+lớp: (1) tiêu đề trang; (2) vị trí trong cây tài liệu, `hierarchy.paths` kết
+thúc ở `…/AppStoreConnectAPI/in-app-purchase`; (3) đoạn ngay trước nói rõ
+“attached directly to an **In-App Purchase**, subscription, or subscription
+group”; (4) **đếm máy trên toàn file: `appStoreVersion` = 0 hit, “app version” =
+0 hit, `inAppPurchaseVersion` = 12 hit** (trang kia: 0 / 0 / 17).
+
+### 31.5 ⭐⭐ BÀI HỌC PHƯƠNG PHÁP: khi một nền prose lung lay, đừng bỏ kết luận — ĐỔI CHÂN ĐỠ và PHÁT BIỂU HẸP HƠN
+
+Kết luận ban đầu: *"arc không miễn phí — phải dựng luồng tạo version bằng tay"*,
+đặt trên câu [02]. Khi [02] bị chất vấn, có **ba** phản ứng:
+
+| | Phản ứng | Vấn đề |
+|---|---|---|
+| ❌ | giữ nguyên kết luận, bảo vệ câu prose | dựng tiếp trên nền đã lung lay |
+| ❌ | bỏ kết luận, quay về "chưa biết gì" | **vứt đi cả phần có nền khác** |
+| ✅ | **tách kết luận thành các mệnh đề con, tìm chân đỡ RIÊNG cho từng cái, hạ mức đúng cái nào mất nền** | — |
+
+Áp vào:
+
+| Mệnh đề con | Chân đỡ MỚI | Mức |
+|---|---|---|
+| Sửa localization của item **đang live** ⇒ **có version IAP mới ra đời** ⇒ **phải duyệt lại** | **ảnh ASC của Manager**: hai dòng cùng locale, **hai version id khác nhau** (§28.11, §28.11.a) | ✅ **ĐÃ ĐO** — không cần prose |
+| Sửa metadata của IAP **đã submit** cần App Review duyệt | Apple help `view-and-edit-in-app-purchase-information`: *“if your In-App Purchase was already submitted, **some changes require approval by App Review**”* | ✅ **TÀI LIỆU** — nguồn thứ ba, độc lập |
+| **AI tạo** version đó — Apple ngầm khi PATCH v2, hay tool phải gọi `POST /v1/inAppPurchaseVersions`? | — | ❌ **CHƯA BIẾT** |
+
+⇒ Hệ quả nghiệp vụ (**duyệt lại ⇒ tên mới không hiển thị với người mua cho tới
+khi Apple duyệt**) **đứng vững trong MỌI nhánh** ⇒ câu hỏi "tool có tự submit
+không" vẫn phải hỏi Manager.
+⇒ Chỉ **chi phí kỹ thuật** của arc là chưa biết: Apple ngầm tạo ⇒ **không có
+rủi ro version mồ côi**; tool phải tạo ⇒ giữ nguyên cả bộ ràng buộc chống mồ côi.
+
+⭐ **Cùng họ với bài học §30.3** (*nhãn mức không phải để ĐÚNG — để SAI MỘT CÁCH
+RẺ*), nhưng là **bước tiếp theo** của nó: §30.3 nói cách **dán nhãn** để sai rẻ;
+§31.5 nói cách **sửa** khi đã sai — không phải rút lui toàn tuyến, mà **thu hẹp
+phát biểu về đúng phần còn chân đỡ**.
+
+### 31.6 ⚠ Thêm một lớp lệch giữa OAS và doc-site: DEPRECATION
+
+Apple đánh dấu deprecated **trên doc-site** cho hai endpoint mà tool đang dùng,
+đọc từ `metadata.platforms[].deprecatedAt` của chính trang operation:
+
+| Endpoint | Doc site | OAS 4.4.1 |
+|---|---|---|
+| `PATCH /v1/inAppPurchaseLocalizations/{id}` (`client.ts:283`) | **deprecated @ 4.4.1** | ❌ **không đánh dấu** |
+| `GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations` (`client.ts:242`) | **deprecated @ 4.4.1** (*“This relationship is deprecated”*) | ❌ **không đánh dấu** |
+| `GET /v1/inAppPurchaseVersions/{id}/localizations` | không deprecated | — |
+
+⚠ OAS 4.4.1 **có** đánh dấu `deprecated: true` cho **159 operation khác** (gồm
+`GET /v1/inAppPurchases/{id}`, `GET /v1/apps/{id}/inAppPurchases`) — nên đây
+không phải "file OAS không dùng cờ đó".
+
+⇒ **Cùng lớp lỗi với §28.1** (`ACTIVE` thiếu trong enum): **OAS không phải nguồn
+đầy đủ.** Bổ sung vào checklist tra cứu: tra OAS **và** trang operation trên
+doc-site; hai nguồn trả lời hai câu khác nhau.
+
+### 31.7 Phép đo tiếp theo, và vì sao nó tách làm HAI lần bấm
+
+Manager chốt 2026-09-24: **lần 1 read-only trên nhiều item, lần 2 mới ghi trên
+một item**. Lý do, nguyên văn: *“Quyết định ghi trước khi nhìn là quyết định
+mù.”*
+
+- **Lần 1 — `LOCV2-SNAPSHOT`** (`GET /api/iap-management/apps/{id}/loc-v2-snapshot?products=…`).
+  Zero-write, cưỡng chế bằng `zero-write.structural.test.ts` (allow-list bắt rễ
+  vào **verb thật trong `client.ts`**, không vào quy ước đặt tên).
+  ⭐ **Nó đóng luôn câu nguy hiểm nhất mà không ghi một byte**: item Manager đã
+  sửa tay có version thứ hai — version đó chứa **mấy locale**? Ít hơn bản
+  approved ⇒ **KHÔNG kế thừa** ⇒ item nhiều locale có thể **mất locale** khi
+  duyệt. Bằng chứng đã nằm sẵn trên server Apple, chỉ cần ĐỌC.
+- **Lần 2 — ghi**, chỉ chạy sau khi Manager xem kết quả lần 1. Bảng phân xử:
+  §30.6 + thiết kế 4 bước/2 giai đoạn của arc.
+  ⚠ Giữ nguyên cảnh báo: gửi nội dung **y hệt** là an toàn nhất **nhưng**
+  `200` + không có version mới là kết quả **NHẬP NHẰNG** (sửa-tại-chỗ-được, hay
+  Apple thấy không đổi nên không làm gì — không phân biệt được). Và **S1 dù gửi
+  y hệt vẫn CHƯA BIẾT có tạo version hay không** — đừng hứa vô hại.
+

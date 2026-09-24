@@ -2,6 +2,50 @@
 
 Format: `- [ ] [PR-X] description — file path — rationale`
 
+## From [LOC-V2-model] (mô hình V2 của localization, 2026-09-24)
+
+**Trạng thái: CHẶN BỞI MỘT PHÉP ĐO.** Câu quyết định — *PATCH
+`/v2/inAppPurchaseLocalizations/{id}` lên localization thuộc version APPROVED
+thì Apple làm gì, và AI tạo version mới* — **CHƯA BIẾT**. Mô hình + bốn dữ kiện
+Apple + bài học phương pháp: **KB §31**.
+
+- [ ] [LOCV2-snapshot-run] ⏳ **CHỜ MANAGER CHẠY — lần 1, read-only.**
+  `GET /api/iap-management/apps/{appleAppId}/loc-v2-snapshot?products=a,b,c`
+  (mở thẳng trên trình duyệt, đã đăng nhập). Chọn **vài** item: đã-sửa-tay ·
+  chưa-sửa · **≥2 locale** nếu có. ⭐ Trả lời luôn câu **kế thừa** (§1.6) mà
+  **không ghi một byte**: version thứ hai của item đã sửa tay chứa **mấy
+  locale**? Ít hơn bản approved ⇒ **KHÔNG kế thừa**. Zero-write cưỡng chế bằng
+  `zero-write.structural.test.ts`.
+- [ ] [LOCV2-write-probe] ⏸ **CHẶN bởi `[LOCV2-snapshot-run]`.** Lần 2 — phép
+  đo GHI (S1), một item Manager chọn **sau khi xem kết quả lần 1**. Thiết kế 4
+  bước + 2 giai đoạn + bảng phân xử: KB §31.7 + §30.6. ⚠ `200` + không có
+  version mới là kết quả **NHẬP NHẰNG** ⇒ S2 chỉ chạy khi Manager đồng ý riêng.
+- [ ] [LOCV2-snapshot-remove] ⏳ **GỠ instrumentation sau khi nó trả lời.**
+  `app/api/iap-management/apps/[appId]/loc-v2-snapshot/` (route + test) ·
+  `lib/iap-management/bulk-import/localization-v2-snapshot.ts` + test ·
+  `listInAppPurchaseVersionsWithLocalizations` **chỉ khi** đường V2 thật không
+  dùng nó · **và dòng `loc-v2-snapshot` trong `LIST_ALL_SITES`**
+  (`retry-composition.structural.test.ts`) — dòng đó tự khai là tạm. Tiền lệ:
+  `LOC-STATE-PROBE`, dòng DEBUG 429-header của arc key-pool.
+- [ ] [LOCV2-client-migrate] ⏸ **TẠM DỪNG (Manager, 2026-09-24)** — chờ kết quả
+  đo. Nếu Apple **ngầm** tạo version thì chữ ký `create` **không** cần
+  `versionId` ⇒ xây trước là xây sai hướng. Census 4 đường ghi + 3 đường đọc,
+  bảng tương đương v1→v2, chi phí (6 file code, 3 file test, 8 assert endpoint):
+  báo cáo arc + KB §31.6.
+- [x] [LOCV2-compare] ✅ **XONG.** Bộ so sánh thuần
+  `lib/iap-management/localization-compare.ts`: `trim` hai đầu ·
+  **case-sensitive** · **KHÔNG** normalize Unicode. ⭐ `diff-detector.ts` nay
+  **import chính nó** thay vì giữ bản sao (`eqText`/`normalize` thành alias) —
+  một luật, không phải hai. 30/30 test cũ của diff-detector vẫn xanh.
+- [ ] [LOCV2-nfc-decide] ⚠ **CẦN MANAGER CHỐT (Q5) — chặn bởi số đo.** Excel và
+  Apple có encode dấu tiếng Việt **khác nhau** không (NFC vs NFD)? Repo
+  **không** có fixture nào chứa response Apple có dấu ⇒ không tra được, phải
+  đo codepoint. Nếu khác: `"Vàng"` vs `"Vàng"` nhìn y hệt mà so **KHÁC** ⇒ ô
+  không đổi bị xếp là đổi ⇒ dưới model V2 có thể **tốn một version + một vòng
+  duyệt cho một thay đổi không tồn tại**. Test ca 4 trong
+  `localization-compare.test.ts` **ghim hành vi hôm nay**, có chú thích rõ nó
+  KHÔNG phải quyết định — đổi theo Q5 khi có số đo.
+
 ## From [BULKIMPORT-loc-step] (step Localization cho Bulk Import, 2026-09-23)
 
 **Trạng thái: PHẠM VI ĐÃ THU HẸP (Manager, 2026-09-23).** Step mới chỉ hiển
