@@ -9,19 +9,20 @@ Format: `- [ ] [PR-X] description — file path — rationale`
 thì Apple làm gì, và AI tạo version mới* — **CHƯA BIẾT**. Mô hình + bốn dữ kiện
 Apple + bài học phương pháp: **KB §31**.
 
-- [ ] [LOCV2-snapshot-run] ⏳ **CHỜ MANAGER CHẠY LẠI — lần 1, read-only.**
-  App `6744642671`, 3 item: `com.pure3q.sea.mb6` (đã sửa tay) ·
-  `com.pure3q.sea.mb30` (đối chứng) · `com.pure3q.sea.mb68` (nhiều locale).
-  ⚠ Lần chạy 2026-09-25 hỏng **400 cả 3** — `limit[localizations]=200` trong
-  khi trần là **50** (KB §31.8). Đã sửa, **và đã đổi luôn cách đọc** sang
-  2 tầng vì pointer V2 có thể bị cắt (KB §31.9, §4.1 LANDMARK).
-  ⭐ Trả lời câu **kế thừa** mà **không ghi một byte**. Zero-write cưỡng chế
-  bằng `zero-write.structural.test.ts`. ⚠ Đọc `flags=[…]` TRƯỚC `locsByVersion`:
-  có cờ nào thì danh sách locale có thể ngắn hơn thực tế.
-- [ ] [LOCV2-write-probe] ⏸ **CHẶN bởi `[LOCV2-snapshot-run]`.** Lần 2 — phép
-  đo GHI (S1), một item Manager chọn **sau khi xem kết quả lần 1**. Thiết kế 4
-  bước + 2 giai đoạn + bảng phân xử: KB §31.7 + §30.6. ⚠ `200` + không có
+- [x] [LOCV2-snapshot-run] ✅ **XONG 2026-09-25 — và nó ĐÓNG câu nguy hiểm
+  nhất, zero write.** App `6744642671`: `mb6` (đã sửa tay) có **2 version**,
+  **cả hai** `{en-US,id,th}` ⇒ ⭐ **CÓ KẾ THỪA, ĐÃ ĐO**; `mb30`+`mb68` mỗi item
+  **1 version APPROVED** ⇒ xác nhận **qua API** rằng IAP live không có version
+  mở sẵn. `flags=[]` cả ba. Chi tiết + giới hạn: **KB §31.11**.
+  ⚠ Giới hạn: version đó do **ASC** tạo; version do **API** tạo có kế thừa
+  không thì **CHƯA ĐO** — và chỉ quan trọng nếu nhánh "tool tự tạo version" đúng.
+  ⚠ n=3 < 10 ⇒ **§4.1 landmark chưa quan sát được**; GIỮ kiến trúc 2 tầng.
+- [ ] [LOCV2-write-probe] ⏳ **CHỜ MANAGER DUYỆT — lần 2, phép đo GHI.**
+  Nay là **câu DUY NHẤT còn lại của arc**: PATCH v2 lên localization thuộc
+  version APPROVED ⇒ Apple trả gì, có version mới không? Thiết kế 4 bước +
+  2 giai đoạn + bảng phân xử: KB §31.7 + §30.6 + §31.13. ⚠ `200` + không có
   version mới là kết quả **NHẬP NHẰNG** ⇒ S2 chỉ chạy khi Manager đồng ý riêng.
+  ⚠ S1 dù gửi nội dung y hệt vẫn **CHƯA BIẾT** có tạo version hay không.
 - [ ] [LOCV2-snapshot-remove] ⏳ **GỠ instrumentation sau khi nó trả lời.**
   `app/api/iap-management/apps/[appId]/loc-v2-snapshot/` (route + test) ·
   `lib/iap-management/bulk-import/localization-v2-snapshot.ts` + test ·
@@ -29,6 +30,11 @@ Apple + bài học phương pháp: **KB §31**.
   dùng nó · **và dòng `loc-v2-snapshot` trong `LIST_ALL_SITES`**
   (`retry-composition.structural.test.ts`) — dòng đó tự khai là tạm. Tiền lệ:
   `LOC-STATE-PROBE`, dòng DEBUG 429-header của arc key-pool.
+- [x] [LOCV2-inherit-copy] ✅ **GỠ KHỎI THIẾT KẾ.** Bước "copy đủ locale sang
+  version mới" **không cần nữa** (§31.11a). Rút gọn: ~2 request/item, và — đáng
+  kể hơn — **xoá hẳn một lớp trạng thái trung gian nguy hiểm** (version tồn tại
+  mà thiếu locale trên item đang bán). ⛔ **KHÔNG gỡ** 6 ràng buộc chống version
+  mồ côi (§31.12) — chúng chặn bởi câu "ai tạo version", chưa đóng.
 - [ ] [LOCV2-client-migrate] ⏸ **TẠM DỪNG (Manager, 2026-09-24)** — chờ kết quả
   đo. Nếu Apple **ngầm** tạo version thì chữ ký `create` **không** cần
   `versionId` ⇒ xây trước là xây sai hướng. Census 4 đường ghi + 3 đường đọc,

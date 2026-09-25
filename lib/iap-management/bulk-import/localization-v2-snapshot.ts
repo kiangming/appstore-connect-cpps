@@ -8,15 +8,29 @@
  * runs over several IAPs; the Manager reads the result and only then chooses
  * which single IAP part 2 may write to.
  *
- * ⭐ IT CLOSES THE MOST DANGEROUS OPEN QUESTION WITHOUT A SINGLE WRITE.
- * The question is **inheritance**: when a second version comes into existence
+ * ⭐⭐ IT CLOSED THE MOST DANGEROUS OPEN QUESTION WITHOUT A SINGLE WRITE — AND
+ * THE ANSWER IS IN (2026-09-25, KB §31.11).
+ * The question was **inheritance**: when a second version comes into existence
  * for a live IAP, does it CARRY OVER the approved version's other locales, or
- * start with only the locale that changed? If it starts empty-but-one, a
- * multi-locale product whose version ships with a single locale could **lose
- * the rest at approval** — data loss on an item that is currently selling. The
- * Manager has ALREADY produced such a second version by hand (KB §28.11 —
- * two `Vietnamese` rows, two distinct version ids), so the evidence is already
- * on Apple's servers. It only had to be READ.
+ * start with only the locale that changed? Starting empty-but-one would mean a
+ * multi-locale product could **lose the rest at approval** — data loss on an
+ * item that is currently selling.
+ *
+ *   **ĐÃ ĐO: IT INHERITS.** `com.pure3q.sea.mb6`, hand-edited in ASC, came back
+ *   with TWO versions and BOTH list `{en-US, id, th}` — the draft carries the
+ *   full locale set, not just the edited one. `flags=[]`, so the reading is
+ *   clean. ⇒ The design no longer copies locales onto a new version.
+ *
+ * ⚠ THE EVIDENCE WAS ALREADY ON APPLE'S SERVERS, put there by the Manager's own
+ * hand-edit weeks earlier. ⭐ Worth keeping as a habit: before designing a
+ * WRITE experiment, check whether the system has already produced the evidence
+ * by accident.
+ *
+ * ⚠ LIMIT OF THAT MEASUREMENT — do not widen it. The version was created by
+ * **ASC**. Whether a version created by the **API**
+ * (`POST /v1/inAppPurchaseVersions`) also inherits is **CHƯA ĐO**: ASC could
+ * copy at the UI layer while the API hands back an empty container. It only
+ * matters if the "tool must create the version itself" branch turns out true.
  *
  * ─── ⚠⚠ WHY THIS MODULE TAKES **TWO** SOURCES AND NOT ONE ──────────────────
  *
@@ -42,6 +56,15 @@
  *   was established on `manualPrices`, never on `localizations`, and
  *   `pointerDisagrees` reports whether it holds here too. Same diagnostic
  *   fingerprint the KB names — "Stage 1 rel_count < Stage 2 total".
+ *
+ * ⚠⚠ AND THE FIRST RUN DID NOT CLEAR THE LANDMARK — DO NOT COLLAPSE BACK TO
+ * ONE STAGE. Every version read on 2026-09-25 had **n=3** locales and
+ * `pointerDisagrees` was false everywhere. §4.1 is a cap at **10 IDs**: at n=3
+ * truncation CANNOT be observed. That run proves "no truncation at n=3", not
+ * "no truncation". Apple ships ~40 App Store locales, so the condition simply
+ * has not occurred yet. ⭐ A guard that has never fired because its trigger has
+ * never occurred is not a dead guard (cf. §29.4, where the guarded value did
+ * not exist at all — a different thing).
  *
  * ⚠ WHAT THIS MODULE DOES **NOT** ANSWER. It cannot say what Apple does when
  * you `PATCH /v2/inAppPurchaseLocalizations/{id}` against a localization owned

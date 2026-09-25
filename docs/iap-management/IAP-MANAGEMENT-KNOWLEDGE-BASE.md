@@ -7820,3 +7820,176 @@ hai nó trả tiền**, và lần này cho một tính năng mới toanh ngay l�
 ⇒ Hệ quả: route read-only **hành xử đúng hợp đồng khi hỏng** — chết ở bước GET,
 **không ghi gì**, đúng như `zero-write.structural.test.ts` cưỡng chế.
 
+
+### 31.11 ⭐⭐ KẾT QUẢ SNAPSHOT (2026-09-25) — kế thừa CÓ, đo được, không ghi một byte
+
+**App `6744642671`, 3 item, `flags=[]` ở CẢ BA:**
+
+| product | version | state | locales | ptr |
+|---|---|---|---|---|
+| `com.pure3q.sea.mb6` (**đã sửa tay**) | `8f825f18` | `PREPARE_FOR_SUBMISSION` | `{en-US, id, th}` | 3 |
+| | `42624658` | `APPROVED` | `{en-US, id, th}` | 3 |
+| `com.pure3q.sea.mb30` (chưa sửa) | 1 version | `APPROVED` | `{en-US, id, th}` | 3 |
+| `com.pure3q.sea.mb68` (chưa sửa) | 1 version | `APPROVED` | `{en-US, id, th}` | 3 |
+
+#### (a) ⭐ VERSION MỚI **CÓ KẾ THỪA** — **ĐÃ ĐO**
+
+Version draft của `mb6` chứa **đủ 3 locale y hệt** version APPROVED. Không phải
+"chỉ locale vừa sửa".
+
+⇒ **Rủi ro "item nhiều locale mất ngôn ngữ khi duyệt" KHÔNG TỒN TẠI.** Đây là
+câu nguy hiểm nhất của arc (mất dữ liệu trên item đang bán) và nó đóng lại
+**bằng một lượt ĐỌC**, vì bằng chứng đã nằm sẵn trên server Apple từ lần Manager
+sửa tay. ⭐ Khuôn đáng nhớ: **trước khi thiết kế một phép đo GHI, hỏi xem hệ
+thống đã vô tình tạo sẵn bằng chứng chưa.**
+
+⚠⚠ **GIỚI HẠN CỦA PHÉP ĐO — ĐỪNG NỚI.** Version `8f825f18` do **ASC tạo** (Manager
+bấm Save trên UI). **CHƯA ĐO:** version do **API tạo** (`POST /v1/inAppPurchaseVersions`)
+có kế thừa không. Hai đường khác nhau — ASC hoàn toàn có thể copy ở tầng UI
+trong khi API trả về một hộp rỗng.
+⇒ Câu này **chỉ quan trọng nếu** nhánh *"tool phải tự tạo version"* đúng. Nếu
+Apple ngầm tạo khi PATCH v2 thì nó **không nằm trên đường đi**.
+
+#### (b) IAP live có đúng MỘT version APPROVED — nay xác nhận **QUA API**
+
+`mb30` và `mb68`: mỗi item **một** version, state `APPROVED`. Trước nay điều này
+chỉ đo qua **ASC UI** (phép đo #4 của sự cố 20 dòng: Manager mở item chưa sửa,
+thấy đúng một dòng). Nay có **nguồn thứ hai, qua API**, trên hai item độc lập.
+
+⇒ Củng cố §28.11: *IAP live KHÔNG có version mở sẵn* ⇒ sửa localization của nó
+bắt buộc sinh version mới. Và `mb6` cho thấy **hình dạng sau khi sửa**: đúng
+hai version, draft kế thừa đủ.
+
+#### (c) ⚠⚠ §4.1 landmark KHÔNG quan sát được ở n=3 — đây là GIỚI HẠN, không phải bằng chứng phủ định
+
+`pointerDisagrees=false` ở **mọi** version. Rất dễ đọc thành *"§4.1 không áp cho
+`localizations`, bỏ tầng 2 đi cho gọn"*. ⛔ **Sai.**
+
+**§4.1 là bẫy cắt ở 10 ID. Cả 3 item đều có n=3.** Ở n=3 thì **không thể** thấy
+truncation — pointer đầy đủ ở đây chứng minh *"ở n=3 thì không cắt"*, **không**
+chứng minh *"không bao giờ cắt"*. Phép đo chưa bao giờ chạm tới ngưỡng.
+
+⇒ **GIỮ kiến trúc hai tầng.** Cờ `PTR_SHORT` chỉ có cơ hội bắn khi gặp app
+nhiều locale (Apple hỗ trợ ~40; `lib/locale-map.json` có 39). Ngày đó đến thì
+cờ đã sẵn ở đó.
+⭐ **Lớp lỗi đáng ghi: một phép đo chạy sạch dưới ngưỡng của bẫy KHÔNG phải
+bằng chứng rằng bẫy không có.** Cùng họ với §29.4 (guard không bao giờ bắn):
+ở đây guard **có** bắn được, chỉ là **điều kiện kích hoạt chưa từng xuất hiện**.
+Đừng gỡ nó vì nó im lặng.
+
+#### (d) Khuôn hai tầng + ba cờ chạy sạch ngay lần đầu
+
+`FETCH_FAILED` · `MORE_PAGES` · `PTR_SHORT` — cả ba im, và `flags=[]` là thứ
+khiến `locsByVersion` **đọc thẳng được**. Nếu không có ba cờ đó thì cùng một
+dòng output ấy **không phân biệt được** "3 locale" với "3 locale đọc được trong
+số nhiều hơn". Giữ nguyên khuôn.
+
+#### ⇒ Câu DUY NHẤT còn lại của arc — không đổi
+
+> **`PATCH /v2/inAppPurchaseLocalizations/{id}` lên localization thuộc version
+> APPROVED — Apple trả gì, và có version mới ra đời không?**
+
+Ba nhánh, ba chi phí arc rất khác nhau (bảng phân xử §30.6 + §31.7). **Chỉ trả
+lời được bằng một lượt GHI thật.**
+
+
+### 31.12 Thiết kế sau §31.11 — cái gỡ được, và cái KHÔNG gỡ
+
+#### ⭐ GỠ: mọi bước "copy locale sang version mới"
+
+Trước §31.11 thiết kế phải phòng ca *version mới rỗng*: sau khi tạo version,
+**đọc đủ locale của bản APPROVED rồi POST lại từng cái**, nếu không item nhiều
+locale có thể mất ngôn ngữ khi duyệt. **Không cần nữa.**
+
+Rút gọn được, cho một item n locale trong đó k locale thật sự đổi:
+
+| | Trước | Sau |
+|---|---|---|
+| Request/item | 1 đọc + 1 tạo version + **n** POST | 1 đọc + (0-1) tạo version + **k** ghi |
+| Ca lỗi phải xử | POST locale thứ i hỏng ⇒ version **thiếu locale** ⇒ mất ngôn ngữ khi duyệt | không tồn tại |
+| Trạng thái trung gian nguy hiểm | có — version tồn tại mà chưa đủ locale | không |
+| Cần đọc bản APPROVED để copy? | **có** | **không** |
+
+⚠ Với lô 88 dòng và n≈3, đó là chênh **~2 request/item** và — đáng kể hơn —
+**một lớp trạng thái trung gian nguy hiểm biến mất hoàn toàn**: không còn thời
+điểm nào tồn tại một version **thiếu locale** trên item đang bán.
+
+#### ⛔ KHÔNG GỠ: sáu ràng buộc chống version mồ côi
+
+Chúng **không** bị chặn bởi câu kế thừa — chúng bị chặn bởi câu **"ai tạo
+version"**, và câu đó **vẫn CHƯA BIẾT**. Giữ nguyên toàn bộ:
+
+1. tạo version **muộn nhất có thể** (sau khi đã so sánh, chỉ khi thật sự ghi)
+2. kiểm trước mọi thứ kiểm được **mà không cần** version
+3. **tái dùng `Vdraft` trước, tạo sau** — khuôn `resolveInAppPurchaseVersionId`
+   (`submit-v2.ts:109-138`) đã có sẵn, tái dùng đừng viết lại
+4. tạo xong mà hỏng ⇒ **ghi lại + báo đích danh**, không nuốt
+5. nhánh tạo-version chạy **tuần tự** (concurrency hiện = 2, `execute/route.ts:140`)
+6. **ngưỡng dừng**: k item liên tiếp tạo version rồi ghi hỏng ⇒ **dừng cả lô**
+
+⚠ Và nhớ: `inAppPurchaseVersions` **KHÔNG CÓ DELETE** (xác minh 3 lớp: 8 path,
+0 `_deleteInstance`, nhóm đối chứng 13 DELETE trên resource version anh em).
+Tạo rồi hỏng = **artifact vĩnh viễn trên item đang bán**.
+
+#### Cái cũng không đổi
+
+Hệ quả nghiệp vụ **duyệt lại** (§31.5): item live bị sửa localization ⇒ version
+mới ⇒ **tên mới không hiển thị với người mua tới khi Apple duyệt**. Đúng trong
+**mọi** nhánh ⇒ câu hỏi *"tool tự submit hay Manager submit tay"* vẫn nguyên.
+
+
+### 31.13 Lần 2 — phép đo GHI, bản cập nhật sau §31.11 (⏳ CHỜ MANAGER DUYỆT)
+
+**Câu cần trả lời (duy nhất còn lại của arc):** `PATCH /v2/inAppPurchaseLocalizations/{id}`
+lên một localization thuộc version **APPROVED** — Apple trả gì, và **có version
+mới ra đời không**?
+
+#### Bốn bước, một lần bấm
+
+| Bước | Việc | Ghi? |
+|---|---|---|
+| 1 | **SNAPSHOT TRƯỚC** — đúng lượt đọc 2 tầng của §31.9 | KHÔNG |
+| 2 | **CHỌN ĐÍCH** — version `state ∈ {APPROVED, ACCEPTED}` → localization id của locale cần đo. ⚠ Không tìm thấy ⇒ **DỪNG, báo, không ghi** | KHÔNG |
+| 3 | **GHI** — `PATCH /v2/inAppPurchaseLocalizations/{locId}`; log **HTTP status + TOÀN BỘ body**, khuôn `failedDetail[].full` | ⚠ **CÓ** |
+| 4 | **SNAPSHOT SAU** — lặp bước 1, diff: **số version · state từng version · locale từng version** | KHÔNG |
+
+Bước 4 là thứ phân biệt ba nhánh; thiếu nó thì `200` không nói được gì.
+
+#### Hai giai đoạn
+
+| | Payload | Chạy khi | Ý nghĩa |
+|---|---|---|---|
+| **S1** | **y hệt giá trị đang có** | luôn | `409` ⇒ **đóng câu hỏi** · `200` + version mới ⇒ **đóng** · `200` + **không** version mới ⇒ **NHẬP NHẰNG → S2** |
+| **S2** | một thay đổi vô hại, có chủ đích | **chỉ khi S1 nhập nhằng, VÀ Manager đồng ý RIÊNG** | phân biệt "sửa tại chỗ được" với "Apple thấy không đổi nên không làm gì" |
+
+⚠⚠ **S1 dù gửi y hệt vẫn CHƯA BIẾT có tạo version hay không.** Không hứa vô hại.
+
+#### Bảng phân xử (giữ nguyên §30.6, cập nhật cột hệ quả)
+
+| Bước 3 | Bước 4 | Kết luận | Hệ quả arc |
+|---|---|---|---|
+| **409** | — | v2 cũng bị chặn ⇒ **tool phải tự tạo version** | 6 ràng buộc §31.12 giữ nguyên · ⚠ mở lại câu **"version do API tạo có kế thừa không"** (§31.11a) |
+| **200** | **CÓ** version mới `PREPARE_FOR_SUBMISSION` | ⭐ **Apple tự tạo ngầm** — đúng thứ Manager mô tả ban đầu | **không có rủi ro mồ côi** · câu kế thừa-qua-API **không nằm trên đường đi** · arc nhẹ hẳn |
+| **200** | KHÔNG | ⚠ nhập nhằng | → S2 |
+| **200** (S2) | KHÔNG, nội dung đã đổi | ⭐⭐ **sửa thẳng tại chỗ** | arc gọn nhất · ⚠ va với ảnh ASC ⇒ phải giải thích và ghi KB, đừng nuốt |
+| 4xx nói giá trị **KHÁC** | — | **dữ kiện mới, cả ba nhánh sai** | **DỪNG, báo lại** |
+
+#### ⚠ Chọn item — đánh đổi, KHÔNG tự chốt
+
+| | `mb6` (đã có draft sẵn) | `mb30` / `mb68` (1 version) |
+|---|---|---|
+| Tín hiệu "version mới ra đời" | ⚠ **lẫn** — đã có `8f825f18`; phải đếm sang **version thứ BA** | ⭐ **sạch** — 1 → 2 là tín hiệu không thể nhầm |
+| Nếu Apple **tái dùng** draft sẵn có thay vì tạo mới | ⭐ **chỉ `mb6` phát hiện được** — và đó là một hành vi thứ tư đáng biết | không quan sát được |
+| Rủi ro nếu S1 ghi thật | thấp hơn — item **đã** đang chờ duyệt rồi | ⚠ cao hơn — kéo một item **đang yên** vào vòng duyệt |
+| Nội dung đổi? | không (S1 gửi y hệt) | không (S1 gửi y hệt) |
+
+⇒ **ĐỀ XUẤT: `mb6`.** Lý do: (1) rủi ro nghiệp vụ **thấp nhất** — item đó đã có
+version chờ duyệt, S1 không kéo thêm item nào đang yên vào vòng duyệt;
+(2) nó là item **duy nhất** phát hiện được nhánh thứ tư *"Apple ghi vào draft
+sẵn có"*, vốn là kết quả **tốt nhất có thể** cho tool (không version mới, không
+duyệt thêm).
+⚠ Đánh đổi phải nói rõ: **tín hiệu đếm version lẫn hơn** — phải đọc `2 → 3`,
+không phải `1 → 2`. Bước 4 in **toàn bộ** danh sách version nên vẫn đọc được,
+chỉ là kém hiển nhiên.
+⇒ Nếu Manager ưu tiên **tín hiệu sạch** hơn **rủi ro thấp**, chọn `mb30`.
+
