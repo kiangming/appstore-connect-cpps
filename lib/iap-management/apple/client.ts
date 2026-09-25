@@ -292,6 +292,51 @@ export async function updateInAppPurchaseLocalization(
   );
 }
 
+/**
+ * ⚠⚠ THE V2 WRITE — **the only write the `[LOC-V2-model]` arc makes.**
+ * `PATCH /v2/inAppPurchaseLocalizations/{id}`.
+ *
+ * ⚠ USED BY THE WRITE PROBE ONLY (`loc-v2-write-probe/route.ts`). It is NOT
+ * wired into bulk import or the edit form, and must not be until the probe
+ * answers what Apple does with it. `[LOCV2-client-migrate]` is the chunk that
+ * would do that, and it is deliberately on hold.
+ *
+ * ⭐ THE BODY IS BYTE-IDENTICAL TO V1 — verified by machine, not by eye.
+ * `InAppPurchaseLocalizationUpdateRequest` and
+ * `InAppPurchaseLocalizationV2UpdateRequest` in OAS 4.4.1 compare EQUAL after
+ * dropping `title`: same `data.type` enum (`"inAppPurchaseLocalizations"` —
+ * Apple did not rename the type), same `data.id`, same nullable
+ * `attributes.{name, description}`, same `required: ["id","type"]`.
+ * ⇒ Moving a PATCH from v1 to v2 changes the **PATH ONLY**. That is why this
+ * function is a near-copy of `updateInAppPurchaseLocalization` rather than a
+ * new shape — the difference really is one segment of the URL.
+ *
+ * ⚠ AND THAT SAMENESS IS ALSO A TRAP. Because the type string and the body are
+ * identical, nothing in a request or a response tells you which MODEL you are
+ * in. Only the path does (KB §28.3, §30.4). Read the path.
+ */
+export async function updateInAppPurchaseLocalizationV2(
+  creds: AscCredentials,
+  localizationId: string,
+  patch: UpdateInAppPurchaseLocalizationPayload,
+): Promise<AscApiResponse<InAppPurchaseLocalizationV2>> {
+  const attrs: Record<string, unknown> = {};
+  if (patch.name !== undefined) attrs.name = patch.name;
+  if (patch.description !== undefined) attrs.description = patch.description;
+  return iapFetch<AscApiResponse<InAppPurchaseLocalizationV2>>(
+    creds,
+    "PATCH",
+    `/v2/inAppPurchaseLocalizations/${localizationId}`,
+    {
+      data: {
+        type: "inAppPurchaseLocalizations",
+        id: localizationId,
+        attributes: attrs,
+      },
+    },
+  );
+}
+
 /** IAP.o.12a — DELETE a localization. Used by update-orchestration when the
  *  Manager removes a locale from the edit form. */
 export async function deleteInAppPurchaseLocalization(

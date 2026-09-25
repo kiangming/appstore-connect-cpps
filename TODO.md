@@ -23,7 +23,19 @@ Apple + bài học phương pháp: **KB §31**.
   ⚠ Giới hạn: version đó do **ASC** tạo; version do **API** tạo có kế thừa
   không thì **CHƯA ĐO** — và chỉ quan trọng nếu nhánh "tool tự tạo version" đúng.
   ⚠ n=3 < 10 ⇒ **§4.1 landmark chưa quan sát được**; GIỮ kiến trúc 2 tầng.
-- [ ] [LOCV2-write-probe] ⏳ **CHỜ MANAGER DUYỆT — lần 2, phép đo GHI.**
+- [ ] [LOCV2-write-probe-run] ⏳ **DỰNG XONG — CHỜ MANAGER BẤM.**
+  `GET /api/iap-management/apps/6744642671/loc-v2-write-probe?product=com.pure3q.sea.mb6&expect=fc859670-ffe1-439c-bef8-895437e410b9&confirm=WRITE`
+  ⚠⚠ **ROUTE NÀY GHI THẬT.** Đúng **một** PATCH, cưỡng chế bằng
+  `one-write.structural.test.ts` (hàm ghi duy nhất · gọi đúng 1 lần · 1 locId ·
+  không vòng lặp · nhánh từ chối RETURN trước khi tới lệnh ghi · đích DERIVED
+  không hard-code). Đọc kết quả theo 4 nhánh: KB §31.13 + `verdict` trong JSON.
+- [ ] [LOCV2-write-probe-remove] ⏳ **GỠ SAU KHI TRẢ LỜI.**
+  `app/api/iap-management/apps/[appId]/loc-v2-write-probe/` (route + test) ·
+  `lib/iap-management/bulk-import/localization-v2-write-probe.ts` + test ·
+  `updateInAppPurchaseLocalizationV2` **chỉ khi** đường V2 thật không dùng nó ·
+  **và dòng `loc-v2-write-probe` trong `LIST_ALL_SITES`**
+  (`retry-composition.structural.test.ts`) — dòng đó tự khai là tạm.
+- [x] [LOCV2-write-probe] ✅ **THIẾT KẾ ĐÃ DUYỆT** (Manager 2026-09-25) — lần 2, phép đo GHI.
   Nay là **câu DUY NHẤT còn lại của arc**: PATCH v2 lên localization thuộc
   version APPROVED ⇒ Apple trả gì, có version mới không? Thiết kế 4 bước +
   2 giai đoạn + bảng phân xử: KB §31.7 + §30.6 + §31.13. ⚠ `200` + không có
