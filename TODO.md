@@ -34,7 +34,16 @@ Apple + bài học phương pháp: **KB §31**.
   ⚠⚠ `WRITABLE` ≠ `SUBMITTABLE` — **đừng hợp nhất** với
   `SUBMITTABLE_VERSION_STATES` (`submit-v2.ts:44`): `READY_FOR_REVIEW`
   submit được nhưng **KHÔNG sửa được**. KB §32.10.
-- [ ] [LOCV2-O2-planner] ⏳ Planner nghĩ theo **version**: đích PATCH = loc của
+- [x] [LOCV2-O2-planner] ✅ **XONG.** `localization-version-plan.ts`:
+  `planLocalizationWrites` (baseline = bản APPROVED, quyết `needsWrite`) +
+  `resolveWriteOps` (target = version ghi được) + `describeWriteTargetRefusal`.
+  ⭐ THAY THẾ `planLocalizationSync`, không bọc — O3 trỏ call site **và XOÁ
+  planner cũ trong CÙNG commit** (hai mô hình cùng sống = P1 cấm).
+  Q3 không sinh `toDelete` · Q4 ba nhãn skip · Q5 tách comparison key khỏi giá
+  trị ghi. KB §32.11.
+  ⚠ **CẦN MANAGER XÁC NHẬN:** câu chữ nhãn #3 (*file == live nhưng draft mang
+  thứ khác*) — chưa từng được duyệt, xem §32.11.
+- [~] [LOCV2-O2-planner-old] ~~Planner nghĩ theo **version**~~: đích PATCH = loc của
   version ghi được; mốc so sánh = bản **APPROVED** (§28.11.c).
   ⚠ Q3 đã chốt: **BỎ nhánh DELETE khỏi bulk import** (giữ ở form đơn lẻ) —
   ghi rõ trong docs để người sau không tưởng là sót.

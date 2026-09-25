@@ -31,8 +31,23 @@
  * customer sees the difference. Folding case would silently refuse a rename the
  * Manager actually asked for.
  *
- * **no Unicode normalization — and this one is a KNOWN OPEN RISK, not an
- * oversight.** ⚠ MỨC CHẮC CHẮN:
+ * **Unicode: NFC — ON THE COMPARISON SIDE ONLY. Manager decision Q5,
+ * 2026-09-25.** ⚠⚠ AND THE TWO SIDES ARE DIFFERENT FUNCTIONS FOR THAT REASON:
+ *   `localizationComparisonKey` — trim + **NFC**. Answers "are these the same?"
+ *   `normalizeLocalizationText` — trim ONLY. Produces the value that is WRITTEN.
+ * Manager's wording: *"normalize NFC chỉ khi SO SÁNH; ghi lên Apple thì NGUYÊN
+ * VĂN nội dung file."* The failure directions are not symmetric — normalizing a
+ * comparison is safe, normalizing a payload **edits the Manager's data**.
+ *
+ * ⚠⚠ THIS WAS ALREADY A LIVE TRAP, NOT A HYPOTHETICAL. `diff-detector.ts` uses
+ * `normalize` to BUILD the values it PATCHes to Apple (`:173, :178, :212-213,
+ * :222, :225`), not only to compare. Had NFC been added to that one function,
+ * every localization the edit form writes would have been silently
+ * re-encoded — a data change nobody asked for, invisible in every test that
+ * compares normalized-to-normalized. The split below is what prevents it.
+ *
+ * ⚠ HISTORY — the rule used to be "no Unicode normalization at all", with this
+ * note attached:
  *   ĐÃ ĐO (code)  — nothing in this module's dependency graph normalizes.
  *                   A machine scan for `.normalize("NF…")` across the repo
  *                   returns exactly one hit, in `store-submissions`, a
@@ -44,22 +59,43 @@
  *                   reading the repo. It is measured alongside the V0 snapshot
  *                   (compare codepoints, not glyphs) and decided by the
  *                   Manager as Q5.
- *   ⇒ If the two sources turn out to differ, `"Vàng"` (NFC) and `"Vàng"` (NFD)
- *     look identical and compare UNEQUAL, so a cell reading "no change" would
- *     be classified as a change. Under the V2 model that can mean a new version
- *     and a re-review **for an edit that does not exist**.
- *   ⚠ DO NOT "fix" this by adding `.normalize()` on a hunch. Over-normalizing
- *     fails the other way and worse: `"188 Vàng"` vs `"188 Vàng."` differ by
- *     one full stop and that IS a real change the Manager wants. The safe
- *     direction is the current one — a spurious *write attempt* is visible and
- *     Apple adjudicates it, whereas a spurious *skip* is silent (KB §30.2).
+ *   ⇒ `"Vàng"` (NFC) and `"Vàng"` (NFD) look identical and compared UNEQUAL, so
+ *     a cell reading "no change" was classified as a change. Under the V2 model
+ *     that costs a new version and a re-review **for an edit that does not
+ *     exist** — and the version cannot be deleted afterwards.
+ *   ⇒ Manager closed it as Q5 rather than waiting for the codepoint
+ *     measurement, because the cost is asymmetric in the same direction the
+ *     measurement would have had to resolve.
+ *
+ * ⚠ NFC DOES NOT MEAN "FOLD EVERYTHING". `"188 Vàng"` vs `"188 Vàng."` differ
+ * by one full stop and that IS a real change the Manager wants; NFC does not
+ * touch it. Case is not folded either. Only encoding is canonicalised.
  */
 
-/** Make two strings comparable. NOT for producing the value that is written. */
+/**
+ * ⭐ THE VALUE THAT GETS WRITTEN. Trim only — **never** NFC.
+ *
+ * ⚠ Used by `diff-detector` to build PATCH payloads. Adding normalisation here
+ * would re-encode the Manager's text on its way to Apple (Q5).
+ */
 export function normalizeLocalizationText(
   s: string | null | undefined,
 ): string {
   return (s ?? "").trim();
+}
+
+/**
+ * ⭐ THE KEY USED TO ASK "ARE THESE THE SAME?" — trim + NFC.
+ *
+ * ⚠ NEVER WRITE THIS VALUE ANYWHERE. It exists to be compared and discarded.
+ * Q5's whole point is that the comparison may canonicalise while the payload
+ * may not; the moment this string is persisted or sent, that distinction is
+ * gone and the Manager's data has been edited.
+ */
+export function localizationComparisonKey(
+  s: string | null | undefined,
+): string {
+  return (s ?? "").trim().normalize("NFC");
 }
 
 /**
@@ -73,7 +109,7 @@ export function localizationTextEquals(
   a: string | null | undefined,
   b: string | null | undefined,
 ): boolean {
-  return normalizeLocalizationText(a) === normalizeLocalizationText(b);
+  return localizationComparisonKey(a) === localizationComparisonKey(b);
 }
 
 /** The two fields a localization carries. Locale is NOT part of the content. */

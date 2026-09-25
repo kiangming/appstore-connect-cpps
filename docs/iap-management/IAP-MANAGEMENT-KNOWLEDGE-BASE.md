@@ -8316,3 +8316,97 @@ Cả hai ca REFUSE đều là chỗ mà **ghi = đoán**, và đoán ở đây *
 
 ⇒ CLAUDE.md: **thà bỏ sót một tín hiệu còn hơn bắn một tín hiệu sai.**
 
+
+### 32.11 O2 — planner nghĩ theo VERSION, và ba thứ nó tách ra
+
+`lib/iap-management/bulk-import/localization-version-plan.ts`.
+
+#### ③ THAY THẾ, không bọc — và vì sao
+
+Planner cũ (`planLocalizationSync`) nghĩ theo **IAP**, tức mô hình V1, tức
+**nguyên nhân trực tiếp** của 20 dòng 409. Bọc nó lại sẽ để **hai mô hình cùng
+sống trên một tài nguyên** — đúng thứ P1 cấm, và đúng hình dạng đã khiến bug gốc
+sống sót lâu như vậy.
+✅ Chi phí thay thế **rẻ, đã grep**: planner cũ có **đúng MỘT** consumer
+production (`execute/route.ts:1431`). O3 trỏ lại call site **và xoá planner cũ
+trong cùng một commit**. Giữa O2 và O3, planner cũ vẫn là cái được đấu dây còn
+cái mới **chưa nối** — một mô hình trong production, không phải hai.
+
+#### ① BASELINE ≠ TARGET — hai thứ, hai input, không trộn
+
+| | Là gì | Trả lời câu gì |
+|---|---|---|
+| **BASELINE** | nội dung bản **APPROVED** | *"có cần đổi gì không?"* (§28.11.c) |
+| **TARGET** | **id** của localization trên version **ghi được** (kết quả O1) | *"ghi vào đâu?"* |
+
+⚠ Trong CA 1 đó là **hai version khác nhau**; ngay cả CA 2 cũng là **hai dòng
+khác nhau**. So với target, hoặc ghi vào baseline, mỗi cái là một lớp bug — và
+**cái thứ hai CHÍNH LÀ 409 gốc**.
+
+#### ⭐ VÀ THỨ TỰ MỚI LÀ THỨ LÀM RÀNG BUỘC 1 THÀNH THẬT
+
+`planLocalizationWrites` chạy **TRƯỚC**, chỉ đối chiếu baseline, và trả
+`needsWrite`. **Chỉ khi** nó `true` thì caller mới resolve write target — mà ở
+CA 1 nghĩa là `POST` một version **không xoá được**.
+⇒ So sánh trước là thứ biến §31.12 ràng buộc 1 (*"tạo version muộn nhất có
+thể"*) từ khẩu hiệu thành cơ chế: **item mà file đã khớp bản đang bán thì tạo
+KHÔNG GÌ.**
+
+#### Luật: **ghi một locale ⇔ file khác bản LIVE VÀ khác bản PENDING**
+
+Vế thứ hai là **guard chạy lại**: Manager đã chạy lại 3 lần trong sự cố, nên
+*"draft đã mang đúng giá trị này"* là **lần chạy thứ hai của mọi lô**, không
+phải ca hiếm.
+
+#### ⚠⚠ BA lý do skip, không phải hai — và một câu cần Manager xác nhận
+
+| # | Điều kiện | Nhãn |
+|---|---|---|
+| 1 | file == live, và không có draft khác | *"Giống bản đang bán — không có gì để đổi"* |
+| 2 | file == **draft** (draft ≠ live) | *"Bản nháp đã mang thay đổi này — đang chờ duyệt"* |
+| 3 | file == live **NHƯNG** draft mang thứ **khác** | *"Giống bản đang bán — nhưng bản nháp đang chờ duyệt mang nội dung khác"* |
+
+> ### ⚠ CÂU CẦN MANAGER XÁC NHẬN — tên ca lệch với lập luận
+> Lập luận Q4 của Manager nói: *"nếu draft đã mang **đúng giá trị trong file**
+> thì PATCH là NO-OP"* — đó là **#2** ở bảng trên (ma trận P3 gọi là **ca I**,
+> ca chạy-lại). Nhưng Manager gọi nó là **ca H**, mà ma trận P3 định nghĩa ca H
+> là *"có CẢ HAI × trùng bản APPROVED"* — tức **#3**.
+> ⇒ Hai tình huống **khác nhau**, và nhãn Manager duyệt (*"bản nháp đã mang
+> thay đổi này"*) khớp **#2**, không khớp #3.
+> ⇒ **Đã cài cả ba**, mỗi cái một nhãn riêng, nên không ca nào bị bỏ. Chỉ cần
+> Manager xác nhận **câu chữ của #3** — nó chưa từng được duyệt.
+> ⚠ Cả ba cùng **UNTICK**; chỉ khác **câu nói**. Gộp chúng là xoá đúng thông
+> tin khiến chúng đáng tồn tại: *"item này có thay đổi đang chờ Apple duyệt hay
+> không"* — thứ Manager sẽ phải mở ASC mới biết.
+
+#### ② Q3 / Q5 nằm ở đâu trong code
+
+- **Q3** — **không sinh `toDelete`**. Ghi thành đoạn văn trong docstring, kèm
+  câu *"nếu bạn vào đây tìm nhánh delete: nó bị bỏ có chủ đích"* — để người sau
+  **không tưởng là sót**. Test ghim: locale có trên Apple mà vắng trong file
+  sinh ra **không gì cả** — không write, không skip, không delete.
+- **Q5** — ⭐ **và nó đã là bẫy SỐNG, không phải giả định.** `normalizeLocalizationText`
+  vốn được `diff-detector` dùng để **DỰNG PAYLOAD** PATCH (`:173, :178,
+  :212-213, :222, :225`), không chỉ để so. Thêm NFC vào **một** hàm đó sẽ khiến
+  **mọi localization form ghi lên Apple bị âm thầm mã hoá lại** — và **không
+  test nào bắt được**, vì test nào cũng so normalized với normalized.
+  ⇒ Tách đôi: `localizationComparisonKey` (trim + NFC, **chỉ để so**) ·
+  `normalizeLocalizationText` (trim, **giá trị được ghi**).
+
+#### ⑤ REFUSE của O1 chảy đi đâu — `describeWriteTargetRefusal`
+
+⚠⚠ **Không để rơi vào `catch` chung.** REFUSE là **quyết định có chủ đích kèm
+lý do**, không phải sự cố. Rơi vào catch chung nó hiện thành *"lỗi không rõ"* —
+dòng đó đọc thành **hỏng** thay vì *"cố tình không ghi, vì ghi là đoán"*. Đó
+đúng là lớp lỗi im lặng mà cả arc này sinh ra để diệt, lần này chĩa vào code của
+chính mình.
+⇒ Caller bắt `WriteTargetRefused` **đích danh**, mỗi locale nhận một câu mang
+**lý do nguyên văn** + khẳng định **"không có thay đổi nào được gửi lên Apple"**.
+Một câu từ chối mà đọc thành *"có thể đã gửi rồi"* còn tệ hơn không có câu nào.
+
+#### ④ Parity — ghim ở O3
+
+Item **chưa live** có sẵn draft (§0 Q1) ⇒ **CA 2** ⇒ `resolveWriteTargetVersion`
+trả REUSE ⇒ **không POST gì**. Hành vi với người dùng **y hệt hôm nay**. Test
+ghim nằm ở O3 vì đó là nơi hai thứ gặp nhau.
+

@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   normalizeLocalizationText,
+  localizationComparisonKey,
   localizationTextEquals,
   localizationContentEquals,
 } from "./localization-compare";
@@ -37,23 +38,39 @@ describe("localizationTextEquals — the six cases", () => {
     expect(localizationTextEquals("188  Vàng", "188 Vàng")).toBe(false);
   });
 
-  it("4. ⚠⚠ NFC vs NFD ⇒ DIFFERENT **TODAY** — this test PINS the input to Q5, not the answer", () => {
-    // ⚠ READ BEFORE CHANGING. This is NOT a decision that composed characters
-    // must compare unequal. It is the record of what today's rule does, so
-    // that when the Manager decides Q5 (after the codepoint measurement) the
-    // change is visible as a change instead of arriving silently.
-    const nfc = "Vàng"; // "Vàng" — precomposed à
-    const nfd = "Vàng"; // "Vàng" — a + combining grave
+  it("4. ⭐ NFC vs NFD ⇒ SAME — Q5 landed here, and this test is how it became visible", () => {
+    // ⚠ READ THE HISTORY BEFORE CHANGING THIS AGAIN. This test used to assert
+    // the OPPOSITE, deliberately: it pinned "what the rule does today" so that
+    // when the Manager decided Q5 the change would arrive as a RED TEST rather
+    // than silently. It did exactly that, and this is the decision landing.
+    // ⚠⚠ WRITTEN AS EXPLICIT ESCAPES ON PURPOSE. A literal "Vàng" typed in NFD
+    // gets silently recomposed by editors, formatters and shell heredocs — it
+    // happened while writing this very test, turning it into a tautology that
+    // passed for the wrong reason. Escapes survive every pipeline.
+    const nfc = "V\u00e0ng"; // V + PRECOMPOSED à
+    const nfd = "Va\u0300ng"; // V + a + COMBINING GRAVE ACCENT
 
-    // The risk made explicit: to a human these are the same word.
-    expect(nfc.normalize("NFC")).toBe(nfd.normalize("NFC"));
-    // To this comparator, today, they are not.
-    expect(localizationTextEquals(nfc, nfd)).toBe(false);
+    // The two are still different byte sequences — the test is not a tautology.
+    expect(nfc.length).toBe(4);
+    expect(nfd.length).toBe(5);
+    expect(nfc).not.toBe(nfd);
+    // And they now compare EQUAL, because comparison canonicalises.
+    expect(localizationTextEquals(nfc, nfd)).toBe(true);
+  });
 
-    // ⇒ If the measurement shows Excel and Apple disagree on encoding, a cell
-    //   that truly matches would be classified as changed — and under the V2
-    //   model that can cost a version and a re-review for an edit that does
-    //   not exist. Q5 decides; this test then changes WITH the decision.
+  it("⚠⚠ but the WRITTEN value is never canonicalised — the other half of Q5", () => {
+    // The asymmetry is the whole decision: normalising a comparison is safe,
+    // normalising a payload edits the Manager's data. `diff-detector` builds
+    // PATCH payloads with `normalizeLocalizationText`, so if THAT function ever
+    // starts folding encodings, every localization the edit form writes gets
+    // silently re-encoded — and no normalized-vs-normalized test would notice.
+    const nfd = "Va\u0300ng"; // decomposed — 5 code points
+    expect(nfd.length).toBe(5);
+    // Trimmed, and otherwise byte-for-byte what the file said.
+    expect(normalizeLocalizationText(nfd)).toBe(nfd);
+    // The comparison key DOES canonicalise — and must never be written.
+    expect(localizationComparisonKey(nfd)).toBe("V\u00e0ng");
+    expect(localizationComparisonKey(nfd).length).toBe(4);
   });
 
   it("5. case differs ⇒ DIFFERENT — pinned explicitly, never left to be inferred", () => {
