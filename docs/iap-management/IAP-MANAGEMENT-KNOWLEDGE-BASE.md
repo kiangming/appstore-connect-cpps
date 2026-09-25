@@ -7699,3 +7699,124 @@ mù.”*
   Apple thấy không đổi nên không làm gì — không phân biệt được). Và **S1 dù gửi
   y hệt vẫn CHƯA BIẾT có tạo version hay không** — đừng hứa vô hại.
 
+
+### 31.8 ⚠⚠ `400 The maximum allowable limit is '50'` — và vì sao mục này KHÔNG phải "OAS lại thiếu"
+
+**Sự cố (2026-09-25).** Lần chạy `LOCV2-SNAPSHOT` đầu tiên hỏng **cả 3 item**:
+
+```
+"code":   "PARAMETER_ERROR.INVALID"
+"detail": "The maximum allowable limit is '50'"
+"source": { "parameter": "limit[localizations]" }
+```
+
+Code gửi `limit[localizations]=200`. Trần thật = **50**.
+
+⚠⚠ **GIẢ THUYẾT BAN ĐẦU LÀ "đây là instance thứ 4 của lớp lỗi OAS-không-mô-tả-
+ràng-buộc-thật" (cùng họ §28.1, §31.6). TRA LẠI THÌ SAI — OAS KHAI RẤT RÕ:**
+
+> `#/paths/~1v2~1inAppPurchases~1{id}~1versions/get` → parameter
+> `limit[localizations]` → `{"type":"integer","maximum":50}`
+> description: *"maximum number of related localizations returned (when they
+> are included)"*
+
+⇒ **Không phải Apple giấu. Là tôi không đọc.** Và tệ hơn: comment trong code do
+chính tôi viết đã **khẳng định** *"Apple's cap for this sub-limit is not
+documented in the OAS"* — một **khẳng định PHỦ ĐỊNH về tài liệu, viết ra mà
+không tra**. Báo cáo §0 của arc thậm chí **đã in ra chính tham số đó** trong
+bảng dump — nhưng chỉ đọc **tên** tham số, không đọc **schema** của nó. Giá trị
+`maximum` nằm cách đúng một trường.
+
+⭐ **BA BÀI HỌC, và cái thứ nhất là cái đắt nhất:**
+
+**(1) §29 áp cho cả khẳng định PHỦ ĐỊNH.** *"X không có trong tài liệu"* là một
+tuyên bố về tài liệu và phải verify y hệt *"X có trong tài liệu"*. Nó **khó
+nghi hơn** vì nghe như sự thận trọng — trong khi thực chất nó đang **cấp phép**
+cho một lựa chọn tuỳ tiện ("OAS không nói, nên tôi đoán 200"). ⚠ Khuôn phát
+hiện: một câu dạng *"tài liệu không khai ⇒ nên tôi chọn N"* mà **không kèm
+JSON pointer đã tra**, là câu phải chặn.
+
+**(2) `limit` và `limit[rel]` là HAI TRẦN KHÁC NHAU — 200 và 50.**
+
+| Dạng | Nghĩa | Trần (OAS 4.4.1) |
+|---|---|---|
+| `?limit=N` | trang của **tài nguyên chính** | **200** |
+| `?limit[rel]=N` | số bản ghi **quan hệ** khi `?include=rel` | **50** (ngoại lệ đã thấy: `limit[pricePoints]` = 8000) |
+
+⚠ Apple **TỪ CHỐI, không tự cắt về trần**. Lý do tôi chọn 200: *"mirrors the
+existing `?limit=200`"* — tức **bê số của tài nguyên chính sang sub-limit**.
+
+**(3) ⚠⚠ REPO ĐÃ CẮN ĐÚNG LỖI NÀY RỒI, VÀ ĐÃ GHI LẠI — TÔI KHÔNG GREP.**
+`availabilities.ts:196-206` (Hotfix 22), **nguyên văn**:
+
+> *"failed in production with `400 PARAMETER_ERROR.INVALID: The maximum
+> allowable limit is '50'` against `limit[availableTerritories]`. V2 endpoints
+> cap the per-relationship include pagination at 50; the tool requested 200
+> (the main-resource limit) which Apple rejects outright instead of clamping."*
+
+**Cùng chuỗi lỗi. Cùng nguyên nhân. Cùng câu giải thích.** Census `limit[` toàn
+repo (đáng ra phải chạy **trước** khi viết dòng đó, không phải sau):
+
+| Chỗ | Giá trị | Trạng thái |
+|---|---|---|
+| `price-schedules.ts:532` `limit[manualPrices]` | **50** | ✅ đúng trần |
+| `availabilities.ts` `limit[availableTerritories]` | — | ✅ đã bỏ đường include từ Hotfix 22 |
+| `client.ts` `limit[localizations]` | ~~200~~ → **50** | ⛔ **chỗ DUY NHẤT sai, và là chỗ mới nhất** |
+
+⇒ ⭐ **Quy tắc: trước khi chọn một hằng số cho một tham số Apple, grep tên tham
+số đó — và grep chuỗi lỗi Apple trả về — trong repo trước.** Ở đây prior art
+nằm cách đúng một `grep "limit\["`.
+
+### 31.9 ⭐⭐ Và số 50 CHỈ LÀ NỬA BÀI — repo còn cấm sẵn cả cách đọc tôi đã chọn
+
+Sửa `200 → 50` làm request chạy được. **Nó KHÔNG làm kết quả đáng tin**, vì
+`availabilities.ts:203-206` nói tiếp ngay câu sau:
+
+> *"The V2 include path also suffers from the documented 10-ID
+> relationship-truncation trap (§4.1 LANDMARK Trap class 1) — **even at
+> `limit=50` Apple may return a truncated list.**"*
+
+Và **§4.1 LANDMARK** thì cấm thẳng: *"never trust `relationships.{rel}.data` as
+the authoritative ID list for an included relation."*
+
+⚠⚠ **Bản đầu của `localization-v2-snapshot.ts` làm ĐÚNG ĐIỀU BỊ CẤM** — join qua
+`version.relationships.localizations.data[]`, kèm một docstring dài **lập luận
+rằng đọc từ phía primary mới đúng** (viện quirk `included[]` của CPP). Lập luận
+đó đúng cho **CPP**, sai cho **Apple V2 IAP**, và repo đã đo điều đó từ IAP.p2.m.
+
+⇒ ⭐⭐ **VÀ HƯỚNG HỎNG LÀ HƯỚNG LẬT NGƯỢC KẾT LUẬN.** Pointer bị cắt ⇒ version
+trông như **ít locale hơn thực tế** ⇒ đọc thành **"version mới KHÔNG kế thừa"**
+⇒ đúng cái kết luận làm đổi toàn bộ thiết kế. **Một câu trả lời tự tin, sai,
+theo hướng không ai đi kiểm.**
+
+**Sửa — theo đúng khuôn nhà, không phát minh:** *"metadata rồi sub-resource"*,
+ba tiền lệ sẵn có (Hotfix 22 availabilities · price-schedules 2 tầng · §4.1
+mitigation):
+
+| Tầng | Gọi gì | Dùng làm gì |
+|---|---|---|
+| 1 | `GET /v2/inAppPurchases/{id}/versions?include=localizations&limit[localizations]=50` | version id + state, **và pointer để ĐỐI CHIẾU** |
+| 2 | `GET /v1/inAppPurchaseVersions/{versionId}/localizations?limit=200` | ⭐ **danh sách locale AUTHORITATIVE** |
+
+⭐ Pointer **không bị bỏ đi mà bị ĐEM RA ĐO**: cờ `PTR_SHORT(v n<m)` bắn khi
+pointer ngắn hơn sub-resource ⇒ **§4.1 landmark được đo trên quan hệ
+`localizations`**, nơi chưa ai đo (landmark gốc đo trên `manualPrices`). Đúng
+dấu vân tay chẩn đoán KB đã đặt tên: *"Stage 1 rel_count < Stage 2 total"*.
+
+⚠ **Ba cơ chế đều có thể làm báo cáo NGẮN ĐI, và cả ba đều phải kêu to** — mỗi
+cái một cờ, mỗi cái một test, mỗi cái một đột biến đã chứng minh đỏ:
+`FETCH_FAILED` (đọc hỏng ≠ không có) · `MORE_PAGES` (`links.next`) ·
+`PTR_SHORT` (§4.1).
+
+### 31.10 Khuôn "trả nguyên văn lỗi Apple, per-item" tiếp tục trả tiền
+
+Sự cố trên lộ ra **trong đúng một lần chạy**, không cần điều tra: route trả lỗi
+**theo từng item**, mang **nguyên văn body của Apple** (`code` + `detail` +
+`source.parameter`), không nuốt, không gộp thành "failed". Manager dán lại và
+nguyên nhân + tham số + trần đều nằm sẵn trong đó.
+
+⇒ Cùng khuôn `failedDetail[].full` đã cứu vụ 20 dòng 409 (§28.8). **Lần thứ
+hai nó trả tiền**, và lần này cho một tính năng mới toanh ngay lần chạy đầu.
+⇒ Hệ quả: route read-only **hành xử đúng hợp đồng khi hỏng** — chết ở bước GET,
+**không ghi gì**, đúng như `zero-write.structural.test.ts` cưỡng chế.
+

@@ -8,33 +8,49 @@
  * runs over several IAPs; the Manager reads the result and only then chooses
  * which single IAP part 2 may write to.
  *
- * ⭐ IT ALSO CLOSES THE MOST DANGEROUS OPEN QUESTION WITHOUT A SINGLE WRITE.
- * The question is **§1.6 / inheritance**: when a second version comes into
- * existence for a live IAP, does it CARRY OVER the approved version's other
- * locales, or start with only the locale that changed?
+ * ⭐ IT CLOSES THE MOST DANGEROUS OPEN QUESTION WITHOUT A SINGLE WRITE.
+ * The question is **inheritance**: when a second version comes into existence
+ * for a live IAP, does it CARRY OVER the approved version's other locales, or
+ * start with only the locale that changed? If it starts empty-but-one, a
+ * multi-locale product whose version ships with a single locale could **lose
+ * the rest at approval** — data loss on an item that is currently selling. The
+ * Manager has ALREADY produced such a second version by hand (KB §28.11 —
+ * two `Vietnamese` rows, two distinct version ids), so the evidence is already
+ * on Apple's servers. It only had to be READ.
  *
- *   · If it starts empty-but-one, then a multi-locale product whose version
- *     ships with a single locale could **lose the rest at approval**. That is
- *     data loss on an item that is currently selling.
- *   · The Manager has ALREADY produced such a second version by hand in App
- *     Store Connect (KB §28.11 / §28.11.a — two `Vietnamese` rows, two distinct
- *     version ids). ⇒ The evidence already exists on Apple's servers. It only
- *     had to be READ.
+ * ─── ⚠⚠ WHY THIS MODULE TAKES **TWO** SOURCES AND NOT ONE ──────────────────
  *
- * ⇒ Snapshot an item the Manager edited by hand, with **two or more locales**,
- *   and count the localizations on each version. No write, no review cycle, no
- *   permanent artifact. See KB §31.
+ * The first version of this file joined localizations to versions through
+ * `version.relationships.localizations.data[]` — the relationship pointer —
+ * and argued at length that reading "from the primary side" was correct.
+ * **That was wrong for Apple V2, and the repo already knew.**
  *
- * ⚠ WHAT THIS MODULE DOES **NOT** ANSWER — do not let the snapshot be read as
- * more than it is. It cannot say what Apple does when you `PATCH
- * /v2/inAppPurchaseLocalizations/{id}` against a localization owned by an
- * APPROVED version. Nothing read-only can: that question is about a WRITE, and
- * only the write answers it. Part 2 exists for exactly that one question.
+ *   KB §4.1 LANDMARK (IAP.p2.m): Apple V2 `?include` truncates the relationship
+ *   pointer at **10 IDs** while the real set is larger (12 observed at MV30).
+ *   *"never trust `relationships.{rel}.data` as the authoritative ID list for
+ *   an included relation."*
+ *
+ * ⚠ AND THE FAILURE DIRECTION IS THE ONE THAT FLIPS THE ANSWER. A truncated
+ * pointer makes a version look like it owns FEWER locales than it does, which
+ * reads as **"no inheritance"** — the exact conclusion that would change the
+ * whole design. A confident wrong answer, in the direction nobody would
+ * question.
+ *
+ * ⇒ So the authoritative count comes from the **V1 sub-resource per version**
+ *   (`listLocalizationsForVersion`), and the pointer is kept only to be
+ *   COMPARED against it. That comparison is itself a measurement: the landmark
+ *   was established on `manualPrices`, never on `localizations`, and
+ *   `pointerDisagrees` reports whether it holds here too. Same diagnostic
+ *   fingerprint the KB names — "Stage 1 rel_count < Stage 2 total".
+ *
+ * ⚠ WHAT THIS MODULE DOES **NOT** ANSWER. It cannot say what Apple does when
+ * you `PATCH /v2/inAppPurchaseLocalizations/{id}` against a localization owned
+ * by an APPROVED version. Nothing read-only can: that is a question about a
+ * WRITE. Part 2 exists for exactly that one question.
  *
  * ⚠⚠ REMOVAL IS PART OF THE JOB. Precedent: `localization-state-probe.ts`, and
  * the DEBUG 429-header line from the key-pool arc — each added to settle a
- * named question, each removed once settled. An "informative" log kept forever
- * is how a log file becomes unreadable.
+ * named question, each removed once settled.
  */
 
 /** One version row, as loosely as Apple might actually send it. */
@@ -42,61 +58,62 @@ export interface ProbeVersion {
   id?: unknown;
   attributes?: { state?: unknown; version?: unknown };
   relationships?: {
-    localizations?: { data?: unknown };
+    localizations?: { data?: unknown; meta?: unknown };
   };
 }
 
-/** One `included[]` row, as loosely as Apple might actually send it. */
-export interface ProbeIncluded {
+/** One localization row, as loosely as Apple might actually send it. */
+export interface ProbeLocalization {
   type?: unknown;
   id?: unknown;
   attributes?: { locale?: unknown; name?: unknown; description?: unknown };
 }
 
 /**
- * ⚠ THREE OUTCOMES FOR THE JOIN EDGE, NOT TWO — and telling them apart IS one
- * of the questions.
- *
- *   NO_EDGE — `relationships.localizations.data` is absent entirely. This is
- *             the JSON:API quirk CLAUDE.md records for CPP (`included[]`
- *             resources ship `links` and omit `data`) appearing on the PRIMARY
- *             side, where it is NOT supposed to. If versions come back this
- *             way, the whole primary-side join plan is unbuildable and the
- *             design has to change.
- *   []      — the edge is present and the version genuinely owns no
- *             localization. A real, different fact.
- *   [ids…]  — the edge is present and populated.
- *
- * Collapsing NO_EDGE into `[]` would destroy the distinction being probed, and
- * would do it in the reassuring direction: "this version has no localizations"
- * reads as data when it is really "we could not tell". Same failure shape as
- * ABSENT-vs-EMPTY in `localization-state-probe.ts`.
+ * Stage 2 — the authoritative per-version read, plus whether Apple said there
+ * was more than one page of it.
  */
+export interface VersionLocalizationsFetch {
+  versionId: string;
+  /** Rows from `GET /v1/inAppPurchaseVersions/{id}/localizations`. */
+  rows: ReadonlyArray<ProbeLocalization>;
+  /**
+   * `links.next` was present ⇒ Apple has MORE than this page.
+   *
+   * ⚠ THIS MUST NEVER BE SWALLOWED. A short list reads as "that locale is not
+   * in this version" ⇒ "no inheritance" ⇒ the wrong design. Unpaged overflow
+   * is reported as loudly as a failure, because for this question it IS one.
+   */
+  hasMorePages?: boolean;
+  /** Stage 2 failed for this version — distinct from "it has none". */
+  error?: string;
+}
+
 export type LocalizationEdge = { kind: "NO_EDGE" } | { kind: "IDS"; ids: string[] };
 
 export interface VersionSnapshotRow {
   versionId: string;
   state: string;
-  edge: LocalizationEdge;
-  /** Locales resolved through the edge, in edge order. */
+  /** ⭐ AUTHORITATIVE — locales from the V1 sub-resource. */
   locales: string[];
-  /** Edge ids with no matching `included[]` row — the join half-failed. */
-  unresolvedIds: string[];
+  /** Apple said there are more pages than the one that was read. */
+  truncatedPages: boolean;
+  /** Stage 2 could not be read. `locales` is then NOT a count of anything. */
+  fetchError?: string;
+  /** The V2 relationship pointer, kept ONLY to be checked against `locales`. */
+  edge: LocalizationEdge;
+  /**
+   * ⭐ The §4.1 landmark, measured on THIS relationship: the pointer listed
+   * fewer ids than the sub-resource actually returned.
+   */
+  pointerDisagrees: boolean;
 }
 
 export interface VersionSnapshot {
   productId: string;
   versions: VersionSnapshotRow[];
-  /** Total localization rows Apple put in `included[]`. */
-  includedTotal: number;
-  /**
-   * `included[]` localizations that NO version claimed through its edge.
-   *
-   * ⚠ A non-empty value here is a LOUD signal, not a detail: Apple returned
-   * localization content the primary-side join cannot place. Reading it as
-   * "belongs to the first version" is the guess this field exists to prevent.
-   */
-  unclaimedLocales: string[];
+  /** True when any row is missing data — the whole snapshot is then partial. */
+  incomplete: boolean;
 }
 
 function str(v: unknown): string | null {
@@ -118,87 +135,109 @@ function readEdge(v: ProbeVersion): LocalizationEdge {
 }
 
 /**
- * Build the structured snapshot. Pure + deterministic — no Apple I/O — so the
- * distinctions above are unit-tested independently of the request.
+ * Build the structured snapshot. Pure + deterministic — no Apple I/O — so every
+ * distinction above is unit-tested independently of the requests.
  */
 export function summarizeVersionSnapshot(
   productId: string,
   versions: ReadonlyArray<ProbeVersion>,
-  included: ReadonlyArray<ProbeIncluded>,
+  fetched: ReadonlyArray<VersionLocalizationsFetch>,
 ): VersionSnapshot {
-  const localeById = new Map<string, string>();
-  let includedTotal = 0;
-  for (const inc of included) {
-    if (inc.type !== "inAppPurchaseLocalizations") continue;
-    includedTotal++;
-    const id = str(inc.id);
-    if (!id) continue;
-    // ⚠ A localization whose `locale` is missing still COUNTS — dropping it
-    // would understate what Apple sent. It is named so it stays visible.
-    localeById.set(id, str(inc.attributes?.locale) ?? "LOCALE_ABSENT");
-  }
+  const byVersion = new Map<string, VersionLocalizationsFetch>();
+  for (const f of fetched) byVersion.set(f.versionId, f);
 
-  const claimed = new Set<string>();
+  let incomplete = false;
   const rows: VersionSnapshotRow[] = versions.map((v) => {
+    const versionId = str(v.id) ?? "ID_ABSENT";
     const edge = readEdge(v);
-    const locales: string[] = [];
-    const unresolvedIds: string[] = [];
-    if (edge.kind === "IDS") {
-      for (const id of edge.ids) {
-        claimed.add(id);
-        const locale = localeById.get(id);
-        if (locale === undefined) unresolvedIds.push(id);
-        else locales.push(locale);
-      }
+    const fetch = byVersion.get(versionId);
+
+    if (!fetch || fetch.error) {
+      // ⚠ NOT an empty locale list. "Apple would not tell us" and "this version
+      // owns no localization" are different facts and only one of them is a
+      // finding. Collapsing them manufactures the "no inheritance" answer.
+      incomplete = true;
+      return {
+        versionId,
+        state: str(v.attributes?.state) ?? "STATE_ABSENT",
+        locales: [],
+        truncatedPages: false,
+        fetchError: fetch?.error ?? "not fetched",
+        edge,
+        pointerDisagrees: false,
+      };
     }
+
+    const locales = fetch.rows.map(
+      (r) => str(r.attributes?.locale) ?? "LOCALE_ABSENT",
+    );
+    const truncatedPages = fetch.hasMorePages === true;
+    if (truncatedPages) incomplete = true;
+
     return {
-      versionId: str(v.id) ?? "ID_ABSENT",
+      versionId,
       state: str(v.attributes?.state) ?? "STATE_ABSENT",
-      edge,
       locales,
-      unresolvedIds,
+      truncatedPages,
+      edge,
+      // Only a SHORT pointer is the landmark. A pointer with more ids than the
+      // sub-resource returned would be a different anomaly, and calling both
+      // "disagrees" would blur a measurement into a warning.
+      pointerDisagrees: edge.kind === "IDS" && edge.ids.length < locales.length,
     };
   });
 
-  const unclaimedLocales: string[] = [];
-  for (const [id, locale] of localeById) {
-    if (!claimed.has(id)) unclaimedLocales.push(locale);
-  }
-
-  return { productId, versions: rows, includedTotal, unclaimedLocales };
+  return { productId, versions: rows, incomplete };
 }
 
 /**
  * One greppable line per IAP. Shape is STABLE — the Manager greps it:
  *
  *   LOCV2-SNAPSHOT product=<id> versions=[v1:APPROVED, v2:PREPARE_FOR_SUBMISSION]
- *     locsByVersion=[v1:{vi,en}, v2:{vi}] total=3 unclaimed=[]
+ *     locsByVersion=[v1:{vi,en-US}, v2:{vi}] ptr=[v1:2, v2:1] flags=[]
  *
- * ⭐ `locsByVersion` IS THE ANSWER TO THE INHERITANCE QUESTION. Two versions
- * where the approved one lists `{vi,en}` and the draft lists `{vi}` means
- * **NO inheritance** — and that is a design-changing fact obtained for zero
+ * ⭐ `locsByVersion` IS THE ANSWER TO THE INHERITANCE QUESTION, and it is the
+ * AUTHORITATIVE read. An approved version listing `{vi,en-US}` beside a draft
+ * listing `{vi}` means **no inheritance** — a design-changing fact for zero
  * writes.
  *
- * ⚠ `NO_EDGE` in place of a brace list means Apple omitted the primary-side
- * relationship data. That is not "no localizations"; it is "unanswerable from
- * this document".
+ * ⚠ `flags` IS NOT DECORATION. Any flag means the line above it may be short,
+ * and a short line is the wrong answer in the reassuring direction:
+ *   FETCH_FAILED(v)  — that version's locales are unknown, NOT empty
+ *   MORE_PAGES(v)    — Apple has more than one page; the list is cut
+ *   PTR_SHORT(v n<m) — ⭐ KB §4.1 truncation, observed on `localizations`
  */
 export function describeVersionSnapshotForLog(snapshot: VersionSnapshot): string {
   const versions = snapshot.versions
     .map((r) => `${r.versionId}:${r.state}`)
     .join(", ");
   const locs = snapshot.versions
-    .map((r) => {
-      if (r.edge.kind === "NO_EDGE") return `${r.versionId}:NO_EDGE`;
-      const parts = [...r.locales, ...r.unresolvedIds.map((id) => `UNRESOLVED(${id})`)];
-      return `${r.versionId}:{${parts.join(",")}}`;
-    })
+    .map((r) =>
+      r.fetchError ? `${r.versionId}:UNKNOWN` : `${r.versionId}:{${r.locales.join(",")}}`,
+    )
     .join(", ");
+  const ptr = snapshot.versions
+    .map((r) =>
+      r.edge.kind === "NO_EDGE"
+        ? `${r.versionId}:NO_EDGE`
+        : `${r.versionId}:${r.edge.ids.length}`,
+    )
+    .join(", ");
+
+  const flags: string[] = [];
+  for (const r of snapshot.versions) {
+    if (r.fetchError) flags.push(`FETCH_FAILED(${r.versionId})`);
+    if (r.truncatedPages) flags.push(`MORE_PAGES(${r.versionId})`);
+    if (r.pointerDisagrees) {
+      flags.push(`PTR_SHORT(${r.versionId} ${r.edge.kind === "IDS" ? r.edge.ids.length : "?"}<${r.locales.length})`);
+    }
+  }
+
   return (
     `LOCV2-SNAPSHOT product=${snapshot.productId} ` +
     `versions=[${versions}] ` +
     `locsByVersion=[${locs}] ` +
-    `total=${snapshot.includedTotal} ` +
-    `unclaimed=[${snapshot.unclaimedLocales.join(",")}]`
+    `ptr=[${ptr}] ` +
+    `flags=[${flags.join(",")}]`
   );
 }

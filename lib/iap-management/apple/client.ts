@@ -21,6 +21,7 @@ import type {
   AscApiResponse,
   InAppPurchase,
   InAppPurchaseLocalization,
+  InAppPurchaseLocalizationV2,
   InAppPurchaseAppStoreReviewScreenshot,
   InAppPurchaseVersion,
   CreateInAppPurchasePayload,
@@ -443,18 +444,34 @@ export async function listInAppPurchaseVersions(
  *                      Tells you WHICH VERSION each localization belongs to.
  *                      That mapping is the whole point.
  *
- * ⚠ READ THE JOIN FROM THE PRIMARY SIDE, NEVER FROM `included[]`.
- * `version.relationships.localizations.data[]` (the version is in `data[]`) is
- * the edge to trust. `localization.relationships.version.data` comes off a
- * resource in `included[]`, where Apple ships `links` and omits `data` — the
- * quirk CLAUDE.md records for CPP. ⚠ MỨC: that omission is **ĐÃ ĐO on the CPP
- * branch**, and **CHƯA ĐO here** — which is one of the things the V0 snapshot
- * exists to settle. `summarizeVersionSnapshot` therefore reports the join it
- * could build AND whether the primary-side edge was present at all.
+ * ⚠⚠ ITS RESULT IS A CROSS-CHECK, NOT THE ANSWER — READ THIS BEFORE USING IT.
+ * `version.relationships.localizations.data[]` is a **relationship pointer**,
+ * and KB §4.1 LANDMARK measured Apple V2 pointers truncating at **10 IDs**
+ * while the real set was larger (12 at MV30). Its mitigation is explicit:
+ * *"never trust `relationships.{rel}.data` as the authoritative ID list for an
+ * included relation."* The authoritative read is
+ * `listLocalizationsForVersion` (the V1 sub-resource) — this function exists to
+ * be COMPARED against it, which is how the landmark gets measured on a
+ * relationship nobody has measured it on yet.
  *
- * ⚠ `limit[localizations]=200` mirrors the existing `?limit=200` on the V1
- * list. Apple's cap for this sub-limit is not documented in the OAS; 200 is
- * the same number the sibling read already uses, not a measured ceiling.
+ * ⚠ AND THE TRUNCATION DIRECTION IS THE DANGEROUS ONE HERE. A truncated
+ * pointer makes a version look like it owns FEWER locales than it does — which
+ * reads as "the new version did not inherit the other locales", the exact
+ * conclusion this snapshot was built to establish. Believing the pointer would
+ * produce a confident, wrong, design-changing answer.
+ *
+ * ⚠ `limit[localizations]=50` — the documented maximum.
+ * OAS 4.4.1 states it outright: `#/paths/~1v2~1inAppPurchases~1{id}~1versions
+ * /get` → parameter `limit[localizations]` → `{"type":"integer","maximum":50}`.
+ * ⚠⚠ THIS WAS 200 AND APPLE REJECTED IT OUTRIGHT (2026-09-25):
+ * `400 PARAMETER_ERROR.INVALID — "The maximum allowable limit is '50'"`,
+ * `source.parameter: limit[localizations]`. Two separate lessons, both already
+ * written down before this code was:
+ *   · `limit` (main resource, max 200) and `limit[rel]` (sub-limit, max 50) are
+ *     DIFFERENT CEILINGS. Copying the main-resource number onto a sub-limit is
+ *     precisely the bug Hotfix 22 fixed on `limit[availableTerritories]` —
+ *     same error string, same cause (`availabilities.ts:196-206`).
+ *   · Apple **rejects** rather than clamps.
  */
 export async function listInAppPurchaseVersionsWithLocalizations(
   creds: AscCredentials,
@@ -464,12 +481,52 @@ export async function listInAppPurchaseVersionsWithLocalizations(
     "include=localizations",
     "fields[inAppPurchaseVersions]=version,state,localizations",
     "fields[inAppPurchaseLocalizations]=name,locale,description,version",
-    "limit[localizations]=200",
+    "limit[localizations]=50",
   ].join("&");
   return iapFetch<AscApiResponse<InAppPurchaseVersion[]>>(
     creds,
     "GET",
     `/v2/inAppPurchases/${iapId}/versions?${query}`,
+  );
+}
+
+/**
+ * ⭐ THE AUTHORITATIVE localization list for ONE version. **GET only.**
+ * `GET /v1/inAppPurchaseVersions/{id}/localizations` → the V2 localization
+ * shape (`InAppPurchaseLocalizationsV2Response` in OAS 4.4.1).
+ *
+ * ⚠ WHY A SECOND CALL INSTEAD OF READING `?include=localizations`.
+ * This is the repo's canonical **"metadata, then sub-resource"** pattern, and
+ * it exists because the aggregate path lies about counts:
+ *   · KB §4.1 LANDMARK — V2 relationship pointers truncate at 10 IDs.
+ *   · Hotfix 22 (`availabilities.ts:193-215`) hit the same wall and split into
+ *     Step A (metadata) + Step B (V1 sub-resource) for exactly this reason,
+ *     noting *"even at `limit=50` Apple may return a truncated list"*.
+ *   · `price-schedules.ts` does the same two-stage read for `manualPrices`.
+ * Three precedents, one shape. This is not a new idea, it is the house style.
+ *
+ * ⚠ `?limit=200` is legitimate HERE and NOT a copy of the number that just
+ * failed. This is a MAIN-RESOURCE page limit, whose documented maximum is 200
+ * (OAS: `#/paths/~1v1~1inAppPurchaseVersions~1{id}~1localizations/get` →
+ * `limit` → `{"type":"integer","maximum":200}`). The 50 ceiling applies to
+ * `limit[rel]` sub-limits. Knowing which of the two a number is, is the whole
+ * lesson of the 400 above.
+ *
+ * ⚠ ONE PAGE IS EXPECTED, NOT ASSUMED. Apple ships ~40 App Store locales
+ * (`lib/locale-map.json` carries 39), so 200 should hold every locale an IAP
+ * can have. The caller still inspects `links.next` and says so out loud rather
+ * than returning a quietly short list — a missing locale here reads as "the
+ * new version did not inherit it", which is the wrong answer in the
+ * reassuring direction.
+ */
+export async function listLocalizationsForVersion(
+  creds: AscCredentials,
+  versionId: string,
+): Promise<AscApiResponse<InAppPurchaseLocalizationV2[]>> {
+  return iapFetch<AscApiResponse<InAppPurchaseLocalizationV2[]>>(
+    creds,
+    "GET",
+    `/v1/inAppPurchaseVersions/${versionId}/localizations?limit=200`,
   );
 }
 

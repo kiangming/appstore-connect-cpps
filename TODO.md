@@ -9,13 +9,15 @@ Format: `- [ ] [PR-X] description — file path — rationale`
 thì Apple làm gì, và AI tạo version mới* — **CHƯA BIẾT**. Mô hình + bốn dữ kiện
 Apple + bài học phương pháp: **KB §31**.
 
-- [ ] [LOCV2-snapshot-run] ⏳ **CHỜ MANAGER CHẠY — lần 1, read-only.**
-  `GET /api/iap-management/apps/{appleAppId}/loc-v2-snapshot?products=a,b,c`
-  (mở thẳng trên trình duyệt, đã đăng nhập). Chọn **vài** item: đã-sửa-tay ·
-  chưa-sửa · **≥2 locale** nếu có. ⭐ Trả lời luôn câu **kế thừa** (§1.6) mà
-  **không ghi một byte**: version thứ hai của item đã sửa tay chứa **mấy
-  locale**? Ít hơn bản approved ⇒ **KHÔNG kế thừa**. Zero-write cưỡng chế bằng
-  `zero-write.structural.test.ts`.
+- [ ] [LOCV2-snapshot-run] ⏳ **CHỜ MANAGER CHẠY LẠI — lần 1, read-only.**
+  App `6744642671`, 3 item: `com.pure3q.sea.mb6` (đã sửa tay) ·
+  `com.pure3q.sea.mb30` (đối chứng) · `com.pure3q.sea.mb68` (nhiều locale).
+  ⚠ Lần chạy 2026-09-25 hỏng **400 cả 3** — `limit[localizations]=200` trong
+  khi trần là **50** (KB §31.8). Đã sửa, **và đã đổi luôn cách đọc** sang
+  2 tầng vì pointer V2 có thể bị cắt (KB §31.9, §4.1 LANDMARK).
+  ⭐ Trả lời câu **kế thừa** mà **không ghi một byte**. Zero-write cưỡng chế
+  bằng `zero-write.structural.test.ts`. ⚠ Đọc `flags=[…]` TRƯỚC `locsByVersion`:
+  có cờ nào thì danh sách locale có thể ngắn hơn thực tế.
 - [ ] [LOCV2-write-probe] ⏸ **CHẶN bởi `[LOCV2-snapshot-run]`.** Lần 2 — phép
   đo GHI (S1), một item Manager chọn **sau khi xem kết quả lần 1**. Thiết kế 4
   bước + 2 giai đoạn + bảng phân xử: KB §31.7 + §30.6. ⚠ `200` + không có

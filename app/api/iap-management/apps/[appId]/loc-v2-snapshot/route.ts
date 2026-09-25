@@ -38,6 +38,7 @@ import { getActiveAccount } from "@/lib/get-active-account";
 import {
   listAllInAppPurchases,
   listInAppPurchaseVersionsWithLocalizations,
+  listLocalizationsForVersion,
 } from "@/lib/iap-management/apple/client";
 import { withRetry } from "@/lib/iap-management/apple/fetch";
 import {
@@ -45,7 +46,8 @@ import {
   describeVersionSnapshotForLog,
   type VersionSnapshot,
   type ProbeVersion,
-  type ProbeIncluded,
+  type ProbeLocalization,
+  type VersionLocalizationsFetch,
 } from "@/lib/iap-management/bulk-import/localization-v2-snapshot";
 import { log } from "@/lib/logger";
 
@@ -145,21 +147,53 @@ export async function GET(
       continue;
     }
     try {
+      // ── Stage 1 — the versions, plus the relationship pointer ────────────
       // ⚠ WRAPPED EXACTLY ONCE, AND `listAllInAppPurchases` ABOVE IS NOT —
-      // that asymmetry is the contract, not an inconsistency.
-      // `listInAppPurchaseVersionsWithLocalizations` is a retry-NAIVE leaf (a
-      // bare `iapFetch`), so one wrapper here is its only retry.
-      // `listAllInAppPurchases` owns its retry internally and wrapping it
-      // again is the exact double-wrap `retry-composition.structural.test.ts`
-      // was written to stop. Both rules are enforced by that test.
-      const res = await withRetry(() =>
+      // that asymmetry is the contract, not an inconsistency. These two are
+      // retry-NAIVE leaves (bare `iapFetch`), so one wrapper each is their only
+      // retry. `listAllInAppPurchases` owns its retry internally and wrapping
+      // it again is the exact double-wrap `retry-composition.structural.test.ts`
+      // was written to stop. All three rules are enforced by that test.
+      const versionsRes = await withRetry(() =>
         listInAppPurchaseVersionsWithLocalizations(creds, appleIapId),
       );
-      const snapshot = summarizeVersionSnapshot(
-        productId,
-        (res.data ?? []) as unknown as ProbeVersion[],
-        (res.included ?? []) as unknown as ProbeIncluded[],
-      );
+      const versions = (versionsRes.data ?? []) as unknown as ProbeVersion[];
+
+      // ── Stage 2 — the AUTHORITATIVE localizations, one call per version ──
+      // ⚠⚠ STAGE 1's POINTER IS NOT USED AS THE ANSWER. KB §4.1 LANDMARK
+      // measured Apple V2 relationship pointers truncating at 10 IDs, and a
+      // short pointer here would read as "the new version did not inherit the
+      // other locales" — the wrong answer, in the direction nobody questions.
+      // Same "metadata then sub-resource" split as Hotfix 22 (availabilities)
+      // and the two-stage price-schedule read.
+      const fetched: VersionLocalizationsFetch[] = [];
+      for (const v of versions) {
+        const versionId = typeof v.id === "string" ? v.id : "";
+        if (!versionId) continue;
+        try {
+          const locRes = await withRetry(() =>
+            listLocalizationsForVersion(creds, versionId),
+          );
+          fetched.push({
+            versionId,
+            rows: (locRes.data ?? []) as unknown as ProbeLocalization[],
+            // ⚠ Apple saying "there is more" must survive into the report.
+            // One page holds 200 and Apple ships ~40 App Store locales, so this
+            // should never fire — which is exactly why it must be checked
+            // rather than assumed away.
+            hasMorePages: Boolean(locRes.links?.next),
+          });
+        } catch (err) {
+          fetched.push({
+            versionId,
+            rows: [],
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        await sleep(PAUSE_MS);
+      }
+
+      const snapshot = summarizeVersionSnapshot(productId, versions, fetched);
       const line = describeVersionSnapshotForLog(snapshot);
       await log(LOG_FEATURE, line);
       results.push({ product_id: productId, snapshot, line });
