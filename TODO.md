@@ -23,7 +23,15 @@ Apple + bài học phương pháp: **KB §31**.
   ⚠ Giới hạn: version đó do **ASC** tạo; version do **API** tạo có kế thừa
   không thì **CHƯA ĐO** — và chỉ quan trọng nếu nhánh "tool tự tạo version" đúng.
   ⚠ n=3 < 10 ⇒ **§4.1 landmark chưa quan sát được**; GIỮ kiến trúc 2 tầng.
-- [ ] [LOCV2-write-probe-run] ⏳ **DỰNG XONG — CHỜ MANAGER BẤM.**
+- [x] [LOCV2-write-probe-run] ✅ **XONG — 409 `IAP_VERSION_UNMODIFIABLE`.**
+  Verdict `APPLE_REFUSED` ⇒ **loại nhánh (B)**. Và capture DevTools của Manager
+  trên `mb30` giải thích trọn vẹn: ASC `POST` một version rồi PATCH vào **bản
+  COPY**, không bao giờ chạm bản APPROVED. **KB §32.**
+- [ ] [LOCV2-orchestrate] ⏳ **CHỜ MANAGER DUYỆT KẾ HOẠCH.** Orchestrator hai
+  ca (§32.6). ⭐ Client đã đủ **4/4 bước** (§32.5) — còn lại là đấu dây, không
+  phải viết client. ⚠ Ràng buộc bản lề: **kiểm có draft TRƯỚC, đừng POST mù** —
+  ca 2 không tạo gì nên không có gì mồ côi.
+- [~] [LOCV2-write-probe-run-old] ⏳ ~~DỰNG XONG — CHỜ MANAGER BẤM.~~
   `GET /api/iap-management/apps/6744642671/loc-v2-write-probe?product=com.pure3q.sea.mb6&expect=fc859670-ffe1-439c-bef8-895437e410b9&confirm=WRITE`
   ⚠⚠ **ROUTE NÀY GHI THẬT.** Đúng **một** PATCH, cưỡng chế bằng
   `one-write.structural.test.ts` (hàm ghi duy nhất · gọi đúng 1 lần · 1 locId ·

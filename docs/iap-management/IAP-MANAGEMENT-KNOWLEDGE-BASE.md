@@ -8040,3 +8040,193 @@ instrument lại không đo được tầng mà nhánh X biểu hiện.** Lý do
 năng đo **phải khớp nhau** — và chỗ kiểm là: *"với mỗi nhánh trong bảng phân
 xử, tầng dữ liệu nào thay đổi, và instrument có chụp tầng đó không?"*
 
+
+## §32 — Câu cuối cùng của arc, đóng bằng DevTools chứ không bằng tài liệu (2026-09-25)
+
+### 32.1 (a) Chuỗi bốn bước ASC thật sự làm — nguyên văn, kèm id thật
+
+Manager sửa Display Name một localization trên `com.pure3q.sea.mb30` — item
+**chỉ có một version `APPROVED`, không có draft** — và capture network của ASC:
+
+| # | Request | Kết quả |
+|---|---|---|
+| 1 | `GET /iris/v1/inAppPurchaseVersions/b9bbebcc/localizations?include=version` | v1 `APPROVED`, **3 locale**: `cc5509dc`(en-US) · `4f02fd0f`(id) · `31c333cc`(th), `total=3` |
+| 2 | ⭐ **`POST /iris/v1/inAppPurchaseVersions`** | `93bc0dad`, `version: 2`, `PREPARE_FOR_SUBMISSION` |
+| 3 | `GET /iris/v1/inAppPurchaseVersions/93bc0dad/localizations?include=version` | ⭐ **ĐÃ CÓ ĐỦ 3 locale, ID MỚI, nội dung COPY từ v1**: `60e11c66`(th) · `0356c1c3`(id) · `0e2adb57`(en-US), `total=3` |
+| 4 | `PATCH /iris/v2/inAppPurchaseLocalizations/0e2adb57` | en-US **của version MỚI** |
+
+⚠ **`/iris` là API NỘI BỘ của ASC.** Đây là bằng chứng về **MÔ HÌNH**, không phải
+endpoint để dùng. Cả bốn bước đều có endpoint công khai tương đương, và repo đã
+có sẵn ba trong bốn (§32.5).
+
+#### ⇒ NHÁNH (A) ĐÚNG, NHÁNH (B) LOẠI
+
+| Ứng viên (§30.3, §31.13) | Phán quyết |
+|---|---|
+| (A) PATCH lên bản APPROVED bị chặn ⇒ **tool phải tự tạo version** | ✅ **ĐÚNG — ĐÃ ĐO** |
+| (B) Apple **tự tạo version ngầm** khi PATCH v2 | ⛔ **LOẠI** — ASC gọi `POST` tường minh ở bước 2 |
+
+⇒ **Sáu ràng buộc chống version mồ côi (§31.12) GIỮ NGUYÊN** — nhưng phạm vi
+thu hẹp, xem §32.4.
+
+### 32.2 (b) ⭐ Apple TỰ COPY localization khi POST version — đo trên CẢ HAI đường
+
+Bước 3 là dữ kiện quan trọng nhất sau bước 2: version vừa tạo **đã có đủ 3
+locale**, **id mới hoàn toàn**, **nội dung copy từ version trước**.
+
+| Version được tạo bởi | Có kế thừa? | Nguồn |
+|---|---|---|
+| **ASC** (Manager bấm Save trên UI) | ✅ | §31.11(a), snapshot `mb6` |
+| **`POST /v1/inAppPurchaseVersions`** | ✅ | §32.1 bước 3, `mb30` |
+
+⇒ ⭐ **§1.6 đóng cho CẢ HAI đường.** Giới hạn ghi ở §31.11(a) (*"chưa đo trên
+version do API tạo"*) **nay đã được gỡ bằng phép đo**, không phải bằng suy luận.
+⇒ **Tool KHÔNG phải copy locale.** Chỉ `POST` rồi `PATCH` locale cần đổi. Bước
+"copy đủ locale sang version mới" đã gỡ khỏi thiết kế ở §31.12 — nay có **căn cứ
+thứ hai, mạnh hơn**.
+
+### 32.3 (c) 409 của write-probe nay GIẢI THÍCH ĐƯỢC — và phép đo đó KHÔNG sai
+
+Write-probe PATCH thẳng vào localization **của bản APPROVED** và nhận **409
+`IAP_VERSION_UNMODIFIABLE`**. §32.1 cho biết vì sao: **ASC không bao giờ làm
+thao tác đó.** Nó `POST` một version rồi PATCH vào **bản copy**. Bản APPROVED
+không bao giờ bị chạm.
+
+⚠⚠ **ĐỪNG ĐỌC THÀNH "PHÉP ĐO HỎNG".** Nó đo **đúng thứ nó định đo** và trả lời
+**đúng câu đã đặt**: *"PATCH lên localization thuộc version APPROVED thì Apple
+trả gì?"* → **409, bị chặn**. Đó là verdict `APPLE_REFUSED` trong bảng bốn
+nhánh, và nó **loại nhánh (B)**.
+
+⭐ Điều nó **không** làm được là nói cho ta biết **luồng thật trông như thế nào**
+— vì luồng thật **không đi qua đường đó**. Hai câu hỏi khác nhau:
+
+| Câu | Trả lời bằng |
+|---|---|
+| *"Endpoint này làm gì khi tôi gọi nó thế này?"* | write-probe — **một lượt ghi** |
+| *"Hệ thống thật sự làm gì?"* | **quan sát ASC** — bốn request, **không ghi gì của mình** |
+
+### 32.4 (d) ⭐⭐ BÀI HỌC: quan sát ASC LÀM GÌ rẻ hơn và chắc hơn tra tài liệu
+
+Câu này đã qua **ba lượt tra tài liệu** mà không đóng được:
+
+| Lượt | Nguồn | Kết quả |
+|---|---|---|
+| 1 | OAS 4.4.1 | ⛔ **1263 operation, 0 description** — không nói gì về việc tạo version |
+| 2 | prose doc-site (`working-with…`, `migrating…`) | ⚠ **tự mâu thuẫn** ([05] vs [12], §31.3); câu [02] có **hai cách đọc** không phân xử được (§31.4) |
+| 3 | Apple Help | ⚠ *"some changes require approval by App Review"* — đúng hướng nhưng **không nói AI tạo version** |
+| **4** | ⭐ **DevTools trên ASC, 4 request** | ✅ **đóng dứt điểm**, và đóng luôn câu kế thừa-qua-API |
+
+⭐ **Quy tắc:** khi câu hỏi là *"hệ thống thật sự làm gì"* — không phải *"API cho
+phép gì"* — thì **mở DevTools và xem UI chính chủ làm gì** là phép đo **rẻ nhất,
+chắc nhất, và KHÔNG GHI GÌ CỦA MÌNH**. Tài liệu mô tả **khả năng**; network trace
+mô tả **hành vi**. Arc này tốn ba lượt tra tài liệu, một lượt ghi thật, rồi được
+đóng bằng bốn request đọc.
+
+⚠ **Giới hạn:** `/iris` là nội bộ, có thể đổi bất cứ lúc nào, và **không được
+gọi từ production**. Nó chứng minh **mô hình**, rồi ta dựng lại mô hình đó bằng
+endpoint công khai.
+
+⇒ Đây là họ hàng gần của §31.11(a) (*bằng chứng đã nằm sẵn trên server*) và
+§31.14 (*tham số cũng nằm sẵn ở đó*). Cả ba cùng nói một điều: **hệ thống đang
+chạy biết nhiều hơn tài liệu của nó.**
+
+
+### 32.5 Hạ tầng: **4/4 bước đã có trong repo** — chỉ còn đấu dây
+
+⚠ Số dòng đã grep lại sau khi arc chèn thêm hàm vào `client.ts` (P44 — số cũ
+trong brief đã trôi: `:416`→`:455`, `:429`→`:599`).
+
+| Bước | Hàm | Dòng | Endpoint công khai |
+|---|---|---|---|
+| 1 | `listInAppPurchaseVersions` | `client.ts:455` | `GET /v2/inAppPurchases/{id}/versions` |
+| 2 | `createInAppPurchaseVersion` | `client.ts:599` | `POST /v1/inAppPurchaseVersions` |
+| 3 | `listLocalizationsForVersion` | `client.ts:567` | `GET /v1/inAppPurchaseVersions/{id}/localizations` |
+| 4 | ⭐ `updateInAppPurchaseLocalizationV2` | `client.ts:318` | `PATCH /v2/inAppPurchaseLocalizations/{id}` |
+
+⇒ **Bước 4 KHÔNG thiếu** — nó đã được dựng cùng write-probe (commit `dca1ce0`)
+và hiện chỉ probe dùng. Còn lại là **orchestration**, không phải client.
+
+#### Payload của bước 2 — xác định hoàn toàn từ OAS, KHÔNG cần hỏi Manager
+
+`#/components/schemas/InAppPurchaseVersionCreateRequest`, nguyên văn:
+`data.required = ["relationships", "type"]` · **KHÔNG có `attributes`** ·
+`data.relationships.required = ["inAppPurchase"]` ·
+`inAppPurchase.data.required = ["id", "type"]`.
+
+```json
+{ "data": { "type": "inAppPurchaseVersions",
+            "relationships": { "inAppPurchase": {
+              "data": { "type": "inAppPurchases", "id": "<appleIapId>" } } } } }
+```
+
+✅ `createInAppPurchaseVersion` (`client.ts:599-616`) **gửi đúng shape này** —
+đối chiếu từng trường, không thiếu không thừa. Không có tham số nào phải chọn
+(không `attributes`, không version number — Apple tự đánh `version: 2`).
+
+### 32.6 Ma trận HAI CA — nay cả hai đều ĐÃ ĐO
+
+| | **CA 1 — item CHƯA có draft** | **CA 2 — item ĐÃ có draft** |
+|---|---|---|
+| Nhận ra bằng | `versions` không có `PREPARE_FOR_SUBMISSION` | có |
+| Các bước | GET versions → **POST version** → GET loc của version mới → PATCH | GET versions → GET loc của draft → PATCH |
+| Tạo version? | **CÓ** | ⭐ **KHÔNG** |
+| Vào duyệt lại? | có | có (version draft rồi cũng phải submit) |
+| Rủi ro mồ côi | ⚠ **CÓ** | ⭐ **KHÔNG** |
+| Nguồn | §32.1, `mb30`, capture DevTools | §31.11 + 3 lần Manager sửa tay (`en-US`×2, `th`×1) — **update tại chỗ** |
+
+⚠⚠ **1.2 — KIỂM CÓ DRAFT TRƯỚC, ĐỪNG `POST` MÙ.** Đây không phải tối ưu hoá
+mà là **cách duy nhất tránh rủi ro mồ côi**: ca 2 không tạo gì cả, nên không có
+gì để mồ côi. `POST` mù trên một item đã có draft vừa thừa vừa sinh artifact
+vĩnh viễn. Khuôn `resolveInAppPurchaseVersionId` (`submit-v2.ts:109-138`) **đã
+làm đúng việc này** — tái dùng, đừng viết lại.
+
+#### Chi phí request, và nó dùng để làm gì
+
+`k` = số locale thật sự đổi · `n` = số locale của item.
+
+| | CA 1 | CA 2 | hôm nay (hỏng) |
+|---|---|---|---|
+| GET versions | 1 | 1 | — |
+| GET loc của bản APPROVED *(mốc so sánh, §28.11.c)* | 1 | 1 | 1 |
+| POST version | **1** | 0 | — |
+| GET loc của version ghi được | 1 | 1 | — |
+| PATCH | k | k | k |
+| **Tổng** | **4 + k** | **3 + k** | 1 + k *(và PATCH 409)* |
+
+**Lô 20 item của sự cố** (đều live, chỉ có APPROVED ⇒ **toàn CA 1**; `n=1`,
+`k=1`): **20 × 5 = 100 request**, so với 40 hôm nay — trong đó 20 PATCH **đều
+hỏng**. ⇒ Đắt hơn 2,5 lần và **chạy được**, thay vì rẻ hơn và **không chạy**.
+⚠ Với concurrency 2 + `INTER_ROW_DELAY_MS = 1000` (`execute/route.ts:140,149`),
+100 request là ~10 phút — chấp nhận được, nhưng **nhánh tạo version nên chạy
+tuần tự** (§31.12 ràng buộc 5).
+
+### 32.7 ⚠ §31.12 viết lại đúng phạm vi: 6 ràng buộc mồ côi CHỈ áp cho CA 1
+
+| Ràng buộc | CA 1 | CA 2 |
+|---|---|---|
+| 1. tạo version muộn nhất có thể | ✅ áp | — không tạo |
+| 2. kiểm trước mọi thứ không cần version | ✅ áp | — |
+| 3. **tái dùng draft trước, tạo sau** | ⭐ chính là thứ **phân loại** hai ca | ⭐ |
+| 4. tạo xong mà hỏng ⇒ ghi lại + báo đích danh | ✅ áp | — |
+| 5. nhánh tạo-version chạy tuần tự | ✅ áp | — |
+| 6. ngưỡng dừng cả lô | ✅ áp | — |
+
+⇒ Ràng buộc **3 là bản lề**: nó không chỉ phòng mồ côi, nó **quyết định item đi
+ca nào**.
+
+### 32.8 ⚠ QUAN SÁT (không phải bảo đảm): version mồ côi ở `PREPARE_FOR_SUBMISSION` có vẻ vô hại
+
+`mb6` và nay `mb30` đều đang mang một version `PREPARE_FOR_SUBMISSION` **chưa
+submit**, nằm đó và **không gây vấn đề gì** — bản `APPROVED` vẫn phục vụ người
+mua bình thường.
+
+⚠⚠ **Đây là QUAN SÁT trên 2 item trong vài ngày, KHÔNG phải bảo đảm.** Không
+được dùng nó để nới ràng buộc §32.7. Ba lý do:
+- **Không có DELETE** (xác minh 3 lớp) ⇒ sai thì không sửa được.
+- Design doc §0 Q3: *"Not confirmed either way by Apple"* — Apple **chưa từng**
+  nói mồ côi là vô hại; bằng chứng gián tiếp (sibling `AppStoreVersion` từ chối
+  version thứ hai đang bay) nghiêng về phía **không nên coi nhẹ**.
+- 2 item × vài ngày **không phủ** được ca "20 item × nhiều tháng".
+
+⇒ Ghi lại vì nó **hạ mức khẩn cấp** của rủi ro mồ côi, **không** vì nó xoá rủi ro.
+
