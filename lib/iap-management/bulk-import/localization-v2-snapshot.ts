@@ -75,6 +75,7 @@
  * the DEBUG 429-header line from the key-pool arc — each added to settle a
  * named question, each removed once settled.
  */
+import { localizationContentEquals } from "../localization-compare";
 
 /** One version row, as loosely as Apple might actually send it. */
 export interface ProbeVersion {
@@ -114,11 +115,41 @@ export interface VersionLocalizationsFetch {
 
 export type LocalizationEdge = { kind: "NO_EDGE" } | { kind: "IDS"; ids: string[] };
 
+/**
+ * One localization, WITH ITS CONTENT.
+ *
+ * ⚠⚠ `ABSENT` IS A REAL VALUE HERE AND MUST NOT BE COLLAPSED INTO `""`.
+ * Apple omitting `description` and Apple sending an empty description are
+ * different facts, and this snapshot is the first thing in the repo that has
+ * ever LOOKED at these two fields on this endpoint — so "we asked and it was
+ * not there" has to stay distinguishable from "it is empty". Same lesson the
+ * state probe was built around (ABSENT ≠ EMPTY).
+ */
+export interface LocalizationContentRow {
+  id: string;
+  locale: string;
+  /** `"ABSENT"` when Apple did not send the field at all. */
+  name: string;
+  /** `"ABSENT"` when Apple did not send the field at all. */
+  description: string;
+}
+
 export interface VersionSnapshotRow {
   versionId: string;
   state: string;
   /** ⭐ AUTHORITATIVE — locales from the V1 sub-resource. */
   locales: string[];
+  /**
+   * ⭐⭐ THE CONTENT — added 2026-09-25 after a design hole was spotted.
+   *
+   * The snapshot used to report only the LOCALE LIST. That made **branch 4**
+   * — Apple writing straight into the existing draft — INVISIBLE: version
+   * count unchanged, locale list unchanged, so the run would read as "nothing
+   * happened" and be filed as the ambiguous case. Branch 4 is the best
+   * possible outcome AND the entire reason `mb6` was chosen as the probe item,
+   * so the instrument was quietly defeating the reason it was pointed there.
+   */
+  localizations: LocalizationContentRow[];
   /** Apple said there are more pages than the one that was read. */
   truncatedPages: boolean;
   /** Stage 2 could not be read. `locales` is then NOT a count of anything. */
@@ -132,15 +163,113 @@ export interface VersionSnapshotRow {
   pointerDisagrees: boolean;
 }
 
+/** One locale whose content differs between the approved and draft versions. */
+export interface DivergentLocale {
+  locale: string;
+  /** The localization id **in the APPROVED version** — the PATCH target. */
+  approvedLocalizationId: string;
+  approved: { name: string; description: string };
+  draft: { name: string; description: string };
+}
+
 export interface VersionSnapshot {
   productId: string;
   versions: VersionSnapshotRow[];
   /** True when any row is missing data — the whole snapshot is then partial. */
   incomplete: boolean;
+  /**
+   * ⭐ THE PARAMETER OF THE NEXT MEASUREMENT, COMPUTED FROM DATA.
+   *
+   * Which locale actually differs between the live version and the draft — the
+   * question a human can only answer from memory, and did answer wrongly once
+   * (the Manager recalled `vi`; this app has no `vi` at all, the edited locale
+   * is `en-US`). The server knew. ⇒ The write probe picks its target from
+   * HERE, never from a hard-coded locale (KB §31.14).
+   *
+   * ⚠ Uses `localizationContentEquals` — the SAME rule bulk import will use to
+   * auto-untick a cell. Not a lookalike: literally the same function, so
+   * "differs" means one thing across the module.
+   *
+   * ⚠ EMPTY HAS TWO CAUSES and the caller must not merge them: there is no
+   * approved/draft PAIR to compare (see `comparable`), or there is a pair and
+   * every locale matches.
+   */
+  divergentLocales: DivergentLocale[];
+  /**
+   * Whether a comparison was possible at all: exactly one APPROVED-ish version
+   * AND exactly one PREPARE_FOR_SUBMISSION version. Anything else is reported
+   * rather than guessed — two drafts is not a situation to pick a winner in.
+   */
+  comparable: { ok: boolean; reason?: string };
 }
 
 function str(v: unknown): string | null {
   return typeof v === "string" && v !== "" ? v : null;
+}
+
+/**
+ * A content attribute, preserving the ABSENT/EMPTY distinction.
+ *
+ * ⚠ `""` IS A LEGITIMATE DESCRIPTION and must survive as `""`. Only a missing
+ * or non-string field becomes `"ABSENT"`. Folding them would make "Apple did
+ * not send it" indistinguishable from "it is blank" — and the PATCH payload is
+ * built from these values, so the difference is not cosmetic.
+ */
+function attr(v: unknown): string {
+  return typeof v === "string" ? v : "ABSENT";
+}
+
+/** Versions that represent what customers currently see. */
+const APPROVED_STATES = new Set(["APPROVED", "ACCEPTED"]);
+const DRAFT_STATE = "PREPARE_FOR_SUBMISSION";
+
+/**
+ * Compare the draft against the live version, locale by locale.
+ *
+ * ⚠ THE APPROVED ROW IS THE BASELINE, and its localization id is what gets
+ * returned — the write probe PATCHes the localization owned by the APPROVED
+ * version, so returning the draft's id would point the measurement at the
+ * wrong resource and quietly answer a different question.
+ */
+function computeDivergence(rows: ReadonlyArray<VersionSnapshotRow>): {
+  divergentLocales: DivergentLocale[];
+  comparable: { ok: boolean; reason?: string };
+} {
+  const approved = rows.filter((r) => APPROVED_STATES.has(r.state));
+  const drafts = rows.filter((r) => r.state === DRAFT_STATE);
+
+  if (approved.length !== 1 || drafts.length !== 1) {
+    // ⚠ REPORTED, NOT GUESSED. With two drafts there is no principled winner,
+    // and with none there is nothing to compare — both are facts the Manager
+    // needs to see, not situations to paper over with an empty list.
+    return {
+      divergentLocales: [],
+      comparable: {
+        ok: false,
+        reason:
+          `need exactly 1 approved + 1 draft version to compare; ` +
+          `found ${approved.length} approved, ${drafts.length} draft`,
+      },
+    };
+  }
+
+  const draftByLocale = new Map(drafts[0].localizations.map((l) => [l.locale, l]));
+  const divergentLocales: DivergentLocale[] = [];
+  for (const a of approved[0].localizations) {
+    const d = draftByLocale.get(a.locale);
+    // A locale present in the approved version but absent from the draft is
+    // NOT a content difference — it is a shape difference, and inventing a
+    // comparison against nothing would manufacture a divergence.
+    if (!d) continue;
+    if (localizationContentEquals(a, d)) continue;
+    divergentLocales.push({
+      locale: a.locale,
+      approvedLocalizationId: a.id,
+      approved: { name: a.name, description: a.description },
+      draft: { name: d.name, description: d.description },
+    });
+  }
+  return { divergentLocales, comparable: { ok: true } };
 }
 
 function readEdge(v: ProbeVersion): LocalizationEdge {
@@ -184,6 +313,7 @@ export function summarizeVersionSnapshot(
         versionId,
         state: str(v.attributes?.state) ?? "STATE_ABSENT",
         locales: [],
+        localizations: [],
         truncatedPages: false,
         fetchError: fetch?.error ?? "not fetched",
         edge,
@@ -191,9 +321,14 @@ export function summarizeVersionSnapshot(
       };
     }
 
-    const locales = fetch.rows.map(
-      (r) => str(r.attributes?.locale) ?? "LOCALE_ABSENT",
-    );
+    const localizations: LocalizationContentRow[] = fetch.rows.map((r) => ({
+      id: str(r.id) ?? "ID_ABSENT",
+      locale: str(r.attributes?.locale) ?? "LOCALE_ABSENT",
+      // ⚠ `?? "ABSENT"` and NOT `?? ""`. See `LocalizationContentRow`.
+      name: attr(r.attributes?.name),
+      description: attr(r.attributes?.description),
+    }));
+    const locales = localizations.map((l) => l.locale);
     const truncatedPages = fetch.hasMorePages === true;
     if (truncatedPages) incomplete = true;
 
@@ -201,6 +336,7 @@ export function summarizeVersionSnapshot(
       versionId,
       state: str(v.attributes?.state) ?? "STATE_ABSENT",
       locales,
+      localizations,
       truncatedPages,
       edge,
       // Only a SHORT pointer is the landmark. A pointer with more ids than the
@@ -210,7 +346,8 @@ export function summarizeVersionSnapshot(
     };
   });
 
-  return { productId, versions: rows, incomplete };
+  const { divergentLocales, comparable } = computeDivergence(rows);
+  return { productId, versions: rows, incomplete, divergentLocales, comparable };
 }
 
 /**
@@ -256,11 +393,18 @@ export function describeVersionSnapshotForLog(snapshot: VersionSnapshot): string
     }
   }
 
+  // ⭐ The divergence is on the line, not only in the JSON: it is the parameter
+  // the next measurement consumes, and a grep has to be able to find it.
+  const diff = snapshot.comparable.ok
+    ? snapshot.divergentLocales.map((d) => d.locale).join(",")
+    : `NOT_COMPARABLE(${snapshot.comparable.reason ?? "?"})`;
+
   return (
     `LOCV2-SNAPSHOT product=${snapshot.productId} ` +
     `versions=[${versions}] ` +
     `locsByVersion=[${locs}] ` +
     `ptr=[${ptr}] ` +
+    `diff=[${diff}] ` +
     `flags=[${flags.join(",")}]`
   );
 }

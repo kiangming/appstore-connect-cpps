@@ -9,6 +9,12 @@ Format: `- [ ] [PR-X] description — file path — rationale`
 thì Apple làm gì, và AI tạo version mới* — **CHƯA BIẾT**. Mô hình + bốn dữ kiện
 Apple + bài học phương pháp: **KB §31**.
 
+- [ ] [LOCV2-snapshot-content-run] ⏳ **CHỜ MANAGER CHẠY LẠI (zero write).**
+  Snapshot nay chụp **CẢ NỘI DUNG** (name + description) mỗi locale mỗi version,
+  và tự tính `divergentLocales`. ⚠ Lý do sửa: bản cũ chỉ ghi danh sách locale ⇒
+  **nhánh 4** (Apple ghi thẳng vào draft) **vô hình** — đúng nhánh là lý do chọn
+  `mb6`. KB §31.14. Kỳ vọng: đúng **một** locale lệch, và là **`en-US`**
+  (⚠ app này KHÔNG có `vi` — Manager nhớ nhầm, §31.14).
 - [x] [LOCV2-snapshot-run] ✅ **XONG 2026-09-25 — và nó ĐÓNG câu nguy hiểm
   nhất, zero write.** App `6744642671`: `mb6` (đã sửa tay) có **2 version**,
   **cả hai** `{en-US,id,th}` ⇒ ⭐ **CÓ KẾ THỪA, ĐÃ ĐO**; `mb30`+`mb68` mỗi item

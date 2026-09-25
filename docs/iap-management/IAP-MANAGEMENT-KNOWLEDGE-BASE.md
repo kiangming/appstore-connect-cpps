@@ -7993,3 +7993,50 @@ không phải `1 → 2`. Bước 4 in **toàn bộ** danh sách version nên v�
 chỉ là kém hiển nhiên.
 ⇒ Nếu Manager ưu tiên **tín hiệu sạch** hơn **rủi ro thấp**, chọn `mb30`.
 
+
+### 31.14 ⭐⭐ THAM SỐ của phép đo cũng phải LẤY TỪ DỮ LIỆU — kể cả khi có người biết câu trả lời
+
+**Instance (2026-09-25).** Thiết kế lần 2 cần biết **locale nào** đã bị sửa tay
+trên `mb6`, để PATCH đúng chỗ. Nguồn hiển nhiên: hỏi Manager — chính người đã
+bấm Save trên ASC. Manager nhớ **`vi`**.
+
+⛔ **App `6744642671` KHÔNG CÓ locale `vi`.** Ba item đều là `{en-US, id, th}`.
+Locale thật sự đã sửa là **`en-US`**.
+
+⚠ Đây **không** phải lỗi của Manager. Đây là thuộc tính của **trí nhớ con
+người** so với **trạng thái hệ thống**: sự cố gốc nói về `vi` suốt (§28 — 20
+dòng 409 trên một app khác), nên `vi` là chữ dính lại. Hệ thống thì không nhớ
+nhầm.
+
+⇒ ⭐ **QUY TẮC: khi thiết kế một phép đo, lấy THAM SỐ từ dữ liệu đã đọc được,
+đừng lấy từ câu trả lời của người — kể cả người đó chính là người tạo ra trạng
+thái đó.**
+
+Đây là **vế thứ hai** của §31.11(a). Vế một: *bằng chứng* đã nằm sẵn trên server
+(version draft do Manager tạo đã trả lời câu kế thừa). Vế hai: **tham số** của
+phép đo tiếp theo cũng nằm sẵn ở đó — chỉ cần chiếu nó ra.
+
+**Áp vào code, không chỉ vào lời:** snapshot nay tự tính `divergentLocales`
+(locale có nội dung draft ≠ approved) và write-probe **chọn đích từ đó**, không
+hard-code locale. `en-US` chỉ là **KỲ VỌNG để đối chiếu**, không phải đầu vào.
+⚠ Và guard đi kèm: locale tự tìm **khác** kỳ vọng ⇒ **DỪNG, báo**; **không**
+locale nào lệch ⇒ **DỪNG, không ghi** (S1 gửi giá trị approved sẽ không phân
+biệt được nhánh 4 khi draft vốn đã khớp).
+
+#### ⚠ Và lỗ thứ hai cùng một họ: INSTRUMENT ĐO THIẾU TẦNG
+
+Snapshot bản đầu chỉ ghi **danh sách locale**, không ghi **nội dung**. Hậu quả:
+
+| Nhánh | Số version | Danh sách locale | Nội dung |
+|---|---|---|---|
+| 4 — **Apple ghi thẳng vào draft sẵn có** | **không đổi** | **không đổi** | ⭐ **đổi** |
+
+⇒ Nhánh 4 — **kết quả TỐT NHẤT có thể**, và là **lý do duy nhất chọn `mb6`** —
+sẽ bị đọc thành ca "không có gì xảy ra" ⇒ xếp vào NHẬP NHẰNG ⇒ phải chạy S2
+(một lượt ghi nữa) để biết thứ lẽ ra đã biết.
+
+⭐ **Lớp lỗi: một thiết kế chọn item vì item đó phát hiện được nhánh X, nhưng
+instrument lại không đo được tầng mà nhánh X biểu hiện.** Lý do chọn và khả
+năng đo **phải khớp nhau** — và chỗ kiểm là: *"với mỗi nhánh trong bảng phân
+xử, tầng dữ liệu nào thay đổi, và instrument có chụp tầng đó không?"*
+

@@ -523,10 +523,22 @@ export async function listLocalizationsForVersion(
   creds: AscCredentials,
   versionId: string,
 ): Promise<AscApiResponse<InAppPurchaseLocalizationV2[]>> {
+  // ⚠ `fields[]` IS STATED, NOT LEFT TO THE DEFAULT. This call feeds the
+  // snapshot, and the snapshot now reports NAME + DESCRIPTION, not just the
+  // locale list. Apple's no-`fields[]` default is *probably* "all attributes"
+  // — but "probably" is how `limit[localizations]=200` happened. Asking for
+  // exactly what is read makes the request state its own contract.
+  // OAS 4.4.1, `#/paths/~1v1~1inAppPurchaseVersions~1{id}~1localizations/get`
+  // → `fields[inAppPurchaseLocalizations]` → enum
+  //   ["name", "locale", "description", "version"]. All three below are in it.
+  const query = [
+    "fields[inAppPurchaseLocalizations]=name,locale,description",
+    "limit=200",
+  ].join("&");
   return iapFetch<AscApiResponse<InAppPurchaseLocalizationV2[]>>(
     creds,
     "GET",
-    `/v1/inAppPurchaseVersions/${versionId}/localizations?limit=200`,
+    `/v1/inAppPurchaseVersions/${versionId}/localizations?${query}`,
   );
 }
 

@@ -24,6 +24,15 @@
  * time. The greppable line is still emitted (same habit, same grep), but the
  * Manager reads the JSON directly.
  *
+ * ⚠⚠ IT REPORTS **CONTENT**, NOT JUST THE LOCALE LIST (fixed 2026-09-25).
+ * The first version listed only locales, which made the best-case outcome of
+ * the NEXT measurement invisible: if Apple writes straight into the existing
+ * draft, the version count and the locale list are both unchanged, so the run
+ * would have read as "nothing happened". The instrument was quietly defeating
+ * the reason its target item was chosen. It now carries `name` + `description`
+ * per locale per version, and computes which locale actually diverges —
+ * `divergentLocales`, the parameter the write probe consumes.
+ *
  * ⚠ SEQUENTIAL, NOT PARALLEL. One Apple request per product with a pause
  * between. This is a diagnostic, not a hot path; a fan-out here would spend
  * rate budget the import itself needs (KB: Hotfix 26 dropped bulk-import
