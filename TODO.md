@@ -27,7 +27,27 @@ Apple + bài học phương pháp: **KB §31**.
   Verdict `APPLE_REFUSED` ⇒ **loại nhánh (B)**. Và capture DevTools của Manager
   trên `mb30` giải thích trọn vẹn: ASC `POST` một version rồi PATCH vào **bản
   COPY**, không bao giờ chạm bản APPROVED. **KB §32.**
-- [ ] [LOCV2-orchestrate] ⏳ **CHỜ MANAGER DUYỆT KẾ HOẠCH.** Orchestrator hai
+- [x] [LOCV2-O1-resolve-version] ✅ **XONG — bản lề.**
+  `lib/iap-management/apple/write-target-version.ts`: `pickWriteTargetVersion`
+  (thuần) + `resolveWriteTargetVersion` (I/O, deps tiêm vào để **ĐẾM** được số
+  lần POST). REUSE / CREATE / REFUSE(>1 draft · đang review).
+  ⚠⚠ `WRITABLE` ≠ `SUBMITTABLE` — **đừng hợp nhất** với
+  `SUBMITTABLE_VERSION_STATES` (`submit-v2.ts:44`): `READY_FOR_REVIEW`
+  submit được nhưng **KHÔNG sửa được**. KB §32.10.
+- [ ] [LOCV2-O2-planner] ⏳ Planner nghĩ theo **version**: đích PATCH = loc của
+  version ghi được; mốc so sánh = bản **APPROVED** (§28.11.c).
+  ⚠ Q3 đã chốt: **BỎ nhánh DELETE khỏi bulk import** (giữ ở form đơn lẻ) —
+  ghi rõ trong docs để người sau không tưởng là sót.
+  ⚠ Q4 đã chốt LẠI: ca H ⇒ **UNTICK** + nhãn phân biệt với ca B (§32.9).
+  ⚠ Q5: normalize NFC **chỉ khi so sánh**, ghi lên Apple **nguyên văn** file.
+- [ ] [LOCV2-O3-O4-wire] ⏳ Đấu vào `bulk-import/execute/route.ts`
+  (`:1419/:1461/:1490/:1512`) **VÀ** twin `update-orchestration.ts`
+  (`:325/:387/:417/:453`) — ⚠ **CÙNG MỘT CHUNK**, đừng để lệch (CLAUDE.md P1).
+  ⚠ Q6 đã chốt: tool **DỪNG ở bước 4**, không submit, không bật
+  `IAP_SUBMIT_V2_APPS`.
+  ⚠ Parity ghim bằng test: item **chưa live** (có sẵn draft, §0 Q1) ⇒ **CA 2**
+  ⇒ hành vi **y hệt hôm nay**, không POST thêm gì.
+- [ ] [LOCV2-orchestrate] ⏳ **ĐÃ DUYỆT KẾ HOẠCH O1-O5** (Manager 2026-09-25). Orchestrator hai
   ca (§32.6). ⭐ Client đã đủ **4/4 bước** (§32.5) — còn lại là đấu dây, không
   phải viết client. ⚠ Ràng buộc bản lề: **kiểm có draft TRƯỚC, đừng POST mù** —
   ca 2 không tạo gì nên không có gì mồ côi.

@@ -8230,3 +8230,89 @@ mua bình thường.
 
 ⇒ Ghi lại vì nó **hạ mức khẩn cấp** của rủi ro mồ côi, **không** vì nó xoá rủi ro.
 
+
+### 32.9 Bốn câu Manager chốt (2026-09-25) — và một câu ĐỔI so với lần chốt trước
+
+| # | Chốt | Lý do Manager |
+|---|---|---|
+| **Q6** | **Manager submit tay.** Tool dừng ở bước 4, để lại version `PREPARE_FOR_SUBMISSION`. **KHÔNG** bật `IAP_SUBMIT_V2_APPS` trong arc này | arc đã mang một rủi ro không hoàn tác (version); chồng thêm submit thì khi hỏng **không phân xử được cái nào** |
+| **Q3** | **BỎ DELETE khỏi bulk import**, giữ ở form đơn lẻ | *"file không có locale X" ≠ "Manager muốn xoá locale X"*. ⚠ Ghi rõ trong docs để người sau **không tưởng là sót** |
+| **Q5** | normalize **NFC chỉ khi SO SÁNH**; **ghi lên Apple thì NGUYÊN VĂN** nội dung file | hướng hỏng **không đối xứng**: normalize khi so là an toàn, normalize khi ghi là **sửa dữ liệu của Manager** |
+| **Q4** | ⚠ **ĐỔI** — xem dưới | |
+
+#### ⚠⚠ Q4 (ca H) ĐỔI — và đổi vì có thêm PHÉP ĐO, không phải đổi ý
+
+**Ca H:** item có cả bản `APPROVED` lẫn draft; file **trùng bản APPROVED** nhưng
+**draft đang mang nội dung khác**.
+
+| | Lần chốt trước | Lần này |
+|---|---|---|
+| Quyết định | **TICK** + nhãn | **UNTICK** + nhãn |
+| Lý do | *"untick theo pending là lặng lẽ đổi mốc so sánh"* | trong **CA 2**, đích PATCH là localization **của DRAFT**. Draft đã mang đúng giá trị trong file ⇒ PATCH là **NO-OP** — gửi đi không đổi gì, chỉ tốn request |
+
+⭐ **Cái đổi không phải ý kiến, mà là DỮ KIỆN.** Lần chốt trước, câu *"đích PATCH
+là gì"* còn **CHƯA BIẾT** — khi đó "tick cho chắc" là lựa chọn đúng dưới sự
+thiếu hiểu biết. §32.1 đo ra đích PATCH, và cùng một lập luận nay dẫn tới kết
+luận ngược. ⚠ Ghi lại rõ để người sau **không đọc thành dao động**: quyết định
+cũ **đúng với dữ kiện lúc đó**, quyết định mới đúng với dữ kiện bây giờ.
+
+⇒ Cùng họ với §30.3 (*nhãn mức để sai một cách rẻ*) và §31.5 (*đổi chân đỡ,
+phát biểu hẹp hơn*): **dán nhãn CHƯA BIẾT đúng chỗ thì lúc đo ra, chỉ phải sửa
+một quyết định — không phải sửa cả một tầng code đã xây lên trên nó.**
+
+#### ⚠ Hai ca cùng UNTICK nhưng KHÁC LÝ DO — nhãn phải phân biệt được
+
+| Ca | Tình huống | Nhãn đề xuất |
+|---|---|---|
+| **B** | file trùng bản **APPROVED**, không có draft | **"Giống bản đang bán — không có gì để đổi"** |
+| **H** | file trùng bản **APPROVED**, draft mang thay đổi khác | **"Bản nháp đã mang thay đổi này — đang chờ duyệt"** |
+
+⚠ **Vì sao phải phân biệt:** cùng một ô untick, nhưng ca H nghĩa là item đó
+**có một thay đổi đang chờ Apple duyệt**, còn ca B nghĩa là **không có gì cả**.
+Manager nhìn bảng phải biết được điều đó **mà không phải mở ASC**. Gộp hai nhãn
+là xoá đúng thông tin khiến ca H đáng tồn tại.
+⏳ **Câu chữ chờ Manager duyệt khi nghiệm thu.**
+
+### 32.10 O1 — `resolveWriteTargetVersion`, bản lề của orchestrator
+
+`lib/iap-management/apple/write-target-version.ts`. Tách **quyết định thuần**
+(`pickWriteTargetVersion`) khỏi **I/O** (`resolveWriteTargetVersion`) để mọi
+nhánh test được mà không chạm sản phẩm đang bán.
+
+| Đầu vào | Quyết định | Tạo gì |
+|---|---|---|
+| đúng 1 version `PREPARE_FOR_SUBMISSION` | **REUSE** | ⭐ **không gì** |
+| không draft, không version đang review | **CREATE** | ⚠ 1 version (vĩnh viễn) |
+| **>1** draft | **REFUSE** | không gì |
+| không draft, có version đang review | **REFUSE** | không gì |
+
+#### ⚠⚠ `WRITABLE` ≠ `SUBMITTABLE` — hai tập trên cùng một enum, hai mục đích
+
+`submit-v2.ts:44` có `SUBMITTABLE_VERSION_STATES = {PREPARE_FOR_SUBMISSION,
+READY_FOR_REVIEW}`. ⛔ **KHÔNG tái dùng, KHÔNG "hợp nhất".**
+
+- *submittable* — version này **gắn vào review submission** được không?
+- *writable* — metadata của nó **còn sửa được** không?
+
+`READY_FOR_REVIEW` là **submittable** và **KHÔNG writable**: Apple mô tả state
+đó là *"The version belongs to a review submission and is waiting for you to
+mark that submission `submitted`"*, và trang IAP-statuses ghi lúc đó *"you can
+edit only the reference name, pricing, and availability"* (§31.2).
+
+⚠ Đây là bẫy §28.2 / §30.4 ở dạng thuần nhất: **hai tập trên cùng một trường,
+cho hai câu hỏi khác nhau.** Hợp nhất chúng sẽ nhắm một lượt sửa vào version
+Apple từ chối — và lời từ chối đó **trông y hệt cái 409 khởi đầu cả arc này**.
+
+#### ⚠ Vì sao REFUSE là kết quả hạng nhất, không phải đường lỗi
+
+Cả hai ca REFUSE đều là chỗ mà **ghi = đoán**, và đoán ở đây **không hoàn tác
+được**:
+- **>1 draft** — hành vi của Apple với hai draft **CHƯA ĐO**, và chọn đại một
+  cái đúng là bug `Map` last-wins mà arc này **đã sửa một lần** (§28.11.a) —
+  chỉ khác là lần này không undo được.
+- **đang review** — tạo version thứ hai khi một cái đang bay **CHƯA ĐO**, và
+  bằng chứng gián tiếp nghiêng về phía Apple từ chối (design doc §0 Q3:
+  `AppStoreVersion` anh em từ chối version thứ hai đang bay).
+
+⇒ CLAUDE.md: **thà bỏ sót một tín hiệu còn hơn bắn một tín hiệu sai.**
+
