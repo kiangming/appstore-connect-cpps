@@ -12,10 +12,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const pollIapReadyForPricing = vi.hoisted(() => vi.fn());
 const updateInAppPurchase = vi.hoisted(() => vi.fn());
-const updateInAppPurchaseLocalization = vi.hoisted(() => vi.fn());
-const createInAppPurchaseLocalization = vi.hoisted(() => vi.fn());
-const deleteInAppPurchaseLocalization = vi.hoisted(() => vi.fn());
-const listInAppPurchaseLocalizations = vi.hoisted(() => vi.fn());
+// ⭐ O4 — the localizations stage no longer talks to the V1 client. It calls
+// the ONE shared V2 path that bulk import calls, so the mock surface is that
+// function, not three client helpers. If this ever grows client mocks back,
+// the twin paths have drifted apart again.
+const syncLocalizationsToVersion = vi.hoisted(() => vi.fn());
 const replaceScreenshotOnApple = vi.hoisted(() => vi.fn());
 const applyPricingSchedule = vi.hoisted(() => vi.fn());
 // SC5 — the orchestrator now goes through the ONE shared write path; the two
@@ -24,13 +25,8 @@ const setAvailabilityTerritories = vi.hoisted(() => vi.fn());
 const auditInsert = vi.hoisted(() => vi.fn());
 
 vi.mock("./poll-iap-ready", () => ({ pollIapReadyForPricing }));
-vi.mock("./client", () => ({
-  updateInAppPurchase,
-  updateInAppPurchaseLocalization,
-  createInAppPurchaseLocalization,
-  deleteInAppPurchaseLocalization,
-  listInAppPurchaseLocalizations,
-}));
+vi.mock("./client", () => ({ updateInAppPurchase }));
+vi.mock("./localization-version-sync", () => ({ syncLocalizationsToVersion }));
 vi.mock("./screenshot-upload", () => ({ replaceScreenshotOnApple }));
 vi.mock("./pricing-orchestration", () => ({ applyPricingSchedule }));
 vi.mock("./availabilities", () => ({
@@ -92,10 +88,15 @@ function emptyDiff(): IapDiff {
 beforeEach(() => {
   pollIapReadyForPricing.mockReset();
   updateInAppPurchase.mockReset();
-  updateInAppPurchaseLocalization.mockReset();
-  createInAppPurchaseLocalization.mockReset();
-  deleteInAppPurchaseLocalization.mockReset();
-  listInAppPurchaseLocalizations.mockReset();
+  syncLocalizationsToVersion.mockReset();
+  syncLocalizationsToVersion.mockResolvedValue({
+    skipped: [],
+    patched: [],
+    created: [],
+    deleted: [],
+    failures: [],
+    versionCreated: false,
+  });
   replaceScreenshotOnApple.mockReset();
   applyPricingSchedule.mockReset();
   setAvailabilityTerritories.mockReset();
@@ -142,7 +143,9 @@ describe("updateIapOnApple — skip behavior", () => {
     expect(out.stages.screenshot.changed).toBe(false);
     expect(out.stages.pricing.changed).toBe(false);
     expect(updateInAppPurchase).not.toHaveBeenCalled();
-    expect(listInAppPurchaseLocalizations).not.toHaveBeenCalled();
+    // ⭐ The localizations stage now reaches Apple only through the shared V2
+    // sync, so "did it touch Apple?" is asked of that one function.
+    expect(syncLocalizationsToVersion).not.toHaveBeenCalled();
     expect(replaceScreenshotOnApple).not.toHaveBeenCalled();
     expect(applyPricingSchedule).not.toHaveBeenCalled();
   });
@@ -195,87 +198,69 @@ describe("updateIapOnApple — attributes stage", () => {
   });
 });
 
-describe("updateIapOnApple — localizations stage", () => {
-  it("looks up Apple loc IDs and PATCHes per updated locale", async () => {
-    listInAppPurchaseLocalizations.mockResolvedValueOnce({
-      data: [
-        { id: "loc-en", attributes: { locale: "en" } },
-        { id: "loc-vi", attributes: { locale: "vi" } },
-      ],
+describe("updateIapOnApple — localizations stage (V2, shared path)", () => {
+  it("⭐ delegates to the SAME shared sync bulk import uses — updated + added become `desired`", () => {
+    syncLocalizationsToVersion.mockResolvedValueOnce({
+      skipped: [],
+      patched: ["en"],
+      created: [{ locale: "ja", id: "loc-ja-new" }],
+      deleted: [],
+      failures: [],
+      versionCreated: false,
+      targetVersionId: "v-draft",
     });
-    updateInAppPurchaseLocalization.mockResolvedValueOnce({ data: { id: "loc-en" } });
-    const out = await updateIapOnApple({
+    return updateIapOnApple({
       creds,
       appleIapId: "iap-1",
       diff: {
         ...emptyDiff(),
         localizations_changed: {
           updated: [{ locale: "en", description: "New desc" }],
-          added: [],
-          removed: [],
-        },
-      },
-      audit: baseAudit,
-    });
-    expect(listInAppPurchaseLocalizations).toHaveBeenCalledWith(creds, "iap-1");
-    expect(updateInAppPurchaseLocalization).toHaveBeenCalledWith(creds, "loc-en", {
-      description: "New desc",
-    });
-    expect(out.stages.localizations.results?.[0]).toMatchObject({
-      op: "update",
-      locale: "en",
-      ok: true,
-    });
-  });
-
-  it("POSTs added locales (no Apple lookup needed for pure-add when no update/remove)", async () => {
-    createInAppPurchaseLocalization.mockResolvedValueOnce({
-      data: { id: "loc-ja-new" },
-    });
-    const out = await updateIapOnApple({
-      creds,
-      appleIapId: "iap-1",
-      diff: {
-        ...emptyDiff(),
-        localizations_changed: {
-          updated: [],
           added: [{ locale: "ja", name: "Ja name", description: "Ja desc" }],
           removed: [],
         },
       },
       audit: baseAudit,
-    });
-    expect(listInAppPurchaseLocalizations).not.toHaveBeenCalled();
-    expect(createInAppPurchaseLocalization).toHaveBeenCalled();
-    expect(out.stages.localizations.results?.[0]).toMatchObject({
-      op: "add",
-      locale: "ja",
-      ok: true,
-      loc_id: "loc-ja-new",
+    }).then((out) => {
+      const call = syncLocalizationsToVersion.mock.calls[0][0];
+      expect(call.appleIapId).toBe("iap-1");
+      expect(call.desired.map((d: { locale: string }) => d.locale)).toEqual(["en", "ja"]);
+      expect(out.stages.localizations.results).toContainEqual({
+        op: "update",
+        locale: "en",
+        ok: true,
+      });
+      expect(out.stages.localizations.results).toContainEqual({
+        op: "add",
+        locale: "ja",
+        ok: true,
+        loc_id: "loc-ja-new",
+      });
     });
   });
 
-  it("DELETEs removed locales and treats missing-on-Apple as idempotent ok", async () => {
-    listInAppPurchaseLocalizations.mockResolvedValueOnce({
-      data: [
-        { id: "loc-en", attributes: { locale: "en" } },
-        // No 'vi' — Apple already doesn't have it.
-      ],
+  it("⚠⚠ THE FORM passes removeLocales — bulk import must not (Q3)", async () => {
+    // The asymmetry between the two surfaces lives at the call sites. Here a
+    // human clicked "remove this locale"; in an import file a missing locale
+    // only means the file was partial.
+    syncLocalizationsToVersion.mockResolvedValueOnce({
+      skipped: [],
+      patched: [],
+      created: [],
+      deleted: ["vi"],
+      failures: [],
+      versionCreated: false,
     });
     const out = await updateIapOnApple({
       creds,
       appleIapId: "iap-1",
       diff: {
         ...emptyDiff(),
-        localizations_changed: {
-          updated: [],
-          added: [],
-          removed: [{ locale: "vi" }],
-        },
+        localizations_changed: { updated: [], added: [], removed: [{ locale: "vi" }] },
       },
       audit: baseAudit,
     });
-    expect(deleteInAppPurchaseLocalization).not.toHaveBeenCalled();
+    expect(syncLocalizationsToVersion.mock.calls[0][0].removeLocales).toEqual(["vi"]);
     expect(out.stages.localizations.results?.[0]).toMatchObject({
       op: "delete",
       locale: "vi",
@@ -283,8 +268,109 @@ describe("updateIapOnApple — localizations stage", () => {
     });
   });
 
-  it("surfaces lookup failure as per-op error rows so the UI can show each intended op", async () => {
-    listInAppPurchaseLocalizations.mockRejectedValueOnce(new Error("api down"));
+  it("⚠ a SKIPPED locale is reported as a result, never dropped", async () => {
+    // The Manager asked for a change; "Apple already has exactly this" is an
+    // answer, and a silent nothing is the failure class this arc removes.
+    syncLocalizationsToVersion.mockResolvedValueOnce({
+      skipped: [
+        { locale: "en", reason: "IDENTICAL_TO_LIVE", label: "Giống bản đang bán — không có gì để đổi" },
+      ],
+      patched: [],
+      created: [],
+      deleted: [],
+      failures: [],
+      versionCreated: false,
+    });
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: {
+        ...emptyDiff(),
+        localizations_changed: {
+          updated: [{ locale: "en", name: "X" }],
+          added: [],
+          removed: [],
+        },
+      },
+      audit: baseAudit,
+    });
+    expect(out.stages.localizations.results).toContainEqual({
+      op: "update",
+      locale: "en",
+      ok: true,
+    });
+    const skipRow = auditInsert.mock.calls
+      .flatMap((c) => c[0])
+      .find((r: { payload?: { skipped?: string } }) => r?.payload?.skipped);
+    expect(skipRow.payload.note).toContain("Giống bản đang bán");
+  });
+
+  it("⚠⚠ a per-locale failure carries the REASON, not a generic error", async () => {
+    syncLocalizationsToVersion.mockResolvedValueOnce({
+      skipped: [],
+      patched: [],
+      created: [],
+      deleted: [],
+      failures: [
+        {
+          locale: "en",
+          message:
+            "en: không ghi được vì tool không xác định được version an toàn để ghi — 2 versions are in PREPARE_FOR_SUBMISSION. Không có thay đổi nào được gửi lên Apple cho locale này.",
+        },
+      ],
+      versionCreated: false,
+    });
+    const out = await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: {
+        ...emptyDiff(),
+        localizations_changed: {
+          updated: [{ locale: "en", name: "X" }],
+          added: [],
+          removed: [],
+        },
+      },
+      audit: baseAudit,
+    });
+    const row = out.stages.localizations.results?.[0] as { error: string };
+    expect(row.error).toContain("2 versions are in PREPARE_FOR_SUBMISSION");
+    expect(row.error).toContain("Không có thay đổi nào được gửi lên Apple");
+  });
+
+  it("⚠ a PERMANENT version creation is announced in the audit trail", async () => {
+    // `inAppPurchaseVersions` has no DELETE, so the only remedy for an orphan
+    // is being able to find it.
+    syncLocalizationsToVersion.mockResolvedValueOnce({
+      skipped: [],
+      patched: ["en"],
+      created: [],
+      deleted: [],
+      failures: [],
+      versionCreated: true,
+      targetVersionId: "v-new",
+    });
+    await updateIapOnApple({
+      creds,
+      appleIapId: "iap-1",
+      diff: {
+        ...emptyDiff(),
+        localizations_changed: {
+          updated: [{ locale: "en", name: "X" }],
+          added: [],
+          removed: [],
+        },
+      },
+      audit: baseAudit,
+    });
+    const created = auditInsert.mock.calls
+      .flatMap((c) => c[0])
+      .find((r: { payload?: { stage?: string } }) => r?.payload?.stage === "version-created");
+    expect(created.payload.version_id).toBe("v-new");
+  });
+
+  it("a sync throw surfaces as per-op error rows so the UI can show each intended op", async () => {
+    syncLocalizationsToVersion.mockRejectedValueOnce(new Error("api down"));
     const out = await updateIapOnApple({
       creds,
       appleIapId: "iap-1",
@@ -298,8 +384,9 @@ describe("updateIapOnApple — localizations stage", () => {
       },
       audit: baseAudit,
     });
-    expect(out.stages.localizations.results).toHaveLength(2);
-    expect(out.stages.localizations.results?.every((r) => !r.ok)).toBe(true);
+    const results = out.stages.localizations.results ?? [];
+    expect(results).toHaveLength(2);
+    expect(results.every((r) => !r.ok)).toBe(true);
   });
 });
 

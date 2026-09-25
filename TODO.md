@@ -49,7 +49,20 @@ Apple + bài học phương pháp: **KB §31**.
   ghi rõ trong docs để người sau không tưởng là sót.
   ⚠ Q4 đã chốt LẠI: ca H ⇒ **UNTICK** + nhãn phân biệt với ca B (§32.9).
   ⚠ Q5: normalize NFC **chỉ khi so sánh**, ghi lên Apple **nguyên văn** file.
-- [ ] [LOCV2-O3-O4-wire] ⏳ Đấu vào `bulk-import/execute/route.ts`
+- [x] [LOCV2-O3-O4-wire] ✅ **XONG — và twin-path sửa bằng MỘT HÀM, không hai
+  lần sửa.** `apple/localization-version-sync.ts` là choke point; cả bulk import
+  lẫn form đều gọi nó. Q3 thành **tham số ở call site** (`removeLocales`), không
+  phải nhánh trong hàm. **XOÁ** `localization-sync.ts` + `localization-state.ts`
+  (+ test) trong cùng commit — mô hình V1 biến mất, không phải "không dùng nữa".
+  Guard `version-create-chokepoint.structural.test.ts`: `POST` version đúng 2
+  call site đã biết · parity CA 2 không POST · V1 client không còn ở hai surface
+  · hai module cũ không còn tồn tại. KB §32.12.
+- [ ] [LOCV2-create-path] ⏳ **Đường CREATE của bulk import vẫn dùng V1.**
+  `execute/route.ts:1025` `createInAppPurchaseLocalization` (quan hệ
+  `inAppPurchaseV2`) — endpoint **deprecated @ 4.4.1** (§31.6). Cố ý để lại:
+  không nằm trong O3/O4, và **không phải cái bug** (IAP mới đã có sẵn draft,
+  §0 Q1). ⚠ Nêu ra chứ không giấu — xem §32.12.
+- [~] [LOCV2-O3-O4-wire-old] ~~Đấu vào `bulk-import/execute/route.ts`~~
   (`:1419/:1461/:1490/:1512`) **VÀ** twin `update-orchestration.ts`
   (`:325/:387/:417/:453`) — ⚠ **CÙNG MỘT CHUNK**, đừng để lệch (CLAUDE.md P1).
   ⚠ Q6 đã chốt: tool **DỪNG ở bước 4**, không submit, không bật

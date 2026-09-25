@@ -192,25 +192,41 @@ describe("execute/route.ts persists the reason at EVERY locale catch", () => {
     expect(routeSrc).not.toMatch(/failedLocales\.push\(/);
   });
 
-  it("⚠ records at all three write catches — CREATE, PATCH, POST", () => {
-    // Three call sites, one choke point (CLAUDE.md meta-rule P1: the project
-    // has repeatedly hardened one sibling and left the other).
-    // ⚠ WHITESPACE-TOLERANT, AND THAT IS A FIX TO THE MEASUREMENT, NOT A
-    // RELAXATION OF THE CLAIM. The original regex was
-    // `/recordLocaleFailure\(localeFailures,/` — one physical line. When the
-    // PATCH catch grew a fourth argument (`describeLocalizationState`, so the
-    // failure can name the locale's Apple state) prettier wrapped the call
-    // across lines and the count fell to 2. The claim being pinned is "all
-    // three write catches record a reason", which did not change; only the
-    // formatting did. A structural test that breaks on a line wrap is
-    // measuring the wrong thing.
+  it("⚠ every locale-failure site records a REASON — two sites after the V2 rewrite", () => {
+    // ⚠⚠ THE NUMBER CHANGED FROM THREE TO TWO, AND THE CLAIM DID NOT.
+    // Before arc `[LOC-V2-model]` the OVERWRITE path had its own PATCH, POST
+    // and DELETE loops, each with a catch — three sites plus the CREATE path's
+    // one. O3 replaced all of the OVERWRITE loops with ONE call to the shared
+    // `syncLocalizationsToVersion`, which reports every per-locale failure
+    // (Apple's message, or a refusal's stated reason) in a single list. So the
+    // sites are now: the CREATE path's own catch, and the OVERWRITE path's
+    // loop over the shared result.
+    // The pinned claim is unchanged: **no locale can fail without a reason
+    // being recorded.** Fewer sites is the point of a choke point, not a
+    // weakening of the guard.
     const calls = routeSrc.match(/recordLocaleFailure\(\s*localeFailures\s*,/g) ?? [];
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(2);
   });
 
-  it("⚠ records the OVERWRITE pre-flight throw as every locale failing", () => {
-    expect(routeSrc).toContain("recordAllLocalesFailed(");
-    expect(routeSrc).toContain("could not list existing localizations");
+  it("⚠⚠ the OVERWRITE path records a reason for EVERY failure the shared sync reports", () => {
+    // The loop must iterate the sync's failures — dropping any of them would
+    // put the stage map back to reading OK for work Apple refused.
+    expect(routeSrc).toMatch(/for\s*\(const f of sync\.failures\)/);
+    expect(routeSrc).toContain("recordLocaleFailure(localeFailures, f.locale");
+  });
+
+  it("⚠ a SKIPPED locale is logged, never silently dropped", () => {
+    // Q4: three skip reasons, all deliberate. A skip that leaves no trace is
+    // indistinguishable from a bug that ate the row.
+    expect(routeSrc).toMatch(/for\s*\(const s of sync\.skipped\)/);
+    expect(routeSrc).toContain("s.label");
+  });
+
+  it("⚠⚠ a PERMANENT version creation is logged with the product and version id", () => {
+    // `inAppPurchaseVersions` has no DELETE. The log line is the only way to
+    // find an orphan afterwards.
+    expect(routeSrc).toContain("sync.versionCreated");
+    expect(routeSrc).toContain("PERMANENT (no DELETE endpoint exists)");
   });
 
   it("⚠ both stage maps carry failedDetail, and derive `failed` from it", () => {

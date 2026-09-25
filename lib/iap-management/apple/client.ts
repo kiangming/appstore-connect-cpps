@@ -293,6 +293,70 @@ export async function updateInAppPurchaseLocalization(
 }
 
 /**
+ * ⭐ V2 CREATE — a localization belongs to a **VERSION**, not to the IAP.
+ * `POST /v2/inAppPurchaseLocalizations`.
+ *
+ * ⚠ THE RELATIONSHIP KEY IS THE WHOLE DIFFERENCE, and Apple's migration guide
+ * says so in one line: *"The relationship key changes from `inAppPurchaseV2`
+ * (targeting the parent product) to `version` (targeting the draft version)."*
+ * OAS 4.4.1 agrees — `InAppPurchaseLocalizationV2CreateRequest`
+ * `relationships.required = ["version"]`, where V1's is `["inAppPurchaseV2"]`.
+ *
+ * ⚠ The `data.type` string is IDENTICAL in both models
+ * (`"inAppPurchaseLocalizations"`), so nothing in the payload tells you which
+ * model you are in — only the path and the relationship key do (KB §28.3).
+ */
+export async function createInAppPurchaseLocalizationV2(
+  creds: AscCredentials,
+  payload: { versionId: string; locale: string; name: string; description?: string },
+): Promise<AscApiResponse<InAppPurchaseLocalizationV2>> {
+  return iapFetch<AscApiResponse<InAppPurchaseLocalizationV2>>(
+    creds,
+    "POST",
+    "/v2/inAppPurchaseLocalizations",
+    {
+      data: {
+        type: "inAppPurchaseLocalizations",
+        attributes: {
+          locale: payload.locale,
+          name: payload.name,
+          ...(payload.description ? { description: payload.description } : {}),
+        },
+        relationships: {
+          version: {
+            data: { type: "inAppPurchaseVersions", id: payload.versionId },
+          },
+        },
+      },
+    },
+  );
+}
+
+/**
+ * V2 DELETE — `DELETE /v2/inAppPurchaseLocalizations/{id}`.
+ *
+ * ⚠ ONLY THE FORM REACHES THIS. Bulk import never deletes a localization
+ * (Manager Q3, 2026-09-25): a locale missing from an import file means the file
+ * is partial, not that the Manager wants it gone. The difference lives at the
+ * call site (`removeLocales` passed or not), not in a branch here.
+ *
+ * ⚠ OAS lists 204 · 400 · 401 · 403 · 404 · 429 for this operation and **no
+ * 409** — but do not read that silence as a promise. Apple has twice returned
+ * things its published spec does not list (`ACTIVE` outside the state enum,
+ * §28.1; the `limit[rel]` ceiling rejected rather than clamped, §31.8).
+ */
+export async function deleteInAppPurchaseLocalizationV2(
+  creds: AscCredentials,
+  localizationId: string,
+): Promise<void> {
+  return iapFetch<void>(
+    creds,
+    "DELETE",
+    `/v2/inAppPurchaseLocalizations/${localizationId}`,
+  );
+}
+
+/**
  * ⚠⚠ THE V2 WRITE — **the only write the `[LOC-V2-model]` arc makes.**
  * `PATCH /v2/inAppPurchaseLocalizations/{id}`.
  *

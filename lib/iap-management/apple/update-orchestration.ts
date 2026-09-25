@@ -24,14 +24,9 @@
  * when Apple rejects a single field but accepts the rest.
  */
 import type { AscCredentials } from "@/lib/asc-jwt";
-import { AppleApiError } from "./fetch";
-import {
-  listInAppPurchaseLocalizations,
-  updateInAppPurchase,
-  createInAppPurchaseLocalization,
-  updateInAppPurchaseLocalization,
-  deleteInAppPurchaseLocalization,
-} from "./client";
+import { AppleApiError, withRetry } from "./fetch";
+import { updateInAppPurchase } from "./client";
+import { syncLocalizationsToVersion } from "./localization-version-sync";
 import { pollIapReadyForPricing } from "./poll-iap-ready";
 import { replaceScreenshotOnApple } from "./screenshot-upload";
 import {
@@ -314,164 +309,128 @@ async function runLocalizationsStage(
     `[update-on-apple] stage=localizations start apple_iap_id=${appleIapId} updated=${diff.localizations_changed.updated.length} added=${diff.localizations_changed.added.length} removed=${diff.localizations_changed.removed.length}`,
   );
 
-  // The cache doesn't store Apple loc IDs, so resolve them from Apple now.
-  // PATCH and DELETE both need the Apple-side localization id.
-  let localeToApple: Map<string, string> = new Map();
-  if (
-    diff.localizations_changed.updated.length > 0 ||
-    diff.localizations_changed.removed.length > 0
-  ) {
-    try {
-      const res = await listInAppPurchaseLocalizations(creds, appleIapId);
-      const rows = (res.data ?? []) as Array<{
-        id: string;
-        attributes?: { locale?: string };
-      }>;
-      localeToApple = new Map(
-        rows
-          .filter((r) => typeof r.attributes?.locale === "string")
-          .map((r) => [r.attributes!.locale as string, r.id]),
-      );
-    } catch (err) {
-      const errStr = errToString(err);
-      console.error(
-        `[update-on-apple] stage=localizations lookup-fail apple_iap_id=${appleIapId}: ${errStr}`,
-      );
-      // Without loc IDs, updated/removed cannot proceed. Surface a single
-      // synthetic failure per locale so the UI can show what was intended.
-      const results: LocalizationOpResult[] = [
-        ...diff.localizations_changed.updated.map(
-          (u): LocalizationOpResult => ({
-            op: "update",
-            locale: u.locale,
-            ok: false,
-            error: `Apple localization lookup failed: ${errStr}`,
-          }),
-        ),
-        ...diff.localizations_changed.removed.map(
-          (r): LocalizationOpResult => ({
-            op: "delete",
-            locale: r.locale,
-            ok: false,
-            error: `Apple localization lookup failed: ${errStr}`,
-          }),
-        ),
-      ];
-      await writeAuditRow(audit, "UPDATE_LOCALIZATION_ON_APPLE", {
-        apple_iap_id: appleIapId,
-        result: "ERROR",
-        stage: "lookup",
-        error: errStr,
-      });
-      return { changed: true, results };
-    }
-  }
-
+  // ⚠⚠ REWIRED TO THE V2 MODEL — arc `[LOC-V2-model]`, O4.
+  // This path had the IDENTICAL hole bulk import shipped a 409 storm through:
+  // it PATCHed `/v1/inAppPurchaseLocalizations/{id}` against the IAP's own
+  // localizations, which for a LIVE item are owned by the APPROVED version —
+  // and Apple refuses edits there (KB §32.3). Nobody had hit it only because
+  // nobody had edited a live item's localization through the form; the backlog
+  // entry `[LOC-ACTIVE-state-single]` predicted exactly this.
+  //
+  // ⭐ It now calls the SAME function bulk import calls. Not a parallel edit —
+  // the same four-step Apple protocol, written once (CLAUDE.md P1).
+  //
+  // ⚠ AND THIS CALL SITE *DOES* PASS `removeLocales`, unlike bulk import.
+  // Here "remove this locale" is something a human clicked in a form; there it
+  // could only ever be inferred from a locale being absent in a spreadsheet
+  // (Q3). The asymmetry is deliberate and lives at the two call sites, not in
+  // a branch inside the shared function.
   const results: LocalizationOpResult[] = [];
+  const desired = [
+    ...diff.localizations_changed.updated.map((u) => ({
+      locale: u.locale,
+      display_name: u.name ?? "",
+      description: u.description ?? "",
+    })),
+    ...diff.localizations_changed.added.map((a) => ({
+      locale: a.locale,
+      display_name: a.name,
+      description: a.description,
+    })),
+  ];
+  const removeLocales = diff.localizations_changed.removed.map((r) => r.locale);
 
-  for (const upd of diff.localizations_changed.updated) {
-    const locId = localeToApple.get(upd.locale);
-    if (!locId) {
-      const error = `Apple has no localization for locale=${upd.locale} — cache out of sync`;
-      console.warn(`[update-on-apple] ${error}`);
-      results.push({ op: "update", locale: upd.locale, ok: false, error });
-      await writeAuditRow(audit, "UPDATE_LOCALIZATION_ON_APPLE", {
-        apple_iap_id: appleIapId,
-        locale: upd.locale,
-        result: "ERROR",
-        error,
-      });
-      continue;
-    }
-    try {
-      await updateInAppPurchaseLocalization(creds, locId, {
-        ...(upd.name !== undefined ? { name: upd.name } : {}),
-        ...(upd.description !== undefined ? { description: upd.description } : {}),
-      });
-      results.push({ op: "update", locale: upd.locale, ok: true });
-      await writeAuditRow(audit, "UPDATE_LOCALIZATION_ON_APPLE", {
-        apple_iap_id: appleIapId,
-        locale: upd.locale,
-        loc_id: locId,
-        result: "SUCCESS",
-        patched: { name: upd.name, description: upd.description },
-      });
-    } catch (err) {
-      const errStr = errToString(err);
-      console.error(
-        `[update-on-apple] stage=localizations update fail locale=${upd.locale}: ${errStr}`,
+  try {
+    const sync = await syncLocalizationsToVersion({
+      creds,
+      appleIapId,
+      desired,
+      removeLocales,
+      run: (fn) => withRetry(fn),
+      log: (message, level) => {
+        if (level === "WARN") console.warn(`[update-on-apple] ${message}`);
+        else console.log(`[update-on-apple] ${message}`);
+      },
+    });
+
+    if (sync.versionCreated) {
+      console.warn(
+        `[update-on-apple] created version ${sync.targetVersionId} for apple_iap_id=${appleIapId} — PERMANENT (no DELETE endpoint exists)`,
       );
-      results.push({ op: "update", locale: upd.locale, ok: false, error: errStr });
       await writeAuditRow(audit, "UPDATE_LOCALIZATION_ON_APPLE", {
         apple_iap_id: appleIapId,
-        locale: upd.locale,
-        loc_id: locId,
-        result: "ERROR",
-        error: errStr,
+        result: "SUCCESS",
+        stage: "version-created",
+        version_id: sync.targetVersionId,
       });
     }
-  }
 
-  for (const add of diff.localizations_changed.added) {
-    try {
-      const res = await createInAppPurchaseLocalization(creds, {
-        iapId: appleIapId,
-        locale: add.locale,
-        name: add.name,
-        description: add.description,
+    for (const locale of sync.patched) {
+      results.push({ op: "update", locale, ok: true });
+      await writeAuditRow(audit, "UPDATE_LOCALIZATION_ON_APPLE", {
+        apple_iap_id: appleIapId,
+        locale,
+        version_id: sync.targetVersionId,
+        result: "SUCCESS",
       });
-      results.push({ op: "add", locale: add.locale, ok: true, loc_id: res.data.id });
+    }
+    for (const c of sync.created) {
+      results.push({ op: "add", locale: c.locale, ok: true, loc_id: c.id });
       await writeAuditRow(audit, "ADD_LOCALIZATION_ON_APPLE", {
         apple_iap_id: appleIapId,
-        locale: add.locale,
-        loc_id: res.data.id,
+        locale: c.locale,
+        loc_id: c.id,
+        version_id: sync.targetVersionId,
         result: "SUCCESS",
       });
-    } catch (err) {
-      const errStr = errToString(err);
-      console.error(
-        `[update-on-apple] stage=localizations add fail locale=${add.locale}: ${errStr}`,
-      );
-      results.push({ op: "add", locale: add.locale, ok: false, error: errStr });
-      await writeAuditRow(audit, "ADD_LOCALIZATION_ON_APPLE", {
-        apple_iap_id: appleIapId,
-        locale: add.locale,
-        result: "ERROR",
-        error: errStr,
-      });
     }
-  }
-
-  for (const rem of diff.localizations_changed.removed) {
-    const locId = localeToApple.get(rem.locale);
-    if (!locId) {
-      // Already absent on Apple — treat as ok (idempotent).
-      results.push({ op: "delete", locale: rem.locale, ok: true });
-      continue;
-    }
-    try {
-      await deleteInAppPurchaseLocalization(creds, locId);
-      results.push({ op: "delete", locale: rem.locale, ok: true });
+    for (const locale of sync.deleted) {
+      results.push({ op: "delete", locale, ok: true });
       await writeAuditRow(audit, "DELETE_LOCALIZATION_ON_APPLE", {
         apple_iap_id: appleIapId,
-        locale: rem.locale,
-        loc_id: locId,
+        locale,
         result: "SUCCESS",
       });
-    } catch (err) {
-      const errStr = errToString(err);
-      console.error(
-        `[update-on-apple] stage=localizations delete fail locale=${rem.locale}: ${errStr}`,
-      );
-      results.push({ op: "delete", locale: rem.locale, ok: false, error: errStr });
-      await writeAuditRow(audit, "DELETE_LOCALIZATION_ON_APPLE", {
+    }
+    // ⚠ A SKIPPED LOCALE IS REPORTED, NOT DROPPED. The Manager asked for a
+    // change; "Apple already has exactly this" is an answer, and a silent
+    // nothing is the failure class this whole arc exists to remove.
+    for (const sk of sync.skipped) {
+      results.push({ op: "update", locale: sk.locale, ok: true });
+      await writeAuditRow(audit, "UPDATE_LOCALIZATION_ON_APPLE", {
         apple_iap_id: appleIapId,
-        locale: rem.locale,
-        loc_id: locId,
-        result: "ERROR",
-        error: errStr,
+        locale: sk.locale,
+        result: "SUCCESS",
+        skipped: sk.reason,
+        note: sk.label,
       });
     }
+    for (const f of sync.failures) {
+      results.push({ op: "update", locale: f.locale, ok: false, error: f.message });
+      await writeAuditRow(audit, "UPDATE_LOCALIZATION_ON_APPLE", {
+        apple_iap_id: appleIapId,
+        locale: f.locale,
+        result: "ERROR",
+        error: f.message,
+      });
+    }
+  } catch (err) {
+    const errStr = errToString(err);
+    console.error(
+      `[update-on-apple] stage=localizations sync-fail apple_iap_id=${appleIapId}: ${errStr}`,
+    );
+    for (const d of desired) {
+      results.push({ op: "update", locale: d.locale, ok: false, error: errStr });
+    }
+    for (const locale of removeLocales) {
+      results.push({ op: "delete", locale, ok: false, error: errStr });
+    }
+    await writeAuditRow(audit, "UPDATE_LOCALIZATION_ON_APPLE", {
+      apple_iap_id: appleIapId,
+      result: "ERROR",
+      stage: "sync",
+      error: errStr,
+    });
   }
 
   console.log(

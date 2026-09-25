@@ -42,10 +42,7 @@ import { getActiveAccount } from "@/lib/get-active-account";
 import {
   createInAppPurchase,
   createInAppPurchaseLocalization,
-  updateInAppPurchaseLocalization,
-  deleteInAppPurchaseLocalization,
   listAllInAppPurchases,
-  listInAppPurchaseLocalizations,
   reserveInAppPurchaseScreenshot,
   uploadScreenshotToOperations,
   confirmInAppPurchaseScreenshot,
@@ -65,7 +62,7 @@ import {
 import { resolveBatchAvailabilitySelection } from "@/lib/iap-management/apple/bulk-availability-view";
 import { availabilityActionType } from "@/lib/iap-management/apple/availability-audit";
 import { decideOverwritePricing } from "@/lib/iap-management/bulk-import/overwrite-pricing-decision";
-import { planLocalizationSync } from "@/lib/iap-management/bulk-import/localization-sync";
+import { syncLocalizationsToVersion } from "@/lib/iap-management/apple/localization-version-sync";
 import {
   applyPricingSchedule,
   type PricingSource,
@@ -95,12 +92,10 @@ import {
   type RowStages,
   type StageState,
 } from "@/lib/iap-management/bulk-import/row-outcome";
-import { describeLocalizationState } from "@/lib/iap-management/apple/localization-state";
 import {
   applyLocalizationSelection,
   type RawLocalizationSelection,
 } from "@/lib/iap-management/bulk-import/localization-selection";
-import { describeLocalizationStatesForLog } from "@/lib/iap-management/bulk-import/localization-state-probe";
 import {
   recordLocaleFailure,
   recordAllLocalesFailed,
@@ -1406,135 +1401,73 @@ async function runOverwrite(args: OrchestrateArgs): Promise<PerIapResult> {
     });
   }
 
-  // 2. Sync localizations via delta (Problem 3b fix). Apple forbids deleting
-  //    the last localization, so delete-all-then-recreate broke on the final
-  //    locale (stale content retained). Instead: PATCH shared locales, POST
-  //    new ones, DELETE only genuinely-removed ones — and run PATCH+POST
-  //    BEFORE DELETE so the desired locales already exist when leftovers are
-  //    removed (never drops the IAP to zero localizations).
-  // Twin of the CREATE path's list — same single-source rule, same reason.
+  // 2. Sync localizations — V2 MODEL. Arc `[LOC-V2-model]`.
+  //
+  // ⚠⚠ THIS USED TO PATCH `/v1/inAppPurchaseLocalizations/{id}` AGAINST THE
+  // IAP'S OWN LOCALIZATIONS, and that is what produced twenty identical
+  // `409 … ACTIVE state` rows on 2026-09-22. Under Apple's real model a
+  // localization belongs to a VERSION; a live item's localizations belong to
+  // its APPROVED version, and Apple refuses edits there (KB §32.3).
+  //
+  // ⭐ ONE SHARED FUNCTION, NOT A SECOND COPY OF THE PROTOCOL. The single-IAP
+  // form (`update-orchestration.ts`) had the identical hole
+  // (`[LOC-ACTIVE-state-single]`) and now calls the same
+  // `syncLocalizationsToVersion`. Keeping two four-step version protocols in
+  // step by hand is exactly what CLAUDE.md P1 forbids.
+  //
+  // ⚠ NO `removeLocales` ARGUMENT — Q3, Manager 2026-09-25. Bulk import does
+  // not delete localizations: a locale absent from an import file means the
+  // file is partial, NOT that the Manager wants it removed. The form passes
+  // that argument; this call site deliberately does not. If you came here
+  // looking for the delete branch, this paragraph is why it is gone.
   const localeFailures: LocaleFailure[] = [];
   try {
-    const existing = await trackedWithRetry(args.rateCounters, () =>
-      listInAppPurchaseLocalizations(creds, appleIapId),
-    );
-    // ⏳ TEMPORARY — see `localization-state-probe.ts`. Unconditional on
-    // purpose: `state` is otherwise touched only in the PATCH catch below, so
-    // a successful row tells us nothing, and "does Apple populate state?" has
-    // stayed unanswerable. Zero extra requests — the LIST already ran.
-    // ⚠ DELETE THIS (and the module) once the next real import has answered
-    // it and the answer is written into KB §28.11.b.
-    await log(
-      "iap-bulk-execute",
-      describeLocalizationStatesForLog(item.product_id, existing.data ?? []),
-    );
-    const plan = planLocalizationSync(
-      // ⚠ `state` IS CARRIED HERE. This line used to be `{ id, locale }`, and
-      // the field it dropped is the one that would have explained twenty
-      // identical failed rows on 2026-09-22 ("Cannot edit
-      // InAppPurchaseLocalization when it is in ACTIVE state").
-      //
-      // ⚠ MỨC CHẮC CHẮN: OAS 4.4.1 declares `state` on this response shape.
-      // Whether Apple POPULATES it has never been observed in this repo — no
-      // fixture, log or test carries one. The probe line above exists to
-      // settle exactly that. Do not restate this as "Apple returns it".
-      // Zero extra requests: the LIST above already fetched it.
-      (existing.data ?? []).map((l) => ({
-        id: l.id,
-        locale: l.attributes.locale,
-        ...(l.attributes.state !== undefined ? { state: l.attributes.state } : {}),
-      })),
-      item.localizations,
-    );
-    if (plan.deletionsSuppressed) {
+    const sync = await syncLocalizationsToVersion({
+      creds,
+      appleIapId,
+      desired: item.localizations,
+      run: (fn) => trackedWithRetry(args.rateCounters, fn),
+      log: (message, level) => log("iap-bulk-execute", message, level ?? "INFO"),
+    });
+
+    for (const s of sync.skipped) {
       await log(
         "iap-bulk-execute",
-        `localization deletions suppressed on ${item.product_id} (would remove last localization)`,
+        `skip loc ${s.locale} on ${item.product_id}: ${s.label}`,
+      );
+    }
+    if (sync.versionCreated) {
+      await log(
+        "iap-bulk-execute",
+        `created version ${sync.targetVersionId} for ${item.product_id} — PERMANENT (no DELETE endpoint exists)`,
         "WARN",
       );
     }
-
-    // 2a. PATCH shared locales — update content in place, no delete.
-    for (const p of plan.toPatch) {
-      try {
-        await trackedWithRetry(args.rateCounters, () =>
-          updateInAppPurchaseLocalization(creds, p.id, {
-            name: p.name,
-            description: p.description,
-          }),
-        );
-      } catch (err) {
-        // ⚠ THE STATE IS THE ANSWER, SO IT GOES IN THE RECORD.
-        // Apple's body already says "…when it is in ACTIVE state", but only
-        // to whoever reads the raw body. Prefixing the locale's own state
-        // turns the row itself into the explanation — which is the whole
-        // point of having carried `state` this far.
-        const failure = recordLocaleFailure(
-          localeFailures,
-          p.locale,
-          err,
-          describeLocalizationState(p.locale, p.state),
-        );
-        await log(
-          "iap-bulk-execute",
-          `patch loc ${p.locale} on ${item.product_id}: ${failure.message}`,
-          "WARN",
-        );
-      }
-    }
-
-    // 2b. POST new locales.
-    for (const c of plan.toCreate) {
-      try {
-        await trackedWithRetry(args.rateCounters, () =>
-          createInAppPurchaseLocalization(creds, {
-            iapId: appleIapId,
-            locale: c.locale,
-            name: c.name,
-            description: c.description,
-          }),
-        );
-      } catch (err) {
-        const failure = recordLocaleFailure(localeFailures, c.locale, err);
-        await log(
-          "iap-bulk-execute",
-          `create loc ${c.locale} on ${item.product_id}: ${failure.message}`,
-          "WARN",
-        );
-      }
-    }
-
-    // 2c. DELETE genuinely-removed locales last (plan guarantees this never
-    //     removes the final localization).
-    for (const d of plan.toDelete) {
-      try {
-        await trackedWithRetry(args.rateCounters, () =>
-          deleteInAppPurchaseLocalization(creds, d.id),
-        );
-      } catch (err) {
-        await log(
-          "iap-bulk-execute",
-          `delete loc ${d.locale} (${d.id}) on ${item.product_id}: ${errMsg(err)}`,
-          "WARN",
-        );
-      }
+    for (const f of sync.failures) {
+      // ⚠ The message already carries Apple's reason, or the refusal's.
+      // It is recorded as-is so the row explains itself.
+      recordLocaleFailure(localeFailures, f.locale, new Error(f.message));
+      await log(
+        "iap-bulk-execute",
+        `loc ${f.locale} on ${item.product_id}: ${f.message}`,
+        "WARN",
+      );
     }
   } catch (err) {
-    // ⚠ A THROW HERE MEANS ZERO LOCALIZATION WRITES HAPPENED — the LIST call,
-    // the plan and the suppressed-deletions log all run in front of the
-    // PATCH/POST/DELETE loops. Before this the block only logged, which left
-    // `failed` empty and `done` equal to `total`: the stage read **OK** for a
-    // row Apple was never told anything about. A stage map that lies, in the
-    // safe-looking direction.
+    // ⚠ A THROW HERE MEANS ZERO LOCALIZATION WRITES HAPPENED — every read and
+    // the plan run in front of the write loops. Before this existed the block
+    // only logged, which left `failed` empty and `done` equal to `total`: the
+    // stage read **OK** for a row Apple was never told anything about. A stage
+    // map that lies, in the safe-looking direction.
     recordAllLocalesFailed(
       localeFailures,
       item.localizations,
       err,
-      "could not list existing localizations",
+      "could not sync localizations",
     );
     await log(
       "iap-bulk-execute",
-      `list locales failed on ${item.product_id}: ${errMsg(err)}`,
+      `localization sync failed on ${item.product_id}: ${errMsg(err)}`,
       "WARN",
     );
   }

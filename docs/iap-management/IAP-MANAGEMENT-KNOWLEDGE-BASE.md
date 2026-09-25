@@ -8410,3 +8410,98 @@ Item **chưa live** có sẵn draft (§0 Q1) ⇒ **CA 2** ⇒ `resolveWriteTarge
 trả REUSE ⇒ **không POST gì**. Hành vi với người dùng **y hệt hôm nay**. Test
 ghim nằm ở O3 vì đó là nơi hai thứ gặp nhau.
 
+
+### 32.12 O3+O4 — và vì sao twin-path được sửa bằng MỘT HÀM, không bằng hai lần sửa
+
+Chỉ thị là *"đấu dây CẢ HAI, đừng để lệch"*. Sửa hai call site song song **làm
+được** — và sẽ để lại **hai bản sao của một giao thức bốn bước** phải đồng ý với
+nhau về việc chọn version **mãi mãi**.
+
+⇒ Thay vào đó: **một hàm dùng chung**, `syncLocalizationsToVersion`
+(`lib/iap-management/apple/localization-version-sync.ts`). Hai surface nay
+**đồng ý theo cấu tạo**, không phải theo kỷ luật.
+
+⭐ Đây là P1 đọc đúng tinh thần: *"one shared choke point, not N separate
+patches"* — N=2 vẫn là N.
+
+| | Bulk import | Form đơn lẻ |
+|---|---|---|
+| Gọi | `syncLocalizationsToVersion` | `syncLocalizationsToVersion` |
+| `removeLocales` | ❌ **không truyền** (Q3) | ✅ **có truyền** |
+| Bọc call | `trackedWithRetry` (rate counters) | `withRetry` |
+| Log đi đâu | `"iap-bulk-execute"` | `console` + `actions_log` |
+
+⚠ **Q3 trở thành một THAM SỐ Ở CALL SITE, không phải một nhánh trong hàm.**
+Khác biệt giữa hai surface nằm đúng chỗ quyết định được đưa ra, và đọc được
+bằng một dòng.
+
+#### ⚠ `[LOC-ACTIVE-state-single]` đóng — nó tiên đoán đúng
+
+Backlog đó ghi: *"Đường IAP đơn lẻ có CÙNG lỗ… Manager chưa gặp chỉ vì chưa thử
+sửa localization của item đang live qua form."* Đúng vậy. Form đã PATCH
+`/v1/inAppPurchaseLocalizations/{id}` vào localization của bản **APPROVED** —
+cùng request Apple trả 409. Nay nó đi cùng đường với bulk import.
+
+#### Cái gì bị XOÁ, và vì sao xoá chứ không để lại
+
+| File | Lý do |
+|---|---|
+| `bulk-import/localization-sync.ts` + test | planner mô hình **V1** — thay thế, không bọc (§32.11) |
+| `apple/localization-state.ts` + test | allow-list `state` của localization. ⚠ **V2 KHÔNG CÓ `state` trên localization** — vòng đời thuộc về VERSION. Consumer duy nhất là planner cũ |
+
+⚠⚠ **Để lại nửa mô hình V1 là đúng thứ chỉ thị ② cấm.** Một module chết mà
+`import` được là một module sẽ sống lại. Guard
+`version-create-chokepoint.structural.test.ts` khẳng định cả hai **không còn tồn
+tại**, không phải *"không còn được dùng"*.
+
+#### ⑥ Guard: `POST /v1/inAppPurchaseVersions` chỉ được gọi từ MỘT chỗ
+
+`version-create-chokepoint.structural.test.ts` quét **toàn repo** (trừ test) và
+khẳng định đúng **hai** call site, cả hai đã biết:
+
+| Call site | Vai trò |
+|---|---|
+| `localization-version-sync.ts` | đường của arc này — tái dùng draft trước, chỉ tạo khi không có (O1) |
+| `submit-v2.ts` | fallback phòng thủ của luồng submit, **có sẵn từ trước**, cũng tự kiểm tái-dùng-trước |
+
+⚠ Liệt kê cả cái thứ hai là thứ khiến *"đúng một chỗ MỚI"* kiểm được. Và guard
+khẳng định thêm: `createInAppPurchaseVersion` trong module đó xuất hiện **đúng
+một lần** và **nằm SAU** `resolveWriteTargetVersion(` — tức nó chỉ chạy qua chỗ
+có kiểm tái dùng.
+⚠ Vì sao gắt thế: **không có DELETE.** Mỗi lần gọi là một artifact vĩnh viễn
+trên hàng có thể đang bán.
+
+#### ③ PARITY — đo ở tầng nào, và vì sao tầng đó
+
+> Item **chưa live** đã có sẵn version `PREPARE_FOR_SUBMISSION` (design doc §0
+> Q1, đo trên 5 IAP thật) ⇒ **CA 2** ⇒ sync **REUSE** ⇒ **không `POST`** ⇒ hành
+> vi **y hệt trước arc**.
+
+⭐ Đó là thứ khiến rewrite này ship được: **đường hằng ngày không đổi gì cả.**
+Hành vi mới chỉ xuất hiện đúng ở chỗ code cũ **đang hỏng** (item live, nơi nó
+409).
+Mutation bắt buộc: bỏ nhánh REUSE ⇒ CA 2 cũng `POST` ⇒ **5 test đỏ**.
+
+#### ⑤ REFUSE chảy tới sheet lỗi, mang lý do nguyên văn
+
+Bulk import: mỗi `sync.failures[]` thành một `recordLocaleFailure` ⇒ dòng đó
+mang **lý do** + câu *"Không có thay đổi nào được gửi lên Apple cho locale
+này"*. Form: thành `LocalizationOpResult` lỗi + `actions_log` ERROR.
+⚠ Không rơi vào catch chung ⇒ không bao giờ hiện thành *"lỗi không rõ"*.
+
+#### ⚠ MỘT CHỖ CỐ Ý KHÔNG ĐỔI — đường CREATE của bulk import
+
+`execute/route.ts:1025` (tạo IAP **mới**) vẫn gọi
+`createInAppPurchaseLocalization` — **V1**, quan hệ `inAppPurchaseV2`.
+
+| | |
+|---|---|
+| Vì sao để lại | Không nằm trong O3/O4 (chỉ thị nêu đích danh `:1431 và quanh đó` + `update-orchestration`). Nó **không phải cái bug**: IAP mới tạo đã có sẵn version draft (§0 Q1) nên POST theo IAP vẫn chạy |
+| ⚠ Rủi ro đã biết | Endpoint đó **deprecated @ 4.4.1** (§31.6) |
+| ⇒ | Backlog `[LOCV2-create-path]`, **không** im lặng |
+
+⚠ Đây **không** phải "hai mô hình cùng sống trên một tài nguyên" theo nghĩa
+nguy hiểm: đường CREATE chạm một **giai đoạn vòng đời khác** (IAP chưa từng
+review, draft chắc chắn có sẵn), và nó **không** tranh chấp với đường OVERWRITE.
+Nhưng nó vẫn là một endpoint deprecated còn sống trong code — nói ra, không giấu.
+
