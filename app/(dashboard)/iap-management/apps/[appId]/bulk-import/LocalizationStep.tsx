@@ -16,10 +16,18 @@
  * Comparing (and the "identical to Apple ⇒ untick automatically" behaviour, the
  * per-cell ACTIVE warning, the four cell states) was designed, mocked up, and
  * then deliberately deferred by the Manager on 2026-09-23: *"tại thời điểm này
- * để user tự check tự xử lý."* It is tracked as `[BULKIMPORT-loc-compare-apple]`
- * and blocked on one unanswered question — whether Apple populates
- * `state` on the list read at all (KB §28.11.b, `localization-state-probe.ts`).
+ * để user tự check tự xử lý."* It is tracked as `[BULKIMPORT-loc-compare-apple]`.
  * ⇒ Default here is TICK-ALL, which is exactly the pre-arc behaviour.
+ *
+ * ⚠ THE BLOCKER IT USED TO CITE IS GONE, AND THE PICTURE CHANGED UNDER IT.
+ * This said the feature was blocked on "does Apple populate `state` on the
+ * localization list?". Arc `[LOC-V2-model]` answered that (yes — KB §33.1) and
+ * then made it irrelevant: under Apple's real model a localization has NO
+ * state at all; the lifecycle belongs to the VERSION that owns it. The server
+ * work this step would need now exists (`syncLocalizationsToVersion` already
+ * reads the approved baseline and computes which locales differ, with three
+ * distinct skip reasons — KB §32.11). What is missing is the UI half, and the
+ * request budget for reading Apple at preview time.
  *
  * M-1 (Manager): each cell shows `Name` and `Desc` on their OWN labelled lines.
  * The point is being able to see WHICH field carries what, at a glance. The

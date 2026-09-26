@@ -360,10 +360,13 @@ export async function deleteInAppPurchaseLocalizationV2(
  * ⚠⚠ THE V2 WRITE — **the only write the `[LOC-V2-model]` arc makes.**
  * `PATCH /v2/inAppPurchaseLocalizations/{id}`.
  *
- * ⚠ USED BY THE WRITE PROBE ONLY (`loc-v2-write-probe/route.ts`). It is NOT
- * wired into bulk import or the edit form, and must not be until the probe
- * answers what Apple does with it. `[LOCV2-client-migrate]` is the chunk that
- * would do that, and it is deliberately on hold.
+ * ⚠ REACHED ONLY THROUGH `localization-version-sync.ts` — the one shared path
+ * both bulk import and the edit form use. It must never be called directly
+ * from a route: the target it is given has to come from
+ * `resolveWriteTargetVersion`, which is where "reuse a draft before creating
+ * one" lives. A direct call bypasses that and can PATCH a localization owned
+ * by the APPROVED version — the `409 IAP_VERSION_UNMODIFIABLE` this arc
+ * removed (KB §32.3, §33.3).
  *
  * ⭐ THE BODY IS BYTE-IDENTICAL TO V1 — verified by machine, not by eye.
  * `InAppPurchaseLocalizationUpdateRequest` and
@@ -524,78 +527,6 @@ export async function listInAppPurchaseVersions(
     creds,
     "GET",
     `/v2/inAppPurchases/${iapId}/versions`,
-  );
-}
-
-/**
- * ⭐ THE V2 READ — versions of one IAP, each with the localizations it owns.
- * Arc `[LOC-V2-model]`, chunk V0-snapshot. **GET only. Writes nothing.**
- *
- * ⚠⚠ WHY THIS EXISTS WHEN `listInAppPurchaseLocalizations` ALREADY READS
- * LOCALIZATIONS. They are not two ways to fetch one thing — they are two
- * MODELS, and only this one can answer the question the arc turns on.
- *
- *   `client.ts:242`  GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations
- *                    → `InAppPurchaseLocalizationsResponse` — the **V1** shape
- *                      (carries `state`, relates to the IAP). A path with "v2"
- *                      in it that answers with the V1 model (KB §28.3).
- *                    ⚠ Apple marks this endpoint **deprecated as of 4.4.1**
- *                      ("This relationship is deprecated") — read from
- *                      `metadata.platforms[].deprecatedAt` on
- *                      developer.apple.com's own operation page, 2026-09-24.
- *                      ⚠ The OAS file does NOT carry that flag (it flags 159
- *                      other operations, not this one) — same class of gap as
- *                      `ACTIVE` missing from the enum (KB §28.1).
- *
- *   THIS ONE         GET /v2/inAppPurchases/{id}/versions?include=localizations
- *                    → `InAppPurchaseVersionsResponse` — versions in `data[]`,
- *                      their localizations in `included[]` in the **V2** shape.
- *                      Tells you WHICH VERSION each localization belongs to.
- *                      That mapping is the whole point.
- *
- * ⚠⚠ ITS RESULT IS A CROSS-CHECK, NOT THE ANSWER — READ THIS BEFORE USING IT.
- * `version.relationships.localizations.data[]` is a **relationship pointer**,
- * and KB §4.1 LANDMARK measured Apple V2 pointers truncating at **10 IDs**
- * while the real set was larger (12 at MV30). Its mitigation is explicit:
- * *"never trust `relationships.{rel}.data` as the authoritative ID list for an
- * included relation."* The authoritative read is
- * `listLocalizationsForVersion` (the V1 sub-resource) — this function exists to
- * be COMPARED against it, which is how the landmark gets measured on a
- * relationship nobody has measured it on yet.
- *
- * ⚠ AND THE TRUNCATION DIRECTION IS THE DANGEROUS ONE HERE. A truncated
- * pointer makes a version look like it owns FEWER locales than it does — which
- * reads as "the new version did not inherit the other locales", the exact
- * conclusion this snapshot was built to establish. Believing the pointer would
- * produce a confident, wrong, design-changing answer.
- *
- * ⚠ `limit[localizations]=50` — the documented maximum.
- * OAS 4.4.1 states it outright: `#/paths/~1v2~1inAppPurchases~1{id}~1versions
- * /get` → parameter `limit[localizations]` → `{"type":"integer","maximum":50}`.
- * ⚠⚠ THIS WAS 200 AND APPLE REJECTED IT OUTRIGHT (2026-09-25):
- * `400 PARAMETER_ERROR.INVALID — "The maximum allowable limit is '50'"`,
- * `source.parameter: limit[localizations]`. Two separate lessons, both already
- * written down before this code was:
- *   · `limit` (main resource, max 200) and `limit[rel]` (sub-limit, max 50) are
- *     DIFFERENT CEILINGS. Copying the main-resource number onto a sub-limit is
- *     precisely the bug Hotfix 22 fixed on `limit[availableTerritories]` —
- *     same error string, same cause (`availabilities.ts:196-206`).
- *   · Apple **rejects** rather than clamps.
- */
-export async function listInAppPurchaseVersionsWithLocalizations(
-  creds: AscCredentials,
-  iapId: string,
-): Promise<AscApiResponse<InAppPurchaseVersion[]>> {
-  const query = [
-    "include=localizations",
-    "fields[inAppPurchaseVersions]=version,state,localizations",
-    "fields[inAppPurchaseLocalizations]=name,locale,description,version",
-    "limit[localizations]=50",
-  ].join("&");
-  return iapFetch<AscApiResponse<InAppPurchaseVersion[]>>(
-    creds,
-    "GET",
-    `/v2/inAppPurchases/${iapId}/versions?${query}`,
   );
 }
 

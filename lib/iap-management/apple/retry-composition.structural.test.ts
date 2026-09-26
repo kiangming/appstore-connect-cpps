@@ -289,25 +289,6 @@ const LIST_ALL_SITES: Array<{ file: string; wrappers: number[]; why: string }> =
     wrappers: [0],
     why: "already correct",
   },
-  {
-    file: "app/api/iap-management/apps/[appId]/loc-v2-snapshot/route.ts",
-    wrappers: [0],
-    why:
-      "arc [LOC-V2-model] V0-snapshot — ⏳ TEMPORARY, remove this row with the " +
-      "route. It resolves productId → Apple id once, unwrapped: the helper " +
-      "owns its retry. ⭐ This row exists because the scan below REFUSED the " +
-      "new call site until someone decided — which is the whole point of the " +
-      "exhaustiveness check, and it worked on a brand-new file.",
-  },
-  {
-    file: "app/api/iap-management/apps/[appId]/loc-v2-write-probe/route.ts",
-    wrappers: [0],
-    why:
-      "arc [LOC-V2-model] write probe — ⏳ TEMPORARY, remove this row with the " +
-      "route. Same single unwrapped resolve as its read-only sibling. ⭐ The " +
-      "scan refused this one too, on the second brand-new file in a row: the " +
-      "guard is not theatre, it fires on real new code.",
-  },
 ];
 
 describe("listAllInAppPurchases — the helper owns its retry; NO caller may wrap it", () => {

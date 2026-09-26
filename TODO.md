@@ -2,125 +2,44 @@
 
 Format: `- [ ] [PR-X] description — file path — rationale`
 
-## From [LOC-V2-model] (mô hình V2 của localization, 2026-09-24)
+## From [LOC-V2-model] (mô hình V2 của localization, 2026-09-24 → 26) — ✅ ĐÓNG
 
-**Trạng thái: CHẶN BỞI MỘT PHÉP ĐO.** Câu quyết định — *PATCH
-`/v2/inAppPurchaseLocalizations/{id}` lên localization thuộc version APPROVED
-thì Apple làm gì, và AI tạo version mới* — **CHƯA BIẾT**. Mô hình + bốn dữ kiện
-Apple + bài học phương pháp: **KB §31**.
+**Arc hoàn thành.** 20 dòng `409 … ACTIVE state` có nguyên nhân, có bản sửa, và
+mô hình thật của Apple đã được đo chứ không suy. Toàn bộ hồ sơ: **KB §31–§33**.
 
-- [ ] [LOCV2-snapshot-content-run] ⏳ **CHỜ MANAGER CHẠY LẠI (zero write).**
-  Snapshot nay chụp **CẢ NỘI DUNG** (name + description) mỗi locale mỗi version,
-  và tự tính `divergentLocales`. ⚠ Lý do sửa: bản cũ chỉ ghi danh sách locale ⇒
-  **nhánh 4** (Apple ghi thẳng vào draft) **vô hình** — đúng nhánh là lý do chọn
-  `mb6`. KB §31.14. Kỳ vọng: đúng **một** locale lệch, và là **`en-US`**
-  (⚠ app này KHÔNG có `vi` — Manager nhớ nhầm, §31.14).
-- [x] [LOCV2-snapshot-run] ✅ **XONG 2026-09-25 — và nó ĐÓNG câu nguy hiểm
-  nhất, zero write.** App `6744642671`: `mb6` (đã sửa tay) có **2 version**,
-  **cả hai** `{en-US,id,th}` ⇒ ⭐ **CÓ KẾ THỪA, ĐÃ ĐO**; `mb30`+`mb68` mỗi item
-  **1 version APPROVED** ⇒ xác nhận **qua API** rằng IAP live không có version
-  mở sẵn. `flags=[]` cả ba. Chi tiết + giới hạn: **KB §31.11**.
-  ⚠ Giới hạn: version đó do **ASC** tạo; version do **API** tạo có kế thừa
-  không thì **CHƯA ĐO** — và chỉ quan trọng nếu nhánh "tool tự tạo version" đúng.
-  ⚠ n=3 < 10 ⇒ **§4.1 landmark chưa quan sát được**; GIỮ kiến trúc 2 tầng.
-- [x] [LOCV2-write-probe-run] ✅ **XONG — 409 `IAP_VERSION_UNMODIFIABLE`.**
-  Verdict `APPLE_REFUSED` ⇒ **loại nhánh (B)**. Và capture DevTools của Manager
-  trên `mb30` giải thích trọn vẹn: ASC `POST` một version rồi PATCH vào **bản
-  COPY**, không bao giờ chạm bản APPROVED. **KB §32.**
-- [x] [LOCV2-O1-resolve-version] ✅ **XONG — bản lề.**
-  `lib/iap-management/apple/write-target-version.ts`: `pickWriteTargetVersion`
-  (thuần) + `resolveWriteTargetVersion` (I/O, deps tiêm vào để **ĐẾM** được số
-  lần POST). REUSE / CREATE / REFUSE(>1 draft · đang review).
-  ⚠⚠ `WRITABLE` ≠ `SUBMITTABLE` — **đừng hợp nhất** với
-  `SUBMITTABLE_VERSION_STATES` (`submit-v2.ts:44`): `READY_FOR_REVIEW`
-  submit được nhưng **KHÔNG sửa được**. KB §32.10.
-- [x] [LOCV2-O2-planner] ✅ **XONG.** `localization-version-plan.ts`:
-  `planLocalizationWrites` (baseline = bản APPROVED, quyết `needsWrite`) +
-  `resolveWriteOps` (target = version ghi được) + `describeWriteTargetRefusal`.
-  ⭐ THAY THẾ `planLocalizationSync`, không bọc — O3 trỏ call site **và XOÁ
-  planner cũ trong CÙNG commit** (hai mô hình cùng sống = P1 cấm).
-  Q3 không sinh `toDelete` · Q4 ba nhãn skip · Q5 tách comparison key khỏi giá
-  trị ghi. KB §32.11.
-  ⚠ **CẦN MANAGER XÁC NHẬN:** câu chữ nhãn #3 (*file == live nhưng draft mang
-  thứ khác*) — chưa từng được duyệt, xem §32.11.
-- [~] [LOCV2-O2-planner-old] ~~Planner nghĩ theo **version**~~: đích PATCH = loc của
-  version ghi được; mốc so sánh = bản **APPROVED** (§28.11.c).
-  ⚠ Q3 đã chốt: **BỎ nhánh DELETE khỏi bulk import** (giữ ở form đơn lẻ) —
-  ghi rõ trong docs để người sau không tưởng là sót.
-  ⚠ Q4 đã chốt LẠI: ca H ⇒ **UNTICK** + nhãn phân biệt với ca B (§32.9).
-  ⚠ Q5: normalize NFC **chỉ khi so sánh**, ghi lên Apple **nguyên văn** file.
-- [x] [LOCV2-O3-O4-wire] ✅ **XONG — và twin-path sửa bằng MỘT HÀM, không hai
-  lần sửa.** `apple/localization-version-sync.ts` là choke point; cả bulk import
-  lẫn form đều gọi nó. Q3 thành **tham số ở call site** (`removeLocales`), không
-  phải nhánh trong hàm. **XOÁ** `localization-sync.ts` + `localization-state.ts`
-  (+ test) trong cùng commit — mô hình V1 biến mất, không phải "không dùng nữa".
-  Guard `version-create-chokepoint.structural.test.ts`: `POST` version đúng 2
-  call site đã biết · parity CA 2 không POST · V1 client không còn ở hai surface
-  · hai module cũ không còn tồn tại. KB §32.12.
+| Chunk | Kết quả |
+|---|---|
+| V0 snapshot · write-probe | đo xong, **đã gỡ** (§33) |
+| V2 bộ so sánh | `localization-compare.ts` — Q5 tách khoá-so khỏi giá-trị-ghi |
+| O1 | `write-target-version.ts` — REUSE / CREATE / REFUSE |
+| O2 | `localization-version-plan.ts` — baseline ≠ target, 3 lý do skip |
+| O3+O4 | `localization-version-sync.ts` — **một** choke point cho cả hai surface; xoá mô hình V1 |
+| O5 | gỡ instrumentation, số liệu chuyển vào KB §33 |
+
+**Còn mở, có chủ đích:**
+
 - [ ] [LOCV2-create-path] ⏳ **Đường CREATE của bulk import vẫn dùng V1.**
-  `execute/route.ts:1025` `createInAppPurchaseLocalization` (quan hệ
-  `inAppPurchaseV2`) — endpoint **deprecated @ 4.4.1** (§31.6). Cố ý để lại:
-  không nằm trong O3/O4, và **không phải cái bug** (IAP mới đã có sẵn draft,
-  §0 Q1). ⚠ Nêu ra chứ không giấu — xem §32.12.
-- [~] [LOCV2-O3-O4-wire-old] ~~Đấu vào `bulk-import/execute/route.ts`~~
-  (`:1419/:1461/:1490/:1512`) **VÀ** twin `update-orchestration.ts`
-  (`:325/:387/:417/:453`) — ⚠ **CÙNG MỘT CHUNK**, đừng để lệch (CLAUDE.md P1).
-  ⚠ Q6 đã chốt: tool **DỪNG ở bước 4**, không submit, không bật
-  `IAP_SUBMIT_V2_APPS`.
-  ⚠ Parity ghim bằng test: item **chưa live** (có sẵn draft, §0 Q1) ⇒ **CA 2**
-  ⇒ hành vi **y hệt hôm nay**, không POST thêm gì.
-- [ ] [LOCV2-orchestrate] ⏳ **ĐÃ DUYỆT KẾ HOẠCH O1-O5** (Manager 2026-09-25). Orchestrator hai
-  ca (§32.6). ⭐ Client đã đủ **4/4 bước** (§32.5) — còn lại là đấu dây, không
-  phải viết client. ⚠ Ràng buộc bản lề: **kiểm có draft TRƯỚC, đừng POST mù** —
-  ca 2 không tạo gì nên không có gì mồ côi.
-- [~] [LOCV2-write-probe-run-old] ⏳ ~~DỰNG XONG — CHỜ MANAGER BẤM.~~
-  `GET /api/iap-management/apps/6744642671/loc-v2-write-probe?product=com.pure3q.sea.mb6&expect=fc859670-ffe1-439c-bef8-895437e410b9&confirm=WRITE`
-  ⚠⚠ **ROUTE NÀY GHI THẬT.** Đúng **một** PATCH, cưỡng chế bằng
-  `one-write.structural.test.ts` (hàm ghi duy nhất · gọi đúng 1 lần · 1 locId ·
-  không vòng lặp · nhánh từ chối RETURN trước khi tới lệnh ghi · đích DERIVED
-  không hard-code). Đọc kết quả theo 4 nhánh: KB §31.13 + `verdict` trong JSON.
-- [ ] [LOCV2-write-probe-remove] ⏳ **GỠ SAU KHI TRẢ LỜI.**
-  `app/api/iap-management/apps/[appId]/loc-v2-write-probe/` (route + test) ·
-  `lib/iap-management/bulk-import/localization-v2-write-probe.ts` + test ·
-  `updateInAppPurchaseLocalizationV2` **chỉ khi** đường V2 thật không dùng nó ·
-  **và dòng `loc-v2-write-probe` trong `LIST_ALL_SITES`**
-  (`retry-composition.structural.test.ts`) — dòng đó tự khai là tạm.
-- [x] [LOCV2-write-probe] ✅ **THIẾT KẾ ĐÃ DUYỆT** (Manager 2026-09-25) — lần 2, phép đo GHI.
-  Nay là **câu DUY NHẤT còn lại của arc**: PATCH v2 lên localization thuộc
-  version APPROVED ⇒ Apple trả gì, có version mới không? Thiết kế 4 bước +
-  2 giai đoạn + bảng phân xử: KB §31.7 + §30.6 + §31.13. ⚠ `200` + không có
-  version mới là kết quả **NHẬP NHẰNG** ⇒ S2 chỉ chạy khi Manager đồng ý riêng.
-  ⚠ S1 dù gửi nội dung y hệt vẫn **CHƯA BIẾT** có tạo version hay không.
-- [ ] [LOCV2-snapshot-remove] ⏳ **GỠ instrumentation sau khi nó trả lời.**
-  `app/api/iap-management/apps/[appId]/loc-v2-snapshot/` (route + test) ·
-  `lib/iap-management/bulk-import/localization-v2-snapshot.ts` + test ·
-  `listInAppPurchaseVersionsWithLocalizations` **chỉ khi** đường V2 thật không
-  dùng nó · **và dòng `loc-v2-snapshot` trong `LIST_ALL_SITES`**
-  (`retry-composition.structural.test.ts`) — dòng đó tự khai là tạm. Tiền lệ:
-  `LOC-STATE-PROBE`, dòng DEBUG 429-header của arc key-pool.
-- [x] [LOCV2-inherit-copy] ✅ **GỠ KHỎI THIẾT KẾ.** Bước "copy đủ locale sang
-  version mới" **không cần nữa** (§31.11a). Rút gọn: ~2 request/item, và — đáng
-  kể hơn — **xoá hẳn một lớp trạng thái trung gian nguy hiểm** (version tồn tại
-  mà thiếu locale trên item đang bán). ⛔ **KHÔNG gỡ** 6 ràng buộc chống version
-  mồ côi (§31.12) — chúng chặn bởi câu "ai tạo version", chưa đóng.
-- [ ] [LOCV2-client-migrate] ⏸ **TẠM DỪNG (Manager, 2026-09-24)** — chờ kết quả
-  đo. Nếu Apple **ngầm** tạo version thì chữ ký `create` **không** cần
-  `versionId` ⇒ xây trước là xây sai hướng. Census 4 đường ghi + 3 đường đọc,
-  bảng tương đương v1→v2, chi phí (6 file code, 3 file test, 8 assert endpoint):
-  báo cáo arc + KB §31.6.
-- [x] [LOCV2-compare] ✅ **XONG.** Bộ so sánh thuần
-  `lib/iap-management/localization-compare.ts`: `trim` hai đầu ·
-  **case-sensitive** · **KHÔNG** normalize Unicode. ⭐ `diff-detector.ts` nay
-  **import chính nó** thay vì giữ bản sao (`eqText`/`normalize` thành alias) —
-  một luật, không phải hai. 30/30 test cũ của diff-detector vẫn xanh.
-- [ ] [LOCV2-nfc-decide] ⚠ **CẦN MANAGER CHỐT (Q5) — chặn bởi số đo.** Excel và
-  Apple có encode dấu tiếng Việt **khác nhau** không (NFC vs NFD)? Repo
-  **không** có fixture nào chứa response Apple có dấu ⇒ không tra được, phải
-  đo codepoint. Nếu khác: `"Vàng"` vs `"Vàng"` nhìn y hệt mà so **KHÁC** ⇒ ô
-  không đổi bị xếp là đổi ⇒ dưới model V2 có thể **tốn một version + một vòng
-  duyệt cho một thay đổi không tồn tại**. Test ca 4 trong
-  `localization-compare.test.ts` **ghim hành vi hôm nay**, có chú thích rõ nó
-  KHÔNG phải quyết định — đổi theo Q5 khi có số đo.
+  `execute/route.ts` `createInAppPurchaseLocalization` (quan hệ
+  `inAppPurchaseV2`) — endpoint **deprecated @ 4.4.1** (KB §31.6). Cố ý để lại:
+  ngoài phạm vi O3/O4 và **không phải cái bug** (IAP mới đã có sẵn version
+  draft, design doc §0 Q1). ⚠ Nêu ra chứ không giấu — KB §32.12.
+- [ ] [WALLCLOCK-assert-in-suite] ⏳ **Assert THỜI GIAN TƯỜNG trong suite chạy
+  song song là nguồn đỏ giả.** Instance: `app-matcher.test.ts` ReDoS guard
+  (`194ms < 100ms`) đỏ khi chạy full suite, xanh khi chạy riêng, ở module arc
+  không đụng. Không sửa trong arc này.
+  ⇒ Tiêu chí flake nay có ngoại lệ cho lớp này: **điều kiện** là module arc
+  không đụng (`git diff --stat` rỗng) **và** file đó chạy riêng xanh.
+- [ ] [BULKIMPORT-loc-compare-apple] ⏸ **ĐỂ DÀNH** — so localization với Apple
+  ngay ở step 4 (tự untick ô đã trùng). ⚠ **Lý do chặn cũ đã hết hiệu lực**:
+  nó từng chặn bởi *"Apple có điền `state` không"*; câu đó đã trả lời (KB §33.1)
+  **và trở thành không liên quan** — V2 không có `state` trên localization.
+  ⭐ Nửa server **đã có sẵn**: `syncLocalizationsToVersion` đọc baseline và tính
+  `skipped` với **ba lý do** phân biệt (KB §32.11). Còn thiếu: **nửa UI** + ngân
+  sách request để đọc Apple ở bước preview (~1 request/item).
+- [ ] [LOCV2-nfc-decide] ✅ **Q5 ĐÃ CHỐT** (Manager 2026-09-25): normalize NFC
+  **chỉ khi so sánh**, ghi lên Apple **nguyên văn** file. Đã cài + ghim test.
+  ⏳ Còn lại: **chưa từng đo** Excel và Apple có thật sự khác encoding không —
+  quyết định đi trước phép đo, có chủ đích, vì chi phí bất đối xứng.
 
 ## From [BULKIMPORT-loc-step] (step Localization cho Bulk Import, 2026-09-23)
 

@@ -1398,6 +1398,52 @@
                 cũ chỉ hiện <em>một con số</em> đếm locale, nên không có cách nào thấy trước, và cũng không có
                 cách nào từ chối.</p>
               </div>
+              <div class="callout callout-info">
+                <div class="callout-title">✅ Lỗi đó nay đã được sửa tận gốc (2026-09-26)</div>
+                <p><strong>Bạn không còn gặp lỗi <code class="inline">ACTIVE state</code> nữa.</strong> Nguyên nhân
+                thật: trên Apple, Display Name / Description <em>không thuộc về sản phẩm</em> — chúng thuộc về một
+                <strong>version</strong> của sản phẩm. Bản đang bán nằm trong version đã duyệt, và Apple
+                <strong>không cho sửa</strong> version đã duyệt. Tool cũ sửa thẳng vào đó, nên bị từ chối.</p>
+                <p>Nay tool làm đúng như chính App Store Connect làm khi bạn bấm Save:</p>
+                <table>
+                  <thead><tr><th>Tình huống</th><th>Tool làm gì</th><th>Hệ quả</th></tr></thead>
+                  <tbody>
+                    <tr>
+                      <td><strong>Item đã có bản nháp</strong> (đang chờ bạn gửi duyệt)</td>
+                      <td>Ghi <strong>thẳng vào bản nháp</strong></td>
+                      <td>✅ Không tạo gì mới, không thêm vòng duyệt</td>
+                    </tr>
+                    <tr>
+                      <td><strong>Item đang bán, chưa có bản nháp</strong></td>
+                      <td><strong>Tạo một version mới</strong> rồi ghi vào đó</td>
+                      <td>⚠️ Item sẽ phải <strong>duyệt lại</strong></td>
+                    </tr>
+                    <tr>
+                      <td><strong>Nội dung trong file đã giống Apple</strong></td>
+                      <td>⭐ <strong>Không làm gì cả</strong></td>
+                      <td>✅ Không tạo version, không tốn request</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="callout callout-warning">
+                <div class="callout-title">⚠️ Hai điều cần biết trước khi sửa localization của item ĐANG BÁN</div>
+                <ul>
+                  <li><strong>Tên mới chưa hiển thị ngay.</strong> Version mới phải qua App Review; tới lúc đó
+                  người mua vẫn thấy tên cũ. Đây là quy định của Apple, không phải độ trễ của tool.</li>
+                  <li><strong>Tool KHÔNG tự gửi duyệt.</strong> Nó dừng lại sau khi ghi xong và để version ở
+                  trạng thái <em>Prepare for Submission</em> — bạn vào App Store Connect kiểm rồi tự gửi. Cố ý
+                  như vậy: tạo version là việc không hoàn tác được, nên bạn giữ quyền quyết định bước cuối.</li>
+                </ul>
+                <p class="mt-2"><strong>Mẹo tiết kiệm:</strong> ô nào nội dung đã trùng Apple thì bỏ tick — tool
+                sẽ bỏ qua và <em>không tạo version nào cả</em> cho item đó.</p>
+              </div>
+              <div class="callout callout-info">
+                <div class="callout-title">🗑️ Bulk Import không bao giờ XOÁ localization</div>
+                <p>Một locale có trên Apple mà <em>không có</em> trong file thì tool <strong>để nguyên</strong> —
+                vì file import thường chỉ chứa một phần. Muốn xoá một ngôn ngữ, dùng <strong>form sửa IAP đơn
+                lẻ</strong>, nơi việc xoá là một thao tác bạn bấm có chủ đích.</p>
+              </div>
               <p><strong>Bảng hiển thị đúng nội dung trong FILE.</strong> Mỗi ô là một
               <em>item × locale</em>, và mỗi ô hiện <strong>hai dòng có nhãn</strong>:
               <code class="inline">Name</code> (Display Name) và <code class="inline">Desc</code> (Description) —

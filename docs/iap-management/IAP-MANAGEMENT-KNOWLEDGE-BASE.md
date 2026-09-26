@@ -8505,3 +8505,94 @@ nguy hiểm: đường CREATE chạm một **giai đoạn vòng đời khác** (
 review, draft chắc chắn có sẵn), và nó **không** tranh chấp với đường OVERWRITE.
 Nhưng nó vẫn là một endpoint deprecated còn sống trong code — nói ra, không giấu.
 
+
+## §33 — Ba probe của arc: kết quả cuối, ghi lại TRƯỚC khi xoá code (2026-09-26)
+
+**O5.** Ba instrumentation được dựng trong arc `[LOC-V2-model]`, mỗi cái để trả
+lời một câu đã đặt tên, và cả ba nay bị xoá. Mục này là **nơi dữ liệu của chúng
+tiếp tục sống** — kèm **id và tên item thật**, để lần sau tái lập được mà **không
+phải đo lại**.
+
+⚠ Đọc kèm: các phép đo này chạy trên **app `6744642671`** (Pure 3Q SEA), ba item
+`com.pure3q.sea.mb6` · `mb30` · `mb68`, mỗi item **3 locale**: `en-US` · `id` ·
+`th`. ⚠ **App này KHÔNG có `vi`** — xem §31.14.
+
+### 33.1 `LOC-STATE-PROBE` — 3/3 câu đã trả lời
+
+| # | Câu | Trả lời |
+|---|---|---|
+| 1 | Apple có **điền** `state` trên localization không? | ✅ **CÓ** |
+| 2 | Một locale có trả về **hai** dòng không? | ✅ **CÓ** — `dupes=[vi x2]` |
+| 3 | Endpoint **bulk import** (`/v2/inAppPurchases/{id}/inAppPurchaseLocalizations`) có mang `state` không? | ✅ **CÓ** |
+
+Dòng đo được, nguyên văn:
+```
+total=2 rows=[vi=PREPARE_FOR_SUBMISSION, vi=APPROVED] dupes=[vi x2]
+```
+⚠ Thứ tự quan sát được là `PREPARE_FOR_SUBMISSION` trước, `APPROVED` sau —
+**không hợp đồng nào bảo đảm**, đừng dựa vào.
+
+⇒ **Nhưng câu hỏi này đã trở thành không liên quan.** Dưới mô hình V2,
+localization **không có `state`**; vòng đời thuộc về **VERSION**. Đó là lý do
+`localization-state.ts` (allow-list `state`) bị xoá ở O3 (§32.12).
+⭐ Ghi lại vì nó là **bằng chứng rằng mô hình V1 có thật và đã được đo** — không
+phải vì còn dùng được.
+
+### 33.2 `loc-v2-snapshot` — §1.6 (kế thừa) đóng, zero write
+
+**`com.pure3q.sea.mb6`** — item Manager đã sửa tay trên ASC, `flags=[]`:
+
+| Version | State | Locales |
+|---|---|---|
+| `8f825f18` | `PREPARE_FOR_SUBMISSION` | `{en-US, id, th}` · ptr=3 |
+| `42624658` | `APPROVED` | `{en-US, id, th}` · ptr=3 |
+
+**Đối chứng** (chưa sửa): `mb30` → `b9bbebcc` `APPROVED` `{en-US,id,th}` ·
+`mb68` → `e19cf8e4` `APPROVED` `{en-US,id,th}`. Mỗi item **đúng một version**.
+
+⇒ **CÓ KẾ THỪA — ĐÃ ĐO.** Draft chứa **đủ 3 locale y hệt** bản APPROVED, **id
+riêng**. ⇒ Tool **không phải copy locale**.
+⇒ **IAP live có đúng MỘT version APPROVED** — xác nhận **qua API** (trước chỉ
+có ASC UI).
+
+**Nội dung, lần sửa tay của Manager** (`en-US`, và **chỉ** `en-US` lệch):
+
+| | `name` | `description` |
+|---|---|---|
+| APPROVED `fc859670-ffe1-439c-bef8-895437e410b9` | `6 Ticket` | `Recharge and receive 6 Ticket` |
+| DRAFT `4f063e61-90d9-49c3-b7ef-ef3ee3e0f8c9` | `6 Tickets.` | `Recharge and receive 6 Tickets.` |
+
+`id` và `th` **giống hệt** ở cả hai version.
+
+⚠ **n=3 < 10 ⇒ §4.1 landmark (bẫy cắt 10-ID) CHƯA quan sát được.**
+`pointerDisagrees=false` chứng minh *"ở n=3 thì không cắt"*, **không** chứng minh
+*"không bao giờ cắt"*. ⇒ Kiến trúc **hai tầng** trong
+`localization-version-sync.ts` **giữ nguyên**; cờ chỉ chưa có cơ hội bắn.
+
+### 33.3 `loc-v2-write-probe` — nhánh (B) bị loại
+
+PATCH `/v2/inAppPurchaseLocalizations/fc859670-…` (localization của bản
+**APPROVED**), payload = **đúng nội dung đang live**:
+
+> **HTTP 409 · `IAP_VERSION_UNMODIFIABLE`**
+
+⇒ Verdict `APPLE_REFUSED` ⇒ **nhánh (B)** (*"Apple tự tạo version ngầm khi
+PATCH"*) **LOẠI**. Tool **phải tự tạo version**.
+
+⚠ **Phép đo đó KHÔNG sai** — nó trả lời **đúng câu đã đặt**. Cái nó không làm
+được là mô tả **luồng thật**, vì luồng thật **không đi qua đường đó**: capture
+DevTools (§32.1) cho thấy ASC `POST` một version rồi PATCH vào **bản copy**, và
+**không bao giờ chạm** bản APPROVED. Hai câu hỏi khác nhau (§32.3).
+
+### 33.4 ⭐ Nghĩa vụ gỡ đã được thực hiện — và đó là lần thứ ba
+
+| Instrumentation | Arc | Gỡ khi |
+|---|---|---|
+| dòng DEBUG 429-header | key-pool | sau khi trả lời |
+| `LOC-STATE-PROBE` | `[BULKIMPORT-loc-step]` | O5 |
+| `loc-v2-snapshot` + `loc-v2-write-probe` | `[LOC-V2-model]` | O5 |
+
+⭐ **Khuôn đã thành nếp, và nó có hai nửa:** (1) probe nào cũng khai ngay trong
+docstring rằng nó là tạm và **ai** phải gỡ; (2) **số liệu được chuyển vào KB
+trước khi code biến mất**. Bỏ nửa (2) thì việc gỡ trở thành **xoá bằng chứng**.
+

@@ -533,3 +533,55 @@ là lúc Manager cần biết vì sao bảng trống.
 
 ⚠ Mẫu số luôn đếm **ô THẬT** (`items[i].localizations.length`), **không** phải
 `rows × locale_pair_count`.
+
+---
+
+## §HẬU KỲ — arc `[LOC-V2-model]` đã sửa tận gốc cái lỗi sinh ra step này (2026-09-26)
+
+⚠ **Đọc mục này trước khi tin phần còn lại của file.** Thiết kế trên được viết
+khi mô hình thật của Apple **chưa được đo**. Nhiều câu ở đây nói về `state` của
+localization — **dưới mô hình V2 thì localization KHÔNG CÓ `state`**.
+
+### Cái đã đổi dưới chân step này
+
+| | Khi step này được thiết kế | Nay (KB §31–§33) |
+|---|---|---|
+| Localization thuộc về | **IAP** | ⭐ **VERSION của IAP** |
+| `state` của localization | có, và là thứ để phân loại | **không tồn tại** — vòng đời thuộc version |
+| Sửa item đang bán | PATCH thẳng ⇒ **409 `ACTIVE state`** | tạo version mới (hoặc dùng bản nháp sẵn có) rồi ghi vào đó |
+| Nếu file đã trùng Apple | vẫn gửi PATCH | ⭐ **không gọi API nào cả** |
+| Xoá locale thừa | có `toDelete` | **bỏ hẳn** khỏi bulk import (Q3) |
+
+### Step 4 còn nguyên giá trị, nhưng vì lý do KHÁC
+
+Nó được sinh ra để **tránh 409**. Nguyên nhân 409 nay đã bị diệt ở tầng dưới,
+nhưng step vẫn đáng giữ:
+
+- Sửa localization của item **đang bán** ⇒ **version mới** ⇒ **duyệt lại** ⇒
+  tên mới **không hiển thị với người mua** cho tới khi Apple duyệt. Bỏ tick là
+  cách duy nhất từ chối chuyện đó.
+- Version đã tạo **không xoá được** (`inAppPurchaseVersions` không có DELETE).
+  Một ô bỏ tick là một artifact vĩnh viễn không sinh ra.
+
+⇒ Mặc định **TICK-ALL** vẫn đúng, và nay có thêm một lớp an toàn phía server:
+ô nào nội dung đã trùng bản đang bán thì **server tự bỏ qua** và **không tạo
+version** — kể cả khi Manager quên untick (`planLocalizationWrites`, KB §32.11).
+
+### `[BULKIMPORT-loc-compare-apple]` — lý do chặn cũ đã hết hiệu lực
+
+Nó từng bị chặn bởi *"Apple có điền `state` trên lượt LIST không?"*. Câu đó
+**đã trả lời** (có — KB §33.1) **và trở thành không liên quan**.
+⭐ Nửa **server đã có sẵn**: `syncLocalizationsToVersion` đọc bản APPROVED làm
+mốc và tính ra `skipped` với **ba lý do phân biệt** (§32.11). Còn thiếu: **nửa
+UI**, và ngân sách request để đọc Apple ở bước preview (~1 request/item).
+
+### Nhãn ba ca (Manager duyệt 2026-09-25/26)
+
+| Tình huống | Nhãn |
+|---|---|
+| File trùng bản đang bán, không có nháp khác | *"Giống bản đang bán — không có gì để đổi"* |
+| File trùng **bản nháp** (lần chạy lại) | *"Bản nháp đã mang thay đổi này — đang chờ duyệt"* |
+| File trùng bản đang bán **nhưng** nháp mang nội dung khác | *"Giống bản đang bán — nhưng bản nháp đang chờ duyệt mang nội dung khác"* |
+
+⚠ Ba ca **cùng UNTICK**, khác **câu nói**. Gộp nhãn là xoá đúng thông tin khiến
+chúng đáng tồn tại: *item này có thay đổi đang chờ Apple duyệt hay không*.
