@@ -209,6 +209,31 @@ export type InAppPurchaseVersion = AscResource<
   InAppPurchaseVersionAttributes
 >;
 
+/**
+ * ⚠⚠ THE RESULT OF ENUMERATING AN IAP'S VERSIONS — AND IT CARRIES WHETHER THE
+ * ENUMERATION CAN BE TRUSTED, BECAUSE A SHORT READ HERE IS NOT A SHORT READ.
+ *
+ * Every consumer of this list asks the same question: *"is there already a
+ * version I can write into?"* — and answers `no` by **creating one**. A
+ * `POST /v1/inAppPurchaseVersions` cannot be undone (`inAppPurchaseVersions`
+ * has no DELETE, verified three ways), so a list that came back incomplete and
+ * was read as "no draft" leaves a permanent artifact on a product that may be
+ * selling.
+ *
+ * ⇒ `complete: false` means **we do not know**, and it must NEVER be collapsed
+ * into "there is none". That is the `UNKNOWN ≠ PATCHABLE` error class that cost
+ * this module an allow-list once already, pointed at the WRITE path this time.
+ * CLAUDE.md: when you do not know, choose the option that does not write.
+ */
+export interface VersionListing {
+  versions: InAppPurchaseVersion[];
+  /**
+   * True only when every page Apple pointed at was fetched AND every page
+   * carried a `data` array. Anything else is `false`.
+   */
+  complete: boolean;
+}
+
 // ─── IAP Localization, V2 MODEL — arc `[LOC-V2-model]` ───────────────────────
 //
 // ⚠⚠ THIS IS A DIFFERENT MODEL FROM `InAppPurchaseLocalization` ABOVE, NOT A

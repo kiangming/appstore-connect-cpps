@@ -120,8 +120,8 @@ describe("executeSubmitV2 — version resolution", () => {
       submission: { id: "sub1" },
       reused: false,
     });
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [{ id: "ver-1", attributes: { state: "PREPARE_FOR_SUBMISSION", version: 1 } }],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [{ id: "ver-1", attributes: { state: "PREPARE_FOR_SUBMISSION", version: 1 } }],
     });
     addReviewSubmissionItem.mockResolvedValue({ id: "item-1" });
 
@@ -136,8 +136,8 @@ describe("executeSubmitV2 — version resolution", () => {
 
   it("also accepts READY_FOR_REVIEW as a submittable existing version", async () => {
     createOrReuseReviewSubmission.mockResolvedValue({ submission: { id: "sub1" }, reused: false });
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [{ id: "ver-2", attributes: { state: "READY_FOR_REVIEW", version: 2 } }],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [{ id: "ver-2", attributes: { state: "READY_FOR_REVIEW", version: 2 } }],
     });
     addReviewSubmissionItem.mockResolvedValue({ id: "item-1" });
 
@@ -150,7 +150,7 @@ describe("executeSubmitV2 — version resolution", () => {
 
   it("falls back to creating a version only when none exists (rare defensive path)", async () => {
     createOrReuseReviewSubmission.mockResolvedValue({ submission: { id: "sub1" }, reused: false });
-    listInAppPurchaseVersions.mockResolvedValue({ data: [] });
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true, versions: [] });
     createInAppPurchaseVersion.mockResolvedValue({ data: { id: "fallback-ver" } });
     addReviewSubmissionItem.mockResolvedValue({ id: "item-1" });
 
@@ -168,8 +168,8 @@ describe("executeSubmitV2 — version resolution", () => {
 
   it("ignores an APPROVED/REJECTED version — only PREPARE_FOR_SUBMISSION/READY_FOR_REVIEW count as submittable", async () => {
     createOrReuseReviewSubmission.mockResolvedValue({ submission: { id: "sub1" }, reused: false });
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [{ id: "old-ver", attributes: { state: "APPROVED", version: 1 } }],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [{ id: "old-ver", attributes: { state: "APPROVED", version: 1 } }],
     });
     createInAppPurchaseVersion.mockResolvedValue({ data: { id: "fallback-ver" } });
     addReviewSubmissionItem.mockResolvedValue({ id: "item-1" });
@@ -180,7 +180,7 @@ describe("executeSubmitV2 — version resolution", () => {
 
   it("surfaces an orphan warning when a fallback-created version's item-add then fails", async () => {
     createOrReuseReviewSubmission.mockResolvedValue({ submission: { id: "sub1" }, reused: false });
-    listInAppPurchaseVersions.mockResolvedValue({ data: [] });
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true, versions: [] });
     createInAppPurchaseVersion.mockResolvedValue({ data: { id: "fallback-ver" } });
     addReviewSubmissionItem.mockRejectedValue(new Error("429: rate limited"));
 
@@ -192,8 +192,8 @@ describe("executeSubmitV2 — version resolution", () => {
 
   it("does NOT flag orphanedVersionWarning when the version already existed and the add fails", async () => {
     createOrReuseReviewSubmission.mockResolvedValue({ submission: { id: "sub1" }, reused: false });
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [{ id: "ver-1", attributes: { state: "PREPARE_FOR_SUBMISSION" } }],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [{ id: "ver-1", attributes: { state: "PREPARE_FOR_SUBMISSION" } }],
     });
     addReviewSubmissionItem.mockRejectedValue(new Error("422: validation error"));
 
@@ -205,8 +205,8 @@ describe("executeSubmitV2 — version resolution", () => {
 
   it("processes multiple items sequentially and reports reused/reviewSubmissionId from create-or-reuse", async () => {
     createOrReuseReviewSubmission.mockResolvedValue({ submission: { id: "sub-shared" }, reused: true });
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [{ id: "ver-x", attributes: { state: "PREPARE_FOR_SUBMISSION" } }],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [{ id: "ver-x", attributes: { state: "PREPARE_FOR_SUBMISSION" } }],
     });
     addReviewSubmissionItem.mockResolvedValue({ id: "item-x" });
 

@@ -73,13 +73,99 @@ beforeEach(() => {
   deleteInAppPurchaseLocalizationV2.mockResolvedValue(undefined);
 });
 
+describe("⚠⚠ CHUNK 0 — an incomplete version read never becomes a write", () => {
+  // ⚠ The POST is stubbed to SUCCEED even though it must never happen. If it
+  // threw instead, removing the fail-safe would fail these tests with a
+  // TypeError from an unconfigured mock — red, but red for the wrong reason,
+  // and it would hide the assertion that actually states the harm
+  // (`createInAppPurchaseVersion` was called at all).
+  beforeEach(() => {
+    createInAppPurchaseVersion.mockResolvedValue({ data: { id: "unwanted-version" } });
+  });
+
+  it("complete:false ⇒ no POST, no PATCH, and the failure carries the reason", async () => {
+    // End-to-end shape of the fail-safe: the rows we managed to read say
+    // "APPROVED only, no draft", which on a complete read is a legitimate
+    // CREATE. The flag is what turns it into a refusal instead.
+    listInAppPurchaseVersions.mockResolvedValue({
+      complete: false,
+      versions: [version("v-approved", "APPROVED")],
+    });
+    listLocalizationsForVersion.mockResolvedValue({
+      data: [loc("a-en", "en-US", "Old", "D")],
+    });
+
+    const out = await syncLocalizationsToVersion(args());
+
+    expect(createInAppPurchaseVersion).not.toHaveBeenCalled();
+    expect(updateInAppPurchaseLocalizationV2).not.toHaveBeenCalled();
+    expect(createInAppPurchaseLocalizationV2).not.toHaveBeenCalled();
+    expect(out.versionCreated).toBe(false);
+    expect(out.failures).toHaveLength(1);
+    expect(out.failures[0].locale).toBe("en-US");
+    expect(out.failures[0].message).toMatch(/không đọc được đầy đủ danh sách version/);
+    // ⚠ The row must also say nothing was sent — a refusal that reads as
+    // "might have written" is worse than no sentence at all (KB §32.11 ⑤).
+    expect(out.failures[0].message).toMatch(/Không có thay đổi nào được gửi lên Apple/);
+  });
+
+  it("⭐ complete:false does NOT take the 'nothing to change' fast path — it refuses out loud", async () => {
+    // The file matches what we read, so on a complete read this would return
+    // early with "Giống bản đang bán — không có gì để đổi". Asserting that
+    // about versions we never fetched is a reassurance we have not earned.
+    listInAppPurchaseVersions.mockResolvedValue({
+      complete: false,
+      versions: [version("v-approved", "APPROVED")],
+    });
+    listLocalizationsForVersion.mockResolvedValue({
+      data: [loc("a-en", "en-US", "New", "D")],
+    });
+
+    const out = await syncLocalizationsToVersion(args());
+
+    expect(createInAppPurchaseVersion).not.toHaveBeenCalled();
+    expect(out.failures).toHaveLength(1);
+    expect(out.failures[0].message).toMatch(/không đọc được đầy đủ danh sách version/);
+    // ⚠ AND NO SKIP LABEL SURVIVES. "Giống bản đang bán — không có gì để đổi"
+    // on a partial read is a quiet all-clear about versions we never fetched.
+    expect(out.skipped).toEqual([]);
+  });
+
+  it("⭐⭐ a draft found only because paging worked ⇒ REUSE, no version created", async () => {
+    // The listing arrives complete and carries a draft alongside several
+    // superseded versions — the shape an item accumulates after repeated edits
+    // (`REPLACED_WITH_NEW_VERSION` is retained, not reaped).
+    listInAppPurchaseVersions.mockResolvedValue({
+      complete: true,
+      versions: [
+        version("v1", "REPLACED_WITH_NEW_VERSION"),
+        version("v-approved", "APPROVED"),
+        version("v-draft", "PREPARE_FOR_SUBMISSION"),
+      ],
+    });
+    listLocalizationsForVersion
+      .mockResolvedValueOnce({ data: [loc("a-en", "en-US", "Old", "D")] }) // approved
+      .mockResolvedValueOnce({ data: [loc("d-en", "en-US", "Older", "D")] }); // draft
+
+    const out = await syncLocalizationsToVersion(args());
+
+    expect(createInAppPurchaseVersion).not.toHaveBeenCalled();
+    expect(out.versionCreated).toBe(false);
+    expect(out.patched).toEqual(["en-US"]);
+    expect(updateInAppPurchaseLocalizationV2).toHaveBeenCalledWith(creds, "d-en", {
+      name: "New",
+      description: "D",
+    });
+  });
+});
+
 describe("⭐⭐ PARITY — an item that is not yet live never creates a version", () => {
   it("CA 2: a draft exists ⇒ REUSE, and createInAppPurchaseVersion is NEVER called", async () => {
     // The everyday path. §0 Q1 measured that every READY_TO_SUBMIT IAP already
     // carries a PREPARE_FOR_SUBMISSION version, so this is what normal use
     // looks like — and it must behave exactly as it did before the rewrite.
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
     });
     listLocalizationsForVersion.mockResolvedValue({
       data: [loc("d-en", "en-US", "Old", "D")],
@@ -99,8 +185,8 @@ describe("⭐⭐ PARITY — an item that is not yet live never creates a version
   it("⭐ nothing to change ⇒ no version, no write, not even on a LIVE item", async () => {
     // The gate that stops CA 1 from POSTing an undeletable version for an item
     // whose file already matches what is live.
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [version("v-approved", "APPROVED")],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [version("v-approved", "APPROVED")],
     });
     listLocalizationsForVersion.mockResolvedValue({
       data: [loc("a-en", "en-US", "New", "D")],
@@ -120,8 +206,8 @@ describe("CA 1 — a live item with no draft", () => {
     // KB §32.1: ASC does exactly this. And §32.2: the new version arrives with
     // copies of every approved locale under NEW ids — so the ids must be
     // re-read. Reusing the approved ids is the 409 this arc exists to remove.
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [version("v-approved", "APPROVED")],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [version("v-approved", "APPROVED")],
     });
     listLocalizationsForVersion
       .mockResolvedValueOnce({ data: [loc("a-en", "en-US", "Old", "D")] }) // approved
@@ -149,8 +235,8 @@ describe("CA 1 — a live item with no draft", () => {
     // There is no DELETE endpoint; the log trail is the only remedy for an
     // orphan, so it must reach where a Manager greps rather than stop inside
     // the helper.
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [version("v-approved", "APPROVED")],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [version("v-approved", "APPROVED")],
     });
     listLocalizationsForVersion
       .mockResolvedValueOnce({ data: [loc("a-en", "en-US", "Old", "D")] })
@@ -167,8 +253,8 @@ describe("CA 1 — a live item with no draft", () => {
 
 describe("⚠ REFUSE — a decision with a reason, not an unknown error", () => {
   it("two drafts ⇒ no write at all, and every intended locale carries the reason", async () => {
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [
         version("v-approved", "APPROVED"),
         version("d1", "PREPARE_FOR_SUBMISSION"),
         version("d2", "PREPARE_FOR_SUBMISSION"),
@@ -188,8 +274,8 @@ describe("⚠ REFUSE — a decision with a reason, not an unknown error", () => 
   });
 
   it("a review already in flight ⇒ refuses rather than creating a second version", async () => {
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [version("v-approved", "APPROVED"), version("v-rev", "IN_REVIEW")],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [version("v-approved", "APPROVED"), version("v-rev", "IN_REVIEW")],
     });
     listLocalizationsForVersion.mockResolvedValue({
       data: [loc("a-en", "en-US", "Old", "D")],
@@ -204,8 +290,8 @@ describe("⚠ REFUSE — a decision with a reason, not an unknown error", () => 
 
 describe("⚠ Q3 — delete is an ARGUMENT, not a branch", () => {
   it("bulk import passes no removeLocales ⇒ nothing is ever deleted", async () => {
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
     });
     listLocalizationsForVersion.mockResolvedValue({
       data: [loc("d-en", "en-US", "Old", "D"), loc("d-th", "th", "T", "DT")],
@@ -217,8 +303,8 @@ describe("⚠ Q3 — delete is an ARGUMENT, not a branch", () => {
   });
 
   it("the form passes removeLocales ⇒ the TARGET version's row is deleted", async () => {
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
     });
     listLocalizationsForVersion.mockResolvedValue({
       data: [loc("d-en", "en-US", "Old", "D"), loc("d-th", "th", "T", "DT")],
@@ -231,8 +317,8 @@ describe("⚠ Q3 — delete is an ARGUMENT, not a branch", () => {
   });
 
   it("a removal of a locale the version does not have is idempotent, not an error", async () => {
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
     });
     listLocalizationsForVersion.mockResolvedValue({
       data: [loc("d-en", "en-US", "New", "D")],
@@ -250,8 +336,8 @@ describe("⚠ Q3 — delete is an ARGUMENT, not a branch", () => {
 
 describe("per-locale failures", () => {
   it("a failed PATCH fails only that locale, and carries Apple's message", async () => {
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
     });
     listLocalizationsForVersion.mockResolvedValue({
       data: [loc("d-en", "en-US", "Old", "D"), loc("d-th", "th", "Old", "D")],
@@ -276,8 +362,8 @@ describe("per-locale failures", () => {
   });
 
   it("a new locale is POSTed onto the target version, with its new id returned", async () => {
-    listInAppPurchaseVersions.mockResolvedValue({
-      data: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
+    listInAppPurchaseVersions.mockResolvedValue({ complete: true,
+      versions: [version("v-draft", "PREPARE_FOR_SUBMISSION")],
     });
     listLocalizationsForVersion.mockResolvedValue({ data: [] });
 

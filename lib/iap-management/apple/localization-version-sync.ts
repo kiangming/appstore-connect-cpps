@@ -53,7 +53,6 @@ import {
   type SkippedLocale,
   type VersionLocalization,
 } from "../bulk-import/localization-version-plan";
-import type { InAppPurchaseVersion } from "@/types/iap-management/apple";
 
 const APPROVED_STATES = new Set(["APPROVED", "ACCEPTED"]);
 const DRAFT_STATE = "PREPARE_FOR_SUBMISSION";
@@ -126,8 +125,8 @@ export async function syncLocalizationsToVersion(
   // ⚠ Two-stage on purpose: the V2 relationship pointer truncates at 10 IDs
   // (KB §4.1 LANDMARK) and a short read here would look like "this locale is
   // not on Apple", turning a PATCH into a POST.
-  const versionsRes = await run(() => listInAppPurchaseVersions(creds, appleIapId));
-  const versions = (versionsRes.data ?? []) as InAppPurchaseVersion[];
+  const listing = await run(() => listInAppPurchaseVersions(creds, appleIapId));
+  const versions = listing.versions;
 
   const approvedVersion = versions.find((v) => APPROVED_STATES.has(v.attributes?.state));
   const draftVersions = versions.filter((v) => v.attributes?.state === DRAFT_STATE);
@@ -146,9 +145,17 @@ export async function syncLocalizationsToVersion(
   const plan = planLocalizationWrites({ approved, draft, desired });
   const removals = args.removeLocales ?? [];
 
-  if (!plan.needsWrite && removals.length === 0) {
+  if (!plan.needsWrite && removals.length === 0 && listing.complete) {
     // ⭐ NOTHING IS CREATED HERE. This is the branch that keeps CA 1 from
     // POSTing an undeletable version for an item that needed no change.
+    //
+    // ⚠ `listing.complete` GATES THE FAST PATH, AND NOT FOR SAFETY — FOR
+    // HONESTY. An incomplete read cannot write anything either way: it falls
+    // through to `resolveWriteTargetVersion`, which REFUSES. What it must not
+    // do is return HERE, because this branch does not merely skip — it puts a
+    // SENTENCE in front of the Manager ("Giống bản đang bán…") that would be
+    // asserting something about versions we never fetched. Refuse out loud
+    // rather than reassure on a partial read.
     return {
       skipped: plan.skipped,
       patched,
@@ -163,7 +170,10 @@ export async function syncLocalizationsToVersion(
   let target: { versionId: string; created: boolean };
   try {
     target = await resolveWriteTargetVersion(appleIapId, {
-      readVersions: async () => versions,
+      // ⚠ THE LISTING IS PASSED WHOLE, INCOMPLETENESS AND ALL. Handing O1 only
+      // `versions` would strip the one fact that makes its refusal possible,
+      // and the read would silently become authoritative on the way across.
+      readVersions: async () => listing,
       createVersion: async () => {
         const res = await run(() => createInAppPurchaseVersion(creds, appleIapId));
         return res.data.id;
@@ -178,16 +188,32 @@ export async function syncLocalizationsToVersion(
     if (err instanceof WriteTargetRefused) {
       // ⚠⚠ NOT a generic catch. A refusal is a decision with a reason, and it
       // must read as "deliberately not written" rather than "unknown error".
-      const intended = [
-        ...plan.toWrite.map((w) => w.locale),
-        ...removals,
-      ];
+      //
+      // ⚠⚠ AND ON AN INCOMPLETE READ THE PLAN IS AN OPINION, NOT A FINDING.
+      // `plan` was computed from whatever pages arrived: its `toWrite` may be
+      // short, and its `skipped` labels ("Giống bản đang bán — không có gì để
+      // đổi") assert something about versions we never fetched. Reporting only
+      // `toWrite` would leave the other locales wearing a confident sentence
+      // nobody measured — a quiet all-clear, which is the failure direction
+      // this arc exists to remove. So: every desired locale is reported as
+      // unknown, and no label is shown at all.
+      const planIsTrustworthy = listing.complete;
+      const intended = planIsTrustworthy
+        ? [...plan.toWrite.map((w) => w.locale), ...removals]
+        : desired.map((d) => d.locale);
       failures.push(...describeWriteTargetRefusal(intended, err.message));
       await args.log(
         `LOCV2-REFUSED iap=${appleIapId} ${err.message}`,
         "WARN",
       );
-      return { skipped: plan.skipped, patched, created, deleted, failures, versionCreated: false };
+      return {
+        skipped: planIsTrustworthy ? plan.skipped : [],
+        patched,
+        created,
+        deleted,
+        failures,
+        versionCreated: false,
+      };
     }
     throw err;
   }

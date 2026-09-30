@@ -24,6 +24,7 @@ import type {
   InAppPurchaseLocalizationV2,
   InAppPurchaseAppStoreReviewScreenshot,
   InAppPurchaseVersion,
+  VersionListing,
   CreateInAppPurchasePayload,
   UpdateInAppPurchasePayload,
   CreateInAppPurchaseLocalizationPayload,
@@ -147,15 +148,18 @@ export async function listAllInAppPurchases(
  *     Enumeration is thereby all-or-nothing: callers can trust a returned set
  *     to be the FULL catalog.
  */
-function extractNextPagePath(nextUrl: string | undefined): string | undefined {
+function extractNextPagePath(
+  nextUrl: string | undefined,
+  caller = "listAllInAppPurchases",
+): string | undefined {
   if (!nextUrl) return undefined;
   try {
     const url = new URL(nextUrl);
     return `${url.pathname}${url.search}`;
   } catch {
     throw new Error(
-      `listAllInAppPurchases: unparseable links.next from Apple ("${nextUrl}") — ` +
-        `cannot guarantee a complete IAP list; refusing to return a truncated set`,
+      `${caller}: unparseable links.next from Apple ("${nextUrl}") — ` +
+        `cannot guarantee a complete list; refusing to return a truncated set`,
     );
   }
 }
@@ -518,16 +522,68 @@ export async function uploadScreenshotToOperations(
  * (design doc §0 Q1) that a READY_TO_SUBMIT IAP already has one in
  * PREPARE_FOR_SUBMISSION — the v2 submit flow READS this, it does not
  * create a version in the common path.
+ *
+ * ⚠⚠ THIS READ IS ON THE **WRITE** PATH, AND A SHORT ANSWER HERE COSTS A
+ * PERMANENT ARTIFACT. Both consumers (`resolveWriteTargetVersion` for
+ * localization edits, `resolveInAppPurchaseVersionId` for submit) answer
+ * *"nothing suitable in this list"* by `POST`ing a version — and
+ * `inAppPurchaseVersions` has **no DELETE**. A truncated list therefore does
+ * not degrade into a stale read; it degrades into an undeletable object on a
+ * selling product.
+ *
+ * ⚠ AND THE LIST GROWS WITH USE. OAS 4.4.1 `filter[state]` enumerates
+ * `REPLACED_WITH_NEW_VERSION`
+ * (`#/paths/~1v2~1inAppPurchases~1{id}~1versions/get/parameters/0`), so
+ * superseded versions are **retained**, not reaped. An item edited repeatedly
+ * accumulates them: the risk this function guards rises with how long the tool
+ * has been in use, which is the worst shape a latent bug can have.
+ *
+ * ⚠ `limit=200` IS STATED, NOT INHERITED. OAS declares
+ * `{"type":"integer","maximum":200}` for `limit`
+ * (`#/paths/~1v2~1inAppPurchases~1{id}~1versions/get/parameters/5/schema`) and
+ * **declares no `default`** — so the page size Apple applies when the parameter
+ * is omitted is not knowable from the spec. Before this, the call sent no
+ * `limit` and never looked at `links.next`: whatever Apple's default happened
+ * to be WAS the ceiling, silently.
+ *
+ * ⚠ ONE PAGE IS STILL EXPECTED, AND STILL NOT ASSUMED — same discipline as
+ * `listLocalizationsForVersion` below. The loop follows `links.next` to the end
+ * and reports whether it got there.
  */
 export async function listInAppPurchaseVersions(
   creds: AscCredentials,
   iapId: string,
-): Promise<AscApiResponse<InAppPurchaseVersion[]>> {
-  return iapFetch<AscApiResponse<InAppPurchaseVersion[]>>(
-    creds,
-    "GET",
-    `/v2/inAppPurchases/${iapId}/versions`,
-  );
+): Promise<VersionListing> {
+  const versions: InAppPurchaseVersion[] = [];
+  let next: string | undefined = `/v2/inAppPurchases/${iapId}/versions?limit=200`;
+  let pageCount = 0;
+
+  while (next) {
+    const path: string = next;
+    const page: AscApiResponse<InAppPurchaseVersion[]> = await iapFetch<
+      AscApiResponse<InAppPurchaseVersion[]>
+    >(creds, "GET", path);
+    pageCount++;
+
+    // ⚠⚠ A MISSING `data` IS NOT AN EMPTY `data`. `?? []` here would turn a
+    // response we failed to understand into the sentence "this IAP has no
+    // versions" — which the callers act on by creating one. Stop, and say we
+    // do not know.
+    if (!Array.isArray(page.data)) {
+      await log(
+        "iap-apple",
+        `listInAppPurchaseVersions iap=${iapId} page=${pageCount} carried no data[] — ` +
+          `returning complete=false (callers MUST NOT read this as "no versions")`,
+        "WARN",
+      );
+      return { versions, complete: false };
+    }
+
+    versions.push(...page.data);
+    next = extractNextPagePath(page.links?.next, "listInAppPurchaseVersions");
+  }
+
+  return { versions, complete: true };
 }
 
 /**

@@ -48,7 +48,10 @@
  * at a version Apple will refuse — and the refusal would look exactly like the
  * 409 this whole arc started from.
  */
-import type { InAppPurchaseVersion } from "@/types/iap-management/apple";
+import type {
+  InAppPurchaseVersion,
+  VersionListing,
+} from "@/types/iap-management/apple";
 
 /** The ONLY state whose metadata Apple still accepts edits for. */
 const WRITABLE_VERSION_STATE = "PREPARE_FOR_SUBMISSION";
@@ -161,7 +164,13 @@ export class WriteTargetRefused extends Error {
 }
 
 export interface ResolveWriteTargetDeps {
-  readVersions: () => Promise<ReadonlyArray<InAppPurchaseVersion>>;
+  /**
+   * ⚠ RETURNS A `VersionListing`, NOT AN ARRAY — ON PURPOSE. An array cannot
+   * say *"this may be short"*, and the one question this module asks is
+   * answered `no` by creating something permanent. See the `complete` branch
+   * below.
+   */
+  readVersions: () => Promise<VersionListing>;
   createVersion: () => Promise<string>;
   onCreate?: (phase: "before" | "after", detail: string) => Promise<void> | void;
 }
@@ -170,8 +179,29 @@ export async function resolveWriteTargetVersion(
   appleIapId: string,
   deps: ResolveWriteTargetDeps,
 ): Promise<ResolvedWriteTarget> {
-  const versions = await deps.readVersions();
-  const decision = pickWriteTargetVersion(versions);
+  const listing = await deps.readVersions();
+
+  // ⚠⚠ A READ WE COULD NOT FINISH IS "WE DO NOT KNOW", NEVER "THERE IS NONE".
+  // Every other branch below reasons about which version exists. This one
+  // exists because the list itself may be untrustworthy — and the failure mode
+  // of ignoring it is not a stale answer, it is a `POST` of an undeletable
+  // version onto a product that may already have had a perfectly good draft on
+  // the page we never fetched. Refusing costs the Manager one re-run; guessing
+  // costs an artifact nobody can remove.
+  //
+  // ⇒ This is deliberately a REFUSE and not a `throw new Error`: refusals carry
+  // a reason all the way to the Manager's row (`describeWriteTargetRefusal`)
+  // and state that nothing was sent, where a generic error reads as "lỗi không
+  // rõ" and leaves "did it write?" open (KB §32.11 ⑤).
+  if (!listing.complete) {
+    throw new WriteTargetRefused(
+      `không đọc được đầy đủ danh sách version của item trên App Store Connect ` +
+        `— đọc thiếu KHÔNG được coi là "item không có bản nháp", vì đoán sai ở ` +
+        `đây tạo ra một version VĨNH VIỄN không xoá được`,
+    );
+  }
+
+  const decision = pickWriteTargetVersion(listing.versions);
 
   if (decision.kind === "REFUSE") {
     throw new WriteTargetRefused(decision.reason);

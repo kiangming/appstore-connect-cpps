@@ -111,7 +111,22 @@ async function resolveInAppPurchaseVersionId(
   item: SubmitV2Item,
 ): Promise<ResolvedVersion> {
   const existing = await listInAppPurchaseVersions(creds, item.appleIapId);
-  const submittable = (existing.data ?? []).find((v) =>
+
+  // ⚠⚠ TWIN OF THE LOCALIZATION PATH, AND IT HAD THE SAME HOLE (CLAUDE.md P1 —
+  // when hardening one path, grep every sibling). The fallback below answers
+  // "nothing submittable here" by creating a version that has **no DELETE**. A
+  // list we could not finish reading must therefore never reach it: the item
+  // fails and the Manager re-runs, rather than accumulating an artifact whose
+  // only justification was a page we never fetched.
+  if (!existing.complete) {
+    throw new Error(
+      `${item.appleIapId}: không đọc được đầy đủ danh sách version trên App Store ` +
+        `Connect — dừng lại thay vì tạo version mới, vì đọc thiếu không có nghĩa ` +
+        `là item chưa có version nộp được (version đã tạo KHÔNG xoá được)`,
+    );
+  }
+
+  const submittable = existing.versions.find((v) =>
     SUBMITTABLE_VERSION_STATES.has(v.attributes.state),
   );
   if (submittable) {

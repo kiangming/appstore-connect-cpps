@@ -89,8 +89,11 @@ describe("pickWriteTargetVersion", () => {
 });
 
 describe("resolveWriteTargetVersion — POST happens only when it must", () => {
-  const mkDeps = (versions: InAppPurchaseVersion[]) => ({
-    readVersions: vi.fn().mockResolvedValue(versions),
+  // ⚠ `complete: true` IS SPELLED OUT IN THE HAPPY-PATH HELPER, not defaulted
+  // inside the module. A default would make "we could not finish reading" the
+  // silent case again — which is the bug this chunk removes.
+  const mkDeps = (versions: InAppPurchaseVersion[], complete = true) => ({
+    readVersions: vi.fn().mockResolvedValue({ versions, complete }),
     createVersion: vi.fn().mockResolvedValue("new-version"),
     onCreate: vi.fn(),
   });
@@ -149,6 +152,36 @@ describe("resolveWriteTargetVersion — POST happens only when it must", () => {
     const deps = mkDeps([v("a", "APPROVED")]);
     await resolveWriteTargetVersion("iap-1", deps);
     expect(deps.readVersions).toHaveBeenCalledTimes(1);
+  });
+
+  it("⚠⚠ complete:false ⇒ REFUSE, and createVersion is NEVER called", async () => {
+    // The fail-safe of chunk 0. An unfinished enumeration must not be read as
+    // "this item has no draft" — that sentence is answered by POSTing a version
+    // Apple provides no DELETE for, onto a product that may already have had a
+    // perfectly good draft on the page we never fetched.
+    const deps = mkDeps([], false);
+    await expect(resolveWriteTargetVersion("iap-1", deps)).rejects.toBeInstanceOf(
+      WriteTargetRefused,
+    );
+    expect(deps.createVersion).not.toHaveBeenCalled();
+  });
+
+  it("⚠ complete:false refuses even when the rows we DID read look like a clean CREATE", async () => {
+    // The dangerous shape: page 1 held only an APPROVED version, so the visible
+    // evidence says CREATE. The flag is the only thing standing between that
+    // and a permanent artifact.
+    const deps = mkDeps([v("a", "APPROVED")], false);
+    await expect(resolveWriteTargetVersion("iap-1", deps)).rejects.toThrow(
+      /không đọc được đầy đủ danh sách version/,
+    );
+    expect(deps.createVersion).not.toHaveBeenCalled();
+  });
+
+  it("⚠ the refusal names the consequence, so the row does not read as 'lỗi không rõ'", async () => {
+    const deps = mkDeps([], false);
+    await expect(resolveWriteTargetVersion("iap-1", deps)).rejects.toThrow(
+      /VĨNH VIỄN không xoá được/,
+    );
   });
 
   it("⚠ a read failure propagates and creates nothing", async () => {
