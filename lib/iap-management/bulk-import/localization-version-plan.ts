@@ -105,11 +105,37 @@ export interface SkippedLocale {
   label: string;
 }
 
+/**
+ * The rows a locale's decision was weighed against.
+ *
+ * ⚠⚠ FOR DISPLAY ONLY — **NEVER BUILD A PAYLOAD FROM THIS.** It exists so the
+ * preview can highlight WHICH field changed (name, description, or both)
+ * without forming a second opinion about whether the cell should be ticked.
+ * The value written to Apple is the file's text, byte for byte (Q5); anything
+ * sourced from here would be Apple's own text echoed back, which is a no-op at
+ * best and, on a locale the file meant to change, a silent revert.
+ *
+ * ⚠ It is deliberately NOT attached to `toWrite`. `resolveWriteOps` reads
+ * `toWrite` to construct PATCH bodies, and fields sitting on those objects are
+ * one autocomplete away from ending up in one.
+ */
+export interface LocaleComparison {
+  /** The APPROVED row this locale was compared against, when there was one. */
+  live?: VersionLocalization;
+  /** The pending draft's row, when there was one. */
+  pending?: VersionLocalization;
+}
+
 export interface LocalizationWritePlan {
   /** Locales whose content must reach Apple. */
   toWrite: DesiredLocalization[];
   /** Locales deliberately not written, each with WHY. */
   skipped: SkippedLocale[];
+  /**
+   * Per-locale rows the decision was made against. Display only — see
+   * `LocaleComparison`.
+   */
+  comparedAgainst: Record<string, LocaleComparison>;
   /**
    * ⭐ THE GATE ON CREATING A VERSION. False ⇒ the caller must not resolve a
    * write target, which in CA 1 means it must not `POST`. An unnecessary POST
@@ -162,11 +188,16 @@ export function planLocalizationWrites(args: {
 
   const toWrite: DesiredLocalization[] = [];
   const skipped: SkippedLocale[] = [];
+  const comparedAgainst: Record<string, LocaleComparison> = {};
 
   for (const d of args.desired) {
     const live = approvedByLocale.get(d.locale);
     const pending = draftByLocale.get(d.locale);
     const want = desiredAsContent(d);
+
+    // Recorded for EVERY desired locale, whatever the verdict — a cell that
+    // ends up ticked still has to show what it is changing FROM.
+    comparedAgainst[d.locale] = { live, pending };
 
     const matchesLive = live !== undefined && localizationContentEquals(want, toContent(live));
     const matchesPending =
@@ -201,7 +232,7 @@ export function planLocalizationWrites(args: {
     toWrite.push(d);
   }
 
-  return { toWrite, skipped, needsWrite: toWrite.length > 0 };
+  return { toWrite, skipped, comparedAgainst, needsWrite: toWrite.length > 0 };
 }
 
 export interface LocalizationWriteOps {
