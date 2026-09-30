@@ -47,6 +47,28 @@ export interface VersionLocalization {
   description: string;
 }
 
+/**
+ * Apple's wire shape → the row shape this module reasons about.
+ *
+ * ⚠ ONE COPY, AND IT LIVES WITH THE TYPE IT PRODUCES. Both readers need it
+ * (the baseline read and the write-target read), and a second copy is a second
+ * place where a renamed attribute silently becomes an empty string — which
+ * reads downstream as "Apple has no name for this locale".
+ */
+export function toVersionLocalizations(
+  rows: ReadonlyArray<{
+    id: string;
+    attributes?: { locale?: string; name?: string; description?: string };
+  }>,
+): VersionLocalization[] {
+  return rows.map((r) => ({
+    id: r.id,
+    locale: r.attributes?.locale ?? "",
+    name: r.attributes?.name ?? "",
+    description: r.attributes?.description ?? "",
+  }));
+}
+
 /** One locale's content as the import file states it. */
 export interface DesiredLocalization {
   locale: string;

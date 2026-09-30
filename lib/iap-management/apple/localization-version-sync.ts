@@ -34,7 +34,6 @@
  */
 import type { AscCredentials } from "@/lib/asc-jwt";
 import {
-  listInAppPurchaseVersions,
   listLocalizationsForVersion,
   createInAppPurchaseVersion,
   updateInAppPurchaseLocalizationV2,
@@ -45,17 +44,15 @@ import {
   resolveWriteTargetVersion,
   WriteTargetRefused,
 } from "./write-target-version";
+import { readVersionBaseline } from "./version-baseline";
 import {
   planLocalizationWrites,
   resolveWriteOps,
   describeWriteTargetRefusal,
+  toVersionLocalizations,
   type DesiredLocalization,
   type SkippedLocale,
-  type VersionLocalization,
 } from "../bulk-import/localization-version-plan";
-
-const APPROVED_STATES = new Set(["APPROVED", "ACCEPTED"]);
-const DRAFT_STATE = "PREPARE_FOR_SUBMISSION";
 
 export interface LocalizationSyncFailure {
   locale: string;
@@ -101,17 +98,6 @@ export interface LocalizationVersionSyncArgs {
   log: (message: string, level?: "INFO" | "WARN") => Promise<void> | void;
 }
 
-function toRows(
-  rows: ReadonlyArray<{ id: string; attributes?: { locale?: string; name?: string; description?: string } }>,
-): VersionLocalization[] {
-  return rows.map((r) => ({
-    id: r.id,
-    locale: r.attributes?.locale ?? "",
-    name: r.attributes?.name ?? "",
-    description: r.attributes?.description ?? "",
-  }));
-}
-
 export async function syncLocalizationsToVersion(
   args: LocalizationVersionSyncArgs,
 ): Promise<LocalizationVersionSyncResult> {
@@ -125,21 +111,16 @@ export async function syncLocalizationsToVersion(
   // ⚠ Two-stage on purpose: the V2 relationship pointer truncates at 10 IDs
   // (KB §4.1 LANDMARK) and a short read here would look like "this locale is
   // not on Apple", turning a PATCH into a POST.
-  const listing = await run(() => listInAppPurchaseVersions(creds, appleIapId));
-  const versions = listing.versions;
-
-  const approvedVersion = versions.find((v) => APPROVED_STATES.has(v.attributes?.state));
-  const draftVersions = versions.filter((v) => v.attributes?.state === DRAFT_STATE);
-
-  const approved = approvedVersion
-    ? toRows((await run(() => listLocalizationsForVersion(creds, approvedVersion.id))).data ?? [])
-    : [];
-  // ⚠ Only read a draft when there is exactly one. With two, O1 refuses anyway,
-  // and reading "the first" would seed the comparison from a row nobody chose.
-  const draft =
-    draftVersions.length === 1
-      ? toRows((await run(() => listLocalizationsForVersion(creds, draftVersions[0].id))).data ?? [])
-      : [];
+  //
+  // ⚠⚠ THE READ LIVES IN `version-baseline.ts` NOW, AND THE PREVIEW ROUTE CALLS
+  // THE SAME FUNCTION. Which version counts as "the one customers see" is a
+  // rule that the preview and the write MUST agree on — a preview that ticks a
+  // cell the write then skips (or the reverse) is worse than no preview. One
+  // function, not two that have to be kept in step (CLAUDE.md P1).
+  const baseline = await readVersionBaseline({ creds, appleIapId, run });
+  const listing = baseline.listing;
+  const approved = baseline.approved;
+  const draft = baseline.draft;
 
   // ── Step 2 — does anything need writing AT ALL? ─────────────────────────
   const plan = planLocalizationWrites({ approved, draft, desired });
@@ -223,10 +204,10 @@ export async function syncLocalizationsToVersion(
   // ids (KB §32.2), so its rows must be re-read — the approved ids are wrong
   // here, and using them is exactly the 409 this arc removes.
   const targetRows = target.created
-    ? toRows((await run(() => listLocalizationsForVersion(creds, target.versionId))).data ?? [])
+    ? toVersionLocalizations((await run(() => listLocalizationsForVersion(creds, target.versionId))).data ?? [])
     : draft.length > 0
       ? draft
-      : toRows((await run(() => listLocalizationsForVersion(creds, target.versionId))).data ?? []);
+      : toVersionLocalizations((await run(() => listLocalizationsForVersion(creds, target.versionId))).data ?? []);
 
   const ops = resolveWriteOps(plan.toWrite, targetRows);
 
