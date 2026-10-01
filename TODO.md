@@ -80,7 +80,36 @@ Thiết kế + mockup: `docs/iap-management/design-bulk-import-localization-step
   - ⚠ **Quy tắc fail-safe đã cài và ghim**: không đọc được ⇒ **UNTICK** + nhãn
     riêng. `UNREADABLE` **không** phải `SkipReason` thứ tư — nó là trục khác
     (KB §34.4).
-- [ ] [LOCSYNC-duplicate-locale] ⚠⚠ **BUG TIỀM TÀNG, độc lập với mọi tính năng mới.** `localization-sync.ts:94` dựng `new Map(existing.map((e) => [e.locale, e]))` ⇒ **khoá trùng thì phần tử SAU ĐÈ phần tử TRƯỚC**, và `route.ts:1388` truyền **toàn bộ** danh sách Apple trả về **không dedup**. Item có **hai** dòng cùng locale (Approved + Prepare for Submission — hình dạng đã quan sát, KB §28.6/§28.7) ⇒ tool PATCH **dòng Apple liệt kê SAU CÙNG**, mà thứ tự đó **không có hợp đồng nào bảo đảm**. Trúng bản pending thì chạy, trúng bản ACTIVE thì **409**. ⚠ Manager đã chạy lại **3 lần** trong sự cố 2026-09-22 ⇒ lớp item này **chắc chắn đã tồn tại**. ⇒ Chọn dòng **có chủ đích theo `state`**, đừng để `Map` chọn hộ. Chi tiết: KB §28.11.a.
+- [x] [LOCSYNC-duplicate-locale] ✅ **ĐÓNG 2026-10-01 — tag đã MỒ CÔI, không
+  còn đối tượng.** Nó mô tả `localization-sync.ts:94` dựng
+  `new Map(existing.map((e) => [e.locale, e]))` trên danh sách Apple **không
+  dedup** từ `route.ts:1388` ⇒ item có hai dòng cùng locale thì `Map` chọn hộ
+  dòng cuối. Census lại toàn repo:
+  - ⛔ **Module và planner được trích dẫn đã bị XOÁ** ở `[LOC-V2-model]` O3
+    (KB §32.12). `localization-sync.ts` không tồn tại; `planLocalizationSync`
+    chỉ còn trong **văn xuôi** của hai docstring. `route.ts:1388` không còn.
+  - ⚠ **Hình dạng Map-theo-locale VẪN CÒN 5 chỗ** — nhưng **mọi** chỗ đều được
+    nạp từ **rows của MỘT version** (`listLocalizationsForVersion`) hoặc từ phía
+    file/DB vốn đã khoá theo locale:
+    `localization-version-sync.ts:250` · `localization-version-plan.ts:186,187,267`
+    · `localization-cell-default.ts:146`. Một version **không thể** có hai dòng
+    cùng locale ⇒ không có đầu vào trùng để `Map` phải chọn hộ.
+  - ⚠ Đã soát cả lớp **first-wins** (`.locale ===` / `.find`), không chỉ
+    last-wins: các hit phía Apple IAP đều nằm trên `it.localizations` — dữ liệu
+    **từ file**, không phải từ Apple.
+  - ⇒ **Nguyên nhân gốc là mô hình, không phải dòng code**: V1 đọc localization
+    **phẳng qua mọi version** nên một locale trả về hai dòng (đo được:
+    `dupes=[vi x2]`, KB §33.1). V2 đọc **theo version**, nên tập đọc không bao
+    giờ chứa hai dòng cùng locale.
+  - ⚠⚠ **KHẨU SÚNG CÒN NẠP ĐẠN, ghi lại ở đây để không mất kiến thức:**
+    `client.ts:240 listInAppPurchaseLocalizations`
+    (`GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations`) — **chính** endpoint
+    phẳng đã đo ra `vi x2` — vẫn còn trong client và hiện có **0 call site sản
+    phẩm**. Ai gọi lại nó **và** khoá kết quả theo locale sẽ làm bug này sống
+    lại. Không gỡ trong arc này (ngoài phạm vi, và nó không hại khi không ai
+    gọi); nêu ra chứ không giấu.
+  ⚠ Lý do đóng thay vì để mở: **một tag trỏ vào file đã xoá là citation chết** —
+  người sau sẽ đi tìm một bug không tồn tại, rồi mất niềm tin vào cả danh sách.
 - [ ] [LOC-STATE-PROBE-remove] ⏳ **GỠ instrumentation sau khi nó trả lời.** `lib/iap-management/bulk-import/localization-state-probe.ts` + test + call site trong `execute/route.ts`. Quy trình: chạy 1 import thật (OVERWRITE, app có item live) → `grep LOC-STATE-PROBE` log Railway → ghi kết quả vào KB **§28.11.b** + điền bảng **§30.1** → XOÁ. Tiền lệ: dòng DEBUG 429-header của arc key-pool. ⚠ Log "cho có thông tin" giữ mãi là cách log trở nên không đọc được.
 - [ ] [LOC-ACTIVE-ui-warning] ⏸ **Cảnh báo UI cho dòng LIVE** — Manager chốt (A)+(C) 2026-09-23: vẫn gửi mọi `toPatch` (Apple là trọng tài, KHÔNG skip), **nhưng** cảnh báo ở step Localization.
   ⚠⚠ **GIÁ TRỊ CẢNH BÁO ĐÃ ĐỔI (2026-09-24): canh `APPROVED`, KHÔNG phải `ACTIVE`.**
