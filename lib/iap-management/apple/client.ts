@@ -237,16 +237,32 @@ export async function deleteInAppPurchase(
 
 // ─── Localizations ───────────────────────────────────────────────────────────
 
-export async function listInAppPurchaseLocalizations(
-  creds: AscCredentials,
-  iapId: string,
-): Promise<AscApiResponse<InAppPurchaseLocalization[]>> {
-  return iapFetch<AscApiResponse<InAppPurchaseLocalization[]>>(
-    creds,
-    "GET",
-    `/v2/inAppPurchases/${iapId}/inAppPurchaseLocalizations?limit=200`,
-  );
-}
+/*
+ * ⛔ `listInAppPurchaseLocalizations` WAS HERE AND IS GONE ON PURPOSE.
+ *
+ * `GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations` is the V1-shaped
+ * read: it returns a locale's rows FLATTENED ACROSS EVERY VERSION. That is the
+ * endpoint whose probe measured `total=2 rows=[vi=PREPARE_FOR_SUBMISSION,
+ * vi=APPROVED] dupes=[vi x2]` (KB §33.1) — i.e. the source of the duplicate
+ * locale that `[LOCSYNC-duplicate-locale]` was about.
+ *
+ * Under the V2 model, localizations are read PER VERSION
+ * (`listLocalizationsForVersion`), so a read set can never contain two rows for
+ * one locale. Keeping this function would leave the only input that can
+ * reproduce that bug sitting one import away — and `[LOC-V2-model]` already
+ * settled the principle: **a dead module that can still be imported is a module
+ * that will come back to life** (KB §32.12, where `localization-sync.ts` and
+ * `localization-state.ts` were deleted rather than left unused).
+ *
+ * ⚠ Apple deprecates it too, but ONLY on the doc-site — *"This relationship is
+ * deprecated"*, read from `metadata.platforms[].deprecatedAt`. OAS 4.4.1 does
+ * **not** carry a `deprecated` flag for it (verified 2026-10-01: the operation
+ * object at `#/paths/~1v2~1inAppPurchases~1{id}~1inAppPurchaseLocalizations/get`
+ * has keys `operationId, parameters, responses, tags` and nothing else). That
+ * asymmetry is itself a landmark — KB §31.6.
+ *
+ * Absence is enforced by `version-create-chokepoint.structural.test.ts`.
+ */
 
 export async function createInAppPurchaseLocalization(
   creds: AscCredentials,

@@ -18,6 +18,22 @@ mô hình thật của Apple đã được đo chứ không suy. Toàn bộ hồ
 
 **Còn mở, có chủ đích:**
 
+- [ ] [V1-LOC-CLIENT-dead-pair] ⚠ **PHÁT HIỆN 2026-10-01 khi xoá
+  `listInAppPurchaseLocalizations` — HAI hàm anh em cũng đã chết.**
+  `updateInAppPurchaseLocalization` và `deleteInAppPurchaseLocalization`
+  (`client.ts`) đều có **0 call site sản phẩm** (grep loại test + dòng khai
+  báo). Chúng là bản V1 mà `syncLocalizationsToVersion` đã thay bằng
+  `*V2`. ⚠⚠ Và `updateInAppPurchaseLocalization` **chính là** hàm sinh ra 409
+  gốc: `PATCH /v1/inAppPurchaseLocalizations/{id}` vào dòng của bản APPROVED.
+  ⇒ **Đề xuất xoá cả hai**, cùng lý do đã áp cho hàm thứ nhất (*module chết mà
+  import được là module sẽ sống lại*, KB §32.12), và ghim absence bằng
+  `version-create-chokepoint.structural.test.ts` thay vì chỉ cấm **gọi**.
+  ⚠ **KHÔNG xoá trong commit này** — chỉ thị nêu đích danh một hàm, mở rộng ra
+  ba là tự ý nới phạm vi. Nêu ra để Manager quyết.
+  ⚠ `createInAppPurchaseLocalization` thì **CÒN SỐNG** (2 call site:
+  `create-on-apple/route.ts:290`, `execute/route.ts:1013`) — đó là
+  `[LOCV2-create-path]` bên dưới, đừng gộp.
+
 - [ ] [LOCV2-create-path] ⏳ **Đường CREATE của bulk import vẫn dùng V1.**
   `execute/route.ts` `createInAppPurchaseLocalization` (quan hệ
   `inAppPurchaseV2`) — endpoint **deprecated @ 4.4.1** (KB §31.6). Cố ý để lại:
@@ -42,6 +58,12 @@ mô hình thật của Apple đã được đo chứ không suy. Toàn bộ hồ
     `stash pop`.
   ⚠ Và **đừng chạy `lint`/`build` song song với suite khi đang đo flake** —
   lượt đầu của chunk 0 tự tạo nhiễu kiểu đó và cho ra một con số phải vứt đi.
+  ⚠⚠ **BƯỚC 3 CHỈ HỢP LỆ KHI MÁY RẢNH — kiểm trước, đừng tin là rảnh.**
+  2026-10-01: chạy bước 3 trong lúc một `next build` còn chạy nền ⇒ **8/10 file
+  đỏ KHI CHẠY RIÊNG**, trông y hệt một hồi quy thật. Chờ build xong
+  (`ps aux | grep "[n]ext build"` ⇒ 0) rồi chạy lại: **10/10 xanh**. ⇒ Trước
+  bước 3, xác nhận không còn tiến trình nặng nào; nếu không, bước 3 đo đúng cái
+  nó sinh ra để loại trừ.
 - [x] [BULKIMPORT-loc-compare-apple] ✅ **ĐÃ SHIP 2026-10-01** — C0→C5. Hồ sơ
   đầy đủ: **KB §34** + **P45–P47**. Ước tính "~1 request/item" trong bản cũ của
   mục này **SAI** — thực tế **2–3** (đo: ~2,33), và cả ba đều bắt buộc để dựng
@@ -110,13 +132,32 @@ Thiết kế + mockup: `docs/iap-management/design-bulk-import-localization-step
     gọi); nêu ra chứ không giấu.
   ⚠ Lý do đóng thay vì để mở: **một tag trỏ vào file đã xoá là citation chết** —
   người sau sẽ đi tìm một bug không tồn tại, rồi mất niềm tin vào cả danh sách.
-- [ ] [LOC-STATE-PROBE-remove] ⏳ **GỠ instrumentation sau khi nó trả lời.** `lib/iap-management/bulk-import/localization-state-probe.ts` + test + call site trong `execute/route.ts`. Quy trình: chạy 1 import thật (OVERWRITE, app có item live) → `grep LOC-STATE-PROBE` log Railway → ghi kết quả vào KB **§28.11.b** + điền bảng **§30.1** → XOÁ. Tiền lệ: dòng DEBUG 429-header của arc key-pool. ⚠ Log "cho có thông tin" giữ mãi là cách log trở nên không đọc được.
-- [ ] [LOC-ACTIVE-ui-warning] ⏸ **Cảnh báo UI cho dòng LIVE** — Manager chốt (A)+(C) 2026-09-23: vẫn gửi mọi `toPatch` (Apple là trọng tài, KHÔNG skip), **nhưng** cảnh báo ở step Localization.
-  ⚠⚠ **GIÁ TRỊ CẢNH BÁO ĐÃ ĐỔI (2026-09-24): canh `APPROVED`, KHÔNG phải `ACTIVE`.**
-  **Lý do, đọc kỹ — đây là cái bẫy chính của việc này:** dòng live khi **ĐỌC** trả `APPROVED` (ảnh View Detail, KB §30.1). `ACTIVE` chỉ xuất hiện trong **thông điệp lỗi của đường GHI**, và **chưa từng** thấy trên đường đọc. ⇒ Một guard `if (state === "ACTIVE")` đặt trên dữ liệu đọc sẽ **KHÔNG BAO GIỜ KHỚP**: tính năng chạy, không crash, không cảnh báo gì cả — và **không ai biết nó chết**. Xem KB **§29.4**.
-  ⚠ **KHÔNG cảnh báo** cho `WAITING_FOR_REVIEW` / `REJECTED` (CHƯA BIẾT) — cảnh báo sai tệ hơn không cảnh báo.
-  ⚠ **Câu chữ phải trung thực với mức đã đo:** `APPROVED` ⇒ *"dòng này là bản người mua đang thấy — sửa nhiều khả năng bị Apple từ chối và cần tạo version mới"*. **Đừng** viết "sẽ bị từ chối" — PATCH lên `APPROVED` chưa ai đo (§30.3 còn hai ứng viên).
-  ⏳ **CHẶN BỞI**: (1) probe xác nhận endpoint bulk import mang `state` (§28.11.b câu 3); (2) phân xử §30.3 bằng một lần import (§30.6).
+- [x] [LOC-STATE-PROBE-remove] ✅ **ĐÓNG 2026-10-01 — nghĩa vụ đã được thực
+  hiện ở `[LOC-V2-model]` O5, tag chỉ chưa được tick.** Census: file
+  `lib/iap-management/bulk-import/localization-state-probe.ts` **không tồn
+  tại**; `grep -rn "LOC-STATE-PROBE\|localization-state-probe"` trên
+  `lib/ app/ components/` ⇒ **0 hit**. Số liệu đã chuyển vào **KB §33.1**
+  TRƯỚC khi code biến mất — đúng nửa (2) của khuôn gỡ probe (§33.4), nửa mà bỏ
+  đi thì việc gỡ thành *xoá bằng chứng*.
+- [x] [LOC-ACTIVE-ui-warning] ✅ **ĐÓNG 2026-10-01 — đã ship ở C4, nhưng bằng
+  một TỪ VỰNG KHÁC, nên ghi rõ kẻo đọc nhầm là chưa làm.**
+  - Yêu cầu gốc (Manager (A)+(C), 2026-09-23): vẫn gửi mọi `toPatch`, **nhưng
+    cảnh báo ở step Localization**. Đã có: nhãn **"đang bán"** mức ITEM
+    (`LocalizationStep.tsx:318-320`) + dòng confirm dialog *"Trong đó N item sẽ
+    tạo version mới trên App Store Connect ⇒ phải duyệt lại"*
+    (`BulkImportWizard.tsx:1148`, ẩn khi N=0).
+  - ⚠ **Hai điều kiện chặn của tag đều đã hết hiệu lực, không phải đã thoả:**
+    (1) *"probe xác nhận endpoint bulk import mang `state`"* — probe đã trả lời
+    **CÓ** (§33.1) rồi câu hỏi **thành không liên quan**: V2 không có `state`
+    trên localization. (2) *"phân xử §30.3"* — đã đóng bằng capture DevTools
+    (§32.1), nhánh (A) đúng.
+  - ⚠ Và cảnh báo nay canh **đúng thứ khác** so với tag: tag dặn canh
+    `APPROVED` chứ đừng canh `ACTIVE`. Bản ship canh `hasApproved` ở mức
+    **VERSION** — tức cùng dữ kiện, đọc ở đúng tầng mô hình V2. Chuỗi `ACTIVE`
+    nay bị **cấm hiển thị** bằng structural test (C4).
+  - ⇒ Câu chữ cũng không còn phải dè dặt theo cách tag yêu cầu: không nói "sẽ
+    bị từ chối" mà nói **hệ quả đã đo** — tạo version mới ⇒ duyệt lại ⇒ không
+    xoá được.
 - [ ] [CLICKOUTSIDE-3-copies] ⚠ **click-outside đã có BA bản sao — rút hook chung, ĐỪNG viết bản thứ tư.** `components/layout/AccountSwitcher.tsx:42-46` · `components/cpp/CppList.tsx:488-492` · `components/google-iap-management/layout/GoogleAccountSwitcher.tsx:59-63`. Cả ba cùng một hình dạng (`mousedown` + `ref.contains(e.target)`). Arc này cần cái thứ tư cho popover *detail* ⇒ đúng lúc gộp. ⚠ Google là module khác — gộp phải giữ được cả hai, hoặc để Google dùng bản sao của nó và chỉ gộp hai bản Apple. Cần census riêng trước khi động vào file Google.
 
 ### ⚠ Bug CÓ SẴN, sửa kèm — KHÔNG phải hệ quả của arc

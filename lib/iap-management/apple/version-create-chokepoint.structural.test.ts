@@ -147,7 +147,6 @@ describe("creating an IAP version is a single choke point", () => {
       for (const v1 of [
         "updateInAppPurchaseLocalization(",
         "deleteInAppPurchaseLocalization(",
-        "listInAppPurchaseLocalizations(",
       ]) {
         expect(src, `${rel} must not use the V1 localization client (${v1})`).not.toContain(v1);
       }
@@ -162,5 +161,22 @@ describe("creating an IAP version is a single choke point", () => {
       /localization-sync\.ts$|apple\/localization-state\.ts$/.test(f),
     );
     expect(stale).toEqual([]);
+  });
+
+  it("⛔⛔ the FLATTENED localization read does not exist — not 'is unused'", () => {
+    // `GET /v2/inAppPurchases/{id}/inAppPurchaseLocalizations` returns a
+    // locale's rows across EVERY version; it is where `dupes=[vi x2]` was
+    // measured (KB §33.1) and therefore the only input that can resurrect
+    // `[LOCSYNC-duplicate-locale]`. Under V2 everything reads per-version, so
+    // this has no legitimate caller — and "no caller today" is exactly the
+    // state a function is in right before someone gives it one.
+    //
+    // ⚠ Asserted on the DECLARATION, not on call sites: the lesson from
+    // `localization-state.ts` is that unused ≠ gone (KB §32.12).
+    for (const file of ["lib", "app", "components"].flatMap((d) => walk(join(ROOT, d)))) {
+      const code = stripComments(readFileSync(file, "utf8"));
+      expect(code, `${file.slice(ROOT.length + 1)} must not declare or call it`)
+        .not.toMatch(/\blistInAppPurchaseLocalizations\b/);
+    }
   });
 });

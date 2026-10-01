@@ -8827,6 +8827,13 @@ Bản cũ: *xanh khi chạy riêng + full suite chỉ đỏ do timeout*. Bổ su
 đầu của chunk 0 tự tạo nhiễu đúng kiểu đó và cho ra một con số (14 file/23 đỏ)
 phải vứt đi.
 
+⚠⚠ **Và bước 3 chỉ hợp lệ khi MÁY RẢNH.** Lần dọn tồn đọng sau khi arc đóng,
+bước 3 được chạy trong lúc một `next build` còn chạy nền ⇒ **8/10 file đỏ KHI
+CHẠY RIÊNG** — trông y hệt một hồi quy thật, và suýt bị báo cáo như vậy. Chờ
+build xong (`ps aux | grep "[n]ext build"` ⇒ 0) rồi chạy lại: **10/10 xanh**.
+⇒ Bước 3 mà chạy trên máy bận thì **đo đúng cái nó sinh ra để loại trừ**. Kiểm
+tiến trình trước, đừng tin là rảnh — kể cả khi chính mình vừa viết ra luật đó.
+
 ### 34.7 Cái KHÔNG làm, có chủ đích
 
 - **Tool vẫn không tự submit review.** Dừng ở version `PREPARE_FOR_SUBMISSION`.
