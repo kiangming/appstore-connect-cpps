@@ -69,6 +69,8 @@ import {
 import { computeWillSubmitCount } from "@/lib/iap-management/bulk-import/will-submit";
 import {
   buildCellDefaults,
+  itemWillCreateVersion,
+  type CellDefault,
   type ItemAppleState,
 } from "@/lib/iap-management/bulk-import/localization-cell-default";
 import { acquireSlot, releaseSlot } from "@/lib/iap-management/client-fetch-queue";
@@ -325,6 +327,20 @@ export function BulkImportWizard({
   const [itemBaselines, setItemBaselines] = useState<
     Record<string, { state: ItemAppleState; hasApproved: boolean; hasDraft: boolean }>
   >({});
+  /**
+   * productId → locale → the cell's verdict.
+   *
+   * ⚠ COMPUTED ONCE, IN `settle`, AND REUSED. The seed needs the tick flags and
+   * the table needs the sentences — the same `buildCellDefaults` result answers
+   * both. Calling it a second time where the table renders would open the exact
+   * gap this arc keeps closing: two computations that agree until one of them
+   * is edited.
+   */
+  const [cellDefaults, setCellDefaults] = useState<
+    Record<string, Record<string, CellDefault>>
+  >({});
+  /** productId → locales the planner would actually write (for the Q-F count). */
+  const [writeLocales, setWriteLocales] = useState<Record<string, string[]>>({});
   /** `{done,total}` while a baseline pass is running; null when idle. */
   const [baselineProgress, setBaselineProgress] = useState<{
     done: number;
@@ -349,6 +365,7 @@ export function BulkImportWizard({
   const [locConfirm, setLocConfirm] = useState<{
     willProcess: number;
     willSkip: number;
+    willCreateVersion: number;
   } | null>(null);
   /**
    * SC7 — the batch's territory selection. ONE selection for every row: the
@@ -525,7 +542,11 @@ export function BulkImportWizard({
     if (step === STEP.LOCALIZATION) {
       const counts = countLocalizationCells(parsed?.items ?? [], localizationSelection);
       if (counts.total > 0) {
-        setLocConfirm({ willProcess: counts.ticked, willSkip: counts.total - counts.ticked });
+        setLocConfirm({
+          willProcess: counts.ticked,
+          willSkip: counts.total - counts.ticked,
+          willCreateVersion: willCreateVersionCount,
+        });
         return;
       }
     }
@@ -634,11 +655,22 @@ export function BulkImportWizard({
         ...prev,
         [productId]: { state, hasApproved, hasDraft },
       }));
+      const defaults = buildCellDefaults(item.localizations, state);
+      setCellDefaults((prev) => ({
+        ...prev,
+        [productId]: Object.fromEntries(defaults.map((d) => [d.locale, d.default])),
+      }));
+      // ⚠ "Would be WRITTEN", not "is ticked". A cell ticked by hand that the
+      // planner will skip creates nothing; a locale Apple has never seen is not
+      // "different" but still forces a version. Both distinctions live in the
+      // planner, so the Q-F count reads the planner's answer (Manager, Q-F).
+      setWriteLocales((prev) => ({
+        ...prev,
+        [productId]: defaults.filter((d) => d.default.tick).map((d) => d.locale),
+      }));
       // ⚠ Hand edits win. See `touchedRef`.
       if (touchedRef.current.has(productId)) return;
-      const ticked = buildCellDefaults(item.localizations, state)
-        .filter((c) => c.default.tick)
-        .map((c) => c.locale);
+      const ticked = defaults.filter((c) => c.default.tick).map((c) => c.locale);
       setLocalizationSelection((prev) => ({
         ...prev,
         selected: { ...prev.selected, [productId]: ticked },
@@ -725,6 +757,49 @@ export function BulkImportWizard({
     }
     setLocalizationSelection(next);
   }
+
+  /**
+   * ⭐ Q-F — how many ITEMS this run will make Apple create a new version for.
+   *
+   * ⚠ ITEMS, NOT CELLS, and the Manager said so explicitly. One item gets ONE
+   * version however many of its locales are ticked; counting cells overstates
+   * by exactly the locale count, on a warning about something that has no
+   * DELETE. The three conditions (live · no draft · at least one locale the
+   * PLANNER would write) live in `itemWillCreateVersion` — the UI must not
+   * re-derive them, because the natural re-derivation ("differs from what is
+   * live") silently drops every add-a-locale row.
+   */
+  const willCreateVersionCount = useMemo(() => {
+    if (localizationSelection.ignoreAll) return 0;
+    let n = 0;
+    for (const [productId, b] of Object.entries(itemBaselines)) {
+      const item = parsed?.items.find((i) => i.product_id === productId);
+      if (!item) continue;
+      const ticked =
+        localizationSelection.selected[productId] ??
+        item.localizations.map((l) => l.locale);
+      if (
+        itemWillCreateVersion({
+          hasApproved: b.hasApproved,
+          hasDraft: b.hasDraft,
+          writeLocales: writeLocales[productId] ?? [],
+          tickedLocales: ticked,
+        })
+      ) {
+        n++;
+      }
+    }
+    return n;
+  }, [itemBaselines, writeLocales, localizationSelection, parsed]);
+
+  /** productId → item is LIVE on Apple. Replaces the mockup's dead ACTIVE pill. */
+  const liveItems = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(itemBaselines).map(([pid, b]) => [pid, b.hasApproved]),
+      ),
+    [itemBaselines],
+  );
 
   /** Items whose Apple state could not be read — surfaced, never silent. */
   const unreadableItemCount = useMemo(
@@ -1014,6 +1089,8 @@ export function BulkImportWizard({
             items={parsed.items}
             value={localizationSelection}
             onChange={handleLocalizationChange}
+            cellDefaults={cellDefaults}
+            liveItems={liveItems}
           />
         </>
       )}
@@ -1053,6 +1130,28 @@ export function BulkImportWizard({
                   {locConfirm.willSkip}
                 </span>
               </div>
+              {/* ⚠ HIDDEN AT ZERO, ON PURPOSE (Manager, Q-F). "0 item sẽ tạo
+                  version mới" is noise: it occupies the place a real warning
+                  would, and a reader who sees that line every run stops reading
+                  it on the run where it says 7. */}
+              {locConfirm.willCreateVersion > 0 && (
+                <div className="flex items-baseline justify-between gap-4 pt-2 border-t border-slate-200 dark:border-slate-700">
+                  <span className="text-amber-800 dark:text-amber-300">
+                    Trong đó{" "}
+                    <strong>{locConfirm.willCreateVersion} item</strong> sẽ tạo
+                    version mới trên App Store Connect ⇒ phải duyệt lại
+                    <span className="block text-[10px] text-amber-700/80 dark:text-amber-400/80">
+                      version đã tạo KHÔNG xoá được
+                    </span>
+                  </span>
+                  <span
+                    data-testid="localization-confirm-new-version"
+                    className="text-base font-semibold text-amber-700 dark:text-amber-300"
+                  >
+                    {locConfirm.willCreateVersion}
+                  </span>
+                </div>
+              )}
             </div>
             <div className="mt-5 flex justify-end gap-2">
               <button

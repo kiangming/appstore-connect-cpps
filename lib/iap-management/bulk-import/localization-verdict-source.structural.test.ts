@@ -140,6 +140,36 @@ describe("the localization verdict has a single source", () => {
     expect(mapper).not.toMatch(/\blocalizationContentEquals\b/);
   });
 
+  it("⛔⛔ no wizard file RENDERS an `ACTIVE` pill — it would never fire", () => {
+    // ⚠ WHY A GUARD FOR SOMETHING THAT WAS NEVER SHIPPED. The mockup drew this
+    // pill and the design doc specified it, so it is the single most likely
+    // thing for a later pass to "finish". Under the real model a localization
+    // has NO state — the lifecycle belongs to the VERSION — and `ACTIVE`
+    // appears only in Apple's WRITE-path error text, never on a read. A pill
+    // driven by it renders for nobody, ever: no crash, no warning, no feature,
+    // and no way to notice (KB §29.4). The honest fact is "this item is
+    // selling", which is what `liveItems` carries.
+    //
+    // ⚠ Prose is exempt — comments are stripped first — because the history of
+    // the 409 is worth keeping written down.
+    for (const file of walk(WIZARD_DIR)) {
+      const code = stripComments(readFileSync(file, "utf8"));
+      expect(code, `${file.slice(ROOT.length + 1)} must not render an ACTIVE pill`)
+        .not.toMatch(/\bACTIVE\b/);
+    }
+  });
+
+  it("⭐ the guard is no longer half-empty — the step DOES consume the verdict", () => {
+    // At C2 the "no wizard file compares" half matched nothing, because the
+    // wizard imported none of this. Asserting the consumption exists is what
+    // stops that half from passing vacuously forever.
+    const step = stripComments(
+      readFileSync(join(WIZARD_DIR, "LocalizationStep.tsx"), "utf8"),
+    );
+    expect(step).toMatch(/cellDefaults/);
+    expect(step).toMatch(/verdict\.label/);
+  });
+
   it("⚠ the three SkipReason members stay three — 'unreadable' is a different axis", () => {
     const plan = stripComments(
       readFileSync(join(__dirname, "localization-version-plan.ts"), "utf8"),

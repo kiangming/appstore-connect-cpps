@@ -147,12 +147,12 @@
   Những thứ dưới đây <strong>ĐÃ VẼ nhưng ĐỂ DÀNH</strong>, chuyển backlog
   <code>[BULKIMPORT-loc-compare-apple]</code> — <strong>giữ lại trong mockup, KHÔNG làm trong arc này:</strong>
   <ul style="margin:6px 0 0;padding-left:20px">
-    <li><strong>4 trạng thái ô</strong> — pill <em>giống hệt Apple</em> / <em>đổi Display Name</em> /
-        <em>đổi cả hai</em> / <em>ACTIVE</em> / <em>chưa có trên Apple</em></li>
+    <li><strong>6 trạng thái ô</strong> — <em>3 câu skip khác nhau</em> / <em>đổi Display Name</em> /
+        <em>đổi cả hai</em> / <em>chưa có trên Apple</em> / <em>không đọc được trạng thái</em></li>
     <li><strong>"ô giống hệt Apple ⇒ mặc định untick"</strong> + hàng mờ <code>untick-row</code></li>
     <li><strong>Mũi tên <code>cũ → mới</code> và nền amber</strong> ở dòng <code>Name</code>/<code>Desc</code> —
         cả hai cần so Apple</li>
-    <li>Dòng cảnh báo <strong>ACTIVE</strong> trong ô, và dòng <em>"Trong đó ACTIVE"</em> ở confirm dialog</li>
+    <li>Dấu <strong>đang bán</strong> ở mức ITEM, và dòng <em>"Trong đó N item sẽ tạo version mới"</em> ở confirm dialog (ẩn khi N=0)</li>
     <li>Các con số <em>"4 ô giống Apple đã tự untick"</em> ở thanh trên bảng</li>
   </ul>
   <br>
@@ -195,6 +195,14 @@
   <strong>⏸ Bảng dưới vẽ theo phạm vi CŨ.</strong> Arc này giữ <strong>hai dòng có nhãn</strong>
   <code>Name</code>/<code>Desc</code> và bố cục bảng; <strong>bỏ</strong> pill trạng thái, mũi tên
   <code>→</code>, nền amber, hàng mờ tự-untick và dòng cảnh báo ACTIVE. Mặc định <strong>TICK-ALL</strong>.
+  <br><br>⚠⚠ <strong>HẬU KỲ 2026-10-01 — arc <code>[BULKIMPORT-loc-compare-apple]</code> đã SHIP phần "để dành", và từ vựng đổi.</strong>
+  Pill <code>ACTIVE</code> trong bản vẽ gốc <strong>đã bị xoá khỏi thiết kế</strong>: dưới mô hình V2, localization <strong>không có</strong>
+  <code>state</code> — vòng đời thuộc về VERSION — và <code>ACTIVE</code> chỉ xuất hiện trong thông điệp lỗi của đường GHI, chưa từng thấy
+  trên đường đọc. Một pill dựng trên nó sẽ <strong>không bao giờ render</strong> (KB §29.4). Thay bằng dấu <strong>đang bán</strong> ở mức
+  <strong>ITEM</strong> (item có version <code>APPROVED</code>) — dữ kiện quan sát được. Và <strong>4 trạng thái ô thành 6</strong>: ba câu
+  skip phân biệt (giống bản đang bán / bản nháp đã mang thay đổi này / giống bản đang bán nhưng nháp mang nội dung khác), cộng
+  <em>chưa có trên Apple</em> và <em>không đọc được trạng thái trên Apple</em>. Ghim bằng structural test
+  <code>localization-verdict-source.structural.test.ts</code>.
 </div>
 <div class="note" style="opacity:.6">
   ⏸ <em>để dành</em> — ⭐ <strong>Q3 đã bật: ô GIỐNG HỆT Apple ⇒ MẶC ĐỊNH UNTICK.</strong> Đây là thứ giải đúng ca của
@@ -225,20 +233,20 @@
       </tr>
     </thead>
     <tbody>
-      <!-- row 1: vi ĐỔI (chỉ display name) + ACTIVE -->
+      <!-- row 1: vi ĐỔI (chỉ display name), item đang bán -->
       <tr>
         <td class="stick"><div class="mono">com.vng.nikki.pack199ak</div><div style="font-size:10.5px;color:var(--subtle)">Item box ingame</div></td>
         <td><div class="cell"><input type="checkbox" checked>
           <div class="fields">
-            <div><span class="pill p-act">ACTIVE</span> <span class="pill p-chg">đổi Display Name</span></div>
+            <div><span class="pill p-act">đang bán</span> <span class="pill p-chg">đổi Display Name</span></div>
             <div class="f chg"><span class="k">Name</span><span class="v"><span class="old">188 Vàng</span> <span class="arrow">→</span> <strong>188 Vàng.</strong></span></div>
             <div class="f same"><span class="k">Desc</span><span class="v">Gói 188 Vàng dùng trong game <span class="same-tag">· không đổi</span></span></div>
-            <div class="warn-line">⚠ Ô ACTIVE — sửa sẽ tạo version mới trên Apple và item phải duyệt lại. Tên mới chưa hiển thị với người mua cho tới khi Apple duyệt.</div>
+            <div class="warn-line">⚠ Item đang bán — sửa sẽ tạo version mới trên Apple và item phải duyệt lại. Tên mới chưa hiển thị với người mua cho tới khi Apple duyệt.</div>
             <a class="lnk">detail</a>
           </div></div></td>
         <td class="untick-row"><div class="cell"><input type="checkbox">
           <div class="fields">
-            <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">giống hệt Apple</span></div>
+            <div><span class="pill p-act">đang bán</span> <span class="pill p-same">giống hệt Apple</span></div>
             <div class="f same"><span class="k">Name</span><span class="v">188 Gold <span class="same-tag">· không đổi</span></span></div>
             <div class="f same"><span class="k">Desc</span><span class="v">188 Gold pack for in-game use <span class="same-tag">· không đổi</span></span></div>
             <a class="lnk">detail</a>
@@ -256,15 +264,15 @@
         <td class="stick"><div class="mono">com.vng.nikki.pack199u</div><div style="font-size:10.5px;color:var(--subtle)">Item box ingame</div></td>
         <td><div class="cell"><input type="checkbox" checked>
           <div class="fields">
-            <div><span class="pill p-act">ACTIVE</span> <span class="pill p-chg">đổi cả hai</span></div>
+            <div><span class="pill p-act">đang bán</span> <span class="pill p-chg">đổi cả hai</span></div>
             <div class="f chg"><span class="k">Name</span><span class="v"><span class="old">588 Vàng</span> <span class="arrow">→</span> <strong>588 Vàng</strong></span></div>
             <div class="f chg"><span class="k">Desc</span><span class="v"><span class="old">Gói 588 Vàng</span> <span class="arrow">→</span> <strong>Gói 588 Vàng dùng trong game</strong></span></div>
-            <div class="warn-line">⚠ Ô ACTIVE — sửa sẽ tạo version mới + duyệt lại.</div>
+            <div class="warn-line">⚠ Item đang bán — sửa sẽ tạo version mới + duyệt lại.</div>
             <a class="lnk">detail</a>
           </div></div></td>
         <td class="untick-row"><div class="cell"><input type="checkbox">
           <div class="fields">
-            <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">giống hệt Apple</span></div>
+            <div><span class="pill p-act">đang bán</span> <span class="pill p-same">giống hệt Apple</span></div>
             <div class="f same"><span class="k">Name</span><span class="v">588 Gold <span class="same-tag">· không đổi</span></span></div>
             <div class="f same"><span class="k">Desc</span><span class="v">588 Gold pack <span class="same-tag">· không đổi</span></span></div>
             <a class="lnk">detail</a>
@@ -344,13 +352,13 @@
       <td class="stick"><div class="mono">com.vng.nikki.pack199ak</div></td>
       <td><div class="cell"><input type="checkbox" checked disabled>
         <div class="fields">
-          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-chg">đổi Display Name</span></div>
+          <div><span class="pill p-act">đang bán</span> <span class="pill p-chg">đổi Display Name</span></div>
           <div class="f chg"><span class="k">Name</span><span class="v"><span class="old">188 Vàng</span> <span class="arrow">→</span> 188 Vàng.</span></div>
           <div class="f same"><span class="k">Desc</span><span class="v">Gói 188 Vàng dùng trong game <span class="same-tag">· không đổi</span></span></div>
         </div></div></td>
       <td><div class="cell"><input type="checkbox" checked disabled>
         <div class="fields">
-          <div><span class="pill p-act">ACTIVE</span> <span class="pill p-same">giống hệt Apple</span></div>
+          <div><span class="pill p-act">đang bán</span> <span class="pill p-same">giống hệt Apple</span></div>
           <div class="f same"><span class="k">Name</span><span class="v">188 Gold <span class="same-tag">· không đổi</span></span></div>
           <div class="f same"><span class="k">Desc</span><span class="v">188 Gold pack <span class="same-tag">· không đổi</span></span></div>
         </div></div></td>
@@ -411,7 +419,7 @@
   <div style="display:flex;gap:8px;align-items:flex-start">
     <input type="checkbox" checked style="margin-top:3px">
     <div>
-      <span class="pill p-act">ACTIVE</span> <span class="pill p-chg">đổi</span>
+      <span class="pill p-act">đang bán</span> <span class="pill p-chg">đổi</span>
       <div class="val" style="max-width:230px"><span class="old">188 Vàng</span> → <span class="new2">188 Vàng.</span></div>
       <div class="pop-wrap">
         <a class="lnk">detail</a>
@@ -419,11 +427,11 @@
           <h4>Apple hiện có · Vietnamese</h4>
           <pre>Display Name: 188 Vàng
 Description:  Gói 188 Vàng dùng trong game
-State:        ACTIVE</pre>
+Item:         đang bán (có version APPROVED)</pre>
           <h4>Trong file import</h4>
           <pre>Display Name: 188 Vàng.
 Description:  Gói 188 Vàng dùng trong game</pre>
-          <p class="hint">⚠ ACTIVE ⇒ sửa được nhưng phải tạo version mới trên Apple ⇒ duyệt lại. Click ra ngoài để đóng.</p>
+          <p class="hint">⚠ Item đang bán ⇒ sửa được nhưng phải tạo version mới trên Apple ⇒ duyệt lại. Click ra ngoài để đóng.</p>
         </div>
       </div>
     </div>
@@ -445,7 +453,7 @@ Description:  Gói 188 Vàng dùng trong game</pre>
     <div class="rows">
       <div class="row"><span class="k">Sẽ xử lý<div class="sm">ô = item × locale, đếm từ số ô THẬT (parser bỏ cặp thiếu một nửa)</div></span><span class="v" style="color:var(--accent)">4</span></div>
       <div class="row"><span class="k">Sẽ bỏ qua<div class="sm">4 ô giống hệt Apple (tự untick) — không có ô nào Manager untick tay</div></span><span class="v" style="color:var(--muted)">4</span></div>
-      <div class="row"><span class="k" style="color:var(--amber-tx)">⚠ Trong đó ACTIVE<div class="sm">mỗi ô này tạo một version mới trên Apple ⇒ item phải duyệt lại</div></span><span class="v" style="color:var(--amber-tx)">2</span></div>
+      <div class="row"><span class="k" style="color:var(--amber-tx)">⚠ Trong đó N <strong>item</strong> sẽ tạo version mới<div class="sm">một item = một version, dù bao nhiêu ô được tick ⇒ item phải duyệt lại</div></span><span class="v" style="color:var(--amber-tx)">2</span></div>
     </div>
     <div class="foot" style="justify-content:flex-end">
       <button class="btn s">Cancel</button><button class="btn">Confirm</button>
@@ -457,7 +465,7 @@ Description:  Gói 188 Vàng dùng trong game</pre>
   ⚠ Mẫu số là <strong>số ô THẬT</strong>, không phải <code>item × locale_pair_count</code> — parser bỏ cặp
   có ô trống (<code>iap-items.ts:389</code>).<br>
   Cancel ⇒ về lại bảng · Confirm ⇒ sang <strong>Territories</strong> (step 5).
-  <br>⭐ Dòng "Trong đó ACTIVE" là cảnh báo <strong>trước khi chạy</strong> — thứ mà sự cố 2026-09-22 không có, nên Manager chỉ biết sau 20 dòng PARTIAL.
+  <br>⭐ Dòng "Trong đó N item sẽ tạo version mới" là cảnh báo <strong>trước khi chạy</strong> — thứ mà sự cố 2026-09-22 không có, nên Manager chỉ biết sau 20 dòng PARTIAL.
 </div>
 
 <h2>Đã chốt · còn chờ duyệt mockup</h2>

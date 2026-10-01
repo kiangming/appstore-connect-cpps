@@ -37,6 +37,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { ParsedIapItem } from "@/lib/iap-management/parsers/iap-items";
 import { useClickOutside } from "@/lib/hooks/use-click-outside";
+import type { CellDefault } from "@/lib/iap-management/bulk-import/localization-cell-default";
 
 export interface LocalizationSelectionState {
   ignoreAll: boolean;
@@ -53,10 +54,35 @@ interface Cell {
   description: string;
 }
 
+/** productId → locale → what the tool concluded about that cell. */
+export type CellDefaultMap = Record<string, Record<string, CellDefault>>;
+
 export interface LocalizationStepProps {
   items: ParsedIapItem[];
   value: LocalizationSelectionState;
   onChange: (next: LocalizationSelectionState) => void;
+  /**
+   * ⚠⚠ THE VERDICT ARRIVES ALREADY DECIDED, AND THIS COMPONENT NEVER FORMS ONE.
+   * Everything here — tick/untick default, which field changed, the sentence
+   * under the cell — is read off `buildCellDefaults` (C2), the translator over
+   * the SAME planner the write path runs. A comparison implemented here would
+   * agree on the day it was written and drift afterwards, and the drift is only
+   * visible by holding a screenshot next to a live product.
+   * ⇒ Pinned structurally: `localization-verdict-source.structural.test.ts`.
+   */
+  cellDefaults?: CellDefaultMap;
+  /**
+   * productId → is the item LIVE on Apple (has an APPROVED version)?
+   *
+   * ⚠ THIS REPLACES THE MOCKUP'S `ACTIVE` PILL, AND IT IS NOT A RENAME.
+   * `ACTIVE` was a V1 word for a state that, under the real model, localizations
+   * do not have — the lifecycle belongs to the VERSION. It appears only in
+   * Apple's WRITE-path error text and has never been seen on a read, so a pill
+   * driven by it would simply never render: a feature that is not broken, not
+   * crashing, and not there (KB §29.4). "This item is selling" is the fact that
+   * pill was reaching for, and it is one we can actually observe.
+   */
+  liveItems?: Record<string, boolean>;
 }
 
 /**
@@ -87,7 +113,13 @@ function isTicked(
   return row.includes(locale);
 }
 
-export function LocalizationStep({ items, value, onChange }: LocalizationStepProps) {
+export function LocalizationStep({
+  items,
+  value,
+  onChange,
+  cellDefaults,
+  liveItems,
+}: LocalizationStepProps) {
   const columns = useMemo(() => localeColumns(items), [items]);
   const rows = useMemo(() => items.filter((i) => i.localizations.length > 0), [items]);
 
@@ -279,6 +311,15 @@ export function LocalizationStep({ items, value, onChange }: LocalizationStepPro
                     {it.product_id}
                   </div>
                   <div className="text-[10px] text-slate-400">{it.reference_name}</div>
+                  {liveItems?.[it.product_id] && (
+                    <div
+                      data-testid={`localization-live-${it.product_id}`}
+                      className="mt-1 inline-flex items-center rounded px-1.5 py-0.5 text-[9px] font-medium bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
+                      title="Item này đang bán — sửa localization sẽ tạo version mới và phải duyệt lại"
+                    >
+                      đang bán
+                    </div>
+                  )}
                 </td>
                 {columns.map((c) => {
                   const loc = it.localizations.find((l) => l.locale === c.locale);
@@ -306,6 +347,7 @@ export function LocalizationStep({ items, value, onChange }: LocalizationStepPro
                           description: loc.description,
                         }}
                         ticked={isTicked(value, it.product_id, loc.locale)}
+                        verdict={cellDefaults?.[it.product_id]?.[loc.locale]}
                         onToggle={(on) => setCell(it.product_id, loc.locale, on)}
                       />
                     </td>
@@ -334,15 +376,22 @@ export function LocalizationStep({ items, value, onChange }: LocalizationStepPro
 function LocalizationCell({
   cell,
   ticked,
+  verdict,
   onToggle,
 }: {
   cell: Cell;
   ticked: boolean;
+  verdict?: CellDefault;
   onToggle: (on: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const popRef = useRef<HTMLDivElement>(null);
   useClickOutside(popRef, () => setOpen(false), open);
+
+  // ⚠ READ, NOT COMPUTED. `changed` was decided in C2 by comparing ONE FIELD at
+  // a time (`localizationTextEquals`); re-deriving it here would be a second
+  // comparison, which is the thing the structural guard forbids.
+  const changed = verdict?.kind === "DIFFERS" ? verdict.changed : undefined;
 
   return (
     <div className={`flex gap-2 ${ticked ? "" : "opacity-45"}`}>
@@ -356,16 +405,51 @@ function LocalizationCell({
       <div className="min-w-0 flex-1">
         <div className="flex gap-1.5 text-[11px]">
           <span className="shrink-0 w-9 text-slate-400 uppercase tracking-wide">Name</span>
-          <span className="text-slate-800 dark:text-slate-200 break-words">
+          <span
+            className={`break-words ${
+              changed?.name
+                ? "font-semibold text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 rounded px-1"
+                : "text-slate-800 dark:text-slate-200"
+            }`}
+            data-changed={changed?.name ? "name" : undefined}
+          >
             {cell.displayName}
           </span>
         </div>
         <div className="flex gap-1.5 text-[11px] mt-0.5">
           <span className="shrink-0 w-9 text-slate-400 uppercase tracking-wide">Desc</span>
-          <span className="text-slate-600 dark:text-slate-400 break-words line-clamp-2">
+          <span
+            className={`break-words line-clamp-2 ${
+              changed?.description
+                ? "font-semibold text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 rounded px-1"
+                : "text-slate-600 dark:text-slate-400"
+            }`}
+            data-changed={changed?.description ? "description" : undefined}
+          >
             {cell.description}
           </span>
         </div>
+        {/* ⚠⚠ EVERY VERDICT GETS A SENTENCE, AND THE UNTICKED ONES MOST OF ALL.
+            Three different findings produce an unticked cell — the file matches
+            what is live / the draft already carries this change / the file
+            matches live but a DIFFERENT change is pending. The action is the
+            same; the sentence is not, and the difference is the one thing the
+            Manager would otherwise have to open App Store Connect to learn.
+            A cell that merely dims is a cell that says "skipped" and nothing
+            more. */}
+        {verdict && (
+          <div
+            data-testid={`localization-why-${cell.productId}-${cell.locale}`}
+            data-kind={verdict.kind}
+            className={`mt-1 text-[10px] leading-snug ${
+              verdict.tick
+                ? "text-amber-700 dark:text-amber-300"
+                : "text-slate-500 dark:text-slate-400"
+            }`}
+          >
+            {verdict.label}
+          </div>
+        )}
         <div className="relative">
           <button
             type="button"

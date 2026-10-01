@@ -373,3 +373,92 @@ describe("② the read set follows step 3 — `resolved` is in the deps", () => 
     expect(h.baselineCalls).toHaveLength(1);
   }, SLOW);
 });
+
+describe("④ Q-F — the confirm dialog warns about VERSIONS, counted per ITEM", () => {
+  async function toConfirm(c: HTMLElement) {
+    fireEvent.click(screen.getByRole("button", { name: /Next/ }));
+    await waitFor(() =>
+      expect(screen.getByTestId("localization-confirm")).toBeInTheDocument(),
+    );
+    return c;
+  }
+
+  it("⭐ a live item with no draft and a real change ⇒ the line appears, saying 1", async () => {
+    const h = installFetch(() => ({
+      readable: true, hasApproved: true, hasDraft: false,
+      approved: [row("a-vi", "vi", "CŨ", "Gói 188 Vàng"), row("a-en", "en-US", "188 Gold", "188 Gold pack")],
+      draft: [],
+    }));
+    const c = renderWizard();
+    await goToLocalization(c);
+    await waitFor(() => expect(h.baselineCalls).toHaveLength(1));
+    await toConfirm(c);
+    expect(screen.getByTestId("localization-confirm-new-version").textContent).toBe("1");
+    const dialog = screen.getByTestId("localization-confirm").textContent ?? "";
+    expect(dialog).toMatch(/1 item/);
+    expect(dialog).toMatch(/sẽ tạo version mới trên App Store Connect/);
+    expect(dialog).toMatch(/phải duyệt lại/);
+  }, SLOW);
+
+  it("⭐⭐ THREE changed locales on ONE item is still 1 — counting cells would say 3", async () => {
+    parseIapItemsXlsx.mockResolvedValue(
+      parsed([
+        loc("vi", "Vietnamese", "A", "B"),
+        loc("en-US", "English (U.S.)", "C", "D"),
+        loc("th", "Thai", "E", "F"),
+      ]),
+    );
+    const h = installFetch(() => ({
+      readable: true, hasApproved: true, hasDraft: false,
+      approved: [
+        row("a-vi", "vi", "x", "y"),
+        row("a-en", "en-US", "x", "y"),
+        row("a-th", "th", "x", "y"),
+      ],
+      draft: [],
+    }));
+    const c = renderWizard();
+    await goToLocalization(c);
+    await waitFor(() => expect(h.baselineCalls).toHaveLength(1));
+    await toConfirm(c);
+    expect(screen.getByTestId("localization-confirm-new-version").textContent).toBe("1");
+  }, SLOW);
+
+  it("⚠ an item that ALREADY has a draft is not counted — CA 2 creates nothing", async () => {
+    const h = installFetch(() => ({
+      readable: true, hasApproved: true, hasDraft: true,
+      approved: [row("a-vi", "vi", "CŨ", "Gói 188 Vàng"), row("a-en", "en-US", "188 Gold", "188 Gold pack")],
+      draft: [row("d-vi", "vi", "KHÁC NỮA", "x"), row("d-en", "en-US", "188 Gold", "188 Gold pack")],
+    }));
+    const c = renderWizard();
+    await goToLocalization(c);
+    await waitFor(() => expect(h.baselineCalls).toHaveLength(1));
+    await toConfirm(c);
+    expect(screen.queryByTestId("localization-confirm-new-version")).toBeNull();
+  }, SLOW);
+
+  it("⚠ N = 0 ⇒ the line is HIDDEN, not rendered as '0 item'", async () => {
+    // "0 item sẽ tạo version mới" occupies the place a real warning would, and
+    // a reader who sees it every run stops reading it on the run it says 7.
+    const h = installFetch(() =>
+      READABLE([row("a-vi", "vi", "188 Vàng", "Gói 188 Vàng"), row("a-en", "en-US", "188 Gold", "188 Gold pack")]),
+    );
+    const c = renderWizard();
+    await goToLocalization(c);
+    await waitFor(() => expect(h.baselineCalls).toHaveLength(1));
+    await toConfirm(c);
+    expect(screen.queryByTestId("localization-confirm-new-version")).toBeNull();
+    expect(screen.getByTestId("localization-confirm").textContent).not.toMatch(/0 item/);
+  }, SLOW);
+
+  it("⚠ an item NOT live is not counted, however much it changes", async () => {
+    const h = installFetch(() => ({
+      readable: true, hasApproved: false, hasDraft: true, approved: [], draft: [],
+    }));
+    const c = renderWizard();
+    await goToLocalization(c);
+    await waitFor(() => expect(h.baselineCalls).toHaveLength(1));
+    await toConfirm(c);
+    expect(screen.queryByTestId("localization-confirm-new-version")).toBeNull();
+  }, SLOW);
+});
