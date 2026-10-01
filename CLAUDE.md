@@ -513,6 +513,37 @@ Push from HEAD; leave the local `main` alone.
 pushed — that is the guard working. Stop and report the output; do not rebase
 on a hunch.
 
+### ⛔ `git checkout -- <path>` on a file with uncommitted changes is FORBIDDEN
+
+It does not "undo the last edit" — it resets the file to `HEAD`, discarding
+**every** uncommitted change in it, including work that has nothing to do with
+what you were trying to revert.
+
+This happened **three times in one session** (2026-10-01), every time while
+undoing a mutation-test edit on a file that also carried real uncommitted work.
+A warning in this file, KB **P13**, and an explicit line in that session's own
+kickoff all said so in advance. Warnings were not enough, so the rule is now
+mechanical:
+
+```
+scripts/mutate.sh apply   <file>   # back up + record md5, THEN mutate
+scripts/mutate.sh restore <file>   # restore from backup + verify md5
+scripts/mutate.sh status           # any mutation left un-restored?
+```
+
+- **`restore` REFUSES when it has no backup of that exact file** — it does not
+  fall back to `git checkout`. The failure mode being designed out is that
+  `git checkout` *succeeded*.
+- **`apply` REFUSES when a backup already exists** — that means a previous
+  mutation was never restored and the tree is not what you think it is.
+- ⚠ A script cannot physically stop you typing `git checkout`. It removes every
+  reason to, and makes the unsafe shape fail loudly. Reach for `git checkout`
+  on a dirty path and you are choosing the thing that already cost work 3×.
+
+**To revert ALL of your uncommitted work on purpose** (rare), that is
+`git restore <path>` / `git checkout` used deliberately — say so out loud in
+the report, because it is indistinguishable afterwards from the accident.
+
 ### Branch convention — one arc, one branch (Manager decision, 2026-08-26)
 
 ```

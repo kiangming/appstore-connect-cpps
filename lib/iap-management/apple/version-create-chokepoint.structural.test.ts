@@ -144,12 +144,9 @@ describe("creating an IAP version is a single choke point", () => {
       expect(src, `${rel} must call the shared sync`).toContain(
         "syncLocalizationsToVersion(",
       );
-      for (const v1 of [
-        "updateInAppPurchaseLocalization(",
-        "deleteInAppPurchaseLocalization(",
-      ]) {
-        expect(src, `${rel} must not use the V1 localization client (${v1})`).not.toContain(v1);
-      }
+      // ⚠ The V1 write clients no longer EXIST (see the declaration guard
+      // below), so "must not call them" is now guarded one level up. What stays
+      // here is the positive half: both surfaces go through the shared sync.
     }
   });
 
@@ -161,6 +158,30 @@ describe("creating an IAP version is a single choke point", () => {
       /localization-sync\.ts$|apple\/localization-state\.ts$/.test(f),
     );
     expect(stale).toEqual([]);
+  });
+
+  it("⛔⛔ the V1 localization WRITE clients do not exist — not 'are unused'", () => {
+    // `updateInAppPurchaseLocalization` is the single most dangerous symbol in
+    // this module's history: `PATCH /v1/inAppPurchaseLocalizations/{id}` on an
+    // APPROVED row is the exact request that returned
+    // `409 … "Cannot edit InAppPurchaseLocalization when it is in ACTIVE state"`
+    // for 20 of 88 rows and set three arcs in motion. Both had 0 production
+    // call sites when deleted — which is the state a function occupies right
+    // before someone gives it one.
+    //
+    // ⚠ Deletion, not disuse: the form's locale removal goes through
+    // `syncLocalizationsToVersion` → `deleteInAppPurchaseLocalizationV2` on the
+    // target VERSION's row, so Q3 ("bulk import never deletes, the form does")
+    // is unaffected by their absence.
+    for (const file of ["lib", "app", "components"].flatMap((d) => walk(join(ROOT, d)))) {
+      const code = stripComments(readFileSync(file, "utf8"));
+      const rel = file.slice(ROOT.length + 1);
+      // ⚠ Word-boundary + NOT the V2 names, which are the live replacements.
+      expect(code, `${rel} must not declare or call the V1 PATCH`)
+        .not.toMatch(/\bupdateInAppPurchaseLocalization\b(?!V2)/);
+      expect(code, `${rel} must not declare or call the V1 DELETE`)
+        .not.toMatch(/\bdeleteInAppPurchaseLocalization\b(?!V2)/);
+    }
   });
 
   it("⛔⛔ the FLATTENED localization read does not exist — not 'is unused'", () => {

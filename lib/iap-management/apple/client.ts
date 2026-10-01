@@ -290,27 +290,29 @@ export async function createInAppPurchaseLocalization(
   );
 }
 
-export async function updateInAppPurchaseLocalization(
-  creds: AscCredentials,
-  localizationId: string,
-  patch: UpdateInAppPurchaseLocalizationPayload,
-): Promise<AscApiResponse<InAppPurchaseLocalization>> {
-  const attrs: Record<string, unknown> = {};
-  if (patch.name !== undefined) attrs.name = patch.name;
-  if (patch.description !== undefined) attrs.description = patch.description;
-  return iapFetch<AscApiResponse<InAppPurchaseLocalization>>(
-    creds,
-    "PATCH",
-    `/v1/inAppPurchaseLocalizations/${localizationId}`,
-    {
-      data: {
-        type: "inAppPurchaseLocalizations",
-        id: localizationId,
-        attributes: attrs,
-      },
-    },
-  );
-}
+/*
+ * ⛔⛔ `updateInAppPurchaseLocalization` WAS HERE. IT IS THE REQUEST THAT
+ * STARTED EVERYTHING, AND THAT IS EXACTLY WHY IT IS GONE.
+ *
+ * `PATCH /v1/inAppPurchaseLocalizations/{id}` aimed at a row belonging to the
+ * APPROVED version is the call Apple answered
+ * `409 ENTITY_ERROR.ATTRIBUTE.INVALID.UNMODIFIABLE · "Cannot edit
+ * InAppPurchaseLocalization when it is in ACTIVE state"` — 20 of 88 rows on
+ * 2026-09-22, and the reason arcs `[LOC-ACTIVE-state]`, `[LOC-V2-model]` and
+ * `[BULKIMPORT-loc-compare-apple]` exist at all (KB §28, §32.3).
+ *
+ * Both surfaces now write through `syncLocalizationsToVersion`, which resolves
+ * a WRITABLE version first and PATCHes `/v2/inAppPurchaseLocalizations/{id}` on
+ * that version's own row. This function had **0 production call sites** — but
+ * "unused" is the state a function is in right before someone gives it a
+ * caller, and the caller it would get is the one that reproduces the 409.
+ *
+ * ⚠ Deprecated by Apple on the **doc-site** (`metadata.platforms[].deprecatedAt`
+ * → deprecated @ 4.4.1); OAS 4.4.1 carries **no** `deprecated` flag for it. The
+ * asymmetry is KB §31.6, measured — not an assumption about the spec.
+ *
+ * Absence is enforced by `version-create-chokepoint.structural.test.ts`.
+ */
 
 /**
  * ⭐ V2 CREATE — a localization belongs to a **VERSION**, not to the IAP.
@@ -424,18 +426,22 @@ export async function updateInAppPurchaseLocalizationV2(
   );
 }
 
-/** IAP.o.12a — DELETE a localization. Used by update-orchestration when the
- *  Manager removes a locale from the edit form. */
-export async function deleteInAppPurchaseLocalization(
-  creds: AscCredentials,
-  localizationId: string,
-): Promise<void> {
-  return iapFetch<void>(
-    creds,
-    "DELETE",
-    `/v1/inAppPurchaseLocalizations/${localizationId}`,
-  );
-}
+/*
+ * ⛔ `deleteInAppPurchaseLocalization` (V1) WAS HERE AND IS GONE.
+ *
+ * ⚠ ITS OLD DOCSTRING SAID *"Used by update-orchestration when the Manager
+ * removes a locale from the edit form"* — THAT SENTENCE WAS STALE, and a stale
+ * docstring is why this one needed checking rather than assuming. Verified
+ * before deleting: the form builds `removeLocales`
+ * (`update-orchestration.ts:341`) and hands it to `syncLocalizationsToVersion`
+ * (`:344-348`), which deletes via `deleteInAppPurchaseLocalizationV2` on the
+ * TARGET VERSION's row (`localization-version-sync.ts:259`).
+ *
+ * ⇒ Q3 is untouched by this deletion: *bulk import never deletes, the single-IAP
+ * form does* — the form simply does it through the V2 path like everything else.
+ *
+ * Absence is enforced by `version-create-chokepoint.structural.test.ts`.
+ */
 
 // ─── Review Screenshots (3-step upload, mirrors CPP pattern) ────────────────
 

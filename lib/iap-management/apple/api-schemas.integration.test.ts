@@ -44,7 +44,6 @@ import {
   getInAppPurchase,
   listAllInAppPurchases,
   createInAppPurchaseLocalization,
-  updateInAppPurchaseLocalization,
   reserveInAppPurchaseScreenshot,
   confirmInAppPurchaseScreenshot,
   deleteInAppPurchaseScreenshot,
@@ -176,13 +175,8 @@ describe("API schema: localization endpoints", () => {
     });
   });
 
-  it("update loc → PATCH /v1/inAppPurchaseLocalizations/{id}", async () => {
-    await updateInAppPurchaseLocalization(creds, "loc-1", { name: "New" });
-    expect(callArgs()).toMatchObject({
-      method: "PATCH",
-      endpoint: "/v1/inAppPurchaseLocalizations/loc-1",
-    });
-  });
+  // ⛔ "update loc → PATCH /v1/inAppPurchaseLocalizations/{id}" — DELETED with
+  // the function it pinned (the V1 PATCH that produced the original 409).
 });
 
 // ─── Screenshots (appStoreReviewScreenshot family, IAP.o.9b fix) ────────────

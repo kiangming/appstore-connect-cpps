@@ -3367,6 +3367,30 @@ push-hygiene verification session, where a backup taken immediately
 before the mutation (not `git stash`/`git checkout`) was what actually
 recovered the correct pre-mutation file.
 
+⚠⚠ **ADDENDUM 2 (2026-10-01) — P13 FAILED AS A WARNING, THREE TIMES IN ONE
+SESSION. IT IS NOW A SCRIPT.**
+
+All three were the same shape: undoing a **mutation-test edit** with
+`git checkout -- <file>` on a file that *also* held uncommitted real work, which
+checkout silently discarded. The deletion of `listInAppPurchaseLocalizations`
+was lost that way and had to be re-authored from scratch.
+
+⚠ What makes this worth a tool rather than a third warning: **this very
+document, CLAUDE.md, and the session's own kickoff all warned about it before
+the first occurrence.** Prose did not prevent any of the three. The arc's own
+thesis — *guard by construction, not by memory* — had simply never been pointed
+at the operator.
+
+⇒ `scripts/mutate.sh apply|restore|status`. `restore` **refuses** without a
+backup of that exact file (it never falls back to checkout); `apply` **refuses**
+when a backup already exists, which surfaces a mutation that was never undone.
+Both verify `md5` across the round trip.
+
+⚠ **Honest limit:** a script cannot stop anyone typing `git checkout`. It
+removes the reason and makes the unsafe path fail *loudly* — the failure mode
+being designed out is that `git checkout` **succeeded**. CLAUDE.md now states
+the prohibition; this states why prose alone was not enough.
+
 ⚠ **ADDENDUM (2026-10-01, arc `[BULKIMPORT-loc-compare-apple]`) — when ONE FILE
 carries the changes of TWO chunks, `git add <file>` silently merges them.**
 C1 and C2 were authored back-to-back and both touched

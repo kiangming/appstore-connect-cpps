@@ -18,21 +18,18 @@ mô hình thật của Apple đã được đo chứ không suy. Toàn bộ hồ
 
 **Còn mở, có chủ đích:**
 
-- [ ] [V1-LOC-CLIENT-dead-pair] ⚠ **PHÁT HIỆN 2026-10-01 khi xoá
-  `listInAppPurchaseLocalizations` — HAI hàm anh em cũng đã chết.**
-  `updateInAppPurchaseLocalization` và `deleteInAppPurchaseLocalization`
-  (`client.ts`) đều có **0 call site sản phẩm** (grep loại test + dòng khai
-  báo). Chúng là bản V1 mà `syncLocalizationsToVersion` đã thay bằng
-  `*V2`. ⚠⚠ Và `updateInAppPurchaseLocalization` **chính là** hàm sinh ra 409
-  gốc: `PATCH /v1/inAppPurchaseLocalizations/{id}` vào dòng của bản APPROVED.
-  ⇒ **Đề xuất xoá cả hai**, cùng lý do đã áp cho hàm thứ nhất (*module chết mà
-  import được là module sẽ sống lại*, KB §32.12), và ghim absence bằng
-  `version-create-chokepoint.structural.test.ts` thay vì chỉ cấm **gọi**.
-  ⚠ **KHÔNG xoá trong commit này** — chỉ thị nêu đích danh một hàm, mở rộng ra
-  ba là tự ý nới phạm vi. Nêu ra để Manager quyết.
-  ⚠ `createInAppPurchaseLocalization` thì **CÒN SỐNG** (2 call site:
-  `create-on-apple/route.ts:290`, `execute/route.ts:1013`) — đó là
-  `[LOCV2-create-path]` bên dưới, đừng gộp.
+- [x] [V1-LOC-CLIENT-dead-pair] ✅ **XOÁ CẢ HAI (Manager chốt 2026-10-01).**
+  `updateInAppPurchaseLocalization` + `deleteInAppPurchaseLocalization` đã bị
+  xoá khỏi `client.ts`, cùng 2 test chỉ ghim endpoint V1 của chúng
+  (`client.test.ts` *"PATCHes only provided fields"* ·
+  `api-schemas.integration.test.ts` *"update loc → PATCH /v1/…"*).
+  ⭐ **Kiểm chặn trước khi xoá DELETE (Q3 vẫn đứng):** form đơn lẻ xoá locale
+  qua **V2**, không phải V1 — `update-orchestration.ts:341` dựng `removeLocales`
+  → `:344-348` gọi `syncLocalizationsToVersion` → `localization-version-sync.ts:259`
+  `deleteInAppPurchaseLocalizationV2` trên dòng của **version đích**. ⇒ code
+  chết thật, không phải twin path sót.
+  ⚠ Docstring cũ của hàm DELETE ghi *"Used by update-orchestration…"* — **đã
+  lỗi thời**. Đó là lý do phải tra chứ không tin.
 
 - [ ] [LOCV2-create-path] ⏳ **Đường CREATE của bulk import vẫn dùng V1.**
   `execute/route.ts` `createInAppPurchaseLocalization` (quan hệ

@@ -11,7 +11,6 @@ import {
   updateInAppPurchase,
   deleteInAppPurchase,
   createInAppPurchaseLocalization,
-  updateInAppPurchaseLocalization,
   reserveInAppPurchaseScreenshot,
   confirmInAppPurchaseScreenshot,
   deleteInAppPurchaseScreenshot,
@@ -179,19 +178,11 @@ describe("createInAppPurchaseLocalization", () => {
   });
 });
 
-describe("updateInAppPurchaseLocalization", () => {
-  it("PATCHes only provided fields", async () => {
-    await updateInAppPurchaseLocalization(creds, "loc-1", {
-      description: "updated",
-    });
-    const [, method, endpoint, body] = iapFetch.mock.calls[0];
-    expect(method).toBe("PATCH");
-    expect(endpoint).toBe("/v1/inAppPurchaseLocalizations/loc-1");
-    const attrs = (body as { data: { attributes: Record<string, unknown> } }).data
-      .attributes;
-    expect(attrs).toEqual({ description: "updated" });
-  });
-});
+// ⛔ `describe("updateInAppPurchaseLocalization")` — "PATCHes only provided
+// fields" — DELETED with the function it pinned. It asserted the V1 endpoint
+// shape `PATCH /v1/inAppPurchaseLocalizations/{id}`, i.e. precisely the request
+// that produced the original 409. The V2 replacement is pinned in
+// `client-versions.test.ts` / the localization-version-sync suite.
 
 describe("reserveInAppPurchaseScreenshot", () => {
   it("POSTs reserve with fileName + fileSize + IAP relationship", async () => {
