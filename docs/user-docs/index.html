@@ -1450,8 +1450,10 @@
               để nhìn vào là biết ngay trường nào mang nội dung gì. Bấm <strong>detail</strong> để xem đầy đủ khi
               nội dung bị cắt.</p>
               <ul>
-                <li><strong>Mặc định tick hết</strong> — tức giữ nguyên hành vi cũ. Việc của bạn là <em>trừ đi</em>
-                những ô không muốn ghi.</li>
+                <li><strong>Mặc định do tool tự quyết</strong> (từ 2026-10-01) — tool đọc App Store Connect
+                rồi <em>chỉ tick những ô thật sự cần đổi</em>. Import 88 item chỉ để sửa giá thì thường
+                <strong>không ô nào được tick</strong> và bạn bấm Next là xong. Bạn vẫn tick/untick đè được mọi ô —
+                tool chỉ đổi <em>mặc định</em>, không lấy mất quyền quyết định.</li>
                 <li><strong>Checkbox ở đầu cột</strong> bật/tắt cả locale đó cho mọi dòng. Cột đang tick đầy đủ mà
                 bấm lần nữa thì <strong>xoá sạch cả cột</strong>. Khi chỉ một số ô được tick, ô vuông đầu cột hiện
                 trạng thái <em>dở dang</em>.</li>
@@ -1462,6 +1464,20 @@
               <p>Góc phải thanh trên cùng luôn hiện <strong>N / M ô sẽ được xử lý</strong>. Bấm <strong>Next</strong>
               sẽ mở hộp xác nhận kèm hai con số: <em>sẽ ghi</em> và <em>để nguyên trên Apple</em>. Bấm
               <strong>Cancel</strong> để ở lại sửa tiếp.</p>
+              <div class="callout callout-warning">
+                <div class="callout-title">⚠️ Dòng thứ ba trong hộp xác nhận — đọc kỹ dòng này</div>
+                <p>Khi lần chạy này sẽ khiến Apple <strong>tạo version mới</strong>, hộp xác nhận hiện thêm:
+                <em>"Trong đó <strong>N item</strong> sẽ tạo version mới trên App Store Connect ⇒ phải duyệt lại"</em>.</p>
+                <ul>
+                  <li>Đếm theo <strong>item</strong>, không theo ô: một item chỉ sinh <em>một</em> version dù bạn
+                  tick 1 hay 10 locale của nó.</li>
+                  <li>Chỉ đếm item <strong>đang bán và chưa có bản nháp</strong>. Item đã có bản nháp thì ghi thẳng
+                  vào nháp, <strong>không tạo gì</strong>.</li>
+                  <li><strong>Version đã tạo thì không xoá được</strong> — Apple không có chức năng đó. Đây là lý do
+                  dòng này tồn tại.</li>
+                  <li>Không có item nào như vậy thì <strong>dòng này không hiện</strong> (chứ không hiện "0 item").</li>
+                </ul>
+              </div>
               <div class="callout">
                 <div class="callout-title">Cặp thiếu một nửa — giờ được báo</div>
                 <p>Một locale chỉ được nhận khi <strong>cả Display Name lẫn Description</strong> đều có nội dung.
@@ -1470,12 +1486,66 @@
               </div>
               <p><strong>File không có cột localization?</strong> Bước này vẫn hiện, kèm dòng giải thích rằng không
               có gì để xử lý, và <strong>Next</strong> đi thẳng — không hỏi xác nhận, vì không có gì để đếm.</p>
+              <div class="callout callout-info">
+                <div class="callout-title">⭐ Tool tự đối chiếu với App Store Connect (từ 2026-10-01)</div>
+                <p>Khi bạn bước vào Step 4, tool đọc App Store Connect để xem <strong>mỗi locale hiện đang là gì</strong>,
+                rồi tự quyết ô nào cần tick. Trong lúc đọc, phía trên bảng hiện dòng
+                <em>"Đang đọc App Store Connect: 34/88"</em> — một lô 88 item mất <strong>khoảng một phút</strong>.
+                Một item đọc lỗi <em>không</em> làm hỏng cả bước; chỉ ô của riêng nó bị ảnh hưởng.</p>
+                <p><strong>Mốc so sánh là bản đang bán</strong> — thứ người mua đang nhìn thấy — chứ không phải bản nháp.</p>
+                <p class="mt-2"><strong>Mỗi ô nói rõ nó đã kết luận gì:</strong></p>
+                <table>
+                  <thead><tr><th>Ô hiện</th><th>Mặc định</th><th>Nghĩa là</th></tr></thead>
+                  <tbody>
+                    <tr>
+                      <td><em>Giống bản đang bán — không có gì để đổi</em></td>
+                      <td>bỏ tick</td>
+                      <td>File trùng khớp bản đang bán. Không có việc gì phải làm.</td>
+                    </tr>
+                    <tr>
+                      <td><em>Bản nháp đã mang thay đổi này — đang chờ duyệt</em></td>
+                      <td>bỏ tick</td>
+                      <td>Bạn (hoặc một lần chạy trước) đã ghi đúng nội dung này rồi; nó đang chờ Apple duyệt.</td>
+                    </tr>
+                    <tr>
+                      <td><em>Giống bản đang bán — nhưng bản nháp đang chờ duyệt mang nội dung khác</em></td>
+                      <td>bỏ tick</td>
+                      <td>⚠️ Item này <strong>có một thay đổi đang chờ duyệt</strong> khác với file. Biết được điều này
+                      mà không cần mở App Store Connect chính là lý do ba câu trên không gộp làm một.</td>
+                    </tr>
+                    <tr>
+                      <td><em>Đổi Display Name</em> / <em>Đổi Description</em> / <em>Đổi cả hai</em></td>
+                      <td><strong>tick</strong></td>
+                      <td>File khác bản đang bán. Trường nào khác sẽ được <strong>tô vàng</strong> ngay trong ô.</td>
+                    </tr>
+                    <tr>
+                      <td><em>Chưa có trên Apple</em></td>
+                      <td><strong>tick</strong></td>
+                      <td>Apple chưa có ngôn ngữ này — đây là một lần thêm mới.</td>
+                    </tr>
+                    <tr>
+                      <td><em>Item mới — chưa có trên App Store Connect</em></td>
+                      <td><strong>tick</strong></td>
+                      <td>Dòng tạo mới. Không có gì để so, nên tool không hỏi Apple về item này.</td>
+                    </tr>
+                    <tr>
+                      <td><em>Không đọc được trạng thái trên Apple</em></td>
+                      <td><strong>bỏ tick</strong></td>
+                      <td>⚠️ Tool <strong>không hỏi được</strong> Apple (mạng, quyền, hoặc Apple trả lời bất thường).
+                      Đây <strong>không</strong> giống "Apple chưa có" — khi không biết, tool chọn cái
+                      <strong>không ghi</strong>. Muốn ghi, bạn tick tay.</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <p class="mt-2">Item <strong>đang bán</strong> có nhãn <em>đang bán</em> ngay cạnh Product ID — đó là
+                những item mà một ô được tick sẽ dẫn tới một version mới và một vòng duyệt.</p>
+              </div>
               <div class="callout callout-warning">
-                <div class="callout-title">⚠️ Bước này KHÔNG so sánh với Apple</div>
-                <p>Bảng hiện nội dung <strong>trong file</strong>, không đối chiếu với giá trị đang có trên App
-                Store Connect. Tool <em>chưa</em> tự bỏ tick những ô trùng khớp — việc kiểm tra "cái này có thật sự
-                cần đổi không" hiện vẫn thuộc về bạn. Nếu một localization đang ở trạng thái live, Apple sẽ từ chối
-                sửa và dòng kết quả sẽ nói rõ lý do đó.</p>
+                <div class="callout-title">⚠️ Tool vẫn kiểm lại lần nữa khi chạy thật</div>
+                <p>Một ô bạn tick tay mà <em>nội dung đã trùng Apple</em> thì khi chạy, tool vẫn <strong>bỏ qua</strong>
+                và ghi lý do vào kết quả — nó không gửi một thay đổi rỗng lên Apple. Chiều ngược lại cũng đúng: ô bạn
+                bỏ tick thì <strong>chắc chắn không được ghi</strong>. Cả hai hướng đều nghiêng về phía
+                <em>không ghi</em>, nên không bao giờ có chuyện tool ghi thứ bạn đã từ chối.</p>
               </div>
             </div>
           </li>

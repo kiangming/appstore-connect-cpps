@@ -29,13 +29,24 @@ mô hình thật của Apple đã được đo chứ không suy. Toàn bộ hồ
   không đụng. Không sửa trong arc này.
   ⇒ Tiêu chí flake nay có ngoại lệ cho lớp này: **điều kiện** là module arc
   không đụng (`git diff --stat` rỗng) **và** file đó chạy riêng xanh.
-- [ ] [BULKIMPORT-loc-compare-apple] ⏸ **ĐỂ DÀNH** — so localization với Apple
-  ngay ở step 4 (tự untick ô đã trùng). ⚠ **Lý do chặn cũ đã hết hiệu lực**:
-  nó từng chặn bởi *"Apple có điền `state` không"*; câu đó đã trả lời (KB §33.1)
-  **và trở thành không liên quan** — V2 không có `state` trên localization.
-  ⭐ Nửa server **đã có sẵn**: `syncLocalizationsToVersion` đọc baseline và tính
-  `skipped` với **ba lý do** phân biệt (KB §32.11). Còn thiếu: **nửa UI** + ngân
-  sách request để đọc Apple ở bước preview (~1 request/item).
+  ⭐ **BỔ SUNG 2026-10-01** (arc `[BULKIMPORT-loc-compare-apple]`, KB §34.6) —
+  hai bước nữa, cả hai sinh từ việc suýt kết luận sai:
+  - **Bước 3 — với file DOM nặng, "chạy riêng" = MỘT FILE MỘT LƯỢT.** Instance:
+    10 file chạy **chung** vẫn 7 đỏ; chạy **từng file một** 10/10 xanh,
+    114/114. Mỗi file wizard tự nó mất 26–29 s trong jsdom, nên một "tập con"
+    vẫn là contention.
+  - **Bước 4 — nghi thay đổi của mình gây đỏ ⇒ chạy cây TRƯỚC thay đổi để đối
+    chứng.** Instance: C3 làm vài test hiện **94 giây**, trông y hệt một vụ treo
+    do effect mới. `git stash` + chạy lại cùng thư mục trên cây trước-C3 cũng
+    đỏ **2 file / 4 test**. ⚠ Backup patch trước khi stash, xác nhận `md5` sau
+    `stash pop`.
+  ⚠ Và **đừng chạy `lint`/`build` song song với suite khi đang đo flake** —
+  lượt đầu của chunk 0 tự tạo nhiễu kiểu đó và cho ra một con số phải vứt đi.
+- [x] [BULKIMPORT-loc-compare-apple] ✅ **ĐÃ SHIP 2026-10-01** — C0→C5. Hồ sơ
+  đầy đủ: **KB §34** + **P45–P47**. Ước tính "~1 request/item" trong bản cũ của
+  mục này **SAI** — thực tế **2–3** (đo: ~2,33), và cả ba đều bắt buộc để dựng
+  ba nhãn skip. Chi phí thật: **~205 request / ~70 giây** cho lô 88, ≈5,7% ngân
+  sách giờ.
 - [ ] [LOCV2-nfc-decide] ✅ **Q5 ĐÃ CHỐT** (Manager 2026-09-25): normalize NFC
   **chỉ khi so sánh**, ghi lên Apple **nguyên văn** file. Đã cài + ghim test.
   ⏳ Còn lại: **chưa từng đo** Excel và Apple có thật sự khác encoding không —
@@ -55,30 +66,20 @@ Thiết kế + mockup: `docs/iap-management/design-bulk-import-localization-step
 - [ ] [BULKIMPORT-loc-step] **Chunk chính.** Step mới đặt SAU `Preview itemID & Price`. Chốt: tick theo CẶP (locale) · cột + untick lẻ tri-state, **header FULL ⇒ clear cột** (KHÔNG port luật Apple "không bao giờ xoá" — ở đây việc thật là TRỪ ĐI, giống ca Google) · đơn vị đếm = ô (item × locale) · "Ignore all" vẫn hiện mờ · **mặc định TICK-ALL** (chỉ hiển thị data từ file, không so Apple). **✅ XONG** — C1 (đánh số bước tập trung + 3 bug có sẵn + M-2) · C2 (choke point + config) · C3 (UI step) · C4 (docs). Chờ Manager UAT.
 - [x] [BULKIMPORT-loc-step-M1] ✅ **M-1 = (a)** — đã ship ở C3. Chi tiết gốc: hai dòng có nhãn `Name` / `Desc` mỗi ô locale — yêu cầu gốc của Manager. ⚠ **KHÔNG** còn mũi tên `cũ → mới` và **không** còn nền amber (cả hai cần so Apple — đã bỏ khỏi arc). Chỉ hiển thị **giá trị trong file**.
 - [x] [BULKIMPORT-loc-step-choke] ✅ **XONG (C2, 613e123).** Choke point: lọc `item.localizations` MỘT LẦN ngay sau `parseIapItemsXlsx`, trước `resolveConflicts`. Cả **8** chỗ đọc (`route.ts:946·968·971·1241·1249` CREATE + `1393·1477·1615` OVERWRITE) thấy list đã lọc ⇒ **không sửa chỗ nào trong 8**. Cùng hình dạng `resolveBatchAvailabilitySelection` (`:565`). ⚠ Ghim bằng **structural test**: không chỗ nào được đọc localization chưa lọc. Lựa chọn đi qua `config` (route `:391` tự khai *"Re-parse Excel server-side (don't trust the client)"* ⇒ client KHÔNG gửi localization); khuôn `tier_overrides` (`:364` → áp `:464-476`).
-- [ ] [BULKIMPORT-loc-compare-apple] ⏸ **ĐỂ DÀNH — so sánh localization với Apple.** Manager thu hẹp phạm vi 2026-09-23: *"tại thời điểm này để user tự check tự xử lý"*. Gồm: `include=inAppPurchaseLocalizations` · **ô giống hệt Apple ⇒ tự untick** · 4 trạng thái ô (giống / khác / ACTIVE / chưa có trên Apple) · probe `included[]`. Mockup **đã vẽ sẵn** 4 trạng thái — giữ nguyên, đánh dấu "để dành". **Census đã đo, đừng điều tra lại:**
-  - ⭐ **0 request thêm nếu làm.** `GET /v1/apps/{id}/inAppPurchasesV2` **đã gọi sẵn** ở `page.tsx:54` (và `route.ts:414`), chấp nhận `include=inAppPurchaseLocalizations`; `fields[inAppPurchaseLocalizations]` có `state`. Type `InAppPurchaseLocalizationAttributes` (`types/iap-management/apple.ts:59-64`) **đã có** `state?: string`.
-  - Khuôn: `client.ts:77` `opts?: { includeAvailability?: boolean }`. ⚠ **NHƯNG** query `:81-83` là **ternary chỉ diễn đạt được MỘT include** ⇒ thêm localizations phải đổi sang **ghép mảng**, không phải thêm một cờ. Không thuần cộng thêm.
-  - ⭐ Vòng paging **đã tự cộng dồn `included[]` qua MỌI trang** (`client.ts:96-98`, `:107-109`) ⇒ rủi ro `has_next` / cap **giảm đáng kể**.
-  - ⚠⚠ **RỦI RO CHƯA VERIFY — đây là lý do phải probe.** Design doc bản đầu khẳng định *"đã verify schema CÓ `data`"* — **KHÔNG ĐÚNG**. `types/asc.ts:26` là `relationships?: Record<string, unknown>`, **không type gì cả**. Và tiền lệ `availabilities.ts:317-326` **KHÔNG bảo chứng** ca này: availability là quan hệ **to-ONE** (`.data` = object có `.id`), localizations là **to-MANY** (`.data` = **mảng**) ⇒ hình dạng không chuyển 1:1. Bản thân tiền lệ đó cũng narrow phòng thủ và `return null` khi thiếu — tức repo coi sự tồn tại của `data` là **không đảm bảo**.
-  - ⚠⚠ **Hỏng thì hỏng IM LẶNG theo cách tệ nhất:** join rỗng ⇒ mọi ô đọc thành "chưa có trên Apple" ⇒ **tick hết** ⇒ **tái sinh đúng bug 409** mà arc này sinh ra để diệt.
-  - **Probe trước khi làm** — app **THẬT nhiều locale** (app test 1 locale cho kết quả "ổn" cho tình huống không tồn tại). `GET /v1/apps/{id}/inAppPurchasesV2?limit=200&include=inAppPurchaseLocalizations` → 4 dòng `jq`:
-    1. `jq '{iap:(.data|length), included:(.included|length), has_next:(.links.next != null)}'`
-    2. `jq '.included[0].attributes | keys'` — phải có `"state"`; thiếu thì thêm `&fields[inAppPurchaseLocalizations]=name,locale,description,state`
-    3. `jq '.data[0].relationships.inAppPurchaseLocalizations'` — **dòng quyết định**, có `data` không
-    4. `jq '[.data[]|select(.relationships.inAppPurchaseLocalizations.data!=null)]|length'` — bao nhiêu item thật sự có join
-  - ⚠ **QUY TẮC FAIL-SAFE bắt buộc khi làm:** không join được Apple ⇒ ô **MẶC ĐỊNH UNTICK** + nhãn *"không đọc được trạng thái trên Apple"*. **Khi không biết, chọn cái KHÔNG GHI.**
-  - ⭐ **CHỐT 1.3 (Manager, 2026-09-23): mốc so sánh là dòng có trạng thái APPROVED.** Căn cứ: Manager test trên ASC — sửa localization đang ở *Prepare for Submission* thì Save **update tại chỗ**, không tạo dòng mới ⇒ dòng Approved là bản người mua đang thấy, dòng pending là bản nháp ghi đè tự do. Mô hình + hệ quả ghi ở **KB §28.11**.
-  - **QUY TẮC ĐẦY ĐỦ (dự thảo — chốt sau probe):**
-    1. Có bản **Approved** → so với bản Approved
-    2. Không có Approved, có bản **pending** → so với bản pending *(CA A — chờ Manager chốt)*
-    3. **Không có localization nào** cho locale đó → **TICK** (add mới)
-    4. **Không hỏi được Apple** → **UNTICK** + nhãn "không đọc được trạng thái" *(fail-safe)*
-    5. Trùng **CẢ HAI** trường → UNTICK; trùng **một** hoặc **không** trùng → TICK
-    ⚠ **Ghim MỖI ca một test riêng.** Ca 3 và ca 4 cho kết quả **NGƯỢC nhau** ⇒ phải phân biệt rõ *"Apple nói không có"* với *"không hỏi được Apple"*. Gộp hai ca này là đúng lớp lỗi `UNKNOWN ≠ PATCHABLE` mà `localization-state.ts` đã phải dựng allow-list để tránh.
-  - ⭐ **PHƯƠNG ÁN ĐÃ CHỐT (Manager, 2026-09-23): cách 1 + fail-safe.** Thêm `include=inAppPurchaseLocalizations` vào lượt gọi đã chạy ở `page.tsx:54` ⇒ **0 request thêm**; ô không đọc được trạng thái ⇒ **UNTICK + nhãn "không đọc được trạng thái trên Apple"**. Bác cách 2 (88 request cho một tiện ích hiển thị) và cách 3 (server tự bỏ qua khi khớp — mất quyền nhìn + chọn của Manager, tức mất lý do step tồn tại).
-  - ⏳ **CHẶN BỞI PROBE.** Nếu Apple không điền `state` ở lượt LIST thì cách 1 **vô dụng** và phải quay lại bàn. Chạy `LOC-STATE-PROBE` trước (KB §30.5).
-  - ⚠ **`client.ts:81` là ternary MỘT include** (`opts?.includeAvailability ? "?limit=200&include=inAppPurchaseAvailability" : "?limit=200"`) ⇒ phải đổi sang **ghép mảng** include, KHÔNG phải thêm một cờ nữa.
-  - ⚠ **CA B — item có CẢ HAI dòng (chạy lại lần hai).** File "188 Vàng." · Approved "188 Vàng" · pending "188 Vàng." ⇒ theo quy tắc 1 thì KHÁC ⇒ TICK ⇒ PATCH **thừa**. Không hại (update tại chỗ), chỉ tốn request + làm Manager tưởng còn việc. ⏳ chờ Manager chốt cách xử. ⚠ **Và CA B chạm đúng `[LOCSYNC-duplicate-locale]`** — hôm nay tool còn chưa chọn đúng dòng để PATCH.
+- [x] [BULKIMPORT-loc-compare-apple] ✅ **ĐÃ SHIP (2026-10-01).** Mục này trước
+  đây mang một census dài — **phần lớn đã lỗi thời** và được thay bằng KB §34.
+  Ba điều đáng giữ lại vì chúng là chỗ census cũ **sai**:
+  - ⛔ **Phương án "0 request thêm" (`include=inAppPurchaseLocalizations` ở
+    `page.tsx`) ĐÃ BỊ BÁC.** Nó dựng UI trên `state` của localization — tức mô
+    hình **V1** mà `[LOC-V2-model]` vừa xoá — và thêm vào đó `fields[]` của
+    đường đó **không có** `version`, còn `limit[inAppPurchaseLocalizations]` trần
+    **50** (2 version × 39 locale = 78 ⇒ cắt im lặng). Đã dùng **phương án A**:
+    hai tầng, `readVersionBaseline`, ~2,3 request/item.
+  - ⭐ **`0 request thêm` vẫn đúng cho MỘT thứ**: `page.tsx` nay giữ lại
+    `iapsRes.data[].id` (đang bị vứt) ⇒ map `productId → appleIapId` miễn phí.
+  - ⚠ **Quy tắc fail-safe đã cài và ghim**: không đọc được ⇒ **UNTICK** + nhãn
+    riêng. `UNREADABLE` **không** phải `SkipReason` thứ tư — nó là trục khác
+    (KB §34.4).
 - [ ] [LOCSYNC-duplicate-locale] ⚠⚠ **BUG TIỀM TÀNG, độc lập với mọi tính năng mới.** `localization-sync.ts:94` dựng `new Map(existing.map((e) => [e.locale, e]))` ⇒ **khoá trùng thì phần tử SAU ĐÈ phần tử TRƯỚC**, và `route.ts:1388` truyền **toàn bộ** danh sách Apple trả về **không dedup**. Item có **hai** dòng cùng locale (Approved + Prepare for Submission — hình dạng đã quan sát, KB §28.6/§28.7) ⇒ tool PATCH **dòng Apple liệt kê SAU CÙNG**, mà thứ tự đó **không có hợp đồng nào bảo đảm**. Trúng bản pending thì chạy, trúng bản ACTIVE thì **409**. ⚠ Manager đã chạy lại **3 lần** trong sự cố 2026-09-22 ⇒ lớp item này **chắc chắn đã tồn tại**. ⇒ Chọn dòng **có chủ đích theo `state`**, đừng để `Map` chọn hộ. Chi tiết: KB §28.11.a.
 - [ ] [LOC-STATE-PROBE-remove] ⏳ **GỠ instrumentation sau khi nó trả lời.** `lib/iap-management/bulk-import/localization-state-probe.ts` + test + call site trong `execute/route.ts`. Quy trình: chạy 1 import thật (OVERWRITE, app có item live) → `grep LOC-STATE-PROBE` log Railway → ghi kết quả vào KB **§28.11.b** + điền bảng **§30.1** → XOÁ. Tiền lệ: dòng DEBUG 429-header của arc key-pool. ⚠ Log "cho có thông tin" giữ mãi là cách log trở nên không đọc được.
 - [ ] [LOC-ACTIVE-ui-warning] ⏸ **Cảnh báo UI cho dòng LIVE** — Manager chốt (A)+(C) 2026-09-23: vẫn gửi mọi `toPatch` (Apple là trọng tài, KHÔNG skip), **nhưng** cảnh báo ở step Localization.

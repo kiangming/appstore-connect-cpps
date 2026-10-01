@@ -3367,6 +3367,19 @@ push-hygiene verification session, where a backup taken immediately
 before the mutation (not `git stash`/`git checkout`) was what actually
 recovered the correct pre-mutation file.
 
+⚠ **ADDENDUM (2026-10-01, arc `[BULKIMPORT-loc-compare-apple]`) — when ONE FILE
+carries the changes of TWO chunks, `git add <file>` silently merges them.**
+C1 and C2 were authored back-to-back and both touched
+`localization-version-plan.ts` (C1 deduplicated a row mapper; C2 added
+`comparedAgainst`). `git add` on the whole file put C2's change inside C1's
+commit, so `git show C1` claimed work C1 did not do.
+⇒ **`git add -p` for any file touched by more than one chunk**, or stage the
+chunks in separate passes. Caught by reading `git show <C1> --stat` before
+pushing; repaired with `reset --soft` + rebuilding C1's true intermediate tree
+(which still had to typecheck and pass its tests on its own), then verifying the
+FINAL tree was byte-identical (`md5`) to the one the gauntlet had actually run
+against. **A commit message is a claim about a diff; the diff is the evidence.**
+
 **P14 — LAYER-GAP, 3rd instance: a guard duplicated on client and server must be opened on BOTH.**
 
 "The server accepts it" ≠ "the user can reach it". Confirmed instances: Google's
@@ -4497,6 +4510,89 @@ payload. Tests: +22.
 `BulkImportWizard.tsx`.
 
 ---
+
+**P45 — A RED TEST CAN MEAN THE HARNESS DID NOT RUN, NOT THAT THE PRODUCT IS
+BROKEN. TWO VITEST SHAPES, BOTH FOUND BY A MUTATION RUN GOING RED FOR THE WRONG
+REASON.** *(arc `[BULKIMPORT-loc-compare-apple]`, chunk 0 + C1)*
+
+Both are invisible while everything passes. Both surface the moment a mutation
+run has to be *attributed* — which is the real reason mutation discipline pays
+for itself twice.
+
+1. **`mockClear()` does not drain queued `mockResolvedValueOnce` values.** It
+   wipes call history and leaves the queue. A test that queues three and consumes
+   one leaks the other two into whatever runs next. Chunk 0's first mutation went
+   red in **5** tests; only **2** were about the mutation, the other 3 were
+   poisoned neighbours. Fixed by `mockReset()` (+ re-establishing the default
+   implementation in `beforeEach`), after which the same mutation went red in
+   exactly the 4 tests that depend on paging.
+   ⇒ **If a test file uses `mockResolvedValueOnce` anywhere, its `beforeEach`
+   must `mockReset`, not `mockClear`.**
+
+2. **A top-level `class` referenced inside a `vi.mock` factory is in its temporal
+   dead zone.** Factories are hoisted above the module body, so
+   `vi.mock("…", () => ({ MyError }))` with `class MyError extends Error {}`
+   below it throws `Cannot access 'MyError' before initialization` and the file
+   reports **"no tests"** — which reads like a path/glob problem, not a hoisting
+   one. ⇒ `const MyError = vi.hoisted(() => class MyError extends Error {})`.
+
+⚠ The family rule: **before concluding anything from a red run, confirm the red
+is about the product.** A count of failures is not a signal until each one is
+attributable; "more tests went red" is not "the guard is stronger".
+
+**P46 — A MOCKUP WITH A "DEFERRED" SECTION IS A LIVE HAZARD, NOT A RECORD. WHEN
+THE DEFERRED PART IS LATER *REJECTED*, FIX THE DRAWING — FIXING THE CODE IS NOT
+ENOUGH.** *(arc `[BULKIMPORT-loc-compare-apple]`, C4)*
+
+`bulk-import-localization-step-mockup.html` drew an `ACTIVE` pill and the design
+doc specified it. The feature was deferred, then the model it rested on was
+**measured and disproved**: under Apple's real model a localization has no
+`state` at all, and `ACTIVE` appears only in WRITE-path error text — a pill
+driven by it would never render for anyone (§29.4).
+
+The code never shipped the pill, so there was nothing to delete. **The drawing
+still showed it**, and a mockup marked "để dành" is precisely the artifact the
+next person opens in order to *finish the job*. Leaving it would have handed a
+future agent a specification for a feature that cannot work, with a checkmark
+implied.
+
+⇒ Three moves, not one: (a) correct the drawing, (b) write a **HẬU KỲ** note on
+it saying what was disproved and when, (c) add a **structural test** forbidding
+the dead vocabulary in the shipped surface, with prose exempted (comments
+stripped — see P15). Code alone fixes today; the drawing is what fixes next
+year.
+
+**P47 — CHANGING A CLIENT-SIDE *DEFAULT* INVALIDATES EVERY SERVER RULE OF THE
+FORM "ABSENT MEANS X". THOSE RULES WERE WRITTEN FOR THE OLD DEFAULT.**
+*(arc `[BULKIMPORT-loc-compare-apple]`, C3 — the arc's #1 silent-bug candidate)*
+
+`isTicked` (client) and `applyLocalizationSelection` (server) both read *"this
+item is absent from `selected`"* as **"process all of its locales"**. Correct,
+deliberate, and in the safe direction — while the default WAS tick-all.
+
+Once the default is computed from Apple, an item whose cells should all be
+UNTICKED and which is merely **absent** renders unticked **and is written in
+full**. UI and server diverge *in the write direction*, with no error anywhere.
+Neither side is wrong on its own; the pair is.
+
+⇒ The fix is **not** to flip the server rule — the other direction turns a
+client/server version skew into a silent mass-skip, which is worse. The fix is
+to make the client **state its opinion explicitly for every item**, so "absent"
+stops occurring in normal operation and reverts to being a true fail-safe.
+
+⚠ **And the meaning of the fail-safe's telemetry changes with it.** The server's
+"item missing ⇒ keep + record anomaly" branch went from *firing constantly*
+("the Manager didn't touch this one") to *never firing* ("client and server
+disagree about the contract"). Same code, different signal. **Say so in the
+docs, or the next person reads the old meaning off a counter that now means
+something alarming.**
+
+⇒ Checklist when a default moves: grep the server for every `?? all`,
+`if (!x) return true`, `absent ⇒ include` branch, and ask of each one *"was this
+written assuming the old default?"*
+
+---
+
 
 ### 10.14 Cycle 44 — IAP Export (Google + Apple) (2026-07)
 
@@ -8596,3 +8692,149 @@ DevTools (§32.1) cho thấy ASC `POST` một version rồi PATCH vào **bản c
 docstring rằng nó là tạm và **ai** phải gỡ; (2) **số liệu được chuyển vào KB
 trước khi code biến mất**. Bỏ nửa (2) thì việc gỡ trở thành **xoá bằng chứng**.
 
+
+## §34 — Step Localization tự quyết mặc định: so với Apple TRƯỚC khi ghi (2026-10-01)
+
+**Arc `[BULKIMPORT-loc-compare-apple]`.** Thứ "để dành" từ 2026-09-23 nay đã
+ship. Mục tiêu một câu: *import 88 item chỉ để sửa price ⇒ **0 ô được tick**,
+Manager bấm Next là xong.*
+
+| Chunk | Kết quả |
+|---|---|
+| **C0** | `listInAppPurchaseVersions` đọc hết trang + fail-safe `complete` — lỗ trên đường GHI, vá trước mọi thứ khác |
+| **C1** | `readVersionBaseline` — **một** định nghĩa "bản đang bán", preview và write cùng gọi · route preview |
+| **C2** | `buildCellDefaults` + `itemWillCreateVersion` — thuần, 6 trạng thái ô |
+| **C3** | đọc lazy ở step 4, tiến trình, cô lập lỗi, **seed `selected` tường minh** |
+| **C4** | 6 trạng thái hiển thị, xoá `ACTIVE`, dòng cảnh báo tạo version |
+| **C5** | KB · user guide · TODO (mục này) |
+
+### 34.1 Chi phí — ĐO THẬT, không ước lượng
+
+⚠ Ước tính cũ trong TODO (*"~1 request/item"*) **SAI**. Nó có từ mô hình V1.
+
+Đo 2026-09-30, account `VNGSing`, app `6744642671`, **6 item**, GET-only:
+
+| Endpoint | n | min | **med** | max |
+|---|---|---|---|---|
+| `GET /v2/inAppPurchases/{id}/versions?limit=200` | 6 | 645 | **859** | 1078 ms |
+| `GET /v1/inAppPurchaseVersions/{id}/localizations` | 6 | 918 | **1149** | 1650 ms |
+
+**R trung bình = 977 ms** (n=12). Hình dạng item quan sát được: 4/6 có **1**
+version (`APPROVED`), 2/6 có **2** (`PREPARE_FOR_SUBMISSION` + `APPROVED`)
+⇒ **2,33 request/item**.
+
+| Lô 88 item (phương án A, hai tầng, concurrency 3, **không** `INTER_ROW_DELAY`) | |
+|---|---|
+| Request | **≈ 205** (dải 176–264) |
+| Thời gian tường | **≈ 70 giây** (dải 59–93 s) |
+| % ngân sách giờ | **≈ 5,7 %** của `user-hour-lim: 3600` |
+
+⚠ `x-rate-limit: user-hour-lim:3600;user-hour-rem:3599;` đọc lại được trên
+`GET /v1/apps/{id}/inAppPurchasesV2` ngày 2026-09-30 — xác nhận §10.8 lần nữa.
+Con số **250 req/giờ** của Hotfix 25 đã chết; comment mang nó trong
+`client-fetch-queue.ts` đã sửa trong arc này.
+
+#### ⚠⚠ GIỚI HẠN CỦA PHÉP ĐO — đừng đọc rộng hơn nó
+- Đo **từ máy dev**, không phải từ Railway. Độ trễ Railway→Apple **CHƯA ĐO**.
+- **6 item, một app, mọi item đúng 3 locale.** App nhiều locale ⇒ payload
+  `localizations` lớn hơn ⇒ **CHƯA ĐO**.
+- Tỉ lệ 2/6 item có draft là của app đó hôm đó, không phải của một lô 88 thật.
+- ⭐ **Mọi `links.next` đều vắng.** C0 vá một ca **chưa từng quan sát được** —
+  cùng hình dạng §33.2 (*`n=3 < 10` ⇒ landmark chưa bắn*). Nó là cái gác, không
+  phải bản vá cho triệu chứng đã thấy.
+
+#### ⭐ Và chi phí này là chi phí LẶP, không phải chi phí mới
+`runOverwrite` **đã** trả đúng 2–3 request/item đó ở execute. Thêm preview ⇒
+tổng ×2 (≈ 11 % ngân sách giờ). Chấp nhận được, và **có chủ đích**: preview
+không gửi kết quả so sánh lên server, vì route execute tự khai *"re-parse
+server-side, don't trust the client"*.
+
+### 34.2 Vì sao preview và write phải dùng CHUNG một hàm đọc
+
+Hai surface cùng hỏi *"version nào là bản người mua đang thấy?"*. Nếu chúng trả
+lời khác nhau thì preview hứa một đằng, Apple nhận một nẻo — và **lệch đó chỉ
+nhìn thấy được bằng cách đặt ảnh chụp màn hình cạnh một sản phẩm đang bán**.
+Tức là không bao giờ.
+
+⇒ `version-baseline.ts` là **một** chỗ: `APPROVED_STATES` (gồm `ACCEPTED`),
+"chỉ đọc draft khi có ĐÚNG MỘT". Ghim bằng structural test — không phải bằng
+kỷ luật.
+⚠ `hasDraft` = **đúng một** draft. Hai draft là trạng thái `pickWriteTargetVersion`
+**REFUSE**; báo "có draft" sẽ khiến preview hứa một lần sửa tại chỗ không bao
+giờ xảy ra.
+
+### 34.3 ⚠⚠ Bug im lặng số một của arc — và nó KHÔNG nằm trong chỉ thị nào
+
+Đọc đầy đủ ở **P47**. Tóm tắt: *"vắng mặt ⇒ ghi hết"* đúng với mặc định CŨ;
+mặc định mới biến nó thành **UI hiện untick, server ghi đủ**. Sửa bằng cách
+seed `selected` **tường minh**, **không** đụng luật phía server.
+
+⭐ Nó được tìm ra bằng **đọc hai luật cạnh nhau ở census**, không bằng test —
+không test nào đang chạy khi đó có thể đỏ, vì cả hai phía đều đúng *một mình*.
+
+### 34.4 Sáu trạng thái ô, và vì sao không phải bốn
+
+Mockup vẽ 4. Mô hình đã đo đòi 6:
+
+| Ô | Mặc định | Vì sao tồn tại |
+|---|---|---|
+| `IDENTICAL_TO_LIVE` | UNTICK | không có gì để đổi |
+| `ALREADY_IN_DRAFT` | UNTICK | lần chạy thứ hai của mọi lô |
+| `LIVE_MATCHES_BUT_DRAFT_DIFFERS` | UNTICK | ⭐ item **có thay đổi đang chờ duyệt** |
+| `DIFFERS` | TICK | kèm **trường nào** khác |
+| `NEW_LOCALE` | TICK | Apple thật sự chưa có |
+| `UNREADABLE` | **UNTICK** | ⚠ **không hỏi được Apple** |
+
+⚠⚠ Ba ca đầu **cùng hành động, khác CÂU**. Gộp nhãn là xoá đúng thông tin
+khiến chúng đáng tồn tại: *"item này có thay đổi đang chờ Apple duyệt hay
+không"* — thứ Manager sẽ phải mở ASC mới biết.
+
+⚠⚠ `NEW_LOCALE` và `UNREADABLE` **ngược hướng nhau** và **không được gộp**:
+*"Apple nói không có"* ≠ *"không hỏi được Apple"*. Gộp theo chiều sai ⇒ mọi ô
+tick ⇒ **tái sinh nguyên vẹn sự cố 409 ngày 2026-09-22**. Vì thế `UNREADABLE`
+sống ở `ItemAppleState`, **bọc ngoài** `SkipReason` — chứ không phải thành viên
+thứ tư của nó.
+
+### 34.5 Q-F — đếm ITEM, và điều kiện (3) phải là `toWrite`
+
+Dòng cảnh báo: *"Trong đó **N item** sẽ tạo version mới trên App Store Connect
+⇒ phải duyệt lại"*, **ẩn khi N = 0**.
+
+N = số item thoả **đủ ba**: (1) có `APPROVED` · (2) **không** có draft ·
+(3) có ít nhất một locale **nằm trong `toWrite` của planner** và được tick.
+
+⚠ **(3) là `toWrite`, KHÔNG phải "khác bản đang bán".** Locale Apple chưa từng
+thấy không "khác" — nó **vắng** — mà thêm nó vào item đang bán vẫn buộc tạo
+version. Diễn đạt thành so nội dung là lỗi tự nhiên và nó **ĐẾM THIẾU** mọi
+dòng add-locale. Ngược lại, ô Manager tick tay mà planner sẽ skip thì **không**
+tạo gì và không được đếm.
+⚠ Đếm theo **ô** thì thổi phồng đúng bằng số locale — trên một cảnh báo về thứ
+**không có DELETE**.
+
+### 34.6 Tiêu chí flake — hai bước mới, cả hai sinh từ arc này
+
+Bản cũ: *xanh khi chạy riêng + full suite chỉ đỏ do timeout*. Bổ sung:
+
+3. ⭐ **Với file DOM nặng, "chạy riêng" = MỘT FILE MỘT LƯỢT.** Instance: 10 file
+   chạy **chung** vẫn 7 đỏ; chạy **từng file một** 10/10 xanh, 114/114. Mỗi file
+   wizard tự nó mất 26–29 s trong jsdom — một "tập con" vẫn là contention.
+4. ⭐ **Nghi thay đổi của mình gây đỏ ⇒ chạy cây TRƯỚC thay đổi để đối chứng.**
+   Instance: C3 làm vài test hiện **94 giây**, trông y hệt một vụ treo do effect
+   mới. `git stash` + chạy lại cùng thư mục trên cây trước-C3: **cũng đỏ 2 file
+   / 4 test**. Contention có sẵn. ⚠ Backup patch trước khi stash, và xác nhận
+   `md5` sau `stash pop`.
+⚠ Và **đừng chạy `lint`/`build` song song với suite khi đang đo flake** — lượt
+đầu của chunk 0 tự tạo nhiễu đúng kiểu đó và cho ra một con số (14 file/23 đỏ)
+phải vứt đi.
+
+### 34.7 Cái KHÔNG làm, có chủ đích
+
+- **Tool vẫn không tự submit review.** Dừng ở version `PREPARE_FOR_SUBMISSION`.
+- **Bulk import vẫn không xoá localization** (Q3). *"File không có locale X"* ≠
+  *"Manager muốn xoá X"*.
+- **Đường CREATE vẫn dùng endpoint V1** — `[LOCV2-create-path]`, còn mở, nêu ra
+  chứ không giấu.
+- **`resolved` trong deps của effect không có test nào phân biệt được.** Giữ vì
+  effect đọc nó, nhưng yêu cầu "override ở step 3 đổi tập đọc" thực tế được bảo
+  đảm bởi **điều hướng step**. Khai rõ thay vì để người sau tưởng dòng deps đó
+  đang gác cái gì.

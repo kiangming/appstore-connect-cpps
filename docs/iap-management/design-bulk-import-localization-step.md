@@ -611,3 +611,54 @@ UI**, và ngân sách request để đọc Apple ở bước preview (~1 request
 
 ⚠ Ba ca **cùng UNTICK**, khác **câu nói**. Gộp nhãn là xoá đúng thông tin khiến
 chúng đáng tồn tại: *item này có thay đổi đang chờ Apple duyệt hay không*.
+
+---
+
+## §AS-BUILT-2 — phần "để dành" đã ship (arc `[BULKIMPORT-loc-compare-apple]`, 2026-10-01)
+
+⚠ **Đọc mục này và §HẬU KỲ trước khi tin phần thiết kế ở trên.**
+
+| Chunk | Commit | Nội dung |
+|---|---|---|
+| C0 | `6c59b73` | `listInAppPurchaseVersions` phân trang + fail-safe `complete` (lỗ đường GHI) |
+| C1 | `9055dec` | `readVersionBaseline` dùng chung + route preview |
+| C2 | `0e55eac` | `buildCellDefaults` · `itemWillCreateVersion` |
+| C3 | `26f34c4` | đọc lazy ở step 4 + **seed `selected` tường minh** |
+| C4 | `c4e4b8d` | 6 trạng thái ô · xoá `ACTIVE` · dòng Q-F |
+| C5 | *(commit này)* | KB §34 + P45–P47 · user guide · TODO |
+
+### ⛔ GATE PARITY D4 HẾT HIỆU LỰC — khai đích danh
+
+D4 ở trên viết: *"mặc định phải GIỐNG HỆT hôm nay… đo thẳng: mặc định ⇒ kết quả
+y hệt hôm nay."* **Không còn đúng, và đó là cả mục đích của arc này.** Mặc định
+nay do Apple quyết.
+
+| | |
+|---|---|
+| Gate **cũ** (D4, tầng hành vi mặc định) | ⛔ **hết hiệu lực** |
+| Gate **đang dùng** | `localization-selection.test.ts:45,57,62` — selection phủ toàn bộ ⇒ **no-op** |
+| Tầng hai | `syncLocalizationsToVersion` không đổi ⇒ execute không đổi |
+
+⚠ Một test cũ đã phải **đổi assertion**, không phải xoá:
+`BulkImportWizard.localization.test.tsx` → *"default posts an EMPTY selection"*
+từng đòi `selected === {}`. Chính comment của nó cho phép: *"a fully-populated
+map here would work too, but an empty one proves the default path never had to
+enumerate anything."* C3 làm nó enumerate, **có chủ đích** (P47). Hành vi không
+đổi — danh sách đủ locale ≡ vắng mặt, với choke point.
+
+### Lệch thiết kế — khai rõ
+
+| Thiết kế / mockup nói | Đã ship | Lý do |
+|---|---|---|
+| **4** trạng thái ô | **6** | 3 câu skip phân biệt + `UNREADABLE` là trục riêng (KB §34.4) |
+| pill `ACTIVE` trong ô | ⛔ **xoá khỏi thiết kế** | V2 không có `state` trên localization; guard trên nó không bao giờ bắn (§29.4). Thay bằng dấu **"đang bán"** mức ITEM. Mockup đã sửa + ghi HẬU KỲ (P46) |
+| *"Trong đó ACTIVE: N"* ở confirm | *"Trong đó **N item** sẽ tạo version mới…"*, **ẩn khi N=0** | Một item = một version dù bao nhiêu ô tick (Q-F) |
+| `include=inAppPurchaseLocalizations`, **0 request** | **hai tầng, ~2,3 request/item** | Phương án cũ dựng trên `state` của localization = hồi sinh mô hình V1 vừa xoá; và dính §4.1 + trần `limit[rel]`=50 |
+| *"~1 request/item"* | **2–3** | ước tính cũ có từ trước mô hình version |
+
+### Hợp đồng `config.localization_selection` — phần ĐỔI
+
+Shape không đổi. Cái đổi là **ai điền nó**: trước C3 chỉ có item Manager đụng
+tay; nay **mọi** item CREATE/OVERWRITE có localization đều có entry tường minh.
+⇒ Nhánh *"item vắng mặt ⇒ giữ hết + anomaly"* chuyển từ **đường chạy hằng ngày**
+thành **fail-safe**. Xem mục anomaly ở trên và **P47**.
