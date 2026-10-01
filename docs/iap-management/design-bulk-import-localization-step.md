@@ -534,6 +534,32 @@ là lúc Manager cần biết vì sao bảng trống.
 ⚠ Mẫu số luôn đếm **ô THẬT** (`items[i].localizations.length`), **không** phải
 `rows × locale_pair_count`.
 
+### ⚠⚠ C3 ĐỔI NGHĨA BỘ ĐẾM ANOMALY — code không đổi, Ý NGHĨA đổi
+
+Bảng trên có dòng: *item **không có** trong `selected` ⇒ GIỮ localization +
+ghi anomaly*. Luật đó **không sửa một dòng nào** ở C3 và **phải giữ nguyên** —
+chiều ngược lại (không nhắc ⇒ bỏ) biến lệch phiên bản client/server thành
+mass-skip im lặng.
+
+Nhưng **cái nó đang đếm thì khác đi**:
+
+| | Trước C3 | Sau C3 |
+|---|---|---|
+| Client gửi gì | chỉ item Manager **đụng tay** | **mọi** item CREATE/OVERWRITE có localization, tường minh |
+| "item vắng mặt" nghĩa là | *"Manager không đụng item này"* — **chuyện thường** | ⚠ *"client và server đang lệch phiên bản"* — **bất thường thật** |
+| Nhánh anomaly bắn khi nào | liên tục, ở vận hành bình thường | gần như **không bao giờ** |
+
+⇒ Nhánh đó chuyển từ **đường chạy hằng ngày** thành **fail-safe**. Ai đọc log
+sau này mà thấy nó bắn thì đó là **tín hiệu thật**, không phải nhiễu — đừng
+đọc theo nghĩa cũ.
+
+⚠ Lý do phải seed tường minh: `isTicked` (client) và `applyLocalizationSelection`
+(server) **cùng** đọc "vắng mặt ⇒ ghi hết". Luật đó viết cho **mặc định cũ**
+(tick-hết). Khi mặc định do Apple quyết, một item đáng untick mà **vắng mặt**
+sẽ hiện untick trên màn hình còn server thì **ghi đủ** — lệch theo **chiều
+GHI**. ⇒ Quy tắc rút ra: **đổi MẶC ĐỊNH ở client thì phải soát lại mọi luật
+"vắng mặt nghĩa là X" ở server** — chúng được viết cho mặc định cũ.
+
 ---
 
 ## §HẬU KỲ — arc `[LOC-V2-model]` đã sửa tận gốc cái lỗi sinh ra step này (2026-09-26)

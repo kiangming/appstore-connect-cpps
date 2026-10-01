@@ -68,6 +68,12 @@ import {
 } from "@/lib/iap-management/bulk-import/conflict-resolution";
 import { computeWillSubmitCount } from "@/lib/iap-management/bulk-import/will-submit";
 import {
+  buildCellDefaults,
+  type ItemAppleState,
+} from "@/lib/iap-management/bulk-import/localization-cell-default";
+import { acquireSlot, releaseSlot } from "@/lib/iap-management/client-fetch-queue";
+import type { LocalizationBaselineResponse } from "@/app/api/iap-management/apps/[appId]/bulk-import/localization-baseline/route";
+import {
   bulkImportToastSeverity,
   hasNonRenewingSub,
 } from "@/lib/iap-management/bulk-import/result-hints";
@@ -94,6 +100,16 @@ interface Props {
   appId: string;
   appName: string;
   existingProductIds: string[];
+  /**
+   * productId → Apple's opaque IAP id, for the Localization step's baseline
+   * read. Comes free from the `listAllInAppPurchases` call the page already
+   * makes (`page.tsx`), so this costs **no extra Apple request**.
+   *
+   * ⚠ An item ABSENT from this map is one we cannot ask Apple about — the step
+   * must render it "không đọc được", never guess an id and never fall through
+   * to "chưa có trên Apple".
+   */
+  appleIapIdByProductId?: Record<string, string>;
   /** C-3 — last bulk-import verdict per product. ⚠ A product ABSENT from this
    *  map has never come through bulk import, which is NOT the same as "it
    *  went fine". Optional so callers predating C-3 still compile. */
@@ -268,6 +284,7 @@ interface ExecuteResult {
 
 export function BulkImportWizard({
   appId,
+  appleIapIdByProductId,
   appName,
   existingProductIds,
   lastImportByProductId,
@@ -289,6 +306,45 @@ export function BulkImportWizard({
    */
   const [localizationSelection, setLocalizationSelection] =
     useState<LocalizationSelectionState>({ ignoreAll: false, selected: {} });
+
+  /* ─── [BULKIMPORT-loc-compare-apple] C3 — what Apple holds, per item ─────
+   *
+   * ⚠⚠ AND WHY THE SELECTION MUST BE SEEDED **EXPLICITLY** ONCE THIS LANDS.
+   * `isTicked` (LocalizationStep) and `applyLocalizationSelection` (server)
+   * both read "this item is absent from `selected`" as **"process all of its
+   * locales"**. That rule was written when the default WAS tick-all, and it is
+   * deliberately in the do-not-mass-skip direction, so it stays.
+   *
+   * But the default is no longer tick-all. An item whose cells should all be
+   * UNTICKED and which is merely ABSENT would render unticked while the server
+   * writes every one of them — a UI/server divergence in the WRITE direction,
+   * which is the bad one. So every item we form an opinion about gets an
+   * explicit entry, and an empty array is a supported, meaning-carrying value
+   * (`localization-selection.test.ts`: "empty is a decision, not a gap").
+   */
+  const [itemBaselines, setItemBaselines] = useState<
+    Record<string, { state: ItemAppleState; hasApproved: boolean; hasDraft: boolean }>
+  >({});
+  /** `{done,total}` while a baseline pass is running; null when idle. */
+  const [baselineProgress, setBaselineProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  /**
+   * ⚠ Items whose baseline has already been requested. NOT a cache — a
+   * LATCH. The effect re-runs whenever step-3 dispositions change (so an item
+   * flipped SKIP→OVERWRITE gets read), and without this it would re-seed every
+   * item each time, silently overwriting cells the Manager had just fixed.
+   */
+  const seededRef = useRef<Set<string>>(new Set());
+  /**
+   * ⚠⚠ Items the Manager has touched BY HAND. Seeding must never overwrite
+   * these, and the window is real: cells are interactive while the ~1-minute
+   * read is still in flight, so a hand edit can land BEFORE that item's
+   * baseline arrives. The latch above cannot see that — it only knows a
+   * request went out.
+   */
+  const touchedRef = useRef<Set<string>>(new Set());
   /** Confirm-before-leaving-the-step dialog; null when closed. */
   const [locConfirm, setLocConfirm] = useState<{
     willProcess: number;
@@ -527,6 +583,156 @@ export function BulkImportWizard({
     }
     return { fromColumn, defaulted };
   }, [parsed]);
+
+  /**
+   * ⭐ C3 — read Apple's current localizations when the step is REACHED.
+   *
+   * ⚠ LAZY, AND NOT MERELY TO SAVE REQUESTS. The set of items to read is a
+   * RESULT of step 3: `resolved` depends on `conflictMode` and the per-row
+   * overrides the Manager clicks there. Reading at parse time would read rows
+   * they are about to mark SKIP, and miss rows they are about to mark
+   * OVERWRITE. Hence `resolved` in the deps — an item flipped SKIP→OVERWRITE
+   * is picked up on the next pass.
+   *
+   * ⚠ FANNED OUT FROM THE BROWSER, concurrency 3 (`client-fetch-queue`, the
+   * same queue the availability cells use). A batch of 88 takes about a minute
+   * (measured: ~977ms mean per Apple request, ~2.3 requests per item), which is
+   * far too long to show nothing. Counting resolved promises gives the "đang
+   * đọc App Store Connect: 34/88" line, and a per-item catch gives failure
+   * isolation, for free.
+   *
+   * ⚠⚠ EVERY FAILURE PATH LANDS ON `UNREADABLE`, WHICH **UNTICKS**. A missing
+   * id, a non-200, `readable:false`, a thrown fetch — all of them mean *we did
+   * not get an answer*, never *Apple has nothing*. The second reading ticks
+   * every cell and recreates the 409 incident; that is the whole reason the two
+   * are different states in `localization-cell-default.ts`.
+   */
+  useEffect(() => {
+    if (step !== STEP.LOCALIZATION || !parsed || !resolved) return;
+
+    const itemsById = new Map(parsed.items.map((i) => [i.product_id, i]));
+    const pending = resolved.decisions.filter((d) => {
+      if (d.disposition !== "CREATE" && d.disposition !== "OVERWRITE") return false;
+      if (seededRef.current.has(d.product_id)) return false;
+      return (itemsById.get(d.product_id)?.localizations.length ?? 0) > 0;
+    });
+    if (pending.length === 0) return;
+    // Latch BEFORE any await — a second effect run must not duplicate requests.
+    for (const d of pending) seededRef.current.add(d.product_id);
+
+    let cancelled = false;
+
+    const settle = (
+      productId: string,
+      state: ItemAppleState,
+      hasApproved: boolean,
+      hasDraft: boolean,
+    ) => {
+      const item = itemsById.get(productId);
+      if (!item) return;
+      setItemBaselines((prev) => ({
+        ...prev,
+        [productId]: { state, hasApproved, hasDraft },
+      }));
+      // ⚠ Hand edits win. See `touchedRef`.
+      if (touchedRef.current.has(productId)) return;
+      const ticked = buildCellDefaults(item.localizations, state)
+        .filter((c) => c.default.tick)
+        .map((c) => c.locale);
+      setLocalizationSelection((prev) => ({
+        ...prev,
+        selected: { ...prev.selected, [productId]: ticked },
+      }));
+    };
+
+    // ⚠ CREATE rows are seeded WITHOUT asking Apple. The item does not exist
+    // there yet, so there is nothing to compare and no id to compare with —
+    // asking would be a request guaranteed to 404.
+    for (const d of pending.filter((x) => x.disposition === "CREATE")) {
+      settle(d.product_id, { kind: "NEW_ITEM" }, false, false);
+    }
+
+    const toRead = pending.filter((d) => d.disposition === "OVERWRITE");
+    if (toRead.length === 0) return;
+
+    setBaselineProgress({ done: 0, total: toRead.length });
+    let done = 0;
+
+    void Promise.all(
+      toRead.map(async (d) => {
+        const appleIapId = appleIapIdByProductId?.[d.product_id];
+        let state: ItemAppleState = { kind: "UNREADABLE" };
+        let hasApproved = false;
+        let hasDraft = false;
+        if (appleIapId) {
+          await acquireSlot();
+          try {
+            const res = await fetch(
+              `/api/iap-management/apps/${appId}/bulk-import/localization-baseline` +
+                `?appleIapId=${encodeURIComponent(appleIapId)}`,
+            );
+            if (res.ok) {
+              const body = (await res.json()) as LocalizationBaselineResponse;
+              if (body.readable) {
+                state = {
+                  kind: "READ",
+                  approved: body.approved ?? [],
+                  draft: body.draft ?? [],
+                };
+                hasApproved = body.hasApproved;
+                hasDraft = body.hasDraft;
+              }
+            }
+          } catch {
+            // Left as UNREADABLE — the option that does not write.
+          } finally {
+            releaseSlot();
+          }
+        }
+        if (cancelled) return;
+        settle(d.product_id, state, hasApproved, hasDraft);
+        done++;
+        setBaselineProgress({ done, total: toRead.length });
+      }),
+    );
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, parsed, resolved, appleIapIdByProductId, appId]);
+
+  /**
+   * ⚠ Records WHICH items the Manager edited by hand, so the baseline effect
+   * never overwrites them. Comparing the incoming selection against the
+   * current one is the only honest signal available — the step reports a whole
+   * new state, not a diff.
+   */
+  function handleLocalizationChange(next: LocalizationSelectionState) {
+    const prev = localizationSelection;
+    for (const productId of new Set([
+      ...Object.keys(next.selected),
+      ...Object.keys(prev.selected),
+    ])) {
+      const a = prev.selected[productId];
+      const b = next.selected[productId];
+      const same =
+        a !== undefined &&
+        b !== undefined &&
+        a.length === b.length &&
+        a.every((l) => b.includes(l));
+      if (!same) touchedRef.current.add(productId);
+    }
+    setLocalizationSelection(next);
+  }
+
+  /** Items whose Apple state could not be read — surfaced, never silent. */
+  const unreadableItemCount = useMemo(
+    () =>
+      Object.values(itemBaselines).filter((b) => b.state.kind === "UNREADABLE")
+        .length,
+    [itemBaselines],
+  );
 
   function toggleOverride(productId: string) {
     setOverrides((prev) => {
@@ -776,11 +982,40 @@ export function BulkImportWizard({
       )}
 
       {step === STEP.LOCALIZATION && parsed && (
-        <LocalizationStep
-          items={parsed.items}
-          value={localizationSelection}
-          onChange={setLocalizationSelection}
-        />
+        <>
+          {/* ⚠ PROGRESS IS NOT DECORATION. Reading Apple for a batch of 88
+              takes about a minute; a bare spinner for that long reads as a
+              hang, and the Manager cannot tell "still working" from "stuck".
+              The count is the only honest thing to show. */}
+          {baselineProgress && baselineProgress.done < baselineProgress.total && (
+            <div
+              data-testid="localization-baseline-progress"
+              className="mb-3 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 px-4 py-2 text-xs text-slate-600 dark:text-slate-300"
+            >
+              Đang đọc App Store Connect: {baselineProgress.done}/
+              {baselineProgress.total}
+            </div>
+          )}
+          {/* ⚠⚠ ITEMS WE COULD NOT ASK ABOUT ARE NAMED, NOT HIDDEN. Their
+              cells are unticked, and an unticked cell with no explanation is
+              indistinguishable from one the Manager unticked on purpose. */}
+          {unreadableItemCount > 0 && (
+            <div
+              data-testid="localization-baseline-unreadable"
+              className="mb-3 rounded-lg border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 px-4 py-2 text-xs text-amber-800 dark:text-amber-200"
+            >
+              Không đọc được trạng thái trên App Store Connect cho{" "}
+              {unreadableItemCount} item. Ô của những item này để{" "}
+              <strong>không tick</strong> — khi không biết, tool chọn cái không
+              ghi. Bạn vẫn tick tay được, và bước này vẫn đi tiếp được.
+            </div>
+          )}
+          <LocalizationStep
+            items={parsed.items}
+            value={localizationSelection}
+            onChange={handleLocalizationChange}
+          />
+        </>
       )}
 
       {locConfirm && (

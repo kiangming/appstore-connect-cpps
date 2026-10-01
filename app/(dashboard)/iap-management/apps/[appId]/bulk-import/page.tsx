@@ -27,6 +27,7 @@ export default async function BulkImportPage({ params }: PageProps) {
 
   let appName = "";
   let existingProductIds: string[] = [];
+  let appleIapIdByProductId: Record<string, string> = {};
   // C-3 [Q-C3.conflict-read-B] — what the previous bulk import left behind,
   // per product. ⚠ Absent = never came through bulk import, which is NOT the
   // same as "it went fine"; Step 3 must not collapse the two.
@@ -56,6 +57,19 @@ export default async function BulkImportPage({ params }: PageProps) {
     appName = appRes.data.attributes.name;
     existingProductIds = (iapsRes.data ?? []).map(
       (iap) => iap.attributes.productId,
+    );
+    // ⭐ [BULKIMPORT-loc-compare-apple] C3 — the Apple-side id, kept rather
+    // than thrown away. The Localization step needs it to ask what Apple
+    // currently holds for each item, and this response ALREADY CARRIES IT:
+    // the line above reads `attributes.productId` off the same objects and
+    // drops `.id` on the floor. Threading it costs **zero extra requests**.
+    //
+    // ⚠ productId → appleIapId, not the reverse. The import file speaks in
+    // productIds; Apple's API speaks in opaque ids. The map is the join, and
+    // an item missing from it is one the step must treat as unreadable rather
+    // than guess an id for.
+    appleIapIdByProductId = Object.fromEntries(
+      (iapsRes.data ?? []).map((iap) => [iap.attributes.productId, iap.id]),
     );
 
     // IAP.p1.g: feed pricing-source availability into the wizard so the
@@ -106,6 +120,7 @@ export default async function BulkImportPage({ params }: PageProps) {
         appId={params.appId}
         appName={appName}
         existingProductIds={existingProductIds}
+      appleIapIdByProductId={appleIapIdByProductId}
         lastImportByProductId={lastImportByProductId}
         usdTiersBySource={usdTiersBySource}
         defaultTemplateAvailable={defaultTemplateAvailable}

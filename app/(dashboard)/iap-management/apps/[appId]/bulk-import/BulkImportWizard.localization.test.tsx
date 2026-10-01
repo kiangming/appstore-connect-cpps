@@ -257,7 +257,26 @@ describe("⭐ the selection reaches the POSTed config — the hop that matters",
     fireEvent.click(exec);
   }
 
-  it("default (nothing un-ticked) posts an EMPTY selection — the server reads that as ALL", async () => {
+  it("default posts an EXPLICIT all-locales selection — same effect, different shape", async () => {
+    // ⚠⚠ THIS ASSERTION CHANGED AT `[BULKIMPORT-loc-compare-apple]` C3, AND
+    // THE CHANGE IS THE POINT OF THAT CHUNK. It used to require `selected` to
+    // be `{}` — its own comment said *"a fully-populated map here would work
+    // too, but an empty one proves the default path never had to enumerate
+    // anything"*. C3 makes it enumerate, deliberately.
+    //
+    // WHY: `isTicked` (client) and `applyLocalizationSelection` (server) both
+    // read "item absent from `selected`" as *process all of its locales*. That
+    // was safe while the default WAS tick-all. Once the default is computed
+    // from Apple, an item that should be fully UNTICKED and is merely ABSENT
+    // renders unticked and is written in full — a UI/server divergence in the
+    // WRITE direction. So every item the wizard forms an opinion about now
+    // carries an explicit list.
+    //
+    // ⭐ THE BEHAVIOUR IS UNCHANGED, and that is what parity means here: an
+    // explicit list naming every locale and an absent key are the same
+    // instruction to the choke point. Pinned one layer down, where it belongs:
+    // `localization-selection.test.ts` — "a selection that ticks everything is
+    // also a no-op".
     const { posted } = installFetch();
     const c = renderWizard();
     await goToLocalization(c);
@@ -269,10 +288,12 @@ describe("⭐ the selection reaches the POSTed config — the hop that matters",
     };
     expect(sel).toBeDefined();
     expect(sel.ignore_all).toBe(false);
-    // ⭐ PARITY: no key means "no opinion", which the choke point turns into a
-    // no-op. A fully-populated map here would work too, but an empty one proves
-    // the default path never had to enumerate anything.
-    expect(sel.selected).toEqual({});
+    // This item is not on Apple (`existingProductIds` is empty) ⇒ a CREATE row
+    // ⇒ nothing is read and every locale is ticked.
+    expect(sel.selected["com.vng.nikki.pack199ak"]?.sort()).toEqual([
+      "en-US",
+      "vi",
+    ]);
   });
 
   it("an un-ticked cell survives the hop, verbatim", async () => {
