@@ -98,16 +98,69 @@ export function jwtClientFromServiceAccount(
  */
 const jwtCache = new Map<string, JWT>();
 
+/**
+ * Which account a given encrypted blob belongs to.
+ *
+ * ⚠ THIS IS THE CHOKE POINT, AND THAT IS THE WHOLE POINT. There are 26
+ * `jwtClientFromEncrypted` call sites across the module; threading an
+ * `accountId` argument through all of them would be 26 chances to forget
+ * one, and the one forgotten is the one whose failure you need to debug
+ * (CLAUDE.md meta-rule P1 — prefer a SHARED choke point over N patches).
+ * Instead `getEncryptedCredentials` — which is the only way a route gets a
+ * blob, and which already knows the id — records it here, keyed by the
+ * SAME blob identity the JWT cache uses. Every caller then gets caller
+ * identity in its logs without changing a line.
+ */
+const blobAccountIds = new Map<string, string>();
+
+/** Caller identity for one JWT. ⛔ Email only — see `JwtAccountTag`. */
+export interface JwtAccountTag {
+  accountId?: string;
+  /** Service account `client_email`. ⛔ NEVER the private key, never the
+   *  encrypted blob. This type exists partly to make that structural. */
+  serviceAccountEmail?: string;
+}
+
+/** Keyed by JWT instance so the tag dies with the client it describes. */
+const jwtTags = new WeakMap<JWT, JwtAccountTag>();
+
+/**
+ * Record the account a credential blob came from. Called by
+ * `getEncryptedCredentials`; safe to call repeatedly.
+ */
+export function rememberAccountForCredentials(
+  encryptedCredentials: string,
+  accountId: string,
+): void {
+  blobAccountIds.set(encryptedCredentials, accountId);
+}
+
+/**
+ * Caller identity for a JWT, for log lines. Returns an empty object for a
+ * JWT this module did not build (test doubles), so callers never branch.
+ */
+export function accountTagForJwt(jwt: JWT): JwtAccountTag {
+  return jwtTags.get(jwt) ?? {};
+}
+
 export function jwtClientFromEncrypted(encryptedCredentials: string): JWT {
   const cached = jwtCache.get(encryptedCredentials);
   if (cached) return cached;
   const plain = decryptCredentials(encryptedCredentials);
   const client = jwtClientFromServiceAccount(plain);
   jwtCache.set(encryptedCredentials, client);
+  jwtTags.set(client, {
+    accountId: blobAccountIds.get(encryptedCredentials),
+    // `parseServiceAccountJson` already validated this is a real email;
+    // reading it off the built client avoids re-parsing the plaintext.
+    serviceAccountEmail:
+      typeof client.email === "string" ? client.email : undefined,
+  });
   return client;
 }
 
 /** Test seam: clear JWT cache between tests. */
 export function __clearJwtCacheForTesting(): void {
   jwtCache.clear();
+  blobAccountIds.clear();
 }

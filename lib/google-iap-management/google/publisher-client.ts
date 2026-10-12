@@ -7,9 +7,18 @@
  *   callers assemble the requests array.
  *
  * Instrumentation strategy: every call logs method + packageName + sku +
- * duration on success, and method + packageName + sku + status code +
- * tail-of-message on failure (no body, no headers — Google's error bodies
- * sometimes echo private key fragments back during scope errors).
+ * CALLER IDENTITY (account id + service account email) + duration, plus
+ * status code, `error.status`, `errors[].reason` and a 200-char message
+ * tail on failure. Still no body and no headers on the log line — Google's
+ * error bodies sometimes echo private key fragments back during scope
+ * errors. The complete body is not discarded any more, it is redacted and
+ * persisted to `actions_log.payload` instead; see
+ * google-error-descriptor.ts.
+ *
+ * ⛔ Caller identity means the service account EMAIL, which is a public
+ * identifier already shown in the account-switcher UI. The private key and
+ * the encrypted credential blob never reach a log line — enforced by
+ * logging-no-secrets.structural.test.ts, not by care.
  *
  * The googleapis SDK manages the OAuth2 token cache internally per JWT
  * instance, so we don't re-mint per call.
@@ -18,6 +27,11 @@ import { google, type androidpublisher_v3 } from "googleapis";
 import type { JWT } from "google-auth-library";
 
 import { logPublisherCall, type LogOutcome } from "./logging";
+import { accountTagForJwt } from "./auth";
+import {
+  describeGoogleError,
+  GoogleDualPathError,
+} from "./google-error-descriptor";
 import {
   oneTimeProductToInAppProduct,
   inAppProductToOneTimeProduct,
@@ -48,7 +62,24 @@ function buildClient(jwt: JWT): Publisher {
   return google.androidpublisher({ version: "v3", auth: jwt });
 }
 
+/**
+ * Time one Publisher call and log it, win or lose.
+ *
+ * ⚠ `jwt` IS THE FIRST PARAMETER FOR A REASON. Every call site already has
+ * one (it is what `buildClient` needs), and it is the only thing in scope
+ * that knows WHICH identity is making the request. Before this, a 403 line
+ * named the method and the package but not the caller — so "the tool was
+ * refused" could not be told apart from "the tool was refused *as this
+ * service account*" without a DB round-trip. Threading it here, rather
+ * than at the 17 individual call sites, keeps that impossible to forget.
+ *
+ * The line stays short: `err_status` / `err_reason` are stable enums, and
+ * `errTail` is still capped at 200 chars. The COMPLETE body is not logged
+ * — it is persisted by the orchestrators via `googleErrorPayload`, where
+ * it outlives log rotation.
+ */
 async function timed<T>(
+  jwt: JWT,
   method: string,
   packageName: string,
   sku: string | undefined,
@@ -58,16 +89,21 @@ async function timed<T>(
   let outcome: LogOutcome = "ok";
   let status: number | undefined;
   let errTail: string | undefined;
+  let errStatus: string | undefined;
+  let errReason: string | undefined;
   try {
     const out = await fn();
     return out;
   } catch (err) {
     outcome = "err";
-    const e = err as { code?: number; status?: number; message?: string };
-    status = e?.code ?? e?.status;
-    errTail = (e?.message ?? String(err)).slice(0, 200);
+    const desc = describeGoogleError(err);
+    status = desc.httpStatus;
+    errTail = desc.message.slice(0, 200);
+    errStatus = desc.status;
+    errReason = desc.reasons?.join(",");
     throw err;
   } finally {
+    const tag = accountTagForJwt(jwt);
     logPublisherCall({
       method,
       packageName,
@@ -76,8 +112,46 @@ async function timed<T>(
       durationMs: Date.now() - t0,
       status,
       errTail,
+      errStatus,
+      errReason,
+      accountId: tag.accountId,
+      serviceAccountEmail: tag.serviceAccountEmail,
     });
   }
+}
+
+/**
+ * Both halves of a try-new-then-legacy call failed — say so, keep both.
+ *
+ * ⚠ THE SHARED CHOKE POINT FOR SIX IDENTICAL HOLES. `catch { throw err }`
+ * appeared verbatim at six fallback sites (list / get / insert / patch /
+ * delete / batch upsert). Each one deleted the legacy call's error while
+ * that same call had just written the `[google-iap:publisher]` line an
+ * operator would go on to read — so the log said `inappproducts.*` and the
+ * thrown message came from `monetization.onetimeproducts.*`. Patching them
+ * one at a time is how five get fixed and the sixth does not (CLAUDE.md
+ * meta-rule P1).
+ */
+function throwBothFailed(
+  op: string,
+  packageName: string,
+  sku: string | undefined,
+  newApiErr: unknown,
+  legacyErr: unknown,
+): never {
+  const primary = describeGoogleError(newApiErr);
+  const fallback = describeGoogleError(legacyErr);
+  console.error(
+    `[google-iap:publisher] BOTH PATHS FAILED op=${op} pkg=${packageName}` +
+      (sku ? ` sku=${sku}` : "") +
+      ` new_api_status=${primary.httpStatus ?? "?"}` +
+      ` new_api_err_status=${primary.status ?? "?"}` +
+      ` new_api_err="${primary.message.slice(0, 200).replace(/"/g, "'")}"` +
+      ` legacy_status=${fallback.httpStatus ?? "?"}` +
+      ` legacy_err_status=${fallback.status ?? "?"}` +
+      ` legacy_err="${fallback.message.slice(0, 200).replace(/"/g, "'")}"`,
+  );
+  throw new GoogleDualPathError(op, primary, fallback);
 }
 
 /* ──────────────────────────────────────────────────────────────────────
@@ -106,7 +180,7 @@ async function newListOneTimeProducts(
   jwt: JWT,
   packageName: string,
 ): Promise<OneTimeProduct[]> {
-  return timed("monetization.onetimeproducts.list", packageName, undefined, async () => {
+  return timed(jwt, "monetization.onetimeproducts.list", packageName, undefined, async () => {
     const client = buildClient(jwt);
     const all: OneTimeProduct[] = [];
     let pageToken: string | undefined;
@@ -131,7 +205,7 @@ async function legacyListInAppProducts(
   jwt: JWT,
   packageName: string,
 ): Promise<InAppProduct[]> {
-  return timed("inappproducts.list", packageName, undefined, async () => {
+  return timed(jwt, "inappproducts.list", packageName, undefined, async () => {
     const client = buildClient(jwt);
     // Legacy list paginates via a `token` request param and returns the
     // next cursor in `tokenPagination.nextPageToken`. A single call caps at
@@ -177,10 +251,10 @@ export async function listInAppProducts(
         `[google-iap:publisher] list fallback pkg=${packageName} new_api_status=${status ?? "?"} legacy_count=${legacy.length}`,
       );
       return legacy;
-    } catch {
-      // Both failed — bubble the new API error (more actionable for
-      // operators: it names the strategic endpoint).
-      throw err;
+    } catch (legacyErr) {
+      // Both failed — carry BOTH. The new API's error leads (it names the
+      // strategic endpoint) but the legacy one is no longer deleted.
+      throwBothFailed("list", packageName, undefined, err, legacyErr);
     }
   }
 }
@@ -190,7 +264,7 @@ async function newGetOneTimeProduct(
   packageName: string,
   productId: string,
 ): Promise<OneTimeProduct> {
-  return timed("monetization.onetimeproducts.get", packageName, productId, async () => {
+  return timed(jwt, "monetization.onetimeproducts.get", packageName, productId, async () => {
     const client = buildClient(jwt);
     const res = await client.monetization.onetimeproducts.get({
       packageName,
@@ -205,7 +279,7 @@ async function legacyGetInAppProduct(
   packageName: string,
   sku: string,
 ): Promise<InAppProduct> {
-  return timed("inappproducts.get", packageName, sku, async () => {
+  return timed(jwt, "inappproducts.get", packageName, sku, async () => {
     const client = buildClient(jwt);
     const res = await client.inappproducts.get({ packageName, sku });
     return res.data as InAppProduct;
@@ -229,8 +303,8 @@ export async function getInAppProduct(
         `[google-iap:publisher] get fallback pkg=${packageName} sku=${sku}`,
       );
       return legacy;
-    } catch {
-      throw err;
+    } catch (legacyErr) {
+      throwBothFailed("get", packageName, sku, err, legacyErr);
     }
   }
 }
@@ -291,7 +365,7 @@ async function newPatchOneTimeProduct(
     regionsVersion?: string;
   } = {},
 ): Promise<OneTimeProduct> {
-  return timed("monetization.onetimeproducts.patch", packageName, productId, async () => {
+  return timed(jwt, "monetization.onetimeproducts.patch", packageName, productId, async () => {
     const client = buildClient(jwt);
     const res = await client.monetization.onetimeproducts.patch({
       packageName,
@@ -313,6 +387,7 @@ async function newBatchUpdateOneTimeProductStates(
   state: "ACTIVATE" | "DEACTIVATE",
 ): Promise<void> {
   await timed(
+    jwt,
     "monetization.onetimeproducts.purchaseOptions.batchUpdateStates",
     packageName,
     productId,
@@ -351,7 +426,7 @@ async function newDeleteOneTimeProduct(
   packageName: string,
   productId: string,
 ): Promise<void> {
-  await timed("monetization.onetimeproducts.delete", packageName, productId, async () => {
+  await timed(jwt, "monetization.onetimeproducts.delete", packageName, productId, async () => {
     const client = buildClient(jwt);
     await client.monetization.onetimeproducts.delete({ packageName, productId });
     return undefined;
@@ -363,7 +438,7 @@ async function legacyInsertInAppProduct(
   packageName: string,
   body: InAppProduct,
 ): Promise<InAppProduct> {
-  return timed("inappproducts.insert", packageName, body.sku ?? undefined, async () => {
+  return timed(jwt, "inappproducts.insert", packageName, body.sku ?? undefined, async () => {
     const client = buildClient(jwt);
     const res = await client.inappproducts.insert({
       packageName,
@@ -379,7 +454,7 @@ async function legacyPatchInAppProduct(
   sku: string,
   body: InAppProduct,
 ): Promise<InAppProduct> {
-  return timed("inappproducts.patch", packageName, sku, async () => {
+  return timed(jwt, "inappproducts.patch", packageName, sku, async () => {
     const client = buildClient(jwt);
     const res = await client.inappproducts.patch({
       packageName,
@@ -395,7 +470,7 @@ async function legacyDeleteInAppProduct(
   packageName: string,
   sku: string,
 ): Promise<void> {
-  await timed("inappproducts.delete", packageName, sku, async () => {
+  await timed(jwt, "inappproducts.delete", packageName, sku, async () => {
     const client = buildClient(jwt);
     await client.inappproducts.delete({ packageName, sku });
     return undefined;
@@ -690,8 +765,8 @@ export async function insertInAppProduct(
         `[google-iap:publisher] insert fallback pkg=${packageName} sku=${body.sku ?? "?"}`,
       );
       return legacy;
-    } catch {
-      throw err;
+    } catch (legacyErr) {
+      throwBothFailed("insert", packageName, body.sku ?? undefined, err, legacyErr);
     }
   }
 }
@@ -778,8 +853,8 @@ export async function patchInAppProduct(
         `[google-iap:publisher] patch fallback pkg=${packageName} sku=${sku}`,
       );
       return legacy;
-    } catch {
-      throw err;
+    } catch (legacyErr) {
+      throwBothFailed("patch", packageName, sku, err, legacyErr);
     }
   }
 }
@@ -799,8 +874,8 @@ export async function deleteInAppProduct(
       console.warn(
         `[google-iap:publisher] delete fallback pkg=${packageName} sku=${sku}`,
       );
-    } catch {
-      throw err;
+    } catch (legacyErr) {
+      throwBothFailed("delete", packageName, sku, err, legacyErr);
     }
   }
 }
@@ -848,7 +923,7 @@ export async function batchUpdateInAppProducts(
   packageName: string,
   requestBody: InappproductsBatchUpdateRequest,
 ): Promise<InappproductsBatchUpdateResponse> {
-  return timed("inappproducts.batchUpdate", packageName, undefined, async () => {
+  return timed(jwt, "inappproducts.batchUpdate", packageName, undefined, async () => {
     const client = buildClient(jwt);
     const res = await client.inappproducts.batchUpdate({
       packageName,
@@ -886,7 +961,7 @@ async function newBatchUpdateOneTimeProducts(
     allowMissing: boolean;
   }>,
 ): Promise<OneTimeProduct[]> {
-  return timed("monetization.onetimeproducts.batchUpdate", packageName, undefined, async () => {
+  return timed(jwt, "monetization.onetimeproducts.batchUpdate", packageName, undefined, async () => {
     const client = buildClient(jwt);
     const res = await client.monetization.onetimeproducts.batchUpdate({
       packageName,
@@ -914,6 +989,7 @@ async function newCrossProductBatchActivate(
 ): Promise<void> {
   if (requests.length === 0) return;
   await timed(
+    jwt,
     "monetization.onetimeproducts.purchaseOptions.batchUpdateStates",
     packageName,
     "-",
@@ -1176,8 +1252,8 @@ export async function batchUpsertInAppProducts(
         `[google-iap:publisher] batch upsert fallback pkg=${packageName} count=${inputs.length}`,
       );
       return (legacyRes.inappproducts ?? []) as InAppProduct[];
-    } catch {
-      throw err;
+    } catch (legacyErr) {
+      throwBothFailed("batch upsert", packageName, undefined, err, legacyErr);
     }
   }
 }
@@ -1206,7 +1282,7 @@ export async function getAppDetails(
   const client = buildClient(jwt);
 
   // Step 1: create edit.
-  const editId = await timed("edits.insert", packageName, undefined, async () => {
+  const editId = await timed(jwt, "edits.insert", packageName, undefined, async () => {
     const res = await client.edits.insert({
       packageName,
       requestBody: {},
@@ -1219,7 +1295,7 @@ export async function getAppDetails(
   // Step 2: read details. Wrap so we can guarantee cleanup attempt.
   let details: AppDetails;
   try {
-    details = await timed("edits.details.get", packageName, undefined, async () => {
+    details = await timed(jwt, "edits.details.get", packageName, undefined, async () => {
       const res = await client.edits.details.get({ packageName, editId });
       return res.data as AppDetails;
     });
@@ -1227,7 +1303,7 @@ export async function getAppDetails(
     // Step 3: best-effort cleanup. Swallow errors — orphan edits expire
     // server-side automatically.
     try {
-      await timed("edits.delete", packageName, undefined, async () => {
+      await timed(jwt, "edits.delete", packageName, undefined, async () => {
         await client.edits.delete({ packageName, editId });
         return undefined;
       });
@@ -1250,6 +1326,7 @@ export async function convertRegionPrices(
   requestBody: ConvertRegionPricesRequest,
 ): Promise<ConvertRegionPricesResponse> {
   return timed(
+    jwt,
     "monetization.convertRegionPrices",
     packageName,
     undefined,

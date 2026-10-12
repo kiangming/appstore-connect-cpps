@@ -44,6 +44,7 @@ import {
   batchUpsertInAppProducts,
   type InAppProduct,
 } from "../google/publisher-client";
+import { googleErrorPayload } from "../google/google-error-descriptor";
 import { decimalToMicros, microsToDecimal } from "../google/price-conversion";
 import { buildRegionMapFromBasePrice } from "../google/regions-helper";
 import { syncIapFromGoogle } from "../repository/iaps";
@@ -1239,7 +1240,17 @@ export async function executeBulkImport(
         cross_currency_by_value_fallback: crossCurrencyByValueFallback,
         custom_priced_rows: customPricedRows,
         custom_refused_rows: customRefusedRows,
-        error: err instanceof Error ? err.message : String(err),
+        // ⚠ THE WHOLE REASON THIS ARC EXISTS. `error` used to be
+        // `err.message` and nothing else, so a batch could record
+        // "The caller does not have permission" 16 times and carry not
+        // one field saying WHICH permission, on WHOSE behalf, or whether
+        // the legacy fallback failed for the same reason. The spread
+        // adds `error_full` / `error_http_status` / `error_status` /
+        // `error_reasons` / `error_details` — and, when both API paths
+        // failed, the `error_fallback_*` half as well. `error` keeps its
+        // old meaning and position, so every existing reader is
+        // unaffected.
+        ...googleErrorPayload(err),
         duration_ms: Date.now() - t0,
       },
     });

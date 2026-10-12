@@ -54,6 +54,10 @@ import {
 } from "@/lib/google-iap-management/hub-tracking/tracking";
 import { computeGoogleBulkImportTerminalStatus } from "@/lib/google-iap-management/hub-tracking/status-mapping";
 import { validateDecimalForCurrency } from "@/lib/google-iap-management/google/currency-precision";
+import {
+  describeGoogleError,
+  GoogleDualPathError,
+} from "@/lib/google-iap-management/google/google-error-descriptor";
 
 export const dynamic = "force-dynamic";
 
@@ -325,13 +329,49 @@ export async function POST(
 
       return NextResponse.json(result);
     } catch (err) {
+      // ⚠ FORWARD THE STRUCTURED HALF, NOT JUST THE SENTENCE. `e.message`
+      // is identical across every cause of a Google 403; `errorStatus`
+      // ("PERMISSION_DENIED"), `errorReasons` and `errorDetails` are what
+      // tell them apart. The orchestrator has already persisted the same
+      // fields to actions_log — this is the live copy, for the wizard and
+      // for anyone reading the HTTP response directly.
+      //
+      // ⛔ Nothing here interprets the error for the Manager. The one
+      // hint the UI used to be able to give would have pointed at per-app
+      // permissions, which the 2026-10-12 investigation established was
+      // the WRONG answer. A guess rendered as advice costs more than no
+      // advice, and any future hint must branch on `errorStatus` /
+      // `errorReasons`, never on the message string.
       const e = err as { code?: number; status?: number; message?: string };
+      const desc = describeGoogleError(err);
       const message = e?.message ?? "Bulk import failed.";
       tracking.errorMessage = message;
       const httpStatus = typeof e?.code === "number" && e.code >= 400 && e.code < 600
         ? e.code
         : 500;
-      return NextResponse.json({ error: message }, { status: httpStatus });
+      return NextResponse.json(
+        {
+          error: message,
+          errorFull: desc.full,
+          ...(desc.status !== undefined ? { errorStatus: desc.status } : {}),
+          ...(desc.httpStatus !== undefined
+            ? { errorHttpStatus: desc.httpStatus }
+            : {}),
+          ...(desc.reasons !== undefined ? { errorReasons: desc.reasons } : {}),
+          ...(desc.details !== undefined ? { errorDetails: desc.details } : {}),
+          ...(err instanceof GoogleDualPathError
+            ? {
+                errorBothPathsFailed: true,
+                errorFallback: err.fallback.message,
+                errorFallbackFull: err.fallback.full,
+                ...(err.fallback.status !== undefined
+                  ? { errorFallbackStatus: err.fallback.status }
+                  : {}),
+              }
+            : {}),
+        },
+        { status: httpStatus },
+      );
     }
   } finally {
     await finalizeHubTracking(tracking.runId, tracking.status, tracking.errorMessage);

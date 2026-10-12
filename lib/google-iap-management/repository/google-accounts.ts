@@ -7,7 +7,10 @@
  */
 import { googleIapDb } from "../db";
 import { encryptCredentials, decryptCredentials } from "../crypto";
-import { parseServiceAccountJson } from "../google/auth";
+import {
+  parseServiceAccountJson,
+  rememberAccountForCredentials,
+} from "../google/auth";
 
 export type AccountStatus = "pending" | "verified" | "invalid";
 
@@ -115,6 +118,12 @@ export async function getDecryptedCredentials(id: string): Promise<string> {
 /**
  * Return the raw encrypted blob without decrypting — used when constructing
  * a JWT client via jwtClientFromEncrypted (so the cache key stays stable).
+ *
+ * ⚠ ALSO THE ONE PLACE THAT KNOWS blob → accountId. Every route reaches a
+ * credential through here, so recording the pairing at this single point
+ * gives all 26 `jwtClientFromEncrypted` call sites caller identity in their
+ * Publisher log lines without threading an argument through any of them.
+ * See `rememberAccountForCredentials` for why that matters.
  */
 export async function getEncryptedCredentials(id: string): Promise<string> {
   const { data, error } = await googleIapDb()
@@ -127,6 +136,7 @@ export async function getEncryptedCredentials(id: string): Promise<string> {
     throw new Error(`Failed to load credentials: ${error.message}`);
   }
   const row = data as { encrypted_credentials: string };
+  rememberAccountForCredentials(row.encrypted_credentials, id);
   return row.encrypted_credentials;
 }
 
