@@ -780,3 +780,58 @@ Hai file tính **cùng một phép cắt bao gồm hai đầu**:
 
 ⚠ Nếu (3) không đạt thì **đừng gộp**: hai bản 22-25 dòng sống cạnh nhau rẻ hơn
 một bản dùng chung mà không ai dám sửa.
+
+---
+
+## `[GOOGLE-tinywar-missing-default]` — `com.vnggames.tankarena.tinywar` hỏng 25/25 hai lần, "Missing: default"
+
+**CHỈ GHI NHẬN. CHƯA ĐIỀU TRA.** Mục này mở ra trong arc
+`arc-google403-error-observability` (2026-10-12) khi Manager chạy Query B
+để điều tra sự cố 403 của `vng.games.tamquoc.chienky`. Dòng tinywar nằm
+cùng kết quả truy vấn đó và **không thuộc phạm vi arc ấy** — arc ấy chỉ
+sửa 3 lỗ quan sát, không chạm logic purchase option.
+
+### Dữ kiện — nguyên văn từ Query B, không thêm diễn giải
+
+| | |
+|---|---|
+| Package | `com.vnggames.tankarena.tinywar` |
+| Ngày | 2026-09-21 |
+| Kết quả | **25/25 hỏng, HAI lần** |
+| Thông điệp | `"Product must list all of its existing purchase options. Missing: default"` |
+| Chạy lại thành công? | **KHÔNG thấy** trong kết quả Query B |
+
+### ⚠ Vì sao mục này ĐÁNG NGỜ chứ không phải "đã biết rồi"
+
+Chuỗi `"must list all of its existing purchase options. Missing: …"`
+**đã được biết và đã được xử lý** — đó chính là lý do đường
+read-modify-write tồn tại: `batchUpsertInAppProducts` GET sản phẩm live
+trước, rồi gửi TOÀN BỘ purchase option thật trong body PATCH
+([publisher-client.ts](../../lib/google-iap-management/google/publisher-client.ts),
+khối `OVERWRITE_GET_CONCURRENCY`).
+
+Nhưng mọi ghi nhận trước đây đều là **`Missing: legacy-base`** —
+id mà sản phẩm tạo bằng API `inappproducts.*` cũ mang. Ở đây là
+**`Missing: default`**, một id thứ BA, chưa từng thấy trong repo.
+
+⚠ Cùng họ với `[feedback_google_purchase_option_id_twin_path]`: "buy" là
+**quy ước, không phải hằng số của Google**; legacy mang "legacy-base";
+nay xuất hiện "default". Mỗi lần đoán id là một lần hỏng.
+
+### ⚠ ĐỪNG kết luận gì từ việc "không thấy lần chạy lại thành công"
+
+Query B `LIMIT 20` và sắp theo `created_at DESC`. Không thấy lần thành
+công **không chứng minh** không có lần nào — có thể nó nằm ngoài 20 dòng.
+Phải truy vấn riêng theo package trước khi nói tinywar "vẫn đang hỏng".
+
+### Việc cần làm khi mở arc (chưa làm)
+
+1. Truy vấn `actions_log` riêng cho package này, bỏ `LIMIT 20`, xem có
+   lần chạy lại thành công nào sau 2026-09-21 không.
+2. ⭐ Chạy lại MỘT lần sau khi O1-O3 đã deploy — nay payload giữ
+   `error_details[]` kèm `@type` + `metadata`, nhiều khả năng nêu đích
+   danh option id mà Google đang đòi, thay vì chỉ một câu chữ.
+3. Chỉ sau đó mới quyết định có sửa `resolve-purchase-options.ts` không.
+   **Đừng hardcode thêm `"default"` vào danh sách đoán** — đó là lần thứ
+   ba lặp lại cùng một sai lầm; nếu phải sửa thì sửa theo hướng *luôn đọc
+   option thật từ Google*, không theo hướng thêm một ứng viên nữa.
