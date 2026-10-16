@@ -934,3 +934,28 @@ hiểu theo currency của app, nhưng bảng hiển thị quy đổi `0.99 USD 
 (6 chữ số thập phân). Hai điểm cần xem: (1) banner và bảng có đang nói hai điều khác
 nhau không; (2) vì sao TWD hiện 6 chữ số — gợi ý duy nhất đã thấy là
 `microsToDecimal(…, 6)` ở `preview/route.ts:281` (chưa xác minh đó là chỗ render).
+
+⟶ **2026-10-16 (cập nhật):** đã xác minh — `33.000000` CHỈ là hiển thị
+(`microsToDecimal(…, 6)`); giá lên dây đúng `Money{TWD, units "33"}`, và 33 TWD là
+entry của template. Ưu tiên thấp. Chi tiết: `design-bulk-import-existence-overwrite-safety.md` §1 E3.
+
+---
+
+## `[GOOGLE-refresh-flips-app-currency]` ⚠ — Refresh IAP ghi đè currency/language của app bằng heuristic
+
+**CENSUS XONG, CHƯA SỬA (2026-10-16).** Thiết kế: D9 trong
+[`design-bulk-import-existence-overwrite-safety.md`](design-bulk-import-existence-overwrite-safety.md).
+
+`batchSyncIapsFromGoogle` (`repository/iaps.ts:759-769`) ghi đè **vô điều kiện**
+`apps.default_currency` = currency của vùng **US** của sản phẩm đầu tiên (adapter
+`onetime-product-adapter.ts:124-133`) và `default_language` = listing đầu tiên hoặc
+`"en-US"` bịa ra (`:152-153`). Google v3 **không có** currency mặc định của app
+(discovery `OneTimeProduct`); comment `iaps.ts:623-627` sai. Đã đo: app TWD/zh-TW bị lật
+thành USD/en-US ở lần Refresh IAP đầu tiên. Hệ quả: lật nghĩa cross-currency / refuse
+google_default / header chung / custom price của **cả app**, và form IAP đòi title en-US.
+Mang tính hệ thống: mọi app có Refresh IAP qua v3 mà sản phẩm đầu có vùng US. Runbook
+E-Q6 liệt kê app nghi bị lật.
+
+⛔ **Liên quan an toàn giá:** với `com.vnggames.ballisticherotwid`, KHÔNG chạy lại bulk
+import (mirror nay đầy ⇒ Overwrite 28 sản phẩm đang bán; ngữ nghĩa Overwrite thay toàn bộ
+giá/vùng/availability/state của option đích — D10). Xem §1 E4 của tài liệu thiết kế.
