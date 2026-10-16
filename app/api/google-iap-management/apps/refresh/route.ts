@@ -9,7 +9,8 @@
  * AppDetails and GUESSED the currency from the Play Console language
  * (zh-TW → TWD) — the value 彈彈英雄 carried into a failed import. Those values
  * are now declared by the Manager (app page → declare route); a newly cached
- * app starts with both empty and bulk import refuses until they are declared.
+ * app starts with both empty. (Since C2.1 they are not bulk-import conditions;
+ * bulk import still reads the currency value for pricing until the H4 fix.)
  *
  * Q-GIAP.C: apps.search default pageSize 50, max 1000. We use 1000 to
  * minimize round-trips for the typical 10-100 apps scenario.

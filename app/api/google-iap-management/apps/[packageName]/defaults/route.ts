@@ -16,7 +16,8 @@
  * mismatch ⇒ 409, nothing written. The write itself is compare-and-set too
  * (declareAppDefault), so a declaration racing in between is not lost.
  *
- * Admin only: the value changes how every bulk import of this app is priced.
+ * Admin only: the CURRENCY changes how bulk import prices this app (until the H4
+ * fix); the language is not used by bulk import.
  * ⚠ The role check runs BEFORE any lookup (KB §25.1, P34) — a non-admin gets
  *   403 whether or not the app exists, so the route cannot be used as an oracle.
  */
@@ -32,7 +33,7 @@ import {
   AppDefaultChangedError,
   declareAppDefault,
   getAppByPackage,
-  getAppImportReadiness,
+  getAppDefaults,
 } from "@/lib/google-iap-management/repository/apps";
 import { appendAction } from "@/lib/google-iap-management/repository/actions-log";
 import {
@@ -133,8 +134,8 @@ export async function POST(
 
   let previous: AppDefaultValue;
   try {
-    const before = await getAppImportReadiness(app.id);
-    previous = before.defaults[field as AppDefaultField];
+    const before = await getAppDefaults(app.id);
+    previous = before[field as AppDefaultField];
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to read the app's current value.";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -180,8 +181,8 @@ export async function POST(
     );
   }
   try {
-    const after = await getAppImportReadiness(app.id);
-    return NextResponse.json({ ok: true, defaults: after.defaults });
+    const after = await getAppDefaults(app.id);
+    return NextResponse.json({ ok: true, defaults: after });
   } catch (err) {
     return NextResponse.json({
       ok: true,

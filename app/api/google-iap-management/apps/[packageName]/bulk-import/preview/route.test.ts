@@ -27,10 +27,15 @@ const listAccounts = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/google-iap-management/repository/google-accounts", () => ({ listAccounts }));
 
 const getAppByPackage = vi.hoisted(() => vi.fn());
-const getAppImportReadiness = vi.hoisted(() => vi.fn());
+const getIapsMirrorSyncedAt = vi.hoisted(() => vi.fn());
+// Provided (guessed / empty values) so a re-introduced "currency must be
+// declared" check would read realistic data and block — the C2.1 tests below
+// then go red for the right reason, not on a missing mock export.
+const getAppDefaults = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/google-iap-management/repository/apps", () => ({
   getAppByPackage,
-  getAppImportReadiness,
+  getIapsMirrorSyncedAt,
+  getAppDefaults,
 }));
 
 const listIapsForApp = vi.hoisted(() => vi.fn());
@@ -74,21 +79,11 @@ function parsedRow(sku: string, rowNumber: number) {
   };
 }
 
-/** Gate open by default: refreshed + both defaults DECLARED. */
-function readiness(over: {
-  iapsLastSyncedAt?: string | null;
-  currency?: { value: string | null; source: "declared" | "guessed" | null };
-  language?: { value: string | null; source: "declared" | "guessed" | null };
-} = {}) {
-  return {
-    iapsLastSyncedAt:
-      over.iapsLastSyncedAt === undefined ? "2026-10-16T03:25:10.000Z" : over.iapsLastSyncedAt,
-    defaults: {
-      currency: over.currency ?? { value: "USD", source: "declared" as const },
-      language: over.language ?? { value: "zh-TW", source: "declared" as const },
-    },
-  };
-}
+const SYNCED_AT = "2026-10-16T03:25:10.000Z";
+const GUESSED_DEFAULTS = {
+  currency: { value: "USD", source: "guessed" as const },
+  language: { value: "en-US", source: "guessed" as const },
+};
 
 beforeEach(() => {
   getServerSession.mockReset().mockResolvedValue({ user: { email: "m@vng.com.vn" } });
@@ -100,7 +95,9 @@ beforeEach(() => {
     default_currency: "USD",
     google_console_account_id: "acc1",
   });
-  getAppImportReadiness.mockReset().mockResolvedValue(readiness());
+  // D0 — gate open by default: refreshed completely.
+  getIapsMirrorSyncedAt.mockReset().mockResolvedValue(SYNCED_AT);
+  getAppDefaults.mockReset().mockResolvedValue(GUESSED_DEFAULTS);
   listIapsForApp.mockReset().mockResolvedValue([]);
   parseIapTemplate.mockReset().mockReturnValue({
     rows: [parsedRow("com.vnggames.ballisticherotwid.0.99", 2), parsedRow("com.vnggames.ballisticherotwid.1.99", 3)],
@@ -112,12 +109,12 @@ beforeEach(() => {
 
 describe("Google bulk-import preview — D0: never refreshed ≠ refreshed and empty", () => {
   it("IAP list never refreshed ⇒ 409 IAPS_NEVER_SYNCED; the mirror is not even read", async () => {
-    getAppImportReadiness.mockResolvedValue(readiness({ iapsLastSyncedAt: null }));
+    getIapsMirrorSyncedAt.mockResolvedValue(null);
     const res = await POST(previewReq(), ctx);
     expect(res.status).toBe(409);
     const body = (await res.json()) as { code?: string; error?: string; rows?: unknown };
     expect(body.code).toBe("IAPS_NEVER_SYNCED");
-    expect(body.error).toMatch(/never been refreshed/);
+    expect(body.error).toMatch(/no complete refresh from Google on record/);
     expect(body.error).toMatch(/Refresh IAP list/);
     expect(body.rows).toBeUndefined();
     expect(listIapsForApp).not.toHaveBeenCalled();
@@ -137,7 +134,7 @@ describe("Google bulk-import preview — D0: never refreshed ≠ refreshed and e
 
   it("the gate reads the sync state of THIS app row", async () => {
     await POST(previewReq(), ctx);
-    expect(getAppImportReadiness).toHaveBeenCalledWith("app-1");
+    expect(getIapsMirrorSyncedAt).toHaveBeenCalledWith("app-1");
   });
 });
 
@@ -160,13 +157,13 @@ describe("Google bulk-import preview — D2: could not read ≠ empty", () => {
   });
 
   it("readiness READ ERROR ⇒ 503 IMPORT_READINESS_READ_FAILED, not IAPS_NEVER_SYNCED / not declared", async () => {
-    getAppImportReadiness.mockRejectedValue(new Error("column apps.iaps_last_synced_at does not exist"));
+    getIapsMirrorSyncedAt.mockRejectedValue(new Error("column apps.iaps_last_synced_at does not exist"));
     const res = await POST(previewReq(), ctx);
     expect(res.status).toBe(503);
     const body = (await res.json()) as { code?: string; error?: string };
     expect(body.code).toBe("IMPORT_READINESS_READ_FAILED");
     // Names what failed (§29.3) — not "the cached IAP list".
-    expect(body.error).toMatch(/import readiness/);
+    expect(body.error).toMatch(/Could not read whether this app's IAP list has been refreshed/);
     expect(body.error).not.toMatch(/cached IAP list/);
     expect(listIapsForApp).not.toHaveBeenCalled();
   });
@@ -187,89 +184,73 @@ describe("Google bulk-import preview — D2: could not read ≠ empty", () => {
   });
 });
 
-describe("Google bulk-import preview — D9: only DECLARED currency/language", () => {
-  it("currency GUESSED by the tool ⇒ 409 APP_DEFAULTS_NOT_DECLARED naming the value; nothing parsed", async () => {
-    getAppImportReadiness.mockResolvedValue(
-      readiness({ currency: { value: "USD", source: "guessed" } }),
-    );
-    const res = await POST(previewReq(), ctx);
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as {
-      code?: string;
-      blockers?: string[];
-      undeclared?: string[];
-      error?: string;
-    };
-    expect(body.code).toBe("APP_DEFAULTS_NOT_DECLARED");
-    expect(body.blockers).toEqual(["APP_DEFAULTS_NOT_DECLARED"]);
-    expect(body.undeclared).toEqual(["currency"]);
-    expect(body.error).toMatch(/USD — guessed by the tool, not confirmed/);
-    expect(parseIapTemplate).not.toHaveBeenCalled();
-    expect(listIapsForApp).not.toHaveBeenCalled();
-  });
-
-  it("language EMPTY ⇒ 409 APP_DEFAULTS_NOT_DECLARED (not set)", async () => {
-    getAppImportReadiness.mockResolvedValue(
-      readiness({ language: { value: null, source: null } }),
-    );
-    const res = await POST(previewReq(), ctx);
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { undeclared?: string[]; error?: string };
-    expect(body.undeclared).toEqual(["language"]);
-    expect(body.error).toMatch(/language \(not set\)/);
-  });
-
-  it("never synced AND not declared ⇒ BOTH blockers reported, never-synced first", async () => {
-    getAppImportReadiness.mockResolvedValue(
-      readiness({
-        iapsLastSyncedAt: null,
-        currency: { value: "TWD", source: "guessed" },
-        language: { value: "zh-TW", source: "guessed" },
-      }),
-    );
-    const res = await POST(previewReq(), ctx);
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { code?: string; blockers?: string[]; undeclared?: string[] };
-    expect(body.code).toBe("IAPS_NEVER_SYNCED");
-    expect(body.blockers).toEqual(["IAPS_NEVER_SYNCED", "APP_DEFAULTS_NOT_DECLARED"]);
-    expect(body.undeclared).toEqual(["currency", "language"]);
-  });
-
-  it("currency DECLARED, language still GUESSED (彈彈英雄 after 'Confirm USD') ⇒ 409, only language undeclared", async () => {
-    getAppImportReadiness.mockResolvedValue(
-      readiness({
-        currency: { value: "USD", source: "declared" },
-        language: { value: "en-US", source: "guessed" },
-      }),
-    );
-    const res = await POST(previewReq(), ctx);
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { code?: string; blockers?: string[]; undeclared?: string[] };
-    expect(body.code).toBe("APP_DEFAULTS_NOT_DECLARED");
-    expect(body.blockers).toEqual(["APP_DEFAULTS_NOT_DECLARED"]);
-    expect(body.undeclared).toEqual(["language"]);
-    expect(parseIapTemplate).not.toHaveBeenCalled();
-    expect(listIapsForApp).not.toHaveBeenCalled();
-  });
-
-  it("both DECLARED + refreshed ⇒ the preview runs", async () => {
+describe("Google bulk-import preview — C2.1: the app's currency/language are NOT conditions", () => {
+  it.each([
+    ["currency + language GUESSED by the tool", GUESSED_DEFAULTS],
+    ["currency + language EMPTY", { currency: { value: null, source: null }, language: { value: null, source: null } }],
+    ["currency declared, language guessed", { ...GUESSED_DEFAULTS, currency: { value: "USD", source: "declared" as const } }],
+  ])("%s ⇒ the preview runs (200), only the IAP sync state gates", async (_label, defaults) => {
+    getAppDefaults.mockResolvedValue(defaults);
     const res = await POST(previewReq(), ctx);
     expect(res.status).toBe(200);
+    expect(parseIapTemplate).toHaveBeenCalledTimes(1);
   });
 
-  it("prices against the DECLARED currency from the gate's read — not app.default_currency, no USD fallback", async () => {
-    // The app row (read before the gate) still holds an older value; the gate
-    // read sees the Manager's declaration. The declared one is what is priced.
-    getAppByPackage.mockResolvedValue({
-      id: "app-1",
-      default_currency: "TWD",
-      google_console_account_id: "acc1",
+  it("the gate never reads the app's currency/language or their provenance", async () => {
+    await POST(previewReq(), ctx);
+    expect(getAppDefaults).not.toHaveBeenCalled();
+  });
+
+  it("pricing is UNCHANGED from the deployed code (H4 fix pending): generic header resolved with app.default_currency", async () => {
+    getAppByPackage.mockResolvedValue({ id: "app-1", default_currency: "TWD", google_console_account_id: "acc1" });
+    await POST(previewReq(), ctx);
+    expect(parseIapTemplate).toHaveBeenCalledWith(expect.anything(), { appDefaultCurrency: "TWD" });
+  });
+
+  it.each([
+    [null, "same_currency", undefined],
+    ["TWD", "cross_currency_refused", "google_default"],
+  ])(
+    "cross-currency trigger pinned to the deployed input: app currency %s + explicit EUR row under Google Conversion ⇒ %s",
+    async (appCurrency, kind, refusalKind) => {
+      getAppByPackage.mockResolvedValue({ id: "app-1", default_currency: appCurrency, google_console_account_id: "acc1" });
+      parseIapTemplate.mockReturnValue({
+        rows: [{ ...parsedRow("com.vnggames.ballisticherotwid.eur", 2), baseCurrency: "EUR", basePriceDecimal: "1.09" }],
+        warnings: [],
+        errors: [],
+        skippedSampleRows: [],
+      });
+      const res = await POST(previewReq(), ctx);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        rows: Array<{ resolution: { kind: string; refusalKind?: string } }>;
+        appCurrency: string | null;
+      };
+      expect(body.rows[0].resolution.kind).toBe(kind);
+      expect(body.rows[0].resolution.refusalKind).toBe(refusalKind);
+      // The wizard's pricing note is driven by what the server priced with.
+      expect(body.appCurrency).toBe(appCurrency);
+    },
+  );
+
+  it("no app currency ⇒ no extra warning, block or confirm — the response carries only the parser's own warnings", async () => {
+    getAppByPackage.mockResolvedValue({ id: "app-1", default_currency: null, google_console_account_id: "acc1" });
+    parseIapTemplate.mockReturnValue({
+      rows: [parsedRow("com.vnggames.ballisticherotwid.0.99", 2)],
+      warnings: ["parser says hi"],
+      errors: [],
+      skippedSampleRows: [],
     });
-    getAppImportReadiness.mockResolvedValue(
-      readiness({ currency: { value: "EUR", source: "declared" } }),
-    );
     const res = await POST(previewReq(), ctx);
     expect(res.status).toBe(200);
-    expect(parseIapTemplate).toHaveBeenCalledWith(expect.anything(), { appDefaultCurrency: "EUR" });
+    const body = (await res.json()) as { warnings: string[] };
+    expect(body.warnings).toEqual(["parser says hi"]);
+  });
+
+  it("…and with no app currency the parser still gets USD, exactly as deployed", async () => {
+    getAppByPackage.mockResolvedValue({ id: "app-1", default_currency: null, google_console_account_id: "acc1" });
+    const res = await POST(previewReq(), ctx);
+    expect(res.status).toBe(200);
+    expect(parseIapTemplate).toHaveBeenCalledWith(expect.anything(), { appDefaultCurrency: "USD" });
   });
 });

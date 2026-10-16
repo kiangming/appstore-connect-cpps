@@ -22,34 +22,22 @@ vi.mock("@/lib/google-iap-management/repository/google-accounts", () => ({
 }));
 
 const getAppByPackage = vi.hoisted(() => vi.fn());
-const getAppImportReadiness = vi.hoisted(() => vi.fn());
+const getIapsMirrorSyncedAt = vi.hoisted(() => vi.fn());
+// Provided with GUESSED values so a re-introduced "currency must be declared"
+// check would read realistic data and block (C2.1 tests go red for the right
+// reason, not on a missing mock export).
+const getAppDefaults = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/google-iap-management/repository/apps", () => ({
   getAppByPackage,
-  getAppImportReadiness,
+  getIapsMirrorSyncedAt,
+  getAppDefaults,
 }));
 
-/** Gate open by default: refreshed + both defaults DECLARED. */
-function readiness(over: {
-  iapsLastSyncedAt?: string | null;
-  currencySource?: "declared" | "guessed" | null;
-  currencyValue?: string;
-  languageSource?: "declared" | "guessed" | null;
-} = {}) {
-  return {
-    iapsLastSyncedAt:
-      over.iapsLastSyncedAt === undefined ? "2026-10-16T03:25:10.000Z" : over.iapsLastSyncedAt,
-    defaults: {
-      currency: {
-        value: over.currencyValue ?? "USD",
-        source: over.currencySource === undefined ? ("declared" as const) : over.currencySource,
-      },
-      language: {
-        value: "en-US",
-        source: over.languageSource === undefined ? ("declared" as const) : over.languageSource,
-      },
-    },
-  };
-}
+const SYNCED_AT = "2026-10-16T03:25:10.000Z";
+const GUESSED_DEFAULTS = {
+  currency: { value: "USD", source: "guessed" as const },
+  language: { value: "en-US", source: "guessed" as const },
+};
 
 const readActiveAccountId = vi.hoisted(() => vi.fn());
 const resolveActiveAccountId = vi.hoisted(() => vi.fn());
@@ -92,8 +80,9 @@ beforeEach(() => {
   listAccounts.mockReset().mockResolvedValue([{ id: "acc1", status: "verified" }]);
   getEncryptedCredentials.mockReset().mockResolvedValue({ enc: "x" });
   getAppByPackage.mockReset().mockResolvedValue({ id: "app1", default_currency: "USD" });
-  // D0 + D9 — default: refreshed completely, currency/language declared.
-  getAppImportReadiness.mockReset().mockResolvedValue(readiness());
+  // D0 — default: refreshed completely. Currency/language merely guessed.
+  getIapsMirrorSyncedAt.mockReset().mockResolvedValue(SYNCED_AT);
+  getAppDefaults.mockReset().mockResolvedValue(GUESSED_DEFAULTS);
   readActiveAccountId.mockReset().mockReturnValue(null);
   resolveActiveAccountId.mockReset().mockReturnValue("acc1");
   jwtClientFromEncrypted.mockReset().mockReturnValue({});
@@ -453,7 +442,7 @@ describe("Google bulk-import execute — per-item custom prices (SC4)", () => {
  */
 describe("Google bulk-import execute — D0 mirror gate", () => {
   it("IAP list never refreshed ⇒ 409 IAPS_NEVER_SYNCED, nothing executed, Hub run closed FAILED", async () => {
-    getAppImportReadiness.mockResolvedValue(readiness({ iapsLastSyncedAt: null }));
+    getIapsMirrorSyncedAt.mockResolvedValue(null);
     const res = await POST(
       jsonReq({ hub_run_id: "run-d0", pricingSource: "google_default", rows: [validRow] }),
       ctx,
@@ -461,18 +450,18 @@ describe("Google bulk-import execute — D0 mirror gate", () => {
     expect(res.status).toBe(409);
     const body = (await res.json()) as { code?: string; error?: string };
     expect(body.code).toBe("IAPS_NEVER_SYNCED");
-    expect(body.error).toMatch(/never been refreshed/);
+    expect(body.error).toMatch(/no complete refresh from Google on record/);
     expect(executeBulkImport).not.toHaveBeenCalled();
     expect(finalizeHubTracking).toHaveBeenCalledTimes(1);
     expect(finalizeHubTracking).toHaveBeenCalledWith(
       "run-d0",
       "FAILED",
-      expect.stringContaining("never been refreshed"),
+      expect.stringContaining("no complete refresh from Google on record"),
     );
   });
 
   it("sync state UNREADABLE ⇒ 503 IMPORT_READINESS_READ_FAILED — not treated as synced, not as never", async () => {
-    getAppImportReadiness.mockRejectedValue(new Error("column does not exist"));
+    getIapsMirrorSyncedAt.mockRejectedValue(new Error("column does not exist"));
     const res = await POST(
       jsonReq({ hub_run_id: "run-d0e", pricingSource: "google_default", rows: [validRow] }),
       ctx,
@@ -491,45 +480,26 @@ describe("Google bulk-import execute — D0 mirror gate", () => {
       rowsRefused: 0, refusedRows: [], customPricedRows: 0, customRefusedRows: 0, durationMs: 1,
     });
     await POST(jsonReq({ pricingSource: "google_default", rows: [validRow] }), ctx);
-    expect(getAppImportReadiness).toHaveBeenCalledWith("app1");
+    expect(getIapsMirrorSyncedAt).toHaveBeenCalledWith("app1");
   });
 
-  it("D9: currency GUESSED ⇒ 409 APP_DEFAULTS_NOT_DECLARED, nothing executed, Hub run closed FAILED", async () => {
-    getAppImportReadiness.mockResolvedValue(readiness({ currencySource: "guessed" }));
-    const res = await POST(
-      jsonReq({ hub_run_id: "run-d9", pricingSource: "google_default", rows: [validRow] }),
-      ctx,
-    );
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { code?: string; undeclared?: string[] };
-    expect(body.code).toBe("APP_DEFAULTS_NOT_DECLARED");
-    expect(body.undeclared).toEqual(["currency"]);
-    expect(executeBulkImport).not.toHaveBeenCalled();
-    expect(finalizeHubTracking).toHaveBeenCalledTimes(1);
-    expect(finalizeHubTracking).toHaveBeenCalledWith(
-      "run-d9",
-      "FAILED",
-      expect.stringContaining("must be declared"),
-    );
+  it.each([
+    ["GUESSED", GUESSED_DEFAULTS],
+    ["EMPTY", { currency: { value: null, source: null }, language: { value: null, source: null } }],
+  ])("C2.1: currency/language %s ⇒ execute RUNS — they are not conditions; the gate never reads them", async (_l, defaults) => {
+    getAppDefaults.mockResolvedValue(defaults);
+    executeBulkImport.mockResolvedValue({
+      rowsTotal: 1, rowsCreated: 1, rowsOverwritten: 0, rowsSkipped: 0, rowsFailed: 0,
+      rowsRefused: 0, refusedRows: [], customPricedRows: 0, customRefusedRows: 0, durationMs: 1,
+    });
+    const res = await POST(jsonReq({ hub_run_id: "run-c21", pricingSource: "google_default", rows: [validRow] }), ctx);
+    expect(res.status).toBe(200);
+    expect(executeBulkImport).toHaveBeenCalledTimes(1);
+    expect(getAppDefaults).not.toHaveBeenCalled();
   });
 
-  it("D9: currency DECLARED, language still GUESSED (彈彈英雄 after 'Confirm USD') ⇒ 409, nothing executed, run FAILED", async () => {
-    getAppImportReadiness.mockResolvedValue(readiness({ languageSource: "guessed" }));
-    const res = await POST(
-      jsonReq({ hub_run_id: "run-d9l", pricingSource: "google_default", rows: [validRow] }),
-      ctx,
-    );
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { code?: string; undeclared?: string[] };
-    expect(body.code).toBe("APP_DEFAULTS_NOT_DECLARED");
-    expect(body.undeclared).toEqual(["language"]);
-    expect(executeBulkImport).not.toHaveBeenCalled();
-    expect(finalizeHubTracking).toHaveBeenCalledWith("run-d9l", "FAILED", expect.stringContaining("language"));
-  });
-
-  it("D9: executes against the DECLARED currency from the gate's read — not app.default_currency", async () => {
-    getAppByPackage.mockResolvedValue({ id: "app1", default_currency: "TWD" });
-    getAppImportReadiness.mockResolvedValue(readiness({ currencyValue: "EUR" }));
+  it("app WITHOUT a currency (null) ⇒ execute RUNS and forwards exactly null — no block, no USD substitution", async () => {
+    getAppByPackage.mockResolvedValue({ id: "app1", default_currency: null, default_language: null });
     executeBulkImport.mockResolvedValue({
       rowsTotal: 1, rowsCreated: 1, rowsOverwritten: 0, rowsSkipped: 0, rowsFailed: 0,
       rowsRefused: 0, refusedRows: [], customPricedRows: 0, customRefusedRows: 0, durationMs: 1,
@@ -538,7 +508,19 @@ describe("Google bulk-import execute — D0 mirror gate", () => {
     expect(res.status).toBe(200);
     expect(executeBulkImport).toHaveBeenCalledTimes(1);
     const [, args] = executeBulkImport.mock.calls[0] as [unknown, { appDefaultCurrency: string | null }];
-    expect(args.appDefaultCurrency).toBe("EUR");
+    expect(args.appDefaultCurrency).toBeNull();
+  });
+
+  it("pricing UNCHANGED from the deployed code (H4 fix pending): executes with app.default_currency", async () => {
+    getAppByPackage.mockResolvedValue({ id: "app1", default_currency: "TWD" });
+    executeBulkImport.mockResolvedValue({
+      rowsTotal: 1, rowsCreated: 1, rowsOverwritten: 0, rowsSkipped: 0, rowsFailed: 0,
+      rowsRefused: 0, refusedRows: [], customPricedRows: 0, customRefusedRows: 0, durationMs: 1,
+    });
+    const res = await POST(jsonReq({ pricingSource: "google_default", rows: [validRow] }), ctx);
+    expect(res.status).toBe(200);
+    const [, args] = executeBulkImport.mock.calls[0] as [unknown, { appDefaultCurrency: string | null }];
+    expect(args.appDefaultCurrency).toBe("TWD");
   });
 });
 

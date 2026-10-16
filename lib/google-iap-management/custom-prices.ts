@@ -284,7 +284,7 @@ export function findAppCurrencyEntry(
     return {
       ok: false,
       reason:
-        "This app has no declared currency. Declare it on the app page (App currency & language) before setting custom prices.",
+        "This app has no currency set. Set it on the app page (App currency & language) before setting custom prices.",
     };
   }
   const priced = rows.filter(

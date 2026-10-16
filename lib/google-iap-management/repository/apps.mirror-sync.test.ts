@@ -1,9 +1,10 @@
 /**
- * D0 + D9 [arc-google-missing-purchase-options] — reads/writes behind the
- * bulk-import gate. Every function THROWS on anything that is not a clean
- * answer: a read error must never come back as "never synced", "not
- * declared" or any default, and a write that touched 0 rows must never look
- * like a success (KB §9 P2: an uninspected write fails silently).
+ * D0 + D9 [arc-google-missing-purchase-options] — the bulk-import gate's read
+ * (sync state) and the app-defaults reads/writes. Every function THROWS on
+ * anything that is not a clean answer: a read error must never come back as
+ * "never synced", "not set" or any default, and a write that touched 0 rows
+ * must never look like a success (KB §9 P2: an uninspected write fails
+ * silently).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -13,7 +14,8 @@ vi.mock("../db", () => ({ googleIapDb: dbSpy }));
 import {
   AppDefaultChangedError,
   declareAppDefault,
-  getAppImportReadiness,
+  getAppDefaults,
+  getIapsMirrorSyncedAt,
   markIapsMirrorSynced,
 } from "./apps";
 
@@ -64,34 +66,55 @@ function fakeDb(result: { data: unknown; error: { message: string } | null }) {
 beforeEach(() => dbSpy.mockReset());
 
 const ROW = {
-  iaps_last_synced_at: "2026-10-16T03:25:10Z",
   default_currency: "USD",
   default_currency_source: "guessed",
   default_language: "en-US",
   default_language_source: "declared",
 };
 
-describe("getAppImportReadiness", () => {
-  it("returns the sync stamp and BOTH defaults with their provenance, for the requested row", async () => {
+describe("getIapsMirrorSyncedAt — the gate's only input", () => {
+  it("returns the stamp of the requested row, reading ONLY the sync column", async () => {
+    const rec = fakeDb({ data: { iaps_last_synced_at: "2026-10-16T03:25:10Z" }, error: null });
+    await expect(getIapsMirrorSyncedAt("app-1")).resolves.toBe("2026-10-16T03:25:10Z");
+    expect(rec.table).toBe("apps");
+    // C2.1: the gate never reads currency/language or their provenance.
+    expect(rec.select).toBe("iaps_last_synced_at");
+    expect(rec.eq).toEqual([["id", "app-1"]]);
+  });
+
+  it("NULL ⇒ null (never refreshed)", async () => {
+    fakeDb({ data: { iaps_last_synced_at: null }, error: null });
+    await expect(getIapsMirrorSyncedAt("app-1")).resolves.toBeNull();
+  });
+
+  it("DB error ⇒ THROWS ('could not read' ≠ 'never synced')", async () => {
+    fakeDb({ data: null, error: { message: "column apps.iaps_last_synced_at does not exist" } });
+    await expect(getIapsMirrorSyncedAt("app-1")).rejects.toThrow(/does not exist/);
+  });
+
+  it("app row missing ⇒ THROWS", async () => {
+    fakeDb({ data: null, error: null });
+    await expect(getIapsMirrorSyncedAt("app-x")).rejects.toThrow(/not found/);
+  });
+});
+
+describe("getAppDefaults — the card's / declare route's read", () => {
+  it("returns BOTH defaults with their provenance, for the requested row", async () => {
     const rec = fakeDb({ data: ROW, error: null });
-    await expect(getAppImportReadiness("app-1")).resolves.toEqual({
-      iapsLastSyncedAt: "2026-10-16T03:25:10Z",
-      defaults: {
-        currency: { value: "USD", source: "guessed" },
-        language: { value: "en-US", source: "declared" },
-      },
+    await expect(getAppDefaults("app-1")).resolves.toEqual({
+      currency: { value: "USD", source: "guessed" },
+      language: { value: "en-US", source: "declared" },
     });
     expect(rec.table).toBe("apps");
     expect(rec.select).toContain("default_currency_source");
     expect(rec.select).toContain("default_language_source");
-    expect(rec.select).toContain("iaps_last_synced_at");
+    expect(rec.select).not.toContain("iaps_last_synced_at");
     expect(rec.eq).toEqual([["id", "app-1"]]);
   });
 
-  it("NULL columns ⇒ never synced, nothing set", async () => {
+  it("NULL columns ⇒ nothing set", async () => {
     fakeDb({
       data: {
-        iaps_last_synced_at: null,
         default_currency: null,
         default_currency_source: null,
         default_language: null,
@@ -99,26 +122,26 @@ describe("getAppImportReadiness", () => {
       },
       error: null,
     });
-    await expect(getAppImportReadiness("app-1")).resolves.toEqual({
-      iapsLastSyncedAt: null,
-      defaults: { currency: { value: null, source: null }, language: { value: null, source: null } },
+    await expect(getAppDefaults("app-1")).resolves.toEqual({
+      currency: { value: null, source: null },
+      language: { value: null, source: null },
     });
   });
 
-  it("an unknown provenance string reads as null (⇒ not declared), never as declared", async () => {
+  it("an unknown provenance string reads as null, never as declared", async () => {
     fakeDb({ data: { ...ROW, default_currency_source: "DECLARED " }, error: null });
-    const r = await getAppImportReadiness("app-1");
-    expect(r.defaults.currency.source).toBeNull();
+    const r = await getAppDefaults("app-1");
+    expect(r.currency.source).toBeNull();
   });
 
-  it("DB error ⇒ THROWS ('could not read' ≠ 'never synced' / 'not declared')", async () => {
+  it("DB error ⇒ THROWS ('could not read' ≠ 'not set')", async () => {
     fakeDb({ data: null, error: { message: "column apps.default_currency_source does not exist" } });
-    await expect(getAppImportReadiness("app-1")).rejects.toThrow(/does not exist/);
+    await expect(getAppDefaults("app-1")).rejects.toThrow(/does not exist/);
   });
 
   it("app row missing ⇒ THROWS", async () => {
     fakeDb({ data: null, error: null });
-    await expect(getAppImportReadiness("app-x")).rejects.toThrow(/not found/);
+    await expect(getAppDefaults("app-x")).rejects.toThrow(/not found/);
   });
 });
 

@@ -1,14 +1,17 @@
 /**
  * D9 [arc-google-missing-purchase-options] — an app's currency / language are
  * values the MANAGER declares. Pure module (no DB, no Google): shared by the
- * declare route, the gate, and client components.
+ * declare route and client components (the app-page card).
  *
- * Provenance (google_iap_mgmt.apps.default_<field>_source):
- *   "declared" — Manager declared or confirmed it. The ONLY state bulk import accepts.
+ * Provenance (google_iap_mgmt.apps.default_<field>_source) — DISPLAY ONLY:
+ *   "declared" — Manager declared or confirmed it.
  *   "guessed"  — written by the tool before 2026-10-16 (guessed from the Play
  *                Console language, or from the first product's US region /
- *                first listing on IAP refresh). Kept, shown, never trusted.
+ *                first listing on IAP refresh). Kept and shown.
  *   null       — never set.
+ * ⚠ Not a bulk-import condition (C2.1, Manager 2026-10-16). Bulk import still
+ *   READS the currency VALUE for pricing — whatever its provenance — until the
+ *   H4 fix (the file currency as the only price source) ships.
  *
  * ⚠ Nothing in the code may PRODUCE "guessed" any more (both refresh routes
  *   stopped writing these columns in the same chunk). The literal exists here
@@ -32,15 +35,6 @@ export interface AppDefaultValue {
 export interface AppDefaultsState {
   currency: AppDefaultValue;
   language: AppDefaultValue;
-}
-
-export function isDeclared(v: AppDefaultValue): boolean {
-  return v.source === APP_DEFAULT_DECLARED && !!v.value;
-}
-
-/** Fields that block bulk import (not declared — guessed or empty). */
-export function undeclaredFields(state: AppDefaultsState): AppDefaultField[] {
-  return APP_DEFAULT_FIELDS.filter((f) => !isDeclared(state[f]));
 }
 
 /** Currencies Google Play actually bills in (measured snapshot, 173 regions). */

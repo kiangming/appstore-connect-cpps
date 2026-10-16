@@ -73,6 +73,9 @@ describe("AppDefaultsCard — provenance is visible", () => {
     expect(card).toHaveTextContent(/Could not read/);
     expect(card).toHaveTextContent("column missing");
     expect(screen.queryByText("Not set")).toBeNull();
+    // C2.1 — the defaults are not a bulk-import condition; the card must not say so.
+    expect(card).toHaveTextContent("This does not decide whether bulk import runs.");
+    expect(card).not.toHaveTextContent(/stays blocked|until they .*declared/i);
   });
 });
 

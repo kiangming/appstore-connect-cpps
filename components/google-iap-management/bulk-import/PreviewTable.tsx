@@ -199,8 +199,12 @@ export function PreviewTable({
                     />
                   ) : row.tierCandidates.length === 0 ? (
                     <div className="flex items-center gap-2">
+                      {/* A refused row is NOT sent: "converted by Google" would
+                          contradict the Refused badge in the same row. */}
                       <span className="text-slate-500 italic">
-                        Auto-converted from USD
+                        {row.resolution?.kind === "cross_currency_refused"
+                          ? "Not sent — refused"
+                          : "Auto-converted by Google"}
                       </span>
                       {customTriggerVisible && (
                         <>

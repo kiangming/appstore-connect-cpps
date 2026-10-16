@@ -2,9 +2,10 @@
 
 /**
  * D9 [arc-google-missing-purchase-options] — the app's currency and default
- * language, with WHERE each value came from. Bulk import accepts only values
- * the Manager declared; a value the tool guessed (before 2026-10-16) is shown
- * with a one-click Confirm so nobody has to retype it.
+ * language, with WHERE each value came from. A value the tool guessed (before
+ * 2026-10-16) is shown with a one-click Confirm so nobody has to retype it.
+ * Not tied to bulk import's gate (C2.1); bulk import still READS the currency
+ * for pricing until the H4 fix ships.
  *
  * Every save sends the app id and the value + source this card SHOWED; the
  * route refuses (409) when either changed since the page loaded — a switched
@@ -54,8 +55,7 @@ export function AppDefaultsCard({
         className="mb-4 text-xs text-red-900 bg-red-50 border border-red-200 rounded-xl px-4 py-3"
       >
         <span className="font-semibold">Could not read this app&apos;s currency / language.</span>{" "}
-        {readError ?? "Unknown error."} Bulk import stays blocked until they can be read and are
-        declared.
+        {readError ?? "Unknown error."} This does not decide whether bulk import runs.
       </section>
     );
   }
@@ -68,10 +68,11 @@ export function AppDefaultsCard({
     >
       <h2 className="text-sm font-semibold text-slate-900">App currency &amp; language</h2>
       <p className="text-xs text-slate-500 mb-2">
-        Bulk import prices every row against the currency and only runs when both values are{" "}
-        <strong>declared</strong> by a Manager (the language is checked, but bulk import does not
-        send it to Google yet). Google Play does not expose an app-wide currency, so the tool no
-        longer guesses one.
+        What the tool records for this app, and whether a Manager declared it or the tool guessed
+        it. Not a condition for bulk import. Today bulk import still reads the currency for a
+        column headed just &quot;Price&quot;, for rows whose file currency differs, and for custom
+        prices — the file&apos;s own currency is meant to become the only source. Google Play does
+        not expose an app-wide currency, so the tool no longer guesses one.
       </p>
       <div className="divide-y divide-slate-100">
         {(["currency", "language"] as const).map((field) => (

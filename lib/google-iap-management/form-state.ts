@@ -53,7 +53,7 @@ export interface IapFormInitial {
  * (Hotfix 4). D9 [arc-google-missing-purchase-options]: these are no longer
  * captured by any refresh — the Manager declares them on the app page — and a
  * value here may still be a pre-2026-10-16 tool guess (provenance is not
- * carried into this form; bulk import reads it through its gate). Both are
+ * carried into this form). Both are
  * null for an app never declared; callers fall back to USD / en-US.
  */
 export interface AppDefaults {

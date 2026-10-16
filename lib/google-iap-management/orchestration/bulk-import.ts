@@ -457,7 +457,7 @@ export async function executeBulkImport(
       if (!appCurrencyForCustom) {
         row.customPriceRefusal = {
           kind: "custom_no_app_currency_entry",
-          reason: `Row ${row.rowNumber} (${row.sku}): this app has no declared currency, so no defaultPrice can be derived from the custom prices. Declare it on the app page and retry. Row not sent.`,
+          reason: `Row ${row.rowNumber} (${row.sku}): this app has no currency set, so no defaultPrice can be derived from the custom prices. Set it on the app page and retry. Row not sent.`,
         };
         customRefusedRows += 1;
         continue;

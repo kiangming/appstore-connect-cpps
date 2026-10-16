@@ -29,11 +29,6 @@ import {
   GOOGLE_LOCALE_OPTIONS,
 } from "@/lib/google-iap-management/parsers/template-spec";
 import { DownloadTemplateButton } from "@/components/ui/shared/DownloadTemplateButton";
-import {
-  undeclaredFields,
-  type AppDefaultField,
-  type AppDefaultsState,
-} from "@/lib/google-iap-management/app-defaults";
 
 export type PricingSource = "google_default" | "default_template" | "app_template";
 export type RowDecision = "overwrite" | "skip" | "create";
@@ -139,9 +134,11 @@ interface Props {
   packageName: string;
   appId: string;
   appDisplayName: string | null;
-  /** The app's DECLARED currency as approved by the bulk-import gate (null
-   *  while the gate is not open). Used by the custom-prices dialog; the
-   *  language has no consumer here (D9 — bulk import does not send it). */
+  /** apps.default_currency — what the server prices with TODAY for generic
+   *  "Price" headers, cross-currency rows and custom prices (H4, 2026-10-16:
+   *  measured to violate "the file currency is the only price source"; fix
+   *  awaiting the gate). Shown in the pricing note and used by the
+   *  custom-prices dialog. Not an import condition. */
   appDefaultCurrency: string | null;
   /** D0/D3 — apps.iaps_last_synced_at: the last COMPLETE IAP-list refresh.
    *  null = never (or unreadable — see iapsSyncReadError). While null the
@@ -149,9 +146,6 @@ interface Props {
   iapsLastSyncedAt: string | null;
   /** D2 — the sync state could not be READ. Distinct from "never synced". */
   iapsSyncReadError?: string | null;
-  /** D9 — currency/language with provenance (null = could not be read). Bulk
-   *  import runs only when both are DECLARED by the Manager. */
-  appDefaults: AppDefaultsState | null;
 }
 
 type Step = "pricing" | "upload" | "preview" | "execute" | "done";
@@ -163,7 +157,6 @@ export function BulkImportWizard({
   appDefaultCurrency,
   iapsLastSyncedAt,
   iapsSyncReadError = null,
-  appDefaults,
 }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>("pricing");
@@ -177,15 +170,32 @@ export function BulkImportWizard({
   const [mirrorRefreshError, setMirrorRefreshError] = useState<string | null>(null);
   const mirrorBlocked = mirrorSyncedAt === null;
 
-  // D9 — fields NOT declared by the Manager (guessed or empty). Seeded from the
-  // page; the server's 409 APP_DEFAULTS_NOT_DECLARED is authoritative.
-  // "Could not read" (appDefaults null) is its own state — never shown as
-  // "not set" (the gate's rule: unreadable ≠ not declared).
-  const [defaultsUndeclared, setDefaultsUndeclared] = useState<AppDefaultField[]>(
-    appDefaults ? undeclaredFields(appDefaults) : [],
-  );
-  const [defaultsUnreadable, setDefaultsUnreadable] = useState<boolean>(appDefaults === null);
-  const defaultsBlocked = defaultsUnreadable || defaultsUndeclared.length > 0;
+  // D0 — the server is the authority: a page loaded before a state change (or
+  // a stale tab) learns it from a refusal — of preview OR execute (twin paths,
+  // same gate) — and re-blocks.
+  function applyGateRefusal(body: { code?: string; blockers?: string[]; error?: string }) {
+    const blockers = body.blockers ?? (body.code ? [body.code] : []);
+    if (blockers.includes("IAPS_NEVER_SYNCED")) {
+      setMirrorSyncedAt(null);
+      setMirrorReadError(null);
+    }
+    if (body.code === "MIRROR_READ_FAILED") {
+      setMirrorReadError(body.error ?? "Could not read the cached IAP list.");
+    }
+    if (body.code === "IMPORT_READINESS_READ_FAILED") {
+      // The sync state could not be read — not "never refreshed".
+      setMirrorSyncedAt(null);
+      setMirrorReadError(body.error ?? "Could not read whether the IAP list has been refreshed.");
+    }
+  }
+
+  // H4.6 — the currency the pricing note describes: the server's own value
+  // from the last preview (it re-reads the app row per request), seeded from
+  // the page.
+  const [pricingAppCurrency, setPricingAppCurrency] = useState<string | null>(appDefaultCurrency);
+
+  // C2.1 — the app's currency/language are NOT import conditions. The app
+  // page is linked only so the pricing note can say where the value lives.
   const appPageHref = `/google-iap-management/apps/${encodeURIComponent(packageName)}#app-defaults`;
 
   async function handleRefreshMirror() {
@@ -509,30 +519,11 @@ export function BulkImportWizard({
         error?: string;
         code?: string;
         blockers?: string[];
-        undeclared?: AppDefaultField[];
         iapsLastSyncedAt?: string | null;
+        appCurrency?: string | null;
       };
       if (!res.ok) {
-        // D0/D9 — the server is the authority: a page loaded before a state
-        // change (or a stale tab) learns it here and re-blocks.
-        const blockers = body.blockers ?? (body.code ? [body.code] : []);
-        if (blockers.includes("IAPS_NEVER_SYNCED")) {
-          setMirrorSyncedAt(null);
-          setMirrorReadError(null);
-        }
-        if (blockers.includes("APP_DEFAULTS_NOT_DECLARED")) {
-          setDefaultsUndeclared(body.undeclared ?? ["currency", "language"]);
-          setDefaultsUnreadable(false);
-        }
-        if (body.code === "MIRROR_READ_FAILED") {
-          setMirrorReadError(body.error ?? "Could not read the cached IAP list.");
-        }
-        if (body.code === "IMPORT_READINESS_READ_FAILED") {
-          // Neither the sync state nor the currency/language could be read.
-          setMirrorSyncedAt(null);
-          setMirrorReadError(body.error ?? "Could not read this app's import readiness.");
-          setDefaultsUnreadable(true);
-        }
+        applyGateRefusal(body);
         if (body.errors && body.errors.length > 0) {
           setUploadError(body.errors.join(" · "));
         } else {
@@ -561,6 +552,8 @@ export function BulkImportWizard({
       setPreviewWarnings(body.warnings ?? []);
       setTierSelections(seedSelections);
       if (body.iapsLastSyncedAt) setMirrorSyncedAt(body.iapsLastSyncedAt);
+      // The note must describe what the server priced THIS preview with.
+      if (body.appCurrency !== undefined) setPricingAppCurrency(body.appCurrency);
 
       // Custom prices deliberately SURVIVE this reset (Manager-locked:
       // "custom survives back-navigation to Step 1 and a template
@@ -819,8 +812,11 @@ export function BulkImportWizard({
       );
       const body = (await res.json().catch(() => ({}))) as ExecuteResult & {
         error?: string;
+        code?: string;
+        blockers?: string[];
       };
       if (!res.ok) {
+        applyGateRefusal(body);
         setExecuteError(body.error ?? `Execute failed (HTTP ${res.status}).`);
         setStep("preview");
         return;
@@ -878,11 +874,8 @@ export function BulkImportWizard({
         onRefresh={handleRefreshMirror}
       />
 
-      <AppDefaultsBanner
-        appName={appDisplayName ?? packageName}
-        defaults={appDefaults}
-        unreadable={defaultsUnreadable}
-        undeclared={defaultsUndeclared}
+      <PricingCurrencyNote
+        appCurrency={pricingAppCurrency}
         appPageHref={appPageHref}
       />
 
@@ -1033,15 +1026,8 @@ export function BulkImportWizard({
             <button
               onClick={handleUploadAndPreview}
               // D0 — blocked while the mirror cannot say which SKUs exist.
-              // D9 — blocked while currency/language are not declared.
-              disabled={!file || uploading || mirrorBlocked || defaultsBlocked}
-              title={
-                mirrorBlocked
-                  ? "Refresh the IAP list first (see the banner above)."
-                  : defaultsBlocked
-                    ? "Declare the app's currency and language first (see the banner above)."
-                    : undefined
-              }
+              disabled={!file || uploading || mirrorBlocked}
+              title={mirrorBlocked ? "Refresh the IAP list first (see the banner above)." : undefined}
               className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition disabled:opacity-50"
             >
               {uploading ? "Parsing…" : "Preview"}
@@ -1465,76 +1451,72 @@ export function computePrecisionViolations(
 }
 
 /**
- * D9 — the app currency/language bulk import prices against. Blocks (amber)
- * until both are DECLARED, with a shortcut to the app page where a guessed
- * value is confirmed in one click.
+ * H4.6 [2026-10-16] — how prices are read from the file TODAY. A description,
+ * not a warning and not a gate: the app's currency is no longer an import
+ * condition (C2.1). Every sentence below is measured behaviour of the preview
+ * + execute code (H4 census, adversarially verified); the app currency still
+ * takes part in pricing (a violation of "the file currency is the only price
+ * source" — fix awaiting the gate). When that fix ships, this note changes
+ * WITH it — changing it alone would make it false.
  */
-function AppDefaultsBanner({
-  appName,
-  defaults,
-  unreadable,
-  undeclared,
+function PricingCurrencyNote({
+  appCurrency,
   appPageHref,
 }: {
-  appName: string;
-  defaults: AppDefaultsState | null;
-  unreadable: boolean;
-  undeclared: AppDefaultField[];
+  appCurrency: string | null;
   appPageHref: string;
 }) {
-  if (unreadable || !defaults) {
-    return (
-      <div
-        data-testid="app-defaults-banner"
-        data-state="unreadable"
-        className="text-xs text-red-900 bg-red-50 border border-red-200 rounded-lg px-3 py-2"
-      >
-        <span className="font-semibold">
-          Could not read {appName}&apos;s currency and language.
-        </span>{" "}
-        Preview is blocked until they can be read — this is not the same as &quot;not set&quot;.
-        Reload the page; if it persists, check the app page.{" "}
-        <a href={appPageHref} className="font-semibold underline">
-          Open the app page →
-        </a>
-      </div>
-    );
-  }
-  const describe = (f: AppDefaultField) => {
-    const v = defaults?.[f];
-    const label = f === "currency" ? "currency" : "default language";
-    if (!v?.value) return `${label}: not set`;
-    return undeclared.includes(f)
-      ? `${label}: ${v.value} (guessed by the tool — not confirmed)`
-      : `${label}: ${v.value}`;
-  };
-  if (undeclared.length > 0) {
-    return (
-      <div
-        data-testid="app-defaults-banner"
-        data-state="undeclared"
-        className="text-xs text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2"
-      >
-        <span className="font-semibold">
-          {appName}&apos;s currency and language must be declared before importing.
-        </span>{" "}
-        Preview is blocked — every row is priced against them. {describe("currency")} ·{" "}
-        {describe("language")}.{" "}
-        <a href={appPageHref} className="font-semibold underline">
-          Confirm or set them on the app page →
-        </a>
-      </div>
-    );
-  }
+  const x = appCurrency?.trim().toUpperCase() || null;
+  const code = (c: string) => (
+    <code className="px-1 bg-white border border-slate-200 rounded font-mono">{c}</code>
+  );
+  const appPageLink = (
+    <a href={appPageHref} className="underline">
+      app page
+    </a>
+  );
   return (
     <div
-      data-testid="app-defaults-banner"
-      data-state="declared"
-      className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2"
+      data-testid="pricing-currency-note"
+      data-app-currency={x ?? ""}
+      className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
     >
-      <span className="font-semibold">Importing to {appName}:</span> declared {describe("currency")}{" "}
-      · {describe("language")}. The &quot;Price (USD)&quot; column is read as USD; when the app
-      currency differs, each row resolves through the selected template&apos;s tier.
+      <span className="font-semibold">How prices are read from the file.</span> The first{" "}
+      {code("Price (XXX)")} column (e.g. {code("Price (USD)")}) is used, in that currency; a{" "}
+      {code("Price")} / Default Price / Base Price column is used only when there is none, and any
+      other price column is ignored without a warning. GT Price + GT Currency override their one
+      country with Google Conversion; with a pricing template the tier&apos;s price is used instead.
+      {x ? (
+        <ul className="mt-1 ml-4 list-disc space-y-0.5">
+          <li>
+            A {code("Price")} column is read as this app&apos;s currency, {code(x)} (shown on the{" "}
+            {appPageLink} — it may still be a tool guess).{" "}
+            {x === "USD"
+              ? "A value with more decimals than USD allows is refused."
+              : `A value with more decimals than ${x} allows is matched against the tiers' USD prices when a pricing template is used (the tier's ${x} price is sent; no match ⇒ refused), and refused with Google Conversion.`}
+          </li>
+          <li>
+            When a row&apos;s price column names a currency other than {x}: with a pricing
+            template the row takes the tier whose price in that currency matches (none ⇒ refused;
+            several ⇒ you pick), and countries the tier does not list are converted by Google from
+            the tier&apos;s {x} price — a tier with no {x} price refuses the row. With Google
+            Conversion the row is refused unless you set custom prices for it; then a {x} custom
+            price, if you set one, becomes the conversion base.
+          </li>
+          <li>
+            Custom prices with a pricing template must include a {x} price, and it becomes the
+            conversion base.
+          </li>
+        </ul>
+      ) : (
+        <ul className="mt-1 ml-4 list-disc space-y-0.5">
+          <li>
+            This app has no currency set (see the {appPageLink}): a {code("Price")} column is read
+            as USD, and every row is priced from the currency its own price column names.
+          </li>
+          <li>Custom prices with a pricing template are refused (they need an app currency).</li>
+        </ul>
+      )}
     </div>
   );
 }
@@ -1587,7 +1569,7 @@ function MirrorSyncBanner({
         <span className="font-semibold">
           {unreadable
             ? "Could not read whether this app's IAP list has been refreshed."
-            : "This app's IAP list has never been refreshed from Google."}
+            : "This app's IAP list has no complete refresh from Google on record."}
         </span>{" "}
         Preview is blocked: without a complete IAP list the tool cannot tell which SKUs
         already exist, and would send existing products as new ones.
@@ -1604,7 +1586,7 @@ function MirrorSyncBanner({
       data-state="synced"
       className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
     >
-      IAP list last refreshed from Google:{" "}
+      IAP list last refreshed completely from Google:{" "}
       <time dateTime={syncedAt} className="font-mono">
         {new Date(syncedAt).toLocaleString()}
       </time>

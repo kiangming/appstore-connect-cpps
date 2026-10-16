@@ -28,7 +28,6 @@ vi.mock("@/lib/xlsx-template", async (importOriginal) => {
 });
 
 import { BulkImportWizard } from "./BulkImportWizard";
-import type { AppDefaultsState } from "@/lib/google-iap-management/app-defaults";
 
 const START_URL = "/api/google-iap-management/hub-tracking/start";
 const CANCEL_URL = "/api/google-iap-management/hub-tracking/cancel";
@@ -108,18 +107,14 @@ function installFetchMock(scenario: FetchScenario) {
   return fetchMock;
 }
 
-const DECLARED_DEFAULTS: AppDefaultsState = {
-  currency: { value: "USD", source: "declared" },
-  language: { value: "en-US", source: "declared" },
-};
-
 function renderWizard(
   mirror: {
     iapsLastSyncedAt: string | null;
     iapsSyncReadError?: string | null;
-    appDefaults?: AppDefaultsState | null;
+    /** apps.default_currency as the page passes it (undefined ⇒ "USD"). */
+    appCurrency?: string | null;
   } = {
-    // D0 — default scenario: the IAP list HAS been refreshed…
+    // D0 — default scenario: the IAP list HAS been refreshed.
     iapsLastSyncedAt: "2026-10-16T03:25:10.000Z",
   },
 ) {
@@ -128,11 +123,9 @@ function renderWizard(
       packageName="com.example.app"
       appId="app-uuid-1"
       appDisplayName="Test App"
-      appDefaultCurrency={mirror.appDefaults?.currency.value ?? "USD"}
+      appDefaultCurrency={mirror.appCurrency === undefined ? "USD" : mirror.appCurrency}
       iapsLastSyncedAt={mirror.iapsLastSyncedAt}
       iapsSyncReadError={mirror.iapsSyncReadError ?? null}
-      // …and D9 — the app's currency/language ARE declared, unless overridden.
-      appDefaults={mirror.appDefaults === undefined ? DECLARED_DEFAULTS : mirror.appDefaults}
     />,
   );
 }
@@ -680,7 +673,7 @@ describe("BulkImportWizard (Google) — D0/D3 IAP mirror sync gate", () => {
     const { container } = renderWizard({ iapsLastSyncedAt: null });
     const banner = screen.getByTestId("mirror-sync-banner");
     expect(banner).toHaveAttribute("data-state", "never");
-    expect(banner).toHaveTextContent(/never been refreshed/);
+    expect(banner).toHaveTextContent(/no complete refresh from Google on record/);
     expect(within(banner).getByRole("button", { name: /Refresh IAP list/ })).toBeEnabled();
 
     await goToUploadStep();
@@ -709,7 +702,7 @@ describe("BulkImportWizard (Google) — D0/D3 IAP mirror sync gate", () => {
     const { container } = renderWizard();
     const banner = screen.getByTestId("mirror-sync-banner");
     expect(banner).toHaveAttribute("data-state", "synced");
-    expect(banner).toHaveTextContent(/IAP list last refreshed from Google/);
+    expect(banner).toHaveTextContent(/IAP list last refreshed completely from Google/);
     expect(banner.querySelector("time")).toHaveAttribute("dateTime", "2026-10-16T03:25:10.000Z");
     await goToUploadStep();
     selectFile(container);
@@ -785,11 +778,12 @@ describe("BulkImportWizard (Google) — D0/D3 IAP mirror sync gate", () => {
 });
 
 /**
- * D9 [arc-google-missing-purchase-options] — bulk import runs only when the
- * app's currency AND language are DECLARED by the Manager. A tool-guessed or
- * empty value blocks Preview, with a shortcut to the app page to confirm it.
+ * C2.1 [arc-google-missing-purchase-options] — the app's currency/language are
+ * NOT import conditions (Manager 2026-10-16). The wizard only describes, in a
+ * neutral note, how prices are read TODAY (H4.6) — measured behaviour, with the
+ * app's currency still taking part until the H4 fix ships.
  */
-describe("BulkImportWizard (Google) — D9 app currency/language must be declared", () => {
+describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language gate", () => {
   function installBasicFetch(
     preview?: () => { ok: boolean; status?: number; json: () => Promise<unknown> },
   ) {
@@ -808,102 +802,146 @@ describe("BulkImportWizard (Google) — D9 app currency/language must be declare
     return fetchMock;
   }
 
-  it("currency GUESSED ⇒ amber banner naming it, shortcut to the app page, Preview DISABLED", async () => {
+  it.each([["TWD"], [null]])(
+    "app currency %s ⇒ Preview ENABLED once the IAP list is refreshed — no currency/language banner, no block",
+    async (appCurrency) => {
+      installBasicFetch();
+      const { container } = renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z", appCurrency });
+      expect(screen.queryByTestId("app-defaults-banner")).toBeNull();
+      await goToUploadStep();
+      selectFile(container);
+      await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
+    },
+  );
+
+  // Every sentence is MEASURED behaviour of today's pricing code (H4 census,
+  // adversarially verified, 2026-10-16). Pinned verbatim so that no wording —
+  // and no pricing change (the H4 fix) — can land without editing this test.
+  const LEAD =
+    "How prices are read from the file. The first Price (XXX) column (e.g. Price (USD)) is used, in that currency; " +
+    "a Price / Default Price / Base Price column is used only when there is none, and any other price column is " +
+    "ignored without a warning. GT Price + GT Currency override their one country with Google Conversion; with a " +
+    "pricing template the tier's price is used instead.";
+  const withCurrency = (x: string, decimals: string) =>
+    LEAD +
+    `A Price column is read as this app's currency, ${x} (shown on the app page — it may still be a tool guess). ` +
+    decimals +
+    `When a row's price column names a currency other than ${x}: with a pricing template the row takes the tier ` +
+    "whose price in that currency matches (none ⇒ refused; several ⇒ you pick), and countries the tier does not list " +
+    `are converted by Google from the tier's ${x} price — a tier with no ${x} price refuses the row. With Google ` +
+    "Conversion the row is refused unless you set custom prices for it; then a " +
+    `${x} custom price, if you set one, becomes the conversion base.` +
+    `Custom prices with a pricing template must include a ${x} price, and it becomes the conversion base.`;
+
+  it.each([
+    [
+      "TWD",
+      withCurrency(
+        "TWD",
+        "A value with more decimals than TWD allows is matched against the tiers' USD prices when a pricing " +
+          "template is used (the tier's TWD price is sent; no match ⇒ refused), and refused with Google Conversion.",
+      ),
+    ],
+    ["USD", withCurrency("USD", "A value with more decimals than USD allows is refused.")],
+    [
+      null,
+      LEAD +
+        "This app has no currency set (see the app page): a Price column is read as USD, and every row is priced " +
+        "from the currency its own price column names." +
+        "Custom prices with a pricing template are refused (they need an app currency).",
+    ],
+  ])("note text, app currency %s — verbatim", (appCurrency, expected) => {
     installBasicFetch();
-    const { container } = renderWizard({
-      iapsLastSyncedAt: "2026-10-16T03:25:10.000Z",
-      appDefaults: {
-        currency: { value: "USD", source: "guessed" },
-        language: { value: "en-US", source: "declared" },
-      },
+    renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z", appCurrency });
+    const note = screen.getByTestId("pricing-currency-note");
+    expect(note.textContent).toBe(expected);
+    expect(note.textContent).not.toMatch(/warning:|before importing|must (set|declare)|interpreted in the app|Google enforces/i);
+  });
+
+  it.each([["TWD"], [null]])(
+    "app currency %s ⇒ clicking Preview sends the preview — no confirm(), no client-side block, no upload error",
+    async (appCurrency) => {
+      const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+      const fetchMock = installBasicFetch(() => ({
+        ok: true,
+        json: async () => ({ rows: [], warnings: [], counts: { total: 0, existing: 0, new: 0 }, appCurrency }),
+      }));
+      const { container } = renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z", appCurrency });
+      await goToUploadStep();
+      selectFile(container);
+      await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /^Preview/ }));
+      });
+      await waitFor(() =>
+        expect(fetchMock.mock.calls.some(([u]) => String(u).includes(PREVIEW_URL_FRAGMENT))).toBe(true),
+      );
+      expect(confirmSpy).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    },
+  );
+
+  it.each([
+    ["IAPS_NEVER_SYNCED", 409, "never"],
+    ["IMPORT_READINESS_READ_FAILED", 503, "unreadable"],
+  ])(
+    "EXECUTE refused with %s (twin path, same gate) ⇒ the mirror banner re-blocks too, not only the preview path",
+    async (code, status, state) => {
+      const fetchMock = installFetchMock({
+        runId: "run-gate",
+        executeResponse: () => ({
+          ok: false,
+          status,
+          json: async () => ({ code, blockers: code === "IAPS_NEVER_SYNCED" ? [code] : undefined, error: `refused ${code}` }),
+        }),
+      });
+      const { container } = renderWizard();
+      await goToPreviewAndAdoptRun(container, fetchMock);
+      await clickExecuteAndSettle();
+      await waitFor(() =>
+        expect(screen.getByTestId("mirror-sync-banner")).toHaveAttribute("data-state", state),
+      );
+    },
+  );
+
+  it("Tier column: a REFUSED row says 'Not sent — refused', a sent row 'Auto-converted by Google'; the note follows the server's currency", async () => {
+    const row = (sku: string, resolution: unknown) => ({
+      rowNumber: 1, sku, baseCurrency: "USD", basePriceDecimal: "0.99", regionOverrides: [], listings: [],
+      exists: false, tierCandidates: [], defaultTierSelection: null, tierMatchedBy: "none", resolution,
     });
-    const banner = screen.getByTestId("app-defaults-banner");
-    expect(banner).toHaveAttribute("data-state", "undeclared");
-    expect(banner).toHaveTextContent(/currency: USD \(guessed by the tool — not confirmed\)/);
-    expect(within(banner).getByRole("link", { name: /Confirm or set them on the app page/ })).toHaveAttribute(
-      "href",
-      "/google-iap-management/apps/com.example.app#app-defaults",
-    );
-    await goToUploadStep();
-    selectFile(container);
-    await waitFor(() => expect(screen.getByText("items.xlsx")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
-  });
-
-  it("language EMPTY ⇒ blocked too", async () => {
-    installBasicFetch();
-    const { container } = renderWizard({
-      iapsLastSyncedAt: "2026-10-16T03:25:10.000Z",
-      appDefaults: {
-        currency: { value: "USD", source: "declared" },
-        language: { value: null, source: null },
-      },
-    });
-    expect(screen.getByTestId("app-defaults-banner")).toHaveTextContent(/default language: not set/);
-    await goToUploadStep();
-    selectFile(container);
-    await waitFor(() => expect(screen.getByText("items.xlsx")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
-  });
-
-  it("both DECLARED ⇒ neutral banner and Preview enabled", async () => {
-    installBasicFetch();
-    const { container } = renderWizard();
-    expect(screen.getByTestId("app-defaults-banner")).toHaveAttribute("data-state", "declared");
-    await goToUploadStep();
-    selectFile(container);
-    await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
-  });
-
-  it("server says APP_DEFAULTS_NOT_DECLARED (stale page) ⇒ the wizard re-blocks on the named fields", async () => {
     installBasicFetch(() => ({
-      ok: false,
-      status: 409,
+      ok: true,
       json: async () => ({
-        code: "APP_DEFAULTS_NOT_DECLARED",
-        blockers: ["APP_DEFAULTS_NOT_DECLARED"],
-        undeclared: ["currency"],
-        error: "The app's currency (USD — guessed by the tool, not confirmed) must be declared…",
+        rows: [
+          row("sku.refused", { kind: "cross_currency_refused", anchorUsdMicros: "990000", reason: "App currency is TWD…", refusalKind: "google_default" }),
+          { ...row("sku.sent", { kind: "same_currency" }), rowNumber: 2 },
+        ],
+        warnings: [],
+        counts: { total: 2, existing: 0, new: 2 },
+        appCurrency: "TWD",
       }),
     }));
-    const { container } = renderWizard();
+    const { container } = renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z", appCurrency: "USD" });
+    expect(screen.getByTestId("pricing-currency-note")).toHaveAttribute("data-app-currency", "USD");
     await goToUploadStep();
     selectFile(container);
     await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /^Preview/ }));
     });
-    await waitFor(() =>
-      expect(screen.getByTestId("app-defaults-banner")).toHaveAttribute("data-state", "undeclared"),
-    );
-    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
+    await waitFor(() => expect(screen.getByText("Not sent — refused")).toBeInTheDocument());
+    expect(screen.getAllByText("Auto-converted by Google")).toHaveLength(1);
+    // The note now describes the currency the server priced THIS preview with.
+    expect(screen.getByTestId("pricing-currency-note")).toHaveAttribute("data-app-currency", "TWD");
   });
 
-  it("defaults could not be READ (page passes null) ⇒ red 'could not read', never 'not set'; Preview blocked", async () => {
-    installBasicFetch();
-    const { container } = renderWizard({
-      iapsLastSyncedAt: null,
-      iapsSyncReadError: "column apps.default_currency_source does not exist",
-      appDefaults: null,
-    });
-    const banner = screen.getByTestId("app-defaults-banner");
-    expect(banner).toHaveAttribute("data-state", "unreadable");
-    expect(banner).toHaveTextContent(/Could not read .*currency and language/);
-    // The "not declared" rendering ("currency: not set") must not appear.
-    expect(banner).not.toHaveTextContent(/currency: not set|default language: not set/);
-    await goToUploadStep();
-    selectFile(container);
-    await waitFor(() => expect(screen.getByText("items.xlsx")).toBeInTheDocument());
-    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
-  });
-
-  it("server says IMPORT_READINESS_READ_FAILED ⇒ both banners turn 'unreadable' and Preview re-blocks", async () => {
+  it("server says IMPORT_READINESS_READ_FAILED ⇒ the mirror banner turns 'unreadable' and Preview re-blocks", async () => {
     installBasicFetch(() => ({
       ok: false,
       status: 503,
       json: async () => ({
         code: "IMPORT_READINESS_READ_FAILED",
-        error: "Could not read this app's import readiness — IAP-list sync state, currency and language (timeout).",
+        error: "Could not read whether this app's IAP list has been refreshed (timeout).",
       }),
     }));
     const { container } = renderWizard();
@@ -914,9 +952,8 @@ describe("BulkImportWizard (Google) — D9 app currency/language must be declare
       fireEvent.click(screen.getByRole("button", { name: /^Preview/ }));
     });
     await waitFor(() =>
-      expect(screen.getByTestId("app-defaults-banner")).toHaveAttribute("data-state", "unreadable"),
+      expect(screen.getByTestId("mirror-sync-banner")).toHaveAttribute("data-state", "unreadable"),
     );
-    expect(screen.getByTestId("mirror-sync-banner")).toHaveAttribute("data-state", "unreadable");
     expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
   });
 });

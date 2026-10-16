@@ -123,56 +123,69 @@ export async function upsertAppFromSync(args: UpsertAppArgs): Promise<void> {
 }
 
 /**
- * D0 + D9 [arc-google-missing-purchase-options] — everything bulk import needs
- * to decide whether it may run, in ONE read: was the IAP mirror ever filled
- * completely (D0), and are the app's currency/language DECLARED by the Manager
- * (D9). Consumed by lib/google-iap-management/bulk-import-mirror-gate.ts (the
- * ONE gate) and by the surfaces that display/declare the defaults.
+ * D0 [arc-google-missing-purchase-options] — when the IAP mirror of THIS app
+ * row was last filled completely (null = never). The bulk-import gate's only
+ * input (lib/google-iap-management/bulk-import-mirror-gate.ts).
  *
- * ⚠ These columns are deliberately NOT part of APP_COLUMNS. getAppByPackage
- *   has ~17 callers across the module; selecting new columns there would make
- *   the WHOLE Google module fail if the code ran before the migrations. Read
- *   on their own, only the surfaces that need them fail — loudly.
- * ⚠ THROWS on a read error. A caller that turns this error into a default
- *   would rebuild the bug D0 closes (`.catch(() => [])` made every row NEW).
+ * ⚠ Not part of APP_COLUMNS: getAppByPackage has ~17 callers across the
+ *   module; selecting a new column there would make the WHOLE module fail if
+ *   the code ran before the migration. Read on its own, only bulk import fails —
+ *   loudly.
+ * ⚠ THROWS on a read error or a missing row. A caller that turns this error
+ *   into a default would rebuild the bug D0 closes (`.catch(() => [])` made
+ *   every row NEW).
  */
-export interface AppImportReadiness {
-  iapsLastSyncedAt: string | null;
-  defaults: AppDefaultsState;
-}
-
-const READINESS_COLUMNS =
-  "iaps_last_synced_at, default_currency, default_currency_source, default_language, default_language_source";
-
-export async function getAppImportReadiness(appId: string): Promise<AppImportReadiness> {
+export async function getIapsMirrorSyncedAt(appId: string): Promise<string | null> {
   const { data, error } = await googleIapDb()
     .from("apps")
-    .select(READINESS_COLUMNS)
+    .select("iaps_last_synced_at")
     .eq("id", appId)
     .maybeSingle();
   if (error) {
-    throw new Error(`Failed to read app import readiness: ${error.message}`);
+    throw new Error(`Failed to read the IAP list sync state: ${error.message}`);
   }
   if (!data) {
-    throw new Error(`Failed to read app import readiness: app ${appId} not found.`);
+    throw new Error(`Failed to read the IAP list sync state: app ${appId} not found.`);
+  }
+  return ((data as { iaps_last_synced_at: string | null }).iaps_last_synced_at ?? null);
+}
+
+/**
+ * D9 — the app's currency / language with their provenance, for the app page
+ * card and the declare route. NOT a bulk-import condition (C2.1, Manager
+ * 2026-10-16): whether an import may run never depends on these.
+ *
+ * ⚠ THROWS on a read error or a missing row — "could not read" is never shown
+ *   as "not set".
+ */
+const DEFAULTS_COLUMNS =
+  "default_currency, default_currency_source, default_language, default_language_source";
+
+export async function getAppDefaults(appId: string): Promise<AppDefaultsState> {
+  const { data, error } = await googleIapDb()
+    .from("apps")
+    .select(DEFAULTS_COLUMNS)
+    .eq("id", appId)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`Failed to read the app's currency/language: ${error.message}`);
+  }
+  if (!data) {
+    throw new Error(`Failed to read the app's currency/language: app ${appId} not found.`);
   }
   const row = data as {
-    iaps_last_synced_at: string | null;
     default_currency: string | null;
     default_currency_source: string | null;
     default_language: string | null;
     default_language_source: string | null;
   };
   return {
-    iapsLastSyncedAt: row.iaps_last_synced_at ?? null,
-    defaults: {
-      currency: { value: row.default_currency ?? null, source: toSource(row.default_currency_source) },
-      language: { value: row.default_language ?? null, source: toSource(row.default_language_source) },
-    },
+    currency: { value: row.default_currency ?? null, source: toSource(row.default_currency_source) },
+    language: { value: row.default_language ?? null, source: toSource(row.default_language_source) },
   };
 }
 
-/** Unknown provenance strings read as null (⇒ not declared ⇒ import blocked). */
+/** Unknown provenance strings read as null (shown as unconfirmed — never as declared). */
 function toSource(raw: string | null): AppDefaultSource | null {
   return raw === APP_DEFAULT_DECLARED || raw === APP_DEFAULT_GUESSED ? raw : null;
 }

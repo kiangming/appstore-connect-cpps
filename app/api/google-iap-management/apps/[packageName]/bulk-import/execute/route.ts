@@ -161,7 +161,7 @@ export async function POST(
         ? body.hub_run_id
         : null;
 
-    // THE bulk-import gate (D0 + D9) — same gate as preview (P1/P14: a guard
+    // THE bulk-import gate (D0) — same gate as preview (P1/P14: a guard
     // on the read surface alone leaves the WRITE open — a tab previewed before
     // this deploy, or a direct POST, would still push its plan). Placed AFTER
     // runId so the Hub run this request belongs to is closed.
@@ -309,11 +309,16 @@ export async function POST(
         sourceFilename: body.sourceFilename ?? null,
         rows,
         actorEmail: session.user.email ?? null,
-        // Cycle 43 cross-currency resolution needs the app's currency to
-        // pick the matching entry from a template tier (e.g. the tier's VND
-        // entry when the app's currency is VND). D9: the DECLARED value from
-        // the gate's own read — not app.default_currency, read earlier.
-        appDefaultCurrency: gate.declaredCurrency,
+        // Cycle 43 cross-currency resolution needs the app's default
+        // currency to pick the matching entry from a template tier
+        // (e.g. the tier's VND entry when the app's default currency is
+        // VND). Null is tolerated by the orchestrator: no app currency ⇒ no
+        // cross-currency trigger at all; custom prices under a template are
+        // refused (they need an app-currency entry).
+        // ⚠ H4 [2026-10-16]: measured to violate "the file currency is the
+        //   only source of prices"; fix awaiting the gate. Deployed
+        //   behaviour kept as is.
+        appDefaultCurrency: app.default_currency,
       });
 
       // ── Hub-tracking terminal status (SUCCESS/FAILED/PARTIAL) ──────────

@@ -33,8 +33,8 @@ export default async function BulkImportPage({
   const app = await getAppByPackage(activeAccountId, packageName);
   if (!app) notFound();
 
-  // THE bulk-import gate (D0 + D9), as plain serialisable props (the wizard is
-  // a client component and must not import the repository module).
+  // THE bulk-import gate (D0), as plain serialisable props (the wizard is a
+  // client component and must not import the repository module).
   const gate = await readBulkImportGate(app.id);
 
   return (
@@ -49,12 +49,11 @@ export default async function BulkImportPage({
         packageName={packageName}
         appId={app.id}
         appDisplayName={app.display_name}
-        // D9 — the DECLARED currency the gate approved (null while blocked:
-        // nothing is priced until preview passes the same gate server-side).
-        appDefaultCurrency={gate.kind === "ok" ? gate.declaredCurrency : null}
+        // The value the server prices with today (H4: to be removed from
+        // pricing) — shown so the pricing note tells the truth.
+        appDefaultCurrency={app.default_currency}
         iapsLastSyncedAt={gate.kind === "error" ? null : gate.iapsLastSyncedAt}
         iapsSyncReadError={gate.kind === "error" ? gate.message : null}
-        appDefaults={gate.kind === "error" ? null : gate.defaults}
       />
     </div>
   );

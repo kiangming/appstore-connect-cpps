@@ -9,7 +9,7 @@ import { authOptions } from "@/lib/auth";
 import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
 import {
   getAppByPackage,
-  getAppImportReadiness,
+  getAppDefaults,
 } from "@/lib/google-iap-management/repository/apps";
 import { listIapsWithDefaultLocale } from "@/lib/google-iap-management/repository/iaps";
 import { readActiveAccountId } from "@/lib/google-iap-management/active-account";
@@ -65,7 +65,7 @@ export default async function AppDetailPage({
   let defaults: AppDefaultsState | null = null;
   let defaultsReadError: string | null = null;
   try {
-    defaults = (await getAppImportReadiness(app.id)).defaults;
+    defaults = await getAppDefaults(app.id);
   } catch (err) {
     defaultsReadError = err instanceof Error ? err.message : String(err);
   }

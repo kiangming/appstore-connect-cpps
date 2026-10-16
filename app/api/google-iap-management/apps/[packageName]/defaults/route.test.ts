@@ -24,14 +24,14 @@ const listAccounts = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/google-iap-management/repository/google-accounts", () => ({ listAccounts }));
 
 const getAppByPackage = vi.hoisted(() => vi.fn());
-const getAppImportReadiness = vi.hoisted(() => vi.fn());
+const getAppDefaults = vi.hoisted(() => vi.fn());
 const declareAppDefault = vi.hoisted(() => vi.fn());
 const { AppDefaultChangedError } = vi.hoisted(() => ({
   AppDefaultChangedError: class AppDefaultChangedError extends Error {},
 }));
 vi.mock("@/lib/google-iap-management/repository/apps", () => ({
   getAppByPackage,
-  getAppImportReadiness,
+  getAppDefaults,
   declareAppDefault,
   AppDefaultChangedError,
 }));
@@ -68,11 +68,8 @@ const post = (body: { field: string; value: unknown } & Record<string, unknown>)
   });
 
 const GUESSED = {
-  iapsLastSyncedAt: "2026-10-16T03:25:10Z",
-  defaults: {
-    currency: { value: "USD", source: "guessed" },
-    language: { value: "en-US", source: "guessed" },
-  },
+  currency: { value: "USD", source: "guessed" },
+  language: { value: "en-US", source: "guessed" },
 };
 
 beforeEach(() => {
@@ -81,7 +78,7 @@ beforeEach(() => {
   readActiveAccountId.mockReset().mockReturnValue(null);
   resolveActiveAccountId.mockReset().mockReturnValue("acc1");
   getAppByPackage.mockReset().mockResolvedValue({ id: "app-1" });
-  getAppImportReadiness.mockReset().mockResolvedValue(GUESSED);
+  getAppDefaults.mockReset().mockResolvedValue(GUESSED);
   declareAppDefault.mockReset().mockResolvedValue(undefined);
   appendAction.mockReset().mockResolvedValue(undefined);
 });
@@ -140,11 +137,11 @@ describe("POST …/defaults — validation", () => {
 
 describe("POST …/defaults — declare / confirm", () => {
   it("CONFIRM a guessed value (same value) ⇒ declared on THIS row, audited as confirm with the old provenance", async () => {
-    getAppImportReadiness
+    getAppDefaults
       .mockResolvedValueOnce(GUESSED)
       .mockResolvedValueOnce({
         ...GUESSED,
-        defaults: { ...GUESSED.defaults, currency: { value: "USD", source: "declared" } },
+        currency: { value: "USD", source: "declared" },
       });
     const res = await POST(post({ field: "currency", value: "usd" }), ctx);
     expect(res.status).toBe(200);
@@ -224,9 +221,9 @@ describe("POST …/defaults — writes only the row and value the Manager was lo
   });
 
   it("someone declared another value since the page loaded ⇒ 409 DEFAULT_CHANGED naming it, nothing written", async () => {
-    getAppImportReadiness.mockResolvedValue({
+    getAppDefaults.mockResolvedValue({
       ...GUESSED,
-      defaults: { ...GUESSED.defaults, currency: { value: "TWD", source: "declared" } },
+      currency: { value: "TWD", source: "declared" },
     });
     // The stale page still shows "USD (guessed)" and clicks Confirm.
     const res = await POST(post({ field: "currency", value: "USD" }), ctx);
@@ -258,7 +255,7 @@ describe("POST …/defaults — writes only the row and value the Manager was lo
   });
 
   it("write OK but the re-read fails ⇒ 200 ok (the value IS declared), defaults null + reread_error (P5)", async () => {
-    getAppImportReadiness
+    getAppDefaults
       .mockResolvedValueOnce(GUESSED)
       .mockRejectedValueOnce(new Error("timeout"));
     const res = await POST(post({ field: "currency", value: "USD" }), ctx);
@@ -271,7 +268,7 @@ describe("POST …/defaults — writes only the row and value the Manager was lo
   });
 
   it("the read BEFORE the write fails ⇒ 500 and nothing written", async () => {
-    getAppImportReadiness.mockRejectedValue(new Error("column does not exist"));
+    getAppDefaults.mockRejectedValue(new Error("column does not exist"));
     const res = await POST(post({ field: "currency", value: "USD" }), ctx);
     expect(res.status).toBe(500);
     expect(declareAppDefault).not.toHaveBeenCalled();
