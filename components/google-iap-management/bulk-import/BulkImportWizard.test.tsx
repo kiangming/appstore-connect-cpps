@@ -28,6 +28,7 @@ vi.mock("@/lib/xlsx-template", async (importOriginal) => {
 });
 
 import { BulkImportWizard } from "./BulkImportWizard";
+import type { AppDefaultsState } from "@/lib/google-iap-management/app-defaults";
 
 const START_URL = "/api/google-iap-management/hub-tracking/start";
 const CANCEL_URL = "/api/google-iap-management/hub-tracking/cancel";
@@ -107,9 +108,18 @@ function installFetchMock(scenario: FetchScenario) {
   return fetchMock;
 }
 
+const DECLARED_DEFAULTS: AppDefaultsState = {
+  currency: { value: "USD", source: "declared" },
+  language: { value: "en-US", source: "declared" },
+};
+
 function renderWizard(
-  mirror: { iapsLastSyncedAt: string | null; iapsSyncReadError?: string | null } = {
-    // D0 — default scenario: the IAP list HAS been refreshed.
+  mirror: {
+    iapsLastSyncedAt: string | null;
+    iapsSyncReadError?: string | null;
+    appDefaults?: AppDefaultsState | null;
+  } = {
+    // D0 — default scenario: the IAP list HAS been refreshed…
     iapsLastSyncedAt: "2026-10-16T03:25:10.000Z",
   },
 ) {
@@ -118,10 +128,11 @@ function renderWizard(
       packageName="com.example.app"
       appId="app-uuid-1"
       appDisplayName="Test App"
-      appDefaultCurrency="USD"
-      appDefaultLanguage="en-US"
+      appDefaultCurrency={mirror.appDefaults?.currency.value ?? "USD"}
       iapsLastSyncedAt={mirror.iapsLastSyncedAt}
       iapsSyncReadError={mirror.iapsSyncReadError ?? null}
+      // …and D9 — the app's currency/language ARE declared, unless overridden.
+      appDefaults={mirror.appDefaults === undefined ? DECLARED_DEFAULTS : mirror.appDefaults}
     />,
   );
 }
@@ -711,7 +722,7 @@ describe("BulkImportWizard (Google) — D0/D3 IAP mirror sync gate", () => {
         ok: true,
         json: async () => ({
           ok: true, synced: 28, failed: 0, total: 28,
-          mirror_complete: true, iaps_last_synced_at: "2026-10-16T09:00:00.000Z",
+          mirror_complete: true, mirror_synced_at: "2026-10-16T09:00:00.000Z",
         }),
       }),
     });
@@ -734,7 +745,7 @@ describe("BulkImportWizard (Google) — D0/D3 IAP mirror sync gate", () => {
         ok: true,
         json: async () => ({
           ok: true, synced: 0, failed: 28, total: 28,
-          mirror_complete: false, iaps_last_synced_at: null,
+          mirror_complete: false, mirror_synced_at: null,
         }),
       }),
     });
@@ -769,6 +780,143 @@ describe("BulkImportWizard (Google) — D0/D3 IAP mirror sync gate", () => {
     await waitFor(() =>
       expect(screen.getByTestId("mirror-sync-banner")).toHaveAttribute("data-state", "never"),
     );
+    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
+  });
+});
+
+/**
+ * D9 [arc-google-missing-purchase-options] — bulk import runs only when the
+ * app's currency AND language are DECLARED by the Manager. A tool-guessed or
+ * empty value blocks Preview, with a shortcut to the app page to confirm it.
+ */
+describe("BulkImportWizard (Google) — D9 app currency/language must be declared", () => {
+  function installBasicFetch(
+    preview?: () => { ok: boolean; status?: number; json: () => Promise<unknown> },
+  ) {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(AVAILABILITY_URL_FRAGMENT)) {
+        return Promise.resolve({ ok: false, json: async () => ({}) });
+      }
+      if (url.includes(PREVIEW_URL_FRAGMENT) && preview) return Promise.resolve(preview());
+      if (url.includes(START_URL)) {
+        return Promise.resolve({ ok: true, json: async () => ({ run_id: null }) });
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("currency GUESSED ⇒ amber banner naming it, shortcut to the app page, Preview DISABLED", async () => {
+    installBasicFetch();
+    const { container } = renderWizard({
+      iapsLastSyncedAt: "2026-10-16T03:25:10.000Z",
+      appDefaults: {
+        currency: { value: "USD", source: "guessed" },
+        language: { value: "en-US", source: "declared" },
+      },
+    });
+    const banner = screen.getByTestId("app-defaults-banner");
+    expect(banner).toHaveAttribute("data-state", "undeclared");
+    expect(banner).toHaveTextContent(/currency: USD \(guessed by the tool — not confirmed\)/);
+    expect(within(banner).getByRole("link", { name: /Confirm or set them on the app page/ })).toHaveAttribute(
+      "href",
+      "/google-iap-management/apps/com.example.app#app-defaults",
+    );
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByText("items.xlsx")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
+  });
+
+  it("language EMPTY ⇒ blocked too", async () => {
+    installBasicFetch();
+    const { container } = renderWizard({
+      iapsLastSyncedAt: "2026-10-16T03:25:10.000Z",
+      appDefaults: {
+        currency: { value: "USD", source: "declared" },
+        language: { value: null, source: null },
+      },
+    });
+    expect(screen.getByTestId("app-defaults-banner")).toHaveTextContent(/default language: not set/);
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByText("items.xlsx")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
+  });
+
+  it("both DECLARED ⇒ neutral banner and Preview enabled", async () => {
+    installBasicFetch();
+    const { container } = renderWizard();
+    expect(screen.getByTestId("app-defaults-banner")).toHaveAttribute("data-state", "declared");
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
+  });
+
+  it("server says APP_DEFAULTS_NOT_DECLARED (stale page) ⇒ the wizard re-blocks on the named fields", async () => {
+    installBasicFetch(() => ({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        code: "APP_DEFAULTS_NOT_DECLARED",
+        blockers: ["APP_DEFAULTS_NOT_DECLARED"],
+        undeclared: ["currency"],
+        error: "The app's currency (USD — guessed by the tool, not confirmed) must be declared…",
+      }),
+    }));
+    const { container } = renderWizard();
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Preview/ }));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("app-defaults-banner")).toHaveAttribute("data-state", "undeclared"),
+    );
+    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
+  });
+
+  it("defaults could not be READ (page passes null) ⇒ red 'could not read', never 'not set'; Preview blocked", async () => {
+    installBasicFetch();
+    const { container } = renderWizard({
+      iapsLastSyncedAt: null,
+      iapsSyncReadError: "column apps.default_currency_source does not exist",
+      appDefaults: null,
+    });
+    const banner = screen.getByTestId("app-defaults-banner");
+    expect(banner).toHaveAttribute("data-state", "unreadable");
+    expect(banner).toHaveTextContent(/Could not read .*currency and language/);
+    // The "not declared" rendering ("currency: not set") must not appear.
+    expect(banner).not.toHaveTextContent(/currency: not set|default language: not set/);
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByText("items.xlsx")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
+  });
+
+  it("server says IMPORT_READINESS_READ_FAILED ⇒ both banners turn 'unreadable' and Preview re-blocks", async () => {
+    installBasicFetch(() => ({
+      ok: false,
+      status: 503,
+      json: async () => ({
+        code: "IMPORT_READINESS_READ_FAILED",
+        error: "Could not read this app's import readiness — IAP-list sync state, currency and language (timeout).",
+      }),
+    }));
+    const { container } = renderWizard();
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Preview/ }));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("app-defaults-banner")).toHaveAttribute("data-state", "unreadable"),
+    );
+    expect(screen.getByTestId("mirror-sync-banner")).toHaveAttribute("data-state", "unreadable");
     expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
   });
 });

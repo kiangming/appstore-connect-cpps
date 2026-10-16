@@ -195,11 +195,16 @@ describe("findAppCurrencyEntry — the Save-time guard (Q6)", () => {
     if (!res.ok) expect(res.reason).toContain("VND price");
   });
 
-  it("fails loudly when the app has no cached default currency", () => {
+  it("fails loudly when the app has no declared currency — and points at the app page, not Refresh (D9)", () => {
     const rows = buildCustomPriceRows({ countries: CATALOG, templateEntries: [], custom: [] });
     const res = findAppCurrencyEntry(rows, null);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toContain("Refresh from Google");
+    if (!res.ok) {
+      expect(res.reason).toContain("Declare it on the app page");
+      // Refresh no longer writes the currency (C2-d): sending the Manager
+      // there would be a dead end.
+      expect(res.reason).not.toContain("Refresh");
+    }
   });
 });
 

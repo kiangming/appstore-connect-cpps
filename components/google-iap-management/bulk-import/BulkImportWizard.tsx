@@ -29,6 +29,11 @@ import {
   GOOGLE_LOCALE_OPTIONS,
 } from "@/lib/google-iap-management/parsers/template-spec";
 import { DownloadTemplateButton } from "@/components/ui/shared/DownloadTemplateButton";
+import {
+  undeclaredFields,
+  type AppDefaultField,
+  type AppDefaultsState,
+} from "@/lib/google-iap-management/app-defaults";
 
 export type PricingSource = "google_default" | "default_template" | "app_template";
 export type RowDecision = "overwrite" | "skip" | "create";
@@ -134,17 +139,19 @@ interface Props {
   packageName: string;
   appId: string;
   appDisplayName: string | null;
-  /** App-level Google Play defaults (Hotfix 4). Shown as a wizard banner
-   *  and threaded into the execute payload so the orchestrator can stamp
-   *  the row's baseCurrency to match Google's per-app enforcement. */
+  /** The app's DECLARED currency as approved by the bulk-import gate (null
+   *  while the gate is not open). Used by the custom-prices dialog; the
+   *  language has no consumer here (D9 — bulk import does not send it). */
   appDefaultCurrency: string | null;
-  appDefaultLanguage: string | null;
   /** D0/D3 — apps.iaps_last_synced_at: the last COMPLETE IAP-list refresh.
    *  null = never (or unreadable — see iapsSyncReadError). While null the
    *  mirror cannot say which SKUs exist, so Preview is blocked. */
   iapsLastSyncedAt: string | null;
   /** D2 — the sync state could not be READ. Distinct from "never synced". */
   iapsSyncReadError?: string | null;
+  /** D9 — currency/language with provenance (null = could not be read). Bulk
+   *  import runs only when both are DECLARED by the Manager. */
+  appDefaults: AppDefaultsState | null;
 }
 
 type Step = "pricing" | "upload" | "preview" | "execute" | "done";
@@ -154,9 +161,9 @@ export function BulkImportWizard({
   appId,
   appDisplayName,
   appDefaultCurrency,
-  appDefaultLanguage,
   iapsLastSyncedAt,
   iapsSyncReadError = null,
+  appDefaults,
 }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>("pricing");
@@ -170,6 +177,17 @@ export function BulkImportWizard({
   const [mirrorRefreshError, setMirrorRefreshError] = useState<string | null>(null);
   const mirrorBlocked = mirrorSyncedAt === null;
 
+  // D9 — fields NOT declared by the Manager (guessed or empty). Seeded from the
+  // page; the server's 409 APP_DEFAULTS_NOT_DECLARED is authoritative.
+  // "Could not read" (appDefaults null) is its own state — never shown as
+  // "not set" (the gate's rule: unreadable ≠ not declared).
+  const [defaultsUndeclared, setDefaultsUndeclared] = useState<AppDefaultField[]>(
+    appDefaults ? undeclaredFields(appDefaults) : [],
+  );
+  const [defaultsUnreadable, setDefaultsUnreadable] = useState<boolean>(appDefaults === null);
+  const defaultsBlocked = defaultsUnreadable || defaultsUndeclared.length > 0;
+  const appPageHref = `/google-iap-management/apps/${encodeURIComponent(packageName)}#app-defaults`;
+
   async function handleRefreshMirror() {
     setMirrorRefreshError(null);
     setRefreshingMirror(true);
@@ -182,13 +200,13 @@ export function BulkImportWizard({
         error?: string;
         failed?: number;
         mirror_complete?: boolean;
-        iaps_last_synced_at?: string | null;
+        mirror_synced_at?: string | null;
       };
       if (!res.ok) {
         setMirrorRefreshError(body.error ?? `Refresh failed (HTTP ${res.status}).`);
         return;
       }
-      if (!body.mirror_complete || !body.iaps_last_synced_at) {
+      if (!body.mirror_complete || !body.mirror_synced_at) {
         // ⚠ A 200 with failed rows is NOT a usable mirror — say so instead of
         // unblocking (P5: the status must reflect the real outcome).
         setMirrorRefreshError(
@@ -197,7 +215,7 @@ export function BulkImportWizard({
         );
         return;
       }
-      setMirrorSyncedAt(body.iaps_last_synced_at);
+      setMirrorSyncedAt(body.mirror_synced_at);
       setMirrorReadError(null);
       setUploadError(null);
       router.refresh();
@@ -490,16 +508,30 @@ export function BulkImportWizard({
         errors?: string[];
         error?: string;
         code?: string;
+        blockers?: string[];
+        undeclared?: AppDefaultField[];
         iapsLastSyncedAt?: string | null;
       };
       if (!res.ok) {
-        // D0 — the server is the authority: a page loaded before a sync
-        // state change (or a stale tab) learns it here and re-blocks.
-        if (body.code === "IAPS_NEVER_SYNCED") {
+        // D0/D9 — the server is the authority: a page loaded before a state
+        // change (or a stale tab) learns it here and re-blocks.
+        const blockers = body.blockers ?? (body.code ? [body.code] : []);
+        if (blockers.includes("IAPS_NEVER_SYNCED")) {
           setMirrorSyncedAt(null);
           setMirrorReadError(null);
-        } else if (body.code === "MIRROR_READ_FAILED") {
+        }
+        if (blockers.includes("APP_DEFAULTS_NOT_DECLARED")) {
+          setDefaultsUndeclared(body.undeclared ?? ["currency", "language"]);
+          setDefaultsUnreadable(false);
+        }
+        if (body.code === "MIRROR_READ_FAILED") {
           setMirrorReadError(body.error ?? "Could not read the cached IAP list.");
+        }
+        if (body.code === "IMPORT_READINESS_READ_FAILED") {
+          // Neither the sync state nor the currency/language could be read.
+          setMirrorSyncedAt(null);
+          setMirrorReadError(body.error ?? "Could not read this app's import readiness.");
+          setDefaultsUnreadable(true);
         }
         if (body.errors && body.errors.length > 0) {
           setUploadError(body.errors.join(" · "));
@@ -846,45 +878,13 @@ export function BulkImportWizard({
         onRefresh={handleRefreshMirror}
       />
 
-      {/* App defaults banner (Hotfix 4) */}
-      {(appDefaultCurrency || appDefaultLanguage) && (
-        <div className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-          <span className="font-semibold">
-            Importing to {appDisplayName ?? packageName}:
-          </span>{" "}
-          {appDefaultCurrency && (
-            <>
-              rows will be sent with currency{" "}
-              <code className="px-1 bg-white border border-emerald-200 rounded font-mono">
-                {appDefaultCurrency}
-              </code>{" "}
-            </>
-          )}
-          {appDefaultLanguage && (
-            <>
-              · default locale{" "}
-              <code className="px-1 bg-white border border-emerald-200 rounded font-mono">
-                {appDefaultLanguage}
-              </code>
-            </>
-          )}
-          {appDefaultCurrency && (
-            <span className="block mt-1 text-emerald-700">
-              The Excel column header reads &quot;Price (USD)&quot; but the
-              numeric values are interpreted in the app&apos;s configured
-              currency — Google enforces app-wide consistency.
-            </span>
-          )}
-        </div>
-      )}
-      {!appDefaultCurrency && !appDefaultLanguage && (
-        <div className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          App defaults not cached. Run <strong>Refresh from Google</strong> on
-          the app detail page first — otherwise rows will be sent as USD and
-          Google will reject them if the app is configured for any other
-          currency.
-        </div>
-      )}
+      <AppDefaultsBanner
+        appName={appDisplayName ?? packageName}
+        defaults={appDefaults}
+        unreadable={defaultsUnreadable}
+        undeclared={defaultsUndeclared}
+        appPageHref={appPageHref}
+      />
 
       {/* Step 1: Pricing source */}
       {step === "pricing" && (
@@ -1033,8 +1033,15 @@ export function BulkImportWizard({
             <button
               onClick={handleUploadAndPreview}
               // D0 — blocked while the mirror cannot say which SKUs exist.
-              disabled={!file || uploading || mirrorBlocked}
-              title={mirrorBlocked ? "Refresh the IAP list first (see the banner above)." : undefined}
+              // D9 — blocked while currency/language are not declared.
+              disabled={!file || uploading || mirrorBlocked || defaultsBlocked}
+              title={
+                mirrorBlocked
+                  ? "Refresh the IAP list first (see the banner above)."
+                  : defaultsBlocked
+                    ? "Declare the app's currency and language first (see the banner above)."
+                    : undefined
+              }
               className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition disabled:opacity-50"
             >
               {uploading ? "Parsing…" : "Preview"}
@@ -1455,6 +1462,81 @@ export function computePrecisionViolations(
     }
   }
   return violations;
+}
+
+/**
+ * D9 — the app currency/language bulk import prices against. Blocks (amber)
+ * until both are DECLARED, with a shortcut to the app page where a guessed
+ * value is confirmed in one click.
+ */
+function AppDefaultsBanner({
+  appName,
+  defaults,
+  unreadable,
+  undeclared,
+  appPageHref,
+}: {
+  appName: string;
+  defaults: AppDefaultsState | null;
+  unreadable: boolean;
+  undeclared: AppDefaultField[];
+  appPageHref: string;
+}) {
+  if (unreadable || !defaults) {
+    return (
+      <div
+        data-testid="app-defaults-banner"
+        data-state="unreadable"
+        className="text-xs text-red-900 bg-red-50 border border-red-200 rounded-lg px-3 py-2"
+      >
+        <span className="font-semibold">
+          Could not read {appName}&apos;s currency and language.
+        </span>{" "}
+        Preview is blocked until they can be read — this is not the same as &quot;not set&quot;.
+        Reload the page; if it persists, check the app page.{" "}
+        <a href={appPageHref} className="font-semibold underline">
+          Open the app page →
+        </a>
+      </div>
+    );
+  }
+  const describe = (f: AppDefaultField) => {
+    const v = defaults?.[f];
+    const label = f === "currency" ? "currency" : "default language";
+    if (!v?.value) return `${label}: not set`;
+    return undeclared.includes(f)
+      ? `${label}: ${v.value} (guessed by the tool — not confirmed)`
+      : `${label}: ${v.value}`;
+  };
+  if (undeclared.length > 0) {
+    return (
+      <div
+        data-testid="app-defaults-banner"
+        data-state="undeclared"
+        className="text-xs text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2"
+      >
+        <span className="font-semibold">
+          {appName}&apos;s currency and language must be declared before importing.
+        </span>{" "}
+        Preview is blocked — every row is priced against them. {describe("currency")} ·{" "}
+        {describe("language")}.{" "}
+        <a href={appPageHref} className="font-semibold underline">
+          Confirm or set them on the app page →
+        </a>
+      </div>
+    );
+  }
+  return (
+    <div
+      data-testid="app-defaults-banner"
+      data-state="declared"
+      className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2"
+    >
+      <span className="font-semibold">Importing to {appName}:</span> declared {describe("currency")}{" "}
+      · {describe("language")}. The &quot;Price (USD)&quot; column is read as USD; when the app
+      currency differs, each row resolves through the selected template&apos;s tier.
+    </div>
+  );
 }
 
 /**

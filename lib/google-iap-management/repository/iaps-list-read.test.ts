@@ -14,7 +14,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const { dbSpy } = vi.hoisted(() => ({ dbSpy: vi.fn() }));
 vi.mock("../db", () => ({ googleIapDb: dbSpy }));
-vi.mock("./apps", () => ({ updateAppDefaults: vi.fn() }));
 
 import { listIapsWithDefaultLocale } from "./iaps";
 

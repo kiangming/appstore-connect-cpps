@@ -76,9 +76,9 @@ describe("IAP refresh — D0 stamps only a complete mirror", () => {
     expect(markIapsMirrorSynced).toHaveBeenCalledTimes(1);
     const [appId, at] = markIapsMirrorSynced.mock.calls[0] as [string, string];
     expect(appId).toBe("app-1");
-    const body = (await res.json()) as { mirror_complete: boolean; iaps_last_synced_at: string | null };
+    const body = (await res.json()) as { mirror_complete: boolean; mirror_synced_at: string | null };
     expect(body.mirror_complete).toBe(true);
-    expect(body.iaps_last_synced_at).toBe(at);
+    expect(body.mirror_synced_at).toBe(at);
     expect(Number.isNaN(Date.parse(at))).toBe(false);
   });
 
@@ -87,9 +87,9 @@ describe("IAP refresh — D0 stamps only a complete mirror", () => {
     const res = await POST(req(), ctx);
     expect(res.status).toBe(200);
     expect(markIapsMirrorSynced).not.toHaveBeenCalled();
-    const body = (await res.json()) as { mirror_complete: boolean; iaps_last_synced_at: string | null };
+    const body = (await res.json()) as { mirror_complete: boolean; mirror_synced_at: string | null };
     expect(body.mirror_complete).toBe(false);
-    expect(body.iaps_last_synced_at).toBeNull();
+    expect(body.mirror_synced_at).toBeNull();
   });
 
   it("list fetch failed ⇒ 500, NO stamp", async () => {

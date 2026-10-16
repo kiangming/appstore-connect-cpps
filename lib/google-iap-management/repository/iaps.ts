@@ -10,7 +10,6 @@
  */
 import { googleIapDb } from "../db";
 import type { InAppProduct } from "../google/publisher-client";
-import { updateAppDefaults } from "./apps";
 
 export type PurchaseType = "managed" | "consumable" | "subscription";
 export type IapStatus = "active" | "inactive";
@@ -620,11 +619,13 @@ export async function acknowledgeRemoveIaps(
  * Pass fetchComplete=false to suppress flagging when the caller knows the
  * list fetch was partial.
  *
- * Hotfix 4: opportunistically write the app's default_currency +
- * default_language from the first product that carries both. Google
- * enforces app-wide defaults, so every IAP under an app shares the
- * same pair — sampling the first one is sufficient and gives ground
- * truth that overrides any inference made during apps refresh.
+ * D9 [arc-google-missing-purchase-options]: this function NO LONGER writes
+ * the app's default_currency / default_language. It used to (Hotfix 4),
+ * from the first product Google returned, on the premise "Google enforces
+ * app-wide defaults". That premise is false for the v3 model (no app-wide
+ * currency; the read adapter derives a "default" from the US region and the
+ * first listing, or fabricates "en-US"). Those values are now declared by
+ * the Manager only.
  */
 export async function batchSyncIapsFromGoogle(
   appId: string,
@@ -755,25 +756,6 @@ export async function batchSyncIapsFromGoogle(
     fetchComplete,
     now,
   });
-
-  // Capture app-level defaults from the first IAP that carries them.
-  const sample = products.find(
-    (p) => p.defaultPrice?.currency || p.defaultLanguage,
-  );
-  if (sample) {
-    try {
-      await updateAppDefaults(appId, {
-        currency: sample.defaultPrice?.currency ?? null,
-        language: sample.defaultLanguage ?? null,
-      });
-    } catch (err) {
-      // Non-fatal — the cache row still has the IAPs synced, just
-      // without updated app defaults. Log for visibility.
-      console.error(
-        `[google-iap:iap-sync] app_defaults_capture_failed appId=${appId} err="${err instanceof Error ? err.message.replace(/"/g, "'") : String(err)}"`,
-      );
-    }
-  }
 
   return { synced, failed, flagReconcile };
 }

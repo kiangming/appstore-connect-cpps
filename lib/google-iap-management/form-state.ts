@@ -49,10 +49,12 @@ export interface IapFormInitial {
 }
 
 /**
- * App-level Google Play defaults that propagate into Create / Edit / Bulk
- * Import forms (Hotfix 4). Both fields are nullable when the cache has
- * not yet been enriched (apps imported before Hotfix 4 land here);
- * callers fall back to USD / en-US in that case.
+ * The app's currency / language as PRE-FILL for the single Create / Edit form
+ * (Hotfix 4). D9 [arc-google-missing-purchase-options]: these are no longer
+ * captured by any refresh — the Manager declares them on the app page — and a
+ * value here may still be a pre-2026-10-16 tool guess (provenance is not
+ * carried into this form; bulk import reads it through its gate). Both are
+ * null for an app never declared; callers fall back to USD / en-US.
  */
 export interface AppDefaults {
   currency: string | null;

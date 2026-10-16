@@ -9,7 +9,7 @@ import { googleIapDb } from "../db";
 
 /**
  * Every value allowed in `google_iap_mgmt.actions_log.action_type`, matching
- * the CHECK constraint as of migration `20260702120000`.
+ * the CHECK constraint as of migration `20261016010000` (+ APP_DEFAULTS_DECLARE).
  *
  * Declared as a `const` array (not a bare union) so the cross-module P2 guard
  * can enumerate it at runtime and assert set-equality against the migration —
@@ -31,6 +31,9 @@ export const GOOGLE_ACTION_TYPES = [
   "BULK_ACTIVATE",
   "BULK_DEACTIVATE",
   "PRICING_TEMPLATE_UPLOAD",
+  // D9 — Manager declared/confirmed an app's currency or language
+  // (20261016010000_google_iap_mgmt_apps_defaults_source.sql adds it to the CHECK).
+  "APP_DEFAULTS_DECLARE",
 ] as const;
 
 export type ActionType = (typeof GOOGLE_ACTION_TYPES)[number];

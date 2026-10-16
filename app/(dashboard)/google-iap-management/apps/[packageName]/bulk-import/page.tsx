@@ -7,7 +7,7 @@ import { authOptions } from "@/lib/auth";
 import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
 import { getAppByPackage } from "@/lib/google-iap-management/repository/apps";
 import { readActiveAccountId } from "@/lib/google-iap-management/active-account";
-import { readMirrorGate } from "@/lib/google-iap-management/bulk-import-mirror-gate";
+import { readBulkImportGate } from "@/lib/google-iap-management/bulk-import-mirror-gate";
 import { BulkImportWizard } from "@/components/google-iap-management/bulk-import/BulkImportWizard";
 
 export default async function BulkImportPage({
@@ -33,9 +33,9 @@ export default async function BulkImportPage({
   const app = await getAppByPackage(activeAccountId, packageName);
   if (!app) notFound();
 
-  // D0/D3 — never/error/synced, as plain serialisable props (the wizard is a
-  // client component and must not import the repository module).
-  const gate = await readMirrorGate(app.id);
+  // THE bulk-import gate (D0 + D9), as plain serialisable props (the wizard is
+  // a client component and must not import the repository module).
+  const gate = await readBulkImportGate(app.id);
 
   return (
     <div className="p-8 max-w-5xl">
@@ -49,10 +49,12 @@ export default async function BulkImportPage({
         packageName={packageName}
         appId={app.id}
         appDisplayName={app.display_name}
-        appDefaultCurrency={app.default_currency}
-        appDefaultLanguage={app.default_language}
-        iapsLastSyncedAt={gate.kind === "synced" ? gate.syncedAt : null}
+        // D9 — the DECLARED currency the gate approved (null while blocked:
+        // nothing is priced until preview passes the same gate server-side).
+        appDefaultCurrency={gate.kind === "ok" ? gate.declaredCurrency : null}
+        iapsLastSyncedAt={gate.kind === "error" ? null : gate.iapsLastSyncedAt}
         iapsSyncReadError={gate.kind === "error" ? gate.message : null}
+        appDefaults={gate.kind === "error" ? null : gate.defaults}
       />
     </div>
   );

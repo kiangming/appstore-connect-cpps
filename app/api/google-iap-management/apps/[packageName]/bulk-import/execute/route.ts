@@ -39,11 +39,8 @@ import {
 } from "@/lib/google-iap-management/repository/google-accounts";
 import { getAppByPackage } from "@/lib/google-iap-management/repository/apps";
 import {
-  IAPS_NEVER_SYNCED,
-  MIRROR_READ_FAILED,
-  mirrorReadFailedMessage,
-  neverSyncedMessage,
-  readMirrorGate,
+  bulkImportGateRefusal,
+  readBulkImportGate,
 } from "@/lib/google-iap-management/bulk-import-mirror-gate";
 import {
   readActiveAccountId,
@@ -164,24 +161,15 @@ export async function POST(
         ? body.hub_run_id
         : null;
 
-    // D0 — twin of the preview gate (P1/P14: a guard on the read surface
-    // alone leaves the WRITE open — a tab previewed before this deploy, or a
-    // direct POST, would still push a plan built from a never-filled mirror).
-    // Placed AFTER runId so the Hub run this request belongs to is closed.
-    const gate = await readMirrorGate(app.id);
-    if (gate.kind === "error") {
-      tracking.errorMessage = mirrorReadFailedMessage(gate.message);
-      return NextResponse.json(
-        { error: tracking.errorMessage, code: MIRROR_READ_FAILED },
-        { status: 503 },
-      );
-    }
-    if (gate.kind === "never") {
-      tracking.errorMessage = neverSyncedMessage(packageName);
-      return NextResponse.json(
-        { error: tracking.errorMessage, code: IAPS_NEVER_SYNCED },
-        { status: 409 },
-      );
+    // THE bulk-import gate (D0 + D9) — same gate as preview (P1/P14: a guard
+    // on the read surface alone leaves the WRITE open — a tab previewed before
+    // this deploy, or a direct POST, would still push its plan). Placed AFTER
+    // runId so the Hub run this request belongs to is closed.
+    const gate = await readBulkImportGate(app.id);
+    if (gate.kind !== "ok") {
+      const refusal = bulkImportGateRefusal(gate, packageName);
+      tracking.errorMessage = refusal.message;
+      return NextResponse.json(refusal.body, { status: refusal.status });
     }
 
     const pricingSource = body.pricingSource;
@@ -321,12 +309,11 @@ export async function POST(
         sourceFilename: body.sourceFilename ?? null,
         rows,
         actorEmail: session.user.email ?? null,
-        // Cycle 43 cross-currency resolution needs the app's default
-        // currency to pick the matching entry from a template tier
-        // (e.g. the tier's VND entry when the app's default currency is
-        // VND). Null is tolerated by the orchestrator — cross-currency
-        // rows then refuse with the google_default message.
-        appDefaultCurrency: app.default_currency,
+        // Cycle 43 cross-currency resolution needs the app's currency to
+        // pick the matching entry from a template tier (e.g. the tier's VND
+        // entry when the app's currency is VND). D9: the DECLARED value from
+        // the gate's own read — not app.default_currency, read earlier.
+        appDefaultCurrency: gate.declaredCurrency,
       });
 
       // ── Hub-tracking terminal status (SUCCESS/FAILED/PARTIAL) ──────────

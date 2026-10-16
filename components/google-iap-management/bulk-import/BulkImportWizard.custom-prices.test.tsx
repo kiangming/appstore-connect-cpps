@@ -112,9 +112,13 @@ const PROPS = {
   appId: "app-uuid-1",
   appDisplayName: "CashKnight",
   appDefaultCurrency: "VND",
-  appDefaultLanguage: "en-US",
   // D0 — these scenarios exercise a mirror that HAS been refreshed.
   iapsLastSyncedAt: "2026-10-16T03:25:10.000Z",
+  // D9 — and an app whose currency/language the Manager HAS declared.
+  appDefaults: {
+    currency: { value: "VND", source: "declared" as const },
+    language: { value: "en-US", source: "declared" as const },
+  },
 };
 
 /** Drive the wizard: Step 1 → Step 2 → upload → Step 3. */

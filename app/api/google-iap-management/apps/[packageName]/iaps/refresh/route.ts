@@ -119,7 +119,7 @@ export async function POST(
       duration_ms: Date.now() - t0,
       mirror_complete: mirrorComplete,
       // null when THIS run did not stamp (failed > 0) — not "never synced".
-      iaps_last_synced_at: iapsLastSyncedAt,
+      mirror_synced_at: iapsLastSyncedAt,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to refresh IAPs";

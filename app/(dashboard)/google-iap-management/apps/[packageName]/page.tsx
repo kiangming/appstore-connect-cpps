@@ -7,10 +7,15 @@ import { ArrowLeft } from "lucide-react";
 
 import { authOptions } from "@/lib/auth";
 import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
-import { getAppByPackage } from "@/lib/google-iap-management/repository/apps";
+import {
+  getAppByPackage,
+  getAppImportReadiness,
+} from "@/lib/google-iap-management/repository/apps";
 import { listIapsWithDefaultLocale } from "@/lib/google-iap-management/repository/iaps";
 import { readActiveAccountId } from "@/lib/google-iap-management/active-account";
 import { IapListClient } from "@/components/google-iap-management/iap-list/IapListClient";
+import { AppDefaultsCard } from "@/components/google-iap-management/app-defaults/AppDefaultsCard";
+import type { AppDefaultsState } from "@/lib/google-iap-management/app-defaults";
 
 export default async function AppDetailPage({
   params,
@@ -55,6 +60,16 @@ export default async function AppDetailPage({
     );
   }
 
+  // D9 — currency/language with their provenance. A read error is shown as
+  // such (never as "not set").
+  let defaults: AppDefaultsState | null = null;
+  let defaultsReadError: string | null = null;
+  try {
+    defaults = (await getAppImportReadiness(app.id)).defaults;
+  } catch (err) {
+    defaultsReadError = err instanceof Error ? err.message : String(err);
+  }
+
   return (
     <div className="p-8 max-w-6xl">
       <Link
@@ -64,6 +79,13 @@ export default async function AppDetailPage({
         <ArrowLeft className="h-3 w-3" />
         All apps
       </Link>
+      <AppDefaultsCard
+        appId={app.id}
+        packageName={packageName}
+        initialDefaults={defaults}
+        readError={defaultsReadError}
+        canEdit={session.user?.role === "admin"}
+      />
       <IapListClient
         packageName={packageName}
         appDisplayName={app.display_name}

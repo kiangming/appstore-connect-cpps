@@ -747,16 +747,23 @@ export function IapForm({
     }
   }
 
+  const appDefaultsHref = `/google-iap-management/apps/${encodeURIComponent(packageName)}#app-defaults`;
+
   return (
     <div className="space-y-6">
-      {/* App defaults banner (Hotfix 4) */}
+      {/* App currency/language banner (Hotfix 4; D9 — values only PRE-FILL this
+          form. They are declared on the app page; refresh no longer captures
+          them, and Google does not enforce an app-wide currency.) */}
       {appDefaults && (appDefaults.currency || appDefaults.language) && (
-        <div className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-          <span className="font-semibold">App defaults:</span>{" "}
+        <div
+          data-testid="iap-form-app-defaults"
+          className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
+        >
+          <span className="font-semibold">App currency &amp; language (pre-fill only):</span>{" "}
           {appDefaults.currency && (
             <span>
               currency{" "}
-              <code className="px-1 bg-white border border-emerald-200 rounded font-mono">
+              <code className="px-1 bg-white border border-slate-200 rounded font-mono">
                 {appDefaults.currency}
               </code>
             </span>
@@ -765,21 +772,29 @@ export function IapForm({
           {appDefaults.language && (
             <span>
               default locale{" "}
-              <code className="px-1 bg-white border border-emerald-200 rounded font-mono">
+              <code className="px-1 bg-white border border-slate-200 rounded font-mono">
                 {appDefaults.language}
               </code>
             </span>
           )}
-          <span className="ml-1 text-emerald-700">
-            — Google enforces these per app; mismatches will be rejected.
+          <span className="ml-1">
+            — they only pre-fill this form and may still be tool guesses.{" "}
+            <a href={appDefaultsHref} className="font-semibold underline">
+              Check them on the app page →
+            </a>
           </span>
         </div>
       )}
       {!appDefaults?.currency && !appDefaults?.language && !isEdit && (
-        <div className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-          App defaults not cached yet. Click <strong>Refresh from Google</strong> on the
-          app detail page to capture this app&apos;s configured currency and locale,
-          otherwise the form falls back to USD / en-US.
+        <div
+          data-testid="iap-form-app-defaults"
+          className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2"
+        >
+          This app&apos;s currency and language are not declared, so the form falls back to
+          USD / en-US.{" "}
+          <a href={appDefaultsHref} className="font-semibold underline">
+            Declare them on the app page →
+          </a>
         </div>
       )}
 

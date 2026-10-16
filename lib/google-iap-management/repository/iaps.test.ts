@@ -18,13 +18,15 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { dbSpy, appDefaultsSpy } = vi.hoisted(() => ({
+const { dbSpy } = vi.hoisted(() => ({
   dbSpy: vi.fn(),
-  appDefaultsSpy: vi.fn(),
 }));
 
 vi.mock("../db", () => ({ googleIapDb: dbSpy }));
-vi.mock("./apps", () => ({ updateAppDefaults: appDefaultsSpy }));
+// D9: NO mock of "./apps". batchSyncIapsFromGoogle must not touch the apps
+// table at all; a mocked "./apps" would swallow a re-introduced
+// "capture app defaults" write and keep this file green. Unmocked, any such
+// write goes through the fake DB and the D9 test below sees it.
 
 import {
   batchSyncIapsFromGoogle,
@@ -270,8 +272,6 @@ function product(sku: string, opts: Partial<InAppProduct> = {}): InAppProduct {
 
 beforeEach(() => {
   dbSpy.mockReset();
-  appDefaultsSpy.mockReset();
-  appDefaultsSpy.mockResolvedValue(undefined);
 });
 
 /* ── Tests ───────────────────────────────────────────────────────────── */
@@ -611,5 +611,29 @@ describe("acknowledgeRemoveIaps + listFlaggedSkusAmong", () => {
 
     const flagged = await listFlaggedSkusAmong("app-1", ["a", "b", "c"]);
     expect([...flagged].sort()).toEqual(["a", "c"]);
+  });
+});
+
+
+/**
+ * D9 [arc-google-missing-purchase-options] — an IAP refresh NEVER writes the
+ * app's currency/language. It used to overwrite them from the first product
+ * Google returned (US-region currency, first listing / fabricated "en-US"),
+ * which turned 彈彈英雄's guessed TWD into an equally guessed USD.
+ */
+describe("batchSyncIapsFromGoogle — D9: never writes app defaults", () => {
+  it("syncing products that carry a currency and a language touches NO apps row", async () => {
+    const db = new FakeDb();
+    dbSpy.mockReturnValue(db);
+    await batchSyncIapsFromGoogle("app-1", [
+      product("pkg.0.99", {
+        defaultLanguage: "zh-TW",
+        defaultPrice: { currency: "USD", priceMicros: "990000" },
+      } as unknown as Partial<InAppProduct>),
+      product("pkg.1.99"),
+    ]);
+    const appsCalls = db.calls.filter((c) => c.table === "apps");
+    expect(appsCalls).toEqual([]);
+    expect(db.calls.length).toBeGreaterThan(0); // the sync itself did run
   });
 });

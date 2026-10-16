@@ -39,11 +39,10 @@ import {
 } from "@/lib/google-iap-management/active-account";
 import { withConcurrency } from "@/lib/iap-management/concurrency";
 import {
-  IAPS_NEVER_SYNCED,
   MIRROR_READ_FAILED,
+  bulkImportGateRefusal,
   mirrorReadFailedMessage,
-  neverSyncedMessage,
-  readMirrorGate,
+  readBulkImportGate,
 } from "@/lib/google-iap-management/bulk-import-mirror-gate";
 
 type PricingSource = "google_default" | "default_template" | "app_template";
@@ -88,21 +87,18 @@ export async function POST(
     );
   }
 
-  // D0 — an app whose IAP list was never refreshed completely has an EMPTY
-  // mirror that means "unknown", not "nothing exists". Refuse before parsing.
-  const gate = await readMirrorGate(app.id);
-  if (gate.kind === "error") {
-    return NextResponse.json(
-      { error: mirrorReadFailedMessage(gate.message), code: MIRROR_READ_FAILED },
-      { status: 503 },
-    );
+  // THE bulk-import gate (D0 + D9): refuse before parsing when the IAP mirror
+  // was never refreshed completely (an empty mirror then means "unknown", not
+  // "nothing exists") or when the app's currency/language are not declared.
+  const gate = await readBulkImportGate(app.id);
+  if (gate.kind !== "ok") {
+    const refusal = bulkImportGateRefusal(gate, packageName);
+    return NextResponse.json(refusal.body, { status: refusal.status });
   }
-  if (gate.kind === "never") {
-    return NextResponse.json(
-      { error: neverSyncedMessage(packageName), code: IAPS_NEVER_SYNCED },
-      { status: 409 },
-    );
-  }
+  // D9 — the currency every row is priced against: the DECLARED value, from
+  // the gate's own read. Not app.default_currency (read earlier, separately)
+  // and no "USD" fallback — the gate only opens on a declared, non-empty value.
+  const appCurrency = gate.declaredCurrency;
 
   let form: FormData;
   try {
@@ -134,12 +130,10 @@ export async function POST(
   })();
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  // Hotfix 16: thread the app's default currency so the parser can
-  // resolve generic "Price" / "Default Price" / "Base Price" headers to
-  // the right currency. Falls back to USD when the app row never had a
-  // default_currency cached (pre-Hotfix-4 row).
+  // Hotfix 16: thread the app's currency so the parser can resolve generic
+  // "Price" / "Default Price" / "Base Price" headers to the right currency.
   const parsed = parseIapTemplate(buffer, {
-    appDefaultCurrency: app.default_currency ?? "USD",
+    appDefaultCurrency: appCurrency,
   });
   if (parsed.errors.length > 0) {
     return NextResponse.json(
@@ -180,7 +174,7 @@ export async function POST(
   // Skipped when pricingSource is google_default: that path can't
   // resolve cross-currency (no template) — refusals are surfaced
   // inline so the wizard can flag rows up front.
-  const appCurrencyNorm = (app.default_currency ?? "").trim().toUpperCase();
+  const appCurrencyNorm = appCurrency.trim().toUpperCase();
   // G1b — MỘT ref cho cả route. `app` đến từ getAppByPackage(accountId, …)
   // nên account sở hữu app == accountId theo cấu trúc.
   const templateRef: TemplateScopeRef =
@@ -228,7 +222,7 @@ export async function POST(
         basePriceDecimal: row.basePriceDecimal,
         baseCurrency: row.baseCurrency,
         priceHeaderSource: row.priceHeaderSource,
-        appDefaultCurrency: app.default_currency,
+        appDefaultCurrency: appCurrency,
       });
 
       if (trigger) {
@@ -454,7 +448,7 @@ export async function POST(
     pricingSource,
     // D3 — when the mirror these EXISTS/NEW flags came from was last filled
     // completely. Read at the same moment as the mirror itself.
-    iapsLastSyncedAt: gate.syncedAt,
+    iapsLastSyncedAt: gate.iapsLastSyncedAt,
     rows,
     warnings: warningsOut,
     counts: {
