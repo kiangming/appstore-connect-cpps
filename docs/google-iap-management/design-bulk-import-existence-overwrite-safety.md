@@ -184,3 +184,113 @@ D4, D5. Cho tới khi có D10: **không Overwrite sản phẩm live qua bulk imp
 - Comment/tài liệu lệch code: banner wizard; JSDoc Props wizard ("threaded into the
   execute payload"); `iaps.ts:623-624` ("carries both" nhưng code dùng `||`);
   `excel-parser.ts:315`; migration `20260521000000:13-15`.
+
+---
+
+## 5. Lượt 2026-10-16 (chiều) — H2.3 · H4 · C2.1 (census đã kiểm đối kháng)
+
+### 5.1 Quyết định Manager làm đổi thiết kế D0–D11
+
+- **Không chặn tool** (không hotfix chặn Overwrite, không tắt Overwrite). C3 chờ kết quả H2.
+- ⭐ **Currency trong file import là nguồn DUY NHẤT cho giá ghi lên Google.** `apps.default_currency`
+  (dù `'guessed'` hay `'declared'`) không được ảnh hưởng giá. Hệ quả:
+  - **D9 đổi nghĩa:** currency/language của app KHÔNG còn là điều kiện import (C2.1). Thẻ khai báo
+    trên trang app giữ nguyên, không gắn với gate.
+  - **D11 hết ý nghĩa** (giữ currency giữa preview và execute) — khi currency của app không còn
+    tham gia giá.
+- Trigger chống rollback (Q1): KHÔNG làm. Bước thủ công trong verify SQL là đủ.
+
+### 5.2 H2.3 — ảnh chụp 03:25 KHÔNG còn trong DB (ĐÃ ĐO bằng code + PGlite)
+
+Lượt OVERWRITE 54de7054 (07:24:59 UTC, code `ac3043f` — a8cbedc chỉ được push lúc 07:45:01) đi
+`bulk-import.ts:1183-1199 → syncIapFromGoogle (iaps.ts:242-300)` cho mỗi SKU thành công:
+upsert `iaps` (giữ `id`, `created_at`), **xoá toàn bộ rồi chèn lại** `iap_listings` + `iap_prices`
+từ PHẢN HỒI của Google. Bản mirror 03:25 đã mất từ ≈07:25. Runbook lưu trạng thái SAU Overwrite +
+dấu vết batch: [`queries/snapshot-ballisticherotwid-after-overwrite.sql`](queries/snapshot-ballisticherotwid-after-overwrite.sql).
+Cấu hình trước Overwrite chỉ có thể còn NGOÀI DB: Supabase backup/PITR (chỉ khôi phục ra DB riêng),
+file Export tải trong 03:25–07:24 UTC, log Railway.
+
+Phát hiện phụ — ảnh hưởng H2 (chưa đo trên Google thật):
+- Mirror lưu giá/status/default_* của **buyOption ĐẦU TIÊN** (`onetime-product-adapter.ts:108-115`),
+  còn Overwrite ghi option **legacyCompatible** (`:313-323`). Thứ tự option trong phản hồi Google:
+  CHƯA BIẾT. Phân biệt bằng Σ `n_price_regions` ở S1 (≈174 ⇒ option không bị đụng).
+- `updateMask` của Overwrite gồm `taxAndComplianceSettings, offerTags, restrictedPaymentCountries`
+  (`publisher-client.ts:348-349, :971`) nhưng body không mang các trường đó (`adapter :400-405`) ⇒
+  có thể đã bị đặt về mặc định trên Google (CHƯA BIẾT). Mirror chưa bao giờ lưu các trường này.
+- Listings bị thay **trên Google** (mask có `listings`), không chỉ trong mirror.
+- Overwrite gửi ACTIVATE cho option đích (`bulk-import.ts:260` `status: "active"`) ⇒ SKU …0.99
+  (inactive lúc 03:25) có thể đang được bán.
+- `syncIapFromGoogle` không transaction, không kiểm lỗi DELETE (`iaps.ts:269, :284`).
+- Fallback legacy gửi `allowMissing=true` cho MỌI dòng, kể cả dòng overwrite mà GET live lỗi
+  (`publisher-client.ts:1241-1248`).
+
+### 5.3 H4 — currency của app ĐANG ảnh hưởng giá ghi lên Google (ĐÃ ĐO, vi phạm yêu cầu)
+
+Đo bằng vitest trên code thật (googleapis mock, FX giả — chỉ đo **neo nào được đưa cho Google**),
+trên cả HEAD và cây đã deploy `ac3043f`: **12/12 cặp "cùng file, app USD vs app TWD" cho kết quả
+KHÁC** (body khác hoặc dòng bị từ chối). Không riêng header USD: lỗi là "currency trong file ≠
+currency của app".
+
+| # | Chỗ | Lớp | Hiệu ứng |
+|---|---|---|---|
+| S-a | parser: header chung `Price`/`Default Price`/`Base Price` ⇒ currency = app (`excel-parser.ts:195-211`) | (a)+(b) | defaultPrice, tra tier, neo convertRegionPrices |
+| S-c | `detectCrossCurrencyTrigger` (`cross-currency.ts:86-112`) | (b)+(d) | đưa dòng vào nhánh cross (bỏ khớp theo SKU); Google Conversion ⇒ TỪ CHỐI |
+| S-d | entry currency-của-app trong tier (`cross-currency.ts:188-228`) | (a)+(b) | neo quy đổi cho mọi vùng ngoài tier; tier thiếu entry ⇒ từ chối |
+| S-e | custom prices: `appCurrencyForCustom` (`bulk-import.ts:387, :451-485`) | (a)+(b)+(d) | dưới template bắt buộc có entry app-currency và nó thành neo |
+| S-g | `buildProduct` defaultPrice → US-stamp khi bootstrap lỗi (`adapter :278-289`), fallback legacy (`publisher-client :1239-1250`) | (a) | US=TWD 35 (đo); defaultPrice legacy theo app |
+| S-b | wizard→execute mang `baseCurrency` của preview; execute tin client (`execute/route.ts:188-200, :228-229`) | (a) | chất mang của S-a |
+| — | E1 lịch sử 2026-05-21 → 06-01 (`18840e1`…`a54f9fe`): wizard gửi `baseCurrency: appDefaultCurrency ?? r.baseCurrency` | (a) | MỌI dòng định giá theo currency app |
+
+Phát hiện phụ (độc lập với currency app — cần Manager):
+- Dưới nguồn template, giá GT trong file bị **thay bằng entry của tier** (`bulk-import.ts:947-952`, `:286`).
+- Cột giá thứ hai bị **bỏ qua im lặng** (first-wins, `excel-parser.ts:180-194`).
+- `PreviewTable` ghi "Auto-converted from USD" cứng — sai khi neo không phải USD, và hiện cả trên
+  dòng đã bị từ chối (C2.1 đổi thành "Auto-converted by Google" / "Not sent — refused").
+
+Ghi chú đáng giá: app **không có currency** (NULL) ⇒ không nhánh cross-currency, mọi dòng định giá
+theo currency cột giá của chính nó; chỉ còn: header chung đọc là USD, custom-dưới-template bị từ chối.
+
+### 5.4 THIẾT KẾ SỬA H4 — CHỜ GATE (chưa code; chunk riêng sau C2.1)
+
+1. **MỘT choke point:** `filePriceOf(row) → {currency, priceMicros} | {refused, reason}` (module mới
+   `orchestration/file-price.ts`). Mọi bước định giá (tra tier ở preview + orchestrator, neo bootstrap,
+   defaultPrice của buildProduct, custom pre-pass) chỉ đọc hàm này.
+2. **Gỡ currency của app ở tầng KIỂU:** xoá `ParseOptions.appDefaultCurrency` + nhánh fallback của
+   parser, `BulkImportInput.appDefaultCurrency`, `cross-currency.ts`, `resolvedDefaultPrice`,
+   `appCurrencyForCustom`, prop `appDefaultCurrency` của wizard/CustomPricesDialog ⇒ đưa lại là lỗi tsc.
+3. **Tra tier:** `findRowCandidates({sku, currency file, micros file})` như nhánh same-currency hôm
+   nay; vùng ngoài tier quy đổi từ GIÁ FILE.
+4. **Google Conversion:** quy đổi từ giá file; KHÔNG từ chối vì lệch currency (⇒ dòng trước đây bị
+   từ chối nay SẼ GHI — Manager xác nhận).
+5. **Custom prices:** neo và defaultPrice luôn là giá file; không đòi entry currency app.
+6. **Header chung không ghi currency** — Manager chọn: O1 (đề xuất) từ chối file "ghi rõ currency,
+   vd Price (USD)" · O2 coi là USD · O3 Manager khai currency cho từng lượt import · O4 cột Currency mỗi dòng.
+7. **Đóng twin path:** execute không tin `baseCurrency`/`priceHeaderSource` của client (parse lại file
+   hoặc ràng preview bằng hash/token); từ chối file có >1 cột giá; US-stamp chỉ khi giá file là USD
+   (hoặc từ chối khi bootstrap lỗi); fallback legacy gửi giá file — bị từ chối là lỗi trung thực.
+8. **Audit:** mọi dòng ghi `file_currency`, header, neo `{currency, micros}`; batch ghi
+   `pricing_rule: "file-currency-only/v1"`.
+9. **Chữ:** banner (thay câu C2.1), Notes sheet `template-spec.ts:351-354`, cảnh báo parser
+   `:400-414`, `template-spec.ts:18-24`, `design-bulk-import-template-download.md:18`.
+10. **Test:** T1 bất biến route-level preview→execute với app USD/TWD/VND/NULL ⇒ body batchUpdate
+    giống hệt (đỏ hôm nay trên cả hai cây); T2 structural cấm `appDefaultCurrency|default_currency|appCurrency`
+    trong đường định giá; T3–T10 theo từng mục trên. **Mutation** M1–M7: đưa currency app trở lại
+    parser / neo bootstrap / neo custom / từ chối lệch currency / execute nhận 'inferred' / đọc
+    `app.default_currency` ở preview / US-stamp giá không phải file ⇒ ĐỎ.
+
+Cần Manager chốt: O1–O4 · template miss = quy đổi hay từ chối · GT dưới template · chính sách US-stamp ·
+chấp nhận fallback legacy từ chối · form tạo/sửa đơn lẻ (pre-fill currency từ app) có thuộc yêu cầu không.
+
+Đo lượt import cũ của 7 app lệch currency: [`queries/audit-app-currency-price-influence.sql`](queries/audit-app-currency-price-influence.sql)
+(theo batch, không theo SKU; header/`priceHeaderSource`/currency app lúc chạy KHÔNG được lưu ⇒
+nhiều lớp là CHƯA BIẾT).
+
+### 5.5 C2.1 — đã làm (chờ gate)
+
+Gate chỉ còn D0; backfill một lần `20261016020000` (luật + khác biệt với route ghi trong header
+migration); banner preview thay bằng mô tả đúng hành vi HÔM NAY (ghim nguyên văn bằng test).
+Code định giá giữ **nguyên văn** bản đã deploy — nhưng ĐẦU VÀO của nó đổi theo C2-d: không còn
+Refresh nào ghi `apps.default_currency`, nên app cache mới (hoặc đang NULL) sẽ ở NULL ⇒ định giá
+không có currency app tham gia (gần với quyết định "file là nguồn duy nhất" hơn); app đang có giá trị
+(kể cả 'guessed') giữ nguyên giá trị đó cho tới chunk H4.
+Verify + thứ tự chạy: [`queries/verify-c1-c2-migrations.sql`](queries/verify-c1-c2-migrations.sql).

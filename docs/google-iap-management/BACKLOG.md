@@ -959,3 +959,46 @@ E-Q6 liệt kê app nghi bị lật.
 ⛔ **Liên quan an toàn giá:** với `com.vnggames.ballisticherotwid`, KHÔNG chạy lại bulk
 import (mirror nay đầy ⇒ Overwrite 28 sản phẩm đang bán; ngữ nghĩa Overwrite thay toàn bộ
 giá/vùng/availability/state của option đích — D10). Xem §1 E4 của tài liệu thiết kế.
+
+---
+
+## `[GOOGLE-declarable-locales-unmeasured]` — 82 locale khai báo được chưa đối chiếu Google (Q2)
+
+**BACKLOG (Manager 2026-10-16).** Thẻ khai báo language của app (C2) chỉ nhận 82 locale của template
+(`GOOGLE_LOCALE_OPTIONS`, `lib/google-iap-management/app-defaults.ts` `DECLARABLE_LANGUAGES`).
+Chưa đo danh sách locale Google Play thật sự nhận (P38: một danh sách của vendor là danh sách API
+đồng ý). App có language mặc định ngoài 82 locale ⇒ không khai báo được. Không chặn gì từ C2.1
+(language không còn là điều kiện import).
+
+---
+
+## `[GOOGLE-bulk-import-language-unused]` — bulk import không dùng language của app (gắn D10)
+
+**BACKLOG (Manager 2026-10-16).** `buildProduct` cố định `defaultLanguage: "en-US"` và tổng hợp
+listing `en-US` khi file thiếu (`orchestration/bulk-import.ts:221-226, :262`). Language Manager khai
+báo trên trang app không đi vào bất kỳ body nào của bulk import. Xử lý cùng D10 (Overwrite không thay
+mù listing). D11 (giữ currency giữa preview và execute) — ĐÓNG, hết ý nghĩa sau quyết định
+"currency trong file là nguồn duy nhất cho giá".
+
+---
+
+## `[GOOGLE-refresh-stamps-degraded-read]` — route Refresh vẫn đóng dấu "đầy đủ" cho lượt đọc suy giảm (D5)
+
+**GHI NHẬN 2026-10-16 (C2.1).** Route IAP refresh đóng dấu `iaps_last_synced_at` khi `failed === 0`
+(`iaps/refresh/route.ts`), kể cả khi chính bộ reconcile đã đánh giá lượt đọc là suy giảm
+(`flag_reconcile_skipped = 'incoming_below_50pct_of_cached'`, `repository/iaps.ts`) hoặc trả 0 sản
+phẩm. Backfill C2.1 loại cả hai — route chưa. Cũng: fallback legacy có thể trả một tập con mà audit
+vẫn `failed=0` (chỉ log Railway `list fallback pkg=` cho biết); vòng phân trang dừng im lặng sau
+100 trang. Xử lý trong chunk D5 (C6).
+
+---
+
+## `[GOOGLE-custom-prices-value-based-row-500]` — giá tuỳ chỉnh trên dòng "Price" chung có số lẻ ⇒ cả lượt push lỗi 500
+
+**GHI NHẬN 2026-10-16 (review C2.1, ĐÃ ĐO trên code thật, Google mock).** App TWD/VND, header
+`Price` (không ghi currency), giá `0.99`, nguồn Google Conversion, có custom prices ⇒ execute trả
+**HTTP 500 cho cả batch**: dòng custom bỏ qua cross-currency (`bulk-import.ts:512`), rồi
+`buildProduct` gọi `decimalToMicros("0.99", "TWD")` và ném (`bulk-import.ts:254`, gọi ở `:1131`).
+Wizard không chặn trước (`computePrecisionViolations` bỏ qua dòng không phải same_currency;
+CustomPricesDialog cho Save khi không có entry currency app dưới Google Conversion). Xử lý trong
+chunk H4 (currency trong file là nguồn duy nhất) — C2.1 không đổi logic định giá.
