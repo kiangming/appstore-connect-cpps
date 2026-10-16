@@ -835,3 +835,102 @@ Phải truy vấn riêng theo package trước khi nói tinywar "vẫn đang h�
    **Đừng hardcode thêm `"default"` vào danh sách đoán** — đó là lần thứ
    ba lặp lại cùng một sai lầm; nếu phải sửa thì sửa theo hướng *luôn đọc
    option thật từ Google*, không theo hướng thêm một ứng viên nữa.
+
+⟶ **2026-10-16:** cơ chế khả dĩ đã được census ở mục
+`[GOOGLE-ballisticherotwid-missing-legacy-default]` ngay dưới (preview
+tính NEW từ mirror DB ⇒ body CREATE chỉ có `"buy"`). Chưa kiểm preview của
+tinywar có đúng là NEW không — chạy Q10 của runbook dưới.
+
+---
+
+## `[GOOGLE-ballisticherotwid-missing-legacy-default]` — 彈彈英雄 báo NEW 28 nhưng Google nói sản phẩm ĐÃ có option `legacy`, `default`
+
+**CENSUS XONG (2026-10-16, chỉ đọc + đo bằng mock, không gọi Google). CHƯA SỬA.**
+Nhánh `arc-google-missing-purchase-options`. Runbook:
+[`queries/read-ballisticherotwid-missing-options.sql`](queries/read-ballisticherotwid-missing-options.sql).
+
+Triệu chứng: `com.vnggames.ballisticherotwid` (TWD, zh-TW), preview `Total 28 ·
+NEW 28 · EXISTING 0`, execute: `batch upsert: new API failed
+(FAILED_PRECONDITION) Product must list all of its existing purchase options.
+Missing: legacy, default — legacy fallback also failed (PERMISSION_DENIED)
+Please migrate to the new publishing API.`
+
+### Đã xác lập (code + đo bằng mock; 102 claim, 0 sai qua verifier)
+
+1. **Tool không hỏi Google "có chưa" ở bất kỳ bước nào.** Preview đọc CHỈ mirror
+   `google_iap_mgmt.iaps` (`preview/route.ts:6`, `:128`); execute tin `decision`
+   client gửi, thiếu thì `"create"` (`execute/route.ts:177`); dòng NEW không có UI
+   đổi sang Overwrite (`PreviewTable.tsx:301-327`).
+2. **`listIapsForApp(app.id).catch(() => [])`** (`preview/route.ts:128`): lỗi đọc DB
+   ⇒ "mọi dòng NEW", HTTP 200, `warnings=[]`, không log — giống từng byte mirror rỗng
+   thật (ĐÃ ĐO). Cùng lớp "không biết ≠ không có".
+3. **Không có chuỗi "API cũ 403 ⇒ danh sách rỗng"**: Refresh hỏng cả hai đường ⇒ 500,
+   KHÔNG ghi gì, mirror giữ nguyên (ĐÃ ĐO). Nhưng list API mới trả `[]` thì KHÔNG
+   fallback và ghi `synced 0` (ĐÃ ĐO).
+4. **Đường CREATE**: một option `"buy"` (`DEFAULT_PURCHASE_OPTION_ID`,
+   `onetime-product-adapter.ts:228`), `allowMissing:true`, `updateMask` gồm
+   `purchaseOptions`, KHÔNG GET (`publisher-client.ts:1155`). Discovery: `allowMissing`
+   chỉ TẠO khi sản phẩm chưa có; có rồi ⇒ là UPDATE. API mới không có lệnh "chỉ tạo".
+   Mock đúng ca này ⇒ tái tạo **từng ký tự** câu lỗi production.
+5. **Đường OVERWRITE** GET live rồi gửi đủ `["legacy","default"]` (ĐÃ ĐO) — nếu preview
+   nói EXISTS thì body đã đúng về danh sách option.
+6. Op `batch upsert` + chỉ một lệnh Google trong try ⇒ sản phẩm bị báo "Missing" CHẮC
+   CHẮN đã đi theo dạng CREATE ⇒ **≥ 1 trong 28 SKU đã tồn tại trên Google**. Bao nhiêu
+   SKU: CHƯA BIẾT (một `batchUpdate` cho cả 28; một lần throw ⇒ cả 28 bị đếm hỏng).
+7. Nửa `PERMISSION_DENIED … Please migrate` là **hệ quả** của fallback vô điều kiện
+   (`publisher-client.ts:1239`, bắt MỌI lỗi kể cả FAILED_PRECONDITION), không phải
+   nguyên nhân thứ hai. Đây là bằng chứng thật đầu tiên trong repo rằng API cũ bị chặn
+   cho một app cụ thể; nó KHÔNG chứng minh ứng viên (c) của chienky (lỗi chienky khác
+   chữ: "The caller does not have permission").
+
+### CHƯA BIẾT — cần Manager
+
+- Vì sao mirror không có các SKU (H1/H2/H3a-e/H2b/H5/H7) ⇒ runbook Q0-Q9.
+- `legacy` / `default` là gì: repo và tài liệu công khai của Google đều không nêu id
+  nào; discovery chỉ nói có "automatically migrated purchase options" (trạng thái
+  `INACTIVE_PUBLISHED`) mà không nêu id ⇒ Play Console hoặc một GET đọc.
+- `error_details` của lần hỏng có nêu productId không ⇒ runbook Q6 (response HTTP của
+  execute KHÔNG mang trường này với lỗi hai-đường).
+
+### Phát hiện phụ (chưa ghi tag riêng)
+
+- `listIapsForApp` không phân trang (`iaps.ts:60-73`) — mirror > 1000 dòng ⇒ SKU xếp
+  cuối thành NEW; anh em cùng file đều phân trang.
+- Nhãn "synced …" trên trang IAP là `apps.last_synced_at` của refresh DANH SÁCH APP,
+  không phải mirror IAP; Refresh IAP chỉ bấm tay, trang bulk import không báo độ cũ.
+- Fallback batch gửi `input.body` thô — bản sửa app-currency `19051e8` chỉ vào
+  insert/patch (twin-path P1). Fallback còn gửi lại cả dòng overwrite mà guard RMW đã
+  cố ý bỏ ra.
+- Runbook chienky (`read-chienky-403-full-error.sql:94-96`) map FAILED_PRECONDITION ⇒
+  "trạng thái app chặn ghi" — sai với lỗi lần này (lỗi về danh sách option trong body);
+  §1 của nó thiếu `error_fallback_http_status/_reasons/_details`.
+- Test `publisher-client.dual-path-error.test.ts:148` giả định "Please migrate" đi kèm
+  `FAILED_PRECONDITION`; production cho thấy `PERMISSION_DENIED`.
+- Tài liệu lệch code: `bulk-import.ts:4-8` (allowMissing:true cho mọi dòng),
+  `google-api-reference.md` §3/§12 (ghi còn dùng API cũ), §10 log `package=` (code là
+  `pkg=`), `operational-guide.md:73-75`.
+
+### Việc tiếp — rẻ → đắt (CHƯA LÀM)
+
+1. Manager chạy runbook Q0, Q1, Q6, Q8, Q10 (miễn phí, chỉ đọc).
+2. Manager grep Railway: `pkg=com.vnggames.ballisticherotwid` (xem dòng
+   `method=monetization.onetimeproducts.list` và `BOTH PATHS FAILED op=list`).
+3. Manager xem Play Console một SKU (`com.vnggames.ballisticherotwid.0.99`): option ids,
+   "Backwards compatible", ngày tạo, người tạo.
+4. Manager Export app (đọc Google, KHÔNG ghi DB) ⇒ biết list của Google có thấy 28 SKU
+   không.
+5. Chỉ sau đó mới thiết kế sửa code — hướng: preview không nuốt lỗi đọc; execute xác
+   minh tồn tại phía server bằng cách **đọc option thật từ Google** trước khi chọn
+   create/overwrite; **đừng hardcode thêm id** (`legacy`, `default` là lần thứ 3–4 của
+   cùng một sai lầm, xem `[GOOGLE-tinywar-missing-default]`).
+
+---
+
+## `[GOOGLE-preview-currency-6dp]` — banner preview nói "theo currency của app" nhưng bảng hiện 0.99 USD → 33.000000 TWD
+
+**CHỈ GHI NHẬN, CHƯA ĐIỀU TRA** (Manager yêu cầu xem riêng, 2026-10-16). Cùng màn
+preview bulk import của `com.vnggames.ballisticherotwid`: banner nói giá trị được
+hiểu theo currency của app, nhưng bảng hiển thị quy đổi `0.99 USD → 33.000000 TWD`
+(6 chữ số thập phân). Hai điểm cần xem: (1) banner và bảng có đang nói hai điều khác
+nhau không; (2) vì sao TWD hiện 6 chữ số — gợi ý duy nhất đã thấy là
+`microsToDecimal(…, 6)` ở `preview/route.ts:281` (chưa xác minh đó là chỗ render).
