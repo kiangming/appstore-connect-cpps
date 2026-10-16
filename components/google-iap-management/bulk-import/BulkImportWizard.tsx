@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   ArrowLeft,
   X,
+  RefreshCw,
 } from "lucide-react";
 
 import { toast } from "sonner";
@@ -138,6 +139,12 @@ interface Props {
    *  the row's baseCurrency to match Google's per-app enforcement. */
   appDefaultCurrency: string | null;
   appDefaultLanguage: string | null;
+  /** D0/D3 — apps.iaps_last_synced_at: the last COMPLETE IAP-list refresh.
+   *  null = never (or unreadable — see iapsSyncReadError). While null the
+   *  mirror cannot say which SKUs exist, so Preview is blocked. */
+  iapsLastSyncedAt: string | null;
+  /** D2 — the sync state could not be READ. Distinct from "never synced". */
+  iapsSyncReadError?: string | null;
 }
 
 type Step = "pricing" | "upload" | "preview" | "execute" | "done";
@@ -148,9 +155,58 @@ export function BulkImportWizard({
   appDisplayName,
   appDefaultCurrency,
   appDefaultLanguage,
+  iapsLastSyncedAt,
+  iapsSyncReadError = null,
 }: Props) {
   const router = useRouter();
   const [step, setStep] = useState<Step>("pricing");
+
+  // D0/D3 — mirror sync state. Seeded from the page, then updated by an
+  // in-wizard Refresh or by the preview response (which reads it at the
+  // same moment as the mirror itself).
+  const [mirrorSyncedAt, setMirrorSyncedAt] = useState<string | null>(iapsLastSyncedAt);
+  const [mirrorReadError, setMirrorReadError] = useState<string | null>(iapsSyncReadError);
+  const [refreshingMirror, setRefreshingMirror] = useState(false);
+  const [mirrorRefreshError, setMirrorRefreshError] = useState<string | null>(null);
+  const mirrorBlocked = mirrorSyncedAt === null;
+
+  async function handleRefreshMirror() {
+    setMirrorRefreshError(null);
+    setRefreshingMirror(true);
+    try {
+      const res = await fetch(
+        `/api/google-iap-management/apps/${encodeURIComponent(packageName)}/iaps/refresh`,
+        { method: "POST" },
+      );
+      const body = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        failed?: number;
+        mirror_complete?: boolean;
+        iaps_last_synced_at?: string | null;
+      };
+      if (!res.ok) {
+        setMirrorRefreshError(body.error ?? `Refresh failed (HTTP ${res.status}).`);
+        return;
+      }
+      if (!body.mirror_complete || !body.iaps_last_synced_at) {
+        // ⚠ A 200 with failed rows is NOT a usable mirror — say so instead of
+        // unblocking (P5: the status must reflect the real outcome).
+        setMirrorRefreshError(
+          `Refresh finished with ${body.failed ?? "some"} item(s) that could not be cached — ` +
+            `the IAP list is not complete yet. Try Refresh again.`,
+        );
+        return;
+      }
+      setMirrorSyncedAt(body.iaps_last_synced_at);
+      setMirrorReadError(null);
+      setUploadError(null);
+      router.refresh();
+    } catch (err) {
+      setMirrorRefreshError(err instanceof Error ? err.message : "Refresh failed.");
+    } finally {
+      setRefreshingMirror(false);
+    }
+  }
 
   // Step 1: pricing source. `null` until the availability check resolves —
   // the selector auto-selects by priority (app template → default template
@@ -433,8 +489,18 @@ export function BulkImportWizard({
         warnings?: string[];
         errors?: string[];
         error?: string;
+        code?: string;
+        iapsLastSyncedAt?: string | null;
       };
       if (!res.ok) {
+        // D0 — the server is the authority: a page loaded before a sync
+        // state change (or a stale tab) learns it here and re-blocks.
+        if (body.code === "IAPS_NEVER_SYNCED") {
+          setMirrorSyncedAt(null);
+          setMirrorReadError(null);
+        } else if (body.code === "MIRROR_READ_FAILED") {
+          setMirrorReadError(body.error ?? "Could not read the cached IAP list.");
+        }
         if (body.errors && body.errors.length > 0) {
           setUploadError(body.errors.join(" · "));
         } else {
@@ -462,6 +528,7 @@ export function BulkImportWizard({
       setPreviewRows(rows);
       setPreviewWarnings(body.warnings ?? []);
       setTierSelections(seedSelections);
+      if (body.iapsLastSyncedAt) setMirrorSyncedAt(body.iapsLastSyncedAt);
 
       // Custom prices deliberately SURVIVE this reset (Manager-locked:
       // "custom survives back-navigation to Step 1 and a template
@@ -771,6 +838,14 @@ export function BulkImportWizard({
 
       <StepHeader step={step} />
 
+      <MirrorSyncBanner
+        syncedAt={mirrorSyncedAt}
+        readError={mirrorReadError}
+        refreshing={refreshingMirror}
+        refreshError={mirrorRefreshError}
+        onRefresh={handleRefreshMirror}
+      />
+
       {/* App defaults banner (Hotfix 4) */}
       {(appDefaultCurrency || appDefaultLanguage) && (
         <div className="text-xs text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
@@ -957,7 +1032,9 @@ export function BulkImportWizard({
             </button>
             <button
               onClick={handleUploadAndPreview}
-              disabled={!file || uploading}
+              // D0 — blocked while the mirror cannot say which SKUs exist.
+              disabled={!file || uploading || mirrorBlocked}
+              title={mirrorBlocked ? "Refresh the IAP list first (see the banner above)." : undefined}
               className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition disabled:opacity-50"
             >
               {uploading ? "Parsing…" : "Preview"}
@@ -1378,6 +1455,82 @@ export function computePrecisionViolations(
     }
   }
   return violations;
+}
+
+/**
+ * D0/D3 — the state of the IAP mirror that Preview's NEW/EXISTING comes from.
+ * Three states, never collapsed: unreadable (red), never refreshed (amber,
+ * blocks Preview), refreshed at <time> (neutral line).
+ */
+function MirrorSyncBanner({
+  syncedAt,
+  readError,
+  refreshing,
+  refreshError,
+  onRefresh,
+}: {
+  syncedAt: string | null;
+  readError: string | null;
+  refreshing: boolean;
+  refreshError: string | null;
+  onRefresh: () => void;
+}) {
+  const refreshButton = (
+    <button
+      type="button"
+      onClick={onRefresh}
+      disabled={refreshing}
+      className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-current px-2.5 py-1 text-xs font-semibold transition hover:bg-white/60 disabled:opacity-60"
+    >
+      <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+      {refreshing ? "Refreshing IAP list…" : "Refresh IAP list"}
+    </button>
+  );
+  const refreshErrorLine = refreshError && (
+    <span className="block mt-1 font-medium">{refreshError}</span>
+  );
+
+  if (syncedAt === null) {
+    const unreadable = readError !== null;
+    return (
+      <div
+        data-testid="mirror-sync-banner"
+        data-state={unreadable ? "unreadable" : "never"}
+        className={`text-xs rounded-lg px-3 py-2 border ${
+          unreadable
+            ? "text-red-900 bg-red-50 border-red-200"
+            : "text-amber-900 bg-amber-50 border-amber-300"
+        }`}
+      >
+        <span className="font-semibold">
+          {unreadable
+            ? "Could not read whether this app's IAP list has been refreshed."
+            : "This app's IAP list has never been refreshed from Google."}
+        </span>{" "}
+        Preview is blocked: without a complete IAP list the tool cannot tell which SKUs
+        already exist, and would send existing products as new ones.
+        {unreadable && <span className="block mt-1">{readError}</span>}
+        {refreshErrorLine}
+        <div>{refreshButton}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-testid="mirror-sync-banner"
+      data-state="synced"
+      className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
+    >
+      IAP list last refreshed from Google:{" "}
+      <time dateTime={syncedAt} className="font-mono">
+        {new Date(syncedAt).toLocaleString()}
+      </time>
+      . New/Existing in the preview is based on that list.
+      {refreshErrorLine}
+      <div>{refreshButton}</div>
+    </div>
+  );
 }
 
 function StepHeader({ step }: { step: Step }) {

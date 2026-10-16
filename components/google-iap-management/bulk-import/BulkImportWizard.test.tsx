@@ -107,7 +107,12 @@ function installFetchMock(scenario: FetchScenario) {
   return fetchMock;
 }
 
-function renderWizard() {
+function renderWizard(
+  mirror: { iapsLastSyncedAt: string | null; iapsSyncReadError?: string | null } = {
+    // D0 — default scenario: the IAP list HAS been refreshed.
+    iapsLastSyncedAt: "2026-10-16T03:25:10.000Z",
+  },
+) {
   return render(
     <BulkImportWizard
       packageName="com.example.app"
@@ -115,6 +120,8 @@ function renderWizard() {
       appDisplayName="Test App"
       appDefaultCurrency="USD"
       appDefaultLanguage="en-US"
+      iapsLastSyncedAt={mirror.iapsLastSyncedAt}
+      iapsSyncReadError={mirror.iapsSyncReadError ?? null}
     />,
   );
 }
@@ -625,5 +632,143 @@ describe("BulkImportWizard (Google) — drag-drop bug fix (Part B)", () => {
 
     expect(capturedEvent).not.toBeNull();
     expect((capturedEvent as unknown as Event).defaultPrevented).toBe(true);
+  });
+});
+
+/**
+ * D0 + D3 [arc-google-missing-purchase-options] — the wizard must not let a
+ * Preview run while the IAP mirror cannot say which SKUs exist, and must say
+ * WHEN the list it relies on was read. Incident: never-refreshed mirror ⇒
+ * 28/28 NEW ⇒ 28 CREATEs onto products that already existed on Google.
+ */
+describe("BulkImportWizard (Google) — D0/D3 IAP mirror sync gate", () => {
+  const REFRESH_URL_FRAGMENT = "/iaps/refresh";
+
+  function installMirrorFetch(opts: {
+    refresh?: () => { ok: boolean; status?: number; json: () => Promise<unknown> };
+    preview?: () => { ok: boolean; status?: number; json: () => Promise<unknown> };
+  }) {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(AVAILABILITY_URL_FRAGMENT)) {
+        return Promise.resolve({ ok: false, json: async () => ({}) });
+      }
+      if (url.includes(REFRESH_URL_FRAGMENT) && opts.refresh) return Promise.resolve(opts.refresh());
+      if (url.includes(PREVIEW_URL_FRAGMENT) && opts.preview) return Promise.resolve(opts.preview());
+      if (url.includes(START_URL)) {
+        return Promise.resolve({ ok: true, json: async () => ({ run_id: null }) });
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  it("never refreshed ⇒ amber banner, and Preview stays DISABLED even with a file selected", async () => {
+    installMirrorFetch({});
+    const { container } = renderWizard({ iapsLastSyncedAt: null });
+    const banner = screen.getByTestId("mirror-sync-banner");
+    expect(banner).toHaveAttribute("data-state", "never");
+    expect(banner).toHaveTextContent(/never been refreshed/);
+    expect(within(banner).getByRole("button", { name: /Refresh IAP list/ })).toBeEnabled();
+
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByText("items.xlsx")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
+  });
+
+  it("sync state UNREADABLE ⇒ red banner naming the error, Preview disabled (not treated as never, not as synced)", async () => {
+    installMirrorFetch({});
+    const { container } = renderWizard({
+      iapsLastSyncedAt: null,
+      iapsSyncReadError: "column apps.iaps_last_synced_at does not exist",
+    });
+    const banner = screen.getByTestId("mirror-sync-banner");
+    expect(banner).toHaveAttribute("data-state", "unreadable");
+    expect(banner).toHaveTextContent(/does not exist/);
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByText("items.xlsx")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
+  });
+
+  it("refreshed ⇒ neutral banner with the refresh time; Preview enabled once a file is chosen", async () => {
+    installMirrorFetch({});
+    const { container } = renderWizard();
+    const banner = screen.getByTestId("mirror-sync-banner");
+    expect(banner).toHaveAttribute("data-state", "synced");
+    expect(banner).toHaveTextContent(/IAP list last refreshed from Google/);
+    expect(banner.querySelector("time")).toHaveAttribute("dateTime", "2026-10-16T03:25:10.000Z");
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
+  });
+
+  it("in-wizard Refresh with a COMPLETE mirror unblocks Preview and refreshes the page data", async () => {
+    installMirrorFetch({
+      refresh: () => ({
+        ok: true,
+        json: async () => ({
+          ok: true, synced: 28, failed: 0, total: 28,
+          mirror_complete: true, iaps_last_synced_at: "2026-10-16T09:00:00.000Z",
+        }),
+      }),
+    });
+    const { container } = renderWizard({ iapsLastSyncedAt: null });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Refresh IAP list/ }));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("mirror-sync-banner")).toHaveAttribute("data-state", "synced"),
+    );
+    expect(routerRefresh).toHaveBeenCalled();
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
+  });
+
+  it("Refresh that answered 200 but with failed items does NOT unblock (status must reflect the real outcome)", async () => {
+    installMirrorFetch({
+      refresh: () => ({
+        ok: true,
+        json: async () => ({
+          ok: true, synced: 0, failed: 28, total: 28,
+          mirror_complete: false, iaps_last_synced_at: null,
+        }),
+      }),
+    });
+    renderWizard({ iapsLastSyncedAt: null });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Refresh IAP list/ }));
+    });
+    const banner = await screen.findByTestId("mirror-sync-banner");
+    await waitFor(() => expect(banner).toHaveTextContent(/28 item\(s\) that could not be cached/));
+    expect(banner).toHaveAttribute("data-state", "never");
+    expect(routerRefresh).not.toHaveBeenCalled();
+  });
+
+  it("server says IAPS_NEVER_SYNCED (stale page) ⇒ the wizard re-blocks instead of trusting its page-load state", async () => {
+    installMirrorFetch({
+      preview: () => ({
+        ok: false,
+        status: 409,
+        json: async () => ({
+          code: "IAPS_NEVER_SYNCED",
+          error: "The IAP list of com.example.app has never been refreshed from Google…",
+        }),
+      }),
+    });
+    const { container } = renderWizard();
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Preview/ }));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("mirror-sync-banner")).toHaveAttribute("data-state", "never"),
+    );
+    expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
   });
 });

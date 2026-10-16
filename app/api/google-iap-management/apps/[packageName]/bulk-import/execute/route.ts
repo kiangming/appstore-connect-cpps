@@ -39,6 +39,13 @@ import {
 } from "@/lib/google-iap-management/repository/google-accounts";
 import { getAppByPackage } from "@/lib/google-iap-management/repository/apps";
 import {
+  IAPS_NEVER_SYNCED,
+  MIRROR_READ_FAILED,
+  mirrorReadFailedMessage,
+  neverSyncedMessage,
+  readMirrorGate,
+} from "@/lib/google-iap-management/bulk-import-mirror-gate";
+import {
   readActiveAccountId,
   resolveActiveAccountId,
 } from "@/lib/google-iap-management/active-account";
@@ -156,6 +163,26 @@ export async function POST(
       typeof body.hub_run_id === "string" && body.hub_run_id.length > 0
         ? body.hub_run_id
         : null;
+
+    // D0 — twin of the preview gate (P1/P14: a guard on the read surface
+    // alone leaves the WRITE open — a tab previewed before this deploy, or a
+    // direct POST, would still push a plan built from a never-filled mirror).
+    // Placed AFTER runId so the Hub run this request belongs to is closed.
+    const gate = await readMirrorGate(app.id);
+    if (gate.kind === "error") {
+      tracking.errorMessage = mirrorReadFailedMessage(gate.message);
+      return NextResponse.json(
+        { error: tracking.errorMessage, code: MIRROR_READ_FAILED },
+        { status: 503 },
+      );
+    }
+    if (gate.kind === "never") {
+      tracking.errorMessage = neverSyncedMessage(packageName);
+      return NextResponse.json(
+        { error: tracking.errorMessage, code: IAPS_NEVER_SYNCED },
+        { status: 409 },
+      );
+    }
 
     const pricingSource = body.pricingSource;
     if (!pricingSource || !VALID_PRICING_SOURCES.includes(pricingSource)) {

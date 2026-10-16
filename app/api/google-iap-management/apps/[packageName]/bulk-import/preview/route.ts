@@ -38,6 +38,13 @@ import {
   resolveActiveAccountId,
 } from "@/lib/google-iap-management/active-account";
 import { withConcurrency } from "@/lib/iap-management/concurrency";
+import {
+  IAPS_NEVER_SYNCED,
+  MIRROR_READ_FAILED,
+  mirrorReadFailedMessage,
+  neverSyncedMessage,
+  readMirrorGate,
+} from "@/lib/google-iap-management/bulk-import-mirror-gate";
 
 type PricingSource = "google_default" | "default_template" | "app_template";
 const VALID_PRICING_SOURCES: PricingSource[] = [
@@ -78,6 +85,22 @@ export async function POST(
     return NextResponse.json(
       { error: `App "${packageName}" is not cached. Refresh the apps list first.` },
       { status: 404 },
+    );
+  }
+
+  // D0 — an app whose IAP list was never refreshed completely has an EMPTY
+  // mirror that means "unknown", not "nothing exists". Refuse before parsing.
+  const gate = await readMirrorGate(app.id);
+  if (gate.kind === "error") {
+    return NextResponse.json(
+      { error: mirrorReadFailedMessage(gate.message), code: MIRROR_READ_FAILED },
+      { status: 503 },
+    );
+  }
+  if (gate.kind === "never") {
+    return NextResponse.json(
+      { error: neverSyncedMessage(packageName), code: IAPS_NEVER_SYNCED },
+      { status: 409 },
     );
   }
 
@@ -125,7 +148,23 @@ export async function POST(
     );
   }
 
-  const existing = await listIapsForApp(app.id).catch(() => []);
+  // D2 — a mirror READ error is NOT "empty mirror". The old
+  // `.catch(() => [])` turned it into "every row NEW" with no log and no
+  // warning (measured: byte-identical to a genuinely empty mirror), and every
+  // NEW row is sent as a CREATE. Refuse instead.
+  let existing: Awaited<ReturnType<typeof listIapsForApp>>;
+  try {
+    existing = await listIapsForApp(app.id);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[google-iap:bulk-import:preview] mirror read failed pkg=${packageName} err="${detail.replace(/"/g, "'")}"`,
+    );
+    return NextResponse.json(
+      { error: mirrorReadFailedMessage(detail), code: MIRROR_READ_FAILED },
+      { status: 503 },
+    );
+  }
   const existingSkus = new Set(existing.map((i) => i.sku));
 
   // Per-row candidate lookup. Two branches:
@@ -413,6 +452,9 @@ export async function POST(
   return NextResponse.json({
     filename: file.name,
     pricingSource,
+    // D3 — when the mirror these EXISTS/NEW flags came from was last filled
+    // completely. Read at the same moment as the mirror itself.
+    iapsLastSyncedAt: gate.syncedAt,
     rows,
     warnings: warningsOut,
     counts: {

@@ -22,7 +22,11 @@ vi.mock("@/lib/google-iap-management/repository/google-accounts", () => ({
 }));
 
 const getAppByPackage = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/google-iap-management/repository/apps", () => ({ getAppByPackage }));
+const getIapsMirrorSyncedAt = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/google-iap-management/repository/apps", () => ({
+  getAppByPackage,
+  getIapsMirrorSyncedAt,
+}));
 
 const readActiveAccountId = vi.hoisted(() => vi.fn());
 const resolveActiveAccountId = vi.hoisted(() => vi.fn());
@@ -65,6 +69,8 @@ beforeEach(() => {
   listAccounts.mockReset().mockResolvedValue([{ id: "acc1", status: "verified" }]);
   getEncryptedCredentials.mockReset().mockResolvedValue({ enc: "x" });
   getAppByPackage.mockReset().mockResolvedValue({ id: "app1", default_currency: "USD" });
+  // D0 — default: the IAP list HAS been refreshed completely.
+  getIapsMirrorSyncedAt.mockReset().mockResolvedValue("2026-10-16T03:25:10.000Z");
   readActiveAccountId.mockReset().mockReturnValue(null);
   resolveActiveAccountId.mockReset().mockReturnValue("acc1");
   jwtClientFromEncrypted.mockReset().mockReturnValue({});
@@ -413,6 +419,56 @@ describe("Google bulk-import execute — per-item custom prices (SC4)", () => {
     );
     expect(res.status).toBe(200);
     expect(finalizeHubTracking).toHaveBeenCalledWith("run-c7", "SUCCESS", undefined);
+  });
+});
+
+/**
+ * D0 [arc-google-missing-purchase-options] — the WRITE twin of the preview
+ * gate. Incident: a never-refreshed mirror ⇒ 28/28 "NEW" ⇒ 28 CREATEs onto
+ * products that already existed. Execute must refuse a plan built from such a
+ * mirror even when the client sends it (stale tab, direct POST).
+ */
+describe("Google bulk-import execute — D0 mirror gate", () => {
+  it("IAP list never refreshed ⇒ 409 IAPS_NEVER_SYNCED, nothing executed, Hub run closed FAILED", async () => {
+    getIapsMirrorSyncedAt.mockResolvedValue(null);
+    const res = await POST(
+      jsonReq({ hub_run_id: "run-d0", pricingSource: "google_default", rows: [validRow] }),
+      ctx,
+    );
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { code?: string; error?: string };
+    expect(body.code).toBe("IAPS_NEVER_SYNCED");
+    expect(body.error).toMatch(/never been refreshed/);
+    expect(executeBulkImport).not.toHaveBeenCalled();
+    expect(finalizeHubTracking).toHaveBeenCalledTimes(1);
+    expect(finalizeHubTracking).toHaveBeenCalledWith(
+      "run-d0",
+      "FAILED",
+      expect.stringContaining("never been refreshed"),
+    );
+  });
+
+  it("sync state UNREADABLE ⇒ 503 MIRROR_READ_FAILED — not treated as synced, not as never", async () => {
+    getIapsMirrorSyncedAt.mockRejectedValue(new Error("column does not exist"));
+    const res = await POST(
+      jsonReq({ hub_run_id: "run-d0e", pricingSource: "google_default", rows: [validRow] }),
+      ctx,
+    );
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as { code?: string; error?: string };
+    expect(body.code).toBe("MIRROR_READ_FAILED");
+    expect(body.error).toMatch(/column does not exist/);
+    expect(executeBulkImport).not.toHaveBeenCalled();
+    expect(finalizeHubTracking).toHaveBeenCalledWith("run-d0e", "FAILED", expect.any(String));
+  });
+
+  it("the gate reads the sync state of THIS app row", async () => {
+    executeBulkImport.mockResolvedValue({
+      rowsTotal: 1, rowsCreated: 1, rowsOverwritten: 0, rowsSkipped: 0, rowsFailed: 0,
+      rowsRefused: 0, refusedRows: [], customPricedRows: 0, customRefusedRows: 0, durationMs: 1,
+    });
+    await POST(jsonReq({ pricingSource: "google_default", rows: [validRow] }), ctx);
+    expect(getIapsMirrorSyncedAt).toHaveBeenCalledWith("app1");
   });
 });
 

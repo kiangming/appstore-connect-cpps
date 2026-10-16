@@ -113,6 +113,8 @@ const PROPS = {
   appDisplayName: "CashKnight",
   appDefaultCurrency: "VND",
   appDefaultLanguage: "en-US",
+  // D0 — these scenarios exercise a mirror that HAS been refreshed.
+  iapsLastSyncedAt: "2026-10-16T03:25:10.000Z",
 };
 
 /** Drive the wizard: Step 1 → Step 2 → upload → Step 3. */

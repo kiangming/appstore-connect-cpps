@@ -148,6 +148,64 @@ export async function updateAppDefaults(
 }
 
 /**
+ * D0 [arc-google-missing-purchase-options] — "chưa từng đọc" ≠ "đọc ra rỗng".
+ *
+ * `iaps_last_synced_at` = the last IAP Refresh that fetched the FULL list and
+ * wrote every product into the mirror with 0 failures. NULL ⇒ the mirror of
+ * this app row has never been filled, so an empty mirror means "unknown",
+ * not "no item exists" — bulk import must refuse (preview + execute).
+ *
+ * ⚠ Deliberately NOT part of APP_COLUMNS. getAppByPackage has ~17 callers
+ *   across the module; if this column were selected there and the code ran
+ *   before the migration, the WHOLE Google module would fail. Read on its
+ *   own, only the bulk-import surfaces that need it fail — and they fail
+ *   loudly, which is the point.
+ * ⚠ THROWS on a read error. A caller that turns this error into `null` would
+ *   rebuild the exact bug D0 closes ("could not read" ⇒ "never synced" is
+ *   fine, but the reverse habit — error ⇒ some default — is how
+ *   `.catch(() => [])` made every row NEW).
+ */
+export async function getIapsMirrorSyncedAt(appId: string): Promise<string | null> {
+  const { data, error } = await googleIapDb()
+    .from("apps")
+    .select("iaps_last_synced_at")
+    .eq("id", appId)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`Failed to read IAP mirror sync state: ${error.message}`);
+  }
+  if (!data) {
+    throw new Error(`Failed to read IAP mirror sync state: app ${appId} not found.`);
+  }
+  return (data as { iaps_last_synced_at: string | null }).iaps_last_synced_at ?? null;
+}
+
+/**
+ * D0 — stamp a COMPLETE IAP Refresh. Only the IAP refresh route calls this,
+ * and only when the full list was fetched AND `failed === 0`.
+ *
+ * ⚠ Verifies that exactly ONE row was written (KB §9 P2: a write nobody
+ *   inspects fails silently). 0 rows ⇒ throw — the mirror would otherwise
+ *   look "never synced" while the caller reports success.
+ */
+export async function markIapsMirrorSynced(appId: string, syncedAt: string): Promise<void> {
+  const { data, error } = await googleIapDb()
+    .from("apps")
+    .update({ iaps_last_synced_at: syncedAt })
+    .eq("id", appId)
+    .select("id");
+  if (error) {
+    throw new Error(`Failed to record IAP mirror sync time: ${error.message}`);
+  }
+  const written = Array.isArray(data) ? data.length : 0;
+  if (written !== 1) {
+    throw new Error(
+      `Failed to record IAP mirror sync time: expected 1 app row updated, got ${written}.`,
+    );
+  }
+}
+
+/**
  * Batch UPSERT — single SQL statement (avoids per-row round-trip). Used
  * after a full Reporting API walk completes successfully.
  */

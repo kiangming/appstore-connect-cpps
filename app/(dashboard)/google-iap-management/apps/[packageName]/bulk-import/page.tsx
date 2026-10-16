@@ -7,6 +7,7 @@ import { authOptions } from "@/lib/auth";
 import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
 import { getAppByPackage } from "@/lib/google-iap-management/repository/apps";
 import { readActiveAccountId } from "@/lib/google-iap-management/active-account";
+import { readMirrorGate } from "@/lib/google-iap-management/bulk-import-mirror-gate";
 import { BulkImportWizard } from "@/components/google-iap-management/bulk-import/BulkImportWizard";
 
 export default async function BulkImportPage({
@@ -32,6 +33,10 @@ export default async function BulkImportPage({
   const app = await getAppByPackage(activeAccountId, packageName);
   if (!app) notFound();
 
+  // D0/D3 — never/error/synced, as plain serialisable props (the wizard is a
+  // client component and must not import the repository module).
+  const gate = await readMirrorGate(app.id);
+
   return (
     <div className="p-8 max-w-5xl">
       <h1 className="text-2xl font-semibold text-slate-900 mb-1">
@@ -46,6 +51,8 @@ export default async function BulkImportPage({
         appDisplayName={app.display_name}
         appDefaultCurrency={app.default_currency}
         appDefaultLanguage={app.default_language}
+        iapsLastSyncedAt={gate.kind === "synced" ? gate.syncedAt : null}
+        iapsSyncReadError={gate.kind === "error" ? gate.message : null}
       />
     </div>
   );
