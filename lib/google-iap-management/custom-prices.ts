@@ -299,6 +299,20 @@ export function findAppCurrencyEntry(
   return { ok: true, regionCode: priced[0].regionCode };
 }
 
+/** The custom-prices dialog's Save gate on the app currency. Template sources
+ *  only: there the app-currency entry is the only possible defaultPrice.
+ *  Under Google Conversion the set is a sparse overlay, so Save is never
+ *  gated. ONE function — the dialog and the route-level pricing test
+ *  (bulk-import/file-currency-invariance.test.ts) both call it. */
+export function customAppCurrencyGate(
+  rows: ReadonlyArray<CustomPriceRow>,
+  args: { isGoogleConversion: boolean; appDefaultCurrency: string | null | undefined },
+): { ok: true; regionCode: string } | { ok: false; reason: string } {
+  return args.isGoogleConversion
+    ? { ok: true, regionCode: "" }
+    : findAppCurrencyEntry(rows, args.appDefaultCurrency);
+}
+
 export interface SuspiciousDrop {
   regionCode: string;
   /** Percent below the template baseline, rounded. */

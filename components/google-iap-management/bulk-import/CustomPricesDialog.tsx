@@ -32,7 +32,7 @@ import {
   buildCustomPriceRows,
   validateCustomPrices,
   summarizeCustomPrices,
-  findAppCurrencyEntry,
+  customAppCurrencyGate,
   flagSuspiciousDrops,
   toCustomEntries,
   type CatalogCountry,
@@ -267,10 +267,7 @@ export function CustomPricesDialog({
    * or the UI blocks what the server would happily accept.
    */
   const appCurrencyCheck = useMemo(
-    () =>
-      isGoogleConversion
-        ? ({ ok: true, regionCode: "" } as const)
-        : findAppCurrencyEntry(rows, appDefaultCurrency),
+    () => customAppCurrencyGate(rows, { isGoogleConversion, appDefaultCurrency }),
     [rows, appDefaultCurrency, isGoogleConversion],
   );
 

@@ -178,12 +178,16 @@ D4, D5. Cho tới khi có D10: **không Overwrite sản phẩm live qua bulk imp
 
 - Đổi `zh-TW → en-US` làm form tạo/sửa IAP đòi title en-US (`iap-form/IapForm.tsx:566-568`).
 - Override `GT Price/GT Currency` bị bỏ qua âm thầm với nguồn template (`bulk-import.ts:286`, `:948`).
+  ⚠ *Đính chính 2026-10-17 (§5.7):* chỉ với dòng template KHỚP tier hoặc resolve cross-currency; dòng
+  template KHÔNG khớp vẫn gửi GT (`:943`, `:947`); custom prices thay GT dưới MỌI nguồn (`:475`).
 - Dòng `import_batches` mồ côi `IN_PROGRESS` khi lỗi ném ngoài try (`bulk-import.ts:319-329`, `:766-784`).
 - Một số dòng log lỗi Google không qua `redactSecrets` / trần 200 ký tự
   (`publisher-client.ts:1118-1122`, `:1214-1218`; `bulk-import.ts:1116-1120`, `:1195-1197`).
 - Comment/tài liệu lệch code: banner wizard; JSDoc Props wizard ("threaded into the
   execute payload"); `iaps.ts:623-624` ("carries both" nhưng code dùng `||`);
   `excel-parser.ts:315`; migration `20260521000000:13-15`.
+  ⚠ *2026-10-17:* ba mục đầu (banner wizard, JSDoc Props, `iaps.ts:623-624`) đã bị C2 `ace8fc9` xoá;
+  còn lại `excel-parser.ts:315` và migration `20260521000000:13-15`.
 
 ---
 
@@ -230,6 +234,9 @@ Phát hiện phụ — ảnh hưởng H2 (chưa đo trên Google thật):
 trên cả HEAD và cây đã deploy `ac3043f`: **12/12 cặp "cùng file, app USD vs app TWD" cho kết quả
 KHÁC** (body khác hoặc dòng bị từ chối). Không riêng header USD: lỗi là "currency trong file ≠
 currency của app".
+⚠ *2026-10-17:* phép đo trên chạy bằng harness tạm NGOÀI repo. Nay thay bằng test T1 trong repo
+(§5.7) — đo lại trên HEAD `375b735`: **33/33** tổ hợp (file × nguồn giá) cho kết quả phụ thuộc
+currency app.
 
 | # | Chỗ | Lớp | Hiệu ứng |
 |---|---|---|---|
@@ -250,7 +257,7 @@ Phát hiện phụ (độc lập với currency app — cần Manager):
 Ghi chú đáng giá: app **không có currency** (NULL) ⇒ không nhánh cross-currency, mọi dòng định giá
 theo currency cột giá của chính nó; chỉ còn: header chung đọc là USD, custom-dưới-template bị từ chối.
 
-### 5.4 THIẾT KẾ SỬA H4 — CHỜ GATE (chưa code; chunk riêng sau C2.1)
+### 5.4 THIẾT KẾ SỬA H4 — ĐÃ GATE 2026-10-17 (quyết định cuối ở §5.7)
 
 1. **MỘT choke point:** `filePriceOf(row) → {currency, priceMicros} | {refused, reason}` (module mới
    `orchestration/file-price.ts`). Mọi bước định giá (tra tier ở preview + orchestrator, neo bootstrap,
@@ -268,6 +275,8 @@ theo currency cột giá của chính nó; chỉ còn: header chung đọc là U
 7. **Đóng twin path:** execute không tin `baseCurrency`/`priceHeaderSource` của client (parse lại file
    hoặc ràng preview bằng hash/token); từ chối file có >1 cột giá; US-stamp chỉ khi giá file là USD
    (hoặc từ chối khi bootstrap lỗi); fallback legacy gửi giá file — bị từ chối là lỗi trung thực.
+   ⚠ *Đã chốt khác (§5.7):* Q8 — BỎ HẲN fallback legacy trên đường batch upsert (không sửa currency
+   của nó); Q9 — execute kiểm lại TỪNG DÒNG phía server (không parse lại file, không hash/token).
 8. **Audit:** mọi dòng ghi `file_currency`, header, neo `{currency, micros}`; batch ghi
    `pricing_rule: "file-currency-only/v1"`.
 9. **Chữ:** banner (thay câu C2.1), Notes sheet `template-spec.ts:351-354`, cảnh báo parser
@@ -277,9 +286,12 @@ theo currency cột giá của chính nó; chỉ còn: header chung đọc là U
     trong đường định giá; T3–T10 theo từng mục trên. **Mutation** M1–M7: đưa currency app trở lại
     parser / neo bootstrap / neo custom / từ chối lệch currency / execute nhận 'inferred' / đọc
     `app.default_currency` ở preview / US-stamp giá không phải file ⇒ ĐỎ.
+    ⚠ *2026-10-17 (§5.7):* T1 của H4.0 XANH — nó ghim hiện trạng (phụ thuộc currency app), chạy trên
+    một cây (`375b735`); H4.2 lật nó, kèm bảng kỳ vọng suy ra tay + khẳng định theo luật.
 
 Cần Manager chốt: O1–O4 · template miss = quy đổi hay từ chối · GT dưới template · chính sách US-stamp ·
 chấp nhận fallback legacy từ chối · form tạo/sửa đơn lẻ (pre-fill currency từ app) có thuộc yêu cầu không.
+⚠ *Đã trả lời 2026-10-17 — xem bảng Q1–Q10 ở §5.7* (form đơn lẻ: ngoài H4, chỉ là giá điền sẵn sửa được).
 
 Đo lượt import cũ của 7 app lệch currency: [`queries/audit-app-currency-price-influence.sql`](queries/audit-app-currency-price-influence.sql)
 (theo batch, không theo SKU; header/`priceHeaderSource`/currency app lúc chạy KHÔNG được lưu ⇒
@@ -323,3 +335,61 @@ audit `stamp_decision: skip:EMPTY_LIST_WITH_MIRROR_ITEMS`, response `mirror_warn
 và trang app. Mirror rỗng + Google rỗng ⇒ vẫn đóng dấu. Phần còn lại của D5 (không xoá mirror, cảnh
 báo khi list rỗng ở mọi nơi, lượt đọc `incoming_below_…` mà route vẫn đóng dấu) ở C6.
 
+### 5.7 H4 — kế hoạch Manager đã chốt (2026-10-17) + H4.0
+
+**Truy vết lại trước khi lập kế hoạch** (4 nhánh song song + kiểm đối kháng từng khẳng định, đọc
+code tại HEAD `375b735`; 223/224 khẳng định CONFIRMED — khẳng định còn lại, "bản ghi duy nhất của giá
+cuối là một dòng console VN, không lưu", SAI: `per_row_diagnostic` lưu giá VN của dòng template/custom
+và `iap_prices` lưu giá Google trả về; đã sửa trước khi viết mục này). Ba điều chỉnh so với §4/§5.3:
+- GT dưới template: chỉ bị thay khi dòng KHỚP tier (`bulk-import.ts:947-952`) hoặc resolve
+  cross-currency (`:286`); không khớp ⇒ GT vẫn gửi (`:943`). Custom prices thay GT dưới mọi nguồn
+  (`:475`). Mọi lần bỏ đều im lặng. Câu ghi chú wizard "with a pricing template the tier's price is
+  used instead" (`BulkImportWizard.tsx:1490-1491` tại `375b735`) sai ở hai ca đó.
+- GT chưa bao giờ được kiểm độ chính xác trước push: `decimalToMicros` ném trong `buildProduct`
+  (`:234`), gọi ở `:1131` ngoài mọi try ⇒ cả batch 500, `import_batches` kẹt `IN_PROGRESS`.
+- Bảng vùng của GT lệch catalog Play (snapshot 2026-09-01): `CNY→CN` (CN không có trong catalog),
+  `ARS→AR` (Google bán AR bằng USD, `play-regions.snapshot.ts:76`).
+
+**Manager chốt** (Q1–Q7, Q9, Q10 theo đề xuất; Q8 đổi):
+
+| # | Quyết định |
+|---|---|
+| Q1 | Header `Price` / `Default Price` / `Base Price` (không ghi currency) ⇒ preview TỪ CHỐI file |
+| Q2 | Bỏ nhánh cross-currency: mọi dòng tra tier theo SKU rồi currency + giá **của file**; defaultPrice + neo = giá file |
+| Q3 | Template không khớp ⇒ quy đổi từ giá file, hiện rõ từng dòng |
+| Q4 | Google Conversion, currency file ≠ app ⇒ quy đổi từ giá file (dòng trước bị từ chối nay SẼ GHI) |
+| Q5 | GT: H4 KHÔNG đổi ngữ nghĩa; preview hiện GT + "sẽ gửi / bị tier thay / bị custom thay"; audit `gt: kept\|dropped\|none` |
+| Q6 | Custom prices: neo + defaultPrice luôn là giá file; bỏ yêu cầu entry currency app (cả Save gate) |
+| Q7 | US-stamp chỉ khi giá file là USD; quy đổi lỗi mà file không phải USD ⇒ từ chối dòng |
+| Q8 | **ĐỔI:** BỎ HẲN fallback legacy (`inappproducts.batchUpdate`) trên đường batch upsert (một phần D4); lỗi API mới báo nguyên văn, có cấu trúc. 5 chỗ fallback còn lại để chunk D4 |
+| Q9 | Execute kiểm lại từng dòng phía server (currency, độ chính xác giá + GT, cặp vùng/currency GT); sai ⇒ từ chối DÒNG; bỏ `priceHeaderSource` |
+| Q10 | Từ chối file >1 cột giá; `Price (XXX)` phải là currency Play có bán; GT sai độ chính xác báo ở preview; sửa CNY/ARS |
+
+Các bước: H4.0 (nhánh `arc-google-h4-file-currency-pricing` + T1 ghim hiện trạng) → H4.1 parser
+(`filePriceOf`, Q1, Q10) → H4.2 định giá preview + orchestrator cùng commit (Q2–Q8; **T1 lật**) →
+H4.3 execute + UI (Q9, Q5) → H4.4 audit + câu chữ. Push CHUNG một lượt sau H4.4.
+
+**H4.0 — T1** ([`bulk-import/file-currency-invariance.test.ts`](../../app/api/google-iap-management/apps/%5BpackageName%5D/bulk-import/file-currency-invariance.test.ts)):
+route preview + execute THẬT, parser, orchestrator, cross-currency, template queries, publisher
+client, adapter. Phía wizard dùng CHÍNH code của wizard: ánh xạ dòng preview, chọn tier ban đầu, gate
+Push (độ chính xác) và TOÀN BỘ body execute (`execute-payload.ts`), gate Save của custom prices
+(`customAppCurrencyGate`, `custom-prices.ts`) — tách ra ở H4.0, hành vi không đổi (kiểm chênh lệch
+trên 285 tổ hợp đầu vào). Một test jsdom của wizard bắt body fetch THẬT gửi tới execute và so với
+builder ⇒ wizard thêm/sửa gì sau builder (vd đóng dấu currency app vào `baseCurrency`) là ĐỎ.
+Giả: googleapis (không gửi gì), DB trong bộ nhớ (truy vấn chưa hỗ trợ / single() >1 dòng / thiếu tỷ
+giá giả ⇒ ghi lỗi, test đỏ), session, account + credentials, app row, mirror IAP RỖNG (⇒ mọi dòng là
+CREATE; Overwrite NGOÀI T1), audit, Hub. `convertRegionPrices` giả trả lại đúng giá vùng của neo — là
+tạo tác của bản giả, T1 KHÔNG chứng minh Google làm gì với vùng gốc.
+Ma trận 11 file × 3 nguồn giá × 4 currency app (USD, TWD, VND, không có) — gồm SKU trùng tên tier
+(F8), giá / GT sai độ chính xác (F9, F10), GT trên dòng template không khớp (F11). So sánh: gate Push
+và gate Save phía client, từ chối ở preview, dòng bị từ chối ở execute, neo `convertRegionPrices`,
+**toàn bộ** request `batchUpdate`, các lệnh đổi trạng thái purchase option. Hiện trạng ghim: **33/33**
+tổ hợp phụ thuộc currency app (`EXPECTED_GROUPS_TODAY`) + bảng 132 ô (`EXPECTED_TODAY`; ví dụ F7
+`US=TWD 30`, F8 tier của SKU chỉ được dùng khi app USD/NULL, F9 app TWD: Push bị chặn và gọi thẳng
+execute ⇒ 500). Bộ đếm mỗi lượt: ≤1 `batchUpdate`, 0 fallback legacy, 0 GET sản phẩm live.
+**Khi lật ở H4.2:** "mọi nhóm thành `NULL+TWD+USD+VND`" CHƯA ĐỦ (từ chối mọi dòng cũng đạt). H4.2 phải
+thay `EXPECTED_TODAY` bằng `EXPECTED_H4` suy ra TAY từ Q1–Q7 trước khi chạy, và thêm khẳng định theo
+luật: neo = currency + giá của header; không từ chối ngoài các ca Q1/Q7/Q9/Q10; vùng GT mang giá GT khi
+không khớp tier; custom xuất hiện nguyên văn; chặn suy biến (F3 ≠ F4 dưới google_default).
+**T1 KHÔNG phủ Q8** (v3 luôn thành công nên fallback không thể chạm tới): H4.2 thêm test riêng — v3 lỗi
+⇒ lỗi có cấu trúc trả nguyên văn, `inappproducts.batchUpdate` không bao giờ được gọi.

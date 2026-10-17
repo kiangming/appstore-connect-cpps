@@ -1007,3 +1007,62 @@ vẫn `failed=0` (chỉ log Railway `list fallback pkg=` cho biết); vòng phâ
 Wizard không chặn trước (`computePrecisionViolations` bỏ qua dòng không phải same_currency;
 CustomPricesDialog cho Save khi không có entry currency app dưới Google Conversion). Xử lý trong
 chunk H4 (currency trong file là nguồn duy nhất) — C2.1 không đổi logic định giá.
+
+---
+
+## `[GOOGLE-parser-sheet-offset-columns]` — sheet có vùng dữ liệu không bắt đầu ở cột A ⇒ mọi cột đọc lệch
+
+**GHI NHẬN 2026-10-17 (truy vết H4; ĐÃ CHẠY THỬ bằng `parseIapTemplate` thật).** Header được đánh số
+từ cột đầu vùng dữ liệu (`excel-parser.ts:385-386`: `for (let c = range.s.c; …) headerRow.push(…)`),
+nhưng ô lại được đọc theo vị trí đó như số cột TUYỆT ĐỐI (`:425` SKU, `:434` giá, `:444-445` GT). Đo:
+sheet có `!ref = "B1:C2"` (cột A trống) ⇒ **0 dòng**, không lỗi, chỉ cảnh báo "No data rows found
+after the header." — dòng bị bỏ im lặng ở `:426` (`if (sku === "") continue;`). Cùng dữ liệu nhưng
+`!ref` bắt đầu từ A ⇒ đọc đúng 1 dòng. Chỉ xảy ra khi thẻ `<dimension>` của file bắt đầu sau cột A
+(Excel ghi như vậy khi cột A trống). Bố cục khác có thể đọc giá / GT từ cột bên cạnh. Chưa có test nào
+với `range.s.c > 0`. Ngoài H4.
+
+---
+
+## `[GOOGLE-bulk-import-duplicate-sku]` — cùng một Product ID xuất hiện 2 lần trong file không bị chặn
+
+**GHI NHẬN 2026-10-17 (truy vết H4).** Không có chỗ khử trùng SKU ở parser, preview, execute,
+orchestrator hay wizard (grep `duplicate|seenSku|dedupe` trên 5 file đó: 0 kết quả). Hai dòng cùng
+SKU được gửi chung một batch; kết quả trên Google (một dòng thắng, hay cả batch bị từ chối — sau Q8
+không còn fallback đỡ): CHƯA BIẾT. Custom prices khoá theo SKU
+(`BulkImportWizard` → `execute-payload.ts` `state.customPrices[r.sku]`) nên một bộ custom áp cho cả
+hai dòng. Ngoài H4.
+
+---
+
+## `[GOOGLE-bulk-import-db-throws-outside-try]` — lỗi DB khi tra template ở execute làm hỏng CẢ batch
+
+**GHI NHẬN 2026-10-17 (truy vết H4).** Các lần tra template trong `executeBulkImport` nằm ngoài mọi
+try: `bulk-import.ts:553`, `:566`, `:599` (cross-currency), `:854` (tier đã chọn), `:898` (SKU),
+`:923` (probe); và hai lần đọc mức batch `:766` (`templateExists`) và `:786` (`findTemplateId`). Chỉ
+probe ở `:912` có bọc. Lỗi DB ⇒ cả request lỗi, `import_batches` kẹt
+`IN_PROGRESS`. Trong khi đó cảnh báo ở preview hứa "affected rows will be REFUSED at push time
+(per-row fail-soft)" (`preview/route.ts:440`) — sai. H4.2 xoá nhánh cross-currency (`:553-599`) và
+đổi lỗi GIÁ thành từ chối dòng; các lần tra template còn lại vẫn mở sau H4.
+
+---
+
+## `[GOOGLE-bulk-import-no-landed-price-check]` — bulk import không kiểm giá đã thật sự lên Google
+
+**GHI NHẬN 2026-10-17 (truy vết H4, bất đối xứng twin-structure — KB P8).** Sửa đơn lẻ so giá gửi với
+giá Google trả về (`update-iap.ts:284` `verifyPricingLanded`). Bulk import coi dòng là
+created/overwritten khi slot phản hồi khác null và `syncIapFromGoogle` chạy được
+(`bulk-import.ts:1183-1199`); không so sánh gì. Giá Google trả về được lưu vào `iap_prices`; giá GỬI
+chỉ còn giá VN của dòng template/custom (`per_row_diagnostic`), bảng giá gửi đầy đủ và neo không được
+lưu (H4.4 bổ sung neo vào audit). Ngoài H4.
+
+---
+
+## `[GOOGLE-single-edit-legacy-fallback-currency]` — fallback legacy của sửa đơn lẻ dùng currency cache của IAP
+
+**GHI NHẬN 2026-10-17 (truy vết H4).** Comment `update-iap.ts:272` nói "The app's configured currency,
+from cache", nhưng `:276` truyền `input.current.iap.default_currency` — currency của chính IAP, do
+adapter lấy từ vùng US (hoặc vùng đầu) của phản hồi Google, không phải `apps.default_currency`.
+`legacyFallbackBody` (`publisher-client.ts:686-701`) chỉ đổi `defaultPrice` khi currency khác giá trị
+đó VÀ bảng giá có một entry bằng currency đó ⇒ fallback căn defaultPrice theo currency vùng US của IAP thay vì currency app; app không phải USD
+⇒ API cũ nhận sai currency. Thuộc 5 chỗ fallback còn lại của chunk D4
+(Manager 2026-10-17: H4 chỉ bỏ fallback của đường batch upsert).

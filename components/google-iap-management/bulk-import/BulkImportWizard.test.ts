@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { computePrecisionViolations } from "./BulkImportWizard";
+import { computePrecisionViolations } from "./execute-payload";
 import type { PreviewRow } from "./BulkImportWizard";
 
 function row(overrides: Partial<PreviewRow>): PreviewRow {

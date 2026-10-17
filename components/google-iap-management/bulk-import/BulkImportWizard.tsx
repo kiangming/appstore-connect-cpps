@@ -21,9 +21,16 @@ import {
   CustomPricesDialog,
   type CustomPriceSet,
 } from "./CustomPricesDialog";
+import {
+  activeCustomSkuSet,
+  buildExecuteRequestBody,
+  buildExecuteRows,
+  computePrecisionViolations,
+  previewRowsFromResponse,
+  seedTierSelections,
+} from "./execute-payload";
 import { PricingSourceSelector } from "@/components/google-iap-management/iap-form/PricingSourceSelector";
 import { PRICING_SOURCE_LABELS } from "@/lib/google-iap-management/pricing-source-labels";
-import { validateDecimalForCurrency } from "@/lib/google-iap-management/google/currency-precision";
 import {
   googleIapTemplateSpec,
   GOOGLE_LOCALE_OPTIONS,
@@ -385,12 +392,7 @@ export function BulkImportWizard({
   /** The SKUs whose customs will actually ship: a saved set on a row that
    *  isn't set to Skip. */
   const activeCustomSkus = useMemo(
-    () =>
-      new Set(
-        previewRows
-          .filter((r) => customPrices[r.sku] && r.decision !== "skip")
-          .map((r) => r.sku),
-      ),
+    () => activeCustomSkuSet(previewRows, customPrices),
     [previewRows, customPrices],
   );
 
@@ -534,23 +536,10 @@ export function BulkImportWizard({
         }
         return;
       }
-      const rows: PreviewRow[] = (body.rows ?? []).map((r) => ({
-        ...r,
-        // Defensive defaults — older clients may not carry these fields.
-        tierCandidates: r.tierCandidates ?? [],
-        defaultTierSelection: r.defaultTierSelection ?? null,
-        tierMatchedBy: r.tierMatchedBy ?? "none",
-        decision: r.exists ? "create" : "create",
-      }));
+      const rows = previewRowsFromResponse(body.rows ?? []);
       // Hotfix 19: seed tierSelections — every row with candidates
       // starts on its primary tier (Q5.B). Manager can change via dropdown.
-      const seedSelections: Record<number, string> = {};
-      for (const r of rows) {
-        if (r.tierCandidates.length >= 1) {
-          const pick = r.defaultTierSelection ?? r.tierCandidates[0].identifier;
-          if (pick) seedSelections[r.rowNumber] = pick;
-        }
-      }
+      const seedSelections = seedTierSelections(rows);
       setPreviewRows(rows);
       setPreviewWarnings(body.warnings ?? []);
       setTierSelections(seedSelections);
@@ -737,80 +726,20 @@ export function BulkImportWizard({
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            pricingSource,
-            sourceFilename: file?.name ?? null,
-            // Threaded to the execute route's `finally` block, which
-            // closes the Hub run with the batch's terminal status. Null
-            // when no run was opened (tracking unconfigured/disabled,
-            // start failed, or the 1s cap won) — the route treats that
-            // identically to a missing field (no-op).
-            hub_run_id: runIdForExecute,
-            rows: previewRows.map((r) => ({
-              rowNumber: r.rowNumber,
-              sku: r.sku,
-              // Cycle 43 (2026-06-01): send the parser-resolved
-              // baseCurrency verbatim. Pre-Cycle-43 the wizard stomped
-              // this to appDefaultCurrency (Hotfix 4) so the legacy
-              // batchUpdate endpoint's "defaultPrice.currency == app
-              // currency" check would pass; Hotfix 14 migrated to the
-              // Monetization API which accepts per-row currency, and
-              // Cycle 43's orchestrator cross-currency pre-pass now
-              // honours the parser's explicit "Price (XXX)" declaration
-              // (header-first trigger) — the stomp obscured this and
-              // forced the value-based fallback even on explicit
-              // headers, which silently mishandled integer cross-
-              // currency values like "25 USD" → "25 VND".
-              baseCurrency: r.baseCurrency,
-              basePriceDecimal: r.basePriceDecimal,
-              regionOverrides: r.regionOverrides,
-              listings: r.listings,
-              decision: r.decision,
-              // Cycle 43 — forward parser header provenance so the
-              // orchestrator's pre-pass can choose explicit_header vs
-              // value_based trigger correctly. Default "inferred" when
-              // a stale preview response lacks the field.
-              priceHeaderSource: r.priceHeaderSource ?? "inferred",
-              // Hotfix 19: explicit tier selection (null when no
-              // template lookup applied). Orchestrator honours it
-              // verbatim — no silent fallback. The companion fields
-              // let the audit log distinguish:
-              //   - single_match           (1 candidate, no choice)
-              //   - default_accepted       (>1 candidates, primary kept)
-              //   - manager_explicit       (>1 candidates, override)
-              //   - no_candidates_auto_bootstrap (0 candidates)
-              chosenTierIdentifier:
-                tierSelections[r.rowNumber] ?? null,
-              defaultTierIdentifier: r.defaultTierSelection,
-              tierCandidateCount: r.tierCandidates.length,
-              // Phase 3 — per-item custom prices. Sent when the row has a
-              // saved set and is not set to Skip (activeCustomSkus encodes
-              // both).
-              //
-              // ⚠ SCOPE — the pricing source is deliberately NOT a
-              // condition here. This once read "…and the batch source is a
-              // template", because custom was template-only; custom now
-              // applies under ALL THREE sources, and under Google
-              // Conversion it is a sparse overlay on the base price. Adding
-              // a source condition back would silently stop sending
-              // customs on that path — the same shape of bug as the
-              // unqualified "no exception" defaultPrice comment, which
-              // cost two defects last cycle. Skip is the only deactivator.
-              customPrices: activeCustomSkus.has(r.sku)
-                ? (() => {
-                    const set = customPrices[r.sku];
-                    return {
-                      entries: set.entries,
-                      baselineTier:
-                        set.baseline.kind === "template"
-                          ? set.baseline.identifier
-                          : null,
-                      editedAt: set.editedAt,
-                    };
-                  })()
-                : null,
-            })),
-          }),
+          // ONE builder, shared with the route-level pricing test
+          // (execute-payload.ts) — nothing may be added or rewritten here.
+          body: JSON.stringify(
+            buildExecuteRequestBody({
+              pricingSource,
+              sourceFilename: file?.name ?? null,
+              hubRunId: runIdForExecute,
+              rows: buildExecuteRows(previewRows, {
+                tierSelections,
+                customPrices,
+                activeCustomSkus,
+              }),
+            }),
+          ),
         },
       );
       const body = (await res.json().catch(() => ({}))) as ExecuteResult & {
@@ -1430,28 +1359,6 @@ export function BulkImportWizard({
  *
  *  Skip-decision rows are excluded — they're not sent to Google so
  *  their numeric shape doesn't matter. */
-export function computePrecisionViolations(
-  previewRows: ReadonlyArray<PreviewRow>,
-): Array<{ rowNumber: number; sku: string; error: string }> {
-  const violations: Array<{ rowNumber: number; sku: string; error: string }> = [];
-  for (const row of previewRows) {
-    if (row.decision === "skip") continue;
-    if (!row.baseCurrency) continue;
-    // Cycle 43: cross-currency rows do NOT send the raw basePriceDecimal —
-    // they either resolve via template (push uses the resolved app-currency
-    // amount, not the raw USD anchor), need a chooser pick, or get refused
-    // (per-row fail-soft, also doesn't send raw). In all three cases the
-    // precision check doesn't apply because the raw value never reaches
-    // Google. Only same-currency rows are precision-gated.
-    const resolutionKind = row.resolution?.kind ?? "same_currency";
-    if (resolutionKind !== "same_currency") continue;
-    const err = validateDecimalForCurrency(row.basePriceDecimal, row.baseCurrency);
-    if (err) {
-      violations.push({ rowNumber: row.rowNumber, sku: row.sku, error: err });
-    }
-  }
-  return violations;
-}
 
 /**
  * H4.6 [2026-10-16] — how prices are read from the file TODAY. A description,

@@ -28,6 +28,12 @@ vi.mock("@/lib/xlsx-template", async (importOriginal) => {
 });
 
 import { BulkImportWizard } from "./BulkImportWizard";
+import {
+  buildExecuteRequestBody,
+  buildExecuteRows,
+  previewRowsFromResponse,
+  seedTierSelections,
+} from "./execute-payload";
 
 const START_URL = "/api/google-iap-management/hub-tracking/start";
 const CANCEL_URL = "/api/google-iap-management/hub-tracking/cancel";
@@ -1007,3 +1013,85 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     expect(screen.getByRole("button", { name: /^Preview/ })).toBeDisabled();
   });
 });
+
+/**
+ * H4.0 — the execute request the wizard REALLY sends (captured fetch body) is
+ * exactly the shared builder's output for the same preview response. The
+ * route-level pricing test (bulk-import/file-currency-invariance.test.ts)
+ * drives the execute route with that builder, so any post-processing added
+ * here — e.g. stamping the app currency into baseCurrency (the old Hotfix 4
+ * shape), or an extra envelope field — would silently make that test stop
+ * describing production. This test is what catches it.
+ */
+describe("BulkImportWizard (Google) — execute body = the shared builder's output (H4.0)", () => {
+  it("captured execute body deep-equals buildExecuteRequestBody(...) for the same preview rows", async () => {
+    const previewRows = [
+      {
+        rowNumber: 2,
+        sku: "sku.a",
+        baseCurrency: "USD",
+        basePriceDecimal: "0.99",
+        regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "26000" }],
+        listings: [],
+        exists: false,
+        priceHeaderSource: "explicit",
+        tierCandidates: [
+          { identifier: "Tier 1", templateId: "tpl", regionCount: 3, vnCurrency: "VND", vnPriceMicros: "25000000000", vnPriceDecimal: "25000" },
+        ],
+        defaultTierSelection: null,
+        tierMatchedBy: "currency_price",
+        resolution: { kind: "same_currency" },
+      },
+      {
+        rowNumber: 3,
+        sku: "sku.b",
+        baseCurrency: "TWD",
+        basePriceDecimal: "30",
+        regionOverrides: [],
+        listings: [],
+        exists: false,
+        tierCandidates: [],
+        defaultTierSelection: null,
+        tierMatchedBy: "none",
+      },
+    ];
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(AVAILABILITY_URL_FRAGMENT)) return Promise.resolve({ ok: false, json: async () => ({}) });
+      if (url.includes(START_URL)) return Promise.resolve({ ok: true, json: async () => ({ run_id: "run-guard" }) });
+      if (url.includes(CANCEL_URL)) return Promise.resolve({ ok: true, json: async () => ({}) });
+      if (url.includes(PREVIEW_URL_FRAGMENT)) {
+        return Promise.resolve({ ok: true, json: async () => ({ rows: previewRows, warnings: [], appCurrency: "USD" }) });
+      }
+      if (url.includes(EXECUTE_URL_FRAGMENT)) return Promise.resolve(successExecuteResponse());
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { container } = renderWizard();
+    await goToPreviewAndAdoptRun(container, fetchMock);
+    await clickExecuteAndSettle();
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some((c) => String(c[0]).includes(EXECUTE_URL_FRAGMENT))).toBe(true),
+    );
+    const executeCall = fetchMock.mock.calls.find((c) => String(c[0]).includes(EXECUTE_URL_FRAGMENT))!;
+    const executeBody = JSON.parse((executeCall[1] as RequestInit).body as string);
+
+    const rows = previewRowsFromResponse(previewRows as Parameters<typeof previewRowsFromResponse>[0]);
+    const expected = buildExecuteRequestBody({
+      pricingSource: "google_default",
+      sourceFilename: "items.xlsx",
+      hubRunId: "run-guard",
+      rows: buildExecuteRows(rows, {
+        tierSelections: seedTierSelections(rows),
+        customPrices: {},
+        activeCustomSkus: new Set(),
+      }),
+    });
+    expect(executeBody).toEqual(JSON.parse(JSON.stringify(expected)));
+    // The builder really was exercised on both branches it encodes.
+    expect(executeBody.rows[0].chosenTierIdentifier).toBe("Tier 1");
+    expect(executeBody.rows[1].priceHeaderSource).toBe("inferred");
+  });
+});
+
