@@ -513,6 +513,32 @@ describe("B — the C2.1 backfill of iaps_last_synced_at reads the audit log ONC
     );
   });
 
+  it("C2.1a: the refresh route's stamp rule and the backfill share ONE definition of 'the mirror holds items'", () => {
+    // TS side: countLiveMirrorItems = this app's iaps rows not flagged deleted.
+    const iaps = code.get("lib/google-iap-management/repository/iaps.ts") as string;
+    const fnStart = iaps.indexOf("export async function countLiveMirrorItems(");
+    expect(fnStart).toBeGreaterThan(0);
+    const fn = iaps.slice(fnStart, iaps.indexOf("\n}\n", fnStart));
+    expect(fn).toMatch(/\.from\("iaps"\)/);
+    expect(fn).toMatch(/\.eq\("app_id", appId\)/);
+    expect(fn).toMatch(/\.is\("deleted_on_google_at", null\)/);
+    // SQL side: the backfill guard + the dry-run's n_live use the same predicate.
+    expect(sql).toMatch(/WHERE i\.app_id = a\.id AND i\.deleted_on_google_at IS NULL/);
+    const verify = readFileSync(join(ROOT, VERIFY), "utf8");
+    expect(verify).toContain("COUNT(*) FILTER (WHERE i.deleted_on_google_at IS NULL) AS n_live");
+    // The route asks the ONE rule; it does not keep a private one.
+    const route = code.get("app/api/google-iap-management/apps/[packageName]/iaps/refresh/route.ts") as string;
+    expect(route).toMatch(/decideMirrorStamp\(\{ fetched: products\.length, failed, liveMirrorItems \}\)/);
+    expect(route).toMatch(/products\.length === 0 \? await countLiveMirrorItems\(app\.id\) : null/);
+    expect(route).not.toMatch(/failed === 0/);
+    // No private condition on `failed` beside the decision, in any spelling
+    // (review M7d: `const noFailures = failed < 1` slipped past a literal pin).
+    expect(route).toMatch(/const mirrorComplete = stampDecision\.stamp;/);
+    expect(route).not.toMatch(/\bfailed\s*(===?|!==?|<=?|>=?)|!\s*failed\b|\bfailed\s*\?/);
+    expect(route.match(/markIapsMirrorSynced\(/g)).toHaveLength(1);
+    expect(route).toMatch(/if \(stampDecision\.stamp\) \{\s*iapsLastSyncedAt = new Date\(\)\.toISOString\(\);\s*await markIapsMirrorSynced/);
+  });
+
   it("the C1 column stays written by the refresh route; no code path re-derives it from actions_log", () => {
     const offenders = [...code]
       .filter(([, src]) => /IAPS_LIST_SYNC/.test(src))

@@ -211,17 +211,20 @@ export function BulkImportWizard({
         failed?: number;
         mirror_complete?: boolean;
         mirror_synced_at?: string | null;
+        mirror_warning?: string | null;
       };
       if (!res.ok) {
         setMirrorRefreshError(body.error ?? `Refresh failed (HTTP ${res.status}).`);
         return;
       }
       if (!body.mirror_complete || !body.mirror_synced_at) {
-        // ⚠ A 200 with failed rows is NOT a usable mirror — say so instead of
-        // unblocking (P5: the status must reflect the real outcome).
+        // ⚠ A 200 that did not stamp is NOT a usable mirror — say WHY (the
+        // server's reason: failed rows, or an empty answer from Google next to
+        // a populated mirror) instead of unblocking (P5).
         setMirrorRefreshError(
-          `Refresh finished with ${body.failed ?? "some"} item(s) that could not be cached — ` +
-            `the IAP list is not complete yet. Try Refresh again.`,
+          body.mirror_warning ??
+            `Refresh finished with ${body.failed ?? "some"} item(s) that could not be cached — ` +
+              `the IAP list is not complete yet. Try Refresh again.`,
         );
         return;
       }

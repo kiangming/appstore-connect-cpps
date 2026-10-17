@@ -72,6 +72,33 @@ export async function listIapsForApp(appId: string): Promise<IapRow[]> {
 }
 
 /**
+ * "The mirror holds items" — the number of this app's mirror rows NOT flagged
+ * deleted-on-Google. ONE definition, shared by:
+ *   • the IAP refresh route's stamp decision (decideMirrorStamp): an EMPTY list
+ *     from Google while this is > 0 is not a complete refresh (chunk C2.1a);
+ *   • the one-time backfill 20261016020000 (`i.deleted_on_google_at IS NULL`)
+ *     and its dry-run D1 (`n_live`).
+ * app-defaults.structural.test.ts (block B) pins that they stay the same.
+ *
+ * ⚠ THROWS on a read error — "could not count" must never read as 0 (that
+ *   would stamp an empty Google answer as complete).
+ */
+export async function countLiveMirrorItems(appId: string): Promise<number> {
+  const { count, error } = await googleIapDb()
+    .from("iaps")
+    .select("id", { count: "exact", head: true })
+    .eq("app_id", appId)
+    .is("deleted_on_google_at", null);
+  if (error) {
+    throw new Error(`Failed to count the app's IAP mirror rows: ${error.message}`);
+  }
+  if (typeof count !== "number") {
+    throw new Error("Failed to count the app's IAP mirror rows: no count returned.");
+  }
+  return count;
+}
+
+/**
  * ID-chunk size for `.in("iap_id", …)` filters. supabase-js does NOT chunk
  * `.in()`, so a large id set produces one oversized request whose query
  * string exceeds the Supabase gateway's ~8 KB URI limit → the request

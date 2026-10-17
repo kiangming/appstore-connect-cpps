@@ -752,6 +752,56 @@ describe("BulkImportWizard (Google) — D0/D3 IAP mirror sync gate", () => {
     expect(routerRefresh).not.toHaveBeenCalled();
   });
 
+  it("C2.1a: Refresh answered 200 with an EMPTY list over a populated mirror ⇒ shows the server's reason, stays blocked", async () => {
+    installMirrorFetch({
+      refresh: () => ({
+        ok: true,
+        json: async () => ({
+          ok: true, synced: 0, failed: 0, total: 0,
+          mirror_complete: false, mirror_synced_at: null,
+          mirror_not_complete_reason: "EMPTY_LIST_WITH_MIRROR_ITEMS",
+          mirror_warning:
+            "Google returned an EMPTY IAP list while the tool holds 16 item(s) for this app — not counted as a complete refresh (the last-complete-refresh time was not updated). If this app has never been refreshed completely, bulk import stays blocked; otherwise it keeps using the list from its last complete refresh.",
+        }),
+      }),
+    });
+    renderWizard({ iapsLastSyncedAt: null });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Refresh IAP list/ }));
+    });
+    const banner = await screen.findByTestId("mirror-sync-banner");
+    await waitFor(() => expect(banner).toHaveTextContent(/EMPTY IAP list while the tool holds 16 item\(s\)/));
+    // Not the failed-rows sentence — that would send the Manager hunting for failures.
+    expect(banner).not.toHaveTextContent(/could not be cached/);
+    expect(banner).toHaveAttribute("data-state", "never");
+    expect(routerRefresh).not.toHaveBeenCalled();
+  });
+
+  it("C2.1a: same EMPTY-list answer on an app refreshed completely BEFORE ⇒ banner stays 'synced', Preview stays open, text tells both cases", async () => {
+    installMirrorFetch({
+      refresh: () => ({
+        ok: true,
+        json: async () => ({
+          ok: true, synced: 0, failed: 0, total: 0,
+          mirror_complete: false, mirror_synced_at: null,
+          mirror_not_complete_reason: "EMPTY_LIST_WITH_MIRROR_ITEMS",
+          mirror_warning:
+            "Google returned an EMPTY IAP list while the tool holds 16 item(s) for this app — not counted as a complete refresh (the last-complete-refresh time was not updated). If this app has never been refreshed completely, bulk import stays blocked; otherwise it keeps using the list from its last complete refresh.",
+        }),
+      }),
+    });
+    const { container } = renderWizard(); // stamped at 2026-10-16T03:25:10Z
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Refresh IAP list/ }));
+    });
+    const banner = await screen.findByTestId("mirror-sync-banner");
+    await waitFor(() => expect(banner).toHaveTextContent(/not counted as a complete refresh/));
+    expect(banner).toHaveAttribute("data-state", "synced");
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
+  });
+
   it("server says IAPS_NEVER_SYNCED (stale page) ⇒ the wizard re-blocks instead of trusting its page-load state", async () => {
     installMirrorFetch({
       preview: () => ({

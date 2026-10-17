@@ -66,7 +66,11 @@ const fakeDb = vi.hoisted(() => {
 vi.mock("@/lib/google-iap-management/db", () => ({ googleIapDb: () => ({ from: fakeDb.from }) }));
 
 const batchSyncIapsFromGoogle = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/google-iap-management/repository/iaps", () => ({ batchSyncIapsFromGoogle }));
+const countLiveMirrorItems = vi.hoisted(() => vi.fn(async () => 0));
+vi.mock("@/lib/google-iap-management/repository/iaps", () => ({
+  batchSyncIapsFromGoogle,
+  countLiveMirrorItems,
+}));
 
 const appendAction = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/google-iap-management/repository/actions-log", () => ({ appendAction }));
@@ -110,6 +114,7 @@ beforeEach(() => {
   resolveActiveAccountId.mockReset().mockReturnValue("acc1");
   jwtClientFromEncrypted.mockReset().mockReturnValue({});
   appendAction.mockReset().mockResolvedValue(undefined);
+  countLiveMirrorItems.mockReset().mockResolvedValue(0);
   // Products carrying exactly what Hotfix 4 used to copy onto the app row.
   listInAppProducts.mockReset().mockResolvedValue([
     {
@@ -142,6 +147,17 @@ describe("IAP refresh — D9: the only write to the apps row is the D0 sync stam
 
   it("incomplete refresh (failed > 0) ⇒ NO write to the apps row at all", async () => {
     batchSyncIapsFromGoogle.mockResolvedValue({ synced: 1, failed: 1, flagReconcile: noFlags });
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(200);
+    expect(fakeDb.state.writes.filter((w) => w.table === "apps")).toEqual([]);
+  });
+
+  it("C2.1a: EMPTY list over a populated mirror ⇒ ZERO writes to the apps row (no stamp)", async () => {
+    listInAppProducts.mockResolvedValue([]);
+    countLiveMirrorItems.mockResolvedValue(16);
+    batchSyncIapsFromGoogle.mockResolvedValue({
+      synced: 0, failed: 0, flagReconcile: { ...noFlags, skippedReason: "empty_response" },
+    });
     const res = await POST(req(), ctx);
     expect(res.status).toBe(200);
     expect(fakeDb.state.writes.filter((w) => w.table === "apps")).toEqual([]);

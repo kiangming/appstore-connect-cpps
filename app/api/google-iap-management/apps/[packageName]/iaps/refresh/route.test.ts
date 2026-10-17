@@ -2,11 +2,13 @@
  * D0 [arc-google-missing-purchase-options] — the IAP refresh route is the ONLY
  * writer of apps.iaps_last_synced_at, and it stamps ONLY a complete mirror.
  *
- * Why the rule is "full list fetched AND failed === 0": bulk import treats a
- * stamped mirror as the truth about which SKUs exist. A refresh that left some
- * products out of the mirror (failed > 0) would make those SKUs preview as
- * NEW — the incident shape. Census also measured that a refresh can answer
- * 200 {ok:true, synced:0, failed:28}; that must not unblock bulk import.
+ * The rule lives in decideMirrorStamp (bulk-import-mirror-gate.ts). Why it
+ * refuses failed rows: bulk import treats a stamped mirror as the truth about
+ * which SKUs exist; a refresh that left some products out of the mirror
+ * (failed > 0) would make those SKUs preview as NEW — the incident shape.
+ * Census also measured that a refresh can answer 200 {ok:true, synced:0,
+ * failed:28}; that must not unblock bulk import. C2.1a adds: an EMPTY answer
+ * over a populated mirror is not complete either (block at the end).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -29,7 +31,11 @@ vi.mock("@/lib/google-iap-management/repository/apps", () => ({
 }));
 
 const batchSyncIapsFromGoogle = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/google-iap-management/repository/iaps", () => ({ batchSyncIapsFromGoogle }));
+const countLiveMirrorItems = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/google-iap-management/repository/iaps", () => ({
+  batchSyncIapsFromGoogle,
+  countLiveMirrorItems,
+}));
 
 const appendAction = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/google-iap-management/repository/actions-log", () => ({ appendAction }));
@@ -67,6 +73,7 @@ beforeEach(() => {
   batchSyncIapsFromGoogle
     .mockReset()
     .mockResolvedValue({ synced: 28, failed: 0, flagReconcile: noFlags });
+  countLiveMirrorItems.mockReset().mockResolvedValue(0);
 });
 
 describe("IAP refresh — D0 stamps only a complete mirror", () => {
@@ -110,5 +117,109 @@ describe("IAP refresh — D0 stamps only a complete mirror", () => {
     expect(body.error).toMatch(/expected 1 app row updated, got 0/);
     // The sync itself happened and is audited before the stamp is attempted.
     expect(appendAction).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * C2.1a — an EMPTY answer from Google next to a populated mirror is not a
+ * complete refresh (tamquoc.chienky, 2026-10-12: empty_response, mirror 16).
+ * Same "mirror holds items" definition as the one-time backfill.
+ */
+describe("IAP refresh — C2.1a: an empty list from Google never stamps over a populated mirror", () => {
+  const emptySync = { synced: 0, failed: 0, flagReconcile: { ...noFlags, skippedReason: "empty_response" } };
+
+  it("0 products + mirror holds 16 live items ⇒ NO stamp, said out loud (response, log, audit)", async () => {
+    listInAppProducts.mockResolvedValue([]);
+    countLiveMirrorItems.mockResolvedValue(16);
+    batchSyncIapsFromGoogle.mockResolvedValue(emptySync);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(200);
+    expect(markIapsMirrorSynced).not.toHaveBeenCalled();
+    const body = (await res.json()) as {
+      mirror_complete: boolean;
+      mirror_synced_at: string | null;
+      mirror_not_complete_reason: string | null;
+      mirror_warning: string | null;
+    };
+    expect(body.mirror_complete).toBe(false);
+    expect(body.mirror_synced_at).toBeNull();
+    expect(body.mirror_not_complete_reason).toBe("EMPTY_LIST_WITH_MIRROR_ITEMS");
+    expect(body.mirror_warning).toMatch(/EMPTY IAP list while the tool holds 16 item\(s\)/);
+    expect(body.mirror_warning).toMatch(/not counted as a complete refresh \(the last-complete-refresh time was not updated\)/);
+    expect(warn.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(
+      /NOT stamping pkg=com\.vnggames\.ballisticherotwid reason=EMPTY_LIST_WITH_MIRROR_ITEMS .*mirror_live_before=16/,
+    );
+    const audit = appendAction.mock.calls[0][0] as { payload: Record<string, unknown> };
+    expect(audit.payload.stamp_decision).toBe("skip:EMPTY_LIST_WITH_MIRROR_ITEMS");
+    expect(audit.payload.mirror_live_items_before).toBe(16);
+    warn.mockRestore();
+  });
+
+  it("the mirror is measured for THIS app row, BEFORE the sync touches it", async () => {
+    listInAppProducts.mockResolvedValue([]);
+    countLiveMirrorItems.mockResolvedValue(16);
+    batchSyncIapsFromGoogle.mockResolvedValue(emptySync);
+    await POST(req(), ctx);
+    expect(countLiveMirrorItems).toHaveBeenCalledWith("app-1");
+    expect(countLiveMirrorItems.mock.invocationCallOrder[0]).toBeLessThan(
+      batchSyncIapsFromGoogle.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("0 products + EMPTY mirror (the app genuinely has none, e.g. vng.g8.Phim) ⇒ STAMPS", async () => {
+    listInAppProducts.mockResolvedValue([]);
+    countLiveMirrorItems.mockResolvedValue(0);
+    batchSyncIapsFromGoogle.mockResolvedValue(emptySync);
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(200);
+    expect(markIapsMirrorSynced).toHaveBeenCalledTimes(1);
+    const body = (await res.json()) as { mirror_complete: boolean; mirror_warning: string | null };
+    expect(body.mirror_complete).toBe(true);
+    expect(body.mirror_warning).toBeNull();
+  });
+
+  it("a non-empty list never pays for the count, and stamps as before", async () => {
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(200);
+    expect(countLiveMirrorItems).not.toHaveBeenCalled();
+    expect(markIapsMirrorSynced).toHaveBeenCalledTimes(1);
+    const audit = appendAction.mock.calls[0][0] as { payload: Record<string, unknown> };
+    expect(audit.payload.stamp_decision).toBe("stamp");
+  });
+
+  it("the mirror COUNT could not be read ⇒ 500, nothing synced, NO stamp ('could not count' ≠ 0)", async () => {
+    listInAppProducts.mockResolvedValue([]);
+    countLiveMirrorItems.mockRejectedValue(new Error("Failed to count the app's IAP mirror rows: timeout"));
+    const res = await POST(req(), ctx);
+    expect(res.status).toBe(500);
+    expect(markIapsMirrorSynced).not.toHaveBeenCalled();
+    expect(batchSyncIapsFromGoogle).not.toHaveBeenCalled();
+    expect(((await res.json()) as { error?: string }).error).toMatch(/count the app's IAP mirror rows/);
+  });
+
+  it("failed rows ⇒ no stamp with the FAILED_ROWS reason (the earlier rule, now from the same decision)", async () => {
+    batchSyncIapsFromGoogle.mockResolvedValue({ synced: 27, failed: 1, flagReconcile: noFlags });
+    const res = await POST(req(), ctx);
+    const body = (await res.json()) as { mirror_not_complete_reason: string | null; mirror_warning: string | null };
+    expect(body.mirror_not_complete_reason).toBe("FAILED_ROWS");
+    expect(body.mirror_warning).toMatch(/1 item\(s\) that could not be cached/);
+    expect(markIapsMirrorSynced).not.toHaveBeenCalled();
+    // The audit records the REAL reason — not a hard-coded one (P5).
+    const audit = appendAction.mock.calls[0][0] as { payload: Record<string, unknown> };
+    expect(audit.payload.stamp_decision).toBe("skip:FAILED_ROWS");
+    expect(audit.payload.mirror_live_items_before).toBeNull();
+  });
+
+  it("boundary: 0 products + exactly ONE live mirror item ⇒ still NO stamp", async () => {
+    listInAppProducts.mockResolvedValue([]);
+    countLiveMirrorItems.mockResolvedValue(1);
+    batchSyncIapsFromGoogle.mockResolvedValue(emptySync);
+    const res = await POST(req(), ctx);
+    expect(markIapsMirrorSynced).not.toHaveBeenCalled();
+    const body = (await res.json()) as { mirror_not_complete_reason: string | null; mirror_warning: string | null };
+    expect(body.mirror_not_complete_reason).toBe("EMPTY_LIST_WITH_MIRROR_ITEMS");
+    // The sentence must be true for an app stamped earlier too: no unconditional "blocked".
+    expect(body.mirror_warning).toMatch(/If this app has never been refreshed completely, bulk import stays blocked; otherwise it keeps using the list from its last complete refresh/);
   });
 });

@@ -36,11 +36,12 @@
 -- today. Value = that row's created_at (DB clock; the route stamps with the app
 -- clock milliseconds later).
 --
--- ⚠ DIFFERS FROM THE REFRESH ROUTE, which stamps whenever failed === 0
---   (iaps/refresh/route.ts): a complete refresh that found 0 products does NOT
---   qualify here (Manager's wording "synced > 0"), and the degraded / era /
---   package / non-empty guards are extra. Every app they exclude stays NULL ⇒
---   one Refresh click after deploy. Reported to the Manager, not hidden.
+-- ⚠ DIFFERS FROM THE REFRESH ROUTE (decideMirrorStamp, bulk-import-mirror-gate.ts),
+--   which stamps when no row failed AND Google's list is non-empty OR the mirror
+--   is empty (C2.1a: an empty list over a populated mirror is NOT complete). Here
+--   EVERY 0-product refresh is excluded (Manager's wording "synced > 0"), and the
+--   degraded / era / package / non-empty guards are extra. Every app they exclude
+--   stays NULL ⇒ one Refresh click after deploy. Reported to the Manager, not hidden.
 -- ⚠ failed = 0 cannot prove a FULL list when the new API threw and the legacy
 --   fallback answered (a subset is possible; nothing in the audit row says so —
 --   only Railway logs: "[google-iap:publisher] list fallback pkg=…").
@@ -117,8 +118,9 @@ COMMENT ON COLUMN google_iap_mgmt.apps.default_language_source IS
   'NULL iff default_language IS NULL.';
 
 COMMENT ON COLUMN google_iap_mgmt.apps.iaps_last_synced_at IS
-  'Last COMPLETE IAP Refresh (full list fetched, 0 rows failed). NULL = the IAP '
-  'list of this app row was never refreshed completely: bulk import is blocked (D0). '
-  'Written by the IAP refresh route. Backfilled ONCE by 20261016020000 from '
-  'IAPS_LIST_SYNC history (full refresh, synced>0, failed=0, total=synced, not '
-  'degraded, created_at >= 2026-05-21 14:52:44 UTC, mirror non-empty); never re-derived.';
+  'Last COMPLETE IAP Refresh (full list fetched, 0 rows failed, and not an empty list over '
+  'a populated mirror). NULL = the IAP list of this app row was never refreshed completely: '
+  'bulk import is blocked (D0). Written by the IAP refresh route (decideMirrorStamp). '
+  'Backfilled ONCE by 20261016020000 from IAPS_LIST_SYNC history (full refresh, synced>0, '
+  'failed=0, total=synced, not degraded, created_at >= 2026-05-21 14:52:44 UTC, mirror '
+  'non-empty); never re-derived.';

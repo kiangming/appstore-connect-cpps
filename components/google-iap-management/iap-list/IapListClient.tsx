@@ -98,6 +98,9 @@ export function IapListClient({
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
+  // C2.1a — the refresh ran but did not count as a COMPLETE refresh (the
+  // last-complete-refresh time was not updated): the server says why.
+  const [refreshWarning, setRefreshWarning] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [exportSummary, setExportSummary] = useState<string | null>(null);
@@ -148,6 +151,7 @@ export function IapListClient({
     setRefreshing(true);
     setRefreshError(null);
     setRefreshSummary(null);
+    setRefreshWarning(null);
     try {
       const res = await fetchWithTimeout(
         `/api/google-iap-management/apps/${encodeURIComponent(packageName)}/iaps/refresh`,
@@ -162,6 +166,8 @@ export function IapListClient({
         flagged?: number;
         unflagged?: number;
         error?: string;
+        mirror_complete?: boolean;
+        mirror_warning?: string | null;
       };
       if (!res.ok) {
         setRefreshError(body.error ?? `Refresh failed (HTTP ${res.status}).`);
@@ -177,6 +183,9 @@ export function IapListClient({
           body.failed ? ` (${body.failed} failed)` : ""
         }${flaggedNote}.`,
       );
+      if (body.mirror_complete === false && body.mirror_warning) {
+        setRefreshWarning(body.mirror_warning);
+      }
     } catch (err) {
       setRefreshError(describeRefreshError(err));
     } finally {
@@ -463,8 +472,27 @@ export function IapListClient({
         </div>
       )}
       {refreshSummary && (
-        <div className="mb-4 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+        // Green only for a refresh that COUNTED as complete (P5): with a
+        // warning the outcome is not a success, so the summary goes neutral.
+        <div
+          data-testid="refresh-summary"
+          data-state={refreshWarning ? "incomplete" : "complete"}
+          className={`mb-4 text-sm rounded-lg px-3 py-2 border ${
+            refreshWarning
+              ? "text-slate-700 bg-slate-50 border-slate-200"
+              : "text-emerald-700 bg-emerald-50 border-emerald-200"
+          }`}
+        >
           {refreshSummary}
+        </div>
+      )}
+      {refreshWarning && (
+        <div
+          data-testid="refresh-mirror-warning"
+          className="mb-4 flex items-start gap-2 text-sm text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2"
+        >
+          <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+          <span>{refreshWarning}</span>
         </div>
       )}
       {exportError && (

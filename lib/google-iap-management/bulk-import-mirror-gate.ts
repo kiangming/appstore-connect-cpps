@@ -77,6 +77,71 @@ export function bulkImportGateRefusal(
   };
 }
 
+/**
+ * C2.1a — the ONE rule for whether an IAP Refresh may stamp
+ * apps.iaps_last_synced_at (the gate's only input). The refresh route asks;
+ * nothing else decides.
+ *
+ *   failed > 0                          → no stamp: some products did not reach the mirror.
+ *   0 products AND the mirror holds N>0 → no stamp: an empty answer from Google next to
+ *                                         a populated mirror is a suspicious read, not
+ *                                         proof the app has nothing (tamquoc.chienky,
+ *                                         2026-10-12: empty_response, mirror 16).
+ *   0 products AND an empty mirror      → stamp: the app genuinely has no items.
+ *   otherwise                           → stamp.
+ * "The mirror holds items" = countLiveMirrorItems (rows not flagged deleted on
+ * Google) — the same definition the one-time backfill uses.
+ */
+export const STAMP_SKIPPED_FAILED_ROWS = "FAILED_ROWS" as const;
+export const STAMP_SKIPPED_EMPTY_LIST = "EMPTY_LIST_WITH_MIRROR_ITEMS" as const;
+
+export type MirrorStampDecision =
+  | { stamp: true }
+  | {
+      stamp: false;
+      reason: typeof STAMP_SKIPPED_FAILED_ROWS | typeof STAMP_SKIPPED_EMPTY_LIST;
+      message: string;
+    };
+
+export function decideMirrorStamp(args: {
+  fetched: number;
+  failed: number;
+  /** Measured only when `fetched === 0`; null otherwise. */
+  liveMirrorItems: number | null;
+}): MirrorStampDecision {
+  if (args.failed > 0) {
+    return {
+      stamp: false,
+      reason: STAMP_SKIPPED_FAILED_ROWS,
+      message:
+        `Refresh finished with ${args.failed} item(s) that could not be cached — the IAP ` +
+        `list is not complete yet. Try Refresh again.`,
+    };
+  }
+  if (args.fetched === 0) {
+    if (args.liveMirrorItems === null) {
+      // A caller that skipped the measurement must not get a stamp by default.
+      throw new Error("decideMirrorStamp: liveMirrorItems must be measured when Google returned 0 products.");
+    }
+    if (args.liveMirrorItems > 0) {
+      return {
+        stamp: false,
+        reason: STAMP_SKIPPED_EMPTY_LIST,
+        // ⚠ True whether or not the app was refreshed completely before: the
+        //   gate only needs SOME complete refresh, and a skipped stamp never
+        //   clears an earlier one (review C2.1a). The wizard banner shows which.
+        message:
+          `Google returned an EMPTY IAP list while the tool holds ${args.liveMirrorItems} item(s) ` +
+          `for this app — not counted as a complete refresh (the last-complete-refresh time was ` +
+          `not updated). If this app has never been refreshed completely, bulk import stays ` +
+          `blocked; otherwise it keeps using the list from its last complete refresh. Check the ` +
+          `app on Play Console (and the service account's access), then Refresh again.`,
+      };
+    }
+  }
+  return { stamp: true };
+}
+
 export function neverSyncedMessage(packageName: string): string {
   return (
     `The IAP list of ${packageName} has no complete refresh from Google on record, so the ` +

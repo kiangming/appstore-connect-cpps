@@ -240,7 +240,8 @@ export async function declareAppDefault(
 
 /**
  * D0 — stamp a COMPLETE IAP Refresh. Only the IAP refresh route calls this,
- * and only when the full list was fetched AND `failed === 0`.
+ * and only when decideMirrorStamp (bulk-import-mirror-gate.ts) says the
+ * refresh was complete.
  *
  * ⚠ Verifies that exactly ONE row was written (KB §9 P2: a write nobody
  *   inspects fails silently). 0 rows ⇒ throw — the mirror would otherwise

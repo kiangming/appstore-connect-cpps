@@ -8869,3 +8869,52 @@ tiến trình trước, đừng tin là rảnh — kể cả khi chính mình v�
   effect đọc nó, nhưng yêu cầu "override ở step 3 đổi tập đọc" thực tế được bảo
   đảm bởi **điều hướng step**. Khai rõ thay vì để người sau tưởng dòng deps đó
   đang gác cái gì.
+
+## §35 — Google bulk import trên một mirror CHƯA TỪNG đọc (arc `arc-google-missing-purchase-options`, 2026-10-17)
+
+**Nguồn đầy đủ:** [`docs/google-iap-management/design-bulk-import-existence-overwrite-safety.md`](../google-iap-management/design-bulk-import-existence-overwrite-safety.md)
+§5.6 (số đo prod) · migration `20261016020000` (luật backfill) ·
+[`queries/verify-c1-c2-migrations.sql`](../google-iap-management/queries/verify-c1-c2-migrations.sql).
+
+### 35.1 ĐÃ ĐO: 5/7 app lệch currency chưa từng có một lần Refresh IAP đầy đủ
+
+Dry-run backfill trên prod (Manager chạy, 2026-10-17, 271 hàng app). Trong 7 app có currency lệch,
+**5** không có lượt Refresh đầy đủ nào trong lịch sử `IAPS_LIST_SYNC`:
+
+| App | Mirror (item chưa đánh dấu xoá) | Ghi chú |
+|---|---|---|
+| `com.vng.codmvn` | 28 | chưa từng Refresh |
+| `gdo.projectx5` | 27 | chưa từng Refresh |
+| `vng.games.tamquoc.chienky` | 16 | lượt duy nhất 2026-10-12 trả **0 sản phẩm** (`empty_response`) |
+| `com.gs2.omg` | 5 | chưa từng Refresh |
+| `vnggames.ananta.vn` | 3 | chưa từng Refresh |
+
+⇒ Mirror của 5 app này chỉ chứa hàng do chính tool tạo. **Mọi lượt bulk import cũ của chúng đã chạy
+trên một mirror chưa từng được đọc từ Google.** Đó đúng là hình dạng sự cố 彈彈英雄: SKU đã có trên
+Google nhưng mirror không biết ⇒ bị coi là NEW ⇒ CREATE ⇒ Google từ chối. Sau deploy C1 + C2 + C2.1
+cả 5 bị gate D0 chặn tới khi Refresh thành công. Đây là chủ ý, không phải hồi quy.
+
+### 35.2 ⭐ "Google trả rỗng" ≠ "đã đọc đầy đủ" (C2.1a)
+
+Cùng họ với D0 (*chưa từng đọc ≠ đọc ra rỗng*), nhưng ở phía ghi dấu. Trước C2.1a, route Refresh
+đóng dấu `iaps_last_synced_at` khi `failed === 0`. Một list rỗng có `failed = 0` (0 dòng thì 0 dòng
+lỗi), nên chienky sẽ được đóng dấu "đầy đủ" trên một lượt đọc trả 0 trong khi tool đang giữ 16 item.
+
+- **Luật (một chỗ, P1):** `decideMirrorStamp` (`lib/google-iap-management/bulk-import-mirror-gate.ts`).
+  Không đóng dấu khi `failed > 0`, hoặc khi Google trả 0 sản phẩm mà mirror còn item. Mirror rỗng
+  cộng Google rỗng thì **vẫn** đóng dấu (`vng.g8.Phim`).
+- **Một định nghĩa "mirror còn item":** `countLiveMirrorItems` (`repository/iaps.ts`), là
+  `deleted_on_google_at IS NULL`. Định nghĩa này trùng điều kiện của backfill và cột `n_live` của D1.
+  Test structural ghim cả hai phía.
+- **Đếm TRƯỚC khi sync.** Sau sync thì con số đã là của lượt đọc đang bị phán xét. Đếm lỗi ⇒ 500,
+  không sync, không đóng dấu. Không đoán thành 0.
+- **Không im lặng (P5):** lượt không được đóng dấu để lại 4 dấu vết:
+  - log `[google-iap:iap-refresh] NOT stamping …`;
+  - audit `stamp_decision: skip:<lý do>` cùng `mirror_live_items_before`;
+  - response `mirror_warning`;
+  - cảnh báo amber trên wizard và trên trang app; tóm tắt của trang app chuyển sang màu trung tính.
+- **Không thu hồi:** lượt không tính không xoá dấu của một lượt đầy đủ trước đó. App đã từng
+  Refresh đầy đủ vẫn import được trên list của lượt đó, và câu cảnh báo nói đúng cả hai trường hợp.
+
+⚠ Còn mở (C6 / D5): một lượt đọc `incoming_below_50pct_of_cached` vẫn được đóng dấu; fallback legacy
+có thể trả tập con; vòng phân trang dừng im lặng sau 100 trang (`[GOOGLE-refresh-stamps-degraded-read]`).

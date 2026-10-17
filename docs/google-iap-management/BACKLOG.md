@@ -991,6 +991,11 @@ phẩm. Backfill C2.1 loại cả hai — route chưa. Cũng: fallback legacy c�
 vẫn `failed=0` (chỉ log Railway `list fallback pkg=` cho biết); vòng phân trang dừng im lặng sau
 100 trang. Xử lý trong chunk D5 (C6).
 
+⟶ **2026-10-17 — C2.1a:** ca "Google trả 0 sản phẩm trong khi mirror còn item" ĐÃ SỬA: route không
+đóng dấu, ghi log + audit + báo Manager (`decideMirrorStamp`; ca thật `vng.games.tamquoc.chienky`
+2026-10-12, mirror 16). Mirror rỗng + Google rỗng vẫn đóng dấu. CÒN MỞ ở C6: lượt đọc
+`incoming_below_50pct_of_cached` (route vẫn đóng dấu), fallback legacy trả tập con, trần 100 trang.
+
 ---
 
 ## `[GOOGLE-custom-prices-value-based-row-500]` — giá tuỳ chỉnh trên dòng "Price" chung có số lẻ ⇒ cả lượt push lỗi 500

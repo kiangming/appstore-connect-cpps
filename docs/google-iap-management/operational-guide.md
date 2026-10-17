@@ -75,6 +75,13 @@ Reporting access or hasn't been granted any apps in Play Console.
    longer in Google's list are removed.
 2. Each IAP row shows default title (en-US), SKU, base price, status,
    purchase type, and last-synced timestamp.
+   A refresh counts as **complete** (and lets bulk import run for this app)
+   only when every item was cached. If Google returns an **empty** list while
+   the tool already holds items for the app, the tool says so in an amber
+   notice and does **not** count it as complete — check the app on Play
+   Console / the service account's access, then refresh again. A refresh
+   that does not count never cancels an EARLIER complete one: an app that
+   was refreshed completely before stays importable on that list.
 3. Click the title or SKU to open the **Edit IAP** form for that SKU.
 4. Click **New IAP** to open the **Create IAP** form.
 5. Click **Bulk import** to open the wizard.

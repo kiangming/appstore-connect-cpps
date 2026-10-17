@@ -294,3 +294,32 @@ Refresh nào ghi `apps.default_currency`, nên app cache mới (hoặc đang NUL
 không có currency app tham gia (gần với quyết định "file là nguồn duy nhất" hơn); app đang có giá trị
 (kể cả 'guessed') giữ nguyên giá trị đó cho tới chunk H4.
 Verify + thứ tự chạy: [`queries/verify-c1-c2-migrations.sql`](queries/verify-c1-c2-migrations.sql).
+
+### 5.6 Dry-run backfill trên PRODUCTION (Manager chạy, 2026-10-17) + chunk C2.1a
+
+**Số đo (ĐÃ ĐO, prod):** 271 hàng app; C1 + C2 đã chạy, V1.1–V2.5 khớp. Dry-run D1:
+**34** app được backfill · **234** chưa từng có lượt Refresh nào tới bước audit · **2** chỉ có
+Refresh ra 0 sản phẩm (`vng.games.tamquoc.chienky` mirror 16, `vng.g8.Phim` mirror 0) · **1** chỉ
+có Refresh trước mốc c7edca0 (`com.vng.lineage2mvn`, 12 item lúc đó, mirror nay 21). D2 = 0, D2b = 0.
+Manager chốt: chấp nhận gunnymobi.vn (14:58, 30/30), giữ synced>0, chấp nhận mọi điều kiện loại.
+
+**⚠ KB — 5/7 app lệch currency CHƯA TỪNG có một lần Refresh IAP đầy đủ:** `com.vng.codmvn`
+(mirror 28) · `gdo.projectx5` (27) · `vng.games.tamquoc.chienky` (16, lượt duy nhất 2026-10-12 trả
+0 sản phẩm) · `com.gs2.omg` (5) · `vnggames.ananta.vn` (3). Mirror của chúng chỉ chứa hàng do tool
+tạo ⇒ **mọi lượt import cũ của 5 app này đã chạy trên một mirror chưa từng được đọc từ Google**
+(đúng hình dạng sự cố 彈彈英雄: SKU đã có trên Google bị coi là NEW ⇒ CREATE ⇒ Google từ chối).
+Sau deploy cả 5 bị chặn tới khi Refresh thành công.
+
+**Phát hiện phụ:** 彈彈英雄 có một lượt Refresh đầy đủ lúc 2026-10-16 08:49:11 UTC (SAU Overwrite,
+code cũ) ⇒ mirror hiện là trạng thái 08:49, và code cũ đã đặt `default_language` = zh-TW (listing đầu
+của sản phẩm đầu). Pháp y R3 Manager đã đóng (hiện trạng đúng ý team).
+
+**C2.1a (chunk nhỏ trước push):** route Refresh IAP KHÔNG đóng dấu `iaps_last_synced_at` khi
+Google trả 0 sản phẩm mà mirror còn item chưa bị đánh dấu xoá — một quy tắc duy nhất
+`decideMirrorStamp` (bulk-import-mirror-gate.ts), một định nghĩa "mirror còn item"
+`countLiveMirrorItems` (repository/iaps.ts) trùng điều kiện của backfill (`deleted_on_google_at IS
+NULL`), test structural ghim hai phía. Không đóng dấu ⇒ log `[google-iap:iap-refresh] NOT stamping`,
+audit `stamp_decision: skip:EMPTY_LIST_WITH_MIRROR_ITEMS`, response `mirror_warning` hiện trong wizard
+và trang app. Mirror rỗng + Google rỗng ⇒ vẫn đóng dấu. Phần còn lại của D5 (không xoá mirror, cảnh
+báo khi list rỗng ở mọi nơi, lượt đọc `incoming_below_…` mà route vẫn đóng dấu) ở C6.
+

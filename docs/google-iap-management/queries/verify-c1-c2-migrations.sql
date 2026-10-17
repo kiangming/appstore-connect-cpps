@@ -309,6 +309,7 @@ SELECT COUNT(*) AS total_apps, COUNT(iaps_last_synced_at) AS stamped,
        COUNT(*) - COUNT(iaps_last_synced_at) AS still_null
 FROM google_iap_mgmt.apps;
 -- KỲ VỌNG: stamped = số dòng 'yes' của D1 (bước 6). Chạy lại migration ⇒ không đổi.
+--   Dry-run prod 2026-10-17: total_apps 271 · stamped 34 · still_null 237.
 
 
 -- @@ V3.2 — mỗi stamp giải thích được bằng ĐÚNG MỘT nguồn
@@ -362,7 +363,8 @@ FROM google_iap_mgmt.apps a
 JOIN google_iap_mgmt.google_console_accounts acc ON acc.id = a.google_console_account_id
 WHERE a.iaps_last_synced_at IS NOT NULL
 ORDER BY stamp_source DESC, a.package_name;
--- KỲ VỌNG (bước 6): mọi dòng 'backfill …'. Sau deploy có thêm 'route …'.
+-- KỲ VỌNG (bước 6): mọi dòng 'backfill …' (dry-run prod 2026-10-17: 34 dòng). Sau deploy có
+--   thêm 'route …' (route chỉ đóng dấu khi decideMirrorStamp cho phép, xem C2.1a).
 --   'KHÔNG GIẢI THÍCH ĐƯỢC' sau deploy: trước khi nghĩ tới DML tay, tìm trong log Railway
 --   '[google-iap:audit] append_failed type=IAPS_LIST_SYNC' — audit bị nuốt lỗi thì stamp
 --   có mà dòng log không có.
@@ -422,9 +424,9 @@ SELECT a.package_name, acc.display_name AS account_name, a.iaps_last_synced_at
 FROM google_iap_mgmt.apps a
 JOIN google_iap_mgmt.google_console_accounts acc ON acc.id = a.google_console_account_id
 WHERE a.package_name = 'com.vnggames.ballisticherotwid';
--- KỲ VỌNG: iaps_last_synced_at ≈ 2026-10-16 03:25:10 UTC (như will_set_to của D1) ⇒
---   bulk import của app này KHÔNG bị chặn sau deploy. Mirror của nó là trạng thái SAU
---   lượt Overwrite 07:24 (xem snapshot-ballisticherotwid-after-overwrite.sql).
+-- KỲ VỌNG: iaps_last_synced_at = 2026-10-16 08:49:11.163938+00 (will_set_to của D1, dry-run
+--   prod 2026-10-17 — một lượt Refresh đầy đủ trên code cũ lúc 08:49, SAU lượt Overwrite 07:24)
+--   ⇒ bulk import của app này KHÔNG bị chặn sau deploy. Mirror của nó là trạng thái 08:49.
 
 
 -- @@ V3.5 — comment cột đã cập nhật

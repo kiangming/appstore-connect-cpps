@@ -7,8 +7,8 @@
  * server read actually FAILED. This locks the distinction: loadError shows an
  * error state, a genuinely empty app shows the empty state, and items render.
  */
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 
@@ -112,5 +112,107 @@ describe("IapListClient — deleted-on-Google flagging", () => {
     fireEvent.click(screen.getByRole("button", { name: /Acknowledge \/ Remove/i }));
     expect(screen.getByText(/already gone from Google Play\. This cannot be undone/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Confirm remove/i })).toBeInTheDocument();
+  });
+});
+
+/**
+ * C2.1a — a Refresh that ran but did NOT count as complete (Google returned an
+ * empty list while the tool holds items) must say so on the app page, not
+ * just "Synced 0 of 0 IAPs" in green.
+ */
+describe("IapListClient — Refresh that did not count as complete", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("shows the server's warning in amber next to the summary", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true, synced: 0, failed: 0, total: 0,
+          mirror_complete: false,
+          mirror_warning:
+            "Google returned an EMPTY IAP list while the tool holds 16 item(s) for this app — not counted as a complete refresh (the last-complete-refresh time was not updated). If this app has never been refreshed completely, bulk import stays blocked; otherwise it keeps using the list from its last complete refresh.",
+        }),
+      })),
+    );
+    renderList({ initialIaps: [iap("a")] });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Refresh$/ }));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("refresh-mirror-warning")).toHaveTextContent(
+        /EMPTY IAP list while the tool holds 16 item\(s\)/,
+      ),
+    );
+    // Not dressed as a success (P5).
+    expect(screen.getByTestId("refresh-summary")).toHaveAttribute("data-state", "incomplete");
+  });
+
+  it("failed rows ⇒ the server's FAILED_ROWS warning is shown too", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true, synced: 26, failed: 2, total: 28,
+          mirror_complete: false,
+          mirror_warning: "Refresh finished with 2 item(s) that could not be cached — the IAP list is not complete yet. Try Refresh again.",
+        }),
+      })),
+    );
+    renderList({ initialIaps: [iap("a")] });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Refresh$/ }));
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("refresh-mirror-warning")).toHaveTextContent(/2 item\(s\) that could not be cached/),
+    );
+    expect(screen.getByTestId("refresh-summary")).toHaveAttribute("data-state", "incomplete");
+  });
+
+  it("a complete refresh shows no warning", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, synced: 1, failed: 0, total: 1, mirror_complete: true, mirror_warning: null }),
+      })),
+    );
+    renderList({ initialIaps: [iap("a")] });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Refresh$/ }));
+    });
+    await waitFor(() => expect(screen.getByText(/Synced 1 of 1 IAPs/)).toBeInTheDocument());
+    expect(screen.queryByTestId("refresh-mirror-warning")).toBeNull();
+    expect(screen.getByTestId("refresh-summary")).toHaveAttribute("data-state", "complete");
+  });
+
+  it("a complete refresh AFTER an incomplete one clears the old warning (no stale amber)", async () => {
+    const answers = [
+      { ok: true, synced: 0, failed: 0, total: 0, mirror_complete: false, mirror_warning: "Google returned an EMPTY IAP list while the tool holds 16 item(s) for this app." },
+      { ok: true, synced: 16, failed: 0, total: 16, mirror_complete: true, mirror_warning: null },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const body = answers.shift();
+        return { ok: true, status: 200, json: async () => body };
+      }),
+    );
+    renderList({ initialIaps: [iap("a")] });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Refresh$/ }));
+    });
+    await waitFor(() => expect(screen.getByTestId("refresh-mirror-warning")).toBeInTheDocument());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Refresh$/ }));
+    });
+    await waitFor(() => expect(screen.getByText(/Synced 16 of 16 IAPs/)).toBeInTheDocument());
+    expect(screen.queryByTestId("refresh-mirror-warning")).toBeNull();
+    expect(screen.getByTestId("refresh-summary")).toHaveAttribute("data-state", "complete");
   });
 });
