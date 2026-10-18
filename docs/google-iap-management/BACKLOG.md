@@ -438,6 +438,13 @@ Bỏ hẳn `defaultCurrencyForRegion` khỏi ba đường trên và lấy curren
 Tức nguồn đúng đã nằm sẵn trong cùng component; ba chỗ kia chỉ đang không dùng.
 ⚠ Cùng hình dạng với lỗi R2: nguồn đúng có sẵn, một đường khác vẫn đọc nguồn cũ.
 
+
+⟶ **2026-10-18 — H4.1 (Google bulk import):** cùng họ, thêm một điểm: `COMMON_CURRENCIES` (dropdown
+currency của `IapForm`, lấy từ bảng này) còn đưa ra `CNY` (CN không có trong catalog đo 2026-09-01) và
+`ARS` (Google bill AR bằng USD — `play-regions.snapshot.ts:76`). Bulk import đã THÔI dùng `regions.ts`
+từ H4.1: bảng GT riêng trong `excel-parser.ts`, mỗi GT kiểm theo catalog qua `fileRegionPriceOf`
+(`orchestration/file-price.ts`). Hướng sửa của mục này giữ nguyên (gom vào arc của họ, xem dưới).
+
 ---
 
 ## `[GOOGLE-promote-hardcoded-usd]` — promote-to-override đóng cứng `"USD"` khi hàng không có giá live

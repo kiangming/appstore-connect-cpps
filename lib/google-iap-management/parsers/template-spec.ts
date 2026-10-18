@@ -16,12 +16,11 @@
  *
  * Canonical shape: 4 lead headers + 82 locale pairs = 168 columns.
  * The price header is FIXED "Price (USD)" — Manager decision. The
- * parser interprets the header currency EXPLICITLY (resolvePriceColumn
- * Pass 1, Hotfix 16): a "Price (USD)" file parses as USD regardless of
- * the app's default currency, and Cycle 43 cross-currency resolution
- * derives the app-currency price from the pricing template. The parser
- * itself stays flexible ("Price (XXX)" / generic "Price") — this const
- * is the EMISSION canonical form only.
+ * parser reads the currency from the header ONLY (H4.1): exactly one
+ * "Price (XXX)" column, in a currency Google Play bills in; a header
+ * without its currency is refused. This const is the EMISSION canonical
+ * form only — the parser accepts any "Price (XXX)". (The Notes text below
+ * still describes Cycle 43 cross-currency; it changes with H4.2/H4.4.)
  *
  * The locale map previously lived inline in excel-parser.ts (which
  * re-exports it for back-compat). Map keys are unique by construction,

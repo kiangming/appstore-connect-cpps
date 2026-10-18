@@ -119,9 +119,7 @@ describe("round-trip — unedited template", () => {
   it("3 example rows come back SKIPPED, zero rows, zero errors", () => {
     const wb = buildTemplateWorkbook(XLSX, googleIapTemplateSpec());
 
-    const result = parseIapTemplate(wbToBuffer(wb), {
-      appDefaultCurrency: "VND",
-    });
+    const result = parseIapTemplate(wbToBuffer(wb));
 
     expect(result.errors).toEqual([]);
     expect(result.rows).toEqual([]); // zero created
@@ -135,7 +133,7 @@ describe("round-trip — unedited template", () => {
 });
 
 describe("round-trip — generated template parses cleanly through the real parser", () => {
-  it('FIXED "Price (USD)" is read as EXPLICIT USD even when the app default currency is VND', () => {
+  it('FIXED "Price (USD)" is read as USD — the header currency is the only currency source', () => {
     const spec = googleIapTemplateSpec();
     const wb = buildTemplateWorkbook(XLSX, spec);
     const headers = googleTemplateHeaders();
@@ -148,12 +146,10 @@ describe("round-trip — generated template parses cleanly through the real pars
       { origin: -1 },
     );
 
-    // VND app — the USD header must win over the app default (Hotfix 16
-    // Pass 1, explicit currency). If the parser ever ignored the header,
-    // 0.99 would be read as VND — wrong by ~25,000×.
-    const result = parseIapTemplate(wbToBuffer(wb), {
-      appDefaultCurrency: "VND",
-    });
+    // The USD header is the ONLY currency source (H4: the parser takes no
+    // app currency at all). If the parser ever ignored the header, 0.99
+    // would be read in some other currency — wrong by up to ~25,000×.
+    const result = parseIapTemplate(wbToBuffer(wb));
 
     expect(result.errors).toEqual([]);
     // Exact counts — notes-sheet contamination would change them. The 3
@@ -190,9 +186,7 @@ describe("round-trip — generated template parses cleanly through the real pars
       { origin: "A2" },
     );
 
-    const result = parseIapTemplate(wbToBuffer(wb), {
-      appDefaultCurrency: "VND",
-    });
+    const result = parseIapTemplate(wbToBuffer(wb));
 
     expect(result.errors).toEqual([]);
     expect(result.rows.map((r) => r.sku)).toEqual([
@@ -225,9 +219,7 @@ describe("round-trip — generated template parses cleanly through the real pars
       spec.dataSheetName,
     );
 
-    const result = parseIapTemplate(wbToBuffer(wb), {
-      appDefaultCurrency: "USD",
-    });
+    const result = parseIapTemplate(wbToBuffer(wb));
     expect(result.errors).toEqual([]);
     expect(result.rows.length).toBe(1);
     expect(result.rows[0].sku).toBe("com.test.notesfirst");
@@ -247,9 +239,7 @@ describe("sheet-name error message", () => {
       "Notes",
     );
 
-    const result = parseIapTemplate(wbToBuffer(wb), {
-      appDefaultCurrency: "USD",
-    });
+    const result = parseIapTemplate(wbToBuffer(wb));
     expect(result.rows).toEqual([]);
     expect(result.errors.length).toBe(1);
     expect(result.errors[0]).toMatch(
@@ -266,7 +256,7 @@ describe("legacy Manager artifact (v1, Sheet1) — fallback path smoke test", ()
         "docs/google-iap-management/templates/template-item-iap-google.xlsx",
       ),
     );
-    const result = parseIapTemplate(buffer, { appDefaultCurrency: "USD" });
+    const result = parseIapTemplate(buffer);
 
     expect(result.errors).toEqual([]);
     expect(result.rows.length).toBeGreaterThanOrEqual(1);
@@ -372,7 +362,7 @@ describe("locale selection — sample rows + notes adapt", () => {
 });
 
 describe("locale selection — ROUND-TRIP through the real parser", () => {
-  it("SUBSET (1 of 82) fills + parses cleanly, USD semantics intact against a VND app", () => {
+  it("SUBSET (1 of 82) fills + parses cleanly, read in the header's USD", () => {
     const spec = googleIapTemplateSpec(["Vietnamese"]);
     const wb = buildTemplateWorkbook(XLSX, spec);
     const headers = [...spec.headers];
@@ -385,9 +375,7 @@ describe("locale selection — ROUND-TRIP through the real parser", () => {
       origin: -1,
     });
 
-    const result = parseIapTemplate(wbToBuffer(wb), {
-      appDefaultCurrency: "VND",
-    });
+    const result = parseIapTemplate(wbToBuffer(wb));
     expect(result.errors).toEqual([]);
     expect(result.rows.length).toBe(1);
     expect(result.skippedSampleRows.length).toBe(3);
@@ -405,9 +393,7 @@ describe("locale selection — ROUND-TRIP through the real parser", () => {
       { origin: -1 },
     );
 
-    const result = parseIapTemplate(wbToBuffer(wb), {
-      appDefaultCurrency: "VND",
-    });
+    const result = parseIapTemplate(wbToBuffer(wb));
     expect(result.errors).toEqual([]);
     expect(result.rows.length).toBe(1);
     expect(result.rows[0].sku).toBe("sku.core");

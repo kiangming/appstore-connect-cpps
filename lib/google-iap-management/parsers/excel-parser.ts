@@ -9,7 +9,8 @@
  *
  * Template shape (data sheet):
  *   Col A:  Product ID (SKU)
- *   Col B:  Price (USD)              — base price, decimal
+ *   Col B:  Price (XXX)              — base price, decimal, in currency XXX
+ *                                       (H4: the header MUST name the currency)
  *   Col C:  GT Price                  — optional "Game Tier" override decimal
  *   Col D:  GT Currency               — currency for col C (e.g. "VND")
  *   Col E+: alternating Title/Description columns, one pair per locale
@@ -26,7 +27,11 @@
  */
 import * as XLSX from "xlsx";
 
-import { COMMON_REGIONS } from "../regions";
+import {
+  filePriceOf,
+  fileRegionPriceOf,
+  PLAY_BILLING_CURRENCIES,
+} from "../orchestration/file-price";
 import {
   GOOGLE_DATA_SHEET_NAME,
   GOOGLE_PRODUCT_ID_HEADER,
@@ -50,13 +55,19 @@ const SAMPLE_PRODUCT_ID_SET = new Set<string>(TEMPLATE_SAMPLE_PRODUCT_IDS);
  *  Re-exported for back-compat. */
 export { LOCALE_NAME_TO_BCP47 };
 
-/** Reverse: currency → primary region for GT Price/Currency override.
- *  Covers the regions in our COMMON_REGIONS list plus a few extra commonly
- *  seen GT currencies. */
+/** GT Currency → the ONE region a GT Price is meant for.
+ *  ⚠ An entry is NOT trusted to be billable: every GT goes through
+ *    fileRegionPriceOf, which checks the pair against the measured catalog
+ *    (play-regions.snapshot.ts). CNY→CN (CN is not sold) and ARS→AR (Google
+ *    bills AR in USD) are KEPT on purpose so such a GT refuses its row with
+ *    Google's real billing, rather than being dropped and replaced by a
+ *    converted price (H4.1). The parser test pins which entries match the
+ *    catalog (23) and which are refused (exactly CNY, ARS). This table is the
+ *    ONLY source — the old COMMON_REGIONS fallback is gone. */
 const CURRENCY_TO_REGION_OVERRIDES: Record<string, string> = {
-  // The Manager's template uses VND as the prototypical GT currency; widen
-  // the map to other markets they may add later. If a row's GT Currency is
-  // not in this map the parser drops the override with a warning.
+  // The Manager's template uses VND as the prototypical GT currency. If a
+  // row's GT Currency is not in this map the parser drops the override with
+  // a warning.
   USD: "US",
   EUR: "DE",
   GBP: "GB",
@@ -85,13 +96,12 @@ const CURRENCY_TO_REGION_OVERRIDES: Record<string, string> = {
 };
 
 export function regionForCurrency(currency: string): string | null {
-  const norm = currency.trim().toUpperCase();
-  if (CURRENCY_TO_REGION_OVERRIDES[norm]) {
-    return CURRENCY_TO_REGION_OVERRIDES[norm];
-  }
-  // Fall back: first matching region in COMMON_REGIONS
-  const fallback = COMMON_REGIONS.find((r) => r.currency === norm);
-  return fallback?.code ?? null;
+  return CURRENCY_TO_REGION_OVERRIDES[currency.trim().toUpperCase()] ?? null;
+}
+
+/** The GT table as pairs — for the catalog-consistency test. */
+export function gtCurrencyRegionPairs(): ReadonlyArray<{ currency: string; region: string }> {
+  return Object.entries(CURRENCY_TO_REGION_OVERRIDES).map(([currency, region]) => ({ currency, region }));
 }
 
 export interface ParsedListing {
@@ -114,108 +124,123 @@ export interface ParsedIapRow {
   basePriceDecimal: string;
   regionOverrides: ParsedRegionOverride[];
   listings: ParsedListing[];
-  /** Cycle 43: provenance of the row's baseCurrency. "explicit" when the
-   *  column header was "Price (XXX)" (parser Pass 1); "inferred" when
-   *  the column was a generic "Price"/"Default Price"/"Base Price" and
-   *  the currency fell back to the app's default. The orchestrator's
-   *  cross-currency trigger is header-first when explicit, value-based
-   *  fallback when inferred (Cycle 43 directive). */
+  /** Cycle 43 provenance of baseCurrency. Since H4.1 ALWAYS "explicit": a
+   *  file without the currency in its price header is refused (Q1), so
+   *  nothing is inferred any more. The field is removed with the execute
+   *  re-check in H4.3 (Q9); "inferred" stays in the type until then. */
   priceHeaderSource: "explicit" | "inferred";
+}
+
+/** A row the file states but the tool cannot honour exactly (H4.1). */
+export interface RefusedFileRow {
+  rowNumber: number;
+  sku: string;
+  reason: string;
 }
 
 export interface ParseResult {
   rows: ParsedIapRow[];
   warnings: string[];
   errors: string[];
+  /** H4.1 — rows NOT imported because their price or GT price cannot be
+   *  honoured exactly. Also in `warnings`; listed here so the wizard can
+   *  block Push and name them (never a silent partial import). */
+  refusedRows: RefusedFileRow[];
   /** Template example rows skipped by Product ID (TEMPLATE_SAMPLE_PRODUCT_IDS).
    *  Explicit outcome — not errors, not silently dropped. */
   skippedSampleRows: { rowNumber: number; sku: string }[];
 }
 
 /** Column headers we recognise as non-locale at the start of the sheet.
- *  Hotfix 16: the price column is no longer required to literally be
- *  "Price (USD)" — `resolvePriceColumn` accepts any "Price (XXX)" with a
- *  3-letter ISO 4217 code, or generic "Price" / "Default Price" / "Base
- *  Price" (which fall back to the app's default currency). The set
- *  below only enumerates headers that are NOT routed through the price
- *  resolver (price headers are matched by regex / case-insensitive
- *  string comparison, see resolvePriceColumn). */
+ *  Price headers are NOT listed: they go through `resolvePriceColumn`. */
 const FIXED_HEADERS = new Set([
   GOOGLE_PRODUCT_ID_HEADER,
   GOOGLE_GT_PRICE_HEADER,
   GOOGLE_GT_CURRENCY_HEADER,
 ]);
 
-/** Price column resolution result (Hotfix 16). Carries both the column
- *  index and the currency the row's base price should be interpreted
- *  in — explicit when the header carried a "(XXX)" suffix, inferred
- *  when the header was a generic "Price" / "Default Price" / "Base
- *  Price" (in which case caller supplied the app's default currency). */
-export interface PriceColumnResolution {
-  columnIndex: number;
-  currencyCode: string;
-  source: "explicit" | "inferred";
-  /** Verbatim header text — useful for error messages. */
-  headerText: string;
-}
+/** The price column, or why the file cannot be priced from its header.
+ *  H4.1 (Manager Q1, Q10 — 2026-10-17): exactly ONE price column, and its
+ *  header names a currency Google Play bills in. */
+export type PriceColumnResult =
+  | { kind: "ok"; columnIndex: number; currencyCode: string; headerText: string }
+  | {
+      kind: "error";
+      reason: "none" | "multiple" | "no_currency" | "not_play_currency" | "unrecognised";
+      message: string;
+    };
 
-/** Hotfix 16: resolve which column carries the row's base price + what
- *  currency to interpret it as. Returns null when no candidate column is
- *  found (caller surfaces the listed-options error).
- *
- *  Resolution order:
- *    1. "Price (XXX)" where XXX is a 3-letter currency code (any case;
- *       trimmed). Currency is explicit.
- *    2. Generic candidates: "Price", "Default Price", "Base Price"
- *       (case-insensitive). Currency falls back to `appDefaultCurrency`.
- *
- *  Backward-compat: "Price (USD)" still matches via rule 1 and resolves
- *  to USD. Older templates keep working unchanged. */
-const GENERIC_PRICE_HEADERS = ["Price", "Default Price", "Base Price"];
+/** "Price (XXX)" — and the same with "Default "/"Base " in front, any case.
+ *  Without "(XXX)" it is a price header WITHOUT a currency. */
+const PRICE_HEADER = /^(?:(?:default|base)\s+)?price\s*(?:\(\s*([a-z]{3})\s*\))?$/i;
+/** Any other header that mentions "price" looks like a price column too. */
+const LOOKS_LIKE_PRICE = /\bprice\b/i;
 
 export function resolvePriceColumn(
   headerRow: ReadonlyArray<string | number | undefined>,
-  appDefaultCurrency: string,
-): PriceColumnResolution | null {
-  // Pass 1: explicit currency suffix.
+): PriceColumnResult {
+  const found: Array<{ columnIndex: number; header: string; currency: string | null }> = [];
+  const unrecognised: string[] = [];
   for (let c = 0; c < headerRow.length; c += 1) {
     const raw = headerRow[c];
     if (raw === undefined || raw === null) continue;
     const header = String(raw).trim();
-    const m = header.match(/^Price\s*\(\s*([A-Za-z]{3})\s*\)$/);
+    if (FIXED_HEADERS.has(header)) continue; // "GT Price" is not a price column
+    const m = header.match(PRICE_HEADER);
     if (m) {
-      return {
-        columnIndex: c,
-        currencyCode: m[1].toUpperCase(),
-        source: "explicit",
-        headerText: header,
-      };
+      found.push({ columnIndex: c, header, currency: m[1] ? m[1].toUpperCase() : null });
+    } else if (LOOKS_LIKE_PRICE.test(header)) {
+      unrecognised.push(header);
     }
   }
-  // Pass 2: generic candidates → app-default currency.
-  const normalisedDefault = appDefaultCurrency.trim().toUpperCase() || "USD";
-  for (let c = 0; c < headerRow.length; c += 1) {
-    const raw = headerRow[c];
-    if (raw === undefined || raw === null) continue;
-    const header = String(raw).trim();
-    const matchesGeneric = GENERIC_PRICE_HEADERS.some(
-      (candidate) => candidate.toLowerCase() === header.toLowerCase(),
-    );
-    if (matchesGeneric) {
-      return {
-        columnIndex: c,
-        currencyCode: normalisedDefault,
-        source: "inferred",
-        headerText: header,
-      };
-    }
+  // H4.1 Q10 — no silent first-wins: a column that looks like a price but is
+  // not read would leave the Manager believing it was.
+  if (unrecognised.length > 0) {
+    return {
+      kind: "error",
+      reason: "unrecognised",
+      message: `${unrecognised.map((h) => `"${h}"`).join(", ")} looks like a price column but is not "Price (XXX)". Rename it to "Price (XXX)" with the currency of the prices, or remove it — prices are read from exactly one "Price (XXX)" column.`,
+    };
   }
-  return null;
+  if (found.length === 0) {
+    return {
+      kind: "error",
+      reason: "none",
+      message:
+        'No price column found. Expected exactly one "Price (XXX)" column, where XXX is the currency of the prices (e.g. "Price (USD)", "Price (VND)").',
+    };
+  }
+  if (found.length > 1) {
+    return {
+      kind: "error",
+      reason: "multiple",
+      message: `The file has ${found.length} price columns (${found
+        .map((f) => `"${f.header}"`)
+        .join(", ")}). Keep exactly one "Price (XXX)" column — prices are read from that column only.`,
+    };
+  }
+  const [only] = found;
+  // H4.1 Q1 — before, such a header silently took the app's currency.
+  if (only.currency === null) {
+    return {
+      kind: "error",
+      reason: "no_currency",
+      message: `Header "${only.header}" does not say which currency the prices are in. Rename it to "Price (XXX)" with the currency of the prices, e.g. "Price (USD)". The app's currency is not used for prices in the file.`,
+    };
+  }
+  if (!PLAY_BILLING_CURRENCIES.has(only.currency)) {
+    return {
+      kind: "error",
+      reason: "not_play_currency",
+      message: `Header "${only.header}": "${only.currency}" is not a currency Google Play bills in.`,
+    };
+  }
+  return { kind: "ok", columnIndex: only.columnIndex, currencyCode: only.currency, headerText: only.header };
 }
 
 interface ColumnIndex {
   sku?: number;
-  price?: PriceColumnResolution;
+  price: PriceColumnResult;
   gtPrice?: number;
   gtCurrency?: number;
   /** locale → [titleCol, descCol] */
@@ -223,20 +248,13 @@ interface ColumnIndex {
   unknownLocales: Set<string>;
 }
 
-function indexColumns(
-  headerRow: Array<string | number | undefined>,
-  appDefaultCurrency: string,
-): ColumnIndex {
+function indexColumns(headerRow: Array<string | number | undefined>): ColumnIndex {
   const idx: ColumnIndex = {
+    // The price column goes through its resolver before the per-cell loop.
+    price: resolvePriceColumn(headerRow),
     locales: new Map(),
     unknownLocales: new Set(),
   };
-
-  // Hotfix 16: route the price column through the flexible resolver
-  // before the per-cell loop. The resolver matches both "Price (XXX)"
-  // (explicit currency) and generic "Price" / "Default Price" / "Base
-  // Price" (resolves to appDefaultCurrency).
-  idx.price = resolvePriceColumn(headerRow, appDefaultCurrency) ?? undefined;
 
   for (let c = 0; c < headerRow.length; c += 1) {
     const raw = headerRow[c];
@@ -249,7 +267,7 @@ function indexColumns(
     else if (header === GOOGLE_GT_CURRENCY_HEADER) idx.gtCurrency = c;
     else if (FIXED_HEADERS.has(header)) {
       /* already handled */
-    } else if (idx.price && idx.price.columnIndex === c) {
+    } else if (idx.price.kind === "ok" && idx.price.columnIndex === c) {
       /* price column — handled by resolvePriceColumn above */
     } else {
       const titleMatch = header.match(/^Title \((.+)\)$/);
@@ -302,19 +320,16 @@ function cellDecimal(
   if (!cell) return "";
   if (cell.v === null || cell.v === undefined) return "";
   if (typeof cell.v === "number") {
-    // Excel may store prices as JS numbers — preserve up to 6 decimal places.
-    return Number.isInteger(cell.v) ? String(cell.v) : cell.v.toFixed(6).replace(/\.?0+$/, "");
+    if (Number.isInteger(cell.v)) return String(cell.v);
+    // Float noise from Excel arithmetic (25999.99999999996, 0.30000000000000004)
+    // reads as its 6-decimal value. A REAL 7th+ decimal (4.9999999, 0.0000001)
+    // is passed through unrounded, so the precision check refuses the row
+    // instead of the tool importing a different price (H4.1).
+    const rounded = cell.v.toFixed(6);
+    if (Math.abs(Number(rounded) - cell.v) > 1e-9) return String(cell.v);
+    return rounded.replace(/\.?0+$/, "");
   }
   return String(cell.v).trim();
-}
-
-export interface ParseOptions {
-  /** Hotfix 16: currency used when the Excel header is a generic
-   *  "Price" / "Default Price" / "Base Price" (no explicit "(XXX)"
-   *  suffix). Pre-Hotfix-16 the parser hardcoded USD; the orchestrator
-   *  passes the app's default_currency captured at apps refresh time
-   *  (Hotfix 4) so VND apps with generic headers resolve to VND. */
-  appDefaultCurrency: string;
 }
 
 /**
@@ -323,25 +338,29 @@ export interface ParseOptions {
  * The parser is tolerant:
  *   - Unrecognised locale columns surface as warnings, not errors.
  *   - Rows missing a SKU are skipped (template often has trailing blanks).
- *   - GT Price + GT Currency are paired; if only one is set, the override
- *     is dropped with a warning.
+ *   - GT Price + GT Currency are paired; if only one is set, or the GT
+ *     Currency is not in the GT table, the override is dropped with a
+ *     warning.
+ *   - H4.1: a row whose price (or GT price) cannot be honoured exactly —
+ *     not a valid decimal, or more decimals than its currency allows — is
+ *     NOT imported, with a per-row warning. It is never sent with some
+ *     other price instead (filePriceOf / fileRegionPriceOf).
  *
  * Hard errors that block the entire file:
  *   - Workbook can't be opened.
  *   - Required Product ID column is missing.
- *   - No recognised price column. Resolved patterns: "Price (XXX)" with
- *     a 3-letter ISO 4217 currency code, or generic "Price" /
- *     "Default Price" / "Base Price". (Hotfix 16 — pre-Hotfix-16
- *     required exactly "Price (USD)".)
+ *   - No price column, more than one, a header without its currency
+ *     ("Price" / "Default Price" / "Base Price" — H4.1 Q1), or a currency
+ *     Google Play does not bill in (Q10). See resolvePriceColumn.
+ *
+ * ⚠ No app currency: the file is the only price source (H4).
  */
-export function parseIapTemplate(
-  buffer: ArrayBuffer | Buffer,
-  options: ParseOptions,
-): ParseResult {
+export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
   const warnings: string[] = [];
   const errors: string[] = [];
   const rows: ParsedIapRow[] = [];
   const skippedSampleRows: ParseResult["skippedSampleRows"] = [];
+  const refusedRows: RefusedFileRow[] = [];
 
   let wb: XLSX.WorkBook;
   try {
@@ -350,12 +369,12 @@ export function parseIapTemplate(
     errors.push(
       `Failed to read workbook: ${err instanceof Error ? err.message : String(err)}`,
     );
-    return { rows, warnings, errors, skippedSampleRows };
+    return { rows, warnings, errors, refusedRows, skippedSampleRows };
   }
 
   if (wb.SheetNames.length === 0) {
     errors.push("Workbook has no sheets.");
-    return { rows, warnings, errors, skippedSampleRows };
+    return { rows, warnings, errors, refusedRows, skippedSampleRows };
   }
   // Sheet-selection hardening (design-bulk-import-template-download.md §C):
   // prefer the canonical data sheet BY NAME so a Notes/instructions sheet
@@ -377,7 +396,7 @@ export function parseIapTemplate(
     : "";
   if (!ws["!ref"]) {
     errors.push(`Sheet "${sheetName}" is empty.` + sheetHint);
-    return { rows, warnings, errors, skippedSampleRows };
+    return { rows, warnings, errors, refusedRows, skippedSampleRows };
   }
 
   const range = XLSX.utils.decode_range(ws["!ref"]);
@@ -386,7 +405,7 @@ export function parseIapTemplate(
     headerRow.push(cellString(ws, range.s.r, c));
   }
 
-  const idx = indexColumns(headerRow, options.appDefaultCurrency);
+  const idx = indexColumns(headerRow);
 
   const skuCol = idx.sku;
   const priceResolution = idx.price;
@@ -394,24 +413,17 @@ export function parseIapTemplate(
     errors.push(
       'Required column "Product ID" not found in header row.' + sheetHint,
     );
-    return { rows, warnings, errors, skippedSampleRows };
+    return { rows, warnings, errors, refusedRows, skippedSampleRows };
   }
-  if (!priceResolution) {
-    const defaultCurrencyForMsg =
-      options.appDefaultCurrency.trim().toUpperCase() || "USD";
-    errors.push(
-      `No price column found. Expected one of: "Price (XXX)" where XXX is a 3-letter currency code (e.g. "Price (USD)", "Price (VND)"), or generic "Price" / "Default Price" / "Base Price" (which is interpreted as the app's default currency "${defaultCurrencyForMsg}").` +
-        sheetHint,
-    );
-    return { rows, warnings, errors, skippedSampleRows };
+  if (priceResolution.kind === "error") {
+    // The wrong-sheet hint only explains a MISSING price column; a header
+    // that exists but lacks its currency is not a sheet problem.
+    errors.push(priceResolution.message + (priceResolution.reason === "none" ? sheetHint : ""));
+    return { rows, warnings, errors, refusedRows, skippedSampleRows };
   }
   const priceCol = priceResolution.columnIndex;
   const resolvedCurrency = priceResolution.currencyCode;
-  if (priceResolution.source === "inferred") {
-    warnings.push(
-      `Header "${priceResolution.headerText}" has no explicit currency; treating prices as the app default currency "${resolvedCurrency}". To suppress this warning, rename the header to "Price (${resolvedCurrency})".`,
-    );
-  }
+  let blankPriceCount = 0;
 
   if (idx.unknownLocales.size > 0) {
     warnings.push(
@@ -436,7 +448,17 @@ export function parseIapTemplate(
       warnings.push(
         `Row ${r + 1} (SKU "${sku}"): missing "${priceResolution.headerText}"; skipped.`,
       );
+      blankPriceCount += 1;
       continue;
+    }
+
+    // H4.1 — the file's price (and GT price) must be honoured exactly, or the
+    // row is not imported. Never substituted by a conversion or another
+    // currency. Both are checked so one upload names every problem.
+    const reasons: string[] = [];
+    const filePrice = filePriceOf({ currency: resolvedCurrency, priceDecimal: basePriceDecimal });
+    if (!filePrice.ok) {
+      reasons.push(`"${priceResolution.headerText}" = "${basePriceDecimal}" — ${filePrice.reason}`);
     }
 
     const regionOverrides: ParsedRegionOverride[] = [];
@@ -448,11 +470,16 @@ export function parseIapTemplate(
       if (hasPrice && hasCurrency) {
         const region = regionForCurrency(gtCurrency);
         if (region) {
-          regionOverrides.push({
-            region,
-            currency: gtCurrency,
-            priceDecimal: gtPriceDecimal,
-          });
+          const gt = fileRegionPriceOf({ region, currency: gtCurrency, priceDecimal: gtPriceDecimal });
+          if (gt.ok) {
+            regionOverrides.push({
+              region,
+              currency: gtCurrency,
+              priceDecimal: gtPriceDecimal,
+            });
+          } else {
+            reasons.push(`GT Price "${gtPriceDecimal}" ${gtCurrency} — ${gt.reason}`);
+          }
         } else {
           warnings.push(
             `Row ${r + 1} (SKU "${sku}"): GT Currency "${gtCurrency}" not in region map; override dropped.`,
@@ -463,6 +490,13 @@ export function parseIapTemplate(
           `Row ${r + 1} (SKU "${sku}"): GT Price + GT Currency must be set together; override dropped.`,
         );
       }
+    }
+
+    if (reasons.length > 0) {
+      const reason = reasons.join(" ");
+      warnings.push(`Row ${r + 1} (SKU "${sku}"): ${reason} Row not imported.`);
+      refusedRows.push({ rowNumber: r + 1, sku, reason });
+      continue;
     }
 
     const listings: ParsedListing[] = [];
@@ -486,22 +520,25 @@ export function parseIapTemplate(
       basePriceDecimal,
       regionOverrides,
       listings,
-      // Cycle 43: propagate header provenance so the orchestrator's
-      // cross-currency pre-pass can prefer the explicit declaration
-      // (header-first) over the value-based fallback (inferred).
-      priceHeaderSource: priceResolution.source,
+      // Always explicit since H4.1 (see ParsedIapRow).
+      priceHeaderSource: "explicit",
     });
   }
 
+  const notImported = refusedRows.length + blankPriceCount;
   if (skippedSampleRows.length > 0) {
     warnings.push(
       `${skippedSampleRows.length} example row(s) skipped (sample Product IDs from the template) — delete the sample rows or replace them with your data.`,
     );
-  } else if (rows.length === 0 && errors.length === 0) {
+  }
+  if (rows.length === 0 && notImported > 0) {
+    // Not "no data": there were rows, and none could be imported.
+    warnings.push(`No row can be imported: ${notImported} row(s) were not imported — see the messages above.`);
+  } else if (rows.length === 0 && errors.length === 0 && skippedSampleRows.length === 0) {
     // Suppressed when sample rows were skipped — the skip message above
     // already explains why nothing is importable.
     warnings.push("No data rows found after the header.");
   }
 
-  return { rows, warnings, errors, skippedSampleRows };
+  return { rows, warnings, errors, refusedRows, skippedSampleRows };
 }

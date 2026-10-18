@@ -870,19 +870,22 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     },
   );
 
-  // Every sentence is MEASURED behaviour of today's pricing code (H4 census,
-  // adversarially verified, 2026-10-16). Pinned verbatim so that no wording —
-  // and no pricing change (the H4 fix) — can land without editing this test.
+  // Every sentence is MEASURED behaviour of the pricing code at this commit
+  // (H4 census 2026-10-16, updated by H4.1). Pinned verbatim so the wording
+  // cannot change silently. ⚠ A text pin CANNOT detect a pricing change — the
+  // route-level T1 (bulk-import/file-currency-invariance.test.ts) does; each
+  // H4 step that changes pricing updates this note in the same commit.
   const LEAD =
-    "How prices are read from the file. The first Price (XXX) column (e.g. Price (USD)) is used, in that currency; " +
-    "a Price / Default Price / Base Price column is used only when there is none, and any other price column is " +
-    "ignored without a warning. GT Price + GT Currency override their one country with Google Conversion; with a " +
-    "pricing template the tier's price is used instead.";
-  const withCurrency = (x: string, decimals: string) =>
+    "How prices are read from the file. The file needs exactly one Price (XXX) column (e.g. Price (USD)), in a " +
+    "currency Google Play bills in, and prices are read in that currency. A price header without its currency " +
+    "(Price / Default Price / Base Price) or a second price column refuses the file; a row whose price or GT price " +
+    "has more decimals than its currency allows is not imported. GT Price + GT Currency override their one " +
+    "country, except when a pricing template tier matches the row (the tier's price is used) or the row has " +
+    "custom prices (they replace it).";
+  const withCurrency = (x: string) =>
     LEAD +
-    `A Price column is read as this app's currency, ${x} (shown on the app page — it may still be a tool guess). ` +
-    decimals +
-    `When a row's price column names a currency other than ${x}: with a pricing template the row takes the tier ` +
+    `When a row's price column names a currency other than this app's currency, ${x} (shown on the app page — it ` +
+    "may still be a tool guess): with a pricing template the row takes the tier " +
     "whose price in that currency matches (none ⇒ refused; several ⇒ you pick), and countries the tier does not list " +
     `are converted by Google from the tier's ${x} price — a tier with no ${x} price refuses the row. With Google ` +
     "Conversion the row is refused unless you set custom prices for it; then a " +
@@ -890,20 +893,13 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     `Custom prices with a pricing template must include a ${x} price, and it becomes the conversion base.`;
 
   it.each([
-    [
-      "TWD",
-      withCurrency(
-        "TWD",
-        "A value with more decimals than TWD allows is matched against the tiers' USD prices when a pricing " +
-          "template is used (the tier's TWD price is sent; no match ⇒ refused), and refused with Google Conversion.",
-      ),
-    ],
-    ["USD", withCurrency("USD", "A value with more decimals than USD allows is refused.")],
+    ["TWD", withCurrency("TWD")],
+    ["USD", withCurrency("USD")],
     [
       null,
       LEAD +
-        "This app has no currency set (see the app page): a Price column is read as USD, and every row is priced " +
-        "from the currency its own price column names." +
+        "This app has no currency set (see the app page): every row is priced from the currency its price column " +
+        "names." +
         "Custom prices with a pricing template are refused (they need an app currency).",
     ],
   ])("note text, app currency %s — verbatim", (appCurrency, expected) => {
@@ -1092,6 +1088,46 @@ describe("BulkImportWizard (Google) — execute body = the shared builder's outp
     // The builder really was exercised on both branches it encodes.
     expect(executeBody.rows[0].chosenTierIdentifier).toBe("Tier 1");
     expect(executeBody.rows[1].priceHeaderSource).toBe("inferred");
+  });
+});
+
+/**
+ * H4.1 — rows the parser refused (a price or GT price that cannot be sent
+ * exactly as written) are not in the preview table. The wizard names them and
+ * blocks Push, so an import is never silently partial.
+ */
+describe("BulkImportWizard (Google) — rows refused in the file block Push (H4.1)", () => {
+  it("refusedRows from the preview ⇒ red list naming each row, Push disabled with the reason", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(AVAILABILITY_URL_FRAGMENT)) return Promise.resolve({ ok: false, json: async () => ({}) });
+      if (url.includes(START_URL)) return Promise.resolve({ ok: true, json: async () => ({ run_id: null }) });
+      if (url.includes(CANCEL_URL)) return Promise.resolve({ ok: true, json: async () => ({}) });
+      if (url.includes(PREVIEW_URL_FRAGMENT)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            ...(await previewResponse().json()),
+            refusedRows: [{ rowNumber: 3, sku: "sku.bad", reason: 'GT Price "26000.5" VND — VND only accepts whole numbers.' }],
+          }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { container } = renderWizard();
+    await goToUploadStep();
+    selectFile(container);
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Preview/ }));
+    });
+    const list = await screen.findByTestId("file-refused-rows");
+    expect(list).toHaveTextContent(/1 row\(s\) in the file cannot be imported/);
+    expect(list).toHaveTextContent('Row 3 (sku.bad): GT Price "26000.5" VND — VND only accepts whole numbers.');
+    const push = screen.getByRole("button", { name: /Push to Google Play/ });
+    expect(push).toBeDisabled();
+    expect(push).toHaveAttribute("title", "1 row(s) in the file cannot be imported — fix the file and re-upload");
   });
 });
 

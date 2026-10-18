@@ -141,11 +141,11 @@ interface Props {
   packageName: string;
   appId: string;
   appDisplayName: string | null;
-  /** apps.default_currency — what the server prices with TODAY for generic
-   *  "Price" headers, cross-currency rows and custom prices (H4, 2026-10-16:
-   *  measured to violate "the file currency is the only price source"; fix
-   *  awaiting the gate). Shown in the pricing note and used by the
-   *  custom-prices dialog. Not an import condition. */
+  /** apps.default_currency — what the server still prices cross-currency
+   *  rows and custom prices with (H4: violates "the file currency is the only
+   *  price source"; removed in H4.2/H4.3). Since H4.1 it no longer reads a
+   *  generic "Price" header — such a file is refused. Shown in the pricing
+   *  note and used by the custom-prices dialog. Not an import condition. */
   appDefaultCurrency: string | null;
   /** D0/D3 — apps.iaps_last_synced_at: the last COMPLETE IAP-list refresh.
    *  null = never (or unreadable — see iapsSyncReadError). While null the
@@ -264,6 +264,12 @@ export function BulkImportWizard({
   // Step 3: preview
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
   const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
+  /** H4.1 — rows the file states but the tool cannot honour exactly (price or
+   *  GT price). Not in previewRows; they block Push so an import is never
+   *  silently partial. */
+  const [fileRefusedRows, setFileRefusedRows] = useState<
+    Array<{ rowNumber: number; sku: string; reason: string }>
+  >([]);
   // Hotfix 19: per-row Manager tier selection. Keyed by rowNumber so
   // the orchestrator's execute payload can map back. Pre-filled from the
   // Preview API's `defaultTierSelection` (Q5.B primary tier).
@@ -526,6 +532,7 @@ export function BulkImportWizard({
         blockers?: string[];
         iapsLastSyncedAt?: string | null;
         appCurrency?: string | null;
+        refusedRows?: Array<{ rowNumber: number; sku: string; reason: string }>;
       };
       if (!res.ok) {
         applyGateRefusal(body);
@@ -542,6 +549,7 @@ export function BulkImportWizard({
       const seedSelections = seedTierSelections(rows);
       setPreviewRows(rows);
       setPreviewWarnings(body.warnings ?? []);
+      setFileRefusedRows(body.refusedRows ?? []);
       setTierSelections(seedSelections);
       if (body.iapsLastSyncedAt) setMirrorSyncedAt(body.iapsLastSyncedAt);
       // The note must describe what the server priced THIS preview with.
@@ -770,6 +778,7 @@ export function BulkImportWizard({
   const canContinueFromPreview =
     counts.pending === 0 &&
     previewRows.length > 0 &&
+    fileRefusedRows.length === 0 &&
     precisionViolations.length === 0 &&
     tierStatus.pending === 0;
 
@@ -1090,6 +1099,25 @@ export function BulkImportWizard({
             </div>
           )}
 
+          {fileRefusedRows.length > 0 && (
+            <div data-testid="file-refused-rows" className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <p className="text-xs font-medium text-red-900 mb-1">
+                {fileRefusedRows.length} row(s) in the file cannot be imported — the price in the
+                file cannot be sent exactly as written. Fix the Excel file and re-upload; nothing is
+                pushed until then.
+              </p>
+              <ul className="space-y-0.5 text-[11px] text-red-800 max-h-32 overflow-y-auto">
+                {fileRefusedRows.slice(0, 20).map((v) => (
+                  <li key={v.rowNumber}>
+                    · Row {v.rowNumber} ({v.sku}): {v.reason}
+                  </li>
+                ))}
+                {fileRefusedRows.length > 20 && (
+                  <li className="italic text-red-700">…and {fileRefusedRows.length - 20} more</li>
+                )}
+              </ul>
+            </div>
+          )}
           {precisionViolations.length > 0 && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-3">
               <p className="text-xs font-medium text-red-900 mb-1">
@@ -1143,7 +1171,11 @@ export function BulkImportWizard({
               onClick={handleExecute}
               disabled={!canContinueFromPreview || executing}
               title={
-                precisionViolations.length > 0
+                fileRefusedRows.length > 0
+                  ? `${fileRefusedRows.length} row(s) in the file cannot be imported — fix the file and re-upload`
+                  : previewRows.length === 0
+                  ? "No row can be imported — see the messages above"
+                  : precisionViolations.length > 0
                   ? `${precisionViolations.length} row(s) violate per-row currency precision`
                   : tierStatus.pending > 0
                     ? `${tierStatus.pending} item${tierStatus.pending === 1 ? "" : "s"} need${tierStatus.pending === 1 ? "s" : ""} tier selection`
@@ -1314,6 +1346,7 @@ export function BulkImportWizard({
                     setFile(null);
                     setPreviewRows([]);
                     setPreviewWarnings([]);
+                    setFileRefusedRows([]);
                     setExecuteResult(null);
                     // Reset the tracking state machine for a fresh cycle —
                     // without this, executeStartedRef staying true would
@@ -1345,29 +1378,18 @@ export function BulkImportWizard({
   );
 }
 
-/** Hotfix 28 — pure helper extracted from the wizard's
- *  `precisionViolations` memo so unit tests can pin per-row currency
- *  validation behaviour without rendering the whole wizard.
- *
- *  Validates each non-skipped row's `basePriceDecimal` against its own
- *  parser-resolved `baseCurrency`. The parser's currency comes from
- *  the column header ("Price (USD)" → USD) and falls back to
- *  appDefaultCurrency only for generic "Price" / "Default Price" /
- *  "Base Price" headers (excel-parser.ts:resolvePriceColumn). The
- *  caller's responsibility is to give us `previewRows` with
- *  `baseCurrency` already populated.
- *
- *  Skip-decision rows are excluded — they're not sent to Google so
- *  their numeric shape doesn't matter. */
-
 /**
  * H4.6 [2026-10-16] — how prices are read from the file TODAY. A description,
  * not a warning and not a gate: the app's currency is no longer an import
  * condition (C2.1). Every sentence below is measured behaviour of the preview
  * + execute code (H4 census, adversarially verified); the app currency still
  * takes part in pricing (a violation of "the file currency is the only price
- * source" — fix awaiting the gate). When that fix ships, this note changes
- * WITH it — changing it alone would make it false.
+ * source" — being removed step by step, H4.1–H4.4). Each H4 step that changes
+ * pricing changes this note IN THE SAME COMMIT — the verbatim test pins the
+ * wording only; it cannot see a pricing change (T1 does).
+ * H4.1: the file needs exactly one "Price (XXX)" column; a header without its
+ * currency or a second price column refuses the file; a too-precise price or
+ * GT price keeps that row out.
  */
 function PricingCurrencyNote({
   appCurrency,
@@ -1391,22 +1413,18 @@ function PricingCurrencyNote({
       data-app-currency={x ?? ""}
       className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
     >
-      <span className="font-semibold">How prices are read from the file.</span> The first{" "}
-      {code("Price (XXX)")} column (e.g. {code("Price (USD)")}) is used, in that currency; a{" "}
-      {code("Price")} / Default Price / Base Price column is used only when there is none, and any
-      other price column is ignored without a warning. GT Price + GT Currency override their one
-      country with Google Conversion; with a pricing template the tier&apos;s price is used instead.
+      <span className="font-semibold">How prices are read from the file.</span> The file needs
+      exactly one {code("Price (XXX)")} column (e.g. {code("Price (USD)")}), in a currency Google
+      Play bills in, and prices are read in that currency. A price header without its currency (
+      {code("Price")} / Default Price / Base Price) or a second price column refuses the file; a
+      row whose price or GT price has more decimals than its currency allows is not imported. GT
+      Price + GT Currency override their one country, except when a pricing template tier matches
+      the row (the tier&apos;s price is used) or the row has custom prices (they replace it).
       {x ? (
         <ul className="mt-1 ml-4 list-disc space-y-0.5">
           <li>
-            A {code("Price")} column is read as this app&apos;s currency, {code(x)} (shown on the{" "}
-            {appPageLink} — it may still be a tool guess).{" "}
-            {x === "USD"
-              ? "A value with more decimals than USD allows is refused."
-              : `A value with more decimals than ${x} allows is matched against the tiers' USD prices when a pricing template is used (the tier's ${x} price is sent; no match ⇒ refused), and refused with Google Conversion.`}
-          </li>
-          <li>
-            When a row&apos;s price column names a currency other than {x}: with a pricing
+            When a row&apos;s price column names a currency other than this app&apos;s currency,{" "}
+            {code(x)} (shown on the {appPageLink} — it may still be a tool guess): with a pricing
             template the row takes the tier whose price in that currency matches (none ⇒ refused;
             several ⇒ you pick), and countries the tier does not list are converted by Google from
             the tier&apos;s {x} price — a tier with no {x} price refuses the row. With Google
@@ -1421,8 +1439,8 @@ function PricingCurrencyNote({
       ) : (
         <ul className="mt-1 ml-4 list-disc space-y-0.5">
           <li>
-            This app has no currency set (see the {appPageLink}): a {code("Price")} column is read
-            as USD, and every row is priced from the currency its own price column names.
+            This app has no currency set (see the {appPageLink}): every row is priced from the
+            currency its price column names.
           </li>
           <li>Custom prices with a pricing template are refused (they need an app currency).</li>
         </ul>

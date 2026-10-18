@@ -240,18 +240,19 @@ currency app.
 
 | # | Chỗ | Lớp | Hiệu ứng |
 |---|---|---|---|
-| S-a | parser: header chung `Price`/`Default Price`/`Base Price` ⇒ currency = app (`excel-parser.ts:195-211`) | (a)+(b) | defaultPrice, tra tier, neo convertRegionPrices |
+| S-a | ~~parser: header chung `Price`/`Default Price`/`Base Price` ⇒ currency = app (`excel-parser.ts:195-211`)~~ **ĐÓNG ở H4.1** (header như vậy ⇒ từ chối file, Q1) | (a)+(b) | defaultPrice, tra tier, neo convertRegionPrices |
 | S-c | `detectCrossCurrencyTrigger` (`cross-currency.ts:86-112`) | (b)+(d) | đưa dòng vào nhánh cross (bỏ khớp theo SKU); Google Conversion ⇒ TỪ CHỐI |
 | S-d | entry currency-của-app trong tier (`cross-currency.ts:188-228`) | (a)+(b) | neo quy đổi cho mọi vùng ngoài tier; tier thiếu entry ⇒ từ chối |
 | S-e | custom prices: `appCurrencyForCustom` (`bulk-import.ts:387, :451-485`) | (a)+(b)+(d) | dưới template bắt buộc có entry app-currency và nó thành neo |
 | S-g | `buildProduct` defaultPrice → US-stamp khi bootstrap lỗi (`adapter :278-289`), fallback legacy (`publisher-client :1239-1250`) | (a) | US=TWD 35 (đo); defaultPrice legacy theo app |
 | S-b | wizard→execute mang `baseCurrency` của preview; execute tin client (`execute/route.ts:188-200, :228-229`) | (a) | chất mang của S-a |
+| S-i | *(bổ sung 2026-10-18, T1 F6 ở H4.1)* preview báo dòng cross-currency "will be refused on push" (`preview/route.ts:435-438`), nhưng dòng có custom prices dưới Google Conversion bỏ qua nhánh cross-currency ở execute (`bulk-import.ts:512`) nên VẪN được gửi | (d) | preview nói khác execute, và chỉ khi currency app ≠ currency file |
 | S-h | *(bổ sung 2026-10-18, T1 F8)* dòng có trigger cross-currency tra tier CHỈ theo (neo, giá), KHÔNG thử tier đặt tên theo SKU (`preview/route.ts:260-264`, `bulk-import.ts:566-570` → `cross-currency.ts:162-182`); dòng không trigger thử SKU trước (`templates.ts:803-819`) | (b) | tier theo SKU chỉ được dùng khi currency app = currency file hoặc app không có currency |
 | — | E1 lịch sử 2026-05-21 → 06-01 (`18840e1`…`a54f9fe`): wizard gửi `baseCurrency: appDefaultCurrency ?? r.baseCurrency` | (a) | MỌI dòng định giá theo currency app |
 
 Phát hiện phụ (độc lập với currency app — cần Manager):
 - Dưới nguồn template, giá GT trong file bị **thay bằng entry của tier** (`bulk-import.ts:947-952`, `:286`).
-- Cột giá thứ hai bị **bỏ qua im lặng** (first-wins, `excel-parser.ts:180-194`).
+- Cột giá thứ hai bị **bỏ qua im lặng** (first-wins, `excel-parser.ts:180-194`). **ĐÓNG ở H4.1** (Q10).
 - `PreviewTable` ghi "Auto-converted from USD" cứng — sai khi neo không phải USD, và hiện cả trên
   dòng đã bị từ chối (C2.1 đổi thành "Auto-converted by Google" / "Not sent — refused").
 
@@ -280,7 +281,7 @@ theo currency cột giá của chính nó; chỉ còn: header chung đọc là U
    của nó); Q9 — execute kiểm lại TỪNG DÒNG phía server (không parse lại file, không hash/token).
 8. **Audit:** mọi dòng ghi `file_currency`, header, neo `{currency, micros}`; batch ghi
    `pricing_rule: "file-currency-only/v1"`.
-9. **Chữ:** banner (thay câu C2.1), Notes sheet `template-spec.ts:351-354`, cảnh báo parser
+9. **Chữ:** banner (thay câu C2.1), Notes sheet `template-spec.ts:351-354`, ~~cảnh báo parser~~ (đã xoá ở H4.1 cùng nhánh header chung)
    `:400-414`, `template-spec.ts:18-24`, `design-bulk-import-template-download.md:18`.
 10. **Test:** T1 bất biến route-level preview→execute với app USD/TWD/VND/NULL ⇒ body batchUpdate
     giống hệt (đỏ hôm nay trên cả hai cây); T2 structural cấm `appDefaultCurrency|default_currency|appCurrency`
@@ -416,3 +417,36 @@ không khớp tier; custom xuất hiện nguyên văn; chặn suy biến (F3 ≠
   OVERWRITE; mỗi Overwrite được gửi GET live đúng 1 lần. Bất biến H4.2 thiết lập cho CREATE vì vậy buộc
   đúng cho Overwrite. Chỉ phần GIÁ thuộc H4; "thay mù" (ép AVAILABLE, tự ACTIVATE, mask thuế) vẫn là D10.
 
+
+**H4.1 — parser: file là nguồn duy nhất, MỘT choke point** (`orchestration/file-price.ts`):
+- `filePriceOf({currency, priceDecimal})` / `fileRegionPriceOf({region, currency, priceDecimal})`: danh
+  sách currency = catalog Play đo được (`PLAY_REGIONS`, 61 currency); độ chính xác = `decimalToMicros`;
+  GT: cặp vùng/currency phải đúng như Google bill. Không nhận currency app (test structural cho cả
+  `file-price.ts` lẫn parser). Parser không còn tham số currency app (`ParseOptions` xoá; preview gọi
+  `parseIapTemplate(buffer)`).
+- **Q1:** header không ghi currency (`Price` / `Default Price` / `Base Price`, mọi kiểu hoa/thường) ⇒
+  TỪ CHỐI file. **Q10:** đúng MỘT cột giá — nhận `Price (XXX)` ở mọi kiểu hoa/thường và cả dạng có
+  `Default`/`Base` phía trước; hai cột trở lên (mọi thứ tự) ⇒ từ chối file; header nào khác có chữ "price"
+  (vd `Price USD`, `Price (US$)`, `Unit price`) ⇒ từ chối file, không còn bị bỏ qua im lặng; `Price (XXX)`
+  mà XXX không phải currency Play bill (ABC, CNY, ARS…) ⇒ từ chối file.
+- Dòng có giá hoặc GT không gửi đúng được (không phải số; nhiều số lẻ hơn currency cho phép; GT ở cặp
+  vùng/currency Google không bill — `CNY→CN` (CN không bán), `ARS→AR` (AR bill bằng USD), giữ trong bảng
+  CÓ CHỦ Ý để bị từ chối với lý do thật) ⇒ dòng KHÔNG được nhập; một thông báo nêu MỌI lý do của dòng.
+  Preview trả các dòng đó trong `refusedRows`; wizard liệt kê bằng khung đỏ và **CHẶN Push** tới khi sửa
+  file (như gate độ chính xác cũ) — không bao giờ nhập một phần mà im lặng. Tóm tắt "No row can be imported:
+  N row(s) were not imported" đếm cả dòng bị từ chối lẫn dòng thiếu giá, hiện cùng thông báo dòng mẫu.
+- Ô số: nhiễu số thực ≤ 1e-9 (vd 25999.99999999996) đọc thành giá trị 6 chữ số lẻ; số lẻ THẬT thứ 7+
+  (4.9999999, 0.0000001) đi nguyên tới kiểm độ chính xác ⇒ dòng bị từ chối, không bị làm tròn thành giá khác.
+- Câu ghi chú giá trong wizard đổi phần parser cùng commit (pin nguyên văn cập nhật; comment test sửa: pin
+  chữ KHÔNG phát hiện được thay đổi giá — T1 làm việc đó).
+- T1 (cùng commit): **3/33** tổ hợp bất biến trọn vẹn (F1 bị từ chối ở preview). F9/F10: wizard chặn Push
+  với MỌI currency app, nhưng tab mở từ trước / POST thẳng vẫn gửi dòng đó và câu trả lời của server còn
+  phụ thuộc currency app (500 vs từ chối; dưới template GT bị thay) ⇒ T1 mô phỏng cả POST thẳng, vẫn tách
+  tới H4.3 (Q9). 24 tổ hợp còn lại tới H4.2. F6 dưới Google Conversion tách thêm vì cảnh báo preview sai
+  (S-i). Ô gửi `batchUpdate`: 82 (CREATE = OVERWRITE), ghim con số chính xác.
+- **Còn chờ Manager chốt** (hành vi cũ giữ nguyên): GT Currency không có trong bảng (vd `XYZ`), hoặc chỉ
+  điền một trong hai ô GT ⇒ bỏ GT + cảnh báo, dòng vẫn nhập theo giá chính (vùng đó nhận giá quy đổi thay
+  vì GT trong file). Đề xuất: thống nhất thành từ chối dòng như các lỗi GT khác.
+- Dung sai cũ ghi nhận (không đổi ở H4.1): số 0 lẻ ở cuối được nhận với currency 0 chữ số lẻ (`"26.000"`
+  VND ⇒ 26, có thể là dấu phân cách nghìn — Hotfix 5 cố ý nhận `"23000.00"`); giá 0 được nhận (Google có
+  nhận giá 0 không: CHƯA BIẾT).

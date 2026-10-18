@@ -126,18 +126,10 @@ export async function POST(
   })();
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  // Hotfix 16: thread the app's default currency so the parser can
-  // resolve generic "Price" / "Default Price" / "Base Price" headers to
-  // the right currency. Falls back to USD when the app has no currency (since
-  // C2 no refresh writes one, so every newly cached app starts empty).
-  // ⚠ H4 [2026-10-16]: the app currency still takes part in pricing here and
-  //   below (generic header, cross-currency trigger + tier entry) — MEASURED
-  //   to violate the Manager's rule "the currency in the file is the only
-  //   source of prices". Fix designed, awaiting the gate; until then this is
-  //   kept byte-for-byte the deployed behaviour so C2.1 changes no price.
-  const parsed = parseIapTemplate(buffer, {
-    appDefaultCurrency: app.default_currency ?? "USD",
-  });
+  // H4.1: the parser takes NO app currency — a price header without its
+  // currency is refused (Q1). ⚠ The app currency still takes part in pricing
+  // BELOW (cross-currency trigger + tier entry) until H4.2 removes it.
+  const parsed = parseIapTemplate(buffer);
   if (parsed.errors.length > 0) {
     return NextResponse.json(
       { errors: parsed.errors, warnings: parsed.warnings },
@@ -456,9 +448,13 @@ export async function POST(
     // pricing note describes it). Display only.
     appCurrency: app.default_currency ?? null,
     rows,
+    // H4.1 — rows the file states but the tool cannot honour exactly (price
+    // or GT price). Not in `rows`; the wizard names them and blocks Push.
+    refusedRows: parsed.refusedRows,
     warnings: warningsOut,
     counts: {
       total: rows.length,
+      refusedInFile: parsed.refusedRows.length,
       existing: rows.filter((r) => r.exists).length,
       new: rows.filter((r) => !r.exists).length,
       ambiguous: ambiguousCount,

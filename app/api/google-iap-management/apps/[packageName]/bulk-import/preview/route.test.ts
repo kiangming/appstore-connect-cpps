@@ -103,6 +103,7 @@ beforeEach(() => {
     rows: [parsedRow("com.vnggames.ballisticherotwid.0.99", 2), parsedRow("com.vnggames.ballisticherotwid.1.99", 3)],
     warnings: [],
     errors: [],
+    refusedRows: [],
     skippedSampleRows: [],
   });
 });
@@ -201,10 +202,35 @@ describe("Google bulk-import preview — C2.1: the app's currency/language are N
     expect(getAppDefaults).not.toHaveBeenCalled();
   });
 
-  it("pricing is UNCHANGED from the deployed code (H4 fix pending): generic header resolved with app.default_currency", async () => {
-    getAppByPackage.mockResolvedValue({ id: "app-1", default_currency: "TWD", google_console_account_id: "acc1" });
-    await POST(previewReq(), ctx);
-    expect(parseIapTemplate).toHaveBeenCalledWith(expect.anything(), { appDefaultCurrency: "TWD" });
+  it.each([["TWD"], [null]])(
+    "H4.1: the parser gets the FILE only — never the app currency (app currency %s)",
+    async (appCurrency) => {
+      getAppByPackage.mockResolvedValue({ id: "app-1", default_currency: appCurrency, google_console_account_id: "acc1" });
+      await POST(previewReq(), ctx);
+      expect(parseIapTemplate).toHaveBeenCalledTimes(1);
+      expect(parseIapTemplate.mock.calls[0]).toHaveLength(1);
+      // …and that one argument is exactly the uploaded file's bytes.
+      expect(parseIapTemplate.mock.calls[0][0]).toEqual(Buffer.from("x"));
+    },
+  );
+
+  it("H4.1: rows the parser refused are passed to the wizard (refusedRows + count), never dropped silently", async () => {
+    parseIapTemplate.mockReturnValue({
+      rows: [parsedRow("com.vnggames.ballisticherotwid.0.99", 2)],
+      warnings: ["w"],
+      errors: [],
+      refusedRows: [{ rowNumber: 3, sku: "bad", reason: "TWD only accepts whole numbers" }],
+      skippedSampleRows: [],
+    });
+    const res = await POST(previewReq(), ctx);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      refusedRows: unknown[];
+      counts: { refusedInFile: number; total: number };
+    };
+    expect(body.refusedRows).toEqual([{ rowNumber: 3, sku: "bad", reason: "TWD only accepts whole numbers" }]);
+    expect(body.counts.refusedInFile).toBe(1);
+    expect(body.counts.total).toBe(1);
   });
 
   it.each([
@@ -218,6 +244,7 @@ describe("Google bulk-import preview — C2.1: the app's currency/language are N
         rows: [{ ...parsedRow("com.vnggames.ballisticherotwid.eur", 2), baseCurrency: "EUR", basePriceDecimal: "1.09" }],
         warnings: [],
         errors: [],
+        refusedRows: [],
         skippedSampleRows: [],
       });
       const res = await POST(previewReq(), ctx);
@@ -239,6 +266,7 @@ describe("Google bulk-import preview — C2.1: the app's currency/language are N
       rows: [parsedRow("com.vnggames.ballisticherotwid.0.99", 2)],
       warnings: ["parser says hi"],
       errors: [],
+      refusedRows: [],
       skippedSampleRows: [],
     });
     const res = await POST(previewReq(), ctx);
@@ -247,10 +275,4 @@ describe("Google bulk-import preview — C2.1: the app's currency/language are N
     expect(body.warnings).toEqual(["parser says hi"]);
   });
 
-  it("…and with no app currency the parser still gets USD, exactly as deployed", async () => {
-    getAppByPackage.mockResolvedValue({ id: "app-1", default_currency: null, google_console_account_id: "acc1" });
-    const res = await POST(previewReq(), ctx);
-    expect(res.status).toBe(200);
-    expect(parseIapTemplate).toHaveBeenCalledWith(expect.anything(), { appDefaultCurrency: "USD" });
-  });
 });
