@@ -15,14 +15,19 @@
  * any query method it does not implement, a single() over >1 rows and an
  * exchange-table miss are recorded and fail the run), the session, the
  * account list + credentials, the active account, the app row, the IAP
- * mirror (EMPTY ⇒ every row is a CREATE; Overwrite rows are outside T1), the
- * audit log and Hub tracking. convertRegionPrices uses a MADE-UP exchange
+ * mirror, the live product a GET returns, the audit log and Hub tracking. convertRegionPrices uses a MADE-UP exchange
  * table: it shows WHICH anchor (currency + amount) the code hands Google.
  * It echoes the anchor's own region exactly — an artifact of the fake, so T1
  * is NOT evidence of what Google does with the base region.
  *
  * THE MATRIX: 11 files × 3 pricing sources × 4 app currencies (USD, TWD,
- * VND, none). Per file and source, the outcome — client gates (Push
+ * VND, none), each run TWICE: as a CREATE (empty mirror) and as an OVERWRITE
+ * (the SKU is in the mirror, the Manager picks Overwrite, a live GET returns
+ * a product with two purchase options). Overwrite prices through the SAME
+ * code as CREATE (design §5.7): the test asserts it cell by cell, so the
+ * invariant H4.2 establishes for CREATE holds for Overwrite too. Only the
+ * PRICE of Overwrite is in scope — the "blind replace" (forced AVAILABLE,
+ * auto-ACTIVATE, tax mask) is D10. Per file and source, the outcome — client gates (Push
  * precision gate, custom Save gate), preview refusal, rows refused at
  * execute, convertRegionPrices anchors, the FULL batchUpdate request and the
  * purchase-option state calls — must not depend on the app currency.
@@ -68,6 +73,8 @@ const st = vi.hoisted(() => ({
   tables: {} as Record<string, Array<Record<string, unknown>>>,
   /** Anything the fakes could not answer truthfully. Must stay empty. */
   fakeErrors: [] as string[],
+  /** The cached IAP mirror (listIapsForApp). */
+  mirror: [] as Array<{ sku: string }>,
 }));
 
 vi.mock("googleapis", () => ({
@@ -110,7 +117,7 @@ vi.mock("@/lib/google-iap-management/repository/apps", () => ({
   getIapsMirrorSyncedAt: async () => "2026-10-16T03:25:10.000Z",
 }));
 vi.mock("@/lib/google-iap-management/repository/iaps", () => ({
-  listIapsForApp: async () => [],
+  listIapsForApp: async () => st.mirror,
   syncIapFromGoogle: async () => undefined,
 }));
 vi.mock("@/lib/google-iap-management/repository/actions-log", () => ({ appendAction: async () => undefined }));
@@ -320,9 +327,46 @@ function dialogRows(entries: CustomPriceSet["entries"]): CustomPriceRow[] {
   }));
 }
 
+type Decision = "create" | "overwrite";
+
+/** The live product an Overwrite GETs: the legacy-compatible option the tool
+ *  targets, plus a second option that must come back untouched. */
+const NON_TARGET_OPTION = {
+  purchaseOptionId: "promo",
+  buyOption: { legacyCompatible: false },
+  state: "ACTIVE",
+  regionalPricingAndAvailabilityConfigs: [
+    { regionCode: "US", price: { currencyCode: "USD", units: "1", nanos: 0 }, availability: "AVAILABLE" },
+  ],
+};
+function liveProduct(productId: string) {
+  return {
+    packageName: PKG,
+    productId,
+    listings: [{ languageCode: "en-US", title: "Live title", description: "" }],
+    purchaseOptions: [
+      {
+        purchaseOptionId: "legacy-base",
+        buyOption: { legacyCompatible: true },
+        state: "ACTIVE",
+        regionalPricingAndAvailabilityConfigs: [
+          { regionCode: "US", price: { currencyCode: "USD", units: "4", nanos: 990_000_000 }, availability: "AVAILABLE" },
+        ],
+      },
+      structuredClone(NON_TARGET_OPTION),
+    ],
+  };
+}
+
 interface Outcome {
   /** Compared for invariance: everything that decides what Google gets. */
   full: string;
+  /** The PRICE part only (client gates, refusals, anchors, the priced
+   *  option's regional configs) — must be identical for CREATE and OVERWRITE. */
+  pricing: string;
+  /** Overwrite only: which option was priced, and whether the other one came
+   *  back exactly as Google had it. Null when nothing was sent. */
+  overwrite: { targetId: string | null; nonTargetUntouched: boolean } | null;
   /** Human-readable, pinned in EXPECTED_TODAY. */
   short: string;
   calls: { batch: number; legacy: number; get: number };
@@ -330,9 +374,10 @@ interface Outcome {
 
 const ctx = { params: { packageName: PKG } };
 
-async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency): Promise<Outcome> {
+async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, decision: Decision): Promise<Outcome> {
   st.appCurrency = appCurrency;
   st.tables = seedTables();
+  st.mirror = decision === "overwrite" ? [{ sku: f.sku ?? SKU }] : [];
   Object.values(g).forEach((m) => m.mockReset());
   if (f.convertFails) {
     g.convert.mockRejectedValue(Object.assign(new Error("convert down"), { code: 503 }));
@@ -343,7 +388,11 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency): P
     data: { oneTimeProducts: r.requestBody.requests.map((x) => x.oneTimeProduct) },
   }));
   g.states.mockResolvedValue({ data: {} });
-  g.get.mockRejectedValue(new Error("T1: create rows must never GET the live product"));
+  if (decision === "overwrite") {
+    g.get.mockImplementation(async (r: { productId: string }) => ({ data: liveProduct(r.productId) }));
+  } else {
+    g.get.mockRejectedValue(new Error("T1: create rows must never GET the live product"));
+  }
   g.legacy.mockRejectedValue(new Error("T1: the legacy batch fallback must never be reached"));
   const calls = () => ({ batch: g.batch.mock.calls.length, legacy: g.legacy.mock.calls.length, get: g.get.mock.calls.length });
 
@@ -359,11 +408,12 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency): P
   };
   if (!pres.ok || !pbody.rows) {
     const preview = `PREVIEW ${pres.status} ${pbody.code ?? ""} ${pbody.error ?? (pbody.errors ?? []).join(" · ")}`.trim();
-    return { full: JSON.stringify({ preview }), short: preview, calls: calls() };
+    return { full: JSON.stringify({ preview }), pricing: JSON.stringify({ preview }), overwrite: null, short: preview, calls: calls() };
   }
 
   // ── Client side, with the wizard's / dialog's own functions ──────────
-  const rows = previewRowsFromResponse(pbody.rows);
+  // Overwrite: the Manager picks it in the preview table for the existing row.
+  const rows = previewRowsFromResponse(pbody.rows).map((r) => (decision === "overwrite" ? { ...r, decision } : r));
   const pushBlocked = computePrecisionViolations(rows).map((v) => `${v.sku}: ${v.error}`);
   const saveGate = f.custom
     ? customAppCurrencyGate(dialogRows(f.custom), {
@@ -411,9 +461,21 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency): P
   const execute = `${eres.status}${ebody.error ? ` ${ebody.error}` : ""}`;
 
   type Cfg = { regionCode: string; price: Money };
-  const cfgs =
-    (requests[0] as { requests?: Array<{ oneTimeProduct?: { purchaseOptions?: Array<{ regionalPricingAndAvailabilityConfigs?: Cfg[] }> } }> } | null)
-      ?.requests?.[0]?.oneTimeProduct?.purchaseOptions?.[0]?.regionalPricingAndAvailabilityConfigs ?? null;
+  type Option = { purchaseOptionId?: string; regionalPricingAndAvailabilityConfigs?: Cfg[] };
+  const options =
+    (requests[0] as { requests?: Array<{ oneTimeProduct?: { purchaseOptions?: Option[] } }> } | null)
+      ?.requests?.[0]?.oneTimeProduct?.purchaseOptions ?? null;
+  const priced = options?.find((o) => o.purchaseOptionId !== NON_TARGET_OPTION.purchaseOptionId) ?? null;
+  const cfgs = priced?.regionalPricingAndAvailabilityConfigs ?? null;
+  const overwrite =
+    decision === "overwrite" && options
+      ? {
+          targetId: priced?.purchaseOptionId ?? null,
+          nonTargetUntouched:
+            JSON.stringify(options.find((o) => o.purchaseOptionId === NON_TARGET_OPTION.purchaseOptionId)) ===
+            JSON.stringify(NON_TARGET_OPTION),
+        }
+      : null;
   const prices = cfgs ? cfgs.map((c) => `${c.regionCode}=${moneyText(c.price)}`).sort().join(", ") : "no batchUpdate";
   const refusedKinds = (ebody.refusedRows ?? []).map((r) => r.kind);
   const short = [
@@ -428,6 +490,8 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency): P
     .join(" · ");
   return {
     full: JSON.stringify({ pushBlocked, customSaveBlocked, execute, refused, anchors, requests, states }),
+    pricing: JSON.stringify({ pushBlocked, customSaveBlocked, execute, refused, anchors, cfgs }),
+    overwrite,
     short,
     calls: calls(),
   };
@@ -435,7 +499,8 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency): P
 
 /* ── Run the matrix once ──────────────────────────────────────────────── */
 
-const outcomes = new Map<string, Map<AppCurrency, Outcome>>();
+const outcomes = new Map<string, Map<AppCurrency, Outcome>>(); // CREATE
+const overwriteOutcomes = new Map<string, Map<AppCurrency, Outcome>>(); // OVERWRITE
 const key = (f: FileCase, s: Source) => `${f.id} · ${s}`;
 
 beforeAll(async () => {
@@ -444,11 +509,16 @@ beforeAll(async () => {
   for (const f of FILES) {
     for (const s of SOURCES) {
       const byCurrency = new Map<AppCurrency, Outcome>();
-      for (const c of APP_CURRENCIES) byCurrency.set(c, await runOnce(f, s, c));
+      const byCurrencyOverwrite = new Map<AppCurrency, Outcome>();
+      for (const c of APP_CURRENCIES) {
+        byCurrency.set(c, await runOnce(f, s, c, "create"));
+        byCurrencyOverwrite.set(c, await runOnce(f, s, c, "overwrite"));
+      }
       outcomes.set(key(f, s), byCurrency);
+      overwriteOutcomes.set(key(f, s), byCurrencyOverwrite);
     }
   }
-}, 120_000);
+}, 240_000);
 afterAll(() => vi.restoreAllMocks());
 
 /** App currencies grouped by identical FULL outcome, e.g. "NULL+USD / TWD / VND". */
@@ -786,16 +856,49 @@ function stripComments(src: string): string {
 }
 
 describe("T1 (H4.0 pin) — today the Google request DEPENDS on the app currency; H4.2 flips it to identical", () => {
-  it("the matrix ran: 11 files × 3 sources × 4 app currencies; per run ≤1 batchUpdate, no legacy fallback, no live GET; the fakes answered every query", () => {
+  it("the matrix ran: 11 files × 3 sources × 4 app currencies × CREATE/OVERWRITE; per run ≤1 batchUpdate, no legacy fallback, a live GET only for a sent Overwrite; the fakes answered every query", () => {
     expect(outcomes.size).toBe(FILES.length * SOURCES.length);
-    const perRun: Record<string, Outcome["calls"]> = {};
-    for (const [k, m] of outcomes) {
-      expect(m.size).toBe(APP_CURRENCIES.length);
-      for (const [c, o] of m) perRun[`${k} · app ${label(c)}`] = o.calls;
+    expect(overwriteOutcomes.size).toBe(FILES.length * SOURCES.length);
+    const offenders: string[] = [];
+    for (const [decision, map] of [["create", outcomes], ["overwrite", overwriteOutcomes]] as const) {
+      for (const [k, m] of map) {
+        expect(m.size).toBe(APP_CURRENCIES.length);
+        for (const [c, o] of m) {
+          const { batch, legacy, get } = o.calls;
+          const getOk = decision === "create" ? get === 0 : get === batch;
+          if (batch > 1 || legacy > 0 || !getOk) offenders.push(`${k} · app ${label(c)} · ${decision} ${JSON.stringify(o.calls)}`);
+        }
+      }
     }
-    const offenders = Object.entries(perRun).filter(([, c]) => c.batch > 1 || c.legacy > 0 || c.get > 0);
     expect(offenders).toEqual([]);
     expect(st.fakeErrors).toEqual([]);
+  });
+
+  it("OVERWRITE prices exactly like CREATE, cell by cell — and leaves the other purchase option untouched", () => {
+    const mismatches: string[] = [];
+    const overwriteFaults: string[] = [];
+    let sentOverwrites = 0;
+    for (const [k, m] of outcomes) {
+      const om = overwriteOutcomes.get(k)!;
+      if (grouping(om) !== grouping(m)) mismatches.push(`${k}: grouping ${grouping(om)} ≠ ${grouping(m)}`);
+      for (const c of APP_CURRENCIES) {
+        const create = m.get(c)!;
+        const ow = om.get(c)!;
+        if (ow.pricing !== create.pricing) mismatches.push(`${k} · app ${label(c)}`);
+        if (ow.overwrite) {
+          sentOverwrites += 1;
+          if (ow.overwrite.targetId !== "legacy-base" || !ow.overwrite.nonTargetUntouched) {
+            overwriteFaults.push(`${k} · app ${label(c)} ${JSON.stringify(ow.overwrite)}`);
+          }
+        }
+      }
+    }
+    expect(mismatches).toEqual([]);
+    expect(overwriteFaults).toEqual([]);
+    // Not vacuous: every cell that sends a CREATE also sends an OVERWRITE.
+    const sentCreates = [...outcomes.values()].flatMap((m) => [...m.values()]).filter((o) => o.calls.batch === 1).length;
+    expect(sentOverwrites).toBe(sentCreates);
+    expect(sentOverwrites).toBeGreaterThan(80);
   });
 
   it("H4.0 pin — which app currencies give the SAME outcome today, file by file", () => {

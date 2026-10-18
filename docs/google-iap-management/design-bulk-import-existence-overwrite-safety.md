@@ -246,6 +246,7 @@ currency app.
 | S-e | custom prices: `appCurrencyForCustom` (`bulk-import.ts:387, :451-485`) | (a)+(b)+(d) | dưới template bắt buộc có entry app-currency và nó thành neo |
 | S-g | `buildProduct` defaultPrice → US-stamp khi bootstrap lỗi (`adapter :278-289`), fallback legacy (`publisher-client :1239-1250`) | (a) | US=TWD 35 (đo); defaultPrice legacy theo app |
 | S-b | wizard→execute mang `baseCurrency` của preview; execute tin client (`execute/route.ts:188-200, :228-229`) | (a) | chất mang của S-a |
+| S-h | *(bổ sung 2026-10-18, T1 F8)* dòng có trigger cross-currency tra tier CHỈ theo (neo, giá), KHÔNG thử tier đặt tên theo SKU (`preview/route.ts:260-264`, `bulk-import.ts:566-570` → `cross-currency.ts:162-182`); dòng không trigger thử SKU trước (`templates.ts:803-819`) | (b) | tier theo SKU chỉ được dùng khi currency app = currency file hoặc app không có currency |
 | — | E1 lịch sử 2026-05-21 → 06-01 (`18840e1`…`a54f9fe`): wizard gửi `baseCurrency: appDefaultCurrency ?? r.baseCurrency` | (a) | MỌI dòng định giá theo currency app |
 
 Phát hiện phụ (độc lập với currency app — cần Manager):
@@ -377,10 +378,11 @@ Push (độ chính xác) và TOÀN BỘ body execute (`execute-payload.ts`), gat
 trên 285 tổ hợp đầu vào). Một test jsdom của wizard bắt body fetch THẬT gửi tới execute và so với
 builder ⇒ wizard thêm/sửa gì sau builder (vd đóng dấu currency app vào `baseCurrency`) là ĐỎ.
 Giả: googleapis (không gửi gì), DB trong bộ nhớ (truy vấn chưa hỗ trợ / single() >1 dòng / thiếu tỷ
-giá giả ⇒ ghi lỗi, test đỏ), session, account + credentials, app row, mirror IAP RỖNG (⇒ mọi dòng là
-CREATE; Overwrite NGOÀI T1), audit, Hub. `convertRegionPrices` giả trả lại đúng giá vùng của neo — là
-tạo tác của bản giả, T1 KHÔNG chứng minh Google làm gì với vùng gốc.
-Ma trận 11 file × 3 nguồn giá × 4 currency app (USD, TWD, VND, không có) — gồm SKU trùng tên tier
+giá giả ⇒ ghi lỗi, test đỏ), session, account + credentials, app row, mirror IAP, sản phẩm live mà GET
+trả về, audit, Hub. `convertRegionPrices` giả trả lại đúng giá vùng của neo — là tạo tác của bản giả:
+Google làm gì với vùng gốc là **CHƯA BIẾT** (chỉ đo được bằng lệnh ghi lên Google — Manager chấp nhận).
+Ma trận 11 file × 3 nguồn giá × 4 currency app (USD, TWD, VND, không có), mỗi ô chạy HAI LẦN: CREATE
+và OVERWRITE (H4.0b, xem dưới) — gồm SKU trùng tên tier
 (F8), giá / GT sai độ chính xác (F9, F10), GT trên dòng template không khớp (F11). So sánh: gate Push
 và gate Save phía client, từ chối ở preview, dòng bị từ chối ở execute, neo `convertRegionPrices`,
 **toàn bộ** request `batchUpdate`, các lệnh đổi trạng thái purchase option. Hiện trạng ghim: **33/33**
@@ -393,3 +395,24 @@ luật: neo = currency + giá của header; không từ chối ngoài các ca Q1
 không khớp tier; custom xuất hiện nguyên văn; chặn suy biến (F3 ≠ F4 dưới google_default).
 **T1 KHÔNG phủ Q8** (v3 luôn thành công nên fallback không thể chạm tới): H4.2 thêm test riêng — v3 lỗi
 ⇒ lỗi có cấu trúc trả nguyên văn, `inappproducts.batchUpdate` không bao giờ được gọi.
+
+**H4.0b — Overwrite có định giá qua cùng thư viện với CREATE không? CÓ** (đọc code tại `dfc6366`):
+- Orchestrator không rẽ nhánh giá theo `decision`: `decision` chỉ dùng để bỏ dòng Skip
+  (`bulk-import.ts:338`), đặt cờ `isOverwrite: row.decision === "overwrite"` (`:1170`) và đếm kết quả
+  (`:1192`). `buildProduct` (`:1131`), cross-currency, tra tier, custom, neo quy đổi chạy y hệt cho cả hai.
+  Preview: `exists` chỉ là cờ hiển thị và bộ đếm (`preview/route.ts:411`, `:462-463`).
+- Khác biệt DUY NHẤT nằm ở `batchUpsertInAppProducts`: dòng Overwrite GET sản phẩm live
+  (`publisher-client.ts:1104-1124`) rồi adapter thay `regionalPricingAndAvailabilityConfigs` của option
+  đích (`onetime-product-adapter.ts:378-385`) bằng ĐÚNG mảng giá mà CREATE dùng — mảng đó dựng bởi
+  `buildRegionalPricing(iap)` trước khi rẽ nhánh (`:361-362`). Option khác giữ nguyên (`:375-377`).
+- Đọc currency app ở chỗ nào riêng cho Overwrite không? KHÔNG: adapter không có tham chiếu nào (grep
+  `appCurrency|default_currency|appDefaultCurrency`: chỉ một comment ở `:58`); trong `publisher-client.ts`
+  `appCurrency` chỉ có ở `legacyFallbackBody` (`:686-701`), do insert/patch ĐƠN LẺ gọi (`:762`, `:850`),
+  không phải đường batch. ⇒ Overwrite thừa hưởng NGUYÊN các chỗ A1–A8 + S-h, không thêm chỗ nào.
+- ⇒ T1 mở rộng: mỗi ô chạy thêm một lượt OVERWRITE (mirror có SKU, Manager chọn Overwrite, GET live trả
+  sản phẩm có option `legacy-base` + option `promo`). Khẳng định mới: **phần GIÁ của Overwrite = của CREATE
+  ở cả 132 ô** (gate client, từ chối, neo, mảng giá của option đích), nhóm theo currency app giống nhau ở
+  cả 33 tổ hợp; option đích là `legacy-base`, option `promo` trở về NGUYÊN VẸN; 92 ô gửi CREATE ⇔ 92 ô gửi
+  OVERWRITE; mỗi Overwrite được gửi GET live đúng 1 lần. Bất biến H4.2 thiết lập cho CREATE vì vậy buộc
+  đúng cho Overwrite. Chỉ phần GIÁ thuộc H4; "thay mù" (ép AVAILABLE, tự ACTIVATE, mask thuế) vẫn là D10.
+
