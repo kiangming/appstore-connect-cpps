@@ -56,14 +56,22 @@ const finalizeHubTracking = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/google-iap-management/hub-tracking/tracking", () => ({ finalizeHubTracking }));
 
 import { POST } from "./route";
+import { MAX_DROPPED_ROWS, PRICING_RULE } from "@/lib/google-iap-management/bulk-import-contract";
 
 const ctx = { params: { packageName: "com.example.app" } };
 
-function jsonReq(body: unknown): Request {
+/** A body as the CURRENT wizard sends it (buildExecuteRequestBody stamps
+ *  `pricing_rule`). Pass a body that already names `pricing_rule` — or
+ *  `{ raw: true }` — to send it untouched. */
+function jsonReq(body: unknown, opts: { raw?: boolean } = {}): Request {
+  const withRule =
+    !opts.raw && body && typeof body === "object" && !("pricing_rule" in (body as object))
+      ? { pricing_rule: PRICING_RULE, ...(body as object) }
+      : body;
   return new Request("http://localhost/api/x", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(withRule),
   });
 }
 
@@ -314,52 +322,24 @@ describe("Google bulk-import execute — per-item custom prices (SC4)", () => {
     ]);
   });
 
-  it("server-side re-validation still applies under Google Conversion", async () => {
-    executeBulkImport.mockResolvedValue(okResult);
-    const res = await POST(
-      jsonReq({
-        hub_run_id: "run-c2b",
-        pricingSource: "google_default",
-        rows: [
-          {
-            ...validRow,
-            customPrices: {
-              entries: [{ region: "JP", currency: "JPY", priceDecimal: "1500.5" }],
-            },
-          },
-        ],
-      }),
-      ctx,
-    );
-    expect(res.status).toBe(200);
-    const arg = executeBulkImport.mock.calls.at(-1)![1];
-    expect(arg.rows[0].customPriceRefusal).toMatchObject({ kind: "custom_invalid_price" });
-  });
-
-  it("SERVER-SIDE RE-VALIDATION rejects what the dialog would have caught (client state is untrusted)", async () => {
+  it("H4.3 (Q9): the PRICE rules run in the orchestrator (one refusal path) — the route forwards a bad price untouched, it does not refuse or 400", async () => {
+    // The orchestrator's custom pre-pass re-checks with statedPriceOf, the
+    // dialog's own rule (bulk-import.custom-prices.test.ts pins the refusal).
     executeBulkImport.mockResolvedValue({ ...okResult, customPricedRows: 0, customRefusedRows: 1 });
-    // VND takes no decimals — the dialog blocks this, a stale tab wouldn't.
-    const res = await POST(
-      jsonReq({
-        hub_run_id: "run-c3",
-        pricingSource: "default_template",
-        rows: [
-          {
-            ...validRow,
-            customPrices: {
-              entries: [{ region: "VN", currency: "VND", priceDecimal: "199000.55" }],
-            },
-          },
-        ],
-      }),
-      ctx,
-    );
-    // Not a 400 — the ROW is refused, the batch still runs.
-    expect(res.status).toBe(200);
-    const arg = executeBulkImport.mock.calls.at(-1)![1];
-    expect(arg.rows[0].customPriceRefusal).toMatchObject({ kind: "custom_invalid_price" });
-    expect(arg.rows[0].customPriceRefusal.reason).toContain("199000.55");
-    expect(arg.rows[0].customPrices.entries).toEqual([]);
+    for (const [priceDecimal, currency, region] of [["199000.55", "VND", "VN"], ["26.000", "VND", "VN"], ["0", "JPY", "JP"]]) {
+      const res = await POST(
+        jsonReq({
+          hub_run_id: "run-c3",
+          pricingSource: "google_default",
+          rows: [{ ...validRow, customPrices: { entries: [{ region, currency, priceDecimal }] } }],
+        }),
+        ctx,
+      );
+      expect(res.status).toBe(200);
+      const arg = executeBulkImport.mock.calls.at(-1)![1];
+      expect(arg.rows[0].customPriceRefusal ?? null).toBeNull();
+      expect(arg.rows[0].customPrices.entries).toEqual([{ region, currency, priceDecimal }]);
+    }
   });
 
   it("one malformed custom row does NOT 400 the batch — 99 good rows still proceed", async () => {
@@ -378,19 +358,27 @@ describe("Google bulk-import execute — per-item custom prices (SC4)", () => {
     expect(res.status).toBe(200);
     const arg = executeBulkImport.mock.calls.at(-1)![1];
     expect(arg.rows[0].customPriceRefusal ?? null).toBeNull();
-    expect(arg.rows[1].customPriceRefusal).toMatchObject({ kind: "custom_invalid_price" });
+    expect(arg.rows[1].customPriceRefusal).toEqual({
+      kind: "custom_invalid_price",
+      // One period, not ".." (H4.3).
+      reason: "Row 3 (bad): a custom price entry is missing its country, currency or amount. Row not sent.",
+    });
   });
 
-  it("400s an empty entries array", async () => {
+  it("H4.3: an EMPTY custom set refuses its ROW (in the orchestrator), not the whole batch", async () => {
+    executeBulkImport.mockResolvedValue({ ...okResult, customPricedRows: 0, customRefusedRows: 1 });
     const res = await POST(
       jsonReq({
         hub_run_id: "run-c5",
         pricingSource: "default_template",
-        rows: [{ ...validRow, customPrices: { entries: [] } }],
+        rows: [{ ...validRow, customPrices: { entries: [] } }, { ...validRow, rowNumber: 2, sku: "sku2" }],
       }),
       ctx,
     );
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    const arg = executeBulkImport.mock.calls.at(-1)![1];
+    expect(arg.rows[0].customPrices.entries).toEqual([]);
+    expect(arg.rows).toHaveLength(2);
   });
 
   it("P5/Q5: a refused CUSTOM row closes the Hub run FAILED, not SUCCESS", async () => {
@@ -434,6 +422,100 @@ describe("Google bulk-import execute — per-item custom prices (SC4)", () => {
     );
     expect(res.status).toBe(200);
     expect(finalizeHubTracking).toHaveBeenCalledWith("run-c7", "PARTIAL", undefined);
+  });
+});
+
+describe("H4.3 — the execute route: pricing rule, dropped rows, every refusal counted", () => {
+  const ok = (over: Record<string, unknown> = {}) => ({
+    batchId: "b1",
+    rowsTotal: 1,
+    rowsCreated: 1,
+    rowsOverwritten: 0,
+    rowsSkipped: 0,
+    rowsFailed: 0,
+    rowsRefused: 0,
+    priceRefusedRows: 0,
+    droppedRows: 0,
+    customPricedRows: 0,
+    customRefusedRows: 0,
+    refusedRows: [],
+    durationMs: 1,
+    ...over,
+  });
+
+  it("a request WITHOUT the current pricing_rule (a tab previewed before H4) ⇒ 409 PREVIEW_OUTDATED, nothing executed, Hub closed FAILED", async () => {
+    for (const body of [
+      { hub_run_id: "run-o1", pricingSource: "google_default", rows: [validRow] },
+      { hub_run_id: "run-o1", pricing_rule: "app-currency/v0", pricingSource: "google_default", rows: [validRow] },
+      // What the pre-H4 wizard sent: priceHeaderSource "inferred" + the app's currency.
+      { hub_run_id: "run-o1", pricingSource: "google_default", rows: [{ ...validRow, baseCurrency: "VND", basePriceDecimal: "26000", priceHeaderSource: "inferred" }] },
+    ]) {
+      finalizeHubTracking.mockClear();
+      const res = await POST(jsonReq(body, { raw: true }), ctx);
+      expect(res.status).toBe(409);
+      expect(((await res.json()) as { code: string }).code).toBe("PREVIEW_OUTDATED");
+      // "Reload": in the stale tab, uploading again would rebuild the same old body.
+      expect(finalizeHubTracking).toHaveBeenCalledWith("run-o1", "FAILED", expect.stringMatching(/Reload this page, then upload the file and run Preview again/));
+    }
+    expect(executeBulkImport).not.toHaveBeenCalled();
+  });
+
+  it("droppedRows reach the orchestrator; one that is ALSO a sent row is counted once (as the sent row)", async () => {
+    executeBulkImport.mockResolvedValue(ok());
+    const res = await POST(
+      jsonReq({
+        hub_run_id: "run-d1",
+        pricingSource: "google_default",
+        rows: [validRow],
+        droppedRows: [
+          { rowNumber: 1, sku: "sku1", reason: "dup of the sent row" },
+          { rowNumber: 5, sku: "sku5", reason: '"Price (USD)" is empty — fill in the price.' },
+          { rowNumber: 5, sku: "sku5", reason: "a repeated entry" },
+        ],
+      }),
+      ctx,
+    );
+    expect(res.status).toBe(200);
+    expect(executeBulkImport.mock.calls.at(-1)![1].droppedRows).toEqual([
+      { rowNumber: 5, sku: "sku5", reason: '"Price (USD)" is empty — fill in the price.' },
+    ]);
+  });
+
+  it("malformed droppedRows / regionOverrides / listings ⇒ a clean 400 (never an unhandled TypeError), Hub closed FAILED", async () => {
+    for (const body of [
+      { hub_run_id: "run-d2", pricingSource: "google_default", rows: [validRow], droppedRows: [{ rowNumber: "x" }] },
+      { hub_run_id: "run-d2", pricingSource: "google_default", rows: [{ ...validRow, regionOverrides: [{ region: 1 }] }] },
+      { hub_run_id: "run-d2", pricingSource: "google_default", rows: [{ ...validRow, listings: [{ locale: "en-US", title: 123 }] }] },
+    ]) {
+      finalizeHubTracking.mockClear();
+      const res = await POST(jsonReq(body), ctx);
+      expect(res.status).toBe(400);
+      expect(finalizeHubTracking).toHaveBeenCalledWith("run-d2", "FAILED", expect.any(String));
+    }
+    expect(executeBulkImport).not.toHaveBeenCalled();
+  });
+
+  it("more dropped rows than one push allows ⇒ a 400 that says what to do (not 'malformed')", async () => {
+    const droppedRows = Array.from({ length: MAX_DROPPED_ROWS + 1 }, (_, i) => ({ rowNumber: i + 10, sku: `s${i}`, reason: "r" }));
+    const res = await POST(jsonReq({ hub_run_id: "run-d3", pricingSource: "google_default", rows: [validRow], droppedRows }), ctx);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toMatch(/cannot be imported — more than \d+ in one push\. Clean the file and run Preview again\./);
+    expect(executeBulkImport).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["refused_in_file (a dropped row)", { rowsTotal: 2, rowsRefused: 1, droppedRows: 1 }],
+    ["tier_price_invalid", { rowsTotal: 2, rowsRefused: 1, priceRefusedRows: 1 }],
+  ])("P5: 1 created + 1 %s ⇒ PARTIAL — the Hub counts rowsRefused, so a refusal of ANY kind is a failure", async (_k, over) => {
+    executeBulkImport.mockResolvedValue(ok(over));
+    const res = await POST(jsonReq({ hub_run_id: "run-p", pricingSource: "google_default", rows: [validRow] }), ctx);
+    expect(res.status).toBe(200);
+    expect(finalizeHubTracking).toHaveBeenCalledWith("run-p", "PARTIAL", undefined);
+  });
+
+  it("the route no longer reads or forwards priceHeaderSource", () => {
+    const src = readFileSync(join(__dirname, "route.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(src).not.toMatch(/priceHeaderSource/);
   });
 });
 

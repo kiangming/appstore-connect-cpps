@@ -68,7 +68,8 @@ import {
   findTemplateId,
   type TemplateScopeRef,
 } from "../queries/templates";
-import { filePriceOf, fileRegionPriceOf } from "./file-price";
+import { filePriceOf, fileRegionPriceOf, statedPriceOf, storedRegionPriceOf } from "./file-price";
+import { describeGoogleError } from "../google/google-error-descriptor";
 
 /** Bound on per-row convertRegionPrices fanout. Google's Publisher API
  *  doesn't publish a documented rate limit for read endpoints but bulk
@@ -97,20 +98,28 @@ export interface BulkImportRow extends ParsedIapRow {
   chosenTierIdentifier?: string | null;
   defaultTierIdentifier?: string | null;
   tierCandidateCount?: number;
-  /** H4.2 — the price the FILE states cannot be sent exactly
-   *  (`file_price_invalid`: filePriceOf / fileRegionPriceOf refused it), or
-   *  Google's conversion of it failed and the file price is not USD, so
-   *  there is no honest US price (`conversion_failed`, Manager Q7). Per-row
-   *  fail-soft: excluded from the batch, audit-logged, returned in
-   *  `refusedRows`. Never replaced by another price. */
+  /** A price refusal — per-row fail-soft: excluded from the batch,
+   *  audit-logged, returned in `refusedRows`. Never replaced by another price.
+   *   - `file_price_invalid` (H4.2): the price / GT the FILE states cannot be
+   *     sent exactly (filePriceOf / fileRegionPriceOf refused it);
+   *   - `conversion_failed` (H4.2, Manager Q7): Google's conversion of the
+   *     file price failed, or returned no US price, and the file price is
+   *     not USD;
+   *   - `tier_price_invalid` (H4.3): the matched pricing-template tier holds
+   *     an amount that cannot be sent (wrong precision, 0) — it used to
+   *     throw the whole batch;
+   *   - `price_build_failed` (H4.3): building the row's prices threw anyway
+   *     — a guard, so no price can ever 500 the batch; its own kind so it
+   *     can never stand in for one of the checks above. */
   priceRefusal?: {
     reason: string;
-    kind: "file_price_invalid" | "conversion_failed";
+    kind: "file_price_invalid" | "conversion_failed" | "tier_price_invalid" | "price_build_failed";
   } | null;
   /** Per-item custom prices (Phase 3). ABSOLUTE per-country amounts the
    *  Manager typed in the Preview step's dialog — independent of the batch
    *  template. Sent under EVERY pricing source on non-skipped rows; the
-   *  execute route re-validates before it gets here.
+   *  execute route checks their STRUCTURE, the custom pre-pass below checks
+   *  their PRICES (statedPriceOf — H4.3, the one server re-check).
    *
    *  Presence of this field makes the row skip the template-resolution
    *  loop (see the guard below) — that is what stops the template from
@@ -142,6 +151,12 @@ export interface BulkImportInput {
   pricingSource: PricingSource;
   sourceFilename: string | null;
   rows: BulkImportRow[];
+  /** H4.3 — rows of the file the preview refused, which the Manager chose
+   *  to leave out ("push the rest"). Never sent; recorded so the batch,
+   *  the audit, the Done report and the Hub status all count them (P5 — a
+   *  partial import must not close SUCCESS). The route dedupes them
+   *  against `rows`. */
+  droppedRows?: Array<{ rowNumber: number; sku: string; reason: string }>;
   actorEmail: string | null;
   // ⚠ H4 (Manager 2026-10-16): NO app currency. The currency written in the
   //   file is the only price source; this input type deliberately has no
@@ -156,19 +171,20 @@ export interface BulkImportResult {
   rowsOverwritten: number;
   rowsSkipped: number;
   rowsFailed: number;
-  /** Per-row fail-soft refusal count (file price / conversion — H4.2 — or a
-   *  custom-price set that could not be applied). */
+  /** EVERY row of the file that was not written, other than a Manager Skip
+   *  or a Google-side failure: price refusals, custom refusals and the rows
+   *  dropped in the file (H4.3). = `refusedRows.length`. The Hub terminal
+   *  status counts it as failed (status principle, P5). */
   rowsRefused: number;
-  /** H4.2 — rows refused because the FILE's price could not be sent as
-   *  written (`file_price_invalid`, `conversion_failed`). A price the file
-   *  states that did not reach Google: counted as failed for the Hub
-   *  terminal status (status principle, P5). */
+  /** Price refusals (`file_price_invalid`, `conversion_failed`,
+   *  `tier_price_invalid`, `price_build_failed`) — audit breakdown. */
   priceRefusedRows: number;
+  /** H4.3 — rows refused in the file and left out by the Manager. */
+  droppedRows: number;
   /** Rows whose prices came from a per-item custom set (Phase 3). */
   customPricedRows: number;
-  /** Custom rows REFUSED. Surfaced separately from `rowsRefused`: a custom
-   *  refusal is a Manager instruction that did not happen (Q5 / P5), so the
-   *  Hub terminal status counts it as failed. */
+  /** Custom rows REFUSED — audit breakdown; included in `rowsRefused`, which
+   *  the Hub terminal status counts as failed (Q5 / P5). */
   customRefusedRows: number;
   /** Refused rows surfaced for caller display — each carries its SKU
    *  and the human-readable reason. Order matches input order for
@@ -237,6 +253,66 @@ export function buildProduct(
   };
 }
 
+/** H4.3 — what a failed conversion was. Manager 2026-10-19: the reason must
+ *  say "temporary — run this row again later", so a failed conversion is
+ *  not mistaken for bad data. Three classes, each named for what it is (P5):
+ *   - "temporary": 5xx, 408, 429, a network error, or an error with no HTTP
+ *     status — the Manager's wording;
+ *   - "price": Google answered 400 INVALID_ARGUMENT — it says the request
+ *     (the price) is invalid; retrying cannot help;
+ *   - "access": any other 4xx (401, 403 PERMISSION_DENIED, 404, a token 400
+ *     such as invalid_grant) — an access / account / app problem, NOT the
+ *     row's data; telling the Manager to check the price would hide it
+ *     (the 2026-10-12 403 incident class). */
+type ConversionFailure = { kind: "temporary" | "price" | "access"; detail: string };
+
+function classifyConversionFailure(err: unknown): ConversionFailure {
+  const d = describeGoogleError(err);
+  const code = (err as { code?: unknown } | null)?.code;
+  const network = typeof code === "string" && /^E[A-Z0-9_]+$/.test(code);
+  const s = d.httpStatus;
+  const kind: ConversionFailure["kind"] =
+    s === undefined || s >= 500 || s === 408 || s === 429
+      ? "temporary"
+      : s === 400 && d.status === "INVALID_ARGUMENT"
+        ? "price"
+        : s >= 400 && s < 500
+          ? "access"
+          : "temporary";
+  const detail =
+    s !== undefined
+      ? `HTTP ${s}${d.status ? ` ${d.status}` : ""}: ${d.message}`
+      : network
+        ? `${code as string}: ${d.message}`
+        : d.message;
+  return { kind, detail };
+}
+
+function conversionFailedReason(
+  row: BulkImportRow,
+  fileCurrency: string,
+  failure: ConversionFailure | undefined,
+): string {
+  const head = `Row ${row.rowNumber} (${row.sku}):`;
+  const rule = "A row whose price is not in USD is not sent without Google's conversion.";
+  if (!failure || failure.kind === "temporary") {
+    return (
+      `${head} Google's price conversion failed temporarily${failure ? ` (${failure.detail})` : ""} — ` +
+      `this is not a problem with the row's data: run this row again later. ${rule} Row not sent.`
+    );
+  }
+  if (failure.kind === "price") {
+    return (
+      `${head} Google rejected the file price ${fileCurrency} ${row.basePriceDecimal} as invalid (${failure.detail}). ` +
+      `This is not a temporary failure — check the price. ${rule} Row not sent.`
+    );
+  }
+  return (
+    `${head} Google refused the conversion request (${failure.detail}) — an access, account or app problem, ` +
+    `not the row's data, and not temporary: fix the access, then run this row again. ${rule} Row not sent.`
+  );
+}
+
 export async function executeBulkImport(
   jwt: JWT,
   input: BulkImportInput,
@@ -251,7 +327,8 @@ export async function executeBulkImport(
       app_id: input.appId,
       source_filename: input.sourceFilename,
       pricing_source: input.pricingSource,
-      rows_total: input.rows.length,
+      // H4.3: the rows the Manager left out are rows of the file too.
+      rows_total: input.rows.length + (input.droppedRows?.length ?? 0),
       status: "IN_PROGRESS",
     })
     .select("id")
@@ -312,6 +389,13 @@ export async function executeBulkImport(
 
   for (const row of actionableRows) {
     if (!row.customPrices || row.priceRefusal) continue;
+    // H4.3 — the route already refused this set (a malformed entry): keep
+    // ITS reason. Overwriting it with "no country prices were supplied"
+    // hid the real cause (the route empties `entries` when it refuses).
+    if (row.customPriceRefusal) {
+      customRefusedRows += 1;
+      continue;
+    }
     const entries = row.customPrices.entries ?? [];
 
     if (entries.length === 0) {
@@ -323,30 +407,30 @@ export async function executeBulkImport(
       continue;
     }
 
-    // Validate every entry against ITS OWN currency. decimalToMicros is
-    // the throwing backstop (the same guard the single-item write path
-    // relies on); the route has already run the non-throwing check.
+    // H4.3 (Q9, Manager 2026-10-19) — every entry through THE rules for a
+    // price a person wrote (statedPriceOf): precision against its OWN
+    // currency, "26.000" in a currency without decimals refused as a
+    // possible thousands separator, no 0. The SAME function the dialog
+    // gates Save with — this is the server's re-check (client state is
+    // untrusted), and the only one: the route checks structure only.
+    // Every bad entry is named, so the Manager can fix them in one pass.
     const priced: Array<{ region: string; currency: string; priceMicros: string }> = [];
-    let invalid: string | null = null;
+    const problems: string[] = [];
     for (const e of entries) {
       const region = e.region.trim().toUpperCase();
       const currency = e.currency.trim().toUpperCase();
       if (!region || !currency) {
-        invalid = `Row ${row.rowNumber} (${row.sku}): a custom price is missing its country or currency. Row not sent.`;
-        break;
+        problems.push("a custom price is missing its country or currency.");
+        continue;
       }
-      try {
-        priced.push({
-          region,
-          currency,
-          priceMicros: decimalToMicros(e.priceDecimal, currency),
-        });
-      } catch (err) {
-        const detail = err instanceof Error ? err.message : String(err);
-        invalid = `Row ${row.rowNumber} (${row.sku}): custom price "${e.priceDecimal}" is invalid for ${currency} — ${detail} Row not sent.`;
-        break;
+      const stated = statedPriceOf({ currency, priceDecimal: e.priceDecimal });
+      if (!stated.ok) {
+        problems.push(`custom price ${region} "${e.priceDecimal}" ${currency} — ${stated.reason}`);
+        continue;
       }
+      priced.push({ region, currency, priceMicros: stated.priceMicros });
     }
+    const invalid = problems.length > 0 ? `Row ${row.rowNumber} (${row.sku}): ${problems.join(" ")} Row not sent.` : null;
     if (invalid) {
       row.customPriceRefusal = { kind: "custom_invalid_price", reason: invalid };
       customRefusedRows += 1;
@@ -396,7 +480,7 @@ export async function executeBulkImport(
   let templateScopeUsed: "ACCOUNT" | "APP" | null = null;
   let templateAccountIdUsed: string | null = null;
   let templateAppIdUsed: string | null = null;
-  type PriceProvenance = "custom" | "custom_refused" | "template" | "auto_bootstrap";
+  type PriceProvenance = "custom" | "custom_refused" | "template" | "template_refused" | "auto_bootstrap";
   type SelectionPath =
     | "manager_explicit"
     | "default_accepted"
@@ -523,6 +607,11 @@ export async function executeBulkImport(
       let candidateCount = row.tierCandidateCount ?? 0;
       const defaultTierOffered = row.defaultTierIdentifier ?? null;
       let selectedTier: string | null = null;
+      // H4.3 — counted only once the tier's prices pass the check below, so
+      // the audit's selection counters never include a tier_price_invalid row
+      // (a row refused LATER — conversion_failed, price_build_failed — is
+      // still counted: the tier did match it).
+      let selectionCounter: "single" | "default_accepted" | "manager_explicit" | null = null;
 
       if (row.chosenTierIdentifier) {
         // Wizard supplied an explicit selection — honour it verbatim.
@@ -545,18 +634,16 @@ export async function executeBulkImport(
           row.chosenTierIdentifier === row.sku ? "sku" : "currency_price";
         if (candidateCount <= 1) {
           selectionPath = "single_match";
-          singleMatchRows += 1;
+          selectionCounter = "single";
         } else if (
           row.defaultTierIdentifier &&
           row.chosenTierIdentifier === row.defaultTierIdentifier
         ) {
           selectionPath = "default_accepted";
-          defaultAcceptedRows += 1;
-          ambiguousRows += 1;
+          selectionCounter = "default_accepted";
         } else {
           selectionPath = "manager_explicit";
-          managerOverrodeRows += 1;
-          ambiguousRows += 1;
+          selectionCounter = "manager_explicit";
         }
       } else if (candidateCount > 0) {
         // Wizard reported candidates but no selection — should never
@@ -584,7 +671,7 @@ export async function executeBulkImport(
           selectionPath = "single_match";
           selectedTier = row.sku;
           candidateCount = 1;
-          singleMatchRows += 1;
+          selectionCounter = "single";
         } else {
           let candidates: Array<{ identifier: string }> = [];
           try {
@@ -609,7 +696,7 @@ export async function executeBulkImport(
               selectionPath = "single_match";
               selectedTier = candidates[0].identifier;
               candidateCount = 1;
-              singleMatchRows += 1;
+              selectionCounter = "single";
             }
           } else if (candidates.length > 1) {
             throw new Error(
@@ -623,7 +710,52 @@ export async function executeBulkImport(
         }
       }
 
+      // H4.3 (Manager 2026-10-19) — the tier's stored amounts through the
+      // same price rules (storedRegionPriceOf, on micros — "26000.000000" is
+      // not a thousands separator). One bad entry (TWD 30.5, a 0) used to
+      // throw in buildProduct outside any try: the WHOLE batch 500'd, the
+      // valid rows were not sent, import_batches stayed IN_PROGRESS. Now
+      // THIS row is refused, naming the tier and every bad entry; the batch
+      // goes on. One check covers all three tier paths (chosen, SKU, probe).
       if (entries.length > 0) {
+        const bad = entries
+          .map((e) => ({ e, r: storedRegionPriceOf({ currency: e.currency, priceMicros: e.priceMicros }) }))
+          .filter((x): x is { e: ParsedPricingEntry; r: { ok: false; reason: string } } => !x.r.ok);
+        if (bad.length > 0) {
+          row.priceRefusal = {
+            kind: "tier_price_invalid",
+            reason:
+              `Row ${row.rowNumber} (${row.sku}): pricing-template tier "${selectedTier ?? "?"}" holds a price that cannot be sent — ` +
+              bad.map((x) => `${x.e.regionCode} ${x.e.currency}: ${x.r.reason}`).join(" ") +
+              ` Fix the tier in Settings → Pricing Templates, then import this row again. Row not sent.`,
+          };
+          priceRefusedRows += 1;
+          console.info(`[google-iap:bulk-import] refused sku=${row.sku} kind=tier_price_invalid tier=${selectedTier ?? "?"}`);
+          perRowDiagnostic.push({
+            row_index: rowIndex,
+            sku: row.sku,
+            base_currency: row.baseCurrency,
+            base_price_decimal: row.basePriceDecimal,
+            candidate_count: candidateCount,
+            default_tier_offered: defaultTierOffered,
+            selected_tier: selectedTier,
+            selection_path: selectionPath,
+            match_strategy: matchStrategy,
+            entries_count: entries.length,
+            vn_currency: null,
+            vn_price_decimal: null,
+            price_provenance: "template_refused",
+          });
+          continue;
+        }
+        if (selectionCounter === "single") singleMatchRows += 1;
+        else if (selectionCounter === "default_accepted") {
+          defaultAcceptedRows += 1;
+          ambiguousRows += 1;
+        } else if (selectionCounter === "manager_explicit") {
+          managerOverrodeRows += 1;
+          ambiguousRows += 1;
+        }
         row.regionOverrides = entries.map((e) => ({
           region: e.regionCode,
           currency: e.currency,
@@ -704,6 +836,9 @@ export async function executeBulkImport(
     regions: Array<{ region: string; currency: string; priceMicros: string }>;
     regionsVersion?: string;
     failed: boolean;
+    /** H4.3 — what the failure was, so Q7's reason says "temporary — run
+     *  this row again later" only when it is (Manager 2026-10-19). */
+    failure?: ConversionFailure;
   };
   const bootstraps = await withConcurrency(
     candidateRows,
@@ -729,7 +864,7 @@ export async function executeBulkImport(
             err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
           }"`,
         );
-        return { regions: [], failed: true };
+        return { regions: [], failed: true, failure: classifyConversionFailure(err) };
       }
     },
   );
@@ -743,7 +878,24 @@ export async function executeBulkImport(
     input: { body: InAppProduct; regionsVersion?: string; isOverwrite: boolean };
   }> = [];
   candidateRows.forEach((row, i) => {
-    const product = buildProduct(input.packageName, row);
+    // H4.3 — a guard: every price was checked above, so this should never
+    // throw; if it does, THIS row is refused (its own kind, so it can never
+    // pass for one of the checks) and the batch goes on — no price can 500
+    // the batch or leave import_batches IN_PROGRESS again.
+    let product: InAppProduct;
+    try {
+      product = buildProduct(input.packageName, row);
+    } catch (err) {
+      row.priceRefusal = {
+        kind: "price_build_failed",
+        reason: `Row ${row.rowNumber} (${row.sku}): its prices could not be built — ${
+          err instanceof Error ? err.message : String(err)
+        } Row not sent.`,
+      };
+      priceRefusedRows += 1;
+      console.error(`[google-iap:bulk-import] refused sku=${row.sku} kind=price_build_failed`);
+      return;
+    }
     const bootstrap = bootstraps[i];
     const existing: NonNullable<InAppProduct["prices"]> = {
       ...(product.prices ?? {}),
@@ -770,9 +922,7 @@ export async function executeBulkImport(
       row.priceRefusal = {
         kind: "conversion_failed",
         reason: bootstrap.failed
-          ? `Row ${row.rowNumber} (${row.sku}): Google's conversion of the file price ${fileCurrency} ` +
-            `${row.basePriceDecimal} failed. A row whose price is not in USD is not sent without it ` +
-            `(the countries it does not list would have no price). Row not sent; try again.`
+          ? conversionFailedReason(row, fileCurrency, bootstrap.failure)
           : `Row ${row.rowNumber} (${row.sku}): Google's conversion of the file price ${fileCurrency} ` +
             `${row.basePriceDecimal} returned no US price, and the file price is not in USD — the product ` +
             `would have no correct US price. Row not sent; try again.`,
@@ -816,12 +966,26 @@ export async function executeBulkImport(
 
   const pushableRows = prepared.map((p) => p.row);
   const upsertInputs = prepared.map((p) => p.input);
-  const refusedRowsDetail = actionableRows
-    .filter((r) => r.priceRefusal || r.customPriceRefusal)
-    .map((r) => {
-      const refusal = (r.customPriceRefusal ?? r.priceRefusal) as { reason: string; kind: string };
-      return { sku: r.sku, rowNumber: r.rowNumber, reason: refusal.reason, kind: refusal.kind };
-    });
+  // H4.3 — the rows dropped in the file (never sent) and the rows refused
+  // here, ONE list in file order: the Done report, the audit and the Hub
+  // all read it, so no row the file states can go missing from any of them.
+  const droppedDetail = (input.droppedRows ?? []).map((d) => ({
+    sku: d.sku,
+    rowNumber: d.rowNumber,
+    reason: `Row ${d.rowNumber} (${d.sku || "no Product ID"}): ${d.reason} Not imported — refused in the file, left out when you pushed.`,
+    kind: "refused_in_file",
+  }));
+  const refusedRowsDetail = [
+    ...droppedDetail,
+    ...actionableRows
+      .filter((r) => r.priceRefusal || r.customPriceRefusal)
+      .map((r) => {
+        const refusal = (r.customPriceRefusal ?? r.priceRefusal) as { reason: string; kind: string };
+        return { sku: r.sku, rowNumber: r.rowNumber, reason: refusal.reason, kind: refusal.kind };
+      }),
+  ].sort((a, b) => a.rowNumber - b.rowNumber);
+  const droppedRows = droppedDetail.length;
+  const rowsTotal = input.rows.length + droppedRows;
 
   let created = 0;
   let overwritten = 0;
@@ -850,7 +1014,7 @@ export async function executeBulkImport(
         batch_id: batchId,
         package_name: input.packageName,
         pricing_source: input.pricingSource,
-        rows_total: input.rows.length,
+        rows_total: rowsTotal,
         rows_skipped: skippedCount,
         rows_created: 0,
         rows_overwritten: 0,
@@ -858,6 +1022,7 @@ export async function executeBulkImport(
         rows_refused: refusedRowsDetail.length,
         refused_rows: refusedRowsDetail,
         price_refused_rows: priceRefusedRows,
+        dropped_in_file_rows: droppedRows,
         custom_priced_rows: customPricedRows,
         custom_refused_rows: customRefusedRows,
         // Included on the nothing-to-push path too. This is the branch a
@@ -871,13 +1036,14 @@ export async function executeBulkImport(
 
     return {
       batchId,
-      rowsTotal: input.rows.length,
+      rowsTotal,
       rowsCreated: 0,
       rowsOverwritten: 0,
       rowsSkipped: skippedCount,
       rowsFailed: 0,
       rowsRefused: refusedRowsDetail.length,
       priceRefusedRows,
+      droppedRows,
       refusedRows: refusedRowsDetail,
       customPricedRows,
       customRefusedRows,
@@ -947,12 +1113,13 @@ export async function executeBulkImport(
         batch_id: batchId,
         package_name: input.packageName,
         pricing_source: input.pricingSource,
-        rows_total: input.rows.length,
+        rows_total: rowsTotal,
         rows_skipped: skippedCount,
         rows_failed: failed,
         rows_refused: refusedRowsDetail.length,
         refused_rows: refusedRowsDetail,
         price_refused_rows: priceRefusedRows,
+        dropped_in_file_rows: droppedRows,
         custom_priced_rows: customPricedRows,
         custom_refused_rows: customRefusedRows,
         // ⚠ THE WHOLE REASON THIS ARC EXISTS. `error` used to be
@@ -1019,15 +1186,18 @@ export async function executeBulkImport(
        *  CỦA AI, đúng câu hỏi mà arc này sinh ra để trả lời. */
       template_account_id_used: templateAccountIdUsed,
       per_row_diagnostic: perRowDiagnostic,
-      // Per-row fail-soft counts + detail (file price / conversion — H4.2 —
-      // and custom), so refused-row SKUs can be correlated with the file.
+      // Every row not sent, with its kind and reason (file_price_invalid,
+      // conversion_failed, tier_price_invalid, price_build_failed,
+      // custom_invalid_price, refused_in_file), so each can be correlated
+      // with the file.
       rows_refused: refusedRowsDetail.length,
       refused_rows: refusedRowsDetail,
       price_refused_rows: priceRefusedRows,
+      dropped_in_file_rows: droppedRows,
       // Phase 3 — per-item custom pricing.
       custom_priced_rows: customPricedRows,
       custom_refused_rows: customRefusedRows,
-      rows_total: input.rows.length,
+      rows_total: rowsTotal,
       rows_created: created,
       rows_overwritten: overwritten,
       rows_skipped: skippedCount,
@@ -1038,13 +1208,14 @@ export async function executeBulkImport(
 
   return {
     batchId,
-    rowsTotal: input.rows.length,
+    rowsTotal,
     rowsCreated: created,
     rowsOverwritten: overwritten,
     rowsSkipped: skippedCount,
     rowsFailed: failed,
     rowsRefused: refusedRowsDetail.length,
     priceRefusedRows,
+    droppedRows,
     refusedRows: refusedRowsDetail,
     customPricedRows,
     customRefusedRows,

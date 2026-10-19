@@ -9,8 +9,9 @@
  *   be a twin that drifts the first time the wizard changes what it sends.
  *   The structural guard in that test fails if the wizard stops using them.
  */
-import { validateDecimalForCurrency } from "@/lib/google-iap-management/google/currency-precision";
-import type { PreviewRow, PricingSource } from "./BulkImportWizard";
+import { filePriceOf } from "@/lib/google-iap-management/orchestration/file-price";
+import { PRICING_RULE } from "@/lib/google-iap-management/bulk-import-contract";
+import type { PreviewRefusedRow, PreviewRow, PricingSource } from "./BulkImportWizard";
 import type { CustomPriceSet } from "./CustomPricesDialog";
 
 /** Preview response rows → wizard rows. Every row starts as "create"; the
@@ -72,9 +73,6 @@ export function buildExecuteRows(
     regionOverrides: r.regionOverrides,
     listings: r.listings,
     decision: r.decision,
-    // Parser header provenance — no effect on pricing since H4.2; dropped
-    // with the execute re-check in H4.3 (Q9).
-    priceHeaderSource: r.priceHeaderSource ?? "inferred",
     // Hotfix 19: explicit tier selection (null when no
     // template lookup applied). Orchestrator honours it
     // verbatim — no silent fallback. The companion fields
@@ -124,17 +122,27 @@ export function buildExecuteRequestBody(args: {
    *  the route treats that identically to a missing field (no-op). */
   hubRunId: string | null;
   rows: ReturnType<typeof buildExecuteRows>;
+  /** H4.3 — the rows the preview refused, which the Manager confirmed
+   *  leaving out. Required (not optional) so no caller can forget them: a
+   *  partial import whose dropped rows never reach the server closes the
+   *  Hub run SUCCESS (P5). */
+  droppedRows: ReadonlyArray<PreviewRefusedRow>;
 }) {
   return {
+    // H4.3 — the execute route refuses a request without it (a pre-H4 tab).
+    pricing_rule: PRICING_RULE,
     pricingSource: args.pricingSource,
     sourceFilename: args.sourceFilename,
     hub_run_id: args.hubRunId,
     rows: args.rows,
+    droppedRows: args.droppedRows.map((d) => ({ rowNumber: d.rowNumber, sku: d.sku, reason: d.reason })),
   };
 }
 
-/** Push gate (Hotfix 28): rows whose base price breaks their OWN currency's
- *  precision. Push stays disabled while this is non-empty. */
+/** Push gate (Hotfix 28): rows whose base price the file-price choke point
+ *  refuses (filePriceOf — the same rules as the parser and the server). The
+ *  parser already refused such rows, so this is defence in depth. Push stays
+ *  disabled while this is non-empty. */
 export function computePrecisionViolations(
   previewRows: ReadonlyArray<PreviewRow>,
 ): Array<{ rowNumber: number; sku: string; error: string }> {
@@ -142,15 +150,77 @@ export function computePrecisionViolations(
   for (const row of previewRows) {
     if (row.decision === "skip") continue;
     if (!row.baseCurrency) continue;
-    // Since H4.2 the preview produces only "same_currency" rows (every row is
-    // priced from its own file price); the other kinds are leftovers of the
-    // removed cross-currency branch, cleaned up in H4.3.
-    const resolutionKind = row.resolution?.kind ?? "same_currency";
-    if (resolutionKind !== "same_currency") continue;
-    const err = validateDecimalForCurrency(row.basePriceDecimal, row.baseCurrency);
-    if (err) {
-      violations.push({ rowNumber: row.rowNumber, sku: row.sku, error: err });
+    const r = filePriceOf({ currency: row.baseCurrency, priceDecimal: row.basePriceDecimal });
+    if (!r.ok) {
+      violations.push({ rowNumber: row.rowNumber, sku: row.sku, error: r.reason });
     }
   }
   return violations;
+}
+
+/** The file's GT (GT Price + GT Currency — one country per row). */
+export type PreviewGt = { region: string; currency: string; priceDecimal: string };
+
+/**
+ * H4.3 — Manager Q5: what happens to a row's GT at push, for the preview
+ * table. Q5 does NOT change the GT's semantics; this only SAYS them:
+ *   - custom prices replace the GT, under every source (bulk-import.ts
+ *     custom pre-pass);
+ *   - under Google Conversion the GT is sent (no template loop);
+ *   - under a template, a matched tier's entries replace ALL overrides, the
+ *     GT included — even when the tier does not list the GT's country (then
+ *     Google converts it); no tier ⇒ the GT is sent.
+ * ⚠ Reads EXACTLY the expressions buildExecuteRows sends (the tier selection
+ *   by rowNumber, the active-custom set), so the label is what the push does
+ *   with the same state. It cannot know a template edited after the preview.
+ * ⚠ The client knows a tier's price only for VN (TierCandidate). For another
+ *   country it says "the tier's price, or Google's conversion" — never a
+ *   number it does not have.
+ */
+export type GtPlan =
+  | { kind: "none" }
+  | { kind: "skip"; gt: PreviewGt }
+  | { kind: "sent"; gt: PreviewGt }
+  | { kind: "replaced_by_custom"; gt: PreviewGt; customEntry: { currency: string; priceDecimal: string } | null }
+  | {
+      kind: "replaced_by_tier";
+      gt: PreviewGt;
+      tier: string;
+      tierEntry: { kind: "known"; currency: string; priceDecimal: string } | { kind: "absent" } | { kind: "unknown" };
+    }
+  | { kind: "pending_tier"; gt: PreviewGt }
+  | { kind: "unknown_lookup_failed"; gt: PreviewGt };
+
+export function gtPlanOf(
+  row: Pick<PreviewRow, "rowNumber" | "sku" | "decision" | "regionOverrides" | "tierCandidates" | "tierMatchedBy">,
+  state: {
+    pricingSource: PricingSource | null;
+    tierSelections: Readonly<Record<number, string>>;
+    customPrices: Readonly<Record<string, CustomPriceSet>>;
+    activeCustomSkus: ReadonlySet<string>;
+  },
+): GtPlan {
+  const gt = row.regionOverrides[0];
+  if (!gt) return { kind: "none" };
+  if (row.decision === "skip") return { kind: "skip", gt };
+  if (state.activeCustomSkus.has(row.sku)) {
+    const e = state.customPrices[row.sku]?.entries.find((x) => x.region === gt.region);
+    return { kind: "replaced_by_custom", gt, customEntry: e ? { currency: e.currency, priceDecimal: e.priceDecimal } : null };
+  }
+  if (state.pricingSource === "google_default") return { kind: "sent", gt };
+  const tier = state.tierSelections[row.rowNumber] ?? null;
+  if (tier) {
+    const candidate = row.tierCandidates.find((c) => c.identifier === tier);
+    let tierEntry: Extract<GtPlan, { kind: "replaced_by_tier" }>["tierEntry"] = { kind: "unknown" };
+    if (gt.region === "VN" && candidate) {
+      tierEntry =
+        candidate.vnCurrency && candidate.vnPriceDecimal
+          ? { kind: "known", currency: candidate.vnCurrency, priceDecimal: candidate.vnPriceDecimal }
+          : { kind: "absent" };
+    }
+    return { kind: "replaced_by_tier", gt, tier, tierEntry };
+  }
+  if (row.tierCandidates.length > 0) return { kind: "pending_tier", gt };
+  if (row.tierMatchedBy === "lookup_failed") return { kind: "unknown_lookup_failed", gt };
+  return { kind: "sent", gt };
 }

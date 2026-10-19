@@ -13,12 +13,14 @@
  *   - failed > 0 && succeeded === 0 → FAILED
  *   - failed > 0 && succeeded > 0   → PARTIAL
  *
- * ⚠ A REFUSED row arrives here inside `failed` (KB P5, H4.2): the execute
- * route adds every refusal kind — file_price_invalid, conversion_failed,
- * custom_invalid_price — to the orchestrator's rowsFailed. A refusal means
- * a price the Manager stated was NOT written, so it is never a soft skip;
- * only a Manager-chosen SKIP is "skipped". (Before H4.2 the cross-currency
- * refusals were folded into "skipped"; that branch is gone.)
+ * ⚠ A REFUSED row arrives here inside `failed` (KB P5, H4.2/H4.3): the
+ * execute route adds the orchestrator's `rowsRefused` — EVERY refusal kind
+ * (file_price_invalid, conversion_failed, tier_price_invalid,
+ * price_build_failed, custom_invalid_price, and refused_in_file for the rows
+ * the Manager left out of the file) — to rowsFailed, and `total` includes
+ * the left-out rows. A refusal means a row of the file was NOT written, so
+ * it is never a soft skip; only a Manager-chosen SKIP is "skipped". (Before
+ * H4.2 the cross-currency refusals were folded into "skipped".)
  *
  * Early-return route exits (before any row is processed — bad JSON,
  * missing rows, no Google account, etc.) are NOT computed here; the route

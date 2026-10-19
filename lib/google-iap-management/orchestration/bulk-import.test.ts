@@ -13,7 +13,6 @@ function row(overrides: Partial<BulkImportRow> = {}): BulkImportRow {
       { locale: "en-US", title: "Small Pack", description: "200 gems" },
     ],
     decision: "create",
-    priceHeaderSource: "explicit",
     ...overrides,
   };
 }

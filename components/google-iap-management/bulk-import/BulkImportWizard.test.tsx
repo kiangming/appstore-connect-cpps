@@ -34,6 +34,7 @@ import {
   previewRowsFromResponse,
   seedTierSelections,
 } from "./execute-payload";
+import { PRICING_RULE } from "@/lib/google-iap-management/bulk-import-contract";
 
 const START_URL = "/api/google-iap-management/hub-tracking/start";
 const CANCEL_URL = "/api/google-iap-management/hub-tracking/cancel";
@@ -886,8 +887,8 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     "the tier's prices replace the GT, and a country the tier does not list is then converted by Google — or the " +
     "row has custom prices (they replace it). Custom prices overlay the file's price, which stays the conversion " +
     "base." +
-    "If Google's conversion fails or returns no US price, a row whose price is not in USD is refused — the " +
-    "countries it does not list would have no price. A USD row is still sent.";
+    "If Google's conversion fails (usually temporary — run the row again later) or returns no US price, a row " +
+    "whose price is not in USD is refused. A USD row is still sent.";
 
   it("note text — verbatim, ONE text: nothing in it depends on the app's currency", () => {
     installBasicFetch();
@@ -944,18 +945,16 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     },
   );
 
-  it("Tier column: a REFUSED row says 'Not sent — refused', a sent row 'Auto-converted by Google'", async () => {
-    const row = (sku: string, resolution: unknown) => ({
-      rowNumber: 1, sku, baseCurrency: "USD", basePriceDecimal: "0.99", regionOverrides: [], listings: [],
-      exists: false, tierCandidates: [], defaultTierSelection: null, tierMatchedBy: "none", resolution,
+  it("H4.3: a row whose tier lookup FAILED says so — never 'Auto-converted by Google' — and its GT is 'unknown'; a plain no-tier row with a GT says 'will be sent'", async () => {
+    const row = (rowNumber: number, sku: string, tierMatchedBy: string) => ({
+      rowNumber, sku, baseCurrency: "USD", basePriceDecimal: "0.99",
+      regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "26000" }], listings: [],
+      exists: false, tierCandidates: [], defaultTierSelection: null, tierMatchedBy,
     });
     installBasicFetch(() => ({
       ok: true,
       json: async () => ({
-        rows: [
-          row("sku.refused", { kind: "cross_currency_refused", anchorUsdMicros: "990000", reason: "App currency is TWD…", refusalKind: "google_default" }),
-          { ...row("sku.sent", { kind: "same_currency" }), rowNumber: 2 },
-        ],
+        rows: [row(1, "sku.failed", "lookup_failed"), row(2, "sku.sent", "none")],
         warnings: [],
         counts: { total: 2, existing: 0, new: 2 },
       }),
@@ -967,8 +966,14 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /^Preview/ }));
     });
-    await waitFor(() => expect(screen.getByText("Not sent — refused")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("tier-lookup-failed")).toBeInTheDocument());
     expect(screen.getAllByText("Auto-converted by Google")).toHaveLength(1);
+    // Google Conversion (availability failed ⇒ google_default): no template
+    // runs, so a GT is sent whatever the tier flag says (gtPlanOf follows the
+    // source first). The template-source labels are pinned in
+    // BulkImportWizard.custom-prices.test.tsx.
+    expect(screen.getAllByTestId("gt-status").map((e) => e.getAttribute("data-state"))).toEqual(["sent", "sent"]);
+    expect(screen.getAllByTestId("gt-status")[1]).toHaveTextContent("GT VN 26000 VND · will be sent");
   });
 
   it("server says IMPORT_READINESS_READ_FAILED ⇒ the mirror banner turns 'unreadable' and Preview re-blocks", async () => {
@@ -1014,13 +1019,11 @@ describe("BulkImportWizard (Google) — execute body = the shared builder's outp
         regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "26000" }],
         listings: [],
         exists: false,
-        priceHeaderSource: "explicit",
         tierCandidates: [
           { identifier: "Tier 1", templateId: "tpl", regionCount: 3, vnCurrency: "VND", vnPriceMicros: "25000000000", vnPriceDecimal: "25000" },
         ],
         defaultTierSelection: null,
         tierMatchedBy: "currency_price",
-        resolution: { kind: "same_currency" },
       },
       {
         rowNumber: 3,
@@ -1067,38 +1070,121 @@ describe("BulkImportWizard (Google) — execute body = the shared builder's outp
         customPrices: {},
         activeCustomSkus: new Set(),
       }),
+      droppedRows: [],
     });
     expect(executeBody).toEqual(JSON.parse(JSON.stringify(expected)));
     // The builder really was exercised on both branches it encodes.
     expect(executeBody.rows[0].chosenTierIdentifier).toBe("Tier 1");
-    expect(executeBody.rows[1].priceHeaderSource).toBe("inferred");
+    // H4.3 — the pricing rule the route checks; no priceHeaderSource any more.
+    expect(executeBody.pricing_rule).toBe(PRICING_RULE);
+    expect(executeBody.rows[1]).not.toHaveProperty("priceHeaderSource");
+    expect(executeBody.droppedRows).toEqual([]);
   });
 });
 
 /**
- * H4.1 — rows the parser refused (a price or GT price that cannot be sent
- * exactly as written) are not in the preview table. The wizard names them and
- * blocks Push, so an import is never silently partial.
+ * H4.3 (Manager 2026-10-18) — rows of the file the tool will not import are
+ * shown IN the preview table with their reason; Push sends the rest only
+ * after a confirmation naming every row left out; the Done report lists them.
+ * No row disappears silently.
  */
-describe("BulkImportWizard (Google) — rows refused in the file block Push (H4.1)", () => {
-  it("refusedRows from the preview ⇒ red list naming each row, Push disabled with the reason", async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+describe("BulkImportWizard (Google) — refused rows in the table, push the rest after confirming (H4.3)", () => {
+  const REFUSED = { rowNumber: 3, sku: "sku.bad", reason: 'GT Price "26000.5" VND — VND only accepts whole numbers.' };
+
+  function installPushFetch(opts: {
+    rows?: unknown[];
+    refusedRows?: unknown[];
+    executeJson?: () => unknown;
+  }) {
+    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.includes(AVAILABILITY_URL_FRAGMENT)) return Promise.resolve({ ok: false, json: async () => ({}) });
-      if (url.includes(START_URL)) return Promise.resolve({ ok: true, json: async () => ({ run_id: null }) });
+      if (url.includes(START_URL)) return Promise.resolve({ ok: true, json: async () => ({ run_id: "run-h43" }) });
       if (url.includes(CANCEL_URL)) return Promise.resolve({ ok: true, json: async () => ({}) });
       if (url.includes(PREVIEW_URL_FRAGMENT)) {
         return Promise.resolve({
           ok: true,
           json: async () => ({
-            ...(await previewResponse().json()),
-            refusedRows: [{ rowNumber: 3, sku: "sku.bad", reason: 'GT Price "26000.5" VND — VND only accepts whole numbers.' }],
+            rows: opts.rows ?? (await previewResponse().json()).rows,
+            refusedRows: opts.refusedRows ?? [REFUSED],
+            warnings: [`Row 3 (SKU "sku.bad"): ${REFUSED.reason} Row not imported.`, "another warning"],
           }),
+        });
+      }
+      if (url.includes(EXECUTE_URL_FRAGMENT)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => (opts.executeJson ? opts.executeJson() : await successExecuteResponse().json()),
         });
       }
       return Promise.reject(new Error(`unexpected fetch: ${url}`));
     });
     vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const executeCalls = (m: ReturnType<typeof vi.fn>) => m.mock.calls.filter((c) => String(c[0]).includes(EXECUTE_URL_FRAGMENT));
+  const cancelCalls = (m: ReturnType<typeof vi.fn>) => m.mock.calls.filter((c) => String(c[0]).includes(CANCEL_URL));
+
+  it("the refused row is IN the table with its reason and a 'Not imported' badge; the parser's duplicate warning is not repeated; Push is ENABLED", async () => {
+    const fetchMock = installPushFetch({});
+    const { container } = renderWizard();
+    await goToPreviewAndAdoptRun(container, fetchMock);
+    const tr = await screen.findByTestId("preview-refused-row");
+    expect(tr).toHaveAttribute("data-row-number", "3");
+    expect(tr).toHaveTextContent("sku.bad");
+    expect(tr).toHaveTextContent(REFUSED.reason);
+    expect(tr).toHaveTextContent("Not imported");
+    expect(screen.getByTestId("file-refused-rows")).toHaveAttribute("data-state", "push-the-rest");
+    // The row's own parser warning is filtered (it is in the table); others stay.
+    expect(screen.getByText(/Parse warnings \(1\)/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Push to Google Play/ })).toBeEnabled();
+  });
+
+  it("Push ⇒ the confirmation names every row left out and NOTHING is sent; 'Go back' closes it — still nothing sent, the Hub run NOT cancelled", async () => {
+    const fetchMock = installPushFetch({});
+    const { container } = renderWizard();
+    await goToPreviewAndAdoptRun(container, fetchMock);
+    await clickExecuteAndSettle();
+    const dialog = await screen.findByTestId("push-confirm");
+    expect(screen.getByTestId("push-confirm-dropped")).toHaveTextContent("1 row(s) of the file will NOT be imported");
+    expect(dialog).toHaveTextContent(`Row 3 (sku.bad): ${REFUSED.reason}`);
+    expect(screen.getByTestId("push-confirm-sent")).toHaveTextContent("1 row(s) will be sent to Google Play");
+    expect(executeCalls(fetchMock)).toHaveLength(0);
+    fireEvent.click(screen.getByTestId("push-confirm-cancel"));
+    expect(screen.queryByTestId("push-confirm")).toBeNull();
+    expect(executeCalls(fetchMock)).toHaveLength(0);
+    expect(cancelCalls(fetchMock)).toHaveLength(0);
+  });
+
+  it("Push ⇒ confirm ⇒ exactly ONE execute, carrying the dropped rows and the preview's Hub run", async () => {
+    const fetchMock = installPushFetch({});
+    const { container } = renderWizard();
+    await goToPreviewAndAdoptRun(container, fetchMock);
+    await clickExecuteAndSettle();
+    await screen.findByTestId("push-confirm");
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("push-confirm-ok"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(executeCalls(fetchMock)).toHaveLength(1));
+    const body = JSON.parse((executeCalls(fetchMock)[0][1] as RequestInit).body as string);
+    expect(body.droppedRows).toEqual([REFUSED]);
+    expect(body.hub_run_id).toBe("run-h43");
+    expect(body.rows.map((r: { sku: string }) => r.sku)).toEqual(["sku1"]);
+  });
+
+  it("no refused row ⇒ Push goes straight to execute, no confirmation", async () => {
+    const fetchMock = installPushFetch({ refusedRows: [] });
+    const { container } = renderWizard();
+    await goToPreviewAndAdoptRun(container, fetchMock);
+    await clickExecuteAndSettle();
+    await waitFor(() => expect(executeCalls(fetchMock)).toHaveLength(1));
+    expect(screen.queryByTestId("push-confirm")).toBeNull();
+  });
+
+  it("EVERY row refused ⇒ nothing to push: Push disabled, the summary says so", async () => {
+    installPushFetch({ rows: [] });
     const { container } = renderWizard();
     await goToUploadStep();
     selectFile(container);
@@ -1106,12 +1192,122 @@ describe("BulkImportWizard (Google) — rows refused in the file block Push (H4.
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /^Preview/ }));
     });
-    const list = await screen.findByTestId("file-refused-rows");
-    expect(list).toHaveTextContent(/1 row\(s\) in the file cannot be imported/);
-    expect(list).toHaveTextContent('Row 3 (sku.bad): GT Price "26000.5" VND — VND only accepts whole numbers.');
-    const push = screen.getByRole("button", { name: /Push to Google Play/ });
-    expect(push).toBeDisabled();
-    expect(push).toHaveAttribute("title", "1 row(s) in the file cannot be imported — fix the file and re-upload");
+    expect(await screen.findByTestId("file-refused-rows")).toHaveAttribute("data-state", "nothing-to-push");
+    expect(screen.getByTestId("preview-refused-row")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Push to Google Play/ })).toBeDisabled();
+  });
+
+  it("Done lists EVERY row not imported, by group, uncapped; the heading says 'finished — N not imported'; the five tiles sum to the rows in the file", async () => {
+    const leftOut = Array.from({ length: 25 }, (_, i) => ({
+      sku: `sku.left${i}`,
+      rowNumber: 10 + i,
+      kind: "refused_in_file",
+      reason: `Row ${10 + i} (sku.left${i}): "Price (USD)" is empty — fill in the price. Not imported — refused in the file, left out when you pushed.`,
+    }));
+    const fetchMock = installPushFetch({
+      executeJson: () => ({
+        rowsTotal: 47,
+        rowsCreated: 1,
+        rowsOverwritten: 0,
+        rowsSkipped: 0,
+        rowsFailed: 0,
+        rowsRefused: 46,
+        droppedRows: 25,
+        refusedRows: [
+          ...leftOut,
+          ...Array.from({ length: 21 }, (_, i) => ({
+            sku: `sku.tier${i}`,
+            rowNumber: 40 + i,
+            kind: "tier_price_invalid",
+            reason: `Row ${40 + i} (sku.tier${i}): pricing-template tier "t" holds a price that cannot be sent — TW TWD: x. Row not sent.`,
+          })),
+        ],
+        durationMs: 5,
+      }),
+    });
+    const { container } = renderWizard();
+    await goToPreviewAndAdoptRun(container, fetchMock);
+    await clickExecuteAndSettle();
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("push-confirm-ok"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const heading = await screen.findByTestId("done-heading");
+    expect(heading).toHaveAttribute("data-state", "partial");
+    expect(heading).toHaveTextContent("Bulk import finished — 46 row(s) not imported (46 not sent)");
+    const list = screen.getByTestId("done-refused-rows");
+    // EVERY row by name — both groups past 20 (the old cap was 20).
+    expect(list.querySelectorAll('li[data-kind="refused_in_file"]')).toHaveLength(25);
+    expect(list.querySelectorAll('li[data-kind="tier_price_invalid"]')).toHaveLength(21);
+    for (const n of [10, 34, 40, 60]) expect(list).toHaveTextContent(`Row ${n} (`);
+    expect(list).toHaveTextContent("25 row(s) left out — refused in the file, not sent:");
+    expect(list).toHaveTextContent("21 row(s) refused at push — not sent to Google:");
+    // The reason already starts "Row N (sku):" — not doubled.
+    expect(list.textContent).not.toMatch(/Row 40 \(sku\.tier0\): Row 40/);
+    const tiles = [...screen.getByTestId("done-tiles").children].map((t) => Number(t.textContent?.match(/\d+/)?.[0]));
+    const [created, overwritten, skipped, failed, notSent] = tiles;
+    expect(created + overwritten + skipped + failed + notSent).toBe(47);
+  });
+
+  it("25 refused rows ⇒ ALL 25 in the table and ALL 25 named in the confirmation (no cap)", async () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({ rowNumber: 10 + i, sku: `sku.r${i}`, reason: `reason ${i}.` }));
+    const fetchMock = installPushFetch({ refusedRows: many });
+    const { container } = renderWizard();
+    await goToPreviewAndAdoptRun(container, fetchMock);
+    expect(screen.getAllByTestId("preview-refused-row").map((e) => e.getAttribute("data-row-number"))).toEqual(
+      many.map((r) => String(r.rowNumber)),
+    );
+    await clickExecuteAndSettle();
+    const dialog = await screen.findByTestId("push-confirm");
+    for (const r of many) expect(dialog).toHaveTextContent(`Row ${r.rowNumber} (${r.sku}): ${r.reason}`);
+  });
+
+  it("the confirmation closes when the wizard leaves the preview — a NEW preview never shows a stale one, and its OK never bypasses the Push gate", async () => {
+    let previewCall = 0;
+    const fetchMock = installPushFetch({});
+    // Second preview: an EXISTING row with no decision yet ⇒ Push gate closed.
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes(AVAILABILITY_URL_FRAGMENT)) return Promise.resolve({ ok: false, json: async () => ({}) });
+      if (url.includes(START_URL)) return Promise.resolve({ ok: true, json: async () => ({ run_id: "run-h43" }) });
+      if (url.includes(CANCEL_URL)) return Promise.resolve({ ok: true, json: async () => ({}) });
+      if (url.includes(PREVIEW_URL_FRAGMENT)) {
+        previewCall += 1;
+        const base = { rowNumber: 1, sku: "sku1", baseCurrency: "USD", basePriceDecimal: "0.99", regionOverrides: [], listings: [], tierCandidates: [], defaultTierSelection: null, tierMatchedBy: "none" };
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ rows: [{ ...base, exists: previewCall > 1 }], refusedRows: [REFUSED], warnings: [] }),
+        });
+      }
+      if (url.includes(EXECUTE_URL_FRAGMENT)) return Promise.resolve(successExecuteResponse());
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    const { container } = renderWizard();
+    await goToPreviewAndAdoptRun(container, fetchMock);
+    await clickExecuteAndSettle();
+    await screen.findByTestId("push-confirm");
+    // Leave the preview with the page's Back (not the dialog's button).
+    fireEvent.click(screen.getByRole("button", { name: /^Back$/ }));
+    await waitFor(() => expect(screen.queryByTestId("push-confirm")).toBeNull());
+    selectFile(container, "second.xlsx");
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).not.toBeDisabled());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Preview/ }));
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Push to Google Play/ })).toBeDisabled());
+    expect(screen.queryByTestId("push-confirm")).toBeNull();
+    expect(executeCalls(fetchMock)).toHaveLength(0);
+  });
+
+  it("a clean batch keeps the green 'Bulk import complete'", async () => {
+    const fetchMock = installPushFetch({ refusedRows: [] });
+    const { container } = renderWizard();
+    await goToPreviewAndAdoptRun(container, fetchMock);
+    await clickExecuteAndSettle();
+    const heading = await screen.findByTestId("done-heading");
+    expect(heading).toHaveAttribute("data-state", "complete");
+    expect(heading).toHaveTextContent("Bulk import complete");
+    expect(screen.queryByTestId("done-refused-rows")).toBeNull();
   });
 });
-

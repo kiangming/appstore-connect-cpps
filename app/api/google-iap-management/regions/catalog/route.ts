@@ -39,7 +39,7 @@ import {
   resolveActiveAccountId,
 } from "@/lib/google-iap-management/active-account";
 import { buildRegionMapFromBasePrice } from "@/lib/google-iap-management/google/regions-helper";
-import { microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
+import { microsToDecimal, stripTrailingZeros } from "@/lib/google-iap-management/google/price-conversion";
 import { checkRegionsVersion } from "@/lib/google-iap-management/google/play-regions.snapshot";
 
 export const dynamic = "force-dynamic";
@@ -116,8 +116,12 @@ export async function GET(req: Request) {
         // Present only when the caller supplied a real base price. Absent
         // means "this is the country list, the amounts are meaningless" —
         // callers must not treat the probe conversion as a price.
+        // H4.3: trailing zeros stripped, losslessly ("26000.000000" →
+        // "26000", "6.300000" → "6.3"). This value seeds the custom-prices
+        // dialog and the item form, which now apply the thousands-separator
+        // rule to what they hold — a seed must not look like "26.000".
         ...(converted
-          ? { convertedDecimal: microsToDecimal(r.priceMicros, 6) }
+          ? { convertedDecimal: stripTrailingZeros(microsToDecimal(r.priceMicros, 6)) }
           : {}),
       })),
       // Echoed for diagnostics only — the dialog does not pin it. The push

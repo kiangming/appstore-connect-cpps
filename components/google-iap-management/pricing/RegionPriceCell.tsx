@@ -14,9 +14,9 @@
  *
  * ⚠ THIS COMPONENT PERFORMS NO VALIDATION — deliberately (§1.1).
  * It renders an `error` it is handed and nothing more. Validation comes
- * from `lib/google-iap-management/google/currency-precision.ts`
- * (validateDecimalForCurrency) and the throwing `decimalToMicros` on the
- * write path. Callers own that call. If validation were added here, a
+ * from `statedPriceError` (lib/google-iap-management/orchestration/file-price.ts
+ * — precision per currency, the thousands-separator rule, no 0; H4.3) and the
+ * throwing `decimalToMicros` on the write path. Callers own that call. If validation were added here, a
  * caller that forgot to render the cell would silently skip it — the
  * detail view's own history: the form validates, the cell only displays.
  *

@@ -135,6 +135,22 @@ describe("validateCustomPrices", () => {
     expect(byRegion.US).toBeUndefined();
   });
 
+  it("H4.3 (Manager 2026-10-19): the same rule as the file — '26.000' VND (thousands separator?) and '0' are errors; '26000' VND and '0.990' USD are not", () => {
+    const rows = buildCustomPriceRows({
+      countries: CATALOG,
+      templateEntries: TEMPLATE,
+      custom: [
+        { region: "JP", currency: "JPY", priceDecimal: "1.000" },
+        { region: "US", currency: "USD", priceDecimal: "0" },
+        { region: "KW", currency: "KWD", priceDecimal: "0.990" },
+      ],
+    });
+    const byRegion = Object.fromEntries(validateCustomPrices(rows).map((e) => [e.regionCode, e.error]));
+    expect(byRegion.JP).toMatch(/it may be a thousands separator/);
+    expect(byRegion.US).toBe("the price is 0 — a 0 price is not accepted; enter the real price.");
+    expect(byRegion.KW).toBeUndefined();
+  });
+
   it("blank countries are not errors — blank means 'let Google convert'", () => {
     const rows = buildCustomPriceRows({
       countries: CATALOG,

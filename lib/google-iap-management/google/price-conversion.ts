@@ -85,6 +85,14 @@ export function decimalToMicros(
   return stripped;
 }
 
+/** Strip trailing fractional zeros — "27000.000000" → "27000", "6.300000" →
+ *  "6.3" — losslessly. The ONE copy (H4.3; the tier-entries route and the
+ *  template queries had private ones). */
+export function stripTrailingZeros(decimal: string): string {
+  if (!decimal.includes(".")) return decimal;
+  return decimal.replace(/\.?0+$/, "");
+}
+
 /**
  * Convert Google's priceMicros wire format to a decimal display string.
  * Examples:

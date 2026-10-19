@@ -2,7 +2,8 @@
 
 import { Check, AlertTriangle, ArrowRight, XCircle, Pencil } from "lucide-react";
 
-import type { PreviewRow, PreviewTierCandidate } from "./BulkImportWizard";
+import type { PreviewRefusedRow, PreviewRow, PreviewTierCandidate } from "./BulkImportWizard";
+import type { GtPlan } from "./execute-payload";
 
 /** Sentinel for the dropdown's Custom entry. It is a TRIGGER ONLY and is
  *  intercepted in the change handler — it must never be stored as the
@@ -14,6 +15,13 @@ const CUSTOM_OPTION = "__custom__";
 
 interface Props {
   rows: PreviewRow[];
+  /** H4.3 — rows of the file that will NOT be imported, with the reason.
+   *  Rendered in the same table, in file order, with no decision / tier /
+   *  custom controls: nothing here can make them pushable. */
+  refusedRows?: ReadonlyArray<PreviewRefusedRow>;
+  /** H4.3 (Q5) — what happens to each row's GT at push, by rowNumber
+   *  (gtPlanOf — the same state the execute body is built from). */
+  gtPlans?: Readonly<Record<number, GtPlan>>;
   onRowDecisionChange: (rowNumber: number, decision: "overwrite" | "skip") => void;
   // Hotfix 19 — tier-selection plumbing.
   tierSelections: Record<number, string>;
@@ -58,6 +66,8 @@ function formatTierLabel(c: PreviewTierCandidate): string {
 
 export function PreviewTable({
   rows,
+  refusedRows = [],
+  gtPlans = {},
   onRowDecisionChange,
   tierSelections,
   onTierSelectionChange,
@@ -92,7 +102,38 @@ export function PreviewTable({
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100">
-          {rows.map((row) => {
+          {[
+            ...rows.map((row) => ({ rowNumber: row.rowNumber, row, refused: null })),
+            ...refusedRows.map((refused) => ({ rowNumber: refused.rowNumber, row: null, refused })),
+          ]
+            .sort((a, b) => a.rowNumber - b.rowNumber)
+            .map(({ row, refused }) => {
+            if (refused) {
+              return (
+                <tr
+                  key={`refused-${refused.rowNumber}`}
+                  data-testid="preview-refused-row"
+                  data-row-number={refused.rowNumber}
+                  className="bg-red-50"
+                >
+                  <td className="px-3 py-2.5 text-xs text-slate-400 font-mono">{refused.rowNumber}</td>
+                  <td className="px-3 py-2.5 text-xs font-mono text-slate-900">
+                    {refused.sku || <span className="italic text-slate-500">no Product ID</span>}
+                  </td>
+                  <td colSpan={4} className="px-3 py-2.5 text-[11px] text-red-800">
+                    {refused.reason}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-red-700 bg-red-100 border border-red-200 px-1.5 py-0.5 rounded">
+                      <XCircle className="h-3 w-3" />
+                      Not imported
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-[11px] text-red-700">Not sent</td>
+                </tr>
+              );
+            }
+            if (!row) return null;
             const defaultTitle =
               row.listings.find((l) => l.locale === "en-US")?.title ??
               row.listings[0]?.title ??
@@ -108,8 +149,7 @@ export function PreviewTable({
             const customCount = customPriceCounts[row.sku];
             const customIsActive =
               customCount !== undefined && (activeCustomSkus?.has(row.sku) ?? false);
-            // Trigger hidden once a set exists (the chip owns re-open) and
-            // under Google Conversion (Q4 — custom doesn't apply there).
+            // Trigger hidden once a set exists (the chip owns re-open).
             const customTriggerVisible =
               customEnabled && customCount === undefined && Boolean(onOpenCustomDialog);
             const rowClass = customIsActive
@@ -148,36 +188,7 @@ export function PreviewTable({
                       {row.baseCurrency}
                     </span>
                   )}
-                  {/* Cycle 43 — cross-currency resolution outcome inline.
-                      For same-currency rows nothing extra is shown (current
-                      behavior bit-for-bit). */}
-                  {row.resolution?.kind === "cross_currency_resolved" && (
-                    <div className="flex items-center justify-end gap-1 text-[10px] text-emerald-700 mt-0.5">
-                      <ArrowRight className="h-3 w-3" />
-                      <span className="font-semibold">
-                        {row.resolution.appCurrencyPrice.priceDecimal}
-                      </span>
-                      <span>{row.resolution.appCurrencyPrice.currency}</span>
-                    </div>
-                  )}
-                  {row.resolution?.kind === "cross_currency_needs_choice" && (
-                    <div className="text-[10px] text-amber-700 mt-0.5">
-                      → pick tier
-                    </div>
-                  )}
-                  {row.resolution?.kind === "cross_currency_refused" && (
-                    <div
-                      className="flex items-center justify-end gap-1 text-[10px] text-red-700 mt-0.5"
-                      title={row.resolution.reason}
-                    >
-                      <XCircle className="h-3 w-3" />
-                      <span className="font-semibold uppercase tracking-wide">
-                        Refused
-                      </span>
-                    </div>
-                  )}
-                  {/* Mirrors the cross_currency_resolved arrow above: the
-                      file value stays visible, the marker says what will
+                  {/* The file value stays visible; the marker says what will
                       actually be sent. */}
                   {customIsActive && (
                     <div className="flex items-center justify-end gap-1 text-[10px] text-violet-700 mt-0.5">
@@ -185,6 +196,7 @@ export function PreviewTable({
                       <span className="font-semibold">custom</span>
                     </div>
                   )}
+                  <GtLine plan={gtPlans[row.rowNumber]} />
                 </td>
                 <td className="px-3 py-2.5 text-xs">
                   {customCount !== undefined ? (
@@ -199,13 +211,15 @@ export function PreviewTable({
                     />
                   ) : row.tierCandidates.length === 0 ? (
                     <div className="flex items-center gap-2">
-                      {/* A refused row is NOT sent: "converted by Google" would
-                          contradict the Refused badge in the same row. */}
-                      <span className="text-slate-500 italic">
-                        {row.resolution?.kind === "cross_currency_refused"
-                          ? "Not sent — refused"
-                          : "Auto-converted by Google"}
-                      </span>
+                      {/* H4.3 — a failed lookup is NOT "no tier": the push
+                          looks again and may find one. */}
+                      {row.tierMatchedBy === "lookup_failed" ? (
+                        <span data-testid="tier-lookup-failed" className="text-amber-700 italic">
+                          Tier lookup failed — run Preview again
+                        </span>
+                      ) : (
+                        <span className="text-slate-500 italic">Auto-converted by Google</span>
+                      )}
                       {customTriggerVisible && (
                         <>
                           <span className="text-slate-300">·</span>
@@ -336,6 +350,52 @@ export function PreviewTable({
           })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** H4.3 (Q5) — the row's GT and what the push does with it. Words only for
+ *  what is known: a tier's price is known for VN alone (TierCandidate). */
+function GtLine({ plan }: { plan: GtPlan | undefined }) {
+  if (!plan || plan.kind === "none") return null;
+  const gt = `GT ${plan.gt.region} ${plan.gt.priceDecimal} ${plan.gt.currency}`;
+  let text: string;
+  let tone = "text-slate-600";
+  switch (plan.kind) {
+    case "sent":
+      text = `${gt} · will be sent`;
+      tone = "text-emerald-700";
+      break;
+    case "skip":
+      text = `${gt} · not sent (row set to Skip)`;
+      break;
+    case "replaced_by_custom":
+      text = plan.customEntry
+        ? `${gt} · replaced by custom (${plan.gt.region} ${plan.customEntry.priceDecimal} ${plan.customEntry.currency})`
+        : `${gt} · replaced by custom — ${plan.gt.region} is not in the custom set, so Google converts it from the file's price`;
+      tone = "text-violet-700";
+      break;
+    case "replaced_by_tier":
+      text =
+        plan.tierEntry.kind === "known"
+          ? `${gt} · replaced by tier "${plan.tier}" (${plan.gt.region} ${plan.tierEntry.priceDecimal} ${plan.tierEntry.currency})`
+          : plan.tierEntry.kind === "absent"
+            ? `${gt} · replaced by tier "${plan.tier}" — the tier has no ${plan.gt.region} price, so Google converts it from the file's price`
+            : `${gt} · replaced by tier "${plan.tier}" — ${plan.gt.region} gets the tier's price, or Google's conversion if the tier has none`;
+      tone = "text-amber-700";
+      break;
+    case "pending_tier":
+      text = `${gt} · depends on the tier you pick`;
+      tone = "text-amber-700";
+      break;
+    case "unknown_lookup_failed":
+      text = `${gt} · unknown — the tier lookup failed; run Preview again`;
+      tone = "text-amber-700";
+      break;
+  }
+  return (
+    <div data-testid="gt-status" data-state={plan.kind} className={`mt-0.5 text-[10px] font-sans text-right ${tone}`}>
+      {text}
     </div>
   );
 }

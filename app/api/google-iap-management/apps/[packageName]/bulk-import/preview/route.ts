@@ -163,7 +163,10 @@ export async function POST(
   type RowCandidateData = {
     candidates: TierCandidate[];
     defaultTierSelection: string | null;
-    matchedBy: "sku" | "currency_price" | "none";
+    /** H4.3 — "lookup_failed": the lookup threw, so "no tier" is NOT known
+     *  (the push re-runs it and may still find one). The wizard says so
+     *  instead of "Auto-converted by Google" / "GT will be sent". */
+    matchedBy: "sku" | "currency_price" | "none" | "lookup_failed";
   };
   const NO_CANDIDATES: RowCandidateData = { candidates: [], defaultTierSelection: null, matchedBy: "none" };
   let candidateLookupError: string | null = null;
@@ -193,7 +196,7 @@ export async function POST(
         console.warn(
           `[google-iap:bulk-import:preview] candidate lookup failed sku=${row.sku} err="${candidateLookupError}"`,
         );
-        return NO_CANDIDATES;
+        return { ...NO_CANDIDATES, matchedBy: "lookup_failed" };
       }
     },
   );
@@ -204,9 +207,6 @@ export async function POST(
     tierCandidates: candidateData[i].candidates,
     defaultTierSelection: candidateData[i].defaultTierSelection,
     tierMatchedBy: candidateData[i].matchedBy,
-    // Every row is priced from its own file price since H4.2; the
-    // cross-currency kinds the wizard still knows are no longer produced.
-    resolution: { kind: "same_currency" as const },
   }));
 
   const ambiguousCount = rows.filter((r) => r.tierCandidates.length > 1).length;
@@ -226,8 +226,10 @@ export async function POST(
     // completely. Read at the same moment as the mirror itself.
     iapsLastSyncedAt: gate.iapsLastSyncedAt,
     rows,
-    // H4.1 — rows the file states but the tool cannot honour exactly (price
-    // or GT price). Not in `rows`; the wizard names them and blocks Push.
+    // Rows of the file the tool will not import, each with its reason (price
+    // or GT that cannot be honoured exactly, empty price, no Product ID).
+    // Not in `rows`. H4.3: the wizard shows them IN the preview table and
+    // lets the Manager push the rest after confirming how many are left out.
     refusedRows: parsed.refusedRows,
     warnings: warningsOut,
     counts: {

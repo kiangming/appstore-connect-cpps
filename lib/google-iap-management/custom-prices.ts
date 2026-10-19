@@ -6,13 +6,14 @@
  * row's template baseline × the Manager's typed overrides) is computed and
  * tested independently of React.
  *
- * REUSES `validateDecimalForCurrency` — no second rule set, no copy.
- * Template-derived prices were validated when the template was uploaded;
- * hand-typed custom prices have no such history, so the SAME check must
- * run before they can reach a live store. The dialog calls
- * `validateCustomPrices` to gate Save; the execute route re-runs the same
- * function server-side because client state is untrusted; the orchestrator
- * has `decimalToMicros`'s throw as a final backstop.
+ * REUSES `statedPriceError` (orchestration/file-price.ts) — no second rule
+ * set, no copy: the same rules as a price in the import file and the item
+ * form (precision per currency, "26.000" in a currency without decimals
+ * refused as a possible thousands separator, no 0 — Manager 2026-10-19).
+ * The dialog calls `validateCustomPrices` to gate Save; the orchestrator's
+ * custom pre-pass re-runs `statedPriceOf` server-side because client state
+ * is untrusted. (Template prices are NOT validated at upload — a stored
+ * tier entry is checked at push by `storedRegionPriceOf`.)
  *
  * CURRENCY IS DERIVED, NEVER TYPED (design §1.5, code-backed by
  * UnifiedPricingTable.tsx:367-369 where it renders as a chip). Derivation
@@ -24,7 +25,7 @@
  *   3. never `getAllRegions()` alone — ~250 ISO codes with no currency,
  *      including markets Google does not sell in.
  */
-import { validateDecimalForCurrency } from "./google/currency-precision";
+import { statedPriceError } from "./orchestration/file-price";
 import { regionNameFromCode } from "./region-name";
 
 /** One country as offered by Google's catalog. `currency` is Google's
@@ -194,12 +195,12 @@ export interface CustomPriceError {
 /**
  * Validate every typed price against ITS OWN country's currency.
  *
- * Delegates to `validateDecimalForCurrency` (currency-precision.ts:92-114)
- * — the exact function the item-detail form calls (IapForm.tsx:56-71,
- * :298-304). Rows the Manager hasn't typed into are not errors: a blank
- * price means "let Google convert this country", which is a valid choice.
+ * Delegates to `statedPriceError` (file-price.ts) — the exact function the
+ * item form calls (IapForm.tsx validateDecimal) and the rules the server
+ * re-runs. Rows the Manager hasn't typed into are not errors: a blank price
+ * means "let Google convert this country", which is a valid choice.
  *
- * Scope note (design §1.4, R4): this checks DECIMAL PRECISION only. There
+ * Scope note (design §1.4, R4): this checks the PRICE RULES only. There
  * is no per-country minimum/maximum table anywhere in the tool
  * (currency-precision.ts:16-18 states so) — Google enforces floors
  * server-side at push. `flagSuspiciousDrops` below is the cheap heuristic
@@ -218,7 +219,7 @@ export function validateCustomPrices(
       });
       continue;
     }
-    const err = validateDecimalForCurrency(r.customDecimal, r.currency);
+    const err = statedPriceError(r.customDecimal, r.currency);
     if (err) errors.push({ regionCode: r.regionCode, error: err });
   }
   return errors;

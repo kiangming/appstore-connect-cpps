@@ -57,7 +57,7 @@ import {
   type HubTerminalStatus,
 } from "@/lib/google-iap-management/hub-tracking/tracking";
 import { computeGoogleBulkImportTerminalStatus } from "@/lib/google-iap-management/hub-tracking/status-mapping";
-import { validateDecimalForCurrency } from "@/lib/google-iap-management/google/currency-precision";
+import { MAX_DROPPED_ROWS, PRICING_RULE } from "@/lib/google-iap-management/bulk-import-contract";
 import {
   describeGoogleError,
   GoogleDualPathError,
@@ -71,6 +71,11 @@ interface ExecuteBody {
   /** Threaded from the wizard's upload→preview Hub-tracking start call.
    *  Absent/empty means tracking never started for this batch (no-op). */
   hub_run_id?: string | null;
+  /** H4.3 — must equal PRICING_RULE; see the check below. */
+  pricing_rule?: string;
+  /** H4.3 — rows the preview refused that the Manager left out ("push the
+   *  rest"). Never sent; counted (Done, audit, Hub). */
+  droppedRows?: Array<{ rowNumber?: number; sku?: string; reason?: string }>;
   rows?: Array<{
     rowNumber?: number;
     sku?: string;
@@ -83,10 +88,6 @@ interface ExecuteBody {
     chosenTierIdentifier?: string | null;
     defaultTierIdentifier?: string | null;
     tierCandidateCount?: number;
-    /** Cycle 43 parser provenance of baseCurrency. Since H4.2 it changes
-     *  nothing (there is no cross-currency branch); removed with the
-     *  execute re-check in H4.3 (Q9). */
-    priceHeaderSource?: "explicit" | "inferred";
     /** Phase 3 — per-item custom prices. Sent under every pricing source,
      *  on non-skipped rows; see the validation below. */
     customPrices?: {
@@ -170,6 +171,24 @@ export async function POST(
       return NextResponse.json(refusal.body, { status: refusal.status });
     }
 
+    // H4.3 — a request built before H4 cannot be priced from the file: the
+    // old preview read a bare "Price" header as the APP's currency and matched
+    // tiers cross-currency, and its rows do not say so (the old
+    // `priceHeaderSource` marker is gone). Refuse the whole request, before
+    // anything is written, and say how to fix it.
+    if (body.pricing_rule !== PRICING_RULE) {
+      // ⚠ "Reload": the stale tab runs the OLD wizard code — uploading again
+      // in the same tab would build the same old body and get this again.
+      tracking.errorMessage =
+        "The tool was updated since this page was opened: this preview was made with an older version, which " +
+        "could price rows in the app's currency. Nothing was sent. Reload this page, then upload the file and " +
+        "run Preview again.";
+      return NextResponse.json(
+        { error: tracking.errorMessage, code: "PREVIEW_OUTDATED" },
+        { status: 409 },
+      );
+    }
+
     const pricingSource = body.pricingSource;
     if (!pricingSource || !VALID_PRICING_SOURCES.includes(pricingSource)) {
       tracking.errorMessage = `pricingSource must be one of ${VALID_PRICING_SOURCES.join(", ")}.`;
@@ -181,8 +200,20 @@ export async function POST(
       return NextResponse.json({ error: tracking.errorMessage }, { status: 400 });
     }
 
+    // Malformed STRUCTURE is a 400 (no wizard sends it); a bad PRICE is a
+    // per-row refusal in the orchestrator (Q9 — one refusal path).
+    const isStr = (v: unknown): v is string => typeof v === "string";
     const rows: BulkImportRow[] = [];
     for (const r of body.rows) {
+      if (
+        !Array.isArray(r.regionOverrides ?? []) ||
+        !(r.regionOverrides ?? []).every((ro) => ro && isStr(ro.region) && isStr(ro.currency) && isStr(ro.priceDecimal)) ||
+        !Array.isArray(r.listings ?? []) ||
+        !(r.listings ?? []).every((l) => l && isStr(l.locale) && isStr(l.title ?? "") && isStr(l.description ?? ""))
+      ) {
+        tracking.errorMessage = `Row ${r.rowNumber ?? "?"}: regionOverrides / listings are malformed.`;
+        return NextResponse.json({ error: tracking.errorMessage }, { status: 400 });
+      }
       if (!r.sku || !r.basePriceDecimal || !r.baseCurrency) {
         tracking.errorMessage = `Row ${r.rowNumber ?? "?"}: sku + basePriceDecimal + baseCurrency are required.`;
         return NextResponse.json({ error: tracking.errorMessage }, { status: 400 });
@@ -220,18 +251,15 @@ export async function POST(
             ? r.defaultTierIdentifier
             : null,
         tierCandidateCount: typeof r.tierCandidateCount === "number" ? r.tierCandidateCount : 0,
-        // No effect on pricing since H4.2; removed in H4.3 (Q9).
-        priceHeaderSource:
-          r.priceHeaderSource === "explicit" ? "explicit" : "inferred",
-        // Phase 3 — parsed + re-validated below.
+        // Phase 3 — parsed below; the PRICES are checked in the orchestrator.
         customPrices: null,
       });
 
-      // ── Custom prices: server-side re-validation ──────────────────────
-      // Client state is UNTRUSTED. The dialog gates Save on exactly these
-      // rules, but nothing stops a stale tab or a direct API call, and
-      // these values go to a live store. Same module the dialog uses, so
-      // the rules cannot diverge.
+      // ── Custom prices: structure here, PRICES in the orchestrator ───────
+      // Client state is UNTRUSTED. H4.3 (Q9): the price rules — the same
+      // statedPriceOf the dialog gates Save with — run in the orchestrator's
+      // custom pre-pass, the one server re-check. Here: only that each entry
+      // HAS a country, a currency and an amount.
       if (r.customPrices) {
         // Custom prices are valid under EVERY source, including Google
         // Conversion. There the clobber that motivated the original
@@ -241,27 +269,19 @@ export async function POST(
         // Google Conversion the set is a sparse overlay on the base
         // price, which is what the file's GT-Price column has always
         // done; this just raises the ceiling from one country to ~170.
-        const entries = r.customPrices.entries;
-        if (!Array.isArray(entries) || entries.length === 0) {
-          tracking.errorMessage = `Row ${r.rowNumber ?? r.sku}: customPrices.entries must be a non-empty array.`;
-          return NextResponse.json({ error: tracking.errorMessage }, { status: 400 });
-        }
-        // A MALFORMED ENTRY REFUSES THIS ROW ONLY — it must never 400 the
-        // whole batch. One bad row cannot be allowed to block 99 good
-        // ones; the orchestrator's per-row fail-soft channel reports it.
+        // A MALFORMED ENTRY — or an empty set — REFUSES THIS ROW ONLY; it
+        // must never 400 the whole batch (one bad row cannot block 99 good
+        // ones). An empty set reaches the orchestrator, which refuses it
+        // ("no country prices were supplied").
+        const entries = Array.isArray(r.customPrices.entries) ? r.customPrices.entries : [];
         const parsed: Array<{ region: string; currency: string; priceDecimal: string }> = [];
         let rowError: string | null = null;
         for (const e of entries) {
-          const region = (e.region ?? "").trim().toUpperCase();
-          const currency = (e.currency ?? "").trim().toUpperCase();
-          const priceDecimal = (e.priceDecimal ?? "").trim();
+          const region = isStr(e?.region) ? e.region.trim().toUpperCase() : "";
+          const currency = isStr(e?.currency) ? e.currency.trim().toUpperCase() : "";
+          const priceDecimal = isStr(e?.priceDecimal) ? e.priceDecimal.trim() : "";
           if (!region || !currency || !priceDecimal) {
-            rowError = `custom price entry is missing country, currency, or amount`;
-            break;
-          }
-          const precisionErr = validateDecimalForCurrency(priceDecimal, currency);
-          if (precisionErr) {
-            rowError = `custom price "${priceDecimal}" is invalid for ${currency} — ${precisionErr}`;
+            rowError = "a custom price entry is missing its country, currency or amount.";
             break;
           }
           parsed.push({ region, currency, priceDecimal });
@@ -274,7 +294,7 @@ export async function POST(
           target.customPrices = { entries: [], baselineTier: null, editedAt: null };
           target.customPriceRefusal = {
             kind: "custom_invalid_price",
-            reason: `Row ${target.rowNumber} (${target.sku}): ${rowError}. Row not sent.`,
+            reason: `Row ${target.rowNumber} (${target.sku}): ${rowError} Row not sent.`,
           };
         } else {
           target.customPrices = {
@@ -290,6 +310,35 @@ export async function POST(
       }
     }
 
+    // ── H4.3 — rows the preview refused, left out by the Manager ─────────
+    // Informational only: they can only add failures, never send anything.
+    // Each rowNumber counts once: a row that is ALSO in `rows` (a direct
+    // POST) is counted as the sent row (the orchestrator re-checks its
+    // prices), and a repeated entry is ignored.
+    const droppedIn = body.droppedRows ?? [];
+    if (!Array.isArray(droppedIn) || !droppedIn.every((d) => d && typeof d.rowNumber === "number" && isStr(d.sku) && isStr(d.reason))) {
+      tracking.errorMessage = "droppedRows entries must each be { rowNumber, sku, reason }.";
+      return NextResponse.json({ error: tracking.errorMessage }, { status: 400 });
+    }
+    if (droppedIn.length > MAX_DROPPED_ROWS) {
+      tracking.errorMessage =
+        `${droppedIn.length} rows of the file cannot be imported — more than ${MAX_DROPPED_ROWS} in one push. ` +
+        "Clean the file and run Preview again.";
+      return NextResponse.json({ error: tracking.errorMessage }, { status: 400 });
+    }
+    const seenRowNumbers = new Set(rows.map((r) => r.rowNumber));
+    const droppedRows = droppedIn
+      .filter((d) => {
+        if (seenRowNumbers.has(d.rowNumber as number)) return false;
+        seenRowNumbers.add(d.rowNumber as number);
+        return true;
+      })
+      .map((d) => ({
+        rowNumber: d.rowNumber as number,
+        sku: (d.sku as string).trim(),
+        reason: (d.reason as string).trim().slice(0, 2000),
+      }));
+
     try {
       const encrypted = await getEncryptedCredentials(accountId);
       const jwt = jwtClientFromEncrypted(encrypted);
@@ -304,16 +353,17 @@ export async function POST(
         pricingSource,
         sourceFilename: body.sourceFilename ?? null,
         rows,
+        droppedRows,
         actorEmail: session.user.email ?? null,
         // ⚠ H4.2: NO app currency — the file is the only price source.
       });
 
       // ── Hub-tracking terminal status (SUCCESS/FAILED/PARTIAL) ──────────
-      // Refused rows are not "skipped" when a price the Manager stated did
-      // not reach Google (P5, the status principle): CUSTOM refusals (Q5)
-      // and, since H4.2, FILE-PRICE refusals (file_price_invalid,
-      // conversion_failed) count as failed for the TERMINAL STATUS ONLY —
-      // the returned counters keep them in `rowsRefused`.
+      // A refused row is not "skipped": a row of the file did not reach
+      // Google (P5, the status principle). H4.3: counted as `rowsRefused` —
+      // EVERY refusal kind (file price, conversion, tier, custom, the rows
+      // dropped in the file), so a new kind can never slip out of the count.
+      // `rowsTotal` includes the dropped rows ("3/2 rows failed" otherwise).
       const succeeded = result.rowsCreated + result.rowsOverwritten;
       const terminal = computeGoogleBulkImportTerminalStatus({
         total: result.rowsTotal,
@@ -322,7 +372,7 @@ export async function POST(
         // this field would make the sum NaN, and `NaN === 0` is false, so
         // every clean batch would close FAILED. Cheap guard against a
         // partial/legacy result object.
-        failed: result.rowsFailed + (result.customRefusedRows ?? 0) + (result.priceRefusedRows ?? 0),
+        failed: result.rowsFailed + (result.rowsRefused ?? 0),
       });
       tracking.status = terminal.status;
       tracking.errorMessage = terminal.errorMessage;

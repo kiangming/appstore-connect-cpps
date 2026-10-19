@@ -345,12 +345,12 @@ function googleNotesRows(selected?: readonly string[]): (string | number)[][] {
     [
       GOOGLE_PRODUCT_ID_HEADER,
       "REQUIRED",
-      "SKU — unique per app. Rows without it are skipped.",
+      "SKU — unique per app. A row with data but no Product ID is not imported (the preview lists it with the reason).",
     ],
     [
       GOOGLE_PRICE_HEADER,
       "REQUIRED",
-      "⚠ US DOLLARS (USD) — the currency is the one in this header, whatever the app's own currency is; the app's currency is not used. Example: 0.99 here means USD 0.99. A pricing template is matched by the tier named after the Product ID, else by this price in USD; other countries are converted by Google from this price. To price in another currency, rename the header (e.g. \"Price (VND)\") — exactly one price column per file. Rows with an empty price are skipped with a warning; a 0 price, or more decimals than the currency allows, keeps the row out. In a currency without decimals (VND, JPY…) write the number without separators: \"26.000\" typed as text keeps the row out (it may mean 26 thousand).",
+      "⚠ US DOLLARS (USD) — the currency is the one in this header, whatever the app's own currency is; the app's currency is not used. Example: 0.99 here means USD 0.99. A pricing template is matched by the tier named after the Product ID, else by this price in USD; other countries are converted by Google from this price. To price in another currency, rename the header (e.g. \"Price (VND)\") — exactly one price column per file. A row with an empty price is not imported (the preview lists it with the reason); a 0 price, or more decimals than the currency allows, keeps the row out. In a currency without decimals (VND, JPY…) write the number without separators: \"26.000\" typed as text keeps the row out (it may mean 26 thousand).",
     ],
     [
       GOOGLE_GT_PRICE_HEADER,

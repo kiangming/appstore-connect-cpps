@@ -337,7 +337,6 @@ function rowAsTheFileStatesIt(f: FileCase, decision: Decision): PreviewRow {
     tierCandidates: [],
     defaultTierSelection: null,
     tierMatchedBy: "none",
-    priceHeaderSource: "explicit",
   };
 }
 
@@ -485,6 +484,8 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
       customPrices,
       activeCustomSkus: activeCustomSkuSet(rows, customPrices),
     }),
+    // H4.3 — what the wizard sends: the rows the preview refused, left out.
+    droppedRows: pbody.refusedRows ?? [],
   });
 
   // ── Server side. Sent even when the Push gate would block: a stale tab
@@ -926,6 +927,7 @@ describe("Q8 — the batch upsert has NO legacy fallback (Manager 2026-10-17)", 
             sourceFilename: "h4.xlsx",
             hubRunId: null,
             rows: buildExecuteRows(rows, { tierSelections: seedTierSelections(rows), customPrices: {}, activeCustomSkus: new Set() }),
+            droppedRows: [],
           }),
         ),
       }),
@@ -939,5 +941,96 @@ describe("Q8 — the batch upsert has NO legacy fallback (Manager 2026-10-17)", 
     expect(ebody).not.toHaveProperty("errorBothPathsFailed");
     expect(g.batch).toHaveBeenCalledTimes(1);
     expect(g.legacy).toHaveBeenCalledTimes(0);
+  });
+});
+
+/**
+ * H4.3 (Manager 2026-10-18) — "push the rest", end to end through the REAL
+ * preview and execute routes, the parser and the orchestrator: rows of the
+ * file the tool will not import are left out after the Manager confirms, and
+ * every layer still counts them — the response the Done screen renders, the
+ * import_batches row, and the Hub terminal status (P5: PARTIAL, not SUCCESS).
+ * Separate from the T1 matrix (its hand table stays as written).
+ */
+describe("H4.3 — push the rest: rows refused in the file are left out, and counted everywhere", () => {
+  it("1 good row + 1 empty price + 1 row with no Product ID ⇒ 1 created, 2 'refused_in_file' in the response, import_batches 3 / FAILED / 2 failed, Hub PARTIAL", async () => {
+    st.appCurrency = null;
+    st.tables = seedTables();
+    st.mirror = [];
+    st.fakeErrors = [];
+    Object.values(g).forEach((m) => m.mockReset());
+    g.convert.mockImplementation(async (r: { requestBody: { price: Money } }) => fakeConvertRegionPrices(r));
+    g.states.mockResolvedValue({ data: {} });
+    g.get.mockRejectedValue(new Error("no live GET for a create row"));
+    g.legacy.mockRejectedValue(new Error("the legacy batch fallback must never be reached"));
+    g.batch.mockImplementation(async (r: { requestBody: { requests: Array<{ oneTimeProduct: unknown }> } }) => ({
+      data: { oneTimeProducts: r.requestBody.requests.map((x) => x.oneTimeProduct) },
+    }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.aoa_to_sheet([
+        ["Product ID", "Price (USD)", "Title (English)"],
+        [SKU, 0.99, "Gem"],
+        ["com.vnggames.h4probe.empty", null, "Empty price"],
+        [null, 1.99, "No id"],
+      ]),
+      "IAP Items",
+    );
+    const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
+    const form = new FormData();
+    form.append("file", new File([new Uint8Array(buf)], "rest.xlsx"));
+    form.append("pricingSource", "google_default");
+    const pres = await PREVIEW(new Request("http://probe/preview", { method: "POST", body: form }), ctx);
+    const pbody = (await pres.json()) as {
+      rows: Array<Omit<PreviewRow, "decision">>;
+      refusedRows: Array<{ rowNumber: number; sku: string; reason: string }>;
+    };
+    expect(pres.status).toBe(200);
+    expect(pbody.rows.map((r) => r.sku)).toEqual([SKU]);
+    expect(pbody.refusedRows.map((r) => [r.rowNumber, r.sku])).toEqual([
+      [3, "com.vnggames.h4probe.empty"],
+      [4, ""],
+    ]);
+
+    const rows = previewRowsFromResponse(pbody.rows);
+    hub.statuses.length = 0;
+    const eres = await EXECUTE(
+      new Request("http://probe/execute", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildExecuteRequestBody({
+            pricingSource: "google_default",
+            sourceFilename: "rest.xlsx",
+            hubRunId: "run-rest",
+            rows: buildExecuteRows(rows, { tierSelections: seedTierSelections(rows), customPrices: {}, activeCustomSkus: new Set() }),
+            droppedRows: pbody.refusedRows,
+          }),
+        ),
+      }),
+      ctx,
+    );
+    const ebody = (await eres.json()) as {
+      rowsTotal: number;
+      rowsCreated: number;
+      rowsRefused: number;
+      refusedRows: Array<{ rowNumber: number; kind: string; reason: string }>;
+    };
+    expect(eres.status).toBe(200);
+    expect(ebody.rowsTotal).toBe(3);
+    expect(ebody.rowsCreated).toBe(1);
+    expect(ebody.rowsRefused).toBe(2);
+    expect(ebody.refusedRows.map((r) => [r.rowNumber, r.kind])).toEqual([
+      [3, "refused_in_file"],
+      [4, "refused_in_file"],
+    ]);
+    expect(ebody.refusedRows[1].reason).toMatch(/^Row 4 \(no Product ID\): no "Product ID"/);
+    const batch = st.tables.import_batches.at(-1) as Record<string, unknown>;
+    expect(batch).toMatchObject({ rows_total: 3, status: "FAILED", rows_success: 1, rows_failed: 2 });
+    expect(hub.statuses).toEqual(["PARTIAL"]);
+    expect(g.batch).toHaveBeenCalledTimes(1);
+    expect(st.fakeErrors).toEqual([]);
   });
 });

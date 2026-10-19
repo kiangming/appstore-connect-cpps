@@ -1071,6 +1071,16 @@ nhánh đó, và lỗi GIÁ CỦA FILE (giá chính + GT) giờ là từ chối 
   batch 500 (dòng hợp lệ cũng không gửi), `import_batches` kẹt `IN_PROGRESS`. Sửa đúng chỗ: kiểm độ chính
   xác theo currency MỘT lần khi tải template lên (cùng luật `getCurrencyDecimals`).
 
+⟶ **2026-10-19 — H4.3:** entry tier sai độ chính xác (và entry 0) giờ là từ chối DÒNG `tier_price_invalid`
+(`storedRegionPriceOf`, kiểm ngay sau khi tra); thêm lưới `price_build_failed` quanh `buildProduct`. Mục
+"entry của tier sai độ chính xác" ở trên ĐÓNG. CÒN MỞ — cơ chế KHÁC (lỗi DB/mạng hoặc logic, không phải dữ
+liệu giá), vẫn ném ngoài try, `import_batches` kẹt `IN_PROGRESS` (đã đo ở map H4.3): `templateExists`, "chưa
+upload template", `findTemplateId`, tra tier đã chọn, tier đã chọn mất entry (drift), có ứng viên mà không
+chọn, tra SKU, tra entries của probe, >1 ứng viên, `BATCH_MAX` (101 dòng ⇒ 500 + IN_PROGRESS). Đề xuất riêng
+(cần Manager): finalize-in-finally cho `import_batches` (KB P10 — mặc định FAILED, kiểm `error` của update)
+xoá "kẹt IN_PROGRESS" cho cả 10 chỗ nhưng KHÔNG biến chúng thành từ chối dòng. Ba update của `import_batches`
+hiện không kiểm `error` (P2).
+
 ---
 
 ## `[GOOGLE-custom-prices-separator-zero]` — giá CUSTOM chưa áp luật (a) dấu phân cách / (b) giá 0
@@ -1084,6 +1094,12 @@ chiếu (tier / giá quy đổi), nhưng không chặn Save. Google trả gì ch
 nơi lệch nhau) ⇒ mở rộng (a)/(b) đổi luôn form đơn lẻ. **Cần Manager:** có áp (a)/(b) cho giá gõ tay từng
 nước không? Nếu có: thêm luật MỘT lần trong `validateDecimalForCurrency` (hoặc một wrapper cả hai bề mặt
 gọi) — route và orchestrator thừa hưởng; không vá riêng dialog.
+
+⟶ **2026-10-19 — ĐÓNG bởi H4.3** (Manager chốt: áp (a)/(b), form đơn lẻ đổi theo). Cách làm: phương án
+"wrapper", KHÔNG phải "trong validateDecimalForCurrency" — đã đo, phương án đó chặn mọi lần sửa item mặc
+định VND vì form tự điền `"26000.00"`. Một hàm `statedPriceOf` / `statedPriceError` (file-price.ts) cho
+file + dialog + form + kiểm lại custom ở server; sửa hai nguồn điền (form-state.ts, route catalog). Phía
+server của sửa đơn lẻ: xem `[GOOGLE-single-edit-server-price-rules]`.
 
 ---
 
@@ -1107,3 +1123,39 @@ adapter lấy từ vùng US (hoặc vùng đầu) của phản hồi Google, kh�
 đó VÀ bảng giá có một entry bằng currency đó ⇒ fallback căn defaultPrice theo currency vùng US của IAP thay vì currency app; app không phải USD
 ⇒ API cũ nhận sai currency. Thuộc 5 chỗ fallback còn lại của chunk D4
 (Manager 2026-10-17: H4 chỉ bỏ fallback của đường batch upsert).
+
+---
+
+## `[GOOGLE-single-edit-server-price-rules]` — sửa/tạo đơn lẻ: server chưa áp (a)/(b), tier sai được gửi thẳng
+
+**GHI NHẬN 2026-10-19 (map H4.3, ĐÃ ĐỌC code).** Từ H4.3 form đơn lẻ chặn "26.000" (VND…) và giá 0 ở CLIENT
+(`statedPriceError`). Phía server (`iaps/[sku]` PATCH → `update-iap.ts`, `iaps` POST → `create-iap.ts`) chỉ
+dùng `decimalToMicros` (nhận số 0 lẻ ở cuối, nhận 0) — tab cũ hoặc gọi API trực tiếp lách được. Bất đối xứng
+với bulk (KB P8). Cùng họ: một entry tier sai độ chính xác có BA kết quả — bulk từ chối dòng (H4.3), tạo đơn
+lẻ ném (create-iap.ts, `decimalToMicros(…, currency)`), SỬA đơn lẻ GỬI THẲNG lên Google (dòng tier
+`dirty:false` ⇒ `update-iap.ts` đổi không kèm currency). ⚠ Không áp (a) phía server cho base edit-mode và dòng
+tier (chuỗi máy tạo `"x.000000"` / `"x.00"`); chỉ dòng Manager gõ (dirty) + base ở create mode + entry tier
+qua `storedRegionPriceOf`. Cần Manager.
+
+---
+
+## `[GOOGLE-template-upload-price-check]` — tải pricing template lên không kiểm giá theo currency
+
+**GHI NHẬN 2026-10-19 (map H4.3, ĐÃ ĐO).** `pricing-template-parser.ts` đổi giá bằng `decimalToMicros(decimal)`
+KHÔNG kèm currency ⇒ lưu được TWD 30.5, giá 0, và "26.000" dạng chữ (lưu thành 26 — mất văn bản gốc, nên
+lúc push KHÔNG thể phát hiện); cặp vùng/currency không kiểm (AR ARS lưu được, gửi được). Ô sai hiện bị cảnh báo
+rồi BỎ (vùng đó rơi về quy đổi của Google — giá Manager không viết). H4.3 chặn được độ chính xác + 0 lúc push
+(`tier_price_invalid`), không chặn được "26.000". Sửa đúng: kiểm qua `statedPriceOf` (theo kiểu ô) lúc tải lên,
+TỪ CHỐI cả file (422) thay vì cảnh báo + bỏ. Kèm một SQL đọc-thôi điểm danh `pricing_template_entries` hiện có
+(micros không chia hết 10^(6-decimals), entry 0, cặp sai) để biết template nào đang dính `tier_price_invalid`.
+
+---
+
+## `[GOOGLE-bulk-import-hub-run-reuse]` — retry sau execute lỗi gửi lại run đã đóng; preview lại bỏ rơi run cũ
+
+**GHI NHẬN 2026-10-19 (map H4.3, ĐÃ ĐO bằng probe wizard).** (1) Execute trả lỗi ⇒ wizard về preview, Push bật
+lại, lần bấm sau gửi CÙNG `hub_run_id` mà server đã đóng FAILED (Hub xử lý lần đóng thứ hai thế nào: CHƯA BIẾT).
+(2) Back rồi Preview lại ⇒ mỗi lần start một run mới, run trước không bị cancel ⇒ kẹt RUNNING. Có từ trước H4;
+hộp xác nhận H4.3 KHÔNG đổi hành vi này (Cancel không đụng run). Sửa cần quyết định: retry mở run mới, hay
+retry không theo dõi.
+

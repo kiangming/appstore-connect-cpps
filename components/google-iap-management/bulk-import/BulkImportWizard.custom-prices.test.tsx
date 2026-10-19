@@ -44,7 +44,6 @@ function previewRow(over: Partial<Record<string, unknown>> = {}) {
     ],
     defaultTierSelection: "tier_999",
     tierMatchedBy: "currency_price",
-    priceHeaderSource: "explicit",
     ...over,
   };
 }
@@ -380,6 +379,65 @@ describe("BulkImportWizard — per-item custom prices", () => {
       await screen.findByText(/VND only accepts whole numbers/),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Save custom prices/ })).toBeDisabled();
+  });
+
+  it.each([
+    ["26.000", /it may be a thousands separator \(26\.000 = 26 thousand\?\)/],
+    ["0", /the price is 0 — a 0 price is not accepted/],
+  ])("H4.3 (Manager 2026-10-19): a typed VN '%s' blocks Save with the shared rule's reason", async (value, reason) => {
+    render(<BulkImportWizard {...PROPS} />);
+    fireEvent.click(await screen.findByRole("radio", { name: /Default Template/ }));
+    await goToPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Custom…" }));
+    const vn = await screen.findByLabelText("Custom price for VN");
+    fireEvent.change(vn, { target: { value } });
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save custom prices/ })).toBeDisabled();
+  });
+
+  it("H4.3: the template seed '249000' VND (tier-entries, trailing zeros stripped) is NOT refused — Save stays enabled", async () => {
+    render(<BulkImportWizard {...PROPS} />);
+    fireEvent.click(await screen.findByRole("radio", { name: /Default Template/ }));
+    await goToPreview();
+    fireEvent.click(screen.getByRole("button", { name: "Custom…" }));
+    const vn = await screen.findByLabelText("Custom price for VN");
+    expect(vn).toHaveValue("249000");
+    expect(screen.queryByText(/thousands separator/)).not.toBeInTheDocument();
+  });
+
+  it("H4.3 (Q5): the GT line says what the push does — replaced by the matched tier (VN price known), then by custom once a set is saved", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installFetch({ previewSequence: [[previewRow({ regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "26000" }] })]] }),
+    );
+    render(<BulkImportWizard {...PROPS} />);
+    fireEvent.click(await screen.findByRole("radio", { name: /Default Template/ }));
+    await goToPreview();
+    const gt = screen.getByTestId("gt-status");
+    expect(gt).toHaveAttribute("data-state", "replaced_by_tier");
+    expect(gt).toHaveTextContent('GT VN 26000 VND · replaced by tier "tier_999" (VN 249000 VND)');
+    await setCustomPrice("199000");
+    expect(screen.getByTestId("gt-status")).toHaveAttribute("data-state", "replaced_by_custom");
+    expect(screen.getByTestId("gt-status")).toHaveTextContent("GT VN 26000 VND · replaced by custom (VN 199000 VND)");
+  });
+
+  it("H4.3 (Q5): template source, no tier matched, lookup FAILED ⇒ the GT is 'unknown — run Preview again', never 'will be sent'", async () => {
+    vi.stubGlobal(
+      "fetch",
+      installFetch({
+        previewSequence: [[previewRow({
+          regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "26000" }],
+          tierCandidates: [],
+          defaultTierSelection: null,
+          tierMatchedBy: "lookup_failed",
+        })]],
+      }),
+    );
+    render(<BulkImportWizard {...PROPS} />);
+    fireEvent.click(await screen.findByRole("radio", { name: /Default Template/ }));
+    await goToPreview();
+    expect(screen.getByTestId("gt-status")).toHaveAttribute("data-state", "unknown_lookup_failed");
+    expect(screen.getByTestId("tier-lookup-failed")).toBeInTheDocument();
   });
 
   it("blank countries state the Google-conversion fallback explicitly", async () => {

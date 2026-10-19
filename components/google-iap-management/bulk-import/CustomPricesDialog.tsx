@@ -11,8 +11,9 @@
  * `RegionPriceCell` — the same component the item-detail view renders
  * (SC1). Validation is `validateCustomPrices` from
  * lib/google-iap-management/custom-prices.ts, which delegates to the same
- * `validateDecimalForCurrency` the detail form uses. Neither the rules nor
- * the control can drift between the two surfaces.
+ * `statedPriceError` (orchestration/file-price.ts) the detail form uses —
+ * and the bulk file and the server re-check (H4.3). Neither the rules nor
+ * the control can drift between the surfaces.
  *
  * Two things this dialog makes VISIBLE that would otherwise be silent:
  *  1. A blank price is not "unpriced" — the orchestrator's regions

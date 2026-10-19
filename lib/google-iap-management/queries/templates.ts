@@ -10,7 +10,7 @@
  * surfaces as an error.
  */
 import { googleIapDb } from "../db";
-import { microsToDecimal } from "../google/price-conversion";
+import { microsToDecimal, stripTrailingZeros } from "../google/price-conversion";
 import type { ParsedPricingEntry } from "../parsers/pricing-template-parser";
 
 export type TemplateScope = "ACCOUNT" | "APP";
@@ -699,11 +699,6 @@ export function buildCandidatesFromEntries(
         : null,
     };
   });
-}
-
-function stripTrailingZeros(decimal: string): string {
-  if (!decimal.includes(".")) return decimal;
-  return decimal.replace(/\.?0+$/, "");
 }
 
 /** Hotfix 19: returns *all* tier identifiers whose `(currency,

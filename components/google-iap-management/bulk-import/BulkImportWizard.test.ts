@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { computePrecisionViolations } from "./execute-payload";
+import { computePrecisionViolations, gtPlanOf } from "./execute-payload";
 import type { PreviewRow } from "./BulkImportWizard";
 
 function row(overrides: Partial<PreviewRow>): PreviewRow {
@@ -114,89 +114,52 @@ describe("computePrecisionViolations (Hotfix 28)", () => {
     expect(computePrecisionViolations([])).toEqual([]);
   });
 
-  // Cycle 43 — cross-currency rows that resolved via template do NOT trip
-  // the precision gate because their raw price is no longer the value sent
-  // to Google; the push uses the resolved app-currency micros instead.
-  describe("Cycle 43 — cross-currency resolution exempts the precision gate", () => {
-    it("cross_currency_resolved row with 4.99 + VND is NOT a violation (push sends resolved VND)", () => {
-      const violations = computePrecisionViolations([
-        row({
-          sku: "sku.cookie.tier5",
-          basePriceDecimal: "4.99",
-          baseCurrency: "VND",
-          resolution: {
-            kind: "cross_currency_resolved",
-            anchorUsdMicros: "4990000",
-            chosenTier: "Tier 5",
-            appCurrencyPrice: {
-              currency: "VND",
-              priceMicros: "120000000000",
-              priceDecimal: "120000",
-            },
-          },
-        }),
-      ]);
-      expect(violations).toEqual([]);
-    });
-
-    it("cross_currency_needs_choice row is NOT a violation (push gated by tier-pick, not precision)", () => {
-      const violations = computePrecisionViolations([
-        row({
-          sku: "sku.cookie.tier5",
-          basePriceDecimal: "0.99",
-          baseCurrency: "VND",
-          resolution: {
-            kind: "cross_currency_needs_choice",
-            anchorUsdMicros: "990000",
-          },
-        }),
-      ]);
-      expect(violations).toEqual([]);
-    });
-
-    it("cross_currency_refused row is NOT a violation (push fail-soft refuses; precision irrelevant)", () => {
-      const violations = computePrecisionViolations([
-        row({
-          sku: "sku.cookie.tier5",
-          basePriceDecimal: "4.99",
-          baseCurrency: "VND",
-          resolution: {
-            kind: "cross_currency_refused",
-            anchorUsdMicros: "4990000",
-            reason: "No template tier matches USD price 4.99.",
-            refusalKind: "template_miss",
-          },
-        }),
-      ]);
-      expect(violations).toEqual([]);
-    });
-
-    it("same_currency rows still receive the precision check (regression guard)", () => {
-      const violations = computePrecisionViolations([
-        row({
-          rowNumber: 2,
-          sku: "sku.vnd.bad",
-          basePriceDecimal: "21.99",
-          baseCurrency: "VND",
-          resolution: { kind: "same_currency" },
-        }),
-      ]);
-      expect(violations).toHaveLength(1);
-      expect(violations[0].error).toMatch(/VND only accepts whole numbers/);
-    });
-
-    it("missing resolution field defaults to same_currency (backward-compat with legacy preview shape)", () => {
-      const violations = computePrecisionViolations([
-        // No `resolution` field — pre-Cycle-43 preview responses look
-        // this way; the gate must still enforce precision.
-        row({
-          rowNumber: 7,
-          sku: "sku.legacy.vnd.bad",
-          basePriceDecimal: "4.99",
-          baseCurrency: "VND",
-        }),
-      ]);
-      expect(violations).toHaveLength(1);
-    });
+  it("H4.3 — the gate IS the file-price choke point: a row the parser would refuse is a violation (0, \"26.000\" VND as text)", () => {
+    const v = computePrecisionViolations([
+      row({ rowNumber: 3, sku: "sku.zero", basePriceDecimal: "0", baseCurrency: "USD" }),
+      row({ rowNumber: 4, sku: "sku.sep", basePriceDecimal: "26.000", baseCurrency: "VND" }),
+      row({ rowNumber: 5, sku: "sku.ok", basePriceDecimal: "26000", baseCurrency: "VND" }),
+    ]);
+    expect(v.map((x) => x.sku)).toEqual(["sku.zero", "sku.sep"]);
   });
 });
+
+describe("H4.3 (Q5) — gtPlanOf: what the push does with a row's GT, every branch", () => {
+  const GT = { region: "VN", currency: "VND", priceDecimal: "26000" };
+  const T1 = { identifier: "T1", templateId: "t", regionCount: 3, vnCurrency: "VND", vnPriceMicros: "25000000000", vnPriceDecimal: "25000" };
+  const NO_VN = { ...T1, identifier: "T2", vnCurrency: null, vnPriceMicros: null, vnPriceDecimal: null };
+  const base = { pricingSource: "default_template" as const, tierSelections: {} as Record<number, string>, customPrices: {}, activeCustomSkus: new Set<string>() };
+  const custom = (entries: Array<{ region: string; currency: string; priceDecimal: string }>) => ({
+    customPrices: { "com.example.sku": { entries, baseline: { kind: "none" as const }, editedAt: "x" } },
+    activeCustomSkus: new Set(["com.example.sku"]),
+  });
+
+  it.each([
+    ["no GT", row({}), base, { kind: "none" }],
+    ["Skip", row({ regionOverrides: [GT], decision: "skip" }), base, { kind: "skip", gt: GT }],
+    ["Google Conversion", row({ regionOverrides: [GT] }), { ...base, pricingSource: "google_default" as const }, { kind: "sent", gt: GT }],
+    ["template, no tier matched", row({ regionOverrides: [GT] }), base, { kind: "sent", gt: GT }],
+    ["custom set WITH the GT country", row({ regionOverrides: [GT] }), { ...base, ...custom([{ region: "VN", currency: "VND", priceDecimal: "27000" }]) },
+      { kind: "replaced_by_custom", gt: GT, customEntry: { currency: "VND", priceDecimal: "27000" } }],
+    ["custom set WITHOUT the GT country", row({ regionOverrides: [GT] }), { ...base, ...custom([{ region: "US", currency: "USD", priceDecimal: "1" }]) },
+      { kind: "replaced_by_custom", gt: GT, customEntry: null }],
+    ["tier with a VN price", row({ regionOverrides: [GT], tierCandidates: [T1] }), { ...base, tierSelections: { 2: "T1" } },
+      { kind: "replaced_by_tier", gt: GT, tier: "T1", tierEntry: { kind: "known", currency: "VND", priceDecimal: "25000" } }],
+    ["tier without a VN price", row({ regionOverrides: [GT], tierCandidates: [NO_VN] }), { ...base, tierSelections: { 2: "T2" } },
+      { kind: "replaced_by_tier", gt: GT, tier: "T2", tierEntry: { kind: "absent" } }],
+    ["tier, GT in another country (price unknown on the client)", row({ regionOverrides: [{ region: "JP", currency: "JPY", priceDecimal: "160" }], tierCandidates: [T1] }), { ...base, tierSelections: { 2: "T1" } },
+      { kind: "replaced_by_tier", gt: { region: "JP", currency: "JPY", priceDecimal: "160" }, tier: "T1", tierEntry: { kind: "unknown" } }],
+    ["candidates but no tier picked", row({ regionOverrides: [GT], tierCandidates: [T1, NO_VN] }), base, { kind: "pending_tier", gt: GT }],
+    ["tier lookup failed", row({ regionOverrides: [GT], tierMatchedBy: "lookup_failed" }), base, { kind: "unknown_lookup_failed", gt: GT }],
+  ])("%s", (_label, r, state, expected) => {
+    expect(gtPlanOf(r, state)).toEqual(expected);
+  });
+
+  it("custom beats a tier (the custom pre-pass replaces the GT before the template loop); Skip beats both", () => {
+    const r = row({ regionOverrides: [GT], tierCandidates: [T1] });
+    const st = { ...base, tierSelections: { 2: "T1" }, ...custom([{ region: "VN", currency: "VND", priceDecimal: "27000" }]) };
+    expect(gtPlanOf(r, st).kind).toBe("replaced_by_custom");
+    expect(gtPlanOf({ ...r, decision: "skip" }, st).kind).toBe("skip");
+  });
+});
+

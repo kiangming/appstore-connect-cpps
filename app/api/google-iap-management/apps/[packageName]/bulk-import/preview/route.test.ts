@@ -57,13 +57,14 @@ vi.mock("@/lib/google-iap-management/queries/templates", () => ({
 }));
 
 import { POST } from "./route";
+import * as templateQueries from "@/lib/google-iap-management/queries/templates";
 
 const ctx = { params: { packageName: "com.vnggames.ballisticherotwid" } };
 
-function previewReq(): Request {
+function previewReq(pricingSource = "google_default"): Request {
   const form = new FormData();
   form.append("file", new File(["x"], "items.xlsx"));
-  form.append("pricingSource", "google_default");
+  form.append("pricingSource", pricingSource);
   return new Request("http://localhost/api/x", { method: "POST", body: form });
 }
 
@@ -73,7 +74,6 @@ function parsedRow(sku: string, rowNumber: number) {
     sku,
     baseCurrency: "USD",
     basePriceDecimal: "0.99",
-    priceHeaderSource: "explicit" as const,
     regionOverrides: [],
     listings: [],
   };
@@ -233,12 +233,9 @@ describe("Google bulk-import preview — C2.1: the app's currency/language are N
     expect(body.counts.total).toBe(1);
   });
 
-  it.each([
-    [null, "same_currency", undefined],
-    ["TWD", "same_currency", undefined],
-  ])(
-    "H4.2: an EUR row under Google Conversion is priced from the file whatever the app currency (%s) ⇒ %s, never refused",
-    async (appCurrency, kind, refusalKind) => {
+  it.each([[null], ["TWD"]])(
+    "H4.2/H4.3: an EUR row under Google Conversion is priced from the file whatever the app currency (%s) — no resolution kind, never refused",
+    async (appCurrency) => {
       getAppByPackage.mockResolvedValue({ id: "app-1", default_currency: appCurrency, google_console_account_id: "acc1" });
       parseIapTemplate.mockReturnValue({
         rows: [{ ...parsedRow("com.vnggames.ballisticherotwid.eur", 2), baseCurrency: "EUR", basePriceDecimal: "1.09" }],
@@ -250,16 +247,38 @@ describe("Google bulk-import preview — C2.1: the app's currency/language are N
       const res = await POST(previewReq(), ctx);
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
-        rows: Array<{ resolution: { kind: string; refusalKind?: string } }>;
+        rows: Array<Record<string, unknown>>;
+        refusedRows: unknown[];
         warnings: string[];
       };
-      expect(body.rows[0].resolution.kind).toBe(kind);
-      expect(body.rows[0].resolution.refusalKind).toBe(refusalKind);
+      // H4.3 — the dead cross-currency `resolution` is gone from the response.
+      expect(body.rows[0]).not.toHaveProperty("resolution");
+      expect(body.rows[0]).toMatchObject({ baseCurrency: "EUR", basePriceDecimal: "1.09" });
+      expect(body.refusedRows).toEqual([]);
       // H4.2: the response says nothing about the app's currency.
       expect(body).not.toHaveProperty("appCurrency");
       expect(body.warnings.join(" ")).not.toMatch(/refused on push/);
     },
   );
+
+  it("H4.3: a tier lookup that THROWS marks the row tierMatchedBy 'lookup_failed' — never indistinguishable from 'no tier'", async () => {
+    getAppByPackage.mockResolvedValue({ id: "app-1", default_currency: null, google_console_account_id: "acc1" });
+    vi.mocked(templateQueries.findRowCandidates)
+      .mockRejectedValueOnce(new Error("db timeout"))
+      .mockResolvedValueOnce({ candidates: [], matchedBy: "none" } as never);
+    parseIapTemplate.mockReturnValue({
+      rows: [parsedRow("com.vnggames.ballisticherotwid.a", 2), parsedRow("com.vnggames.ballisticherotwid.b", 3)],
+      warnings: [],
+      errors: [],
+      refusedRows: [],
+      skippedSampleRows: [],
+    });
+    const res = await POST(previewReq("default_template"), ctx);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { rows: Array<{ sku: string; tierMatchedBy: string }>; warnings: string[] };
+    expect(body.rows.map((r) => r.tierMatchedBy)).toEqual(["lookup_failed", "none"]);
+    expect(body.warnings.join(" ")).toMatch(/Tier lookup failed for one or more rows \(db timeout\)/);
+  });
 
   it("no app currency ⇒ no extra warning, block or confirm — the response carries only the parser's own warnings", async () => {
     getAppByPackage.mockResolvedValue({ id: "app-1", default_currency: null, google_console_account_id: "acc1" });

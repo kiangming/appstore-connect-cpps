@@ -26,10 +26,8 @@ import {
 } from "@/lib/google-iap-management/regions";
 import { getAllRegions } from "@/lib/google-iap-management/region-name";
 import { decimalToMicros } from "@/lib/google-iap-management/google/price-conversion";
-import {
-  getCurrencyDecimals,
-  validateDecimalForCurrency,
-} from "@/lib/google-iap-management/google/currency-precision";
+import { getCurrencyDecimals } from "@/lib/google-iap-management/google/currency-precision";
+import { statedPriceError } from "@/lib/google-iap-management/orchestration/file-price";
 import {
   computeIapDiff,
   type IapStateSnapshot,
@@ -69,11 +67,12 @@ interface Props {
 
 function validateDecimal(input: string, currency?: string): string | null {
   if (!input.trim()) return null;
-  // Hotfix 5: when a currency is known, run the currency-aware
-  // validation first (catches VND/JPY/KRW fractions before they're
-  // sent and rejected by Google).
+  // Hotfix 5 → H4.3: when a currency is known, the SAME rules as the bulk
+  // file and the custom-prices dialog (statedPriceError, file-price.ts):
+  // precision per currency, "26.000" in a currency without decimals refused
+  // as a possible thousands separator, and no 0 price (Manager 2026-10-19).
   if (currency) {
-    const currencyErr = validateDecimalForCurrency(input, currency);
+    const currencyErr = statedPriceError(input, currency);
     if (currencyErr) return currencyErr;
   }
   try {
@@ -411,12 +410,15 @@ export function IapForm({
     priceDecimal: string,
     currency: string,
   ): Promise<DerivedRegionPrice[] | null> {
+    // Invalid base price — the inline field error already says so. Don't
+    // burn a Google call on it, and never recompute every untouched row from
+    // a price the field refuses (H4.3: "26.000" VND = 26 VND, or 0, used to
+    // pass this gate and re-derive the whole catalogue from it).
+    if (statedPriceError(priceDecimal, currency) !== null) return null;
     let micros: string;
     try {
       micros = decimalToMicros(priceDecimal, currency);
     } catch {
-      // Invalid base price — the inline field error already says so. Don't
-      // burn a Google call on it.
       return null;
     }
     const qs = new URLSearchParams({

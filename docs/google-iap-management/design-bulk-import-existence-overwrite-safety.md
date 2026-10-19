@@ -505,7 +505,7 @@ không khớp tier; custom xuất hiện nguyên văn; chặn suy biến (F3 ≠
     của preview** (cái Manager thấy và chọn) — mutation "preview tra tier theo currency app" trước chỉ đỏ ở T2
     vì fallback SKU→giá của orchestrator tìm lại đúng tier, request gửi Google không đổi; T2 cấm `inappproducts.batchUpdate`
     trong TOÀN file publisher; Q8 thêm 503 + Error trơn; bar O1 (`throwBothFailed`) chuyển sang
-    `getInAppProduct` (5 fallback còn lại đều kết thúc ở hàm đó); `bulk-import.q7.test.ts` chốt 2 nhánh Q7
+    `getInAppProduct` (5 fallback còn lại đều kết thúc ở hàm đó); `bulk-import.price-refusals.test.ts` chốt 2 nhánh Q7
     T1 không phủ (USD + quy đổi lỗi ⇒ VẪN gửi; TWD + quy đổi không có US ⇒ từ chối) + bộ đếm.
   - **Câu chữ:** Notes sheet hàng GT (trước "dropped with a warning"), câu tier/GT của ghi chú wizard,
     header orchestrator (fallback legacy, bootstrap "non-fatal"), `status-mapping.ts` (từ chối không còn là
@@ -513,4 +513,69 @@ không khớp tier; custom xuất hiện nguyên văn; chặn suy biến (F3 ≠
   - **KHÔNG sửa ở H4.2 (ghi BACKLOG / H4.4):** giá CUSTOM chưa áp (a)/(b) — quyết định Manager chỉ nêu ô
     file và GT, validator dùng chung với form sửa đơn lẻ ⇒ `[GOOGLE-custom-prices-separator-zero]`; entry
     tier sai độ chính xác vẫn ném cả batch (`[GOOGLE-bulk-import-db-throws-outside-try]`).
+
+**H4.3 — execute + UI (Q9, Q5) + custom (a)/(b) + tier sai độ chính xác — Manager 2026-10-18/19:**
+- **(a)/(b) cho giá gõ tay (Manager chốt 1):** quy tắc nằm ở MỘT hàm `statedPriceOf` / `statedPriceError`
+  (`orchestration/file-price.ts`), dùng chung cho file (`filePriceOf` = cổng Play + `statedPriceOf`), dialog
+  custom (`validateCustomPrices`), form sửa đơn lẻ (`IapForm` `validateDecimal` + cổng gọi Google của
+  `fetchDerivedForBase`) và kiểm lại phía server (pre-pass custom của orchestrator). **KHÔNG** đặt vào
+  `validateDecimalForCurrency`: đã đo — form tự điền giá cache dạng `"26000.00"` (microsToDecimal(m,2)) và
+  route catalog trả `"26000.000000"`; luật (a) ở đó chặn MỌI lần sửa item mặc định VND (kể cả chỉ đổi tên).
+  Sửa hai nguồn điền: `form-state.ts` (số nguyên ở currency 0 số lẻ ⇒ không dấu chấm; TWD 6.30 giữ nguyên —
+  không làm tròn) và route catalog (`stripTrailingZeros`, một bản chung trong `price-conversion.ts`).
+  Thứ tự luật đổi nhẹ: phần lẻ không thể là nhóm nghìn ("30.5", "26.50", "6.3000" — 1, 2 hoặc ≥4 chữ số) báo
+  bằng lời của luật độ chính xác (Google tự viết TWD 6.30 — gọi nó "dấu phân cách nghìn" là sai hướng); ",", nhiều
+  ".", phần lẻ toàn 0 hoặc ĐÚNG 3 chữ số ("49.900") vẫn là lời dấu phân cách. Tập giá trị bị từ chối không đổi. Phía server của sửa đơn lẻ CHƯA có (a)/(b) (BACKLOG).
+- **Q7 (Manager chốt 2):** giữ từ chối dòng đã có giá US khi quy đổi lỗi. Lý do nói rõ "Google's price
+  conversion failed temporarily (…) — this is not a problem with the row's data: run this row again later".
+  Ba lớp, mỗi lớp nói đúng nguyên nhân: lỗi mạng / 5xx / 408 / 429 / không có HTTP status ⇒ "temporary"
+  (đúng lời Manager); 400 INVALID_ARGUMENT ⇒ "Google rejected the file price … as invalid — check the price";
+  4xx khác (401, 403 PERMISSION_DENIED — lớp sự cố 2026-10-12 —, 404, 400 token invalid_grant) ⇒ "an access,
+  account or app problem, not the row's data, and not temporary". Nhánh "không có giá US" giữ lời riêng.
+- **Q9:** kiểm từng dòng phía server đã có từ H4.2 (pre-pass `filePriceOf` / `fileRegionPriceOf`). H4.3
+  thêm: giá custom kiểm bằng `statedPriceOf` ở orchestrator (một đường từ chối — route chỉ kiểm cấu trúc;
+  bộ custom rỗng ⇒ từ chối dòng thay vì 400 cả batch); sửa lỗi orchestrator ghi đè lý do từ chối của route
+  ("no country prices were supplied") và dấu chấm kép. Bỏ `priceHeaderSource` khắp nơi. ⚠ Tab xem trước
+  TRƯỚC H4 (đang chạy production) gửi `inferred` + currency app và tier đã khớp chéo currency — không gì
+  trong dòng nói điều đó. Thay bằng `pricing_rule: "file-currency-only/v1"` (`lib/google-iap-management/
+  bulk-import-contract.ts`, dùng chung client + route) do `buildExecuteRequestBody` gửi; thiếu ⇒ 409
+  `PREVIEW_OUTDATED` ("Reload this page, then upload the file and run Preview again" — tab cũ chạy code cũ,
+  upload lại trong cùng tab sẽ gửi lại đúng body cũ), không ghi gì, Hub FAILED.
+  `regionOverrides` / `listings` sai cấu trúc ⇒ 400 sạch (trước: TypeError không bắt).
+- **Dòng bị từ chối trong preview (Manager chốt ở H4.1 gate):** hiện TRONG bảng preview (hàng "Not imported"
+  + lý do, không có nút quyết định / tier / custom). Push cho phần còn lại sau hộp xác nhận nêu số dòng bị bỏ
+  và tên từng dòng; Cancel không đụng Hub run. Dòng bị bỏ gửi lên server qua `droppedRows` (cùng builder),
+  dedupe theo rowNumber (với dòng gửi và với nhau), tối đa `MAX_DROPPED_ROWS` = 20000 (wizard tắt Push trên
+  mức đó bằng CÙNG hằng số — không bao giờ gặp 400 "malformed"); orchestrator tính vào `rows_total`, `refusedRows` (kind `refused_in_file`, theo thứ tự
+  file), `import_batches.rows_failed`, audit (`dropped_in_file_rows`); route đếm Hub bằng `rowsRefused` (mọi
+  kind, cả kind mới). Hộp xác nhận đóng khi wizard rời bước preview (không thể hiện lại trên một preview KHÁC)
+  và nút OK kiểm lại cùng cổng với Push. Done: tiêu đề theo kết quả (complete / finished — N not imported
+  (X failed at Google, Y not sent) / nothing imported), tile "Not sent", liệt kê MỌI dòng không gửi theo tên,
+  chia "left out in the file" / "refused at push", không cắt 20, không lặp "Row N (sku)" (dòng Google báo lỗi
+  chỉ có số đếm — kết quả không mang tên từng dòng). Không còn dòng biến mất im lặng: dòng ghi một sản phẩm
+  (giá, GT Price, title hoặc description) mà thiếu Product ID (trước: biến mất hoàn toàn) và dòng trống giá
+  (trước: chỉ cảnh báo) giờ là dòng bị từ chối có lý do. KHÔNG tính: công thức kéo xuống cho kết quả rỗng / 0,
+  GT Currency điền tràn, cột lạ, ghi chú "delete the sample rows" của template.
+- **GT trong preview (Q5):** `gtPlanOf` (execute-payload.ts) đọc ĐÚNG các biểu thức `buildExecuteRows` gửi ⇒
+  dòng "GT VN 26000 VND · will be sent / replaced by tier "X" (VN …) / replaced by custom (…) / depends on the
+  tier you pick / not sent (Skip)". Giá tier chỉ biết cho VN (TierCandidate) — nước khác nói "the tier's price,
+  or Google's conversion if the tier has none". Tra tier lỗi ở preview ⇒ `tierMatchedBy: "lookup_failed"`:
+  cột Tier "Tier lookup failed — run Preview again" và GT "unknown" (trước: giống hệt "không có tier").
+- **Tier sai độ chính xác (gộp vào H4.3):** `storedRegionPriceOf` (cùng `statedPriceOf`, trên micros —
+  "26000.000000" không phải dấu phân cách) kiểm entry của tier NGAY SAU khi tra, trước bộ đếm lựa chọn ⇒ từ chối
+  DÒNG `tier_price_invalid` (nêu tier, nước, lý do, "Fix the tier in Settings → Pricing Templates"); batch chạy
+  tiếp, kết thúc đúng trạng thái. Áp cả (b): entry 0 bị từ chối (cùng chiều với dialog, vốn đã chặn seed 0).
+  KHÔNG kiểm cặp vùng/currency với snapshot (Hotfix 9: snapshot có thể lệch catalog sống). Thêm lưới an toàn
+  quanh `buildProduct`: nếu vẫn ném ⇒ từ chối dòng `price_build_failed` (kind riêng — không thể che một kiểm
+  tra bị gỡ). Các chỗ "DB ném ngoài try" còn lại (templateExists, findTemplateId, tra tier/SKU/probe, tier mất
+  entry, >100 dòng) là cơ chế KHÁC (lỗi DB/mạng/logic, không phải dữ liệu giá) ⇒ vẫn ở
+  `[GOOGLE-bulk-import-db-throws-outside-try]`.
+- **Dọn:** kiểu `PreviewResolution` / `resolution` cross-currency, nhánh UI tương ứng, cổng precision dùng
+  `filePriceOf`.
+- **Test:** T1 vẫn 33/33, bảng tay không đổi (md5 `9e6009…bb`); thêm test đầu-cuối "push the rest" qua route
+  thật (1 tạo + 2 bỏ ⇒ import_batches 3/FAILED/2, Hub PARTIAL). Route: `PREVIEW_OUTDATED`, droppedRows dedupe,
+  400 cấu trúc, Hub đếm mọi kind. Orchestrator: tier 30.5 / 0, bộ đếm lựa chọn, custom (a)/(b) + lý do của
+  route, dropped rows, Q7 4 nhánh phân loại, lưới `price_build_failed`. Wizard: hàng refused trong bảng, hộp
+  xác nhận (không gửi trước khi xác nhận; Cancel không huỷ Hub run; Confirm ⇒ đúng 1 execute kèm droppedRows),
+  Done liệt kê đủ + tile cộng đúng tổng, GT labels. Form đơn lẻ + dialog: "26.000"/"0" bị chặn, seed không bị chặn.
 

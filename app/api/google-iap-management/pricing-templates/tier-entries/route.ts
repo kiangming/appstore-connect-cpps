@@ -33,18 +33,13 @@ import {
   lookupTemplateEntriesForIdentifier,
   type TemplateScope,
 } from "@/lib/google-iap-management/queries/templates";
-import { microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
+import { microsToDecimal, stripTrailingZeros } from "@/lib/google-iap-management/google/price-conversion";
 
 export const dynamic = "force-dynamic";
 
-/** Strip trailing fractional zeros so VND/JPY render as "27000" not
- *  "27000.000000", without losing precision for fractional currencies.
- *  Same treatment buildCandidatesFromEntries applies to the VN label
- *  (queries/templates.ts:649-652). */
-function stripTrailingZeros(decimal: string): string {
-  if (!decimal.includes(".")) return decimal;
-  return decimal.replace(/\.?0+$/, "");
-}
+// Trailing fractional zeros are stripped (stripTrailingZeros, the shared
+// copy in price-conversion.ts) so VND/JPY render as "27000" not
+// "27000.000000", without losing precision for fractional currencies.
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);

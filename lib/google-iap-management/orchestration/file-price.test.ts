@@ -6,7 +6,14 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { filePriceOf, fileRegionPriceOf, PLAY_BILLING_CURRENCIES } from "./file-price";
+import {
+  filePriceOf,
+  fileRegionPriceOf,
+  PLAY_BILLING_CURRENCIES,
+  statedPriceError,
+  statedPriceOf,
+  storedRegionPriceOf,
+} from "./file-price";
 import { PLAY_REGIONS } from "../google/play-regions.snapshot";
 
 describe("filePriceOf", () => {
@@ -37,11 +44,21 @@ describe("filePriceOf", () => {
 
 describe("H4.2 (a) thousands separators, (b) zero", () => {
   it("(a) a no-decimals currency typed as TEXT with '.' or ',' ⇒ refused; a NUMBER keeps its reading", () => {
-    for (const raw of ["26.000", "26,000", "30.5"]) {
+    for (const raw of ["26.000", "26,000", "26.", "1.234.567", "26,5", "49.900", "26.500"]) {
       const r = filePriceOf({ currency: "VND", priceDecimal: raw });
       expect(r.ok).toBe(false);
       expect(!r.ok && r.reason).toMatch(/it may be a thousands separator \(26\.000 = 26 thousand\?\)/);
     }
+    // H4.3 — a REAL fraction is still refused, but by the precision rule and
+    // its own words (Google's TWD 6.30 is not "a thousands separator").
+    expect(filePriceOf({ currency: "VND", priceDecimal: "30.5" })).toEqual({
+      ok: false,
+      reason: 'VND only accepts whole numbers (got "30.5"). Google rejects fractional values for this currency.',
+    });
+    // 2 or 4 fraction digits cannot be a thousands group: precision wording too.
+    expect(filePriceOf({ currency: "VND", priceDecimal: "26.50" }).ok && "ok").toBe(false);
+    expect((filePriceOf({ currency: "VND", priceDecimal: "26.50" }) as { reason: string }).reason).toMatch(/^VND only accepts whole numbers/);
+    expect((filePriceOf({ currency: "TWD", priceDecimal: "6.3000" }) as { reason: string }).reason).toMatch(/^TWD only accepts whole numbers/);
     expect(filePriceOf({ currency: "VND", priceDecimal: "26000", cell: "number" })).toEqual({ ok: true, currency: "VND", priceMicros: "26000000000" });
     expect(filePriceOf({ currency: "VND", priceDecimal: "26000" }).ok).toBe(true);
     // Every no-decimals currency, not just VND.
@@ -60,6 +77,56 @@ describe("H4.2 (a) thousands separators, (b) zero", () => {
       });
     }
     expect(fileRegionPriceOf({ region: "VN", currency: "VND", priceDecimal: "0", cell: "number" }).ok).toBe(false);
+  });
+});
+
+describe("H4.3 — statedPriceOf: ONE rule set for every price a person writes (file, custom dialog, item form)", () => {
+  it("the same (a) / precision / (b) as filePriceOf, but no Play-currency gate (typed surfaces use Google's live catalog)", () => {
+    expect(statedPriceOf({ currency: "VND", priceDecimal: "26000" })).toEqual({ ok: true, currency: "VND", priceMicros: "26000000000" });
+    expect(statedPriceOf({ currency: "VND", priceDecimal: "26.000" }).ok).toBe(false);
+    expect(statedPriceOf({ currency: "USD", priceDecimal: "0" }).ok).toBe(false);
+    expect(statedPriceOf({ currency: "USD", priceDecimal: "0.990" })).toEqual({ ok: true, currency: "USD", priceMicros: "990000" });
+    // CNY is not billed by Play (filePriceOf refuses it), but a typed value is
+    // only checked against its own currency's rules here.
+    expect(filePriceOf({ currency: "CNY", priceDecimal: "7" }).ok).toBe(false);
+    expect(statedPriceOf({ currency: "CNY", priceDecimal: "7" }).ok).toBe(true);
+  });
+
+  it("statedPriceError: null for blank or valid, the reason otherwise — what the dialog and the form show", () => {
+    expect(statedPriceError("", "VND")).toBeNull();
+    expect(statedPriceError("  ", "VND")).toBeNull();
+    expect(statedPriceError("26000", "VND")).toBeNull();
+    expect(statedPriceError("26.000", "VND")).toMatch(/may be a thousands separator/);
+    expect(statedPriceError("0", "JPY")).toBe("the price is 0 — a 0 price is not accepted; enter the real price.");
+    expect(statedPriceError("1499.50", "JPY")).toMatch(/^JPY only accepts whole numbers/);
+  });
+
+  it("filePriceOf IS the Play gate + statedPriceOf (one body, not a copy)", () => {
+    const src = readFileSync(join(__dirname, "file-price.ts"), "utf8");
+    const body = src.slice(src.indexOf("export function filePriceOf("), src.indexOf("export function statedPriceOf("));
+    expect(body).toMatch(/return statedPriceOf\(/);
+    expect(body).not.toMatch(/decimalToMicros|thousandsSeparatorIn|priceMicros === "0"/);
+  });
+});
+
+describe("H4.3 — storedRegionPriceOf: a tier entry the tool holds as micros", () => {
+  it("whole amounts in a currency without decimals are fine — '26000.000000' is NOT a thousands separator", () => {
+    expect(storedRegionPriceOf({ currency: "VND", priceMicros: "26000000000" })).toEqual({ ok: true, currency: "VND", priceMicros: "26000000000" });
+    expect(storedRegionPriceOf({ currency: "TWD", priceMicros: "30000000" }).ok).toBe(true);
+    expect(storedRegionPriceOf({ currency: "USD", priceMicros: "990000" }).ok).toBe(true);
+  });
+
+  it("wrong precision (TWD 30.5, USD 0.999) and 0 are refused with the shared words", () => {
+    expect(storedRegionPriceOf({ currency: "TWD", priceMicros: "30500000" })).toEqual({
+      ok: false,
+      reason: 'TWD only accepts whole numbers (got "30.5"). Google rejects fractional values for this currency.',
+    });
+    expect(storedRegionPriceOf({ currency: "USD", priceMicros: "999000" }).ok).toBe(false);
+    expect(storedRegionPriceOf({ currency: "TWD", priceMicros: "0" })).toEqual({
+      ok: false,
+      reason: "the price is 0 — a 0 price is not accepted; enter the real price.",
+    });
+    expect(storedRegionPriceOf({ currency: "TWD", priceMicros: "abc" }).ok).toBe(false);
   });
 });
 

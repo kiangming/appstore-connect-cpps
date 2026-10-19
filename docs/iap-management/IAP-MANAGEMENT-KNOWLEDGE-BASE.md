@@ -8962,3 +8962,31 @@ Test ghim: `app/api/google-iap-management/apps/[packageName]/bulk-import/file-cu
   không bị luật "header lạ có chữ price" bắt nhầm (test).
 - **Phương pháp lật T1:** bảng kỳ vọng `EXPECTED_H4` suy TAY từ Q1–Q7 trước khi chạy; một bản build
   từ chối mọi dòng phải ĐỎ (có guard chống thoái hoá: 84 ô được gửi). Khớp ngay lượt chạy đầu.
+
+### 35.4 H4.3 — giá gõ tay cùng luật với file; "push the rest" không để dòng nào biến mất (2026-10-19)
+
+- **Một luật cho mọi giá do NGƯỜI viết** (Manager chốt 2026-10-19): `statedPriceOf` / `statedPriceError`
+  (file-price.ts) — file, dialog custom, form sửa đơn lẻ, kiểm lại custom ở server. Giá do TOOL giữ (entry
+  tier, micros): `storedRegionPriceOf` — cùng luật độ chính xác + không 0, không có luật dấu phân cách.
+- ⭐ **Bài học: trước khi siết một validator dùng chung, đo NHỮNG GIÁ TRỊ CHÍNH TOOL ĐIỀN VÀO.** Đặt (a) vào
+  `validateDecimalForCurrency` trông như "một choke point" — nhưng form tự điền giá cache là `"26000.00"`
+  (`microsToDecimal(m, 2)`) và route catalog trả `"26000.000000"`: luật mới sẽ chặn mọi lần sửa item mặc định
+  VND, kể cả chỉ đổi tên. Sửa nguồn điền (số nguyên ở currency 0 số lẻ ⇒ không dấu chấm; KHÔNG làm tròn — TWD
+  6.30 qua `microsToDecimal(…, 0)` thành "6" và Save sẽ ghi 6) rồi mới bật luật. Cùng họ P1: choke point đúng
+  là chỗ mọi đường đọc qua, VÀ không có đường nào đưa dữ liệu máy tạo qua luật dành cho chữ người gõ.
+- **Q7 — lý do nói đúng nguyên nhân (P5):** "temporary — run this row again later" cho mạng / 5xx / 408 / 429 /
+  không status; "check the price" CHỈ khi Google trả 400 INVALID_ARGUMENT; 4xx khác (401, 403 PERMISSION_DENIED,
+  404, invalid_grant) là vấn đề quyền / tài khoản / app — bảo Manager "kiểm giá" ở đó sẽ giấu nguyên nhân thật
+  (đúng lớp sự cố 2026-10-12).
+- **Request từ tab cũ:** khi một trường đánh dấu (`priceHeaderSource`) bị bỏ, server mất cách nhận ra payload
+  được dựng theo luật cũ. Thay bằng `pricing_rule` do builder chung gửi; thiếu ⇒ 409 `PREVIEW_OUTDATED` trước
+  khi ghi bất cứ gì. Lời nhắn phải bảo "Reload this page": tab cũ chạy CODE cũ — "upload lại" trong cùng tab
+  dựng lại đúng body cũ.
+- **"Push the rest" + P5:** dòng bị bỏ ở client phải ĐẾN server (`droppedRows`, cùng builder, dedupe theo
+  rowNumber; giới hạn là MỘT hằng số chung cho wizard và route — giới hạn chỉ ở server biến "push the rest" thành
+  400 mà Manager không làm gì được) — nếu không, batch bỏ N dòng vẫn đóng Hub SUCCESS. Route đếm Hub bằng `rowsRefused` (mọi kind)
+  thay vì cộng từng bộ đếm — kind mới không thể lọt khỏi tổng; `total` cũng gồm dòng bị bỏ ("3/2 rows failed"
+  nếu không).
+- **Lưới an toàn có kind riêng:** guard quanh `buildProduct` từ chối dòng `price_build_failed`. Nếu dùng lại
+  `file_price_invalid` / `tier_price_invalid`, mutation "gỡ kiểm tra" vẫn xanh (guard bắt thay) — test phải
+  khẳng định ĐÚNG kind.

@@ -160,7 +160,6 @@ describe("round-trip — generated template parses cleanly through the real pars
     const row = result.rows[0];
     expect(row.sku).toBe("com.test.roundtrip1");
     expect(row.baseCurrency).toBe("USD");
-    expect(row.priceHeaderSource).toBe("explicit");
     expect(row.basePriceDecimal).toBe("0.99");
     expect(row.regionOverrides).toEqual([
       { region: "VN", currency: "VND", priceDecimal: "23000" },
@@ -262,7 +261,6 @@ describe("legacy Manager artifact (v1, Sheet1) — fallback path smoke test", ()
     expect(result.rows.length).toBeGreaterThanOrEqual(1);
     expect(result.rows[0].sku).toBe("com.vng.example.product1");
     expect(result.rows[0].baseCurrency).toBe("USD");
-    expect(result.rows[0].priceHeaderSource).toBe("explicit");
   });
 });
 
@@ -402,7 +400,6 @@ describe("locale selection — ROUND-TRIP through the real parser", () => {
     expect(result.rows.length).toBe(1);
     expect(result.skippedSampleRows.length).toBe(3);
     expect(result.rows[0].baseCurrency).toBe("USD");
-    expect(result.rows[0].priceHeaderSource).toBe("explicit");
     expect(result.rows[0].listings.map((l) => l.locale)).toEqual(["vi"]);
   });
 

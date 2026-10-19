@@ -4,6 +4,7 @@
  * server-side pages can call this without crossing the client wire.
  */
 import { microsToDecimal } from "./google/price-conversion";
+import { getCurrencyDecimals } from "./google/currency-precision";
 
 export const DEFAULT_LOCALE = "en-US";
 
@@ -61,9 +62,16 @@ export interface AppDefaults {
   language: string | null;
 }
 
-function safeMicrosToDecimal(micros: string | null | undefined): string {
+/** H4.3: a WHOLE amount in a currency with no decimals is seeded without a
+ *  dot ("26000", not "26000.00") — the form now applies the thousands-
+ *  separator rule (statedPriceError) and must not trip on its own seed.
+ *  Anything else keeps 2+ decimals: never round (TWD 6.30 stays "6.30";
+ *  microsToDecimal(…, 0) would truncate it to "6" and a Save would write 6). */
+function safeMicrosToDecimal(micros: string | null | undefined, currency?: string | null): string {
   if (!micros) return "";
   try {
+    const whole = /^\d+$/.test(micros.trim()) && BigInt(micros.trim()) % BigInt(1_000_000) === BigInt(0);
+    if (whole && currency && getCurrencyDecimals(currency) === 0) return microsToDecimal(micros, 0);
     return microsToDecimal(micros, 2);
   } catch {
     return "0";
@@ -95,7 +103,7 @@ export function iapDetailToInitial(
   const regionOverrides: RegionOverrideRow[] = detail.prices.map((p) => ({
     region: p.region_code,
     currency: p.currency,
-    priceDecimal: safeMicrosToDecimal(p.price_micros),
+    priceDecimal: safeMicrosToDecimal(p.price_micros, p.currency),
   }));
   return {
     sku: detail.iap.sku,
@@ -106,7 +114,10 @@ export function iapDetailToInitial(
     listings,
     baseCurrency:
       detail.iap.default_currency ?? appDefaults?.currency ?? "USD",
-    basePriceDecimal: safeMicrosToDecimal(detail.iap.default_price_micros),
+    basePriceDecimal: safeMicrosToDecimal(
+      detail.iap.default_price_micros,
+      detail.iap.default_currency ?? appDefaults?.currency ?? "USD",
+    ),
     regionOverrides,
   };
 }

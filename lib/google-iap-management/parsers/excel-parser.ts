@@ -40,7 +40,7 @@ import {
   GOOGLE_GT_CURRENCY_HEADER,
   LOCALE_NAME_TO_BCP47,
 } from "./template-spec";
-import { TEMPLATE_SAMPLE_PRODUCT_IDS } from "@/lib/xlsx-template";
+import { TEMPLATE_SAMPLE_PRODUCT_IDS, TEMPLATE_SAMPLE_ROWS_NOTE } from "@/lib/xlsx-template";
 
 /** Sample Product IDs shipped in the generated template's data sheet.
  *  Rows keeping them are SKIPPED (explicit outcome, not an error) so an
@@ -125,11 +125,9 @@ export interface ParsedIapRow {
   basePriceDecimal: string;
   regionOverrides: ParsedRegionOverride[];
   listings: ParsedListing[];
-  /** Cycle 43 provenance of baseCurrency. Since H4.1 ALWAYS "explicit": a
-   *  file without the currency in its price header is refused (Q1), so
-   *  nothing is inferred any more. The field is removed with the execute
-   *  re-check in H4.3 (Q9); "inferred" stays in the type until then. */
-  priceHeaderSource: "explicit" | "inferred";
+  // (Cycle 43's `priceHeaderSource` is gone — H4.3, Q9: since H4.1 the
+  // currency always comes from the header, and the execute route refuses a
+  // request built before that by its `pricing_rule`.)
 }
 
 /** A row the file states but the tool cannot honour exactly (H4.1). */
@@ -143,9 +141,11 @@ export interface ParseResult {
   rows: ParsedIapRow[];
   warnings: string[];
   errors: string[];
-  /** H4.1 — rows NOT imported because their price or GT price cannot be
-   *  honoured exactly. Also in `warnings`; listed here so the wizard can
-   *  block Push and name them (never a silent partial import). */
+  /** Rows of the file NOT imported, each with its reason: a price or GT
+   *  that cannot be honoured exactly (H4.1), an empty price, or no Product
+   *  ID on a row that has data (H4.3 — "no row disappears silently"). Also
+   *  in `warnings`; the wizard shows them in the preview table and the
+   *  Manager may push the rest after confirming. */
   refusedRows: RefusedFileRow[];
   /** Template example rows skipped by Product ID (TEMPLATE_SAMPLE_PRODUCT_IDS).
    *  Explicit outcome — not errors, not silently dropped. */
@@ -353,6 +353,24 @@ function cellString(
   return String(cell.v).trim();
 }
 
+/** H4.3 — does a row with NO Product ID still state a product? Only the
+ *  columns that describe one count: the price, the GT price, a title or a
+ *  description. A formula whose result is empty / 0 / FALSE (a helper column
+ *  dragged down past the data), a stray GT Currency filled down, an unknown
+ *  column, and the generated template's own "delete the sample rows" note do
+ *  not — those rows are not products the Manager wrote, and refusing them
+ *  would bury the real refusals (and could refuse thousands of rows). */
+function rowStatesAProduct(ws: XLSX.WorkSheet, r: number, cols: number[]): boolean {
+  for (const c of cols) {
+    const cell = ws[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined;
+    if (!cell || cell.v === undefined || cell.v === null) continue;
+    if (cell.f && (cell.v === 0 || cell.v === false || String(cell.v).trim() === "")) continue;
+    const text = String(cell.v).trim();
+    if (text !== "" && text !== TEMPLATE_SAMPLE_ROWS_NOTE.trim()) return true;
+  }
+  return false;
+}
+
 /** "number" for an Excel NUMBER cell, else "text" (filePriceOf needs it to
  *  tell a typed "26.000" from the number 26000). */
 function cellKind(ws: XLSX.WorkSheet, r: number, c: number): FileCell {
@@ -385,7 +403,10 @@ function cellDecimal(
  *
  * The parser is tolerant:
  *   - Unrecognised locale columns surface as warnings, not errors.
- *   - Rows missing a SKU are skipped (template often has trailing blanks).
+ *   - H4.3: a row that states a product (price, GT price, title or
+ *     description) but has no Product ID is a refused row with a reason;
+ *     anything else without one (empty rows, helper formulas, the template's
+ *     own note) is ignored. An empty price is a refused row too.
  *   - H4.1/H4.2: a row whose price or GT price cannot be honoured exactly
  *     is NOT imported (per-row warning + `refusedRows`): not a valid
  *     decimal, more decimals than its currency allows, 0, a "." / ","
@@ -475,7 +496,6 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
   }
   const priceCol = priceResolution.columnIndex;
   const resolvedCurrency = priceResolution.currencyCode;
-  let blankPriceCount = 0;
 
   if (idx.unknownLocales.size > 0) {
     warnings.push(
@@ -485,9 +505,24 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
     );
   }
 
+  const productCols = [
+    priceCol,
+    ...(idx.gtPrice !== undefined ? [idx.gtPrice] : []),
+    ...[...idx.locales.values()].flatMap((l) => [l.titleCol, l.descCol]).filter((c): c is number => c !== undefined),
+  ];
+  const refuse = (rowNumber: number, sku: string, reason: string) => {
+    warnings.push(`Row ${rowNumber} (SKU "${sku}"): ${reason} Row not imported.`);
+    refusedRows.push({ rowNumber, sku, reason });
+  };
+
   for (let r = range.s.r + 1; r <= range.e.r; r += 1) {
     const sku = cellString(ws, r, skuCol);
-    if (sku === "") continue;
+    if (sku === "") {
+      // H4.3 — a row that states a product but has no Product ID used to
+      // vanish without a word. Anything else without an ID is not a row.
+      if (rowStatesAProduct(ws, r, productCols)) refuse(r + 1, "", 'no "Product ID" — every row needs one.');
+      continue;
+    }
 
     // Template example rows: skip by Product ID (explicit outcome below).
     if (SAMPLE_PRODUCT_ID_SET.has(sku)) {
@@ -497,10 +532,9 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
 
     const basePriceDecimal = cellDecimal(ws, r, priceCol);
     if (basePriceDecimal === "") {
-      warnings.push(
-        `Row ${r + 1} (SKU "${sku}"): missing "${priceResolution.headerText}"; skipped.`,
-      );
-      blankPriceCount += 1;
+      // H4.3 — a refused row like the others (table, confirmation, Done,
+      // Hub count), no longer a warning-only skip.
+      refuse(r + 1, sku, `"${priceResolution.headerText}" is empty — fill in the price.`);
       continue;
     }
 
@@ -559,9 +593,7 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
     }
 
     if (reasons.length > 0) {
-      const reason = reasons.join(" ");
-      warnings.push(`Row ${r + 1} (SKU "${sku}"): ${reason} Row not imported.`);
-      refusedRows.push({ rowNumber: r + 1, sku, reason });
+      refuse(r + 1, sku, reasons.join(" "));
       continue;
     }
 
@@ -586,12 +618,10 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
       basePriceDecimal,
       regionOverrides,
       listings,
-      // Always explicit since H4.1 (see ParsedIapRow).
-      priceHeaderSource: "explicit",
     });
   }
 
-  const notImported = refusedRows.length + blankPriceCount;
+  const notImported = refusedRows.length;
   if (skippedSampleRows.length > 0) {
     warnings.push(
       `${skippedSampleRows.length} example row(s) skipped (sample Product IDs from the template) — delete the sample rows or replace them with your data.`,
@@ -599,7 +629,7 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
   }
   if (rows.length === 0 && notImported > 0) {
     // Not "no data": there were rows, and none could be imported.
-    warnings.push(`No row can be imported: ${notImported} row(s) were not imported — see the messages above.`);
+    warnings.push(`No row can be imported: ${notImported} row(s) were not imported — each is listed with its reason.`);
   } else if (rows.length === 0 && errors.length === 0 && skippedSampleRows.length === 0) {
     // Suppressed when sample rows were skipped — the skip message above
     // already explains why nothing is importable.

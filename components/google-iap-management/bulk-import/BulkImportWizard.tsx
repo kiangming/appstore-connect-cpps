@@ -26,11 +26,14 @@ import {
   buildExecuteRequestBody,
   buildExecuteRows,
   computePrecisionViolations,
+  gtPlanOf,
   previewRowsFromResponse,
   seedTierSelections,
+  type GtPlan,
 } from "./execute-payload";
 import { PricingSourceSelector } from "@/components/google-iap-management/iap-form/PricingSourceSelector";
 import { PRICING_SOURCE_LABELS } from "@/lib/google-iap-management/pricing-source-labels";
+import { MAX_DROPPED_ROWS } from "@/lib/google-iap-management/bulk-import-contract";
 import {
   googleIapTemplateSpec,
   GOOGLE_LOCALE_OPTIONS,
@@ -63,35 +66,6 @@ export interface PreviewTierCandidate {
   vnPriceDecimal: string | null;
 }
 
-/** Cycle 43 — cross-currency resolution outcome surfaced by the Preview
- *  API per row. Drives:
- *   - whether the precision gate skips this row (raw price not sent)
- *   - the Resolved column display
- *   - the per-row refusal indicator banner */
-export type PreviewResolution =
-  | { kind: "same_currency" }
-  | {
-      kind: "cross_currency_resolved";
-      anchorUsdMicros: string;
-      chosenTier: string;
-      appCurrencyPrice: {
-        currency: string;
-        priceMicros: string;
-        priceDecimal: string;
-      };
-    }
-  | { kind: "cross_currency_needs_choice"; anchorUsdMicros: string }
-  | {
-      kind: "cross_currency_refused";
-      anchorUsdMicros: string | null;
-      reason: string;
-      refusalKind:
-        | "google_default"
-        | "template_miss"
-        | "missing_entries"
-        | "no_app_currency_entry";
-    };
-
 export interface PreviewRow {
   rowNumber: number;
   sku: string;
@@ -104,17 +78,22 @@ export interface PreviewRow {
   // Hotfix 19 — server-rendered candidate metadata.
   tierCandidates: PreviewTierCandidate[];
   defaultTierSelection: string | null;
-  tierMatchedBy: "sku" | "currency_price" | "none";
-  /** Cycle 43 — cross-currency resolution outcome. Defaults to
-   *  `same_currency` when the server didn't populate it (legacy
-   *  response shape backward-compat). */
-  resolution?: PreviewResolution;
-  /** Cycle 43 — parser provenance of the baseCurrency. "explicit" for
-   *  "Price (XXX)" headers (drives header-first cross-currency
-   *  detection); "inferred" for generic "Price"/"Default Price"/"Base
-   *  Price" (drives value-based fallback). Optional for legacy preview
-   *  responses; the orchestrator defaults to "inferred" when absent. */
-  priceHeaderSource?: "explicit" | "inferred";
+  /** "lookup_failed" (H4.3): the preview's tier lookup threw — whether a
+   *  tier matches is NOT known (the push looks again). */
+  tierMatchedBy: "sku" | "currency_price" | "none" | "lookup_failed";
+  // (H4.3: the Cycle 43 cross-currency `resolution` and `priceHeaderSource`
+  // are gone — every row is priced from the currency in the file's header.)
+}
+
+/** A row of the file the tool will not import, with the reason (preview
+ *  `refusedRows`): a price / GT that cannot be honoured exactly, an empty
+ *  price, no Product ID. H4.3: shown IN the preview table; the Manager may
+ *  push the rest after confirming; sent to the server as `droppedRows` so
+ *  Done, the audit and the Hub count them. */
+export interface PreviewRefusedRow {
+  rowNumber: number;
+  sku: string;
+  reason: string;
 }
 
 interface ExecuteResult {
@@ -123,8 +102,12 @@ interface ExecuteResult {
   rowsOverwritten: number;
   rowsSkipped: number;
   rowsFailed: number;
-  /** Cycle 43 — per-row cross-currency fail-soft refusals. */
+  /** Every row not written other than Skip / a Google-side failure: price,
+   *  tier, custom refusals AND the rows dropped in the file (H4.3). */
   rowsRefused?: number;
+  priceRefusedRows?: number;
+  /** H4.3 — rows refused in the file and left out by the Manager. */
+  droppedRows?: number;
   /** Phase 3 — rows priced from a per-item custom set. */
   customPricedRows?: number;
   customRefusedRows?: number;
@@ -253,12 +236,23 @@ export function BulkImportWizard({
   // Step 3: preview
   const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
   const [previewWarnings, setPreviewWarnings] = useState<string[]>([]);
-  /** H4.1 — rows the file states but the tool cannot honour exactly (price or
-   *  GT price). Not in previewRows; they block Push so an import is never
-   *  silently partial. */
-  const [fileRefusedRows, setFileRefusedRows] = useState<
-    Array<{ rowNumber: number; sku: string; reason: string }>
-  >([]);
+  /** Rows of the file the tool will not import, with the reason. NOT in
+   *  previewRows (nothing that iterates previewRows may ever send them).
+   *  H4.3: shown in the preview table; Push sends the rest only after the
+   *  Manager confirms how many are left out (confirmPushOpen), and they go
+   *  to the server as `droppedRows` so Done / audit / Hub count them. */
+  const [fileRefusedRows, setFileRefusedRows] = useState<PreviewRefusedRow[]>([]);
+  /** H4.3 — the "push the rest?" confirmation. Opening or cancelling it does
+   *  NOT touch the Hub run: the run belongs to the whole preview (a later
+   *  Confirm still sends it; the header's "Back to <app>" and page unload
+   *  still cancel it — the preview's own Back does not, see BACKLOG
+   *  [GOOGLE-bulk-import-hub-run-reuse]). Only handleExecute marks execution
+   *  started. Closed whenever the wizard leaves the preview step (effect
+   *  below), so it can never reappear over a DIFFERENT preview. */
+  const [confirmPushOpen, setConfirmPushOpen] = useState(false);
+  useEffect(() => {
+    if (step !== "preview") setConfirmPushOpen(false);
+  }, [step]);
   // Hotfix 19: per-row Manager tier selection. Keyed by rowNumber so
   // the orchestrator's execute payload can map back. Pre-filled from the
   // Preview API's `defaultTierSelection` (Q5.B primary tier).
@@ -460,6 +454,26 @@ export function BulkImportWizard({
   const precisionViolations = useMemo(
     () => computePrecisionViolations(previewRows),
     [previewRows],
+  );
+
+  /** H4.3 (Q5) — what happens to each row's GT at push, from the SAME state
+   *  the execute body is built from (gtPlanOf, execute-payload.ts). */
+  const gtPlans = useMemo(() => {
+    const out: Record<number, GtPlan> = {};
+    for (const r of previewRows) {
+      out[r.rowNumber] = gtPlanOf(r, { pricingSource, tierSelections, customPrices, activeCustomSkus });
+    }
+    return out;
+  }, [previewRows, pricingSource, tierSelections, customPrices, activeCustomSkus]);
+
+  /** The parser lists each refused row in its warnings too; the table and the
+   *  summary above it already show them — not a third time here. */
+  const visibleWarnings = useMemo(
+    () =>
+      previewWarnings.filter(
+        (w) => !fileRefusedRows.some((r) => w.startsWith(`Row ${r.rowNumber} (SKU "`)),
+      ),
+    [previewWarnings, fileRefusedRows],
   );
 
   // Hotfix 19: derive disambiguation status for the banner + button counter.
@@ -732,6 +746,7 @@ export function BulkImportWizard({
                 customPrices,
                 activeCustomSkus,
               }),
+              droppedRows: fileRefusedRows,
             }),
           ),
         },
@@ -761,12 +776,26 @@ export function BulkImportWizard({
   // selection (Manager either accepted the pre-selected primary tier or
   // explicitly picked another). `tierStatus.pending > 0` only happens
   // when Manager clears a dropdown back to "— Select a tier —".
+  // H4.3 — rows refused in the file no longer block Push: they are left out
+  // after a confirmation (requestPush). A file with NO importable row still
+  // cannot push (previewRows.length > 0).
   const canContinueFromPreview =
     counts.pending === 0 &&
     previewRows.length > 0 &&
-    fileRefusedRows.length === 0 &&
+    fileRefusedRows.length <= MAX_DROPPED_ROWS &&
     precisionViolations.length === 0 &&
     tierStatus.pending === 0;
+
+  /** H4.3 — Push: straight to execute when every row of the file is
+   *  importable; otherwise the confirmation first, naming every row left out.
+   *  ⚠ Never mark execution started here — see confirmPushOpen. */
+  function requestPush() {
+    if (fileRefusedRows.length > 0) {
+      setConfirmPushOpen(true);
+      return;
+    }
+    void handleExecute();
+  }
 
   return (
     <div className="space-y-4">
@@ -974,6 +1003,11 @@ export function BulkImportWizard({
               <span>
                 Total: <strong className="text-slate-900">{counts.total}</strong>
               </span>
+              {fileRefusedRows.length > 0 && (
+                <span className="text-red-700">
+                  Not imported: <strong>{fileRefusedRows.length}</strong>
+                </span>
+              )}
               <span>
                 New:{" "}
                 <strong className="text-emerald-700">{counts.willCreate}</strong>
@@ -1062,43 +1096,41 @@ export function BulkImportWizard({
                     (<span className="font-mono">{customCarryNotice.kept.join(", ")}</span>)
                   </>
                 )}
-                ; dropped where it does not (
+                ; dropped where it is no longer an importable row of the file (
                 <span className="font-mono">{customCarryNotice.dropped.join(", ")}</span>
                 ).
               </p>
             </div>
           )}
 
-          {previewWarnings.length > 0 && (
+          {visibleWarnings.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
               <p className="text-xs font-medium text-amber-900 mb-1">
-                Parse warnings ({previewWarnings.length})
+                Parse warnings ({visibleWarnings.length})
               </p>
               <ul className="space-y-0.5 text-[11px] text-amber-800 max-h-32 overflow-y-auto">
-                {previewWarnings.map((w, i) => (
+                {visibleWarnings.map((w, i) => (
                   <li key={i}>· {w}</li>
                 ))}
               </ul>
             </div>
           )}
 
+          {/* H4.3 — the refused rows themselves are IN the table below
+              (marked "Not imported", with the reason). */}
           {fileRefusedRows.length > 0 && (
-            <div data-testid="file-refused-rows" className="bg-red-50 border border-red-200 rounded-lg p-3">
-              <p className="text-xs font-medium text-red-900 mb-1">
-                {fileRefusedRows.length} row(s) in the file cannot be imported — the price in the
-                file cannot be sent exactly as written. Fix the Excel file and re-upload; nothing is
-                pushed until then.
+            <div
+              data-testid="file-refused-rows"
+              data-state={previewRows.length > 0 ? "push-the-rest" : "nothing-to-push"}
+              className="bg-red-50 border border-red-200 rounded-lg p-3"
+            >
+              <p className="text-xs font-medium text-red-900">
+                {fileRefusedRows.length} row(s) of the file will not be imported — each is marked
+                &quot;Not imported&quot; in the table with the reason.{" "}
+                {previewRows.length > 0
+                  ? "Push sends the other rows after you confirm; the rows left out are listed in the report."
+                  : "No row can be imported — fix the file and upload it again."}
               </p>
-              <ul className="space-y-0.5 text-[11px] text-red-800 max-h-32 overflow-y-auto">
-                {fileRefusedRows.slice(0, 20).map((v) => (
-                  <li key={v.rowNumber}>
-                    · Row {v.rowNumber} ({v.sku}): {v.reason}
-                  </li>
-                ))}
-                {fileRefusedRows.length > 20 && (
-                  <li className="italic text-red-700">…and {fileRefusedRows.length - 20} more</li>
-                )}
-              </ul>
             </div>
           )}
           {precisionViolations.length > 0 && (
@@ -1132,6 +1164,8 @@ export function BulkImportWizard({
 
           <PreviewTable
             rows={previewRows}
+            refusedRows={fileRefusedRows}
+            gtPlans={gtPlans}
             onRowDecisionChange={setRowDecision}
             tierSelections={tierSelections}
             onTierSelectionChange={setRowTierSelection}
@@ -1151,13 +1185,13 @@ export function BulkImportWizard({
               Back
             </button>
             <button
-              onClick={handleExecute}
+              onClick={requestPush}
               disabled={!canContinueFromPreview || executing}
               title={
-                fileRefusedRows.length > 0
-                  ? `${fileRefusedRows.length} row(s) in the file cannot be imported — fix the file and re-upload`
+                fileRefusedRows.length > MAX_DROPPED_ROWS
+                  ? `${fileRefusedRows.length} rows cannot be imported — more than ${MAX_DROPPED_ROWS} in one push; clean the file`
                   : previewRows.length === 0
-                  ? "No row can be imported — see the messages above"
+                  ? "No row can be imported — each row is listed with its reason"
                   : precisionViolations.length > 0
                   ? `${precisionViolations.length} row(s) violate per-row currency precision`
                   : tierStatus.pending > 0
@@ -1175,6 +1209,65 @@ export function BulkImportWizard({
             </button>
           </div>
         </section>
+      )}
+
+      {/* H4.3 — "push the rest?" Cancel only closes it: the Hub run stays
+          open and attached (a later Confirm sends it). */}
+      {confirmPushOpen && step === "preview" && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="push-confirm-title"
+          data-testid="push-confirm"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+        >
+          <div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl">
+            <h3 id="push-confirm-title" className="text-sm font-semibold text-slate-900">
+              Push without the rows that cannot be imported?
+            </h3>
+            <p data-testid="push-confirm-dropped" className="mt-2 text-xs text-red-800">
+              {fileRefusedRows.length} row(s) of the file will NOT be imported:
+            </p>
+            <ul className="mt-1 max-h-48 space-y-0.5 overflow-y-auto text-[11px] text-red-800">
+              {fileRefusedRows.map((r) => (
+                <li key={r.rowNumber}>
+                  · Row {r.rowNumber} ({r.sku || "no Product ID"}): {r.reason}
+                </li>
+              ))}
+            </ul>
+            <p data-testid="push-confirm-sent" className="mt-2 text-xs text-slate-700">
+              {previewRows.filter((r) => r.decision !== "skip").length} row(s) will be sent to Google Play
+              {counts.willSkip > 0 ? ` (${counts.willSkip} set to Skip)` : ""}. The rows left out are listed
+              in the report afterwards — fix them in the file and import them again.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                autoFocus
+                data-testid="push-confirm-cancel"
+                onClick={() => setConfirmPushOpen(false)}
+                className="px-3 py-2 text-sm font-medium text-slate-700 border border-slate-200 hover:bg-slate-50 rounded-lg transition"
+              >
+                Go back
+              </button>
+              <button
+                type="button"
+                data-testid="push-confirm-ok"
+                disabled={!canContinueFromPreview || executing}
+                onClick={() => {
+                  setConfirmPushOpen(false);
+                  // The SAME gate as Push: the dialog must never be a way
+                  // around an unresolved decision / tier / precision block.
+                  if (!canContinueFromPreview || executing) return;
+                  void handleExecute();
+                }}
+                className="px-4 py-2 text-sm font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg transition"
+              >
+                Leave them out and push
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Per-item custom prices dialog. Mounted only while open so each
@@ -1250,20 +1343,60 @@ export function BulkImportWizard({
       )}
 
       {/* Step 5: Done */}
-      {step === "done" && executeResult && (
-        <section className="bg-white border border-emerald-200 rounded-xl p-6">
+      {step === "done" && executeResult && (() => {
+        const written = executeResult.rowsCreated + executeResult.rowsOverwritten;
+        const notWritten = executeResult.rowsFailed + (executeResult.rowsRefused ?? 0);
+        // H4.3 / P5 — the heading says what happened, not "complete" for a
+        // batch that left rows out.
+        const outcome = notWritten === 0 ? "complete" : written > 0 ? "partial" : "none";
+        const refused = executeResult.refusedRows ?? [];
+        const leftOut = refused.filter((r) => r.kind === "refused_in_file");
+        const refusedAtPush = refused.filter((r) => r.kind !== "refused_in_file");
+        const line = (r: { rowNumber: number; sku: string; reason: string }) =>
+          r.reason.startsWith(`Row ${r.rowNumber} `) ? r.reason : `Row ${r.rowNumber} (${r.sku}): ${r.reason}`;
+        return (
+        <section
+          className={`bg-white border rounded-xl p-6 ${
+            outcome === "complete" ? "border-emerald-200" : outcome === "partial" ? "border-amber-200" : "border-red-200"
+          }`}
+        >
           <div className="flex items-start gap-3">
-            <div className="flex-shrink-0 w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center">
-              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+            <div
+              className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center ${
+                outcome === "complete" ? "bg-emerald-100" : outcome === "partial" ? "bg-amber-100" : "bg-red-100"
+              }`}
+            >
+              {outcome === "complete" ? (
+                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+              ) : (
+                <AlertCircle className={`h-5 w-5 ${outcome === "partial" ? "text-amber-600" : "text-red-600"}`} />
+              )}
             </div>
             <div className="flex-1">
-              <h2 className="text-base font-semibold text-slate-900 mb-1">
-                Bulk import complete
+              <h2 data-testid="done-heading" data-state={outcome} className="text-base font-semibold text-slate-900 mb-1">
+                {outcome === "complete"
+                  ? "Bulk import complete"
+                  : outcome === "partial"
+                    ? `Bulk import finished — ${notWritten} row(s) not imported`
+                    : "Nothing was imported"}
+                {outcome !== "complete" && (
+                  <span className="font-normal text-slate-600">
+                    {" "}(
+                    {[
+                      executeResult.rowsFailed > 0 ? `${executeResult.rowsFailed} failed at Google` : null,
+                      (executeResult.rowsRefused ?? 0) > 0 ? `${executeResult.rowsRefused} not sent` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(", ")}
+                    )
+                  </span>
+                )}
               </h2>
               <p className="text-xs text-slate-500 mb-3">
-                {appDisplayName ?? packageName} · {executeResult.durationMs}ms
+                {appDisplayName ?? packageName} · {executeResult.rowsTotal} row(s) in the file ·{" "}
+                {executeResult.durationMs}ms
               </p>
-              <div className="grid grid-cols-6 gap-2">
+              <div data-testid="done-tiles" className="grid grid-cols-6 gap-2">
                 <Stat label="Created" value={executeResult.rowsCreated} tone="emerald" />
                 <Stat
                   label="Overwritten"
@@ -1272,12 +1405,12 @@ export function BulkImportWizard({
                 />
                 <Stat label="Skipped" value={executeResult.rowsSkipped} tone="slate" />
                 <Stat label="Failed" value={executeResult.rowsFailed} tone="red" />
-                {/* Per-row refusals — the file's price could not be sent as
-                    written (file_price_invalid / conversion_failed, H4.2) or a
-                    custom set could not be applied. Distinct from "Failed"
-                    (Google-side errors): these rows were never sent. */}
+                {/* Rows never sent: refused at push (price, tier, custom) or
+                    left out in the file (H4.3). Distinct from "Failed"
+                    (Google-side errors). The five tiles before Custom sum
+                    to the rows in the file. */}
                 <Stat
-                  label="Refused"
+                  label="Not sent"
                   value={executeResult.rowsRefused ?? 0}
                   tone="red"
                 />
@@ -1290,24 +1423,39 @@ export function BulkImportWizard({
                   tone="violet"
                 />
               </div>
-              {executeResult.refusedRows && executeResult.refusedRows.length > 0 && (
-                <div className="mt-3 bg-red-50 border border-red-200 rounded-lg p-3">
-                  <p className="text-xs font-medium text-red-900 mb-1">
-                    {executeResult.refusedRows.length} row(s) refused (per-row
-                    fail-soft — not sent to Google):
-                  </p>
-                  <ul className="space-y-0.5 text-[11px] text-red-800 max-h-40 overflow-y-auto">
-                    {executeResult.refusedRows.slice(0, 20).map((r) => (
-                      <li key={`${r.rowNumber}-${r.sku}`}>
-                        · Row {r.rowNumber} ({r.sku}): {r.reason}
-                      </li>
-                    ))}
-                    {executeResult.refusedRows.length > 20 && (
-                      <li className="italic text-red-700">
-                        …and {executeResult.refusedRows.length - 20} more.
-                      </li>
-                    )}
-                  </ul>
+              {/* H4.3 — EVERY row not sent, by name, none capped away. (Rows
+                  Google failed are counted in "Failed"; the result carries no
+                  per-row names for them.) */}
+              {refused.length > 0 && (
+                <div data-testid="done-refused-rows" className="mt-3 bg-red-50 border border-red-200 rounded-lg p-3 space-y-2">
+                  {leftOut.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium text-red-900 mb-1">
+                        {leftOut.length} row(s) left out — refused in the file, not sent:
+                      </p>
+                      <ul className="space-y-0.5 text-[11px] text-red-800 max-h-48 overflow-y-auto">
+                        {leftOut.map((r) => (
+                          <li key={`${r.rowNumber}-${r.sku}`} data-kind={r.kind}>
+                            · {line(r)}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {refusedAtPush.length > 0 && (
+                    <div>
+                      <p className="text-xs font-medium text-red-900 mb-1">
+                        {refusedAtPush.length} row(s) refused at push — not sent to Google:
+                      </p>
+                      <ul className="space-y-0.5 text-[11px] text-red-800 max-h-48 overflow-y-auto">
+                        {refusedAtPush.map((r) => (
+                          <li key={`${r.rowNumber}-${r.sku}`} data-kind={r.kind}>
+                            · {line(r)}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
               <div className="mt-6 flex gap-2">
@@ -1329,6 +1477,7 @@ export function BulkImportWizard({
                     setPreviewRows([]);
                     setPreviewWarnings([]);
                     setFileRefusedRows([]);
+                    setConfirmPushOpen(false);
                     setExecuteResult(null);
                     // Reset the tracking state machine for a fresh cycle —
                     // without this, executeStartedRef staying true would
@@ -1355,7 +1504,8 @@ export function BulkImportWizard({
             </div>
           </div>
         </section>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -1398,8 +1548,8 @@ function PricingCurrencyNote() {
           prices overlay the file&apos;s price, which stays the conversion base.
         </li>
         <li>
-          If Google&apos;s conversion fails or returns no US price, a row whose price is not in USD
-          is refused — the countries it does not list would have no price. A USD row is still sent.
+          If Google&apos;s conversion fails (usually temporary — run the row again later) or returns no
+          US price, a row whose price is not in USD is refused. A USD row is still sent.
         </li>
       </ul>
     </div>

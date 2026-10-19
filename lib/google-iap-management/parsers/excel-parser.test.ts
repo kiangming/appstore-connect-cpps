@@ -343,7 +343,7 @@ describe("parseIapTemplate", () => {
     expect(result.rows).toEqual([]);
     expect(result.warnings.join("\n")).toMatch(/Row 2 \(SKU "sku\.a"\): "Price \(USD\)" = "abc" — Decimal price must be a non-negative number/);
     // Not "no data rows" — there was a row, and it was refused.
-    expect(result.warnings).toContain("No row can be imported: 1 row(s) were not imported — see the messages above.");
+    expect(result.warnings).toContain("No row can be imported: 1 row(s) were not imported — each is listed with its reason.");
     expect(result.refusedRows).toEqual([
       { rowNumber: 2, sku: "sku.a", reason: '"Price (USD)" = "abc" — Decimal price must be a non-negative number (got "abc").' },
     ]);
@@ -400,7 +400,7 @@ describe("parseIapTemplate", () => {
     ]);
     const result = parseIapTemplate(buf);
     expect(result.rows).toEqual([]);
-    expect(result.warnings).toContain("No row can be imported: 2 row(s) were not imported — see the messages above.");
+    expect(result.warnings).toContain("No row can be imported: 2 row(s) were not imported — each is listed with its reason.");
     expect(result.warnings.join("\n")).toMatch(/example row\(s\) skipped/);
   });
 
@@ -418,12 +418,14 @@ describe("parseIapTemplate", () => {
     expect(result.refusedRows.map((r) => r.sku)).toEqual(["sku.real", "sku.tiny"]);
   });
 
-  it("every parsed row is explicit (nothing inferred since H4.1)", () => {
+  it("H4.3 (Q9): a parsed row carries no priceHeaderSource — the currency always comes from the header", () => {
     const buf = makeWorkbook([
       ["Product ID", "Price (VND)"],
       ["sku.a", 25000],
     ]);
-    expect(parseIapTemplate(buf).rows[0].priceHeaderSource).toBe("explicit");
+    const row = parseIapTemplate(buf).rows[0];
+    expect(row.baseCurrency).toBe("VND");
+    expect("priceHeaderSource" in row).toBe(false);
   });
 });
 
@@ -480,6 +482,50 @@ describe("H4.2 — thousands separators and zero prices (Manager 2026-10-18)", (
       { rowNumber: 3, sku: "sku.zero-text", reason: '"Price (USD)" = "0.00" — the price is 0 — a 0 price is not accepted; enter the real price.' },
       { rowNumber: 4, sku: "sku.gt-zero", reason: 'GT Price "0" VND — the price is 0 — a 0 price is not accepted; enter the real price.' },
     ]);
+  });
+});
+
+describe("H4.3 — no row disappears silently", () => {
+  it("a row with data but NO Product ID, and a row with an EMPTY price, are refused rows with a reason; an empty row is not a row", () => {
+    const buf = makeWorkbook([
+      ["Product ID", "Price (USD)", "Title (English)"],
+      ["sku.ok", 0.99, "Gem"],
+      ["", 1.99, "No id"],
+      ["sku.noprice", "", "No price"],
+      ["", "", ""],
+    ]);
+    const result = parseIapTemplate(buf);
+    expect(result.rows.map((r) => r.sku)).toEqual(["sku.ok"]);
+    expect(result.refusedRows).toEqual([
+      { rowNumber: 3, sku: "", reason: 'no "Product ID" — every row needs one.' },
+      { rowNumber: 4, sku: "sku.noprice", reason: '"Price (USD)" is empty — fill in the price.' },
+    ]);
+  });
+
+  it("rows WITHOUT a Product ID that do not state a product are ignored: a helper formula dragged down (cached 0 / empty), a GT Currency filled down, an unknown column", () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      ["Product ID", "Price (USD)", "GT Price", "GT Currency", "Notes"],
+      ["sku.ok", 0.99, null, null, null],
+      [null, null, null, "VND", "planning"],
+      [null, null, null, "VND", null],
+    ]);
+    // A helper formula in GT Price, dragged down: cached result 0 / "".
+    ws["C3"] = { t: "n", v: 0, f: "A3*25000" };
+    ws["C4"] = { t: "s", v: "", f: 'IF(A4="","",A4)' };
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "IAP Items");
+    const out = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+    const result = parseIapTemplate(Buffer.isBuffer(out) ? out : Buffer.from(out as ArrayBuffer));
+    expect(result.rows.map((r) => r.sku)).toEqual(["sku.ok"]);
+    expect(result.refusedRows).toEqual([]);
+  });
+
+  it("the generated template's own 'delete the sample rows' note (empty Product ID) is NOT a refused row", async () => {
+    const { googleTemplateDataRows, googleTemplateHeaders } = await import("./template-spec");
+    const buf = makeWorkbook([googleTemplateHeaders(), ...googleTemplateDataRows()]);
+    const result = parseIapTemplate(buf);
+    expect(result.refusedRows).toEqual([]);
+    expect(result.skippedSampleRows).toHaveLength(3);
   });
 });
 
