@@ -579,3 +579,32 @@ không khớp tier; custom xuất hiện nguyên văn; chặn suy biến (F3 ≠
   xác nhận (không gửi trước khi xác nhận; Cancel không huỷ Hub run; Confirm ⇒ đúng 1 execute kèm droppedRows),
   Done liệt kê đủ + tile cộng đúng tổng, GT labels. Form đơn lẻ + dialog: "26.000"/"0" bị chặn, seed không bị chặn.
 
+**H4.4 — audit, finalize-in-finally, câu chữ, kiểm template trước push — Manager 2026-10-19:**
+- **Chốt gate H4.3:** Q7 ba lớp · entry tier = 0 ⇒ từ chối · dòng trống giá ⇒ từ chối (batch PARTIAL) · làm
+  finalize-in-finally trong H4.4.
+- **finalize-in-finally (KB P10):** thân `executeBulkImport` chạy trong try/finally sau khi chèn hàng
+  `import_batches`; mọi lối ra hợp lệ đóng hàng qua MỘT hàm `finalizeImportBatch` (đánh dấu đã đóng TRƯỚC khi
+  ghi — finally không bao giờ ghi đè một kết quả thật; kiểm `error` của lần ghi, lỗi ⇒ log, KB P2). Lối ra ném
+  lỗi (DB/mạng khi tra template, tier trôi, >100 dòng, …) ⇒ finally đóng `FAILED`, `rows_failed` = số dòng
+  không Skip (không dòng nào đã ghi: mọi chỗ ném đều trước bước push). Lỗi vẫn tới route như trước. Đây là
+  cơ chế đóng hàng — các chỗ ném đó vẫn là lỗi cả batch, không phải từ chối dòng (BACKLOG). Batch đóng bởi
+  finally vẫn có một dòng audit (`closed_by: "finally"`, `pricing_rule`, `price_header`, nguyên nhân), và log
+  ghi nguyên nhân. Giới hạn: nếu chính lần GHI đóng hàng thất bại, hàng còn `IN_PROGRESS` (có log).
+- **Audit (§5.4 mục 8):** payload `BULK_IMPORT_BATCH` thêm `pricing_rule: "file-currency-only/v1"`,
+  `price_header` (header giá đúng như file ghi — parser → preview → wizard → builder → route → orchestrator;
+  đây là dữ kiện mà audit cũ không có, §5.3) và `per_row_pricing` cho mọi dòng gửi trong `rows` (dòng bị
+  bỏ trong file nằm ở `refused_rows`, kind `refused_in_file`): `file_currency`, `file_price`, `gt` +
+  `gt_outcome` (`none` / `kept` / `replaced_by_tier` / `replaced_by_custom` / `not_sent`), `anchor
+  {currency, price_micros}` gửi Google quy đổi (ghi cả khi quy đổi lỗi), `regions_version` mà REQUEST đã ghim
+  + `regions_version_from` (`conversion` / `publisher_default`; null nếu không gửi), `outcome` lấy SAU bước
+  push (`written` / `google_failed` / `cache_sync_failed` / `google_rejected` / `skipped` / kind từ chối).
+  Khoá theo object dòng (rowNumber không bảo đảm duy nhất với POST trực tiếp).
+- **Câu (ii):** ghi chú giá của wizard mở đầu bằng "Prices come only from the file." (C2.1 đã ship câu (i);
+  câu (ii) chờ tới khi bản sửa giá làm nó đúng).
+- **SQL chỉ đọc trước push:** `queries/audit-template-entries-h4.sql` — CHẠY TỪNG CÂU (SQL Editor chỉ hiện câu
+  cuối; câu chặn push đặt cuối). Q1 tổng quan · Q2 entry lệch catalog Play mà H4 không kiểm (vẫn gửi) · Q3 dòng
+  import nào có thể bị từ chối (dự báo dư, không bao giờ thiếu) · Q4 CÂU CHẶN PUSH: entry H4 sẽ từ chối. Hai
+  bảng nhúng (độ chính xác currency, 173 vùng Play) sinh từ code và được test ghim; phần còn lại của file ghim
+  bằng md5; quy tắc từ chối của SQL được so với `storedRegionPriceOf` trên 476 tổ hợp. Chưa chạy thử trên
+  Postgres (máy không có) — câu chỉ đọc.
+

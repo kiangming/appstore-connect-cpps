@@ -117,7 +117,13 @@ vi.mock("@/lib/google-iap-management/repository/iaps", () => ({
   listIapsForApp: async () => st.mirror,
   syncIapFromGoogle: async () => undefined,
 }));
-vi.mock("@/lib/google-iap-management/repository/actions-log", () => ({ appendAction: async () => undefined }));
+/** Audit payloads the orchestrator wrote (H4.4 — checked end to end below). */
+const audit = vi.hoisted(() => ({ payloads: [] as Array<Record<string, unknown>> }));
+vi.mock("@/lib/google-iap-management/repository/actions-log", () => ({
+  appendAction: async (a: { payload?: Record<string, unknown> }) => {
+    audit.payloads.push(a.payload ?? {});
+  },
+}));
 vi.mock("@/lib/google-iap-management/active-account", () => ({
   readActiveAccountId: () => null,
   resolveActiveAccountId: () => "acc1",
@@ -416,6 +422,7 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
   const pbody = (await pres.json()) as {
     rows?: Array<Omit<PreviewRow, "decision">>;
     refusedRows?: Array<{ rowNumber: number; sku: string; reason: string }>;
+    priceHeader?: string | null;
     warnings?: string[];
     error?: string;
     code?: string;
@@ -486,6 +493,7 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
     }),
     // H4.3 — what the wizard sends: the rows the preview refused, left out.
     droppedRows: pbody.refusedRows ?? [],
+    priceHeader: pbody.priceHeader ?? null,
   });
 
   // ── Server side. Sent even when the Push gate would block: a stale tab
@@ -928,6 +936,7 @@ describe("Q8 — the batch upsert has NO legacy fallback (Manager 2026-10-17)", 
             hubRunId: null,
             rows: buildExecuteRows(rows, { tierSelections: seedTierSelections(rows), customPrices: {}, activeCustomSkus: new Set() }),
             droppedRows: [],
+            priceHeader: null,
           }),
         ),
       }),
@@ -986,6 +995,7 @@ describe("H4.3 — push the rest: rows refused in the file are left out, and cou
     const pbody = (await pres.json()) as {
       rows: Array<Omit<PreviewRow, "decision">>;
       refusedRows: Array<{ rowNumber: number; sku: string; reason: string }>;
+      priceHeader: string | null;
     };
     expect(pres.status).toBe(200);
     expect(pbody.rows.map((r) => r.sku)).toEqual([SKU]);
@@ -1007,6 +1017,7 @@ describe("H4.3 — push the rest: rows refused in the file are left out, and cou
             hubRunId: "run-rest",
             rows: buildExecuteRows(rows, { tierSelections: seedTierSelections(rows), customPrices: {}, activeCustomSkus: new Set() }),
             droppedRows: pbody.refusedRows,
+            priceHeader: pbody.priceHeader,
           }),
         ),
       }),
@@ -1032,5 +1043,26 @@ describe("H4.3 — push the rest: rows refused in the file are left out, and cou
     expect(hub.statuses).toEqual(["PARTIAL"]);
     expect(g.batch).toHaveBeenCalledTimes(1);
     expect(st.fakeErrors).toEqual([]);
+
+    // H4.4 — the audit records the rule, the file's header (parser → preview →
+    // wizard builder → route → orchestrator) and how each row was priced.
+    const a = audit.payloads.at(-1) as Record<string, unknown>;
+    expect(a.pricing_rule).toBe("file-currency-only/v1");
+    expect(a.price_header).toBe("Price (USD)");
+    expect(a.per_row_pricing).toEqual([
+      {
+        row_number: 2,
+        sku: SKU,
+        decision: "create",
+        file_currency: "USD",
+        file_price: "0.99",
+        gt: null,
+        gt_outcome: "none",
+        anchor: { currency: "USD", price_micros: "990000" },
+        regions_version: "2025/03",
+        regions_version_from: "conversion",
+        outcome: "written",
+      },
+    ]);
   });
 });

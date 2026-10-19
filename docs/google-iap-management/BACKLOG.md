@@ -1081,6 +1081,12 @@ chọn, tra SKU, tra entries của probe, >1 ứng viên, `BATCH_MAX` (101 dòng
 xoá "kẹt IN_PROGRESS" cho cả 10 chỗ nhưng KHÔNG biến chúng thành từ chối dòng. Ba update của `import_batches`
 hiện không kiểm `error` (P2).
 
+⟶ **2026-10-19 — H4.4:** finalize-in-finally (Manager chốt) — chỗ ném nào cũng được finally đóng `FAILED`
+(test `bulk-import.finalize.test.ts`), kèm một dòng audit `closed_by: "finally"` có nguyên nhân. Ngoại lệ duy
+nhất: chính lần GHI đóng hàng bị DB từ chối / ném — khi đó có log `import_batches close FAILED|THREW` và hàng
+còn `IN_PROGRESS`. Ba lần ghi đóng hàng giờ
+kiểm `error` (P2). CÒN MỞ: các chỗ ném đó vẫn làm CẢ batch lỗi (500) thay vì từ chối từng dòng — một lỗi DB
+khi tra tier của một dòng chặn mọi dòng khác.
 ---
 
 ## `[GOOGLE-custom-prices-separator-zero]` — giá CUSTOM chưa áp luật (a) dấu phân cách / (b) giá 0

@@ -150,6 +150,10 @@ export interface ParseResult {
   /** Template example rows skipped by Product ID (TEMPLATE_SAMPLE_PRODUCT_IDS).
    *  Explicit outcome — not errors, not silently dropped. */
   skippedSampleRows: { rowNumber: number; sku: string }[];
+  /** H4.4 — the price header exactly as the file wrote it (e.g. "Price (USD)"),
+   *  when it resolved. Recorded in the import audit: the header was the one
+   *  fact past audits could not recover. */
+  priceHeader?: string;
 }
 
 /** Column headers we recognise as non-locale at the start of the sheet.
@@ -636,5 +640,5 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
     warnings.push("No data rows found after the header.");
   }
 
-  return { rows, warnings, errors, refusedRows, skippedSampleRows };
+  return { rows, warnings, errors, refusedRows, skippedSampleRows, priceHeader: priceResolution.headerText };
 }

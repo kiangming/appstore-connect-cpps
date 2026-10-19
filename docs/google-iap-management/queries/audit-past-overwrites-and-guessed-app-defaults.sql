@@ -163,3 +163,6 @@ ORDER BY CASE
 --   biết; Google v3 không trả). Ví dụ đã xác nhận: com.vnggames.ballisticherotwid dùng USD
 --   — giá trị TWD lúc 03:21 là đoán sai (a), USD sau 03:25 là đúng NHỜ MAY (b).
 --   ⚠ Một app "THẤP" vẫn là giá trị đoán; D9 sẽ cần Manager khai cho MỌI app.
+--   (2026-10-19, H4: currency của app KHÔNG còn tham gia định giá bulk import — khai currency không
+--    còn là bước cần trước bulk import; nó chỉ còn tác động ở form tạo/sửa đơn lẻ (giá điền sẵn) và
+--    các fallback legacy đơn lẻ.)

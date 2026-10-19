@@ -67,16 +67,21 @@ credential and forces a re-upload of every Service Account JSON).
 > until Phase 2 lands. See §12 for the migration story + field
 > mapping; see [onetime-product-adapter.ts](../../lib/google-iap-management/google/onetime-product-adapter.ts)
 > for the schema bridge.
+>
+> *Since then:* Phase 2 moved the single-item writes the same day (§12);
+> Bulk Import moved to `monetization.onetimeproducts.batchUpdate` in
+> Hotfix 14 and lost its legacy fallback in H4.2 (October 2026). The table
+> below is current.
 
 | Method | Endpoint (current strategic) | Caller | Status |
 |---|---|---|---|
 | GET | `/monetization/onetimeproducts` (paginated) | Apps detail → IAPs list refresh | **Migrated** (legacy fallback) |
 | GET | `/monetization/onetimeproducts/{productId}` | Single IAP fetch | **Migrated** (legacy fallback) |
-| POST | `/inappproducts` | Create IAP orchestrator | Legacy (Phase 2) |
-| PATCH | `/inappproducts/{sku}` | Edit IAP orchestrator | Legacy (Phase 2) |
-| DELETE | `/inappproducts/{sku}` | (reserved for future delete UI) | Legacy (Phase 2) |
-| POST | `/inappproducts:batchUpdate` | Bulk Import orchestrator | Legacy (Phase 2) |
-| POST | `/monetization/convertRegionPrices` | (reserved — preview-only equalisation) | n/a |
+| PATCH | `/monetization/onetimeproducts/{productId}` (`allowMissing=true`) | Create IAP orchestrator | **Migrated** (Phase 2, legacy `inappproducts.insert` fallback) |
+| PATCH | `/monetization/onetimeproducts/{productId}` | Edit IAP orchestrator | **Migrated** (Phase 2, legacy `inappproducts.patch` fallback) |
+| DELETE | `/monetization/onetimeproducts/{productId}` | (reserved for future delete UI) | **Migrated** (Phase 2, legacy fallback) |
+| POST | `/monetization/onetimeproducts:batchUpdate` + `purchaseOptions:batchUpdateStates` | Bulk Import orchestrator | **Migrated** (Hotfix 14) — **no legacy fallback** since H4.2 (October 2026, Manager Q8) |
+| POST | `/monetization/convertRegionPrices` | Create / Edit / Bulk Import regions bootstrap (Bulk Import: one call per row, anchored on the row's file price) + the custom-prices dialog's country list | Strategic only |
 
 All calls live in `lib/google-iap-management/google/publisher-client.ts`.
 Every call is wrapped by `timed()` which logs `method · packageName ·
@@ -85,29 +90,36 @@ truncated to the first 200 characters** — Google's error responses
 occasionally echo private-key fragments back when scope mismatches
 occur, so we never log the full body.
 
-### batchUpdate semantics
+### batchUpdate semantics (Bulk Import)
+
+Bulk Import writes through `monetization.onetimeproducts.batchUpdate`
+(`newBatchUpdateOneTimeProducts` → `batchUpsertInAppProducts`,
+`publisher-client.ts`), not the legacy `inappproducts.batchUpdate`:
 
 ```ts
-type InappproductsBatchUpdateRequest = {
-  requests: InappproductsUpdateRequest[]; // up to 100
-};
-
-type InappproductsUpdateRequest = {
-  packageName: string;
-  sku: string;
-  allowMissing?: boolean;         // when true: insert if SKU absent
-  autoConvertMissingPrices?: boolean;
-  inappproduct: InAppProduct;
-  latencyTolerance?: string;
-};
+requestBody: {
+  requests: Array<{                 // up to 100 (BATCH_MAX in the orchestrator)
+    oneTimeProduct: OneTimeProduct; // every region priced (regions bootstrap, §12)
+    updateMask: FULL_UPDATE_MASK;
+    regionsVersion: { version };    // the catalog convertRegionPrices used (Hotfix 9)
+    allowMissing: boolean;          // true for NEW rows (insert); false for Overwrite
+  }>;
+}
 ```
 
-Insert + update are unified via `allowMissing: true`. The response
-shape is `{ inappproducts: InAppProduct[] }`, one entry per request in
-the **same order** — there is no per-row error array. If a row fails
-the whole batch throws and the orchestrator marks every actionable row
-as failed. The 100-row cap is enforced server-side; the wizard's
-preview step shows the count.
+The response is `{ oneTimeProducts: OneTimeProduct[] }` in the **same
+order** — there is no per-row error array; a missing position counts as
+a failed row. Overwrite rows are read first (GET, §13); a row whose GET
+fails is left out of the call and counted failed. State is set by a
+second call, `purchaseOptions:batchUpdateStates` with `productId="-"`.
+If the batch call throws, every row it carried is failed and Google's
+error reaches the caller verbatim and structured — **no legacy
+fallback** since H4.2 (October 2026, Manager Q8: the legacy call
+demanded the app's currency for `defaultPrice`). Rows refused before the
+call (`refusedRows`: file price, tier, custom, conversion, rows left out
+in the file) are never sent. The 100-row cap is checked by the
+orchestrator after skips and the file-price / tier / custom refusals;
+the preview does not pre-check it.
 
 ---
 
@@ -208,30 +220,42 @@ Import form, the server resolves prices in this order:
 0. **Bulk Import only — if the row carries per-item Custom prices, they
    win and no template is consulted for that row.** Valid under **all
    three** pricing sources. `regionOverrides` is replaced by the custom
-   entries; countries the set omits are still filled by Google's
-   conversion via the regions bootstrap. A custom set that cannot be
-   applied REFUSES the row (per-row fail-soft, `refusedRows`) — it never
-   falls back to the template price.
+   entries (the file's GT included); countries the set omits are still
+   filled by Google's conversion via the regions bootstrap. A custom set
+   that cannot be applied REFUSES the row (per-row fail-soft,
+   `refusedRows`, kind `custom_invalid_price`) — it never falls back to
+   the template price. The orchestrator's custom pre-pass re-checks every
+   entry with the same rule the dialog uses (`statedPriceOf`,
+   `orchestration/file-price.ts`: precision, no 0, no `26.000`-style
+   separator in a currency without decimals); the execute route checks
+   structure only.
 
-   **`defaultPrice` resolution is source-dependent.** This is the one
-   place where the two sources genuinely differ:
+   **`defaultPrice` and the conversion anchor are ALWAYS the row's file
+   price** (`Price (XXX)` via `filePriceOf`) — under every source, custom
+   or not, and no custom entry is required in any particular currency
+   (H4.2, Manager Q6, October 2026). Until then this was source-dependent:
+   under a template an app-currency custom entry was required and became
+   `defaultPrice` (else `custom_no_app_currency_entry`); under Google
+   Conversion an app-currency entry, if set, won via `resolvedDefaultPrice`.
+   Both rules, `resolvedDefaultPrice` and the cross-currency path are gone.
 
-   | Source | `defaultPrice` | App-currency entry |
-   |---|---|---|
-   | `default_template` · `app_template` | The custom entry whose currency equals the app's default currency. | **Required.** The custom set replaces the whole ~170-country set, so nothing else can supply `defaultPrice`. Missing ⇒ `custom_no_app_currency_entry`. |
-   | `google_default` | The row's base price (`baseCurrency` / `basePriceDecimal`) via `buildProduct`'s fallback — **unless** the custom set contains an app-currency entry, in which case that is stamped into `resolvedDefaultPrice` and wins. | **Not required.** The custom set is a sparse overlay; requiring it would refuse legitimate partial overrides. |
-
-   Implementation: the custom pre-pass in `orchestration/bulk-import.ts`
-   (`isTemplateSource` branch), plus the `row.customPrices` clause in the
-   template loop's skip guard. `custom_source_mismatch` — which refused
-   custom prices under `google_default` — was retired in August 2026.
+   Implementation: the custom pre-pass in `orchestration/bulk-import.ts`,
+   plus the `row.customPrices` clause in the template loop's skip guard
+   (`row.priceRefusal || row.customPrices`). `custom_source_mismatch` —
+   which refused custom prices under `google_default` — was retired in
+   August 2026.
 1. If `app_template` is selected and an App template exists for this
    app: use its tier entries.
 2. Else if `default_template` is selected and a Default template
    exists: use its tier entries.
 3. Else (`google_default`, labelled **Google Conversion** in the UI):
    use the row's inline base price + region overrides + Google's
-   auto-equalisation for unset regions.
+   auto-equalisation for unset regions. In Bulk Import the base price is
+   the file's `Price (XXX)` in its header currency (the only price
+   source); every country without a GT / custom price is converted from
+   it, and the US price is the file price only when the file is in USD — a
+   non-USD row whose conversion fails is refused (`conversion_failed`,
+   Q7; see §12).
 
 > The stored/wire value is `google_default` and always will be — the
 > August 2026 relabel changed the UI text only (the value is under a
@@ -239,9 +263,16 @@ Import form, the server resolves prices in this order:
 > every historical `actions_log` payload).
 
 For the single-IAP forms, the tier identifier is chosen via dropdown.
-For Bulk Import, **each row's SKU is matched against the template's
-`identifier` column**; rows without a match silently fall back to
-inline pricing (no warning shown — this is the documented contract).
+For Bulk Import, each row is matched to a tier on ONE path (H4.2, Manager
+Q2): **the tier named after the row's SKU first, else the tier whose price
+in the FILE's currency equals the row's file price** (`findRowCandidates`,
+`queries/templates.ts`); several candidates ⇒ the Manager picks in the
+preview. The app's currency takes no part. No match ⇒ the row is converted
+by Google from the file price, and the preview says so per row
+("Auto-converted by Google", Q3) — it is no longer silent. A matched tier
+replaces the row's GT (the preview shows what happens to it). A tier entry
+Google cannot take (wrong precision for its currency, or 0) refuses the
+row (`tier_price_invalid`) instead of failing the batch.
 
 ---
 
@@ -251,7 +282,7 @@ Every Publisher / Reporting call is logged via
 `lib/google-iap-management/google/logging.ts` with shape:
 
 ```
-[google-iap:publisher] method=inappproducts.batchUpdate package=com.example.app sku= outcome=ok duration_ms=412 status=200
+[google-iap:publisher] method=monetization.onetimeproducts.batchUpdate pkg=com.example.app outcome=ok dur_ms=412 status=200
 ```
 
 Audit-log writes go to `google_iap_mgmt.actions_log` (append-only) for:
@@ -274,8 +305,10 @@ listings + prices buckets, plus summary counts).
 - **batchUpdate 100-row cap** — orchestrator surfaces an error; wizard
   preview shows the count so the Manager can split files manually.
 - **Per-row failures inside batchUpdate** — Google doesn't return a
-  structured per-row error array. A failed batch fails the whole
-  import; orchestrator marks all actionable rows as failed.
+  structured per-row error array. A failed call fails every row it
+  carried (rows refused before the call keep their own reasons in
+  `refusedRows`); the error is returned verbatim, with no legacy retry
+  (H4.2, Q8).
 - **`GOOGLE_CREDENTIALS_ENCRYPTION_KEY`** — never rotate in production.
 - **Locale name → BCP-47** coverage is the 82 names in the v1 IAP
   template. Add to `LOCALE_NAME_TO_BCP47` when Manager introduces a new
@@ -342,6 +375,12 @@ single products now go through Monetization API v3. Bulk Import is
 still on legacy `inappproducts.batchUpdate` — call it Phase 3 if
 the Manager's portfolio reaches a state where every bulk-import
 target is migrated.
+
+> *Since then:* Bulk Import moved to `monetization.onetimeproducts.batchUpdate`
+> in Hotfix 14 ("Phase 3", `batchUpsertInAppProducts`), keeping the legacy call
+> only as a fallback; H4.2 (October 2026, Manager Q8) removed that fallback.
+> `inappproducts.batchUpdate` is no longer called anywhere (the T2 structural
+> test bans it in `publisher-client.ts`).
 
 What's wired:
 
@@ -418,6 +457,17 @@ proceeds with only the explicit prices — Google will then reject
 with a clear "must provide a price..." error and the Manager gets
 an actionable message instead of a silent half-broken state.
 
+> **Bulk Import differs (H4.2 / H4.3, October 2026, Manager Q7).** Its
+> bootstrap is anchored on the row's FILE price (`Price (XXX)` — never the
+> app's currency, never a template entry), one call per row. If the call
+> fails, or returns no `US` price, and the file price is not in USD, the row
+> is REFUSED (`conversion_failed`) rather than sent — the US stamp would put
+> a TWD/VND amount on the US store, and there would be no catalog version
+> to pin. The reason names the class: temporary (network, 5xx, 408, 429, no
+> HTTP status — "run this row again later"), Google rejected the price (400
+> `INVALID_ARGUMENT`), or an access / account / app problem (any other
+> 4xx). A USD row is still sent: its file price is the US price.
+
 Cost: one extra API call per create / update for the regions
 bootstrap. Acceptable — Manager's create / edit volume is low.
 
@@ -428,9 +478,13 @@ bootstrap. Acceptable — Manager's create / edit volume is low.
   legacy_count=…`. Empty success from the new API is NOT a fallback
   trigger (it means "this app has no products" — a legacy call would
   be noise).
-- WRITE methods (Phase 2): same try-new-then-fallback. May tighten
-  the trigger to a specific Google error code once the
-  rolling-deprecation tail behaviour is observed in practice.
+- WRITE methods (Phase 2 — single-item insert / patch / delete): same
+  try-new-then-fallback. May tighten the trigger to a specific Google
+  error code once the rolling-deprecation tail behaviour is observed in
+  practice. The Bulk Import batch upsert has **no** fallback since H4.2
+  (October 2026, Manager Q8): the legacy call demanded the app's currency
+  for `defaultPrice` — a second, silent pricing path. The remaining
+  single-item fallbacks go in chunk D4.
 
 ### When can the fallback go away?
 

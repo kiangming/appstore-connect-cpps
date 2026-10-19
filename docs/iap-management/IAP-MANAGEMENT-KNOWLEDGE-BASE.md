@@ -8990,3 +8990,23 @@ Test ghim: `app/api/google-iap-management/apps/[packageName]/bulk-import/file-cu
 - **Lưới an toàn có kind riêng:** guard quanh `buildProduct` từ chối dòng `price_build_failed`. Nếu dùng lại
   `file_price_invalid` / `tier_price_invalid`, mutation "gỡ kiểm tra" vẫn xanh (guard bắt thay) — test phải
   khẳng định ĐÚNG kind.
+
+### 35.5 H4.4 — hàng theo dõi được đóng ở mọi lối ra; audit ghi đủ để dựng lại giá (2026-10-19)
+
+- **finalize-in-finally cho `import_batches` (P10, Manager chốt):** MỘT hàm đóng hàng
+  (`finalizeImportBatch`), đánh dấu "đã đóng" TRƯỚC khi ghi và kiểm `error` (P2); finally chỉ đóng `FAILED`
+  khi chưa có lần đóng nào (và ghi một dòng audit `closed_by: "finally"` có nguyên nhân). Giới hạn nói thẳng: nếu
+  chính lần GHI đóng hàng thất bại, hàng còn `IN_PROGRESS` và chỉ còn log `import_batches close FAILED|THREW`.
+  Thứ tự đó là bắt buộc: nếu finally kiểm "ghi thành công" thay vì "đã thử đóng",
+  một lần ghi COMPLETE bị DB từ chối sẽ bị finally ghi đè thành FAILED — sai kết quả thật (P5). Test: ném ở
+  tra template / tier trôi / >100 dòng ⇒ đúng MỘT lần ghi FAILED; batch sạch ⇒ đúng MỘT lần ghi COMPLETE;
+  mutation bỏ finally ⇒ ĐỎ.
+- **Audit ghi cái không dựng lại được:** header giá của file, neo quy đổi (cả khi quy đổi lỗi) + regionsVersion
+  mà REQUEST đã ghim (`regions_version_from`: conversion / publisher_default), GT bị giữ hay bị thay, và kết
+  quả THẬT sau bước push (`written` / `google_failed` / `cache_sync_failed` / `google_rejected` — không bao
+  giờ "sent" cho một dòng Google không ghi, P5) — từng dòng (`per_row_pricing`). Bài học từ §35.3: câu hỏi "giá này từ đâu ra" trước H4 chỉ trả lời
+  được bằng file gốc vì header chưa từng được lưu.
+- **SQL kiểm dữ liệu trước khi đổi luật:** khi một thay đổi biến dữ liệu đang lưu thành từ chối (entry tier 0 /
+  sai độ chính xác ⇒ `tier_price_invalid`), Manager chạy câu SQL CHỈ ĐỌC trước push để biết dòng nào sẽ bị
+  từ chối. Mọi bảng hằng số nhúng trong SQL được sinh từ code và test ghim — một bản gõ tay sẽ lệch.
+

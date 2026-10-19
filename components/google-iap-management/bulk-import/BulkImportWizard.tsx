@@ -250,6 +250,8 @@ export function BulkImportWizard({
    *  started. Closed whenever the wizard leaves the preview step (effect
    *  below), so it can never reappear over a DIFFERENT preview. */
   const [confirmPushOpen, setConfirmPushOpen] = useState(false);
+  /** H4.4 — the file's price header, for the import audit. */
+  const [priceHeader, setPriceHeader] = useState<string | null>(null);
   useEffect(() => {
     if (step !== "preview") setConfirmPushOpen(false);
   }, [step]);
@@ -535,6 +537,7 @@ export function BulkImportWizard({
         blockers?: string[];
         iapsLastSyncedAt?: string | null;
         refusedRows?: Array<{ rowNumber: number; sku: string; reason: string }>;
+        priceHeader?: string | null;
       };
       if (!res.ok) {
         applyGateRefusal(body);
@@ -552,6 +555,7 @@ export function BulkImportWizard({
       setPreviewRows(rows);
       setPreviewWarnings(body.warnings ?? []);
       setFileRefusedRows(body.refusedRows ?? []);
+      setPriceHeader(body.priceHeader ?? null);
       setTierSelections(seedSelections);
       if (body.iapsLastSyncedAt) setMirrorSyncedAt(body.iapsLastSyncedAt);
 
@@ -747,6 +751,7 @@ export function BulkImportWizard({
                 activeCustomSkus,
               }),
               droppedRows: fileRefusedRows,
+              priceHeader,
             }),
           ),
         },
@@ -840,11 +845,11 @@ export function BulkImportWizard({
           </h2>
           <p className="text-xs text-slate-500 mb-4">
             Q-GIAP.E batch-level. Applied to every row in this import. For
-            template modes, each row&apos;s SKU is matched to a template tier
-            identifier; rows without a matching tier fall back to{" "}
-            <strong>Google Conversion</strong> — the row&apos;s inline base
-            price + GT Price override, converted by Google into every other
-            country.
+            template modes, each row takes the tier named after its SKU, else
+            the tier whose price in the file&apos;s currency equals the
+            file&apos;s price; rows without a matching tier fall back to{" "}
+            <strong>Google Conversion</strong> — the file&apos;s price + GT
+            Price override, converted by Google into every other country.
           </p>
           <PricingSourceSelector
             value={pricingSource}
@@ -1477,6 +1482,7 @@ export function BulkImportWizard({
                     setPreviewRows([]);
                     setPreviewWarnings([]);
                     setFileRefusedRows([]);
+                    setPriceHeader(null);
                     setConfirmPushOpen(false);
                     setExecuteResult(null);
                     // Reset the tracking state machine for a fresh cycle —
@@ -1516,7 +1522,9 @@ export function BulkImportWizard({
  * this commit (H4.2: the app's currency takes NO part in pricing). Each H4
  * step that changes pricing changes this note IN THE SAME COMMIT — the
  * verbatim test pins the wording only; it cannot see a pricing change (T1,
- * bulk-import/file-currency-invariance.test.ts, does).
+ * bulk-import/file-currency-invariance.test.ts, does). H4.4 — the lead is
+ * sentence (ii), "prices come only from the file": planned with C2.1, held
+ * back until the pricing fix made it true.
  */
 function PricingCurrencyNote() {
   const code = (c: string) => (
@@ -1527,7 +1535,7 @@ function PricingCurrencyNote() {
       data-testid="pricing-currency-note"
       className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
     >
-      <span className="font-semibold">How prices are read from the file.</span> The file needs
+      <span className="font-semibold">Prices come only from the file.</span> The file needs
       exactly one {code("Price (XXX)")} column (e.g. {code("Price (USD)")}), in a currency Google
       Play bills in, and prices are read in that currency only — the app&apos;s currency is not
       used. A price header without its currency ({code("Price")} / Default Price / Base Price) or a

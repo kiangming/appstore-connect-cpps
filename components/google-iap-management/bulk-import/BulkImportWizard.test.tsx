@@ -874,7 +874,7 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
   // change — the route-level T1 (bulk-import/file-currency-invariance.test.ts)
   // does; each H4 step that changes pricing updates this note in the same commit.
   const NOTE =
-    "How prices are read from the file. The file needs exactly one Price (XXX) column (e.g. Price (USD)), in a " +
+    "Prices come only from the file. The file needs exactly one Price (XXX) column (e.g. Price (USD)), in a " +
     "currency Google Play bills in, and prices are read in that currency only — the app's currency is not used. " +
     "A price header without its currency (Price / Default Price / Base Price) or a second price column refuses the " +
     "file; a row whose price or GT price cannot be sent exactly as written (more decimals than its currency " +
@@ -1044,7 +1044,7 @@ describe("BulkImportWizard (Google) — execute body = the shared builder's outp
       if (url.includes(START_URL)) return Promise.resolve({ ok: true, json: async () => ({ run_id: "run-guard" }) });
       if (url.includes(CANCEL_URL)) return Promise.resolve({ ok: true, json: async () => ({}) });
       if (url.includes(PREVIEW_URL_FRAGMENT)) {
-        return Promise.resolve({ ok: true, json: async () => ({ rows: previewRows, warnings: [] }) });
+        return Promise.resolve({ ok: true, json: async () => ({ rows: previewRows, warnings: [], priceHeader: "Price (USD)" }) });
       }
       if (url.includes(EXECUTE_URL_FRAGMENT)) return Promise.resolve(successExecuteResponse());
       return Promise.reject(new Error(`unexpected fetch: ${url}`));
@@ -1071,6 +1071,7 @@ describe("BulkImportWizard (Google) — execute body = the shared builder's outp
         activeCustomSkus: new Set(),
       }),
       droppedRows: [],
+      priceHeader: "Price (USD)",
     });
     expect(executeBody).toEqual(JSON.parse(JSON.stringify(expected)));
     // The builder really was exercised on both branches it encodes.

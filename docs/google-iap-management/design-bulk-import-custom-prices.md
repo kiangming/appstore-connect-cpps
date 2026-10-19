@@ -8,6 +8,24 @@ All six §2.H questions answered — see §3 for the recorded answers and §4
 for the as-built notes, **including two places where this document turned
 out to be wrong.**
 
+> ⚠ **Superseded in part — H4, October 2026** (`arc-google-h4-file-currency-pricing`;
+> `design-bulk-import-existence-overwrite-safety.md` §5.4 / §5.7, Manager Q6).
+> The currency written in the import FILE is the only price source; the app's
+> currency takes no part. For custom prices: `defaultPrice` and the conversion
+> anchor are ALWAYS the row's file price, under every source, and a custom set
+> needs no entry in any particular currency. Gone: `custom_no_app_currency_entry`,
+> the dialog's app-currency Save gate (`findAppCurrencyEntry` /
+> `customAppCurrencyGate`), `resolvedDefaultPrice` and the whole cross-currency
+> path (`price_provenance` is now `custom` · `custom_refused` · `template` ·
+> `template_refused` · `auto_bootstrap`). Custom prices follow the one rule for a
+> typed price (`statedPriceOf`: precision, no 0, no `26.000`-style separator in a
+> currency without decimals) — in the dialog, and again in the orchestrator's
+> custom pre-pass (the route checks structure only); the only custom refusal kind
+> is `custom_invalid_price`. Every refusal counts as failed for the Hub status,
+> and the result screen's "Refused" tile is now "Not sent". Passages below about
+> the app's currency, `resolvedDefaultPrice` or cross-currency are the August
+> 2026 design, kept as history.
+
 Scope: **Google IAP Management bulk import only**
 (`components/google-iap-management/bulk-import/*`,
 `lib/google-iap-management/orchestration/bulk-import.ts`,
@@ -231,6 +249,14 @@ handles this as an explicit empty-baseline state rather than pretending.
 > template-upload time; hand-typed custom prices have no such history, so
 > the **same** precision check must run — client-side to gate Push, and
 > again server-side because client state is untrusted (§2.E).
+
+> ⚠ *H4.3 (October 2026): two parts of this no longer hold. Template prices are
+> NOT checked against their currency at upload (`pricing-template-parser.ts`
+> converts without the currency — BACKLOG `[GOOGLE-template-upload-price-check]`);
+> a matched tier's entries are checked at push instead (`storedRegionPriceOf` ⇒
+> row refused, `tier_price_invalid`). And the rule for hand-typed prices is no
+> longer precision alone: `statedPriceOf` (`orchestration/file-price.ts`) also
+> refuses 0 and a `26.000`-style separator in a currency without decimals.*
 
 ### 1.5 CURRENCY SEMANTICS — derived from country; display-only in the anchor
 
@@ -600,6 +626,13 @@ and in the per-row loop (`:145-190`):
    which the custom pre-pass has set; blank countries get Google's
    conversion, as surfaced in the dialog (§2.B).
 
+   > ⚠ *H4.2 (October 2026, Manager Q6): steps 2, 4 and 5 no longer hold — there
+   > is no `resolvedDefaultPrice` and no cross-currency pre-pass. `defaultPrice`
+   > and the bootstrap anchor are the row's FILE price; the template-loop guard is
+   > `row.priceRefusal || row.customPrices`. Route step 3 above is superseded too
+   > (H4.3): the route checks structure only; prices are checked by
+   > `statedPriceOf` in the custom pre-pass.*
+
 **Failure reporting — never a silent fallback (the hard requirement).**
 Reuse the per-row fail-soft channel (`refusedRows`, `bulk-import.ts:460-467`)
 with new kinds:
@@ -621,6 +654,14 @@ with new kinds:
 > that at one country instead of ~170. Custom prices are now valid under
 > all three sources, and the `defaultPrice` rule branches (§3's Q6 scope
 > note).
+
+> ⚠ **`custom_no_app_currency_entry` was RETIRED in October 2026 (H4.2, Manager
+> Q6).** The row above is the design as signed off. `defaultPrice` is now always
+> the row's file price, so a custom set needs no entry in any particular currency;
+> the only custom refusal kind left is `custom_invalid_price` (an entry that fails
+> `statedPriceOf`, or an empty / malformed set). Since H4.2 EVERY refusal kind
+> counts as failed for the Hub status — the cross-currency "soft skip" is gone
+> with the path.
 
 A custom row that cannot be applied is **excluded from the batch** and
 listed on the result screen. It **never** falls through to the template
@@ -768,6 +809,15 @@ always derives from the app-currency entry.
 > of a locked decision and invites someone to "restore" the old rule —
 > which would silently reintroduce refusals for legitimate sparse
 > overlays.
+
+> ⚠ **Superseded again — H4.2, October 2026 (Manager Q6).** There is no branch
+> any more: under every source `defaultPrice` and the conversion anchor are the
+> row's FILE price, and no custom entry is required in any currency. Restoring
+> either the template-required rule or the Google-Conversion
+> `resolvedDefaultPrice` stamp would put the app's currency back into
+> bulk-import pricing — T1/T2 in
+> `app/api/google-iap-management/apps/[packageName]/bulk-import/file-currency-invariance.test.ts`
+> go red.
 
 ### 3.1 Measured sizes (B1)
 
@@ -933,6 +983,12 @@ shipping those prices. Keying off the INTENT as well as the outcome is
 the durable form. The guard's comment now says this rather than
 repeating the claim above.
 
+> ⚠ *H4.2 (October 2026): the first protection in the table is gone with
+> `resolvedDefaultPrice`. `|| row.customPrices` is now the ONLY clause keeping
+> custom rows — applied or refused — out of the template loop, and the anchor
+> test pins it on the SUCCESS path as well (deleting it puts the template's
+> numbers in the payload — `bulk-import.custom-prices.test.ts` header).*
+
 **Generalisable lesson (P10, sharpened):** a mutation-check is not
 ceremony to confirm a test you already believe. It is the only thing that
 tells you *which* line your test is actually pinning — and here the
@@ -989,6 +1045,8 @@ which is gated on a template source; under Google Conversion
 `regionOverrides` flows straight through. The Q4 keep-but-inactive state
 is gone entirely. `custom_source_mismatch` retired. See the Q6 scope note
 in §3 for the `defaultPrice` branch, which is the correctness crux.
+*(H4.2, October 2026: that branch is gone too — see the note under the Q6
+scope note, and the status note at the top.)*
 
 **Two defects the review's "check the comment scope" question flushed
 out** — both were the *same class as the comment*, i.e. a rule applied

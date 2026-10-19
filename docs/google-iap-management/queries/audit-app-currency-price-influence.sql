@@ -45,6 +45,12 @@
 --                              từ ecfd7b8, push lần đầu 2026-08-07 17:13:14.
 --   ⚠ E3 và mốc custom-dưới-template là giờ push lên origin/main (theo reflog). E0/E1 là giờ
 --     commit: reflog chỉ bắt đầu từ 2026-06-29 nên KHÔNG kiểm được giờ push của chúng.
+--   ⚠ 2026-10-19 — E4 (H4, arc-google-h4-file-currency-pricing; giờ push H4 ghi vào đây khi đã push):
+--     currency của app KHÔNG còn tham gia định giá bulk import — currency ghi trong file là nguồn
+--     giá duy nhất (không cross-currency; custom không cần entry currency app; header "Price" chung
+--     bị từ chối). Batch tạo SAU giờ push H4 nằm NGOÀI runbook này: H4-2 vẫn gắn era 'E3' cho chúng
+--     và có thể ra nhãn A? / B? — nhãn đó SAI với chúng (bỏ qua, hoặc lọc created_at < giờ push H4).
+--     Batch từ E4 mang payload pricing_rule = 'file-currency-only/v1' (H4.4) — dùng nó để nhận ra.
 -- ============================================================
 
 

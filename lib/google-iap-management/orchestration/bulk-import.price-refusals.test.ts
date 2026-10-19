@@ -528,3 +528,114 @@ describe("H4.3 — rows dropped in the file are rows of the batch: counted, list
     ]);
   });
 });
+
+describe("H4.4 — the audit records how EACH row was priced (per_row_pricing, pricing_rule, price_header)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    batchUpdates.length = 0;
+    googleIapDb.mockReturnValue(makeDb());
+    templateExists.mockResolvedValue(true);
+    findTemplateId.mockResolvedValue("tpl-1");
+    findCandidateTiersForCurrencyPrice.mockResolvedValue([]);
+    syncIapFromGoogle.mockResolvedValue(undefined);
+    buildRegionMapFromBasePrice.mockResolvedValue(CONVERTED_WITH_US);
+    lookupTemplateEntriesForIdentifier.mockImplementation(async ({ identifier }: { identifier: string }) =>
+      identifier === "t1" ? [{ identifier, regionCode: "VN", currency: "VND", priceMicros: "25000000000" }] : [],
+    );
+    batchUpsertInAppProducts.mockImplementation(async (_jwt, _pkg, inputs) =>
+      inputs.map((i: { body: { sku: string } }) => ({ sku: i.body.sku })),
+    );
+  });
+
+  it("GT kept / replaced by tier / replaced by custom / not sent; the anchor and pinned catalog per sent row; skipped and refused outcomes", async () => {
+    const GT = [{ region: "VN", currency: "VND", priceDecimal: "26000" }];
+    await executeBulkImport({} as never, {
+      ...INPUT,
+      pricingSource: "default_template",
+      priceHeader: "Price (TWD)",
+      rows: [
+        row({ rowNumber: 2, sku: "g.kept", baseCurrency: "TWD", basePriceDecimal: "30", regionOverrides: GT }),
+        row({ rowNumber: 3, sku: "g.tier", regionOverrides: GT, chosenTierIdentifier: "t1", tierCandidateCount: 1 }),
+        row({ rowNumber: 4, sku: "g.custom", regionOverrides: GT, customPrices: { entries: [{ region: "VN", currency: "VND", priceDecimal: "27000" }], baselineTier: null, editedAt: null } }),
+        row({ rowNumber: 5, sku: "g.zero", basePriceDecimal: "0", regionOverrides: GT }),
+        row({ rowNumber: 6, sku: "g.skip", decision: "skip" }),
+      ],
+    });
+    const payload = appendAction.mock.calls.at(-1)?.[0]?.payload as Record<string, unknown>;
+    expect(payload.pricing_rule).toBe("file-currency-only/v1");
+    expect(payload.price_header).toBe("Price (TWD)");
+    const byRow = Object.fromEntries(
+      (payload.per_row_pricing as Array<Record<string, unknown>>).map((p) => [p.row_number, p]),
+    );
+    const gt = { region: "VN", currency: "VND", price: "26000" };
+    const sent = { regions_version: "2025/03", regions_version_from: "conversion", outcome: "written" };
+    expect(byRow[2]).toEqual({
+      row_number: 2, sku: "g.kept", decision: "create", file_currency: "TWD", file_price: "30",
+      gt, gt_outcome: "kept", anchor: { currency: "TWD", price_micros: "30000000" }, ...sent,
+    });
+    expect(byRow[3]).toEqual({
+      row_number: 3, sku: "g.tier", decision: "create", file_currency: "USD", file_price: "0.99",
+      gt, gt_outcome: "replaced_by_tier", anchor: { currency: "USD", price_micros: "990000" }, ...sent,
+    });
+    expect(byRow[4]).toEqual({
+      row_number: 4, sku: "g.custom", decision: "create", file_currency: "USD", file_price: "0.99",
+      gt, gt_outcome: "replaced_by_custom", anchor: { currency: "USD", price_micros: "990000" }, ...sent,
+    });
+    expect(byRow[5]).toEqual({
+      row_number: 5, sku: "g.zero", decision: "create", file_currency: "USD", file_price: "0",
+      gt, gt_outcome: "not_sent", anchor: null, regions_version: null, regions_version_from: null, outcome: "file_price_invalid",
+    });
+    expect(byRow[6]).toEqual({
+      row_number: 6, sku: "g.skip", decision: "skip", file_currency: "USD", file_price: "0.99",
+      gt: null, gt_outcome: "none", anchor: null, regions_version: null, regions_version_from: null, outcome: "skipped",
+    });
+  });
+
+  it("outcome is what GOOGLE did, after the push: a null slot ⇒ google_failed; a rejected call ⇒ google_rejected (never 'written')", async () => {
+    batchUpsertInAppProducts.mockImplementation(async (_jwt, _pkg, inputs) =>
+      inputs.map((i: { body: { sku: string } }, n: number) => (n === 0 ? null : { sku: i.body.sku })),
+    );
+    await executeBulkImport({} as never, { ...INPUT, pricingSource: "google_default", rows: [row({ rowNumber: 2, sku: "a" }), row({ rowNumber: 3, sku: "b" })] });
+    let rows = (appendAction.mock.calls.at(-1)?.[0]?.payload as { per_row_pricing: Array<{ sku: string; outcome: string }> }).per_row_pricing;
+    expect(rows.map((r) => [r.sku, r.outcome])).toEqual([["a", "google_failed"], ["b", "written"]]);
+
+    batchUpsertInAppProducts.mockRejectedValue(Object.assign(new Error("denied"), { code: 403 }));
+    await expect(
+      executeBulkImport({} as never, { ...INPUT, pricingSource: "google_default", priceHeader: "Price (USD)", rows: [row({ rowNumber: 2, sku: "a" })] }),
+    ).rejects.toThrow("denied");
+    const p = appendAction.mock.calls.at(-1)?.[0]?.payload as Record<string, unknown>;
+    rows = p.per_row_pricing as Array<{ sku: string; outcome: string }>;
+    expect(rows.map((r) => [r.sku, r.outcome])).toEqual([["a", "google_rejected"]]);
+    // The catch path's audit carries the H4.4 fields too.
+    expect(p).toMatchObject({ pricing_rule: "file-currency-only/v1", price_header: "Price (USD)" });
+  });
+
+  it("the anchor is recorded even when the conversion FAILED; a USD row sent without a conversion pins the publisher's default", async () => {
+    buildRegionMapFromBasePrice.mockRejectedValue(new Error("convert down"));
+    await executeBulkImport({} as never, {
+      ...INPUT,
+      pricingSource: "google_default",
+      rows: [row({ rowNumber: 2, sku: "twd", baseCurrency: "TWD", basePriceDecimal: "30" }), row({ rowNumber: 3, sku: "usd" })],
+    });
+    const p = appendAction.mock.calls.at(-1)?.[0]?.payload as { per_row_pricing: Array<Record<string, unknown>> };
+    expect(p.per_row_pricing[0]).toMatchObject({
+      outcome: "conversion_failed", anchor: { currency: "TWD", price_micros: "30000000" }, regions_version: null, regions_version_from: null,
+    });
+    expect(p.per_row_pricing[1]).toMatchObject({
+      outcome: "written", anchor: { currency: "USD", price_micros: "990000" }, regions_version: null, regions_version_from: "publisher_default",
+    });
+  });
+
+  it("the NOTHING-to-push path's audit carries pricing_rule, price_header and per_row_pricing too", async () => {
+    await executeBulkImport({} as never, {
+      ...INPUT,
+      pricingSource: "google_default",
+      priceHeader: "Price (USD)",
+      rows: [row({ rowNumber: 2, sku: "z", basePriceDecimal: "0" })],
+    });
+    expect(batchUpsertInAppProducts).not.toHaveBeenCalled();
+    const p = appendAction.mock.calls.at(-1)?.[0]?.payload as Record<string, unknown>;
+    expect(p).toMatchObject({ pricing_rule: "file-currency-only/v1", price_header: "Price (USD)" });
+    expect((p.per_row_pricing as Array<{ outcome: string }>).map((r) => r.outcome)).toEqual(["file_price_invalid"]);
+  });
+});

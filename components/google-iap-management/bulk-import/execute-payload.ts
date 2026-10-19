@@ -127,6 +127,9 @@ export function buildExecuteRequestBody(args: {
    *  partial import whose dropped rows never reach the server closes the
    *  Hub run SUCCESS (P5). */
   droppedRows: ReadonlyArray<PreviewRefusedRow>;
+  /** H4.4 — the file's price header as the preview read it, for the import
+   *  audit (informational: pricing reads each row's currency). */
+  priceHeader: string | null;
 }) {
   return {
     // H4.3 — the execute route refuses a request without it (a pre-H4 tab).
@@ -136,6 +139,7 @@ export function buildExecuteRequestBody(args: {
     hub_run_id: args.hubRunId,
     rows: args.rows,
     droppedRows: args.droppedRows.map((d) => ({ rowNumber: d.rowNumber, sku: d.sku, reason: d.reason })),
+    priceHeader: args.priceHeader,
   };
 }
 

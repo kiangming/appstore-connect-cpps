@@ -62,6 +62,11 @@ const CURRENCY_DECIMALS: Record<string, number> = {
   // Everything else (USD, EUR, GBP, CNY, INR, ...) → default exponent 2.
 };
 
+/** The override table itself, read-only — H4.4: the template-entry audit SQL
+ *  (docs/google-iap-management/queries/audit-template-entries-h4.sql) carries a
+ *  copy, and a structural test pins that copy to this table. */
+export const CURRENCY_DECIMALS_OVERRIDES: Readonly<Record<string, number>> = CURRENCY_DECIMALS;
+
 /** Default decimal places for currencies not in the override table.
  *  Most modern currencies use 2 (cents). */
 const DEFAULT_DECIMALS = 2;

@@ -7,7 +7,7 @@
  * 20000, is far too many rows to render in jsdom).
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 
 vi.mock("@/lib/google-iap-management/bulk-import-contract", async (importOriginal) => {
@@ -46,11 +46,20 @@ function installFetch(refusedCount: number) {
 }
 
 async function goToPreview() {
-  fireEvent.click(await screen.findByRole("button", { name: /Continue/ }, { timeout: 3000 }));
-  const input = document.querySelector("#bulk-upload-file") as HTMLInputElement;
+  // Continue is gated until the availability check resolves (Part A) — wait
+  // for it to be ENABLED, not merely present (a click on the disabled button
+  // does nothing, which made this flaky under load).
+  await waitFor(() => expect(screen.getByRole("button", { name: /Continue/ })).toBeEnabled(), { timeout: 5000 });
+  fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+  const input = (await waitFor(() => {
+    const el = document.querySelector("#bulk-upload-file");
+    if (!el) throw new Error("upload input not rendered yet");
+    return el;
+  })) as HTMLInputElement;
   fireEvent.change(input, { target: { files: [new File(["x"], "iaps.xlsx")] } });
-  fireEvent.click(screen.getByRole("button", { name: /Preview/ }));
-  await screen.findByText(/Push to Google Play/);
+  await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled(), { timeout: 5000 });
+  fireEvent.click(screen.getByRole("button", { name: /^Preview/ }));
+  await screen.findByText(/Push to Google Play/, {}, { timeout: 5000 });
 }
 
 const PROPS = { packageName: "com.vng.cap", appId: "app-1", appDisplayName: "Cap", iapsLastSyncedAt: "2026-10-16T03:25:10.000Z" };

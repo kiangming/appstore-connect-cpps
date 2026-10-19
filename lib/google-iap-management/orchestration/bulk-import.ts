@@ -70,6 +70,7 @@ import {
 } from "../queries/templates";
 import { filePriceOf, fileRegionPriceOf, statedPriceOf, storedRegionPriceOf } from "./file-price";
 import { describeGoogleError } from "../google/google-error-descriptor";
+import { PRICING_RULE } from "../bulk-import-contract";
 
 /** Bound on per-row convertRegionPrices fanout. Google's Publisher API
  *  doesn't publish a documented rate limit for read endpoints but bulk
@@ -157,6 +158,8 @@ export interface BulkImportInput {
    *  partial import must not close SUCCESS). The route dedupes them
    *  against `rows`. */
   droppedRows?: Array<{ rowNumber: number; sku: string; reason: string }>;
+  /** H4.4 — the file's price header as the preview read it. Audit only. */
+  priceHeader?: string | null;
   actorEmail: string | null;
   // ⚠ H4 (Manager 2026-10-16): NO app currency. The currency written in the
   //   file is the only price source; this input type deliberately has no
@@ -341,6 +344,101 @@ export async function executeBulkImport(
   }
   const batchId = (batchRow as { id: string }).id;
 
+  // KB P10 — finalize-in-finally (Manager 2026-10-19). From here on the
+  // batch row MUST end in a terminal state, whatever throws — a DB / network
+  // error in a template lookup, a drifted tier, more than BATCH_MAX rows.
+  // Every legitimate exit closes it through finalizeImportBatch; anything
+  // that escapes without doing so is closed FAILED here. Before this, those
+  // exits left import_batches IN_PROGRESS for good.
+  const batch: BatchTracker = { db, batchId, finalized: false };
+  let cause: unknown = null;
+  try {
+    return await runBulkImport(jwt, input, t0, batch);
+  } catch (err) {
+    cause = err;
+    throw err;
+  } finally {
+    if (!batch.finalized) {
+      const skipped = input.rows.filter((r) => r.decision === "skip").length;
+      const total = input.rows.length + (input.droppedRows?.length ?? 0);
+      const why = cause === null ? "no error captured" : describeGoogleError(cause).message;
+      console.error(
+        `[google-iap:bulk-import] batch=${batchId} ended by a throw before it was closed — closing it FAILED (finally) err="${why.replace(/"/g, "'")}"`,
+      );
+      await finalizeImportBatch(batch, {
+        status: "FAILED",
+        rows_success: 0,
+        rows_skipped: skipped,
+        // Nothing was written: the throw sites are all before the push.
+        rows_failed: total - skipped,
+        executed_at: new Date().toISOString(),
+      });
+      // The batch still gets its audit row — with the rule it ran under and
+      // the cause (design §5.4 item 8: every batch records pricing_rule).
+      await appendAction({
+        actionType: "BULK_IMPORT_BATCH",
+        actorEmail: input.actorEmail,
+        targetId: input.appId,
+        payload: {
+          batch_id: batchId,
+          package_name: input.packageName,
+          pricing_source: input.pricingSource,
+          pricing_rule: PRICING_RULE,
+          price_header: input.priceHeader ?? null,
+          rows_total: total,
+          rows_skipped: skipped,
+          rows_failed: total - skipped,
+          closed_by: "finally",
+          ...(cause === null ? {} : googleErrorPayload(cause)),
+          duration_ms: Date.now() - t0,
+        },
+      });
+    }
+  }
+}
+
+/** The import_batches row being run, and whether it has been closed. */
+type BatchTracker = { db: ReturnType<typeof googleIapDb>; batchId: string; finalized: boolean };
+
+/**
+ * THE one way an import_batches row is closed (KB P10 + P2). Marks the batch
+ * finalized BEFORE writing — an attempted close is never overwritten by the
+ * finally's FAILED (that would misreport a batch that did complete) — and
+ * checks the write's `error`: a refused / failed update is logged, never
+ * silent. Never throws.
+ */
+async function finalizeImportBatch(batch: BatchTracker, patch: Record<string, unknown>): Promise<void> {
+  batch.finalized = true;
+  try {
+    const { error } = await batch.db.from("import_batches").update(patch).eq("id", batch.batchId);
+    if (error) {
+      console.error(
+        `[google-iap:bulk-import] import_batches close FAILED batch=${batch.batchId} status=${String(patch.status)} err="${error.message}"`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[google-iap:bulk-import] import_batches close THREW batch=${batch.batchId} status=${String(patch.status)} err="${
+        err instanceof Error ? err.message : String(err)
+      }"`,
+    );
+  }
+}
+
+async function runBulkImport(
+  jwt: JWT,
+  input: BulkImportInput,
+  t0: number,
+  batch: BatchTracker,
+): Promise<BulkImportResult> {
+  const { batchId } = batch;
+  // H4.4 audit — the GT exactly as the FILE stated it, before custom prices
+  // or a tier replace the row's overrides.
+  // Keyed by the row OBJECT (rowNumber is not guaranteed unique in a direct
+  // POST); rows are mutated in place below, so the object is the identity.
+  const fileGtByRow = new Map(input.rows.map((r) => [r, (r.regionOverrides as ParsedRegionOverride[])[0] ?? null]));
+  const customAppliedRows = new Set<BulkImportRow>();
+  const tierAppliedRows = new Set<BulkImportRow>();
   const actionableRows = input.rows.filter((r) => r.decision !== "skip");
   const skippedCount = input.rows.length - actionableRows.length;
 
@@ -443,6 +541,7 @@ export async function executeBulkImport(
       priceDecimal: microsToDecimal(p.priceMicros, 6),
     }));
     customPricedRows += 1;
+    customAppliedRows.add(row);
     console.info(
       `[google-iap:bulk-import:custom-prices] applied sku=${row.sku} source=${input.pricingSource} entries=${priced.length} default=file-price baseline_tier=${row.customPrices.baselineTier ?? "-"}`,
     );
@@ -761,6 +860,7 @@ export async function executeBulkImport(
           currency: e.currency,
           priceDecimal: microsToDecimal(e.priceMicros, 6),
         }));
+        tierAppliedRows.add(row);
         templateMatchCount += 1;
         if (matchStrategy === "sku") templateMatchBySku += 1;
         else if (matchStrategy === "currency_price")
@@ -836,6 +936,8 @@ export async function executeBulkImport(
     regions: Array<{ region: string; currency: string; priceMicros: string }>;
     regionsVersion?: string;
     failed: boolean;
+    /** H4.4 audit — the price Google was asked to convert from. */
+    anchor?: { currency: string; price_micros: string };
     /** H4.3 — what the failure was, so Q7's reason says "temporary — run
      *  this row again later" only when it is (Manager 2026-10-19). */
     failure?: ConversionFailure;
@@ -844,8 +946,11 @@ export async function executeBulkImport(
     candidateRows,
     REGIONS_BOOTSTRAP_CONCURRENCY,
     async (row): Promise<RowBootstrap> => {
+      // Computed before the call so the audit records the anchor Google was
+      // asked to convert from even when the conversion fails.
+      const anchor = filePriceOf({ currency: row.baseCurrency, priceDecimal: row.basePriceDecimal });
+      const anchorAudit = anchor.ok ? { currency: anchor.currency, price_micros: anchor.priceMicros } : undefined;
       try {
-        const anchor = filePriceOf({ currency: row.baseCurrency, priceDecimal: row.basePriceDecimal });
         if (!anchor.ok) throw new Error(anchor.reason); // unreachable: refused above
         const result = await buildRegionMapFromBasePrice(
           jwt,
@@ -857,6 +962,7 @@ export async function executeBulkImport(
           regions: result.regions,
           regionsVersion: result.regionsVersion ?? undefined,
           failed: false,
+          anchor: anchorAudit,
         };
       } catch (err) {
         console.warn(
@@ -864,7 +970,7 @@ export async function executeBulkImport(
             err instanceof Error ? err.message.replace(/"/g, "'") : String(err)
           }"`,
         );
-        return { regions: [], failed: true, failure: classifyConversionFailure(err) };
+        return { regions: [], failed: true, failure: classifyConversionFailure(err), anchor: anchorAudit };
       }
     },
   );
@@ -987,6 +1093,63 @@ export async function executeBulkImport(
   const droppedRows = droppedDetail.length;
   const rowsTotal = input.rows.length + droppedRows;
 
+  // H4.4 — how EACH row sent in `rows` was priced (design §5.4 item 8): its
+  // file currency and price, the anchor Google was asked to convert from,
+  // the catalog version the request pinned, what happened to its GT, and its
+  // outcome. Rows dropped in the file are in `refused_rows` (kind
+  // refused_in_file). `outcome` is final only after the push — rows in the
+  // request start as "in_request" and are resolved below (written /
+  // google_failed / cache_sync_failed / google_rejected): a row Google did
+  // not write must never read "written" (P5).
+  const bootstrapByRow = new Map(candidateRows.map((r, i) => [r, bootstraps[i]]));
+  const sentVersionByRow = new Map(prepared.map((p) => [p.row, p.input.regionsVersion ?? null]));
+  type RowOutcome = string;
+  const perRowPricingByRow = new Map(
+    input.rows.map((r) => {
+      const gt = fileGtByRow.get(r) ?? null;
+      const refusal = r.customPriceRefusal ?? r.priceRefusal ?? null;
+      const outcome: RowOutcome =
+        r.decision === "skip" ? "skipped" : refusal ? refusal.kind : sentVersionByRow.has(r) ? "in_request" : "not_sent";
+      return [
+        r,
+        {
+          row_number: r.rowNumber,
+          sku: r.sku,
+          decision: r.decision,
+          file_currency: r.baseCurrency,
+          file_price: r.basePriceDecimal,
+          gt: gt ? { region: gt.region, currency: gt.currency, price: gt.priceDecimal } : null,
+          gt_outcome: !gt
+            ? "none"
+            : !sentVersionByRow.has(r)
+              ? "not_sent"
+              : customAppliedRows.has(r)
+                ? "replaced_by_custom"
+                : tierAppliedRows.has(r)
+                  ? "replaced_by_tier"
+                  : "kept",
+          // The price Google was asked to convert from (also when it failed).
+          anchor: bootstrapByRow.get(r)?.anchor ?? null,
+          // The catalog version the REQUEST pinned (Hotfix 9): the conversion's,
+          // or — when the conversion gave none — the publisher's static
+          // default REGIONS_VERSION; null when the row was not sent.
+          regions_version: sentVersionByRow.get(r) ?? null,
+          regions_version_from: !sentVersionByRow.has(r)
+            ? null
+            : sentVersionByRow.get(r)
+              ? "conversion"
+              : "publisher_default",
+          outcome,
+        },
+      ] as [BulkImportRow, Record<string, unknown> & { outcome: RowOutcome }];
+    }),
+  );
+  const setOutcome = (row: BulkImportRow, outcome: RowOutcome) => {
+    const rec = perRowPricingByRow.get(row);
+    if (rec) rec.outcome = outcome;
+  };
+  const perRowPricing = input.rows.map((r) => perRowPricingByRow.get(r));
+
   let created = 0;
   let overwritten = 0;
   let failed = 0;
@@ -995,16 +1158,13 @@ export async function executeBulkImport(
     // Nothing to send to Google; close out the batch. Refusals are still
     // recorded so the caller (and audit log) see exactly which rows were
     // rejected and why.
-    await db
-      .from("import_batches")
-      .update({
-        status: refusedRowsDetail.length > 0 ? "FAILED" : "COMPLETE",
-        rows_skipped: skippedCount,
-        rows_success: 0,
-        rows_failed: refusedRowsDetail.length,
-        executed_at: new Date().toISOString(),
-      })
-      .eq("id", batchId);
+    await finalizeImportBatch(batch, {
+      status: refusedRowsDetail.length > 0 ? "FAILED" : "COMPLETE",
+      rows_skipped: skippedCount,
+      rows_success: 0,
+      rows_failed: refusedRowsDetail.length,
+      executed_at: new Date().toISOString(),
+    });
 
     await appendAction({
       actionType: "BULK_IMPORT_BATCH",
@@ -1014,6 +1174,11 @@ export async function executeBulkImport(
         batch_id: batchId,
         package_name: input.packageName,
         pricing_source: input.pricingSource,
+        // H4.4 — the rule this batch was priced under, the file's price header,
+        // and how each row was priced (per_row_pricing, built above).
+        pricing_rule: PRICING_RULE,
+        price_header: input.priceHeader ?? null,
+        per_row_pricing: perRowPricing,
         rows_total: rowsTotal,
         rows_skipped: skippedCount,
         rows_created: 0,
@@ -1065,17 +1230,22 @@ export async function executeBulkImport(
       const product = returned[i];
       if (!product || !product.sku) {
         failed += 1;
+        // Google returned nothing for it — incl. an Overwrite row whose live
+        // read failed, which the publisher leaves out of the call.
+        setOutcome(row, "google_failed");
         continue;
       }
       try {
         await syncIapFromGoogle(input.appId, product);
         if (row.decision === "overwrite") overwritten += 1;
         else created += 1;
+        setOutcome(row, "written");
       } catch (err) {
         console.error(
           `[google-iap:bulk-import] cache_sync_failed sku=${row.sku} err="${err instanceof Error ? err.message : String(err)}"`,
         );
         failed += 1;
+        setOutcome(row, "cache_sync_failed");
       }
     }
 
@@ -1083,28 +1253,23 @@ export async function executeBulkImport(
     // catch branches (one rule for all three updates). The CHECK allows only
     // PENDING / IN_PROGRESS / COMPLETE / FAILED: never write a partial value.
     const rowsFailedTotal = failed + refusedRowsDetail.length;
-    await db
-      .from("import_batches")
-      .update({
-        status: rowsFailedTotal > 0 ? "FAILED" : "COMPLETE",
-        rows_success: created + overwritten,
-        rows_overwritten: overwritten,
-        rows_skipped: skippedCount,
-        rows_failed: rowsFailedTotal,
-        executed_at: new Date().toISOString(),
-      })
-      .eq("id", batchId);
+    await finalizeImportBatch(batch, {
+      status: rowsFailedTotal > 0 ? "FAILED" : "COMPLETE",
+      rows_success: created + overwritten,
+      rows_overwritten: overwritten,
+      rows_skipped: skippedCount,
+      rows_failed: rowsFailedTotal,
+      executed_at: new Date().toISOString(),
+    });
   } catch (err) {
     failed = pushableRows.length;
-    await db
-      .from("import_batches")
-      .update({
-        status: "FAILED",
-        rows_failed: failed + refusedRowsDetail.length,
-        rows_skipped: skippedCount,
-        executed_at: new Date().toISOString(),
-      })
-      .eq("id", batchId);
+    for (const row of pushableRows) setOutcome(row, "google_rejected");
+    await finalizeImportBatch(batch, {
+      status: "FAILED",
+      rows_failed: failed + refusedRowsDetail.length,
+      rows_skipped: skippedCount,
+      executed_at: new Date().toISOString(),
+    });
     await appendAction({
       actionType: "BULK_IMPORT_BATCH",
       actorEmail: input.actorEmail,
@@ -1113,6 +1278,11 @@ export async function executeBulkImport(
         batch_id: batchId,
         package_name: input.packageName,
         pricing_source: input.pricingSource,
+        // H4.4 — the rule this batch was priced under, the file's price header,
+        // and how each row was priced (per_row_pricing, built above).
+        pricing_rule: PRICING_RULE,
+        price_header: input.priceHeader ?? null,
+        per_row_pricing: perRowPricing,
         rows_total: rowsTotal,
         rows_skipped: skippedCount,
         rows_failed: failed,
@@ -1147,6 +1317,11 @@ export async function executeBulkImport(
       batch_id: batchId,
       package_name: input.packageName,
       pricing_source: input.pricingSource,
+      // H4.4 — the rule this batch was priced under, the file's price header,
+      // and how each row was priced (per_row_pricing, built above).
+      pricing_rule: PRICING_RULE,
+      price_header: input.priceHeader ?? null,
+      per_row_pricing: perRowPricing,
       template_matched_rows: templateMatchCount,
       // Hotfix 15 → Hotfix 16: split per match strategy so a future
       // audit can tell how many rows used the documented SKU-identifier

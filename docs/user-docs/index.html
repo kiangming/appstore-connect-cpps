@@ -1097,7 +1097,7 @@
           <a class="nav-item" data-page="google-edit-iap" data-keywords="google edit item chỉnh sửa update unified pricing live stored sync">
             <span class="nav-item-label">Chỉnh sửa item</span>
           </a>
-          <a class="nav-item" data-page="google-bulk-import" data-keywords="google bulk import nhập hàng loạt csv excel">
+          <a class="nav-item" data-page="google-bulk-import" data-keywords="google bulk import nhập hàng loạt csv excel price (usd) price (vnd) currency giá từ chối tu choi not imported not sent refused preview_outdated reload custom prices 26.000 giá 0 gia 0">
             <span class="nav-item-label">Bulk Import</span>
           </a>
           <a class="nav-item" data-page="google-pricing-matrix" data-keywords="google pricing matrix bảng giá bang gia template export xlsx excel xuất file xuat file csv highlight differences amber cam ô trống o trong dấu chấm dau cham freeze cố định cot tier">
@@ -5314,8 +5314,9 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
 
         <h2 class="section-title">Base price &amp; Tier — nguồn duy nhất quyết định giá mọi nước (Cycle 44)</h2>
         <p><strong>Base price là nguồn DUY NHẤT</strong> quyết định giá của khoảng 170 nước. Chọn tier chỉ là
-        cách nhanh để đặt base — base sẽ nhảy theo <strong>giá USD</strong> của tier đó (template giá của Google
-        luôn dùng cột <code class="inline">Price (USD)</code> cố định, nên con số USD là giá chuẩn của tier).</p>
+        cách nhanh để đặt base — base sẽ nhảy theo <strong>giá USD</strong> của tier đó (tier không có giá USD thì lấy
+        giá theo currency của form, không có nữa thì giá đầu tiên của tier). Đây là form 1 item — file Bulk Import thì
+        lấy giá theo currency ghi ở header <code class="inline">Price (XXX)</code> của chính file đó.</p>
         <p>Cả hai thao tác đều có nghĩa <em>"tính lại giá tất cả các nước"</em>, và <strong>lần sau ghi đè lần
         trước</strong>, lặp bao nhiêu lần cũng được:</p>
         <table class="docs-table">
@@ -5361,6 +5362,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <li>Chỉ khi <strong>bạn tự gõ</strong> vào dòng đó nó mới thành lỗi chặn — vì lúc đó giá là của bạn,
           bạn sửa được.</li>
           <li>Muốn đổi TWD 6.30 thành số khác? Sửa <strong>có chủ đích</strong> trên form hoặc trên Play Console.</li>
+          <li>Giá bạn gõ theo <strong>cùng luật</strong> với Bulk Import (từ 10/2026): giá <code class="inline">0</code> bị chặn; ở currency không có số lẻ (VND, IDR, KRW, JPY, TWD…) gõ <code class="inline">26.000</code> hoặc <code class="inline">26,000</code> bị chặn vì có thể là dấu phân cách nghìn — gõ <code class="inline">26000</code>. Giá tool tự điền sẵn (vd <code class="inline">26000</code>) không bị chặn.</li>
         </ul>
 
         <h2 class="section-title">Update báo "no changes" dù bạn có sửa (Cycle 44)</h2>
@@ -5397,15 +5399,18 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
       <section class="page" data-page="google-bulk-import">
         <div class="meta-strip">
           <span class="meta-chip module-google">Google IAP Management</span>
-          <span class="meta-chip cycle">Hotfix 28 · Cycle 43 cross-currency</span>
+          <span class="meta-chip cycle">Hotfix 28 · H4 (10/2026) giá chỉ theo currency của file</span>
           <span class="meta-chip">Wizard · 4 bước</span>
         </div>
         <h1 class="page-title">Bulk Import (Google)</h1>
         <p class="page-lede">
           Wizard 4 bước tương tự <a class="inline-link" data-goto="apple-bulk-import">Apple Bulk Import</a>,
           khác biệt chính ở <strong>tier disambiguation trong bước Preview</strong> (Google không có "tier" thẳng — tool match
-          price → tier candidates → user chọn per-row) và Hotfix 28 per-row currency validation.
-          Cycle 43 bổ sung hỗ trợ <strong>cross-currency</strong>: file dùng USD nhưng app default currency là VND (hoặc bất kỳ non-USD).
+          price → tier candidates → user chọn per-row).
+          <strong>Từ 10/2026 (H4): giá chỉ lấy từ file</strong> — currency ghi ở header <code class="inline">Price (XXX)</code>
+          là nguồn giá duy nhất; currency mặc định của app <strong>không</strong> tham gia định giá, nên không cần khai
+          currency của app trước khi import. Dòng có giá không gửi đúng được hiện ngay trong Preview kèm lý do, và có thể
+          push phần còn lại sau khi xác nhận (xem mục “Giá lấy từ đâu &amp; dòng bị từ chối” bên dưới).
         </p>
 
         <h2 class="section-title">4 bước wizard</h2>
@@ -5414,8 +5419,8 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <tbody>
             <tr><td>1. Pricing source</td><td>Chọn nguồn giá cho cả batch</td><td>Default Template · App-specific Template · Google Conversion</td></tr>
             <tr><td>2. Upload</td><td>Drag &amp; drop file .xlsx theo template</td><td>Nút Download template ở header wizard (mọi bước) + trang Apps list</td></tr>
-            <tr><td>3. Preview</td><td>Per-row validation + tier disambiguation + currency check (Hotfix 28)</td><td>New/Exists · Overwrite/Skip · dropdown chọn tier (Cycle 35-36) · <strong>Custom prices per item</strong></td></tr>
-            <tr><td>4. Execute</td><td>Tạo/ghi đè items lên Google Play API</td><td>MỘT lệnh batchUpdate (allowMissing) · cap 100 rows/lần</td></tr>
+            <tr><td>3. Preview</td><td>Kiểm giá từng dòng (dòng bị từ chối hiện ngay trong bảng, kèm lý do) + tier disambiguation + GT sẽ ra sao</td><td>New/Exists · Overwrite/Skip · dropdown chọn tier (Cycle 35-36) · <strong>Custom prices per item</strong> · hàng <em>Not imported</em></td></tr>
+            <tr><td>4. Execute</td><td>Tạo/ghi đè items lên Google Play API</td><td>MỘT lệnh batchUpdate (allowMissing) · cap 100 rows/lần · có dòng bị từ chối ⇒ hỏi xác nhận rồi push phần còn lại · không còn fallback sang API cũ</td></tr>
           </tbody>
         </table>
 
@@ -5429,8 +5434,8 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <p style="margin-top:8px;">Số cột tuỳ lựa chọn: <strong>4 cột core luôn có</strong> + 2 cột cho mỗi locale đã chọn (chọn đủ 82 = 168 cột). Tên file: <code class="inline">…-template-core.xlsx</code> (không chọn locale), <code class="inline">…-template-N-locales.xlsx</code> (chọn N), <code class="inline">google-iap-bulk-import-template.xlsx</code> (đủ 82). Hai lần tải cùng số N nhưng khác locale sẽ trùng tên — browser tự thêm "(1)"; mở sheet Notes để biết file đó có locale nào. Cột core:</p>
               <ul>
                 <li><code class="inline">Product ID</code> — SKU, unique per app (bắt buộc)</li>
-                <li><code class="inline">Price (USD)</code> — <strong>giá USD</strong> (bắt buộc). ⚠️ LUÔN là USD, kể cả khi app dùng VND — tool tự resolve giá app-currency từ pricing template (Cycle 43). Vd: <code class="inline">0.99</code> nghĩa là 0.99 USD, KHÔNG phải 0.99 VND.</li>
-                <li><code class="inline">GT Price</code> + <code class="inline">GT Currency</code> — <strong>GIÁ bán thật</strong> cho region của currency đó (vd: <code class="inline">26000</code> + <code class="inline">VND</code> = giá 26.000₫ áp cho region VN). Đây <strong>KHÔNG phải tỷ giá quy đổi</strong>. Không bắt buộc; nếu điền thì phải điền cả cặp.</li>
+                <li><code class="inline">Price (USD)</code> — giá của item (bắt buộc), <strong>theo đúng currency ghi trong header</strong>. Template tải về dùng <code class="inline">Price (USD)</code>: <code class="inline">0.99</code> nghĩa là 0.99 USD, kể cả khi app dùng VND — currency của app <strong>không</strong> được dùng. Muốn nhập theo currency khác thì đổi header, vd <code class="inline">Price (VND)</code> rồi ghi <code class="inline">26000</code> (currency phải là loại Google Play bán). File phải có <strong>đúng MỘT</strong> cột giá: header không ghi currency (<code class="inline">Price</code> / <code class="inline">Default Price</code> / <code class="inline">Base Price</code>), cột giá thứ hai, hoặc header khác có chữ "price" (vd <code class="inline">Price USD</code>) ⇒ <strong>cả file bị từ chối</strong> — sửa header thành <code class="inline">Price (USD)</code> / <code class="inline">Price (VND)</code>…</li>
+                <li><code class="inline">GT Price</code> + <code class="inline">GT Currency</code> — <strong>GIÁ bán thật</strong> cho region của currency đó (vd: <code class="inline">26000</code> + <code class="inline">VND</code> = giá 26 nghìn ₫ áp cho region VN). Đây <strong>KHÔNG phải tỷ giá quy đổi</strong>. Không bắt buộc; nếu điền thì phải điền cả cặp — chỉ điền một ô ⇒ dòng bị từ chối. GT Currency phải nằm trong danh sách GT và là currency Google thật sự bán ở nước đó (vd <code class="inline">ARS</code>: Google bán Argentina bằng USD; <code class="inline">CNY</code>: Google không bán ở CN) — nếu không, dòng bị từ chối. Tier khớp với dòng, hoặc custom prices, sẽ <strong>thay</strong> GT — Preview ghi rõ GT của từng dòng <em>will be sent</em> / <em>replaced by tier</em> / <em>replaced by custom</em>. Hai header phải viết đúng <code class="inline">GT Price</code> / <code class="inline">GT Currency</code> và có cả hai cột (hoặc không cột nào); nếu không, cả file bị từ chối.</li>
                 <li><code class="inline">Title (Locale)</code> + <code class="inline">Description (Locale)</code> — một cặp cột cho mỗi locale bạn chọn ở form (0–82 cặp, không bắt buộc)</li>
               </ul>
               <div class="callout callout-warning" style="margin-top:8px;">
@@ -5470,9 +5475,10 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
             <div class="step-body"><p>Drag &amp; drop file <code class="inline">.xlsx</code> đã điền, hoặc click chọn file.</p></div>
           </li>
           <li class="step">
-            <div class="step-title">Preview: validation + tier disambiguation + currency check (Step 3)</div>
+            <div class="step-title">Preview: dòng bị từ chối + tier disambiguation + GT (Step 3)</div>
             <div class="step-body">
-              <p>Mỗi row hiển thị trạng thái <strong>New / Exists</strong> — với SKU đã tồn tại phải chọn <strong>Overwrite</strong> hoặc <strong>Skip</strong> (Continue bị khóa tới khi đủ quyết định). Tool match từng row với tier candidates: khi có nhiều candidates (vd: <code class="inline">0.99 USD</code> match Tier 1 và Alternate Tier A), chọn qua dropdown per-row (Cycle 35-36); rows không ambiguity → Tier read-only. Hotfix 28: validate currency vs region per-row — vd row mang giá <code class="inline">USD</code> nhưng app cấu hình region <code class="inline">JP</code> → warning; fix file rồi re-upload, hoặc bỏ qua warning. Panel warnings (amber) cũng hiển thị message "example row(s) skipped" nếu file còn dòng sample.</p>
+              <p>Mỗi row hiển thị trạng thái <strong>New / Exists</strong> — với SKU đã tồn tại phải chọn <strong>Overwrite</strong> hoặc <strong>Skip</strong> (nút <strong>Push to Google Play</strong> bị khóa tới khi đủ quyết định). Tool match từng row với tier: trước hết tier đặt tên theo SKU; nếu không có thì tier có giá <em>theo currency của file</em> bằng giá trong file. Khi có nhiều candidates (vd: <code class="inline">0.99 USD</code> match Tier 1 và Alternate Tier A), chọn qua dropdown per-row (Cycle 35-36); rows không ambiguity → Tier read-only; không tier nào khớp → <em>Auto-converted by Google</em> (Google quy đổi từ giá trong file). Cột Tier ghi <em>Tier lookup failed — run Preview again</em> nghĩa là tool chưa tra được tier (không phải "không có tier") — chạy Preview lại trước khi push. Dòng có GT có thêm một dòng nói GT sẽ ra sao: <em>will be sent</em> / <em>replaced by tier</em> / <em>replaced by custom</em> / <em>depends on the tier you pick</em>. Ô ghi chú <em>Prices come only from the file</em> ở đầu wizard (hiện ở mọi bước) tóm tắt các luật giá. Panel warnings (amber) hiển thị message "example row(s) skipped" nếu file còn dòng sample.</p>
+              <p style="margin-top:8px;"><strong>Dòng bị từ chối nằm ngay trong bảng</strong>, đánh dấu <em>Not imported</em> kèm lý do (khung đỏ phía trên ghi tổng số). Một dòng bị từ chối khi giá hoặc GT không gửi đúng được như đã ghi — xem bảng lý do ở mục <em>Giá lấy từ đâu &amp; dòng bị từ chối</em> bên dưới. Dòng bị từ chối <strong>không chặn</strong> phần còn lại: sửa file rồi upload lại, hoặc push phần còn lại (Step 4).</p>
             </div>
           </li>
           <li class="step">
@@ -5482,27 +5488,28 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
 
               <p style="margin-top:8px;"><strong>Ý nghĩa của “custom” khác nhau theo nguồn giá — đây là điểm dễ sai nhất:</strong></p>
               <table class="docs-table" style="margin-top:8px;">
-                <thead><tr><th>Nguồn giá</th><th>Custom nghĩa là gì</th><th>Bắt buộc có giá theo currency của app?</th></tr></thead>
+                <thead><tr><th>Nguồn giá</th><th>Custom nghĩa là gì</th><th>Giá trong file còn vai trò gì?</th></tr></thead>
                 <tbody>
                   <tr>
                     <td><code class="inline">Default Template</code><br><code class="inline">App-specific Template</code></td>
                     <td><strong>THAY THẾ toàn bộ</strong> bảng giá của tier. Dialog điền sẵn giá của tier để bạn sửa.</td>
-                    <td><strong>CÓ.</strong> Vì custom thay thế cả bộ, Google không còn chỗ nào khác để lấy <code class="inline">defaultPrice</code>. Thiếu → row bị từ chối với <code class="inline">custom_no_app_currency_entry</code>. Dialog chặn Save ngay để bạn không phát hiện lúc push.</td>
+                    <td><code class="inline">defaultPrice</code> <strong>luôn là giá trong file</strong>, và là gốc để Google quy đổi cho mọi nước không có giá custom (nước tier không có, hoặc nước bạn xóa trắng). <strong>Không</strong> bắt buộc có giá theo currency nào cụ thể.</td>
                   </tr>
                   <tr>
                     <td><code class="inline">Google Conversion</code></td>
                     <td><strong>PHỦ LÊN một phần</strong> (sparse overlay). Chỉ đặt những nước bạn muốn; mọi nước để trống vẫn nhận giá Google tự quy đổi. Dialog mở ra <strong>trống hoàn toàn</strong>, không điền sẵn gì.</td>
-                    <td><strong>KHÔNG.</strong> <code class="inline">defaultPrice</code> lấy từ giá gốc trong file Excel. Bạn có thể override 3 nước không nước nào dùng currency của app — hoàn toàn hợp lệ. Nếu bạn <em>có</em> đặt giá cho nước dùng currency của app thì giá đó <strong>thắng</strong> giá gốc.</td>
+                    <td>Như dòng trên: <code class="inline">defaultPrice</code> luôn là giá trong file; mọi nước để trống nhận giá Google quy đổi từ giá đó. Giá custom chỉ thắng cho <strong>đúng nước</strong> của nó — kể cả nước dùng currency của app, nó không thay <code class="inline">defaultPrice</code>.</td>
                   </tr>
                 </tbody>
               </table>
 
+              <p style="margin-top:8px;"><em>Thay đổi 10/2026 (H4): trước đây, dưới nguồn template, custom bắt buộc có giá theo currency của app (thiếu → dòng bị từ chối <code class="inline">custom_no_app_currency_entry</code>, dialog chặn Save). Luật đó đã bỏ ở cả dialog lẫn server.</em></p>
               <p style="margin-top:8px;">Các quy tắc chung cho cả 3 nguồn:</p>
               <ul>
                 <li><strong>Currency cố định theo quốc gia</strong> — hiển thị dạng chip, KHÔNG chọn được. Đây là đồng tiền thanh toán Google quy định cho thị trường đó.</li>
-                <li><strong>Ô để trống KHÔNG phải là “không có giá”</strong> — hiển thị <code class="inline">inherits — Google conversion</code>, nghĩa là khi push Google sẽ tự quy đổi cho nước đó. Bấm <strong>set price</strong> để mở ô nhập.</li>
-                <li><strong>Save bị khóa khi sai precision</strong> — VND/JPY chỉ nhận số nguyên, KWD 3 số lẻ. Cùng bộ rule với form Edit item, không phải rule riêng.</li>
-                <li><strong>Cảnh báo (không chặn) khi giá thấp hơn mốc tham chiếu ≥90%</strong> — mốc tham chiếu là <em>giá của tier</em> khi dùng template, hoặc <em>giá Google tự quy đổi</em> khi dùng Google Conversion. Tool không có bảng giá sàn từng nước; Google chỉ báo lỗi lúc push và <strong>không nói row nào</strong>, nên một giá dưới sàn có thể làm hỏng cả batch.</li>
+                <li><strong>Ô để trống KHÔNG phải là “không có giá”</strong> — hiển thị <code class="inline">inherits — Google conversion</code>, nghĩa là khi push Google sẽ tự quy đổi cho nước đó <strong>từ giá trong file</strong>. Bấm <strong>set price</strong> để mở ô nhập.</li>
+                <li><strong>Save bị khóa khi giá sai luật</strong> — nhiều số lẻ hơn currency cho phép (VND/JPY chỉ nhận số nguyên, KWD 3 số lẻ); giá <code class="inline">0</code>; hoặc có “.” / “,” ở currency không có số lẻ (VND, IDR, KRW, JPY, TWD…): gõ <code class="inline">26.000</code> bị chặn vì có thể là dấu phân cách nghìn — gõ <code class="inline">26000</code>. Cùng MỘT bộ luật với cột giá trong file và form Edit item. Khi push, server kiểm lại: giá sai ⇒ dòng bị từ chối (<code class="inline">custom_invalid_price</code>), không gửi giá nào khác thay.</li>
+                <li><strong>Cảnh báo (không chặn) khi giá thấp hơn mốc tham chiếu ≥90%</strong> — mốc tham chiếu là <em>giá của tier</em> khi row có tier, nếu không thì <em>giá Google tự quy đổi</em> từ giá trong file. Tool không có bảng giá sàn từng nước; Google chỉ báo lỗi lúc push và <strong>không nói row nào</strong>, nên một giá dưới sàn có thể làm hỏng cả batch.</li>
               </ul>
 
               <p style="margin-top:8px;">Sau khi lưu, row hiện chip <code class="inline">Custom · N countries</code> kèm <strong>View / edit</strong> (mở lại đúng giá đã lưu) và <strong>Clear</strong> (bỏ custom, trả row về nguồn giá của batch). Trong dialog nút tương ứng là <strong>Clear custom prices</strong>. Giá custom là <strong>tuyệt đối</strong> — không còn gắn với template và không đổi khi bạn đổi template.</p>
@@ -5510,7 +5517,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
               <div class="callout callout-warning">
                 <div class="callout-title">⚠️ Custom prices sống ở đâu, mất khi nào</div>
                 <p>
-                  <strong>Giữ nguyên và vẫn được gửi</strong> khi: quay lại Step 1 <strong>đổi nguồn giá</strong> (kể cả sang <code class="inline">Google Conversion</code>) rồi preview lại — dialog sẽ ghi “no longer tied to a template”; upload file khác nhưng SKU vẫn còn trong file (banner nêu rõ SKU nào giữ, SKU nào bị bỏ).<br>
+                  <strong>Giữ nguyên và vẫn được gửi</strong> khi: quay lại Step 1 <strong>đổi nguồn giá</strong> (kể cả sang <code class="inline">Google Conversion</code>) rồi preview lại — dialog sẽ ghi “no longer tied to a template”; upload file khác nhưng SKU vẫn là dòng import được trong file mới (banner nêu rõ SKU nào giữ, SKU nào bị bỏ — SKU vắng mặt, hoặc thành dòng <em>Not imported</em> trong file mới, thì custom của nó bị bỏ).<br>
                   <strong>Giữ nhưng KHÔNG gửi</strong> khi: row được set <code class="inline">Skip</code> — chip xám kèm ghi chú “inactive — this row is set to Skip, so nothing is sent”; bỏ Skip là dùng lại được. Đây là <strong>trường hợp duy nhất</strong> làm custom bị vô hiệu.<br>
                   <strong>Mất</strong> khi: <strong>refresh trang</strong> (toàn bộ state wizard nằm ở trình duyệt — sẽ có cảnh báo của browser trước), hoặc bấm <strong>Import another</strong> (đó là batch mới).
                 </p>
@@ -5519,8 +5526,9 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </li>
           <li class="step">
             <div class="step-title">Execute (Step 4)</div>
-            <div class="step-body"><p>Click <strong>Commit</strong>. Tool gửi <strong>MỘT</strong> lệnh <code class="inline">batchUpdate</code> (allowMissing — tạo mới + ghi đè trong cùng 1 call) lên Google Play API. Kết quả hiển thị Created / Overwritten / Skipped / Failed.</p>
-            <p style="margin-top:8px;"><strong>Giới hạn: tối đa 100 dòng import được mỗi lần</strong> (đếm sau khi trừ dòng Skip, dòng sample và dòng bị refuse — không phải tổng dòng trong file). Nếu vượt, tool <strong>báo lỗi rõ ràng khi Commit và KHÔNG gửi gì lên Google</strong> (không cắt bớt, không import một phần) — chia file nhỏ rồi chạy lại. Lưu ý: bước Preview <em>không</em> chặn trước giới hạn này; lỗi chỉ xuất hiện khi bấm Commit.</p></div>
+            <div class="step-body"><p>Click <strong>Push to Google Play</strong>. Nếu Preview có dòng bị từ chối, tool hỏi xác nhận trước (<em>"Push without the rows that cannot be imported?"</em> — liệt kê từng dòng bị bỏ kèm lý do): <strong>Go back</strong> thì không gửi gì, <strong>Leave them out and push</strong> thì gửi phần còn lại. Tool gửi <strong>MỘT</strong> lệnh <code class="inline">batchUpdate</code> (allowMissing — tạo mới + ghi đè trong cùng 1 call) lên Google Play API. Nếu Google từ chối lệnh, lỗi của Google hiện nguyên văn — tool <strong>không còn</strong> thử lại bằng API cũ <code class="inline">inappproducts.batchUpdate</code>.</p>
+            <p style="margin-top:8px;">Kết quả: Created / Overwritten / Skipped / Failed / <strong>Not sent</strong> / Custom. Mọi dòng không được gửi đều liệt kê theo tên kèm lý do, chia hai nhóm: <em>left out — refused in the file</em> (bị từ chối ở Preview, bạn đã xác nhận bỏ) và <em>refused at push</em> (bị từ chối lúc push, vd quy đổi lỗi hoặc tier hỏng). Còn dòng nào chưa được ghi thì tiêu đề là <em>"Bulk import finished — N row(s) not imported"</em> (hoặc <em>"Nothing was imported"</em>), và trạng thái trên Hub (nếu bật Hub Tracking) là PARTIAL — hoặc FAILED nếu không dòng nào được ghi — không bao giờ báo thành công trọn vẹn.</p>
+            <p style="margin-top:8px;"><strong>Giới hạn: tối đa 100 dòng import được mỗi lần</strong> (đếm sau khi trừ dòng Skip, dòng sample, dòng bị từ chối trong file và dòng bị từ chối vì giá / tier / custom — không phải tổng dòng trong file). Nếu vượt, tool <strong>báo lỗi rõ ràng khi bấm Push to Google Play và KHÔNG gửi gì lên Google</strong> (không cắt bớt, không import một phần) — chia file nhỏ rồi chạy lại. Lưu ý: bước Preview <em>không</em> chặn trước giới hạn này; lỗi chỉ xuất hiện khi bấm Push.</p></div>
           </li>
         </ol>
 
@@ -5597,34 +5605,49 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           </div>
         </div>
 
-        <h2 class="section-title">Nhập giá USD vào app VND (Cross-currency — Cycle 43)</h2>
-        <p>Từ Cycle 43, file Excel không cần phải dùng đúng currency của app. Tool tự resolve giá app-currency từ pricing template:</p>
+        <h2 class="section-title">Giá lấy từ đâu &amp; dòng bị từ chối (H4 — 10/2026)</h2>
+        <p><strong>Currency ghi trong file là nguồn giá duy nhất.</strong> Currency mặc định của app không tham gia bất kỳ bước định giá nào của Bulk Import: không quy đổi chéo currency, không lấy currency của app làm dự phòng, không cần khai currency của app trước khi import. Cùng một file cho ra cùng một bộ giá gửi Google, dù app dùng USD, VND, TWD hay chưa có currency. Ô <em>Prices come only from the file</em> ở đầu wizard (hiện ở mọi bước) tóm tắt đúng các luật này.</p>
         <table class="docs-table">
-          <thead><tr><th>Trường hợp</th><th>Tool xử lý thế nào</th></tr></thead>
+          <thead><tr><th>Nguồn giá</th><th>Dòng nhận giá thế nào</th></tr></thead>
           <tbody>
             <tr>
-              <td><strong>Single match</strong><br><small>USD anchor → 1 tier candidate trong template</small></td>
-              <td>Auto-resolve: tool điền giá VND tương ứng từ template. Không cần action từ user.</td>
+              <td><code class="inline">Default Template</code><br><code class="inline">App-specific Template</code></td>
+              <td>Tra tier: trước hết tier đặt tên theo Product ID; không có thì tier có giá <strong>theo currency của file</strong> bằng giá trong file (nhiều tier khớp ⇒ chọn ở dropdown). Khớp ⇒ dùng giá của tier (thay cả GT); nước tier không có ⇒ Google quy đổi từ giá trong file. Không khớp tier nào ⇒ giống Google Conversion (GT vẫn được gửi).</td>
             </tr>
             <tr>
-              <td><strong>Multi-match</strong><br><small>USD anchor → nhiều tier candidates</small></td>
-              <td>Bước Preview (tier disambiguation): user chọn tier từ dropdown (giống rows ambiguous thông thường). Tool hiển thị cả giá VND từng option.</td>
-            </tr>
-            <tr>
-              <td><strong>No match / No template</strong><br><small>Không tìm thấy USD anchor trong template, hoặc chưa upload template</small></td>
-              <td>Row bị <strong>refuse</strong> — hiển thị error, không push lên Google. Upload template trước hoặc dùng VND price trực tiếp trong file.</td>
+              <td><code class="inline">Google Conversion</code></td>
+              <td>Mọi nước được Google quy đổi từ giá trong file; GT (nếu có) ghi đè nước của nó. Giá US chỉ bằng đúng giá trong file khi file là <code class="inline">Price (USD)</code>.</td>
             </tr>
           </tbody>
         </table>
-        <div class="callout callout-tip">
-          <div class="callout-title">💡 Cách bật cross-currency</div>
-          <p>Không cần cài đặt gì. Nếu file Excel có cột <code class="inline">Price (USD)</code> (header ghi rõ currency — template tải từ tool luôn dùng header này) hoặc giá USD không vừa VND precision → tool tự detect cross-currency mode. Điều kiện cần: đã upload <a class="inline-link" data-goto="google-pricing-matrix">Pricing template</a> cho app này.</p>
+        <p style="margin-top:8px;">Custom prices (nếu đặt) thay giá của tier / GT cho dòng đó; <code class="inline">defaultPrice</code> và gốc quy đổi vẫn luôn là giá trong file.</p>
+
+        <h3 class="section-title" style="font-size:1rem; margin-top:1rem;">Dòng bị từ chối — lý do và cách sửa</h3>
+        <p>Dòng bị từ chối <strong>không bao giờ được gửi với một giá khác</strong> thay vào. Bị từ chối ở Preview ⇒ hiện trong bảng (<em>Not imported</em>), và nếu bạn push phần còn lại thì liệt kê lại ở màn kết quả (<em>left out — refused in the file</em>); bị từ chối lúc push ⇒ liệt kê ở màn kết quả (<em>refused at push</em>).</p>
+        <table class="docs-table">
+          <thead><tr><th>Khi nào</th><th>Lý do</th><th>Cách sửa</th></tr></thead>
+          <tbody>
+            <tr><td>Upload — cả file</td><td>Không có cột <code class="inline">Product ID</code> hoặc không có cột <code class="inline">Price (XXX)</code>; header giá không ghi currency (<code class="inline">Price</code> / <code class="inline">Default Price</code> / <code class="inline">Base Price</code>); hơn một cột giá; header khác có chữ "price"; currency không phải loại Google Play bán; có cột <code class="inline">GT Price</code> mà thiếu cột <code class="inline">GT Currency</code> (hoặc ngược lại), hoặc header GT sai hoa/thường</td><td>Sửa header thành <code class="inline">Price (USD)</code> / <code class="inline">Price (VND)</code>…, giữ đúng một cột giá; viết đúng <code class="inline">GT Price</code> / <code class="inline">GT Currency</code></td></tr>
+            <tr><td>Preview — từng dòng</td><td>Ô giá trống; dòng có dữ liệu mà không có Product ID; giá (hoặc GT Price) bằng <code class="inline">0</code>; nhiều số lẻ hơn currency cho phép (vd <code class="inline">30.5</code> cho TWD); ô <strong>chữ</strong> có “.” / “,” ở currency không có số lẻ (VND, IDR, KRW, JPY, TWD, HUF…) — <code class="inline">26.000</code> có thể là 26 nghìn; GT chỉ điền một ô; GT Currency ngoài danh sách GT, hoặc Google không bán nước đó bằng currency ấy</td><td>Sửa ô trong file rồi upload lại — hoặc push phần còn lại và import các dòng này sau. Ô <strong>SỐ</strong> trong Excel không bị luật “26.000” (kể cả khi Excel hiển thị dấu chấm nghìn): chỉ ô dạng chữ bị kiểm</td></tr>
+            <tr><td>Push — <code class="inline">tier_price_invalid</code></td><td>Tier khớp với dòng chứa giá không gửi được (0, hoặc sai số lẻ của currency)</td><td>Sửa tier ở Settings → Pricing Templates rồi import lại dòng đó</td></tr>
+            <tr><td>Push — <code class="inline">conversion_failed</code></td><td>File không phải USD và Google quy đổi lỗi (hoặc không trả giá US). Lý do nói rõ một trong ba lớp: <em>tạm thời</em> (mạng / 5xx / 408 / 429 — chạy lại dòng đó sau); <em>Google báo giá không hợp lệ</em> (400 INVALID_ARGUMENT — kiểm giá); <em>vấn đề quyền / tài khoản / app</em> (4xx khác — sửa quyền rồi chạy lại). File <code class="inline">Price (USD)</code> vẫn được gửi, giá US = giá trong file</td><td>Làm theo đúng lớp lỗi ghi trong lý do</td></tr>
+            <tr><td>Push — <code class="inline">custom_invalid_price</code></td><td>Giá custom sai luật (server kiểm lại bằng cùng luật với dialog), hoặc bộ custom rỗng / thiếu nước, currency hay giá</td><td>Mở lại <strong>View / edit</strong>, sửa giá</td></tr>
+            <tr><td>Push — <code class="inline">file_price_invalid</code> · <code class="inline">price_build_failed</code></td><td>Lưới an toàn phía server cho giá trong file (bình thường Preview đã chặn trước)</td><td>Chạy Preview lại; vẫn gặp thì báo team dev kèm lý do</td></tr>
+          </tbody>
+        </table>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Đã thay đổi 10/2026 — “cross-currency” của Cycle 43 không còn</div>
+          <p>Trước H4, file <code class="inline">Price (USD)</code> nhập vào app VND được “resolve” sang giá theo currency của app qua pricing template, và dòng không tìm được giá theo currency của app bị từ chối. Cách đó đã bỏ: giá chỉ đọc theo currency của file. Hệ quả: <strong>dòng lệch currency trước đây bị từ chối nay được ghi</strong> (Google quy đổi từ giá trong file); header không ghi currency không còn được hiểu là currency của app mà làm cả file bị từ chối.</p>
         </div>
 
         <h2 class="section-title">Tips và pitfalls</h2>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Sau mỗi lần cập nhật tool: RELOAD trang Bulk Import</div>
+          <p>Tab mở từ trước bản cập nhật vẫn chạy code cũ. Với bản cập nhật H4 (10/2026) — hoặc bất kỳ bản nào đổi luật định giá — bấm Push từ tab đó sẽ bị từ chối với <code class="inline">PREVIEW_OUTDATED</code> (<em>"The tool was updated since this page was opened… Nothing was sent. Reload this page, then upload the file and run Preview again."</em>) — không có gì được ghi lên Google. Upload lại trong cùng tab <strong>không</strong> đủ: phải reload trang trước. Các bản cập nhật khác KHÔNG chặn tab cũ — nên luôn reload sau mỗi lần cập nhật.</p>
+        </div>
         <div class="callout callout-info">
-          <div class="callout-title">ℹ️ Hotfix 28 — currency validation</div>
-          <p>Trước Hotfix 28, currency mismatch chỉ surface lúc Execute (Google reject 400). Hotfix 28 validate per-row ở Step 3 Preview → user fix trước khi commit.</p>
+          <div class="callout-title">ℹ️ Giá được kiểm hai lần: ở Preview và lúc push</div>
+          <p>Preview từ chối dòng có giá sai ngay khi upload (số lẻ theo currency, giá 0, “26.000” ở currency không có số lẻ, và GT). Lúc push, server kiểm lại từng dòng bằng cùng luật: dòng sai bị từ chối riêng, không làm hỏng cả batch. (Bước kiểm “currency mismatch” của Hotfix 28 không còn: currency của app không tham gia định giá.)</p>
         </div>
         <div class="callout callout-warning">
           <div class="callout-title">⚠️ Items tạo ra INACTIVE</div>
@@ -5632,7 +5655,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         </div>
         <div class="callout callout-info">
           <div class="callout-title">ℹ️ Bulk Import cho items đã tồn tại trên Google (overwrite)</div>
-          <p>Khi import SKU đã có trên Google Play (decision = overwrite), tool fetch giá trị hiện tại của item từ Google trước khi patch — đảm bảo không mất purchase option nào. Nếu fetch thất bại cho 1 row thì row đó fail riêng, các rows khác vẫn tiếp tục.</p>
+          <p>Khi import SKU đã có trên Google Play (decision = overwrite), tool fetch giá trị hiện tại của item từ Google trước khi patch — đảm bảo không mất purchase option nào. Nếu fetch thất bại cho 1 row thì row đó fail riêng, các rows khác vẫn tiếp tục. Giá của purchase option bị ghi đè được tính theo <strong>đúng cùng luật</strong> với dòng tạo mới (chỉ từ giá trong file, cùng tier / GT / custom); các purchase option khác giữ nguyên.</p>
         </div>
       </section>
 
@@ -5855,6 +5878,10 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
         <div class="callout callout-warning">
           <div class="callout-title">⚠️ regionsVersion drift</div>
           <p>Khi Google đổi catalog (BGN→EUR Jan 2026), giá cũ trong template vẫn dùng được nhưng có thể stale. Resync template sau khi Google announce changes — tool sẽ refresh regionsVersion tự động.</p>
+        </div>
+        <div class="callout callout-warning">
+          <div class="callout-title">⚠️ Giá 0 hoặc sai số lẻ trong template ⇒ Bulk Import từ chối dòng khớp tier đó</div>
+          <p>Lúc upload template, tool <strong>chưa</strong> kiểm giá theo currency. Một tier có giá <code class="inline">0</code> hoặc nhiều số lẻ hơn currency cho phép (vd <code class="inline">30.5</code> TWD) vẫn được lưu, nhưng mọi dòng <a class="inline-link" data-goto="google-bulk-import">Bulk Import</a> khớp tier đó sẽ bị từ chối lúc push (<code class="inline">tier_price_invalid</code>, lý do nêu tên tier và nước); các dòng khác vẫn được gửi. Riêng ô VND/JPY… ghi dạng chữ <code class="inline">26.000</code> được lưu thành <strong>26</strong> và lúc push <strong>không</strong> phát hiện được — kiểm kỹ ô giá trước khi upload template.</p>
         </div>
 
         <h2 class="section-title">Tính năng liên quan</h2>

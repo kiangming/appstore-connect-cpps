@@ -231,6 +231,8 @@ export async function POST(
     // Not in `rows`. H4.3: the wizard shows them IN the preview table and
     // lets the Manager push the rest after confirming how many are left out.
     refusedRows: parsed.refusedRows,
+    // H4.4 — echoed into the execute body for the import audit.
+    priceHeader: parsed.priceHeader ?? null,
     warnings: warningsOut,
     counts: {
       total: rows.length,

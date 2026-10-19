@@ -76,6 +76,8 @@ interface ExecuteBody {
   /** H4.3 — rows the preview refused that the Manager left out ("push the
    *  rest"). Never sent; counted (Done, audit, Hub). */
   droppedRows?: Array<{ rowNumber?: number; sku?: string; reason?: string }>;
+  /** H4.4 — the file's price header as the preview read it (audit only). */
+  priceHeader?: string | null;
   rows?: Array<{
     rowNumber?: number;
     sku?: string;
@@ -354,6 +356,7 @@ export async function POST(
         sourceFilename: body.sourceFilename ?? null,
         rows,
         droppedRows,
+        priceHeader: isStr(body.priceHeader) ? body.priceHeader.slice(0, 100) : null,
         actorEmail: session.user.email ?? null,
         // ⚠ H4.2: NO app currency — the file is the only price source.
       });

@@ -20,8 +20,9 @@
  * "Price (XXX)" column, in a currency Google Play bills in; a header
  * without its currency is refused. This const is the EMISSION canonical
  * form only — the parser accepts any "Price (XXX)". The Notes text below
- * describes H4.2: the file's price, in its header currency, is the only
- * price source — the app's currency takes no part.
+ * describes H4 (H4.1–H4.3): the file's price, in its header currency, is
+ * the only price source — the app's currency takes no part — and a row
+ * the tool cannot send exactly is refused with its reason in the preview.
  *
  * The locale map previously lived inline in excel-parser.ts (which
  * re-exports it for back-compat). Map keys are unique by construction,
@@ -55,8 +56,9 @@ export const GOOGLE_NOTES_SHEET_NAME = "Notes";
 export const GOOGLE_TEMPLATE_FILENAME = "google-iap-bulk-import-template.xlsx";
 
 export const GOOGLE_PRODUCT_ID_HEADER = "Product ID";
-/** FIXED USD — Manager-locked decision (see module doc above for why
- *  this is safe against non-USD apps). */
+/** FIXED USD — Manager-locked decision. Safe for an app in any currency:
+ *  the parser reads the currency from this header only, and the app's
+ *  currency takes no part in bulk-import pricing (H4 — module doc above). */
 export const GOOGLE_PRICE_HEADER = "Price (USD)";
 export const GOOGLE_GT_PRICE_HEADER = "GT Price";
 export const GOOGLE_GT_CURRENCY_HEADER = "GT Currency";
@@ -300,8 +302,12 @@ const SAMPLE_ROW_VALUES = TEMPLATE_SAMPLE_PRODUCT_IDS.map((id, i) => ({
 }));
 
 /** The pre-filled data-sheet rows: 3 samples, a spacer, and the visible
- *  delete-me warning in a row whose Product ID cell is EMPTY (the
- *  parser skips SKU-less rows, so the note never parses as data).
+ *  delete-me warning in a row whose Product ID cell is EMPTY. Since H4.3 a
+ *  SKU-less row that states a product (price, GT price, title or
+ *  description) is REFUSED, not skipped — the note sits in the price
+ *  column, so the parser recognises it by its exact text
+ *  (TEMPLATE_SAMPLE_ROWS_NOTE, excel-parser.ts rowStatesAProduct) and
+ *  ignores it; it never parses or refuses as data.
  *  A sample row NEVER references a column absent from the selection. */
 export function googleTemplateDataRows(
   selected?: readonly string[],
@@ -350,7 +356,7 @@ function googleNotesRows(selected?: readonly string[]): (string | number)[][] {
     [
       GOOGLE_PRICE_HEADER,
       "REQUIRED",
-      "⚠ US DOLLARS (USD) — the currency is the one in this header, whatever the app's own currency is; the app's currency is not used. Example: 0.99 here means USD 0.99. A pricing template is matched by the tier named after the Product ID, else by this price in USD; other countries are converted by Google from this price. To price in another currency, rename the header (e.g. \"Price (VND)\") — exactly one price column per file. A row with an empty price is not imported (the preview lists it with the reason); a 0 price, or more decimals than the currency allows, keeps the row out. In a currency without decimals (VND, JPY…) write the number without separators: \"26.000\" typed as text keeps the row out (it may mean 26 thousand).",
+      "⚠ US DOLLARS (USD) — the currency is the one in this header, whatever the app's own currency is; the app's currency is not used. Example: 0.99 here means USD 0.99. A pricing template is matched by the tier named after the Product ID, else by this price in the header's currency; other countries are converted by Google from this price. To price in another currency, rename the header (e.g. \"Price (VND)\") to a currency Google Play bills in — exactly one price column per file. A header without its currency (\"Price\", \"Default Price\", \"Base Price\") or a second price column refuses the whole file. A row with an empty price is not imported (the preview lists it with the reason); a 0 price, or more decimals than the currency allows, keeps the row out. In a currency without decimals (VND, JPY…) write the number without separators: \"26.000\" typed as text keeps the row out (it may mean 26 thousand).",
     ],
     [
       GOOGLE_GT_PRICE_HEADER,

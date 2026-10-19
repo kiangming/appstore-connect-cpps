@@ -261,8 +261,9 @@ without changes), the modal disables Confirm.
 
 **The base price is the single source for every country price.** Picking a
 tier is just a fast way to set the base: the base jumps to the tier's
-**USD** figure (Google's pricing templates use a fixed `Price (USD)`
-column, so that number is the tier's canonical price).
+**USD** figure (if the tier has no USD price: its price in the form's
+currency, else its first price). This is the item form only — a bulk-import
+file is priced in the currency of its own `Price (XXX)` header (§6).
 
 Both actions mean the same thing — *recalculate every country from this* —
 and each one overwrites the last, as many times as you like:
@@ -297,6 +298,13 @@ still edit and save anything else on the item. It only becomes a blocking
 error once *you* type into that row, because then it is your value to fix.
 If you want TWD 6.30 to become something else, change it deliberately —
 the tool will not decide that for you.
+
+**What you type follows the same price rules as a bulk-import file and the
+custom-prices dialog** (October 2026): no more decimals than the currency
+allows, no 0 price, and in a currency without decimals (VND, IDR, KRW, JPY,
+TWD…) no "." or "," — `26.000` may mean 26 thousand, so write `26000`. The
+prices the form fills in itself are written without separators, so they
+never trip that rule.
 
 ### 5.3 "Sync from Google" mid-edit
 
@@ -336,9 +344,25 @@ The wizard has four steps:
 
 Pick `Default Template`, `App-specific Template`, or `Google Conversion`
 for the **entire batch** (that is the order the cards appear in).
-Template-mode rows are matched to a tier by **SKU = tier identifier**;
-rows without a match fall back to `Google Conversion` — inline base price
-+ GT Price, converted by Google into every other country.
+
+**Prices come only from the file**: the number in its `Price (XXX)` column,
+in the currency XXX written in that header (Step 2). The app's own currency
+takes no part in bulk-import pricing — there is nothing to set or declare on
+the app before importing (since October 2026, H4).
+
+- **Template sources:** a row takes the tier named after its SKU
+  (**SKU = tier identifier**); otherwise the tier whose price **in the
+  file's currency** equals the file's price (when several tiers match, Step 3
+  lets you pick). Countries the tier does not list, and rows with no matching
+  tier, get Google's conversion of the file's price. A matched tier holding a
+  price Google cannot take (more decimals than its currency allows, or 0)
+  refuses the row (`tier_price_invalid`, Step 4).
+- **`Google Conversion`:** every country is converted by Google from the
+  file's price — so the US price is the file's price only when the file is
+  in USD.
+- **GT Price + GT Currency** override their one country, except when a tier
+  matches the row (the tier's prices replace the GT) or the row has custom
+  prices (they replace it). Step 3 shows, per row, what happens to its GT.
 
 > `Google Conversion` was labelled `Google default` before August 2026.
 > Only the label changed: the stored value is still `google_default` in
@@ -414,16 +438,25 @@ Two sheets:
 Drop or browse the filled `.xlsx`. Max 5 MB. Columns (matched by
 header NAME, not position):
 
-- **Product ID** (SKU) — required
-- **Price (USD)** decimal — required. ALWAYS US dollars (fixed header —
-  Manager decision): the parser reads the currency from the header
-  explicitly, so USD stays USD even for non-USD apps; cross-currency
-  resolution (Cycle 43) derives the app-currency price from the
-  pricing template
+- **Product ID** (SKU) — required (a file without this column is refused).
+  A row with data but no Product ID is not imported (Step 3).
+- **Price (XXX)** decimal — required, **exactly one** such column (also
+  accepted as `Default Price (XXX)` / `Base Price (XXX)`, any letter case).
+  XXX is the currency the prices are written in and must be one Google Play
+  bills in. The downloaded template writes `Price (USD)`; to price in
+  another currency, rename the header — e.g. `Price (VND)`. This header's
+  currency is the **only** price currency: the app's own currency is not
+  used. **The whole file is refused** (no preview) when the price header has
+  no currency (`Price`, `Default Price`, `Base Price`), when there is a
+  second price column, when another column looks like a price but is not
+  `Price (XXX)` (e.g. `Price USD`, `Unit price`), or when XXX is not a
+  currency Google Play bills in.
 - **GT Price** + **GT Currency** — a REAL per-region store price (e.g.
   `26000` + `VND` = the actual 26,000₫ price for the VN region), NOT an
-  exchange rate. Optional; must be filled together (the region is
-  derived from the currency)
+  exchange rate. Optional; fill both or neither (the region is derived
+  from the currency — one region per GT currency). Same price rules as
+  the Price column. Write the headers exactly `GT Price` / `GT Currency`
+  and keep both columns or neither — otherwise the file is refused.
 - paired `Title (LangName)` / `Description (LangName)` per locale (82
   supported)
 
@@ -435,12 +468,40 @@ artifact) still parse via the first-sheet fallback.
 
 The wizard parses the file and shows every row with its existence
 status (New · Exists). For existing SKUs, pick **Overwrite** or
-**Skip** — Continue is gated until every row has a decision. Bulk
-actions ("Set all Overwrite" / "Set all Skip") apply to existing rows
-only.
+**Skip** — **Push to Google Play** is gated until every row has a
+decision. Bulk actions ("Set all Overwrite" / "Set all Skip") apply to
+existing rows only. A pricing note at the top of the wizard ("Prices come
+only from the file", shown on every step) restates the rules of Step 1,
+and each row with a GT says what the push will do with it (`will be sent`
+· `replaced by tier …` · `replaced by custom …` · `depends on the tier you
+pick`).
 
-Parse warnings (unrecognised locale columns, unmapped GT currencies,
-mismatched GT Price/Currency pairs) appear in a collapsible amber
+**A row that cannot be imported is shown IN the table**, marked
+**Not imported** with its reason, and counted in a red notice above it.
+It is never sent with some other price instead. A row is not imported
+when:
+
+- its price is empty;
+- its price or GT price is not a number, is 0, or has more decimals than
+  its currency allows;
+- in a currency without decimals (VND, IDR, KRW, JPY, TWD, HUF…) its price
+  or GT price is typed as **text** with a "." or "," — `26.000` may mean 26
+  thousand: write `26000` (a NUMBER cell is fine, even when Excel displays
+  it with a thousands separator);
+- only one of GT Price / GT Currency is filled;
+- its GT Currency is not in the GT list, or is not the currency Google Play
+  bills that region in (`CNY` — Google Play does not sell in China; `ARS` —
+  Google bills Argentina in USD);
+- it has data (price, GT Price, title or description) but no Product ID.
+
+If other rows can be imported, **Push** first opens a confirmation that
+names every row left out — **Go back** sends nothing; **Leave them out and
+push** sends the rest, and the rows left out are listed again on the result
+screen. If no row can be imported, Push stays disabled: fix the file and
+upload it again.
+
+Parse warnings (unrecognised locale columns, skipped sample rows, a tier
+lookup that failed — run Preview again) appear in a collapsible amber
 panel — they're informational; the rest of the import proceeds.
 
 **Listing-loss warning (Google only).** A prominent amber banner appears
@@ -465,23 +526,36 @@ currency) and continent filters.
 
 **What "custom" means depends on the source — this is the rule that bites.**
 
-| Source | Semantics | App-currency entry required? |
-|---|---|---|
-| `Default Template` · `App-specific Template` | **REPLACES** the tier's whole price set. The dialog pre-fills from the tier. | **Yes.** Because the custom set replaces everything, it is the only possible source of `defaultPrice`. Missing ⇒ the row is refused with `custom_no_app_currency_entry`; the dialog blocks Save so you find out before pushing. |
-| `Google Conversion` | **SPARSE OVERLAY.** Set only the countries you want; every blank country still gets Google's automatic conversion. The dialog opens **empty** — nothing is pre-filled. | **No.** `defaultPrice` comes from the file's base price. Overriding three countries, none of them in the app's currency, is legitimate. If you *do* set an app-currency price, it wins over the base price. |
+| Source | Semantics |
+|---|---|
+| `Default Template` · `App-specific Template` | **REPLACES** the tier's whole price set. The dialog pre-fills from the row's tier (no matching tier: it opens empty); after Save the tier is not used for this row at all — a country you leave blank or clear gets Google's conversion of the file's price, not the tier's price. |
+| `Google Conversion` | **SPARSE OVERLAY.** Set only the countries you want; every blank country still gets Google's automatic conversion of the file's price. The dialog opens **empty** — nothing is pre-filled. |
+
+Under every source the row's file price (`Price (XXX)`) stays its default
+price and the base Google converts from, and a custom set needs **no** price
+in any particular currency — the app's currency included.
+
+> Until October 2026 (H4) a custom set under a template source had to
+> contain a price in the app's currency: the dialog blocked Save without it
+> and the server refused the row with `custom_no_app_currency_entry`. Both
+> are gone.
 
 Rules that hold under every source:
 
 - **Currency is fixed per country** and shown as a chip — it is Google's
   billing currency for that market, not something you pick.
 - **A blank price is not "no price".** It reads
-  `inherits — Google conversion`: at push, Google converts the item's
-  default price into that country. **set price** opens the field.
-- **Save is blocked on a currency-precision error** — VND/JPY take whole
-  numbers, KWD takes 3 decimals. Same rules as the item Edit form.
+  `inherits — Google conversion`: at push, Google converts the row's file
+  price (`Price (XXX)`) into that country. **set price** opens the field.
+- **Save is blocked when a price breaks the price rules** — the same rules
+  as a bulk-import file and the item Edit form: no more decimals than the
+  currency allows (VND/JPY take whole numbers, KWD takes 3 decimals), no 0
+  price, and in a currency without decimals no "." or "," (`26.000` may
+  mean 26 thousand — write `26000`). The server checks every custom price
+  again at push (`custom_invalid_price`).
 - **Prices ≥90% below the reference get a non-blocking warning.** The
-  reference is the *tier's price* under a template source, or *Google's
-  converted price* under Google Conversion. The tool has no per-country
+  reference is the *tier's price* when the row has a tier, otherwise
+  *Google's converted price* of the file's price. The tool has no per-country
   minimum table — Google enforces floors at push and reports no per-row
   reason, so one below-floor price can fail the whole batch. It is a
   heuristic, not a guarantee.
@@ -500,44 +574,74 @@ pricing source.
 | You do this | Custom prices |
 |---|---|
 | Back to Step 1, change the source (including to `Google Conversion`), re-preview | **Kept and still sent.** The dialog then says "no longer tied to a template" and shows the current source's values for comparison |
-| Upload a **different file** at Step 2 | Kept for SKUs still in the file, dropped for the rest — the banner names both lists |
+| Upload a **different file** at Step 2 | Kept for SKUs that are importable rows of the new file; dropped for the rest — including a SKU that is in the file but marked **Not imported** there. The banner names both lists |
 | Set the row to **Skip** | **Kept but not sent** — the chip greys out with "inactive — this row is set to Skip, so nothing is sent". Un-skipping reactivates it. This is the *only* thing that deactivates a custom set |
 | **Refresh the page** | **Lost** — all wizard state is in the browser. You get a browser warning first |
 | **Import another** | Cleared — that is a new batch |
 
 ### Step 4 — Execute
 
-The server fires a single `inappproducts.batchUpdate` call with
-`allowMissing: true` (so the same call inserts new SKUs and updates
-existing ones). When the response returns, the cache is synced row by
-row and the result panel shows Created / Overwritten / Skipped /
-Failed / Refused / **Custom** counts. **Custom** is how many items were
+Before writing, the server asks Google to convert each row's **file price**
+into every country (one `convertRegionPrices` call per row; tier, custom and
+GT prices win where present), and reads the live product of each Overwrite
+row once, so its other purchase options are kept (API reference §13). It
+then sends ONE `monetization.onetimeproducts.batchUpdate` call
+(`allowMissing: true` for new SKUs, `false` for Overwrite rows) and sets
+each product's state with `purchaseOptions:batchUpdateStates`. There is no
+fallback to the legacy `inappproducts.batchUpdate` any more (removed in
+October 2026, H4): if Google refuses the call, the wizard shows Google's own
+error. When the response returns, the cache is synced row by row and the
+result screen shows Created / Overwritten / Skipped / Failed / **Not sent** /
+**Custom** counts — the first five add up to the rows in the file.
+**Failed** = rows Google did not write: the call failed for them or returned
+no product for them — including **Overwrite** rows whose live read failed
+(the tool leaves those out of the call rather than overwrite blind) — and
+rows whose cache sync failed; **Not sent** = rows refused at push, or left
+out in the file. **Custom** is how many items were
 priced from a per-item custom set rather than the batch template.
 
-**Refused rows are listed with their reason.** A custom row that cannot
-be applied is excluded from the batch and named here — it is NEVER
-quietly shipped with the template price instead. Custom refusal reasons:
+**Every row not sent is listed by name with its reason**, in two groups:
+"left out — refused in the file" (the rows you confirmed leaving out at
+Push) and "refused at push". A row whose price cannot be applied exactly as
+stated is excluded from the batch — it is NEVER quietly sent with another
+price (a template price, a conversion, another currency) instead. The codes
+below are the `kind` the audit log records for each refused row:
 
 | Reason | Meaning |
 |---|---|
-| `custom_invalid_price` | A price broke its currency's precision rules. Fix it in the dialog and re-push. |
-| `custom_no_app_currency_entry` | **Template sources only.** No priced country used the app's own currency, so Google had no default price to use. Normally the dialog blocks this at Save. Cannot occur under `Google Conversion`, where the base price supplies the default. |
+| `refused_in_file` | Marked **Not imported** in Step 3 (reason kept) and left out when you confirmed Push. Fix the file and import the row again. |
+| `file_price_invalid` | The row's price or GT price cannot be sent exactly as written — the Step 3 checks, run again on the server. |
+| `tier_price_invalid` | The matched pricing-template tier holds a price that cannot be sent (more decimals than its currency allows, or 0). The reason names the tier and the country. Fix the tier in Settings → Pricing Templates, then import the row again. |
+| `conversion_failed` | The file price is not in USD and Google's conversion of it failed, or left the row with no US price. The reason says which failure it was: **temporary** (network, Google 5xx, 408, 429) — not the row's data, run the row again later; **Google rejected the price as invalid** (400 `INVALID_ARGUMENT`) — check the price; **an access, account or app problem** (any other 4xx, e.g. 403) — fix the access, then run again. A USD row is still sent: its file price is the US price. |
+| `custom_invalid_price` | A custom price breaks the price rules (precision, 0, `26.000`-style text in a currency without decimals), an entry is missing its country, currency or amount, or the custom set is empty. Fix it in the dialog and re-push. |
+| `price_build_failed` | Safety net: the row's prices could not be built even though every check passed. Should never happen — report it. |
 
+> `custom_no_app_currency_entry` was retired in October 2026 (H4): a custom
+> set no longer needs a price in the app's currency (see Step 3). Rows that
+> used to be refused because the file's currency differed from the app's
+> are now written, priced from the file.
+>
 > `custom_source_mismatch` was retired in August 2026. It refused custom
 > prices on a `Google Conversion` batch, which is now a supported
 > combination.
 
-A refused custom row also makes the run's Hub status **FAILED** rather
-than SUCCESS — the Manager asked for a price and it did not get applied,
-so reporting success would be wrong. (Cross-currency refusals still count
-as a soft skip, unchanged.)
+**Every row not written counts as failed for the Hub** — refused at push,
+left out in the file, or not written by Google; only rows you set to
+**Skip** count as skipped. The run closes **PARTIAL** when other rows were
+written and **FAILED** when none were — never SUCCESS. In the database,
+`import_batches.status` is `COMPLETE` only when every row was written or
+skipped, and `FAILED` otherwise (the column has no partial value); a run
+that ends in an error is closed `FAILED` too — unless the closing write itself
+fails, which is logged (`[google-iap:bulk-import] import_batches close
+FAILED|THREW batch=…`) and leaves the row `IN_PROGRESS`.
 
-**Cap:** 100 actionable rows per call (`BATCH_MAX`,
-`orchestration/bulk-import.ts` — counted AFTER skips, sample rows and
-cross-currency refusals, not raw file rows). If exceeded, the tool
-throws before anything is sent to Google — no partial import, no
-silent truncation — and the wizard surfaces the error at Commit.
-Preview does NOT pre-check this cap; split the file and re-run.
+**Cap:** 100 rows sent per call (`BATCH_MAX`,
+`orchestration/bulk-import.ts` — counted AFTER skips, sample rows, rows
+left out in the file and rows refused for their file price, tier or custom
+prices; not raw file rows). If exceeded, the tool throws before anything is
+sent to Google — no partial import, no silent truncation — the batch is
+closed `FAILED`, and the wizard shows the error when you Push. Preview does
+NOT pre-check this cap; split the file and re-run.
 
 ---
 
@@ -566,6 +670,13 @@ thing from the `Google Conversion` pricing-source mode.
   resolutions.
 - Header summary: Tiers × Regions × Entries × Uploaded by.
 - Sample table shows the first 50 entries for sanity-checking.
+- ⚠ Upload does not yet check prices against each currency (BACKLOG
+  `[GOOGLE-template-upload-price-check]`). A 0, or a price with more
+  decimals than its currency allows (e.g. TWD `30.5`), is stored — and
+  every Bulk Import row that matches that tier is refused at push
+  (`tier_price_invalid`; other rows are still sent). A VND/JPY… cell typed
+  as text `26.000` is stored as **26** and cannot be caught at push — check
+  price cells before uploading.
 
 ### Per-App Templates
 
@@ -594,6 +705,24 @@ The template file format is documented in
   Service Account; check Play Console permissions.
 - **Bulk import says "exceeds Google's per-call cap (100)"** → split
   the input file into ≤100-row chunks.
+- **Push answers "The tool was updated since this page was opened…"
+  (`PREVIEW_OUTDATED`, 409)** → the tab was opened before an update;
+  nothing was sent. **Reload the page**, then upload the file and run
+  Preview again — uploading again in the same tab gets the same answer.
+- **Upload refused: "Header "Price" does not say which currency the prices
+  are in"** (or "The file has 2 price columns") → rename the header to
+  `Price (XXX)` with the currency of the prices, e.g. `Price (USD)` /
+  `Price (VND)`, and keep exactly one price column (§6 Step 2).
+- **A row is marked "Not imported"** → its reason is on the row (§6 Step 3).
+  Fix the file and re-upload, or push the rest and import that row later.
+- **A row was refused `conversion_failed` "temporarily"** → not a problem
+  with the row's data: run that row again later. "Google rejected the file
+  price … as invalid" → check the price; "an access, account or app
+  problem" → fix the service account's access first (§6 Step 4).
+- **A row was refused `tier_price_invalid`** → the pricing-template tier
+  holds a price Google cannot take (more decimals than its currency
+  allows, or 0). Fix the tier in Settings → Pricing Templates, then import
+  the row again.
 - **Tier dropdown empty** in the form → the template was uploaded but
   has zero parsed entries; re-upload the file (check the sheet name is
   `price_tiers` and headers match `CC - CUR - Name` format).

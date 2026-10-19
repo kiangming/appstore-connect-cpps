@@ -8,6 +8,11 @@
                   google_iap_mgmt) — NOT Apple IAP.
   Design doc    : docs/google-iap-management/design-bulk-import-custom-prices.md
   Status        : DESIGN ONLY — hold for Manager review. No implementation.
+                  (Historical. Implemented August 2026 — see the design doc's
+                  STATUS. ⚠ 2026-10-19, H4: the "defaultPrice" panel below
+                  (app-currency custom entry → resolvedDefaultPrice) no longer
+                  holds — defaultPrice is always the row's FILE price; and the
+                  "NOT Google Conversion" rule was lifted in August 2026.)
 
   PART 1 — relabel + reorder (label-only; the stored enum value stays
   `google_default`, see design doc §1.8):

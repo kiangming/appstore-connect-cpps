@@ -63,6 +63,9 @@ ORDER BY created_at DESC;
 **Expected.** One or more rows. Note the `id` UUID and the
 `default_currency` (likely `VND` for the PASS SDK app — Hotfix 16's
 generic-header inference uses this field).
+*(2026-10-19, H4: no longer — a price header without its currency is
+refused and the app's `default_currency` takes no part in bulk-import
+pricing; the field only explains batches from before H4.)*
 
 **If zero rows:** the Google IAP module has never cached this app.
 Either Manager hasn't done a Refresh on the apps list, or the
