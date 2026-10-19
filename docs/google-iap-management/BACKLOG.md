@@ -1129,6 +1129,8 @@ adapter lấy từ vùng US (hoặc vùng đầu) của phản hồi Google, kh�
 đó VÀ bảng giá có một entry bằng currency đó ⇒ fallback căn defaultPrice theo currency vùng US của IAP thay vì currency app; app không phải USD
 ⇒ API cũ nhận sai currency. Thuộc 5 chỗ fallback còn lại của chunk D4
 (Manager 2026-10-17: H4 chỉ bỏ fallback của đường batch upsert).
+*2026-10-19:* ĐÃ ĐO trên mock — base gõ VND 26 tới API cũ thành USD 0.99. Phương án D4 **(A) tách riêng, làm sau
+`[GOOGLE-single-edit-server-price-rules]`** là ĐỀ XUẤT, CHƯA CHỐT (design doc §6.5).
 
 ---
 
@@ -1142,6 +1144,30 @@ lẻ ném (create-iap.ts, `decimalToMicros(…, currency)`), SỬA đơn lẻ G�
 `dirty:false` ⇒ `update-iap.ts` đổi không kèm currency). ⚠ Không áp (a) phía server cho base edit-mode và dòng
 tier (chuỗi máy tạo `"x.000000"` / `"x.00"`); chỉ dòng Manager gõ (dirty) + base ở create mode + entry tier
 qua `storedRegionPriceOf`. Cần Manager.
+
+**⏸ HOÃN 2026-10-19 (Manager).** Không gấp: bulk (đường dùng chính) đã sửa ở H4; form đơn lẻ chặn "26.000"/0
+ở trình duyệt từ H4.3; prod 0 entry tier hỏng; quy đổi lỗi hiếm. Lỗ còn lại chỉ ở server (tab cũ chưa reload /
+gọi API trực tiếp). **Kế hoạch đầy đủ** (chỗ tính giá file:line, bảng 3 đường × ca, choke point, test bất biến +
+10 mutation, D4/D10): `design-bulk-import-existence-overwrite-safety.md` §6 — tại commit `64557c9`, mọi ô ĐÃ ĐO
+là đo trên mock.
+
+**CHỜ Manager quyết (đề xuất hiện có trong ngoặc):**
+- **Q-a** Khi sửa, tier thắng hay quy đổi thắng? (hôm nay quy đổi đè tier, `update-iap.ts:233`; UI nói tier thay)
+- **Q-b** Quy đổi lỗi khi sửa: từ chối mọi lần đổi base, hay theo đúng bulk (từ chối khi không USD, gửi khi USD)?
+  Sửa chỉ title mà quy đổi lỗi có cho qua?
+- **Q-c** Server biết base do Manager gõ bằng cách nào? (đề xuất: gửi `baseDirty` form đã có + một contract marker
+  như `pricing_rule`; tab cũ nhận 409 "reload")
+- **Q-d** Kiểm cặp vùng/currency cho dòng gõ tay? (đề xuất: không — giá custom của bulk không kiểm)
+- **Q-e** Base đơn lẻ qua `statedPriceOf` hay `filePriceOf`? (đề xuất: `statedPriceOf`; `filePriceOf` sẽ từ chối
+  ARS/CNY mà form cho chọn)
+- **Q-f** Giá gõ tay dưới tier, cái nào thắng? (bulk: custom thắng; đơn lẻ: tier thay hết) — chưa có đề xuất
+- **Q-g** Giá 0 do Google viết có cho qua? (đề xuất: cho qua, KB (d))
+
+**SQL chỉ-đọc định cỡ Q-c** (cột có trong schema: init `:137`, deleted_on_google `:22`):
+```sql
+SELECT count(*) FROM google_iap_mgmt.iaps
+WHERE default_currency IS NULL AND deleted_on_google_at IS NULL;
+```
 
 ---
 
@@ -1165,3 +1191,39 @@ lại, lần bấm sau gửi CÙNG `hub_run_id` mà server đã đóng FAILED (H
 hộp xác nhận H4.3 KHÔNG đổi hành vi này (Cancel không đụng run). Sửa cần quyết định: retry mở run mới, hay
 retry không theo dõi.
 
+
+---
+
+## Phát hiện ngoài phạm vi khi lập kế hoạch `[GOOGLE-single-edit-server-price-rules]` (2026-10-19, đo trên mock tại `64557c9`)
+
+Mỗi dòng một mục; chưa làm. Nguồn: design doc `design-bulk-import-existence-overwrite-safety.md` §6.7.
+- `[GOOGLE-edit-title-only-pins-2022-02]` — sửa chỉ title mà quy đổi lỗi vẫn patch, ghim regionsVersion `2022/02` (bẫy Hotfix 9 trên một lần sửa không đổi giá).
+- `[GOOGLE-bulk-usd-conversion-failed-pin]` — dòng USD của bulk mà quy đổi lỗi vẫn gửi, ghim `2022/02`, trái với chính comment lý do từ chối dòng không-USD (`bulk-import.ts:1023-1025`).
+- `[GOOGLE-missing-tier-asymmetry]` — tier không tồn tại: đơn lẻ trả 404 (`iaps/route.ts:160-167`), bulk ném lỗi cả batch.
+- `[GOOGLE-edit-noop-success-toast]` — form không đọc `hasChanges`, báo "updated on Google Play" cả khi server trả noOp (`IapForm.tsx:739`).
+- `[GOOGLE-edit-dirty-after-base-change]` — dòng dirty gõ SAU khi đổi base bị quy đổi của server đè (`update-iap.ts:231-239`), không có cảnh báo (cảnh báo của form chỉ đếm dòng dirty lúc re-derive).
+- `[GOOGLE-edit-first-buyoption-price]` — sửa chỉ title ghi giá của buyOption ĐẦU TIÊN đè lên `legacy-base` (đọc chọn option đầu `onetime-product-adapter.ts:108-115`, ghi chọn option legacy `:313-323`); thứ tự option thật của Google CHƯA BIẾT. Gần D10.
+- `[GOOGLE-common-regions-ar-ars]` — `COMMON_REGIONS` để AR=ARS (`regions.ts:45`), còn snapshot Play tính AR bằng USD (`play-regions.snapshot.ts:76`). Cùng họ `[GOOGLE-common-regions-usd-default]`.
+
+---
+
+## `[GOOGLE-twd-decimals]` — code coi TWD là tiền 0 số lẻ, nhưng Google đang giữ một giá TWD 6.30
+
+**GHI NHẬN 2026-10-19.** `currency-precision.ts:45-46` (Hotfix 5, `e42683b`, 2026-05-21) đặt `TWD: 0` ("Google
+Play Console treats TWD as 0 in practice") — CHƯA TỪNG ĐO. Dữ liệu thật ngược lại: `com.vng.passsdk.2508111020`
+có TW = **TWD 6.30** do Google viết (`diagnostics/price-precision-audit.md:22-24`; 1/1.661 giá TWD trong cache có
+số lẻ). ⇒ Tool có thể đang TỪ CHỐI giá TWD hợp lệ ở mọi chỗ Manager gõ hoặc tool giữ giá (form, file bulk, custom,
+entry tier qua `storedRegionPriceOf`). Giá do Google viết không bị đụng (gửi lại nguyên byte, KB §10.13.K (d)).
+HUF (cũng 0 thay vì 2 theo ISO 4217) khớp dữ liệu: 0/1.661 giá có số lẻ.
+
+**Ảnh hưởng hiện tại:** 0 entry trên prod (SQL kiểm template trước H4: Q4 0 dòng).
+
+**Đường đúng khi làm:** đo KHÔNG ghi — **không ghi thử lên Google chỉ để đo.** Ví dụ: SQL chỉ-đọc đếm giá TWD/HUF
+có số lẻ trong cache (`iap_prices.price_micros` TEXT, init `:184-191`):
+```sql
+SELECT currency, count(*) FROM google_iap_mgmt.iap_prices
+WHERE currency IN ('TWD','HUF') AND (price_micros::numeric % 1000000) <> 0
+GROUP BY currency;
+```
+cộng với tài liệu/Play Console của Google về độ chính xác TWD. Đổi bảng ⇒ SQL `queries/audit-template-entries-h4.sql`
+và test ghim của nó đổi theo (bảng `decimals` sinh từ code).

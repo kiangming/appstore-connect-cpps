@@ -160,6 +160,17 @@ cần Manager xác nhận**. D9–D11 là mục mới từ census lượt này.
 → D9 (phải trước mọi auto-refresh) → D1 (+ đo batchGet) → D10 (+ chốt ngữ nghĩa) → D11,
 D4, D5. Cho tới khi có D10: **không Overwrite sản phẩm live qua bulk import.**
 
+**Cập nhật phạm vi 2026-10-19** (map `[GOOGLE-single-edit-server-price-rules]`, §6.5 — đo trên mock tại `64557c9`):
+- **D10 gồm cả SỬA ĐƠN LẺ, không chỉ bulk Overwrite** (KB P8). Ba phần dùng chung code với sửa đơn lẻ, đã đo:
+  - ép `AVAILABLE` (adapter `onetime-product-adapter.ts:274`, `:287`) — sửa chỉ title vẫn gửi lại BY
+    (`NO_LONGER_AVAILABLE` live) là AVAILABLE;
+  - mask thuế: `FULL_UPDATE_MASK` có `taxAndComplianceSettings` mà body không mang (`publisher-client.ts:348-349`);
+  - thay toàn bộ cấu hình vùng của option đích (adapter `:381-386`).
+
+  Tự động ACTIVATE và tự sinh listing en-US vẫn chỉ ở bulk.
+- **D4:** phương án **(A) tách riêng, làm sau `[GOOGLE-single-edit-server-price-rules]`** là ĐỀ XUẤT, CHƯA CHỐT
+  (các phương án (A)/(B)/(C) ở §6.5). Câu D4 ở §3 mục 3 vẫn mở.
+
 ---
 
 ## 3. Câu cần Manager chốt
@@ -608,3 +619,227 @@ không khớp tier; custom xuất hiện nguyên văn; chặn suy biến (F3 ≠
   bằng md5; quy tắc từ chối của SQL được so với `storedRegionPriceOf` trên 476 tổ hợp. Chưa chạy thử trên
   Postgres (máy không có) — câu chỉ đọc.
 
+
+---
+
+## 6. `[GOOGLE-single-edit-server-price-rules]` — KẾ HOẠCH, HOÃN
+
+**⏸ HOÃN 2026-10-19 (Manager).** Lý do: không gấp — đường bulk (dùng chính) đã sửa ở H4; form đơn lẻ đã
+chặn "26.000"/0 ở phía trình duyệt từ H4.3; prod có 0 entry tier hỏng (§35.5 KB: Q1 0 dòng, Q4 0 dòng);
+quy đổi lỗi hiếm. Lỗ còn lại chỉ ở phía server (tab cũ chưa reload / gọi API trực tiếp).
+
+**Tham chiếu:** mọi `file:line` dưới đây là tại commit `64557c9` (H4.4 — đã lên `origin/main`). Kế hoạch
+chép NGUYÊN từ báo cáo bước 4 gửi Manager ngày 2026-10-19; CHƯA CODE dòng nào.
+**⚠ Mọi ô ĐÃ ĐO là đo trên MOCK:** code thật chạy, Google/DB/đăng nhập là giả, bảng tỷ giá do agent đặt ra.
+Phản ứng thật của Google ở mọi ô là **CHƯA BIẾT**. Nguồn: 4 agent đọc code + chạy probe, 1 agent kiểm chéo
+(probe ở scratchpad, repo không đổi); các `file:line` chính đã grep lại.
+
+Câu cần Manager quyết trước khi làm: §6.6 (Q-a → Q-g), phương án D4 ở §6.5.
+
+### 6.1 Mọi chỗ ở server đơn lẻ có tính hoặc kiểm giá
+
+Không chỗ nào đi qua `statedPriceOf` / `filePriceOf` / `storedRegionPriceOf`. Cách tra: grep
+`file-price|statedPrice|storedRegionPriceOf|filePriceOf|classifyConversionFailure` trên cả hai route,
+`create-iap`, `update-iap`, `publisher-client`, adapter và `regions-helper` ⇒ exit 1, không có kết quả.
+
+| Chỗ | Đường | Làm gì hôm nay |
+|---|---|---|
+| `iaps/route.ts:128-134` | tạo | lọc dòng; thiếu currency thì tự thành `"USD"` (`:132`) |
+| `iaps/route.ts:138-173` | tạo | tra tier, rồi **thay hết** các dòng gõ tay bằng `microsToDecimal(e.priceMicros, 6)` → chuỗi `"x.000000"` (`:168-172`) |
+| `create-iap.ts:101` | tạo | base qua `decimalToMicros(base, currency)`: chỉ kiểm số lẻ, nhận 0 |
+| `create-iap.ts:108-114` | tạo | dòng gõ tay và dòng tier qua cùng một hàm, không phân biệt nguồn |
+| `create-iap.ts:149-159` | tạo | quy đổi lỗi thì bỏ qua mọi lớp lỗi rồi gửi tiếp |
+| `iaps/[sku]/route.ts:136-144` | sửa | lọc dòng; thiếu currency thì thành `"USD"` (`:141`); đọc cờ `dirty` |
+| `iaps/[sku]/route.ts:146-188` | sửa | **bản sao** nhánh tier của route tạo; dòng tier mang `dirty:false` (`:182-187`) |
+| `update-iap.ts:109-117` | sửa | dòng dirty: kiểm số lẻ (`:114`); dòng non-dirty (gồm cả dòng tier): **không kiểm** (`:115`) |
+| `update-iap.ts:124` | sửa | base: chỉ kiểm số lẻ |
+| `update-iap.ts:150` | sửa | ảnh chụp trước khi sửa lấy `default_currency ?? "USD"` |
+| `update-iap.ts:219-239` | sửa | base đổi ⇒ quy đổi ghi đè **mọi** vùng, kể cả dòng tier (`:233`) |
+| `update-iap.ts:248-254` | sửa | quy đổi lỗi thì bỏ qua, patch vẫn gửi với regionsVersion `"2022/02"` |
+| `iaps/route.ts:198-206`, `iaps/[sku]/route.ts:214-220` | cả hai | một Error thường thành HTTP **500** |
+
+(`iaps/…` = `app/api/google-iap-management/apps/[packageName]/iaps/…`; `create-iap.ts` / `update-iap.ts` ở
+`lib/google-iap-management/orchestration/`.)
+
+**Nơi ghi giá lên Google** (grep tên hàm ghi, bỏ file test): chỉ có `create-iap.ts:176`, `update-iap.ts:270`
+và `bulk-import.ts:1220`. Không có đường ghi giá đơn lẻ nào khác.
+
+**Test hiện có:** chưa có test nào cho `create-iap` hay cho route POST/PATCH `iaps`.
+
+### 6.2 Bảng 3 đường × các trường hợp
+
+Ghi chú về các ô của Sửa:
+- **"Base đổi"** là trường hợp thường khi chọn tier: form dời base về giá USD của tier (`IapForm.tsx:499-505`).
+- **"noOp"** nghĩa là server trả `hasChanges:false`, nhưng form vẫn báo "updated" (`IapForm.tsx:739`).
+
+| Trường hợp | Bulk hôm nay | Tạo đơn lẻ hôm nay | Sửa đơn lẻ hôm nay | Sau chunk (cả 3 đường) |
+|---|---|---|---|---|
+| Tier TWD 30.5 (sai số lẻ) | từ chối `tier_price_invalid` (`bulk-import.ts:819-833`) | **500**, câu báo lỗi không nêu tier hay vùng | base không đổi ⇒ **gửi** TWD 30.5; base đổi ⇒ quy đổi đè lên; base đổi + quy đổi lỗi ⇒ **gửi** 30.5 với `2022/02` | từ chối `tier_price_invalid`, cùng câu lý do; đơn lẻ trả **422**, 0 lệnh ghi |
+| Tier giá 0 | từ chối | **gửi** TW=0 (201) | **gửi** 0, hoặc bị quy đổi đè | như trên |
+| Gõ "26.000" VND | từ chối `custom_invalid_price` (`:524`) | **gửi** VND 26 | **gửi** VND 26 | từ chối, cùng câu (a) |
+| Gõ 0 | từ chối | **gửi** 0 | **gửi** 0 | từ chối, cùng câu (b) |
+| Base gõ "26.000" VND / 0 | từ chối `file_price_invalid` | **gửi**, quy đổi từ VND 26 / 0 | **gửi**, quy đổi lại cả catalog từ VND 26 / 0 | từ chối |
+| Quy đổi lỗi, base không USD | từ chối `conversion_failed`, 3 lớp lỗi (`:1026-1038`) | 201, **US mang giá TWD/VND**, `2022/02` | có US ⇒ noOp, thay đổi base **mất**; không có US ⇒ US = VND; có tier ⇒ vùng ngoài tier **bị rớt** | từ chối, 3 lớp lỗi (phạm vi ở đơn lẻ chờ Q-b) |
+| Quy đổi lỗi, base USD | gửi, chỉ có US, `2022/02` | giống bulk | đổi base ⇒ noOp; chỉ sửa title ⇒ patch với `2022/02` | **chờ Q-b** |
+
+Ba đường chỉ cho cùng kết quả ở hai ca: các ca đối chứng (giá đúng), và "quy đổi lỗi + base USD" giữa bulk
+và tạo đơn lẻ.
+
+### 6.3 Một choke point duy nhất (P1)
+
+1. **Module thuần mới** `lib/google-iap-management/orchestration/item-price-rules.ts`:
+   - **Chuyển nguyên văn từ `bulk-import.ts`:**
+     - `classifyConversionFailure` (`:272-292`);
+     - `conversionFailedReason` (`:294-317`): nhận "head + giá" thay vì cả `BulkImportRow`;
+     - điều kiện Q7 (`:1026-1027`) thành `conversionRefusal()`;
+     - kiểm entry tier (`:819-833`) thành `tierEntriesRefusal()`;
+     - vòng kiểm giá custom (`:515-530`) thành `statedPricesRefusal()`.
+   - **Bulk import ngược lại** các hàm này. T1 và `bulk-import.price-refusals.test.ts` phải xanh mà **không
+     sửa dòng test nào**. Đó là bằng chứng chỉ chuyển chỗ, không đổi hành vi.
+2. **`checkItemPrices()`** cho hai đường đơn lẻ, gọi trong `createIapOnGoogle` và `updateIapOnGoogle`
+   **trước mọi lệnh gọi Google**. Luật chọn theo **ai viết ra giá đó**:
+
+   | Ai viết giá | Gồm những giá nào | Kiểm thế nào |
+   |---|---|---|
+   | Manager gõ | base khi tạo, dòng khi tạo, dòng dirty khi sửa, base khi sửa **nếu Manager đổi nó** | `statedPriceOf` |
+   | Tier trong template | entry tier, ở dạng **micros** | `storedRegionPriceOf` |
+   | Google viết | dòng non-dirty, base không đổi, giá do Google quy đổi | **không kiểm**; gửi lại nguyên byte (TWD 6.30 vẫn là 6300000) |
+
+   - Phép đổi số không kèm currency (`update-iap.ts:115`) chuyển vào module này.
+   - Không được áp `statedPriceOf` lên chuỗi `"x.000000"` mà route tạo ra. ĐÃ ĐO: làm vậy thì mọi tier
+     VND/TWD/JPY hợp lệ đều bị từ chối.
+3. **Gộp hai nhánh tier** (`iaps/route.ts:138-173` và `[sku]/route.ts:146-188`) vào một helper. Helper giữ
+   entry ở dạng micros kèm nguồn, và bỏ bước đổi sang chuỗi.
+4. **Bỏ `?? "USD"`** ở `:132` và `:141`. Thiếu currency hoặc currency rỗng thì từ chối với câu của bulk
+   "missing its country or currency" (`bulk-import.ts:520-522`). ĐÃ ĐO: currency `""` hôm nay đi tới Google
+   thành `currencyCode ""`.
+5. **`conversionRefusal()`** chạy sau bước quy đổi và trước `insertInAppProduct` / `patchInAppProduct`. Nó ở
+   tầng orchestrator, **không** nằm trong adapter hay trong khối `try` của publisher. ĐÃ ĐO: đặt ở đó thì
+   fallback legacy nuốt mất lời từ chối và gửi body chưa kiểm lên API cũ.
+6. **Lỗi trả về:** ném `PriceRefusalError`. Hai route bắt nó trước và trả **422**
+   `{error, code:"PRICE_REFUSED", kind, refusals[]}`. Form đã hiện `body.error` (`IapForm.tsx:680`, `:735`),
+   nên không cần đổi UI để hiện câu báo.
+7. **Client đồng bộ với server (P14):** form sửa hiện chỉ *cảnh báo* entry tier sai. Cần chặn luôn ở form bằng
+   `storedRegionPriceOf`, chạy trên `priceMicros` mà route tier-entries đã trả về. Nếu không, Manager thấy
+   cảnh báo vàng rồi lại nhận 422.
+
+### 6.4 Test bất biến và mutation
+
+**File:** `app/api/google-iap-management/apps/[packageName]/iaps/price-rules-invariance.test.ts`.
+- Chạy ba route thật: bulk execute, POST `iaps`, PATCH `iaps/[sku]`.
+- Dùng googleapis giả trong bộ nhớ, `fakeDb` của T1 và `queries/templates.ts` thật.
+- Một bảng CASES, kèm ba bộ chuyển đổi: `toBulkRow`, `toCreateBody`, `toEditBody`.
+
+**Phải khẳng định:**
+1. Kết quả bulk == tạo == sửa. Kết quả được chuẩn hoá thành {verdict, kind, lớp lỗi quy đổi, giá gửi đi ở các
+   vùng ca đó nêu + US, regionsVersion}.
+2. Mỗi kết quả bằng một **EXPECTED ghim bằng tay**. Chỉ so ba đường với nhau thì không bắt được lỗi bên trong
+   module chung, vì cả ba sẽ sai giống nhau.
+3. Ca bị từ chối ⇒ 0 lệnh ghi, kể cả `inappproducts.*` legacy.
+4. Các ca riêng của Sửa, theo ai viết giá:
+   - TWD 6.30 không đụng tới ⇒ gửi lại 6300000;
+   - seed tab cũ `"26000.00"` không đổi ⇒ qua;
+   - base gõ "26.000" ⇒ từ chối.
+5. Kiểm cấu trúc: bốn file đơn lẻ không import `decimalToMicros` / `microsToDecimal`.
+
+**Không khẳng định** availability, mask hay option, vì đó là việc của D10; khẳng định ở đây sẽ ghim hành vi
+hiện tại của D10. Ca "gõ tay dưới tier" để ngoài test cho đến khi có Q-f.
+
+**Mutation** (chỉ qua `scripts/mutate.sh`), mỗi cái phải đỏ đúng lý do:
+
+| # | Sửa gì | Ca phải đỏ |
+|---|---|---|
+| M1 | `storedRegionPriceOf` trong module luôn trả ok | EXPECTED đỏ (so ba đường vẫn xanh) |
+| M2 | route sửa đổi tier lại thành chuỗi `dirty:false` | A/B ở đường sửa |
+| M3 | áp `statedPriceOf` lên dòng non-dirty | ca TWD 6.30 |
+| M4 | chuyển bước kiểm ra sau lệnh ghi | ca 0 lệnh ghi |
+| M5 | bỏ luật từ chối currency trống | ca currency `""` |
+| M6 | đường tạo bỏ `conversionRefusal` | ca quy đổi lỗi ở đường tạo |
+| M7 | base khi sửa luôn coi là Manager gõ | ca seed tab cũ |
+| M8 | base khi sửa luôn coi là Google viết | ca base "26.000" |
+| M9 | `PriceRefusalError` trả 500 | ca mã trạng thái |
+| M10 | vòng custom của bulk quay về `decimalToMicros` | C/D |
+
+**Đề xuất thứ tự commit** (giống H4.0 → H4.4):
+- S0: test ghim hiện trạng;
+- S1: chuyển luật bulk sang module, không đổi hành vi;
+- S2: hai đường đơn lẻ đi qua choke point, các ca lật xanh;
+- S3: client đồng bộ + tài liệu + BACKLOG.
+
+### 6.5 Quan hệ với D4 và D10 (đề xuất, chưa gộp)
+
+**D4 — 5 fallback legacy trong `publisher-client.ts`:**
+- Năm chỗ:
+  - list `:244`;
+  - get `:299`;
+  - insert `:757-771`, chỉ được gọi từ đường tạo;
+  - patch `:844-860`, chỉ được gọi từ đường sửa;
+  - delete `:864`, 0 nơi gọi.
+
+  Chỉ insert và patch mang giá.
+- **Chạm chung** với chunk này ở hai lệnh gọi `create-iap.ts:176-178` và `update-iap.ts:270-277`
+  (`appCurrency` ở `:276`), cùng `legacyFallbackBody` (`:686-701`).
+- Bước kiểm đặt trước publisher, nên lời từ chối **không bao giờ** tới fallback (ĐÃ ĐO: 0 lệnh gọi Google).
+- Còn lệch: khi v3 trả lỗi, ba đường xử lý khác nhau:
+  - bulk trả nguyên văn lỗi;
+  - tạo đơn lẻ gọi lại API cũ với cùng body;
+  - sửa đơn lẻ gọi API cũ với `defaultPrice` bị thay. ĐÃ ĐO: base gõ VND 26 tới API cũ thành USD 0.99.
+- Phương án:
+  - (A) tách riêng, làm sau chunk này;
+  - (B) gộp phần ghi (insert/patch + `legacyFallbackBody`), làm lật 6 test hiện có;
+  - (C) làm D4 trước: không cần, vì chunk này không phụ thuộc D4.
+- **Đề xuất: (A).** (CHƯA CHỐT — Manager quyết.)
+
+**D10 — Overwrite thay thế mù:**
+- Phần dùng chung với sửa đơn lẻ, ĐÃ ĐO:
+  - ép `AVAILABLE` (adapter `:274`, `:287`): sửa chỉ title vẫn gửi lại BY là AVAILABLE;
+  - `FULL_UPDATE_MASK` có trường thuế mà body không có (`publisher-client.ts:348-349`);
+  - thay toàn bộ cấu hình vùng của option đích (adapter `:381-386`).
+- Tự động ACTIVATE và tự sinh listing en-US chỉ có ở bulk.
+- Chunk này **không đụng** các dòng đó ⇒ **đề xuất tách**. Phạm vi D10 nay gồm cả sửa đơn lẻ (P8) — đã ghi
+  vào bảng §2.
+- Việc "sửa + tier + quy đổi lỗi ⇒ rớt vùng" chỉ đóng được trong chunk này nếu Q-b chọn từ chối.
+
+### 6.6 Cần Manager quyết trước khi code
+
+- **Q-a — Khi sửa, tier thắng hay quy đổi thắng?**
+  - Hôm nay quy đổi đè giá tier (`update-iap.ts:233`), trong khi UI ghi "tier's region prices will replace…"
+    (`IapForm.tsx:976-977`).
+  - Nếu quy đổi vẫn thắng, từ chối tier sai sẽ chặn một giá mà Google không bao giờ nhận.
+- **Q-b — Quy đổi lỗi khi sửa thì sao?**
+  - Từ chối mọi lần đổi base mà quy đổi lỗi, hay theo đúng bulk (từ chối khi không phải USD, gửi khi USD)?
+  - Sửa chỉ title mà quy đổi lỗi thì cho qua không?
+- **Q-c — Server biết base có do Manager gõ không bằng cách nào?**
+  - Form đã theo dõi `baseDirty` (`IapForm.tsx:241`, đặt ở `:504`, `:1000`, `:1029`) nhưng chưa gửi lên server.
+  - So với cache thì bị cấm (`form-state.ts:30-33`), và sai khi `default_currency` NULL: form lấy currency của
+    app (`:115-118`), server lấy "USD" (`update-iap.ts:150`).
+  - *Đề xuất:* gửi `baseDirty` + một contract marker như `pricing_rule`; tab cũ nhận 409 "reload".
+- **Q-d — Có kiểm cặp vùng/currency cho dòng gõ tay không?** Giá custom của bulk không kiểm. *Đề xuất: không.*
+- **Q-e — Base đơn lẻ kiểm bằng `statedPriceOf` hay `filePriceOf`?** `filePriceOf` có thêm cổng currency, nên
+  sẽ từ chối ARS/CNY mà form đang cho chọn (ĐÃ ĐO). *Đề xuất: `statedPriceOf`*, ghi backlog việc sửa danh sách
+  currency của form.
+- **Q-f — Giá gõ tay dưới tier, cái nào thắng?** Bulk: custom thắng tier. Đơn lẻ: tier thay hết dòng gõ tay.
+  Phải chọn một.
+- **Q-g — Giá 0 do Google viết có cho qua không?** *Đề xuất: cho qua* (KB (d)).
+
+**SQL chỉ-đọc để định cỡ Q-c** (cột đã có trong schema: `20260520010000_google_iap_mgmt_init.sql:137`,
+`20260702120000_google_iap_mgmt_deleted_on_google.sql:22`):
+```sql
+SELECT count(*) FROM google_iap_mgmt.iaps
+WHERE default_currency IS NULL AND deleted_on_google_at IS NULL;
+```
+
+### 6.7 Phát hiện ngoài phạm vi: chỉ ghi BACKLOG, không code trong chunk này
+
+- Sửa chỉ title mà quy đổi lỗi vẫn patch với `2022/02`.
+- Dòng USD của bulk mà quy đổi lỗi cũng ghim `2022/02`, trái với comment của chính nó
+  (`bulk-import.ts:1023-1025`).
+- Tier không tồn tại: đơn lẻ trả 404, bulk ném lỗi cả batch.
+- Form không đọc `hasChanges`, nên báo "updated" cả khi không có gì thay đổi (`IapForm.tsx:739`).
+- Dòng dirty gõ sau khi đổi base bị quy đổi đè mà không có cảnh báo.
+- Sửa chỉ title ghi giá của buyOption đầu tiên đè lên `legacy-base` (đo trên mock; thứ tự option thật của
+  Google CHƯA BIẾT).
+- `COMMON_REGIONS` để AR=ARS, còn snapshot của Play tính AR bằng USD.
+
+(Mỗi mục có một dòng trong BACKLOG, mục "Phát hiện ngoài phạm vi khi lập kế hoạch
+`[GOOGLE-single-edit-server-price-rules]`".)

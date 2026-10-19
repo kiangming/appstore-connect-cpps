@@ -9009,4 +9009,7 @@ Test ghim: `app/api/google-iap-management/apps/[packageName]/bulk-import/file-cu
 - **SQL kiểm dữ liệu trước khi đổi luật:** khi một thay đổi biến dữ liệu đang lưu thành từ chối (entry tier 0 /
   sai độ chính xác ⇒ `tier_price_invalid`), Manager chạy câu SQL CHỈ ĐỌC trước push để biết dòng nào sẽ bị
   từ chối. Mọi bảng hằng số nhúng trong SQL được sinh từ code và test ghim — một bản gõ tay sẽ lệch.
-
+- **Kết quả trên prod — kiểm template prod trước H4 = 0 entry hỏng** (Manager chạy 2026-10-19, file
+  `queries/audit-template-entries-h4.sql` tại commit `64557c9`): Q1 0 dòng, Q4 (câu chặn push) 0 dòng; Q2/Q3 không
+  cần chạy. ⇒ Luật `tier_price_invalid` của H4.3 không từ chối entry nào đang có trên prod lúc ship. Bảng
+  `decimals`/`billed` trong SQL đã được kiểm khớp code tại `64557c9` trước push (test ghim + so từng cặp).
