@@ -27,6 +27,7 @@
  */
 
 import { iapDb } from "../db";
+import { readTemplateEntries } from "./template-entries";
 import {
   APPLE_CONTINENTS,
   getContinentForTerritory,
@@ -96,8 +97,13 @@ export function composeMatrix(args: {
   entries: ReadonlyArray<TemplateEntryRow>;
   tierNames: ReadonlyMap<string, string>;
   defaultEntries?: ReadonlyArray<TemplateEntryRow>;
+  /** Column order (Hotfix 24). Codes not listed — or every code, when this
+   *  is absent — follow in the order they first appear in `entries`. Codes
+   *  listed but absent from `entries` are ignored: the ORDER never adds or
+   *  removes a column, only `entries` does. */
+  marketOrder?: ReadonlyArray<string>;
 }): MatrixData {
-  const { entries, tierNames, defaultEntries } = args;
+  const { entries, tierNames, defaultEntries, marketOrder } = args;
 
   const tierById = new Map<string, MatrixTier>();
   const marketCurrencyByCode = new Map<string, string>();
@@ -146,19 +152,20 @@ export function composeMatrix(args: {
   // markets left-to-right in business-priority order (VN first, then
   // SEA neighbours, then larger markets). Pre-Hotfix-24 the matrix
   // sorted alphabetically by country name, which buried Manager's
-  // intent. `marketCurrencyByCode` is a `Map`, so iteration order =
-  // insertion order = the order rows arrive from the DB. Templates
-  // are REPLACE-ONLY (Q-A) so a fresh upload yields physical-heap
-  // order = insertion order for the SELECT without ORDER BY. The
-  // chunked fetcher above respects that.
-  const markets: MatrixMarket[] = Array.from(marketCurrencyByCode.entries()).map(
-    ([code, currency]) => ({
-      code,
-      name: territoryName(code),
-      currency,
-      continent: getContinentForTerritory(code),
-    }),
-  );
+  // intent. The order comes from `marketOrder` (the fetchers below read it
+  // with today's unordered query — R6 split ORDER from CONTENT); without
+  // it, first appearance in `entries`.
+  const orderedCodes = new Set<string>();
+  for (const code of marketOrder ?? []) {
+    if (marketCurrencyByCode.has(code)) orderedCodes.add(code);
+  }
+  for (const code of marketCurrencyByCode.keys()) orderedCodes.add(code);
+  const markets: MatrixMarket[] = Array.from(orderedCodes, (code) => ({
+    code,
+    name: territoryName(code),
+    currency: marketCurrencyByCode.get(code)!,
+    continent: getContinentForTerritory(code),
+  }));
 
   const continentCounts: Record<Continent, number> = {
     Asia: 0,
@@ -207,32 +214,66 @@ async function fetchTemplateId(scope: ScopeQuery): Promise<string | null> {
   return data ? (data as { id: string }).id : null;
 }
 
-async function fetchAllEntries(templateId: string): Promise<TemplateEntryRow[]> {
+const ORDER_PAGE_SIZE = 1000;
+
+/**
+ * R6 — the Hotfix 24 column ORDER, read apart from the CONTENT.
+ *
+ * The content now comes from `readTemplateEntries` (ordered by the primary
+ * key, proven complete). That order would turn the columns alphabetical, so
+ * the column order is still taken the way it always was — first appearance
+ * in a read WITHOUT ORDER BY (heap order ≈ upload order) — but from a read
+ * that returns only `territory_code` and never decides what is IN the
+ * matrix: a row it misses or repeats can move a column, never drop or add a
+ * cell. It stops as soon as every territory of the content has appeared
+ * (one page for a full grid). Codes it never saw are appended by
+ * `composeMatrix`.
+ *
+ * ⚠ This order is exactly as stable as before R6, no more: measured, heap
+ *   order is not always upload order and the plan can change it. Only a
+ *   persisted order (a migration) would guarantee it.
+ */
+async function fetchMarketOrder(
+  templateId: string,
+  codes: ReadonlySet<string>,
+): Promise<string[]> {
   const db = iapDb();
-  const countRes = await db
-    .from("price_tier_template_entries")
-    .select("template_id", { count: "exact", head: true })
-    .eq("template_id", templateId);
-  if (countRes.error) {
-    throw new Error(
-      `Matrix entries count failed: ${countRes.error.message}`,
-    );
-  }
-  const total = countRes.count ?? 0;
-  const PAGE_SIZE = 1000;
-  const out: TemplateEntryRow[] = [];
-  for (let offset = 0; offset < total; offset += PAGE_SIZE) {
+  const order: string[] = [];
+  const seen = new Set<string>();
+  let offset = 0;
+  while (seen.size < codes.size) {
     const pageRes = await db
       .from("price_tier_template_entries")
-      .select("tier_id, territory_code, currency_code, customer_price, proceeds")
+      .select("territory_code")
       .eq("template_id", templateId)
-      .range(offset, offset + PAGE_SIZE - 1);
+      .range(offset, offset + ORDER_PAGE_SIZE - 1);
     if (pageRes.error) {
-      throw new Error(`Matrix entries page fetch failed: ${pageRes.error.message}`);
+      throw new Error(`Matrix column order fetch failed: ${pageRes.error.message}`);
     }
-    out.push(...((pageRes.data ?? []) as TemplateEntryRow[]));
+    const page = (pageRes.data ?? []) as Array<{ territory_code: string }>;
+    if (page.length === 0) break;
+    for (const { territory_code } of page) {
+      if (codes.has(territory_code) && !seen.has(territory_code)) {
+        seen.add(territory_code);
+        order.push(territory_code);
+      }
+    }
+    offset += page.length;
   }
-  return out;
+  return order;
+}
+
+/** Content (complete, via the shared reader) + Hotfix 24 column order. */
+async function fetchMatrixEntries(
+  templateId: string,
+): Promise<{ entries: TemplateEntryRow[]; marketOrder: string[] }> {
+  const entries = await readTemplateEntries(templateId);
+  if (entries.length === 0) return { entries, marketOrder: [] };
+  const marketOrder = await fetchMarketOrder(
+    templateId,
+    new Set(entries.map((e) => e.territory_code)),
+  );
+  return { entries, marketOrder };
 }
 
 async function fetchTierNames(): Promise<Map<string, string>> {
@@ -280,13 +321,13 @@ export async function fetchDefaultMatrix(
 ): Promise<AppleMatrixResult | null> {
   const templateId = await fetchTemplateId({ scope: "ACCOUNT", accountId });
   if (!templateId) return null;
-  const [entries, tierNames, header] = await Promise.all([
-    fetchAllEntries(templateId),
+  const [{ entries, marketOrder }, tierNames, header] = await Promise.all([
+    fetchMatrixEntries(templateId),
     fetchTierNames(),
     fetchTemplateHeader(templateId),
   ]);
   if (entries.length === 0 || !header) return null;
-  return { matrix: composeMatrix({ entries, tierNames }), header };
+  return { matrix: composeMatrix({ entries, tierNames, marketOrder }), header };
 }
 
 /** Per-App matrix; loads Default entries in parallel so cells can be
@@ -304,18 +345,20 @@ export async function fetchPerAppMatrix(
     fetchTemplateId({ scope: "ACCOUNT", accountId }),
   ]);
   if (!perAppTemplateId) return null;
-  const [perAppEntries, defaultEntries, tierNames, header] = await Promise.all([
-    fetchAllEntries(perAppTemplateId),
-    defaultTemplateId ? fetchAllEntries(defaultTemplateId) : Promise.resolve([]),
+  const [perApp, defaultEntries, tierNames, header] = await Promise.all([
+    fetchMatrixEntries(perAppTemplateId),
+    // The Default is only diffed against, never laid out: content only.
+    defaultTemplateId ? readTemplateEntries(defaultTemplateId) : Promise.resolve([]),
     fetchTierNames(),
     fetchTemplateHeader(perAppTemplateId),
   ]);
-  if (perAppEntries.length === 0 || !header) return null;
+  if (perApp.entries.length === 0 || !header) return null;
   return {
     matrix: composeMatrix({
-      entries: perAppEntries,
+      entries: perApp.entries,
       tierNames,
       defaultEntries,
+      marketOrder: perApp.marketOrder,
     }),
     header,
   };

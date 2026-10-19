@@ -21,6 +21,7 @@ import type {
 } from "../parsers/price-tiers";
 import { flattenTemplateEntries } from "../parsers/price-tiers";
 import { listUsdTiers, type UsdTierEntry } from "./price-tiers";
+import { readTemplateEntries } from "./template-entries";
 import { findAllAccounts } from "@/lib/asc-account-repository";
 
 const ENTRY_BATCH_SIZE = 1000;
@@ -134,37 +135,6 @@ async function fetchTemplateHeader(
   return (res.data as TemplateHeader | null) ?? null;
 }
 
-async function fetchEntries(templateId: string): Promise<FlatTemplateEntry[]> {
-  const db = iapDb();
-  // IAP.p1.j Issue 2: Supabase default page size is 1000 — without range
-  // pagination a 16,800-entry Default Template would silently truncate.
-  // The truncation also affected pricing-orchestration (only first 1000
-  // template entries were iterated). Range-paginate to fix both surfaces.
-  const countRes = await db
-    .from("price_tier_template_entries")
-    .select("template_id", { count: "exact", head: true })
-    .eq("template_id", templateId);
-  if (countRes.error) {
-    throw new Error(`Template entries count failed: ${countRes.error.message}`);
-  }
-  const total = countRes.count ?? 0;
-  const PAGE_SIZE = 1000;
-  const entries: FlatTemplateEntry[] = [];
-  for (let offset = 0; offset < total; offset += PAGE_SIZE) {
-    const pageRes = await db
-      .from("price_tier_template_entries")
-      .select("tier_id, territory_code, currency_code, customer_price, proceeds")
-      .eq("template_id", templateId)
-      .order("tier_id", { ascending: true })
-      .order("territory_code", { ascending: true })
-      .range(offset, offset + PAGE_SIZE - 1);
-    if (pageRes.error) {
-      throw new Error(`Template entries page fetch failed: ${pageRes.error.message}`);
-    }
-    entries.push(...((pageRes.data ?? []) as FlatTemplateEntry[]));
-  }
-  return entries;
-}
 
 /**
  * Load the Default Template của MỘT account + entries. Returns null when Manager
@@ -177,7 +147,7 @@ export async function getDefaultTemplate(
 ): Promise<TemplateWithEntries | null> {
   const template = await fetchTemplateHeader({ kind: "ACCOUNT", account_id: accountId });
   if (!template) return null;
-  const entries = await fetchEntries(template.id);
+  const entries = await readTemplateEntries(template.id);
   return { template, entries };
 }
 
@@ -263,7 +233,7 @@ export async function getAppTemplate(
 ): Promise<TemplateWithEntries | null> {
   const template = await fetchTemplateHeader({ kind: "APP", app_id });
   if (!template) return null;
-  const entries = await fetchEntries(template.id);
+  const entries = await readTemplateEntries(template.id);
   return { template, entries };
 }
 
@@ -486,36 +456,14 @@ export async function getTemplateOverview(
   }
 
   const db = iapDb();
-  // IAP.p1.j Issue 2: Supabase's `.select()` default page size is 1000 —
-  // for a 16,800-entry migrated Default Template `entries.length` was
-  // saturating at 1000 and Manager saw "1000" on the Settings stat card.
-  // Two fixes: (a) request an accurate count via `count: 'exact', head:
-  // true` separately, then (b) range-fetch the full set in 1000-row
-  // chunks so the per-tier detail view stays complete.
-  const countRes = await db
-    .from("price_tier_template_entries")
-    .select("template_id", { count: "exact", head: true })
-    .eq("template_id", header.id);
-  if (countRes.error)
-    throw new Error(`Template entries count failed: ${countRes.error.message}`);
-  const totalEntries = countRes.count ?? 0;
-
   const tiersRes = await db.from("price_tiers").select("tier_id, tier_name");
   if (tiersRes.error)
     throw new Error(`Tier metadata fetch failed: ${tiersRes.error.message}`);
 
-  const PAGE_SIZE = 1000;
-  const entries: FlatTemplateEntry[] = [];
-  for (let offset = 0; offset < totalEntries; offset += PAGE_SIZE) {
-    const pageRes = await db
-      .from("price_tier_template_entries")
-      .select("tier_id, territory_code, currency_code, customer_price, proceeds")
-      .eq("template_id", header.id)
-      .range(offset, offset + PAGE_SIZE - 1);
-    if (pageRes.error)
-      throw new Error(`Template entries page fetch failed: ${pageRes.error.message}`);
-    entries.push(...((pageRes.data ?? []) as FlatTemplateEntry[]));
-  }
+  // IAP.p1.j Issue 2 (1 000-row truncation) and R6 (unordered pages losing
+  // rows) are both handled by the shared reader — this view used to page
+  // without ORDER BY, the same defect as the matrix read.
+  const entries = await readTemplateEntries(header.id);
   const tierMeta = new Map(
     ((tiersRes.data ?? []) as Array<{ tier_id: string; tier_name: string }>).map(
       (t) => [t.tier_id, t.tier_name],
@@ -557,9 +505,9 @@ export async function getTemplateOverview(
     template: header,
     tiers,
     territory_count: territories.size,
-    // Authoritative count comes from the exact-count query above so the
-    // Settings stat card is accurate even when entries > 1000.
-    populated_entry_count: totalEntries,
+    // readTemplateEntries proved rows == exact count, so this IS the
+    // authoritative count (the Settings stat card) even when entries > 1000.
+    populated_entry_count: entries.length,
   };
 }
 

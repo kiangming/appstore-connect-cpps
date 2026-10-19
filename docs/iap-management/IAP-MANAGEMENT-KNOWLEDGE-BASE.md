@@ -6530,6 +6530,45 @@ Four concrete gaps, the last one decisive — `proceeds` is not in `MatrixData`
 at all, so round-tripping needs a new read path, not a column rename. Tracked
 as `[TEMPLATE-xlsx-reimport]`.
 
+### 21.9 ⚠ R6 — a template's entries are read through ONE reader, ordered by the key, proven complete (2026-10-19)
+
+**ĐÃ ĐO (Postgres 17.5 thật — PGlite — với template thật 16 625 entry).** Hai đường đọc
+phân trang **không ORDER BY** — `fetchAllEntries` (matrix view + export) và
+`getTemplateOverview` (bảng Settings) — mất 1 225–1 400 entry mà vẫn trả đúng `count`
+dòng. Planner chọn index scan cho các OFFSET đầu và heap scan cho các OFFSET sau ⇒ các
+trang chồng lên nhau và bỏ sót nhau, dòng trùng bù đúng bằng dòng sót. Kết quả HTTP 200,
+0 log, màn hình hiện cùng cái lỗ. Đường áp giá (`fetchEntries` → orchestrator) đã có
+ORDER BY nên không dính, nhưng nó cũng không kiểm số dòng.
+
+**Luật** (`lib/iap-management/queries/template-entries.ts` → `readTemplateEntries`, mọi
+chỗ đọc nội dung entry đều đi qua đây — test cấu trúc ghim điều này):
+1. **ORDER BY khoá duy nhất** `(tier_id, territory_code)` trên MỌI trang. Với
+   `template_id` cố định đó chính là PK ⇒ thứ tự toàn phần, không phụ thuộc plan.
+2. **Chứng minh đủ:** số dòng đọc == `count` == số khoá distinct, không thì **ném lỗi**
+   (`TemplateEntriesIncompleteError`). Một template đọc thiếu không phải là một
+   template nhỏ hơn mà là một template **sai**: ô thiếu im lặng rơi về giá Apple.
+3. **Trang tiến theo số dòng thật nhận được**, không theo PAGE_SIZE ⇒ PostgREST
+   `max_rows` < 1000 chỉ tốn thêm request, không còn cắt im lặng (IAP.p1.j Issue 2 là
+   phiên bản 1 000 dòng của cùng lỗi).
+4. `count` null ⇒ lỗi (không có gì để chứng minh), không phải "template rỗng".
+
+**Thứ tự cột Hotfix 24 tách khỏi NỘI DUNG.** Đọc có ORDER BY sẽ làm cột thành alphabet,
+nên thứ tự vẫn lấy như cũ (lần xuất hiện đầu trong một lần đọc không ORDER BY), nhưng từ
+một lần đọc **chỉ trả `territory_code`**. Lần đọc đó không bao giờ quyết định cái gì
+nằm trong matrix: sót hay trùng chỉ có thể làm dịch một cột, không thể thêm hay bớt một ô.
+⚠ Thứ tự đó vẫn chỉ ổn định như trước R6: đã đo, heap không phải lúc nào cũng theo thứ
+tự upload. Chỉ một thứ tự được lưu (migration) mới bảo đảm được.
+
+**Không bắt được:** đọc bắt đầu SAU KHI một `replaceTemplate` đồng thời mới chèn một phần
+template mới — `count` khớp với trạng thái dở. Đó là lỗi ghi không nguyên tử (R7), không
+phải lỗi của lần đọc.
+
+**Cách test:** ép đúng kiểu tách plan mà census đo được (index scan khi OFFSET < 2000,
+heap scan từ 2000) trên PGlite, thay vì trông chờ ANALYZE tái hiện. Kiểu đọc cũ trong
+harness ra 16 625 dòng nhưng chỉ 15 225 khoá, mất trọn TIER_2…TIER_9. Mutation: bỏ
+ORDER BY ⇒ đỏ (15 225 distinct) · bỏ kiểm số dòng ⇒ đỏ · nhảy trang theo PAGE_SIZE ⇒ đỏ
+(`max_rows` 500 chỉ đọc được 8 500) · bỏ thứ tự cột ⇒ đỏ (cột thành alphabet).
+
 ---
 
 ---

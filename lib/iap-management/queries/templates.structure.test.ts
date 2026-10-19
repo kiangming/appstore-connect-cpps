@@ -50,6 +50,12 @@ const ROOT = join(__dirname, "..", "..", "..");
 const ALLOW = [
   "lib/iap-management/queries/templates.ts",
   "lib/iap-management/queries/template-matrix.ts",
+  // R6 (2026-10-19) — the ONE reader of entry content (KB P1). "Lấy
+  // accountId ở đâu?": nowhere — it takes a template ID that the two files
+  // above already resolved through their scope-checked helpers, and never
+  // resolves a scope itself. It is its own module only so template-matrix.ts
+  // can use it without importing templates.ts's account repository.
+  "lib/iap-management/queries/template-entries.ts",
 ] as const;
 
 /** Hai bảng Apple. KHÔNG bao gồm bảng của Google
