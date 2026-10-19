@@ -215,7 +215,9 @@ describe("Google bulk-import execute — Hub tracking closes on every exit exact
     expect(finalizeHubTracking).toHaveBeenCalledWith("run-3", "PARTIAL", undefined);
   });
 
-  it("all rows refused (cross-currency fail-soft, folded into skipped): closes SUCCESS, not FAILED", async () => {
+  it("H4.2 / P5: all rows refused because the FILE price could not be sent ⇒ closes FAILED, not SUCCESS", async () => {
+    // Before H4.2 refusals were cross-currency "soft skips" closing SUCCESS.
+    // A price the file states that never reached Google is not a success.
     executeBulkImport.mockResolvedValue({
       rowsTotal: 3,
       rowsCreated: 0,
@@ -223,7 +225,8 @@ describe("Google bulk-import execute — Hub tracking closes on every exit exact
       rowsSkipped: 0,
       rowsFailed: 0,
       rowsRefused: 3,
-      refusedRows: [{ sku: "sku1", rowNumber: 1, reason: "no match", kind: "template_miss" }],
+      priceRefusedRows: 3,
+      refusedRows: [{ sku: "sku1", rowNumber: 1, reason: "conversion failed", kind: "conversion_failed" }],
       durationMs: 10,
     });
     const res = await POST(
@@ -231,7 +234,7 @@ describe("Google bulk-import execute — Hub tracking closes on every exit exact
       ctx,
     );
     expect(res.status).toBe(200);
-    expect(finalizeHubTracking).toHaveBeenCalledWith("run-4", "SUCCESS", undefined);
+    expect(finalizeHubTracking).toHaveBeenCalledWith("run-4", "FAILED", expect.any(String));
   });
 
   it("executeBulkImport throwing closes FAILED with the specific message + maps err.code to HTTP status", async () => {
@@ -402,7 +405,7 @@ describe("Google bulk-import execute — per-item custom prices (SC4)", () => {
       customPricedRows: 0,
       customRefusedRows: 1,
       refusedRows: [
-        { sku: "sku1", rowNumber: 1, reason: "no VND entry", kind: "custom_no_app_currency_entry" },
+        { sku: "sku1", rowNumber: 1, reason: "custom price invalid", kind: "custom_invalid_price" },
       ],
     });
     const res = await POST(
@@ -413,24 +416,24 @@ describe("Google bulk-import execute — per-item custom prices (SC4)", () => {
     expect(finalizeHubTracking).toHaveBeenCalledWith("run-c6", "FAILED", expect.any(String));
   });
 
-  it("cross-currency refusal semantics are UNCHANGED — still a soft skip closing SUCCESS", async () => {
+  it("H4.2 / P5: one row created + one FILE-PRICE refusal ⇒ closes PARTIAL (the refusal is not a soft skip)", async () => {
     executeBulkImport.mockResolvedValue({
       ...okResult,
+      rowsTotal: 2,
       rowsCreated: 1,
       rowsFailed: 0,
       rowsRefused: 1,
+      priceRefusedRows: 1,
       customPricedRows: 0,
       customRefusedRows: 0,
-      refusedRows: [
-        { sku: "x", rowNumber: 9, reason: "cross-currency", kind: "template_miss" },
-      ],
+      refusedRows: [{ sku: "x", rowNumber: 9, reason: "file price invalid", kind: "file_price_invalid" }],
     });
     const res = await POST(
       jsonReq({ hub_run_id: "run-c7", pricingSource: "default_template", rows: [validRow] }),
       ctx,
     );
     expect(res.status).toBe(200);
-    expect(finalizeHubTracking).toHaveBeenCalledWith("run-c7", "SUCCESS", undefined);
+    expect(finalizeHubTracking).toHaveBeenCalledWith("run-c7", "PARTIAL", undefined);
   });
 });
 
@@ -498,30 +501,21 @@ describe("Google bulk-import execute — D0 mirror gate", () => {
     expect(getAppDefaults).not.toHaveBeenCalled();
   });
 
-  it("app WITHOUT a currency (null) ⇒ execute RUNS and forwards exactly null — no block, no USD substitution", async () => {
-    getAppByPackage.mockResolvedValue({ id: "app1", default_currency: null, default_language: null });
-    executeBulkImport.mockResolvedValue({
-      rowsTotal: 1, rowsCreated: 1, rowsOverwritten: 0, rowsSkipped: 0, rowsFailed: 0,
-      rowsRefused: 0, refusedRows: [], customPricedRows: 0, customRefusedRows: 0, durationMs: 1,
-    });
-    const res = await POST(jsonReq({ pricingSource: "google_default", rows: [validRow] }), ctx);
-    expect(res.status).toBe(200);
-    expect(executeBulkImport).toHaveBeenCalledTimes(1);
-    const [, args] = executeBulkImport.mock.calls[0] as [unknown, { appDefaultCurrency: string | null }];
-    expect(args.appDefaultCurrency).toBeNull();
-  });
-
-  it("pricing UNCHANGED from the deployed code (H4 fix pending): executes with app.default_currency", async () => {
-    getAppByPackage.mockResolvedValue({ id: "app1", default_currency: "TWD" });
-    executeBulkImport.mockResolvedValue({
-      rowsTotal: 1, rowsCreated: 1, rowsOverwritten: 0, rowsSkipped: 0, rowsFailed: 0,
-      rowsRefused: 0, refusedRows: [], customPricedRows: 0, customRefusedRows: 0, durationMs: 1,
-    });
-    const res = await POST(jsonReq({ pricingSource: "google_default", rows: [validRow] }), ctx);
-    expect(res.status).toBe(200);
-    const [, args] = executeBulkImport.mock.calls[0] as [unknown, { appDefaultCurrency: string | null }];
-    expect(args.appDefaultCurrency).toBe("TWD");
-  });
+  it.each([["TWD"], [null]])(
+    "H4.2: the orchestrator gets NO app currency, whatever the app row says (app currency %s) — execute runs",
+    async (appCurrency) => {
+      getAppByPackage.mockResolvedValue({ id: "app1", default_currency: appCurrency, default_language: null });
+      executeBulkImport.mockResolvedValue({
+        rowsTotal: 1, rowsCreated: 1, rowsOverwritten: 0, rowsSkipped: 0, rowsFailed: 0,
+        rowsRefused: 0, refusedRows: [], customPricedRows: 0, customRefusedRows: 0, durationMs: 1,
+      });
+      const res = await POST(jsonReq({ pricingSource: "google_default", rows: [validRow] }), ctx);
+      expect(res.status).toBe(200);
+      const [, args] = executeBulkImport.mock.calls[0] as [unknown, Record<string, unknown>];
+      expect(args).not.toHaveProperty("appDefaultCurrency");
+      expect(JSON.stringify(args)).not.toMatch(/TWD/);
+    },
+  );
 });
 
 /**

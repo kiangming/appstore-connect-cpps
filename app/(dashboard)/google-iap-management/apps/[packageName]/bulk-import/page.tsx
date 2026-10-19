@@ -49,9 +49,6 @@ export default async function BulkImportPage({
         packageName={packageName}
         appId={app.id}
         appDisplayName={app.display_name}
-        // The value the server prices with today (H4: to be removed from
-        // pricing) — shown so the pricing note tells the truth.
-        appDefaultCurrency={app.default_currency}
         iapsLastSyncedAt={gate.kind === "error" ? null : gate.iapsLastSyncedAt}
         iapsSyncReadError={gate.kind === "error" ? gate.message : null}
       />

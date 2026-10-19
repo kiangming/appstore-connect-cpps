@@ -16,11 +16,12 @@
  *
  * Two things this dialog makes VISIBLE that would otherwise be silent:
  *  1. A blank price is not "unpriced" — the orchestrator's regions
- *     bootstrap fills it from Google's conversion
- *     (bulk-import.ts:839-846). Blank rows say so in words.
- *  2. Google needs a defaultPrice, derived from the app-currency entry
- *     (Q6). Missing it means a server-side refusal at push; the Save gate
- *     surfaces it here instead, while it can still be fixed.
+ *     bootstrap fills it from Google's conversion of the FILE's price
+ *     (executeBulkImport, "Build per-row InAppProduct"). Blank rows say so
+ *     in words.
+ *  (Until H4.2 there was a second one: a Save gate demanding an entry in
+ *  the app's currency. Gone — defaultPrice and the conversion base are
+ *  always the file's price, so no currency is required here; Manager Q6.)
  */
 import { useEffect, useMemo, useState } from "react";
 import { X, Search, AlertTriangle, Loader2, Info } from "lucide-react";
@@ -32,7 +33,6 @@ import {
   buildCustomPriceRows,
   validateCustomPrices,
   summarizeCustomPrices,
-  customAppCurrencyGate,
   flagSuspiciousDrops,
   toCustomEntries,
   type CatalogCountry,
@@ -72,7 +72,6 @@ interface Props {
   scope: "ACCOUNT" | "APP";
   appId: string;
   packageName: string;
-  appDefaultCurrency: string | null;
   /** The row's base price, forwarded to the catalog route so Google's own
    *  conversion of THIS price can act as the reference column under Google
    *  Conversion, where there is no template to compare against. */
@@ -105,7 +104,6 @@ export function CustomPricesDialog({
   scope,
   appId,
   packageName,
-  appDefaultCurrency,
   baseCurrency,
   basePriceDecimal,
   existing,
@@ -256,23 +254,12 @@ export function CustomPricesDialog({
     [warnings],
   );
   const summary = useMemo(() => summarizeCustomPrices(rows), [rows]);
-  /**
-   * The app-currency entry is required ONLY under a template source,
-   * where the custom set replaces the whole price set and is therefore
-   * the only possible source of defaultPrice. Under Google Conversion the
-   * set is a sparse overlay and defaultPrice comes from the file's base
-   * price — gating Save there would block someone overriding three
-   * countries, none of them the app's own, which is exactly what this
-   * source is for. Mirrors the orchestrator's branch; the two must agree,
-   * or the UI blocks what the server would happily accept.
-   */
-  const appCurrencyCheck = useMemo(
-    () => customAppCurrencyGate(rows, { isGoogleConversion, appDefaultCurrency }),
-    [rows, appDefaultCurrency, isGoogleConversion],
-  );
-
+  // H4.2 (Manager Q6): no Save gate on the app's currency. defaultPrice and
+  // the conversion base are always the FILE's price, so a custom set needs
+  // no entry in any particular currency — client and server agree (the
+  // orchestrator dropped its twin refusal in the same commit).
   const nothingTyped = summary.customised === 0 && rows.every((r) => r.customDecimal === null);
-  const canSave = errors.length === 0 && appCurrencyCheck.ok && !nothingTyped;
+  const canSave = errors.length === 0 && !nothingTyped;
 
   const visibleRows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -418,17 +405,6 @@ export function CustomPricesDialog({
               </button>
             </div>
 
-            {/* Save-time app-currency guard (Q6) — surfaced here, not at
-                push. Rendered as soon as it fails rather than on a Save
-                click: Save is DISABLED while it fails, so gating the
-                explanation behind clicking it would leave a dead button
-                with no stated reason. */}
-            {!appCurrencyCheck.ok && (
-              <div className="mx-5 mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-red-600" />
-                <p className="text-[11px] text-red-800">{appCurrencyCheck.reason}</p>
-              </div>
-            )}
             {nothingTyped && (
               <div className="mx-5 mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
                 <Info className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
@@ -590,7 +566,7 @@ function DialogRow({
       <td className="px-5 py-2.5 align-top">
         {row.customDecimal === null && !editing ? (
           /* Blank is NOT "unpriced" — the orchestrator's bootstrap fills it
-             from Google's conversion (bulk-import.ts:839-846). Say so. */
+             from Google's conversion of the file's price (executeBulkImport). Say so. */
           <span className="inline-flex items-center gap-1.5 text-xs text-slate-400 italic px-2 py-1 rounded-md border border-dashed border-slate-300">
             inherits — Google conversion ·{" "}
             <button

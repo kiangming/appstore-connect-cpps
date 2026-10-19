@@ -14,16 +14,16 @@ describe("computeGoogleBulkImportTerminalStatus", () => {
     ).toEqual({ status: "SUCCESS" });
   });
 
-  it("maps a batch that was entirely REFUSED (cross-currency fail-soft, folded into skipped) to SUCCESS", () => {
-    // rowsRefused is folded into "skipped" by the caller before this
-    // function runs — an all-refused batch arrives here as succeeded=0,
-    // failed=0, same as all-skipped.
+  it("maps a batch that was entirely REFUSED to FAILED — the route counts every refusal as failed (P5, H4.2)", () => {
+    // The execute route adds file_price_invalid / conversion_failed /
+    // custom_invalid_price refusals to `failed` before this function runs,
+    // so an all-refused batch arrives as succeeded=0, failed=total.
     expect(
-      computeGoogleBulkImportTerminalStatus({ total: 4, succeeded: 0, failed: 0 }),
-    ).toEqual({ status: "SUCCESS" });
+      computeGoogleBulkImportTerminalStatus({ total: 4, succeeded: 0, failed: 4 }),
+    ).toEqual({ status: "FAILED", errorMessage: "4/4 rows failed" });
   });
 
-  it("maps a mix of succeeded + skipped/refused rows with zero failures to SUCCESS", () => {
+  it("maps a mix of succeeded + skipped rows with zero failures to SUCCESS", () => {
     expect(
       computeGoogleBulkImportTerminalStatus({ total: 5, succeeded: 3, failed: 0 }),
     ).toEqual({ status: "SUCCESS" });

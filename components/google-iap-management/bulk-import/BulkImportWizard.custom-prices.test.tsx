@@ -111,7 +111,6 @@ const PROPS = {
   packageName: "com.vng.cashknight",
   appId: "app-uuid-1",
   appDisplayName: "CashKnight",
-  appDefaultCurrency: "VND",
   // D0 — these scenarios exercise a mirror that HAS been refreshed.
   iapsLastSyncedAt: "2026-10-16T03:25:10.000Z",
 };
@@ -351,24 +350,22 @@ describe("BulkImportWizard — per-item custom prices", () => {
     );
   });
 
-  it("dialog blocks Save when no entry carries the app currency — TEMPLATE SOURCE ONLY (Q6, at save not push)", async () => {
-    // App currency VND; type only into US, leaving VN blank.
+  it("H4.2 (Q6): under a TEMPLATE source Save is NOT gated on any currency — a US-only custom set saves", async () => {
+    // Before H4.2 this was blocked ("Google needs a VND price") because the
+    // app-currency entry became defaultPrice. Now the file's price is the
+    // base, so no currency is special.
     render(<BulkImportWizard {...PROPS} />);
     fireEvent.click(await screen.findByRole("radio", { name: /Default Template/ }));
     await goToPreview();
     fireEvent.click(screen.getByRole("button", { name: "Custom…" }));
     const us = await screen.findByLabelText("Custom price for US");
     fireEvent.change(us, { target: { value: "12.00" } });
-    // Clear VN so no VND entry remains.
     fireEvent.click(screen.getByLabelText("Clear custom price for VN"));
 
-    // The reason is stated WITHOUT needing to click — Save is disabled, so
-    // gating the explanation behind a click would leave a dead button.
-    expect(await screen.findByText(/Google needs a VND price/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Save custom prices/ })).toBeDisabled();
+    expect(screen.queryByText(/Google needs a .* price|has no currency set/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save custom prices/ })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: /Save custom prices/ }));
-    // Dialog stays open — nothing was saved.
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   it("dialog blocks Save on a currency-precision violation, using the shared rules", async () => {

@@ -5,7 +5,6 @@ import {
   validateCustomPrices,
   diffFromTemplate,
   summarizeCustomPrices,
-  findAppCurrencyEntry,
   flagSuspiciousDrops,
   toCustomEntries,
   type CatalogCountry,
@@ -172,41 +171,9 @@ describe("summarizeCustomPrices + diffFromTemplate", () => {
   });
 });
 
-describe("findAppCurrencyEntry — the Save-time guard (Q6)", () => {
-  it("passes when a priced country uses the app's default currency", () => {
-    const rows = buildCustomPriceRows({
-      countries: CATALOG,
-      templateEntries: TEMPLATE,
-      custom: [{ region: "VN", currency: "VND", priceDecimal: "199000" }],
-    });
-    expect(findAppCurrencyEntry(rows, "VND")).toEqual({ ok: true, regionCode: "VN" });
-  });
+// H4.2 (Manager Q6): the app-currency Save guard (findAppCurrencyEntry) is
+// removed — defaultPrice and the conversion base are the file's price.
 
-  it("fails when no PRICED country uses the app currency — a template value doesn't count", () => {
-    // VN has a template price but the Manager typed nothing there; the
-    // push sends only typed entries, so there'd be no VND defaultPrice.
-    const rows = buildCustomPriceRows({
-      countries: CATALOG,
-      templateEntries: TEMPLATE,
-      custom: [{ region: "US", currency: "USD", priceDecimal: "12.00" }],
-    });
-    const res = findAppCurrencyEntry(rows, "VND");
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.reason).toContain("VND price");
-  });
-
-  it("fails loudly when the app has no currency set — and points at the app page, not Refresh (D9)", () => {
-    const rows = buildCustomPriceRows({ countries: CATALOG, templateEntries: [], custom: [] });
-    const res = findAppCurrencyEntry(rows, null);
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.reason).toContain("Set it on the app page");
-      // Refresh no longer writes the currency (C2-d): sending the Manager
-      // there would be a dead end.
-      expect(res.reason).not.toContain("Refresh");
-    }
-  });
-});
 
 describe("flagSuspiciousDrops — the missing-floor-table heuristic (R4)", () => {
   it("flags a price >=90% below the template baseline", () => {

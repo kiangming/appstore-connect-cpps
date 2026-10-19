@@ -141,12 +141,8 @@ interface Props {
   packageName: string;
   appId: string;
   appDisplayName: string | null;
-  /** apps.default_currency — what the server still prices cross-currency
-   *  rows and custom prices with (H4: violates "the file currency is the only
-   *  price source"; removed in H4.2/H4.3). Since H4.1 it no longer reads a
-   *  generic "Price" header — such a file is refused. Shown in the pricing
-   *  note and used by the custom-prices dialog. Not an import condition. */
-  appDefaultCurrency: string | null;
+  // ⚠ H4.2: no app currency prop. The file is the only price source — the
+  //   wizard, the pricing note and the custom-prices dialog never read it.
   /** D0/D3 — apps.iaps_last_synced_at: the last COMPLETE IAP-list refresh.
    *  null = never (or unreadable — see iapsSyncReadError). While null the
    *  mirror cannot say which SKUs exist, so Preview is blocked. */
@@ -161,7 +157,6 @@ export function BulkImportWizard({
   packageName,
   appId,
   appDisplayName,
-  appDefaultCurrency,
   iapsLastSyncedAt,
   iapsSyncReadError = null,
 }: Props) {
@@ -196,14 +191,8 @@ export function BulkImportWizard({
     }
   }
 
-  // H4.6 — the currency the pricing note describes: the server's own value
-  // from the last preview (it re-reads the app row per request), seeded from
-  // the page.
-  const [pricingAppCurrency, setPricingAppCurrency] = useState<string | null>(appDefaultCurrency);
-
-  // C2.1 — the app's currency/language are NOT import conditions. The app
-  // page is linked only so the pricing note can say where the value lives.
-  const appPageHref = `/google-iap-management/apps/${encodeURIComponent(packageName)}#app-defaults`;
+  // C2.1 — the app's currency/language are NOT import conditions; since
+  // H4.2 the wizard does not read the app's currency at all.
 
   async function handleRefreshMirror() {
     setMirrorRefreshError(null);
@@ -531,7 +520,6 @@ export function BulkImportWizard({
         code?: string;
         blockers?: string[];
         iapsLastSyncedAt?: string | null;
-        appCurrency?: string | null;
         refusedRows?: Array<{ rowNumber: number; sku: string; reason: string }>;
       };
       if (!res.ok) {
@@ -552,8 +540,6 @@ export function BulkImportWizard({
       setFileRefusedRows(body.refusedRows ?? []);
       setTierSelections(seedSelections);
       if (body.iapsLastSyncedAt) setMirrorSyncedAt(body.iapsLastSyncedAt);
-      // The note must describe what the server priced THIS preview with.
-      if (body.appCurrency !== undefined) setPricingAppCurrency(body.appCurrency);
 
       // Custom prices deliberately SURVIVE this reset (Manager-locked:
       // "custom survives back-navigation to Step 1 and a template
@@ -815,10 +801,7 @@ export function BulkImportWizard({
         onRefresh={handleRefreshMirror}
       />
 
-      <PricingCurrencyNote
-        appCurrency={pricingAppCurrency}
-        appPageHref={appPageHref}
-      />
+      <PricingCurrencyNote />
 
       {/* Step 1: Pricing source */}
       {step === "pricing" && (
@@ -1219,7 +1202,6 @@ export function BulkImportWizard({
               scope={pricingSource === "app_template" ? "APP" : "ACCOUNT"}
               appId={appId}
               packageName={packageName}
-              appDefaultCurrency={appDefaultCurrency}
               baseCurrency={row?.baseCurrency ?? ""}
               basePriceDecimal={row?.basePriceDecimal ?? ""}
               existing={customPrices[customDialogSku] ?? null}
@@ -1290,10 +1272,10 @@ export function BulkImportWizard({
                 />
                 <Stat label="Skipped" value={executeResult.rowsSkipped} tone="slate" />
                 <Stat label="Failed" value={executeResult.rowsFailed} tone="red" />
-                {/* Cycle 43 — per-row cross-currency fail-soft refusals.
-                    Distinct from "Failed" (Google-side errors): refused rows
-                    were rejected by our pre-pass (unresolvable cross-currency)
-                    and never sent to Google. */}
+                {/* Per-row refusals — the file's price could not be sent as
+                    written (file_price_invalid / conversion_failed, H4.2) or a
+                    custom set could not be applied. Distinct from "Failed"
+                    (Google-side errors): these rows were never sent. */}
                 <Stat
                   label="Refused"
                   value={executeResult.rowsRefused ?? 0}
@@ -1379,72 +1361,47 @@ export function BulkImportWizard({
 }
 
 /**
- * H4.6 [2026-10-16] — how prices are read from the file TODAY. A description,
- * not a warning and not a gate: the app's currency is no longer an import
- * condition (C2.1). Every sentence below is measured behaviour of the preview
- * + execute code (H4 census, adversarially verified); the app currency still
- * takes part in pricing (a violation of "the file currency is the only price
- * source" — being removed step by step, H4.1–H4.4). Each H4 step that changes
- * pricing changes this note IN THE SAME COMMIT — the verbatim test pins the
- * wording only; it cannot see a pricing change (T1 does).
- * H4.1: the file needs exactly one "Price (XXX)" column; a header without its
- * currency or a second price column refuses the file; a too-precise price or
- * GT price keeps that row out.
+ * How prices are read from the file — a description, not a warning and not a
+ * gate. Every sentence is measured behaviour of the preview + execute code at
+ * this commit (H4.2: the app's currency takes NO part in pricing). Each H4
+ * step that changes pricing changes this note IN THE SAME COMMIT — the
+ * verbatim test pins the wording only; it cannot see a pricing change (T1,
+ * bulk-import/file-currency-invariance.test.ts, does).
  */
-function PricingCurrencyNote({
-  appCurrency,
-  appPageHref,
-}: {
-  appCurrency: string | null;
-  appPageHref: string;
-}) {
-  const x = appCurrency?.trim().toUpperCase() || null;
+function PricingCurrencyNote() {
   const code = (c: string) => (
     <code className="px-1 bg-white border border-slate-200 rounded font-mono">{c}</code>
-  );
-  const appPageLink = (
-    <a href={appPageHref} className="underline">
-      app page
-    </a>
   );
   return (
     <div
       data-testid="pricing-currency-note"
-      data-app-currency={x ?? ""}
       className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2"
     >
       <span className="font-semibold">How prices are read from the file.</span> The file needs
       exactly one {code("Price (XXX)")} column (e.g. {code("Price (USD)")}), in a currency Google
-      Play bills in, and prices are read in that currency. A price header without its currency (
-      {code("Price")} / Default Price / Base Price) or a second price column refuses the file; a
-      row whose price or GT price has more decimals than its currency allows is not imported. GT
-      Price + GT Currency override their one country, except when a pricing template tier matches
-      the row (the tier&apos;s price is used) or the row has custom prices (they replace it).
-      {x ? (
-        <ul className="mt-1 ml-4 list-disc space-y-0.5">
-          <li>
-            When a row&apos;s price column names a currency other than this app&apos;s currency,{" "}
-            {code(x)} (shown on the {appPageLink} — it may still be a tool guess): with a pricing
-            template the row takes the tier whose price in that currency matches (none ⇒ refused;
-            several ⇒ you pick), and countries the tier does not list are converted by Google from
-            the tier&apos;s {x} price — a tier with no {x} price refuses the row. With Google
-            Conversion the row is refused unless you set custom prices for it; then a {x} custom
-            price, if you set one, becomes the conversion base.
-          </li>
-          <li>
-            Custom prices with a pricing template must include a {x} price, and it becomes the
-            conversion base.
-          </li>
-        </ul>
-      ) : (
-        <ul className="mt-1 ml-4 list-disc space-y-0.5">
-          <li>
-            This app has no currency set (see the {appPageLink}): every row is priced from the
-            currency its price column names.
-          </li>
-          <li>Custom prices with a pricing template are refused (they need an app currency).</li>
-        </ul>
-      )}
+      Play bills in, and prices are read in that currency only — the app&apos;s currency is not
+      used. A price header without its currency ({code("Price")} / Default Price / Base Price) or a
+      second price column refuses the file; a row whose price or GT price cannot be sent exactly as
+      written (more decimals than its currency allows, 0, or a &quot;.&quot; / &quot;,&quot; in a
+      currency without decimals) is not imported.
+      <ul className="mt-1 ml-4 list-disc space-y-0.5">
+        <li>
+          With a pricing template, a row takes the tier named after its SKU, else the tier whose
+          price in the file&apos;s currency equals the file&apos;s price; countries the tier does not
+          list, and rows with no matching tier, are converted by Google from the file&apos;s price.
+          With Google Conversion every country is converted from the file&apos;s price.
+        </li>
+        <li>
+          GT Price + GT Currency (both, or neither) override their one country, except when a tier
+          matches the row — the tier&apos;s prices replace the GT, and a country the tier does not
+          list is then converted by Google — or the row has custom prices (they replace it). Custom
+          prices overlay the file&apos;s price, which stays the conversion base.
+        </li>
+        <li>
+          If Google&apos;s conversion fails or returns no US price, a row whose price is not in USD
+          is refused — the countries it does not list would have no price. A USD row is still sent.
+        </li>
+      </ul>
     </div>
   );
 }

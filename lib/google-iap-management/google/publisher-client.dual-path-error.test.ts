@@ -1,5 +1,7 @@
 /**
- * ⭐ O1 — when BOTH the new API and the legacy fallback fail, BOTH are kept.
+ * ⭐ Q8 (H4.2) — the batch upsert has NO legacy fallback; and ⭐ O1 — where a
+ * fallback remains (the five single-item sites, until D4), when BOTH the new
+ * API and the legacy fallback fail, BOTH are kept.
  *
  * The hole this closes, precisely: six fallback sites ended in
  * `catch { throw err }`, which discarded the legacy call's error. That is
@@ -15,10 +17,17 @@
  * sentence, and nothing anywhere to tell them apart. An investigation spent
  * a full round-trip establishing that from source.
  *
- * ⚠ MUTATION BAR. Restoring `catch { throw err }` at any of the six sites
- * must turn this file RED. The dual-path assertions below are written
- * against the THROWN VALUE, not against a log spy, so a site that merely
- * logs both and still throws one is also caught.
+ * ⚠ H4.2: the batch site no longer has a fallback at all (Manager Q8) — the
+ *   first block pins THAT, for a 403, a 503 and a plain Error alike (a
+ *   fallback restored "only for transient 5xx" is caught too). The other
+ *   five sites keep their fallback (D4); the O1 block pins `throwBothFailed`
+ *   through one of them (getInAppProduct) — every one of the five ends in
+ *   that same function, so one site carries the bar for all.
+ *
+ * ⚠ MUTATION BAR. Restoring a legacy fallback on the batch path, or making
+ * `throwBothFailed` rethrow only the new API's error, must turn this file
+ * RED. The O1 assertions are written against the THROWN VALUE, not against
+ * a log spy, so a site that merely logs both and still throws one is caught.
  *
  * ⚠ PARITY. The success path is the other half of the bar: `lightandnight`
  * imported 9/9 cleanly the week before and must keep doing so. The parity
@@ -33,12 +42,14 @@ const {
   newBatchUpdateSpy,
   batchActivateSpy,
   legacyBatchUpdateSpy,
+  legacyGetSpy,
   logSpy,
 } = vi.hoisted(() => ({
   getProductSpy: vi.fn(),
   newBatchUpdateSpy: vi.fn(),
   batchActivateSpy: vi.fn(),
   legacyBatchUpdateSpy: vi.fn(),
+  legacyGetSpy: vi.fn(),
   logSpy: vi.fn(),
 }));
 
@@ -52,14 +63,14 @@ vi.mock("googleapis", () => ({
           purchaseOptions: { batchUpdateStates: batchActivateSpy },
         },
       },
-      inappproducts: { batchUpdate: legacyBatchUpdateSpy },
+      inappproducts: { batchUpdate: legacyBatchUpdateSpy, get: legacyGetSpy },
     }),
   },
 }));
 vi.mock("./logging", () => ({ logPublisherCall: logSpy }));
 vi.mock("google-auth-library", () => ({ JWT: class {} }));
 
-import { batchUpsertInAppProducts } from "./publisher-client";
+import { batchUpsertInAppProducts, getInAppProduct } from "./publisher-client";
 import type { BatchUpsertInput } from "./publisher-client";
 import { GoogleDualPathError } from "./google-error-descriptor";
 
@@ -132,103 +143,104 @@ beforeEach(() => {
   newBatchUpdateSpy.mockReset();
   batchActivateSpy.mockReset();
   legacyBatchUpdateSpy.mockReset();
+  legacyGetSpy.mockReset();
   logSpy.mockReset();
   batchActivateSpy.mockResolvedValue({ data: {} });
 });
 
-describe("⭐ both paths failed — the fallback's error is no longer deleted", () => {
-  /** ⚠ Fresh Error instances per attempt: reusing one rejected instance
-   *  across two mocked calls produces spurious failures (see
-   *  feedback_vitest_mock_rejected — IAP.o.10a). */
+/**
+ * ⭐ H4.2 — Manager Q8 (2026-10-17): the BATCH path has NO legacy fallback.
+ * Its `inappproducts.batchUpdate` resend was a second, silent pricing path
+ * (different rules: it demands defaultPrice in the app's currency). A
+ * new-API error now reaches the caller as itself — verbatim and structured —
+ * and the legacy resource is never called, even when it would succeed.
+ * (Before H4.2 this block pinned the both-failed GoogleDualPathError of that
+ * fallback; the five single-item fallbacks keep it until chunk D4.)
+ */
+describe("⭐ H4.2 / Q8 — the batch upsert has no legacy fallback", () => {
+  it("⭐ v3 fails ⇒ the v3 error ITSELF is thrown, and inappproducts.batchUpdate is called 0 times — even if it would succeed", async () => {
+    const v3err = permissionDenied("The caller does not have permission");
+    newBatchUpdateSpy.mockRejectedValueOnce(v3err);
+    legacyBatchUpdateSpy.mockResolvedValue({ data: { inappproducts: [{ sku: "sku.new", status: "active" }] } });
+    const err = await rejectionOf(batchUpsertInAppProducts(jwt, PKG, [createInput()]));
+    expect(err).toBe(v3err);
+    expect(err).not.toBeInstanceOf(GoogleDualPathError);
+    expect(legacyBatchUpdateSpy).toHaveBeenCalledTimes(0);
+  });
+
+  it.each([
+    ["a transient 503", () => Object.assign(new Error("Service unavailable"), { code: 503, response: { status: 503, data: { error: { code: 503, message: "Service unavailable", status: "UNAVAILABLE" } } } })],
+    ["a plain Error with no code", () => new Error("socket hang up")],
+  ])("⭐ %s ⇒ still the v3 error itself, still 0 legacy calls (no fallback on ANY failure)", async (_label, make) => {
+    const v3err = make();
+    newBatchUpdateSpy.mockRejectedValueOnce(v3err);
+    legacyBatchUpdateSpy.mockResolvedValue({ data: { inappproducts: [{ sku: "sku.new", status: "active" }] } });
+    const err = await rejectionOf(batchUpsertInAppProducts(jwt, PKG, [createInput()]));
+    expect(err).toBe(v3err);
+    expect(legacyBatchUpdateSpy).toHaveBeenCalledTimes(0);
+  });
+
+  it("⚠ the thrown error keeps its structure: code 403, status, reasons, details — so the execute route answers 403 with them", async () => {
+    newBatchUpdateSpy.mockRejectedValueOnce(permissionDenied("The caller does not have permission"));
+    const err = (await rejectionOf(batchUpsertInAppProducts(jwt, PKG, [createInput()]))) as unknown as {
+      code: number;
+      response: { data: { error: { status: string; errors: Array<{ reason: string }>; details: Array<{ metadata: { permission: string } }> } } };
+    };
+    expect(err.code).toBe(403);
+    expect(err.response.data.error.status).toBe("PERMISSION_DENIED");
+    expect(err.response.data.error.errors[0].reason).toBe("forbidden");
+    expect(err.response.data.error.details[0].metadata.permission).toBe("androidpublisher.inappproducts.update");
+  });
+
+  it("logs ONE per-call error line, for the new API only, with err_status — no both-failed line", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    newBatchUpdateSpy.mockRejectedValueOnce(permissionDenied("The caller does not have permission"));
+    await batchUpsertInAppProducts(jwt, PKG, [createInput()]).catch(() => {});
+    const failed = logSpy.mock.calls.map((c) => c[0]).filter((e) => e.outcome === "err");
+    expect(failed.map((e) => e.method)).toEqual(["monetization.onetimeproducts.batchUpdate"]);
+    expect(failed[0].errStatus).toBe("PERMISSION_DENIED");
+    expect(spy.mock.calls.map((c) => String(c[0])).some((l) => l.includes("BOTH PATHS FAILED"))).toBe(false);
+    spy.mockRestore();
+  });
+});
+
+/**
+ * ⭐ O1 — kept on a SURVIVING fallback site. Before H4.2 this bar lived on
+ * the batch path; Q8 deleted that fallback, and with it the only behavioural
+ * test of `throwBothFailed`, which list/get/insert/patch/delete still end
+ * in. getInAppProduct carries it until D4 removes those fallbacks.
+ */
+describe("⭐ O1 (on getInAppProduct) — both paths failed: the fallback's error is no longer deleted", () => {
+  /** ⚠ Fresh Error instances per attempt (feedback_vitest_mock_rejected). */
   function bothFail() {
-    newBatchUpdateSpy.mockRejectedValueOnce(
-      permissionDenied("The caller does not have permission"),
-    );
-    legacyBatchUpdateSpy.mockRejectedValueOnce(
+    getProductSpy.mockRejectedValueOnce(permissionDenied("The caller does not have permission"));
+    legacyGetSpy.mockRejectedValueOnce(
       permissionDenied("Please migrate to the new publishing API.", "FAILED_PRECONDITION"),
     );
   }
 
-  it("⭐ throws a GoogleDualPathError, not a bare rethrow of the new API's error", async () => {
+  it("⭐ throws a GoogleDualPathError carrying BOTH halves structurally, code 403 kept", async () => {
     bothFail();
-    await expect(
-      batchUpsertInAppProducts(jwt, PKG, [createInput()]),
-    ).rejects.toBeInstanceOf(GoogleDualPathError);
-  });
-
-  it("⭐ the thrown message names BOTH failures", async () => {
-    bothFail();
-    const err = await rejectionOf(
-      batchUpsertInAppProducts(jwt, PKG, [createInput()]),
-    );
+    const err = await rejectionOf(getInAppProduct(jwt, PKG, "sku.x"));
+    expect(err).toBeInstanceOf(GoogleDualPathError);
     expect(err.message).toContain("The caller does not have permission");
     expect(err.message).toContain("Please migrate to the new publishing API.");
-  });
-
-  it("⭐ both halves survive STRUCTURALLY, not only as prose", async () => {
-    bothFail();
-    const err = await rejectionOf(
-      batchUpsertInAppProducts(jwt, PKG, [createInput()]),
-    );
     expect(err.primary.status).toBe("PERMISSION_DENIED");
-    expect(err.primary.details?.[0].metadata).toEqual({
-      permission: "androidpublisher.inappproducts.update",
-    });
     expect(err.fallback.status).toBe("FAILED_PRECONDITION");
     expect(err.fallback.httpStatus).toBe(403);
-  });
-
-  it("⚠ keeps `code` = 403 so the execute route answers 403, not 500", async () => {
-    bothFail();
-    const err = await rejectionOf(
-      batchUpsertInAppProducts(jwt, PKG, [createInput()]),
-    );
     expect(err.code).toBe(403);
   });
 
   it("logs ONE both-failed line carrying both statuses", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     bothFail();
-    await batchUpsertInAppProducts(jwt, PKG, [createInput()]).catch(() => {});
-    const lines = spy.mock.calls
-      .map((c) => String(c[0]))
-      .filter((l) => l.includes("BOTH PATHS FAILED"));
+    await getInAppProduct(jwt, PKG, "sku.x").catch(() => {});
+    const lines = spy.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("BOTH PATHS FAILED"));
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain(`pkg=${PKG}`);
+    expect(lines[0]).toContain("op=get");
     expect(lines[0]).toContain("new_api_err_status=PERMISSION_DENIED");
     expect(lines[0]).toContain("legacy_err_status=FAILED_PRECONDITION");
     spy.mockRestore();
-  });
-
-  it("still logs BOTH per-call lines, so the method names stay distinguishable", async () => {
-    bothFail();
-    await batchUpsertInAppProducts(jwt, PKG, [createInput()]).catch(() => {});
-    const methods = logSpy.mock.calls.map((c) => c[0].method);
-    expect(methods).toContain("monetization.onetimeproducts.batchUpdate");
-    expect(methods).toContain("inappproducts.batchUpdate");
-  });
-
-  it("the per-call error lines carry err_status, not just a message tail", async () => {
-    bothFail();
-    await batchUpsertInAppProducts(jwt, PKG, [createInput()]).catch(() => {});
-    const failed = logSpy.mock.calls
-      .map((c) => c[0])
-      .filter((e) => e.outcome === "err");
-    expect(failed.length).toBeGreaterThanOrEqual(2);
-    expect(failed.map((e) => e.errStatus)).toContain("PERMISSION_DENIED");
-    expect(failed.map((e) => e.errReason)).toContain("forbidden");
-  });
-});
-
-describe("the legacy fallback still WORKS when it can (unchanged behaviour)", () => {
-  it("returns the legacy result and does not throw when only the new API fails", async () => {
-    newBatchUpdateSpy.mockRejectedValueOnce(new Error("new API blew up"));
-    legacyBatchUpdateSpy.mockResolvedValueOnce({
-      data: { inappproducts: [{ sku: "sku.new", status: "active" }] },
-    });
-    const out = await batchUpsertInAppProducts(jwt, PKG, [createInput()]);
-    expect(out).toHaveLength(1);
-    expect(out[0].sku).toBe("sku.new");
   });
 });
 

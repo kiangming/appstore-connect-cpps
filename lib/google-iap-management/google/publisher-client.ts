@@ -914,24 +914,9 @@ export async function batchUpdateProductStates(
   await newCrossProductBatchActivate(jwt, packageName, requests);
 }
 
-/**
- * Q-GIAP.E: batchUpdate runs the Manager's preview decisions in a single
- * round-trip. Each request is an insert / update / delete operation.
- */
-export async function batchUpdateInAppProducts(
-  jwt: JWT,
-  packageName: string,
-  requestBody: InappproductsBatchUpdateRequest,
-): Promise<InappproductsBatchUpdateResponse> {
-  return timed(jwt, "inappproducts.batchUpdate", packageName, undefined, async () => {
-    const client = buildClient(jwt);
-    const res = await client.inappproducts.batchUpdate({
-      packageName,
-      requestBody,
-    });
-    return res.data as InappproductsBatchUpdateResponse;
-  });
-}
+/* H4.2 (Manager Q8, 2026-10-17): the legacy `inappproducts.batchUpdate`
+ * wrapper is gone — its only caller was batchUpsertInAppProducts' fallback,
+ * removed with it. The five single-item fallbacks stay for chunk D4. */
 
 /* ──────────────────────────────────────────────────────────────────────
  *  Phase 3 — Bulk Import migration to Monetization API (Hotfix 14).
@@ -1064,9 +1049,12 @@ export interface BatchUpsertInput {
  * intended state onto each returned product so the downstream adapter +
  * cache sync see ACTIVE / INACTIVE matching Manager's submitted rows.
  *
- * Falls back to legacy `inappproducts.batchUpdate` on new-API failure
- * (apps not yet migrated, transient 5xx, etc.). Same try-new-then-legacy
- * pattern as the single-write paths.
+ * ⚠ NO legacy fallback (H4.2, Manager Q8 — part of D4 "drop the old API").
+ *   It used to resend the same bodies through `inappproducts.batchUpdate`,
+ *   whose rules differ (it demands the app's currency for defaultPrice) —
+ *   a second, silent pricing path. A new-API error now reaches the caller
+ *   verbatim and structured (timed() tags it; describeGoogleError /
+ *   googleErrorPayload carry it to the response and the audit log).
  */
 export async function batchUpsertInAppProducts(
   jwt: JWT,
@@ -1237,24 +1225,8 @@ export async function batchUpsertInAppProducts(
       (p) => (p ? (oneTimeProductToInAppProduct(p) as unknown as InAppProduct) : null as unknown as InAppProduct),
     );
   } catch (err) {
-    try {
-      const legacyReq: InappproductsBatchUpdateRequest = {
-        requests: inputs.map((input) => ({
-          packageName,
-          sku: input.body.sku ?? undefined,
-          allowMissing: true,
-          autoConvertMissingPrices: false,
-          inappproduct: input.body,
-        })),
-      };
-      const legacyRes = await batchUpdateInAppProducts(jwt, packageName, legacyReq);
-      console.warn(
-        `[google-iap:publisher] batch upsert fallback pkg=${packageName} count=${inputs.length}`,
-      );
-      return (legacyRes.inappproducts ?? []) as InAppProduct[];
-    } catch (legacyErr) {
-      throwBothFailed("batch upsert", packageName, undefined, err, legacyErr);
-    }
+    // H4.2 (Q8): no fallback — the new-API error, verbatim.
+    throw err;
   }
 }
 

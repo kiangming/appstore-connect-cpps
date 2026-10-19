@@ -63,27 +63,17 @@ export function buildExecuteRows(
   return previewRows.map((r) => ({
     rowNumber: r.rowNumber,
     sku: r.sku,
-    // Cycle 43 (2026-06-01): send the parser-resolved
-    // baseCurrency verbatim. Pre-Cycle-43 the wizard stomped
-    // this to appDefaultCurrency (Hotfix 4) so the legacy
-    // batchUpdate endpoint's "defaultPrice.currency == app
-    // currency" check would pass; Hotfix 14 migrated to the
-    // Monetization API which accepts per-row currency, and
-    // Cycle 43's orchestrator cross-currency pre-pass now
-    // honours the parser's explicit "Price (XXX)" declaration
-    // (header-first trigger) — the stomp obscured this and
-    // forced the value-based fallback even on explicit
-    // headers, which silently mishandled integer cross-
-    // currency values like "25 USD" → "25 VND".
+    // The parser's currency, verbatim — the currency written in the file's
+    // price header. ⚠ Never the app's currency: the Hotfix 4 stomp to
+    // appDefaultCurrency is exactly what H4 removed (the wizard test that
+    // captures the real fetch body fails on any rewrite here).
     baseCurrency: r.baseCurrency,
     basePriceDecimal: r.basePriceDecimal,
     regionOverrides: r.regionOverrides,
     listings: r.listings,
     decision: r.decision,
-    // Cycle 43 — forward parser header provenance so the
-    // orchestrator's pre-pass can choose explicit_header vs
-    // value_based trigger correctly. Default "inferred" when
-    // a stale preview response lacks the field.
+    // Parser header provenance — no effect on pricing since H4.2; dropped
+    // with the execute re-check in H4.3 (Q9).
     priceHeaderSource: r.priceHeaderSource ?? "inferred",
     // Hotfix 19: explicit tier selection (null when no
     // template lookup applied). Orchestrator honours it
@@ -152,12 +142,9 @@ export function computePrecisionViolations(
   for (const row of previewRows) {
     if (row.decision === "skip") continue;
     if (!row.baseCurrency) continue;
-    // Cycle 43: cross-currency rows do NOT send the raw basePriceDecimal —
-    // they either resolve via template (push uses the resolved app-currency
-    // amount, not the raw USD anchor), need a chooser pick, or get refused
-    // (per-row fail-soft, also doesn't send raw). In all three cases the
-    // precision check doesn't apply because the raw value never reaches
-    // Google. Only same-currency rows are precision-gated.
+    // Since H4.2 the preview produces only "same_currency" rows (every row is
+    // priced from its own file price); the other kinds are leftovers of the
+    // removed cross-currency branch, cleaned up in H4.3.
     const resolutionKind = row.resolution?.kind ?? "same_currency";
     if (resolutionKind !== "same_currency") continue;
     const err = validateDecimalForCurrency(row.basePriceDecimal, row.baseCurrency);

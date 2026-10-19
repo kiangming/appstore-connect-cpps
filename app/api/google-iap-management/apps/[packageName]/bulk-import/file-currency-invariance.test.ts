@@ -5,11 +5,12 @@
  * can push or what is sent to Google.
  *
  * WHAT RUNS FOR REAL: the preview route, the execute route, the parser, the
- * orchestrator, the cross-currency module, the template queries, the
+ * file-price choke point, the orchestrator, the template queries, the
  * publisher client and the one-time-product adapter. The wizard side is the
  * wizard's OWN code, not a copy: preview-row mapping, tier seeding, the Push
  * precision gate and the whole execute request body come from
- * execute-payload.ts; the custom-prices Save gate from custom-prices.ts.
+ * execute-payload.ts. (The cross-currency module and the custom-prices Save
+ * gate on the app's currency were deleted in H4.2.)
  *
  * WHAT IS FAKED: googleapis (nothing is sent anywhere), the DB (in-memory;
  * any query method it does not implement, a single() over >1 rows and an
@@ -28,41 +29,24 @@
  * invariant H4.2 establishes for CREATE holds for Overwrite too. Only the
  * PRICE of Overwrite is in scope — the "blind replace" (forced AVAILABLE,
  * auto-ACTIVATE, tax mask) is D10. Per file and source, the outcome — client gates (Push
- * precision gate, custom Save gate), preview refusal, rows refused at
+ * precision gate, rows refused in the file), preview refusal, rows refused at
  * execute, convertRegionPrices anchors, the FULL batchUpdate request and the
  * purchase-option state calls — must not depend on the app currency.
  *
- * ⚠ THE PINS FOLLOW EACH H4 STEP — EXPECTED_GROUPS_TODAY (which app
- *   currencies give the same outcome) and EXPECTED_TODAY (the outcome of every
- *   cell — a characterisation pin) describe the CURRENT commit:
- *   H4.0 — 33/33 combinations depended on the app currency.
- *   H4.1 — the parser takes no app currency. A header without its currency
- *          is refused at preview (F1 — invariant end to end ⇒ 3/33). A row
- *          whose price or GT price breaks its currency is refused in the file
- *          and the wizard blocks Push for EVERY app currency (F9, F10) — but a
- *          tab previewed earlier, or a direct POST, still sends that row, and
- *          the server's answer still depends on the app currency (500 vs
- *          refused; under a template the GT is replaced) until H4.3 (Q9).
- *          The other 24 depend on it through the cross-currency branch, the
- *          tier entry, custom prices and the US-stamp until H4.2. F6 under
- *          Google Conversion also splits on a preview warning that says
- *          "will be refused on push" while execute sends the row (S-i).
- *   Cells that send a batchUpdate (CREATE = OVERWRITE): H4.0 92, H4.1 82.
- * ⚠ WHAT H4.2 MUST DO WHEN IT FLIPS T1 — "every group becomes
- *   NULL+TWD+USD+VND" ALONE IS NOT ENOUGH: refusing every row, rejecting every
- *   file, or ignoring the file currency would all pass it. H4.2 must also:
- *   (1) replace EXPECTED_TODAY with EXPECTED_H4 (one entry per file·source),
- *       derived BY HAND from Q1–Q7 BEFORE running the code;
- *   (2) add rule assertions computed from each FileCase: every pushed cell
- *       anchors on the header currency + value; no refusal except the cases
- *       Q1/Q7/Q9/Q10 name; the GT region carries the GT value when no tier
- *       matched; custom entries appear verbatim; and degeneracy guards (e.g.
- *       F3 and F4 differ under google_default).
- * ⚠ NOT Q8 COVERAGE. v3 batchUpdate always succeeds here, so the legacy
- *   inappproducts fallback can never be reached in T1; the per-run counters
- *   only prove no cell touches it or GETs a live product. Q8 (remove the
- *   batch fallback) needs its own test in H4.2: v3 rejects ⇒ the structured
- *   error comes back verbatim and inappproducts.batchUpdate is never called.
+ * HISTORY OF THE PINS (one commit each):
+ *   H4.0 — 33/33 combinations depended on the app currency (92 cells sent).
+ *   H4.1 — the parser took no app currency: 3/33 invariant (82 sent).
+ *   H4.2 — the app currency takes NO part in pricing: 33/33 invariant, for
+ *          CREATE and OVERWRITE alike (84 sent). Checked three ways, so a
+ *          degenerate build cannot pass: (1) every group is NULL+TWD+USD+VND;
+ *          (2) the single outcome equals EXPECTED_H4, derived BY HAND from
+ *          Q1–Q7 before the code ran; (3) rule assertions computed from each
+ *          FileCase (anchor = the header currency + value; refusals only where
+ *          Q7 / the file says so; the US price is always USD; GT and custom
+ *          prices verbatim where they apply) + degeneracy guards.
+ * ⚠ Q8 is covered by its own route-level test below: v3 rejects ⇒ the error
+ *   comes back verbatim and structured, inappproducts.batchUpdate is called
+ *   0 times. In the matrix itself v3 always succeeds.
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { readFileSync } from "node:fs";
@@ -138,7 +122,13 @@ vi.mock("@/lib/google-iap-management/active-account", () => ({
   readActiveAccountId: () => null,
   resolveActiveAccountId: () => "acc1",
 }));
-vi.mock("@/lib/google-iap-management/hub-tracking/tracking", () => ({ finalizeHubTracking: async () => undefined }));
+/** The Hub terminal status the execute route closes with (P5 — refusals count as failed). */
+const hub = vi.hoisted(() => ({ statuses: [] as string[] }));
+vi.mock("@/lib/google-iap-management/hub-tracking/tracking", () => ({
+  finalizeHubTracking: async (_runId: string | null, status: string) => {
+    hub.statuses.push(status);
+  },
+}));
 
 /** In-memory googleIapDb() for the exact queries the bulk-import path makes. */
 const fakeDb = vi.hoisted(() => {
@@ -212,7 +202,6 @@ import {
   previewRowsFromResponse,
   seedTierSelections,
 } from "@/components/google-iap-management/bulk-import/execute-payload";
-import { customAppCurrencyGate, type CustomPriceRow } from "@/lib/google-iap-management/custom-prices";
 import { regionForCurrency } from "@/lib/google-iap-management/parsers/excel-parser";
 import type { PreviewRow } from "@/components/google-iap-management/bulk-import/BulkImportWizard";
 import type { CustomPriceSet } from "@/components/google-iap-management/bulk-import/CustomPricesDialog";
@@ -328,19 +317,6 @@ function workbook(f: FileCase): File {
   return new File([new Uint8Array(buf)], "h4.xlsx");
 }
 
-/** The custom set as the dialog's rows see it: only typed countries matter to
- *  the Save gate (customAppCurrencyGate reads customDecimal + currency). */
-function dialogRows(entries: CustomPriceSet["entries"]): CustomPriceRow[] {
-  return entries.map((e) => ({
-    regionCode: e.region,
-    countryName: e.region,
-    currency: e.currency,
-    templateDecimal: null,
-    customDecimal: e.priceDecimal,
-    state: "custom",
-  }));
-}
-
 type Decision = "create" | "overwrite";
 
 /** What a tab previewed before H4.1 — or a direct POST — sends for a row the
@@ -403,9 +379,11 @@ interface Outcome {
   /** Overwrite only: which option was priced, and whether the other one came
    *  back exactly as Google had it. Null when nothing was sent. */
   overwrite: { targetId: string | null; nonTargetUntouched: boolean } | null;
-  /** Human-readable, pinned in EXPECTED_TODAY. */
+  /** Human-readable, pinned in EXPECTED_H4. */
   short: string;
   calls: { batch: number; legacy: number; get: number };
+  /** Structured facts for the RULE assertions (computed from the file, not pinned). */
+  facts: { anchors: string[]; prices: Record<string, string>; refusedKinds: string[]; previewStatus: number; hubStatus: string };
 }
 
 const ctx = { params: { packageName: PKG } };
@@ -446,7 +424,14 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
   };
   if (!pres.ok || !pbody.rows) {
     const preview = `PREVIEW ${pres.status} ${pbody.code ?? ""} ${pbody.error ?? (pbody.errors ?? []).join(" · ")}`.trim();
-    return { full: JSON.stringify({ preview }), pricing: JSON.stringify({ preview }), overwrite: null, short: preview, calls: calls() };
+    return {
+      full: JSON.stringify({ preview }),
+      pricing: JSON.stringify({ preview }),
+      overwrite: null,
+      short: preview,
+      calls: calls(),
+      facts: { anchors: [], prices: {}, refusedKinds: [], previewStatus: pres.status, hubStatus: "none" },
+    };
   }
 
   const previewWarnings = pbody.warnings ?? [];
@@ -459,7 +444,14 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
   if (rows.length === 0) {
     if (fileRefused.length === 0) {
       const empty = JSON.stringify({ preview: "0 rows", previewWarnings });
-      return { full: empty, pricing: empty, overwrite: null, short: ["PREVIEW 0 rows", ...previewWarnings].join(" · "), calls: calls() };
+      return {
+        full: empty,
+        pricing: empty,
+        overwrite: null,
+        short: ["PREVIEW 0 rows", ...previewWarnings].join(" · "),
+        calls: calls(),
+        facts: { anchors: [], prices: {}, refusedKinds: [], previewStatus: pres.status, hubStatus: "none" },
+      };
     }
     // The wizard cannot push (0 rows + Push blocked). But a tab previewed
     // BEFORE this change, or a direct POST, still sends the row exactly as
@@ -469,20 +461,21 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
     directPost = true;
   }
 
+  // What the Manager SEES and picks in the preview's tier column. Part of the
+  // outcome on its own: the orchestrator's legacy SKU→price lookup can find
+  // the same tier when the preview found none, so the Google request alone
+  // would not reveal a preview that looked tiers up in the app's currency.
+  const previewTiers = previewRows.map(
+    (r) => `${r.sku}:${r.defaultTierSelection ?? "-"}/${r.tierCandidates.map((c) => c.identifier).join("|")}`,
+  );
+
   // ── Client side, with the wizard's / dialog's own functions ──────────
   const pushBlocked = computePrecisionViolations(previewRows).map((v) => `${v.sku}: ${v.error}`);
-  const saveGate = f.custom
-    ? customAppCurrencyGate(dialogRows(f.custom), {
-        isGoogleConversion: source === "google_default",
-        appDefaultCurrency: appCurrency,
-      })
-    : null;
-  const customSaveBlocked = saveGate && !saveGate.ok ? saveGate.reason : null;
-  // A set the dialog refuses to save never reaches the wizard's state.
-  const customPrices: Record<string, CustomPriceSet> =
-    f.custom && !customSaveBlocked
-      ? { [f.sku ?? SKU]: { entries: f.custom, baseline: { kind: "none" }, editedAt: "2026-10-17T00:00:00.000Z" } }
-      : {};
+  // The custom-prices dialog has no currency gate since H4.2 (Q6): a set
+  // the Manager typed always reaches the wizard's state.
+  const customPrices: Record<string, CustomPriceSet> = f.custom
+    ? { [f.sku ?? SKU]: { entries: f.custom, baseline: { kind: "none" }, editedAt: "2026-10-17T00:00:00.000Z" } }
+    : {};
   const body = buildExecuteRequestBody({
     pricingSource: source,
     sourceFilename: "h4.xlsx",
@@ -496,6 +489,7 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
 
   // ── Server side. Sent even when the Push gate would block: a stale tab
   //    or a direct POST reaches the route, and its answer is pinned too.
+  hub.statuses.length = 0;
   const eres = await EXECUTE(
     new Request("http://probe/execute", {
       method: "POST",
@@ -515,6 +509,11 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
   const states = g.states.mock.calls.map((c) => (c[0] as { requestBody?: unknown }).requestBody ?? null);
   const refused = (ebody.refusedRows ?? []).map((r) => `${r.kind}: ${r.reason}`);
   const execute = `${eres.status}${ebody.error ? ` ${ebody.error}` : ""}`;
+  const hubStatus = hub.statuses.join("+") || "none";
+  // The catalog version each request is pinned to (Hotfix 9) — part of the
+  // price: an Overwrite pinned to another catalog is not "the same price".
+  const regionsVersions =
+    (requests[0] as { requests?: Array<{ regionsVersion?: unknown }> } | null)?.requests?.map((r) => r.regionsVersion) ?? null;
 
   type Cfg = { regionCode: string; price: Money };
   type Option = { purchaseOptionId?: string; regionalPricingAndAvailabilityConfigs?: Cfg[] };
@@ -537,7 +536,6 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
   const short = [
     fileRefused.length ? `CLIENT: Push blocked (${fileRefused.length} row(s) refused in the file)` : null,
     pushBlocked.length ? "CLIENT: Push blocked (precision)" : null,
-    customSaveBlocked ? "CLIENT: custom Save blocked" : null,
     directPost ? "DIRECT POST:" : null,
     eres.status === 200 ? null : `EXECUTE ${eres.status}`,
     refusedKinds.length ? `REFUSED ${refusedKinds.join("+")}` : null,
@@ -547,11 +545,18 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
     .filter(Boolean)
     .join(" · ");
   return {
-    full: JSON.stringify({ previewWarnings, fileRefused, pushBlocked, customSaveBlocked, directPost, execute, refused, anchors, requests, states }),
-    pricing: JSON.stringify({ previewWarnings, fileRefused, pushBlocked, customSaveBlocked, directPost, execute, refused, anchors, cfgs }),
+    full: JSON.stringify({ previewWarnings, previewTiers, fileRefused, pushBlocked, directPost, execute, hubStatus, refused, anchors, requests, states }),
+    pricing: JSON.stringify({ previewWarnings, fileRefused, pushBlocked, directPost, execute, hubStatus, refused, anchors, regionsVersions, cfgs }),
     overwrite,
     short,
     calls: calls(),
+    facts: {
+      anchors,
+      prices: Object.fromEntries((cfgs ?? []).map((c) => [c.regionCode, moneyText(c.price)])),
+      refusedKinds,
+      previewStatus: pres.status,
+      hubStatus,
+    },
   };
 }
 
@@ -591,327 +596,78 @@ function grouping(byCurrency: Map<AppCurrency, Outcome>): string {
 
 /* ── Expectations ─────────────────────────────────────────────────────── */
 
-// CURRENT STATE (H4.1). H4.2/H4.3 flip every entry to "NULL+TWD+USD+VND" — and
-// must add what the header lists. F9/F10 split on the DIRECT POST only (the
-// wizard blocks Push everywhere) until H4.3. Why the other 24 still split
-// (design-bulk-import-existence-overwrite-safety.md §5.3/§5.7):
-//  - file currency ≠ app currency triggers cross-currency (cross-currency.ts:95-111):
-//    REFUSED under Google Conversion (bulk-import.ts:532), and under a template
-//    the tier is found by price only (S-h — F8: the SKU's own tier is skipped)
-//    and its APP-currency entry becomes the anchor (cross-currency.ts:225);
-//  - custom prices: the app-currency entry becomes the anchor, and under a
-//    template the dialog refuses to save a set without one (custom-prices.ts);
-//  - convertRegionPrices down ⇒ defaultPrice stamped on US in ANY currency
-//    (onetime-product-adapter.ts:283) — F7 "US=TWD 30".
-const EXPECTED_GROUPS_TODAY: Record<string, string> = {
-  "F1 'Price' 0.99 · google_default": "NULL+TWD+USD+VND",
-  "F1 'Price' 0.99 · default_template": "NULL+TWD+USD+VND",
-  "F1 'Price' 0.99 · app_template": "NULL+TWD+USD+VND",
-  "F2 'Price (USD)' 0.99 · google_default": "NULL+USD / TWD / VND",
-  "F2 'Price (USD)' 0.99 · default_template": "NULL+USD / TWD / VND",
-  "F2 'Price (USD)' 0.99 · app_template": "NULL+USD / TWD / VND",
-  "F3 'Price (TWD)' 30 · google_default": "NULL+TWD / USD / VND",
-  "F3 'Price (TWD)' 30 · default_template": "NULL+TWD / USD / VND",
-  "F3 'Price (TWD)' 30 · app_template": "NULL+TWD / USD / VND",
-  "F4 'Price (VND)' 26000 · google_default": "NULL+VND / TWD / USD",
-  "F4 'Price (VND)' 26000 · default_template": "NULL+VND / TWD / USD",
-  "F4 'Price (VND)' 26000 · app_template": "NULL+VND / TWD / USD",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · google_default": "NULL+USD / TWD / VND",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · default_template": "NULL+USD / TWD / VND",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · app_template": "NULL+USD / TWD / VND",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · google_default": "NULL+USD / TWD / VND",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · default_template": "NULL / TWD / USD / VND",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · app_template": "NULL / TWD / USD / VND",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · google_default": "NULL+TWD / USD / VND",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · default_template": "NULL+TWD / USD / VND",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · app_template": "NULL+TWD / USD / VND",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · google_default": "NULL+USD / TWD / VND",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · default_template": "NULL+USD / TWD / VND",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · app_template": "NULL+USD / TWD / VND",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · google_default": "NULL+TWD / USD / VND",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · default_template": "NULL+TWD / USD / VND",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · app_template": "NULL+TWD / USD / VND",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · google_default": "NULL+USD / TWD / VND",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · default_template": "NULL+USD / TWD / VND",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · app_template": "NULL+USD / TWD / VND",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · google_default": "NULL+TWD / USD / VND",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · default_template": "NULL+TWD / USD / VND",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · app_template": "NULL+TWD / USD / VND",
-};
+// H4.2 — DERIVED BY HAND from Manager Q1–Q7 BEFORE the H4.2 code ran (copy
+// timestamped 2026-10-18T23:17:05+0700 in the session scratchpad; md5
+// 9e6009595e8abaea7b59149d511e8fbb). ONE outcome per file · source, for every
+// app currency and for CREATE and OVERWRITE alike. Fixtures: the fake FX
+// table (per USD: TWD 32, VND 26000, JPY 150, EUR 0.92, KRW 1400) and the two
+// templates in seedTables().
+//   Q2 tier = the SKU's own tier, else the tier whose price in the FILE's
+//      currency equals the FILE's price; anchor = defaultPrice = file price.
+//   Q3 no tier ⇒ Google conversion of the file price (GT kept).
+//   Q4 Google Conversion never refuses on currency.
+//   Q5 GT kept unless a tier matched or custom prices (they replace it).
+//   Q6 custom: anchor = file price, no app-currency entry, no Save gate.
+//   Q7 conversion failed + file price not USD ⇒ refused (conversion_failed).
+//   Choke point: a file price the server cannot send as written ⇒ refused
+//   per row (file_price_invalid) — F9/F10's direct POST.
+const P422 = "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.";
+const C_USD = "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 25740";
+const TIER1_BY_USD = "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 160, KR=KRW 1386, TW=TWD 30, US=USD 0.99, VN=VND 25000";
+const APP1_BY_USD = "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000";
+const C_TWD = "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30, US=USD 0.94, VN=VND 24375";
+const TIER1_BY_TWD = "anchor TWD 30 · DE=EUR 0.86, JP=JPY 160, KR=KRW 1313, TW=TWD 30, US=USD 0.99, VN=VND 25000";
+const C_VND = "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 1, VN=VND 26000";
+const APP1_BY_VND = "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000";
+const GT_KEPT_ON_C_USD = "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000";
+const CUSTOM_ON_C_USD = "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 170, KR=KRW 1386, TW=TWD 35, US=USD 0.99, VN=VND 25740";
+const CONVERSION_FAILED = "REFUSED conversion_failed · anchor TWD 30 · no batchUpdate";
+const SKU_TIER = "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 90, US=USD 2.99, VN=VND 75000";
+const REFUSED_IN_FILE =
+  "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · REFUSED file_price_invalid · no batchUpdate";
+const GT_KEPT_ON_C_TWD = "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30, US=USD 0.94, VN=VND 26000";
 
-// Characterisation of the CURRENT outcomes (H4.1), per file · source · app currency.
-const EXPECTED_TODAY: Record<string, string> = {
-  "F1 'Price' 0.99 · google_default · app USD":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F1 'Price' 0.99 · google_default · app TWD":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F1 'Price' 0.99 · google_default · app VND":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F1 'Price' 0.99 · google_default · app NULL":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F1 'Price' 0.99 · default_template · app USD":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F1 'Price' 0.99 · default_template · app TWD":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F1 'Price' 0.99 · default_template · app VND":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F1 'Price' 0.99 · default_template · app NULL":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F1 'Price' 0.99 · app_template · app USD":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F1 'Price' 0.99 · app_template · app TWD":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F1 'Price' 0.99 · app_template · app VND":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F1 'Price' 0.99 · app_template · app NULL":
-    "PREVIEW 422  Header \"Price\" does not say which currency the prices are in. Rename it to \"Price (XXX)\" with the currency of the prices, e.g. \"Price (USD)\". The app's currency is not used for prices in the file.",
-  "F2 'Price (USD)' 0.99 · google_default · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 25740",
-  "F2 'Price (USD)' 0.99 · google_default · app TWD":
-    "REFUSED google_default · no batchUpdate",
-  "F2 'Price (USD)' 0.99 · google_default · app VND":
-    "REFUSED google_default · no batchUpdate",
-  "F2 'Price (USD)' 0.99 · google_default · app NULL":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 25740",
-  "F2 'Price (USD)' 0.99 · default_template · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 160, KR=KRW 1386, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F2 'Price (USD)' 0.99 · default_template · app TWD":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 160, KR=KRW 1313, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F2 'Price (USD)' 0.99 · default_template · app VND":
-    "anchor VND 25000 · DE=EUR 0.88, JP=JPY 160, KR=KRW 1346, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F2 'Price (USD)' 0.99 · default_template · app NULL":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 160, KR=KRW 1386, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F2 'Price (USD)' 0.99 · app_template · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F2 'Price (USD)' 0.99 · app_template · app TWD":
-    "anchor TWD 32 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F2 'Price (USD)' 0.99 · app_template · app VND":
-    "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F2 'Price (USD)' 0.99 · app_template · app NULL":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F3 'Price (TWD)' 30 · google_default · app USD":
-    "REFUSED google_default · no batchUpdate",
-  "F3 'Price (TWD)' 30 · google_default · app TWD":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30, US=USD 0.94, VN=VND 24375",
-  "F3 'Price (TWD)' 30 · google_default · app VND":
-    "REFUSED google_default · no batchUpdate",
-  "F3 'Price (TWD)' 30 · google_default · app NULL":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30, US=USD 0.94, VN=VND 24375",
-  "F3 'Price (TWD)' 30 · default_template · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 160, KR=KRW 1386, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F3 'Price (TWD)' 30 · default_template · app TWD":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 160, KR=KRW 1313, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F3 'Price (TWD)' 30 · default_template · app VND":
-    "anchor VND 25000 · DE=EUR 0.88, JP=JPY 160, KR=KRW 1346, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F3 'Price (TWD)' 30 · default_template · app NULL":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 160, KR=KRW 1313, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F3 'Price (TWD)' 30 · app_template · app USD":
-    "REFUSED template_miss · no batchUpdate",
-  "F3 'Price (TWD)' 30 · app_template · app TWD":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30, US=USD 0.94, VN=VND 24375",
-  "F3 'Price (TWD)' 30 · app_template · app VND":
-    "REFUSED template_miss · no batchUpdate",
-  "F3 'Price (TWD)' 30 · app_template · app NULL":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30, US=USD 0.94, VN=VND 24375",
-  "F4 'Price (VND)' 26000 · google_default · app USD":
-    "REFUSED google_default · no batchUpdate",
-  "F4 'Price (VND)' 26000 · google_default · app TWD":
-    "REFUSED google_default · no batchUpdate",
-  "F4 'Price (VND)' 26000 · google_default · app VND":
-    "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 1, VN=VND 26000",
-  "F4 'Price (VND)' 26000 · google_default · app NULL":
-    "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 1, VN=VND 26000",
-  "F4 'Price (VND)' 26000 · default_template · app USD":
-    "REFUSED template_miss · no batchUpdate",
-  "F4 'Price (VND)' 26000 · default_template · app TWD":
-    "REFUSED template_miss · no batchUpdate",
-  "F4 'Price (VND)' 26000 · default_template · app VND":
-    "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 1, VN=VND 26000",
-  "F4 'Price (VND)' 26000 · default_template · app NULL":
-    "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 1, VN=VND 26000",
-  "F4 'Price (VND)' 26000 · app_template · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F4 'Price (VND)' 26000 · app_template · app TWD":
-    "anchor TWD 32 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F4 'Price (VND)' 26000 · app_template · app VND":
-    "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F4 'Price (VND)' 26000 · app_template · app NULL":
-    "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · google_default · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · google_default · app TWD":
-    "REFUSED google_default · no batchUpdate",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · google_default · app VND":
-    "REFUSED google_default · no batchUpdate",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · google_default · app NULL":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · default_template · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 160, KR=KRW 1386, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · default_template · app TWD":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 160, KR=KRW 1313, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · default_template · app VND":
-    "anchor VND 25000 · DE=EUR 0.88, JP=JPY 160, KR=KRW 1346, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · default_template · app NULL":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 160, KR=KRW 1386, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · app_template · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · app_template · app TWD":
-    "anchor TWD 32 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · app_template · app VND":
-    "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · app_template · app NULL":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · google_default · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 170, KR=KRW 1386, TW=TWD 35, US=USD 0.99, VN=VND 25740",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · google_default · app TWD":
-    "anchor TWD 35 · DE=EUR 1.01, JP=JPY 170, KR=KRW 1531, TW=TWD 35, US=USD 1.09, VN=VND 28438",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · google_default · app VND":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 170, KR=KRW 1386, TW=TWD 35, US=USD 0.99, VN=VND 25740",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · google_default · app NULL":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 170, KR=KRW 1386, TW=TWD 35, US=USD 0.99, VN=VND 25740",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · default_template · app USD":
-    "CLIENT: custom Save blocked · anchor USD 0.99 · DE=EUR 0.91, JP=JPY 160, KR=KRW 1386, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · default_template · app TWD":
-    "anchor TWD 35 · DE=EUR 1.01, JP=JPY 170, KR=KRW 1531, TW=TWD 35, US=USD 1.09, VN=VND 28438",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · default_template · app VND":
-    "CLIENT: custom Save blocked · anchor VND 25000 · DE=EUR 0.88, JP=JPY 160, KR=KRW 1346, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · default_template · app NULL":
-    "CLIENT: custom Save blocked · anchor USD 0.99 · DE=EUR 0.91, JP=JPY 160, KR=KRW 1386, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · app_template · app USD":
-    "CLIENT: custom Save blocked · anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · app_template · app TWD":
-    "anchor TWD 35 · DE=EUR 1.01, JP=JPY 170, KR=KRW 1531, TW=TWD 35, US=USD 1.09, VN=VND 28438",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · app_template · app VND":
-    "CLIENT: custom Save blocked · anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · app_template · app NULL":
-    "CLIENT: custom Save blocked · anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · google_default · app USD":
-    "REFUSED google_default · no batchUpdate",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · google_default · app TWD":
-    "anchor TWD 30 · US=TWD 30",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · google_default · app VND":
-    "REFUSED google_default · no batchUpdate",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · google_default · app NULL":
-    "anchor TWD 30 · US=TWD 30",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · default_template · app USD":
-    "anchor USD 0.99 · JP=JPY 160, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · default_template · app TWD":
-    "anchor TWD 30 · JP=JPY 160, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · default_template · app VND":
-    "anchor VND 25000 · JP=JPY 160, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · default_template · app NULL":
-    "anchor TWD 30 · JP=JPY 160, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · app_template · app USD":
-    "REFUSED template_miss · no batchUpdate",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · app_template · app TWD":
-    "anchor TWD 30 · US=TWD 30",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · app_template · app VND":
-    "REFUSED template_miss · no batchUpdate",
-  "F7 'Price (TWD)' 30 + convertRegionPrices fails · app_template · app NULL":
-    "anchor TWD 30 · US=TWD 30",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · google_default · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 25740",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · google_default · app TWD":
-    "REFUSED google_default · no batchUpdate",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · google_default · app VND":
-    "REFUSED google_default · no batchUpdate",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · google_default · app NULL":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 25740",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · default_template · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 90, US=USD 2.99, VN=VND 75000",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · default_template · app TWD":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 160, KR=KRW 1313, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · default_template · app VND":
-    "anchor VND 25000 · DE=EUR 0.88, JP=JPY 160, KR=KRW 1346, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · default_template · app NULL":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 90, US=USD 2.99, VN=VND 75000",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · app_template · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · app_template · app TWD":
-    "anchor TWD 32 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · app_template · app VND":
-    "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F8 'Price (USD)' 0.99, SKU is a tier identifier · app_template · app NULL":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · google_default · app USD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · REFUSED google_default · no batchUpdate",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · google_default · app TWD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · EXECUTE 500 · no batchUpdate",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · google_default · app VND":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · REFUSED google_default · no batchUpdate",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · google_default · app NULL":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · EXECUTE 500 · no batchUpdate",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · default_template · app USD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · REFUSED template_miss · no batchUpdate",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · default_template · app TWD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · EXECUTE 500 · no batchUpdate",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · default_template · app VND":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · REFUSED template_miss · no batchUpdate",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · default_template · app NULL":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · EXECUTE 500 · no batchUpdate",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · app_template · app USD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · REFUSED template_miss · no batchUpdate",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · app_template · app TWD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · EXECUTE 500 · no batchUpdate",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · app_template · app VND":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · REFUSED template_miss · no batchUpdate",
-  "F9 'Price (TWD)' 30.5 (too precise for TWD) · app_template · app NULL":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · EXECUTE 500 · no batchUpdate",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · google_default · app USD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · EXECUTE 500 · anchor USD 0.99 · no batchUpdate",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · google_default · app TWD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · REFUSED google_default · no batchUpdate",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · google_default · app VND":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · REFUSED google_default · no batchUpdate",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · google_default · app NULL":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · EXECUTE 500 · anchor USD 0.99 · no batchUpdate",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · default_template · app USD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · anchor USD 0.99 · DE=EUR 0.91, JP=JPY 160, KR=KRW 1386, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · default_template · app TWD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · anchor TWD 30 · DE=EUR 0.86, JP=JPY 160, KR=KRW 1313, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · default_template · app VND":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · anchor VND 25000 · DE=EUR 0.88, JP=JPY 160, KR=KRW 1346, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · default_template · app NULL":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · anchor USD 0.99 · DE=EUR 0.91, JP=JPY 160, KR=KRW 1386, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · app_template · app USD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · app_template · app TWD":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · anchor TWD 32 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · app_template · app VND":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · app_template · app NULL":
-    "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · google_default · app USD":
-    "REFUSED google_default · no batchUpdate",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · google_default · app TWD":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30, US=USD 0.94, VN=VND 26000",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · google_default · app VND":
-    "REFUSED google_default · no batchUpdate",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · google_default · app NULL":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30, US=USD 0.94, VN=VND 26000",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · default_template · app USD":
-    "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 160, KR=KRW 1386, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · default_template · app TWD":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 160, KR=KRW 1313, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · default_template · app VND":
-    "anchor VND 25000 · DE=EUR 0.88, JP=JPY 160, KR=KRW 1346, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · default_template · app NULL":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 160, KR=KRW 1313, TW=TWD 30, US=USD 0.99, VN=VND 25000",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · app_template · app USD":
-    "REFUSED template_miss · no batchUpdate",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · app_template · app TWD":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30, US=USD 0.94, VN=VND 26000",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · app_template · app VND":
-    "REFUSED template_miss · no batchUpdate",
-  "F11 'Price (TWD)' 30 + GT 26000 VND · app_template · app NULL":
-    "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30, US=USD 0.94, VN=VND 26000",
+const EXPECTED_H4: Record<string, string> = {
+  "F1 'Price' 0.99 · google_default": P422,
+  "F1 'Price' 0.99 · default_template": P422,
+  "F1 'Price' 0.99 · app_template": P422,
+  "F2 'Price (USD)' 0.99 · google_default": C_USD,
+  "F2 'Price (USD)' 0.99 · default_template": TIER1_BY_USD,
+  "F2 'Price (USD)' 0.99 · app_template": APP1_BY_USD,
+  "F3 'Price (TWD)' 30 · google_default": C_TWD,
+  "F3 'Price (TWD)' 30 · default_template": TIER1_BY_TWD,
+  "F3 'Price (TWD)' 30 · app_template": C_TWD,
+  "F4 'Price (VND)' 26000 · google_default": C_VND,
+  "F4 'Price (VND)' 26000 · default_template": C_VND,
+  "F4 'Price (VND)' 26000 · app_template": APP1_BY_VND,
+  "F5 'Price (USD)' 0.99 + GT 26000 VND · google_default": GT_KEPT_ON_C_USD,
+  "F5 'Price (USD)' 0.99 + GT 26000 VND · default_template": TIER1_BY_USD,
+  "F5 'Price (USD)' 0.99 + GT 26000 VND · app_template": APP1_BY_USD,
+  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · google_default": CUSTOM_ON_C_USD,
+  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · default_template": CUSTOM_ON_C_USD,
+  "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · app_template": CUSTOM_ON_C_USD,
+  "F7 'Price (TWD)' 30 + convertRegionPrices fails · google_default": CONVERSION_FAILED,
+  "F7 'Price (TWD)' 30 + convertRegionPrices fails · default_template": CONVERSION_FAILED,
+  "F7 'Price (TWD)' 30 + convertRegionPrices fails · app_template": CONVERSION_FAILED,
+  "F8 'Price (USD)' 0.99, SKU is a tier identifier · google_default": C_USD,
+  "F8 'Price (USD)' 0.99, SKU is a tier identifier · default_template": SKU_TIER,
+  "F8 'Price (USD)' 0.99, SKU is a tier identifier · app_template": APP1_BY_USD,
+  "F9 'Price (TWD)' 30.5 (too precise for TWD) · google_default": REFUSED_IN_FILE,
+  "F9 'Price (TWD)' 30.5 (too precise for TWD) · default_template": REFUSED_IN_FILE,
+  "F9 'Price (TWD)' 30.5 (too precise for TWD) · app_template": REFUSED_IN_FILE,
+  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · google_default": REFUSED_IN_FILE,
+  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · default_template": REFUSED_IN_FILE,
+  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · app_template": REFUSED_IN_FILE,
+  "F11 'Price (TWD)' 30 + GT 26000 VND · google_default": GT_KEPT_ON_C_TWD,
+  "F11 'Price (TWD)' 30 + GT 26000 VND · default_template": TIER1_BY_TWD,
+  "F11 'Price (TWD)' 30 + GT 26000 VND · app_template": GT_KEPT_ON_C_TWD,
 };
 
 function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
 }
 
-describe("T1 — the Google request vs the app currency, pinned per H4 step (H4.1: 3/33 invariant end to end); H4.2/H4.3 flip it to identical", () => {
+describe("T1 — same file ⇒ same Google request whatever the app currency (H4.2: 33/33, CREATE and OVERWRITE)", () => {
   it("the matrix ran: 11 files × 3 sources × 4 app currencies × CREATE/OVERWRITE; per run ≤1 batchUpdate, no legacy fallback, a live GET only for a sent Overwrite; the fakes answered every query", () => {
     expect(outcomes.size).toBe(FILES.length * SOURCES.length);
     expect(overwriteOutcomes.size).toBe(FILES.length * SOURCES.length);
@@ -962,20 +718,103 @@ describe("T1 — the Google request vs the app currency, pinned per H4 step (H4.
     // Not vacuous: every cell that sends a CREATE also sends an OVERWRITE.
     const sentCreates = [...outcomes.values()].flatMap((m) => [...m.values()]).filter((o) => o.calls.batch === 1).length;
     expect(sentOverwrites).toBe(sentCreates);
-    // Exact, updated per H4 step (H4.0: 92) — a step that refuses far more
-    // rows than it should cannot slip past a loose bound.
-    expect(sentCreates).toBe(82);
+    // Exact, updated per H4 step (H4.0: 92, H4.1: 82) — a build that refuses
+    // far more rows than it should cannot slip past a loose bound.
+    expect(sentCreates).toBe(84);
   });
 
-  it("pin — which app currencies give the SAME outcome now, file by file", () => {
-    const actual = Object.fromEntries([...outcomes].map(([k, m]) => [k, grouping(m)]));
-    expect(actual).toEqual(EXPECTED_GROUPS_TODAY);
+  it("H4.2 (1) — the app's currency changes NOTHING: one outcome per file · source for USD/TWD/VND/none, CREATE and OVERWRITE", () => {
+    const split: string[] = [];
+    for (const [decision, map] of [["CREATE", outcomes], ["OVERWRITE", overwriteOutcomes]] as const) {
+      for (const [k, m] of map) {
+        const g = grouping(m);
+        if (g !== "NULL+TWD+USD+VND") split.push(`${decision} ${k}: ${g}`);
+      }
+    }
+    expect(split).toEqual([]);
   });
 
-  it("pin — the outcome now for every file · source · app currency", () => {
+  it("H4.2 (2) — that one outcome is the one derived BY HAND from Q1–Q7 (EXPECTED_H4)", () => {
     const actual: Record<string, string> = {};
-    for (const [k, m] of outcomes) for (const [c, o] of m) actual[`${k} · app ${label(c)}`] = o.short;
-    expect(actual).toEqual(EXPECTED_TODAY);
+    for (const [k, m] of outcomes) for (const [c, o] of m) {
+      if (o.short !== EXPECTED_H4[k]) actual[`${k} · app ${label(c)}`] = o.short;
+    }
+    expect(actual).toEqual({});
+    expect(Object.keys(EXPECTED_H4).sort()).toEqual([...outcomes.keys()].sort());
+  });
+
+  it("H4.2 (3) — rules computed from each FILE, not pinned", () => {
+    const broken: string[] = [];
+    const say = (k: string, c: AppCurrency, what: string) => broken.push(`${k} · app ${label(c)}: ${what}`);
+    for (const f of FILES) {
+      const headerCurrency = f.header.match(/\(([A-Z]{3})\)/)?.[1] ?? null;
+      const id = f.id.split(" ")[0];
+      const expectedRefusals = id === "F7" ? ["conversion_failed"] : id === "F9" || id === "F10" ? ["file_price_invalid"] : [];
+      for (const s of SOURCES) {
+        for (const c of APP_CURRENCIES) {
+          const o = outcomes.get(key(f, s))?.get(c);
+          if (!o) {
+            say(key(f, s), c, "missing run");
+            continue;
+          }
+          const k = key(f, s);
+          if (headerCurrency === null) {
+            // Q1 — a header without its currency is refused at preview, every time.
+            if (o.facts.previewStatus !== 422 || o.calls.batch !== 0) say(k, c, "generic header was not refused at preview");
+            continue;
+          }
+          if (JSON.stringify(o.facts.refusedKinds) !== JSON.stringify(expectedRefusals)) {
+            say(k, c, `refusals ${JSON.stringify(o.facts.refusedKinds)} ≠ ${JSON.stringify(expectedRefusals)}`);
+          }
+          if (o.calls.batch !== 1) continue;
+          // The anchor IS the file's price, in the file's currency.
+          if (o.facts.anchors[0] !== `${headerCurrency} ${f.value}`) say(k, c, `anchor ${o.facts.anchors[0]}`);
+          // The US store never gets a non-USD price (Q7).
+          if (!o.facts.prices.US?.startsWith("USD ")) say(k, c, `US=${o.facts.prices.US}`);
+          // Custom prices reach Google verbatim, under every source (Q6).
+          for (const e of f.custom ?? []) {
+            if (o.facts.prices[e.region] !== `${e.currency} ${e.priceDecimal}`) say(k, c, `custom ${e.region}`);
+          }
+          // With no template involved, the GT region carries the GT value (Q5).
+          if (f.gt && s === "google_default" && o.facts.prices[regionForCurrency(f.gt[1]) ?? ""] !== `${f.gt[1]} ${f.gt[0]}`) {
+            say(k, c, "GT not kept under Google Conversion");
+          }
+        }
+      }
+    }
+    expect(broken).toEqual([]);
+  });
+
+  it("P5 — the Hub run closes FAILED for every cell whose row was refused, SUCCESS for every cell that sent (the orchestrator's priceRefusedRows, end to end)", () => {
+    const wrong: string[] = [];
+    let refusedCells = 0;
+    let sentCells = 0;
+    for (const [decision, map] of [["CREATE", outcomes], ["OVERWRITE", overwriteOutcomes]] as const) {
+      for (const [k, m] of map) for (const [c, o] of m) {
+        if (o.facts.refusedKinds.length > 0) {
+          refusedCells += 1;
+          if (o.facts.hubStatus !== "FAILED") wrong.push(`${decision} ${k} · app ${label(c)}: refused, Hub ${o.facts.hubStatus}`);
+        } else if (o.calls.batch === 1) {
+          sentCells += 1;
+          if (o.facts.hubStatus !== "SUCCESS") wrong.push(`${decision} ${k} · app ${label(c)}: sent, Hub ${o.facts.hubStatus}`);
+        }
+      }
+    }
+    expect(wrong).toEqual([]);
+    // F7 (conversion_failed), F9 + F10 (file_price_invalid): 3 files × 3 sources × 4 currencies × 2 decisions.
+    expect(refusedCells).toBe(72);
+    expect(sentCells).toBe(84 * 2);
+  });
+
+  it("H4.2 — degeneracy guards: refusing everything, or ignoring the file's currency, is RED", () => {
+    const one = (id: string, s: Source) => [...outcomes].find(([k]) => k.startsWith(id + " ") && k.endsWith(` · ${s}`))?.[1].get("USD")?.short;
+    // TWD 30 and VND 26000 are different prices: same output ⇒ the file currency was ignored.
+    expect(one("F3", "google_default")).not.toBe(one("F4", "google_default"));
+    expect(one("F3", "google_default")).toMatch(/^anchor TWD 30 · /);
+    expect(one("F4", "google_default")).toMatch(/^anchor VND 26000 · /);
+    // Most cells must actually send (the exact count is pinned in the Overwrite test).
+    const sent = [...outcomes.values()].flatMap((m) => [...m.values()]).filter((o) => o.calls.batch === 1).length;
+    expect(sent).toBeGreaterThan(FILES.length * SOURCES.length * APP_CURRENCIES.length / 2);
   });
 
   it("the wizard side above IS the wizard's code (no hand-copied twin)", () => {
@@ -1001,7 +840,104 @@ describe("T1 — the Google request vs the app currency, pinned per H4 step (H4.
         "utf8",
       ),
     );
-    expect(dialog).toMatch(/customAppCurrencyGate\(rows, \{ isGoogleConversion, appDefaultCurrency \}\)/);
-    expect(dialog).not.toMatch(/findAppCurrencyEntry/);
+    // H4.2 (Q6): no currency gate on Save at all.
+    expect(dialog).not.toMatch(/\b(appDefaultCurrency|customAppCurrencyGate|findAppCurrencyEntry)\b/);
+  });
+
+  it("T2 — no file on the bulk-import pricing path reads the app's currency (H4.2)", () => {
+    const read = (rel: string) =>
+      stripComments(readFileSync(fileURLToPath(new URL(`../../../../../../${rel}`, import.meta.url)), "utf8"));
+    const PRICING_PATH = [
+      "app/api/google-iap-management/apps/[packageName]/bulk-import/preview/route.ts",
+      "app/api/google-iap-management/apps/[packageName]/bulk-import/execute/route.ts",
+      "app/(dashboard)/google-iap-management/apps/[packageName]/bulk-import/page.tsx",
+      "lib/google-iap-management/orchestration/bulk-import.ts",
+      "lib/google-iap-management/orchestration/file-price.ts",
+      "lib/google-iap-management/parsers/excel-parser.ts",
+      "lib/google-iap-management/custom-prices.ts",
+      "components/google-iap-management/bulk-import/execute-payload.ts",
+      "components/google-iap-management/bulk-import/BulkImportWizard.tsx",
+      "components/google-iap-management/bulk-import/CustomPricesDialog.tsx",
+      "components/google-iap-management/bulk-import/PreviewTable.tsx",
+    ];
+    const APP_CURRENCY = /\b(appDefaultCurrency|default_currency|appCurrency|AppCurrency)\b/;
+    const offenders = PRICING_PATH.filter((f) => APP_CURRENCY.test(read(f)));
+    expect(offenders).toEqual([]);
+    // The shared publisher client keeps the single-item legacy fallback (D4),
+    // which still takes an app currency — the BATCH function must not.
+    const pc = read("lib/google-iap-management/google/publisher-client.ts");
+    const start = pc.indexOf("export async function batchUpsertInAppProducts(");
+    const batchFn = pc.slice(start, pc.indexOf("\n}\n", start));
+    expect(start).toBeGreaterThan(0);
+    expect(batchFn).not.toMatch(APP_CURRENCY);
+    expect(batchFn).not.toMatch(/batchUpdateInAppProducts|inappproducts|legacyFallbackBody/);
+    // File-wide (Q8): no code anywhere in the client calls the legacy BATCH
+    // resource — a fallback routed through a helper outside the function
+    // is caught too. The five remaining fallbacks use list/get/insert/patch/
+    // delete, never batchUpdate.
+    const pcCode = pc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+    expect(pcCode).not.toMatch(/inappproducts\s*\.\s*batchUpdate/);
+  });
+});
+
+describe("Q8 — the batch upsert has NO legacy fallback (Manager 2026-10-17)", () => {
+  it("v3 batchUpdate rejects ⇒ execute answers with THAT error, verbatim and structured; inappproducts.batchUpdate is called 0 times", async () => {
+    st.appCurrency = "VND";
+    st.tables = seedTables();
+    st.mirror = [];
+    Object.values(g).forEach((m) => m.mockReset());
+    g.convert.mockImplementation(async (r: { requestBody: { price: Money } }) => fakeConvertRegionPrices(r));
+    g.states.mockResolvedValue({ data: {} });
+    g.get.mockRejectedValue(new Error("no live GET for a create row"));
+    const message = "The caller does not have permission";
+    g.batch.mockRejectedValue(
+      Object.assign(new Error(message), {
+        code: 403,
+        response: {
+          status: 403,
+          data: {
+            error: {
+              code: 403,
+              message,
+              status: "PERMISSION_DENIED",
+              errors: [{ message, domain: "global", reason: "forbidden" }],
+            },
+          },
+        },
+      }),
+    );
+    // Even a legacy API that WOULD succeed must not be called.
+    g.legacy.mockResolvedValue({ data: { inappproducts: [{ sku: SKU, status: "active" }] } });
+
+    const f = FILES[1]; // F2 'Price (USD)' 0.99
+    const form = new FormData();
+    form.append("file", workbook(f));
+    form.append("pricingSource", "google_default");
+    const pres = await PREVIEW(new Request("http://probe/preview", { method: "POST", body: form }), ctx);
+    const pbody = (await pres.json()) as { rows: Array<Omit<PreviewRow, "decision">> };
+    const rows = previewRowsFromResponse(pbody.rows);
+    const eres = await EXECUTE(
+      new Request("http://probe/execute", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(
+          buildExecuteRequestBody({
+            pricingSource: "google_default",
+            sourceFilename: "h4.xlsx",
+            hubRunId: null,
+            rows: buildExecuteRows(rows, { tierSelections: seedTierSelections(rows), customPrices: {}, activeCustomSkus: new Set() }),
+          }),
+        ),
+      }),
+      ctx,
+    );
+    const ebody = (await eres.json()) as Record<string, unknown>;
+    expect(eres.status).toBe(403);
+    expect(ebody.error).toBe(message);
+    expect(ebody.errorStatus).toBe("PERMISSION_DENIED");
+    expect(ebody.errorReasons).toEqual(["forbidden"]);
+    expect(ebody).not.toHaveProperty("errorBothPathsFailed");
+    expect(g.batch).toHaveBeenCalledTimes(1);
+    expect(g.legacy).toHaveBeenCalledTimes(0);
   });
 });

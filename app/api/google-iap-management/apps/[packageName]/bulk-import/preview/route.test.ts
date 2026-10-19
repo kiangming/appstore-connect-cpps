@@ -235,9 +235,9 @@ describe("Google bulk-import preview — C2.1: the app's currency/language are N
 
   it.each([
     [null, "same_currency", undefined],
-    ["TWD", "cross_currency_refused", "google_default"],
+    ["TWD", "same_currency", undefined],
   ])(
-    "cross-currency trigger pinned to the deployed input: app currency %s + explicit EUR row under Google Conversion ⇒ %s",
+    "H4.2: an EUR row under Google Conversion is priced from the file whatever the app currency (%s) ⇒ %s, never refused",
     async (appCurrency, kind, refusalKind) => {
       getAppByPackage.mockResolvedValue({ id: "app-1", default_currency: appCurrency, google_console_account_id: "acc1" });
       parseIapTemplate.mockReturnValue({
@@ -251,12 +251,13 @@ describe("Google bulk-import preview — C2.1: the app's currency/language are N
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         rows: Array<{ resolution: { kind: string; refusalKind?: string } }>;
-        appCurrency: string | null;
+        warnings: string[];
       };
       expect(body.rows[0].resolution.kind).toBe(kind);
       expect(body.rows[0].resolution.refusalKind).toBe(refusalKind);
-      // The wizard's pricing note is driven by what the server priced with.
-      expect(body.appCurrency).toBe(appCurrency);
+      // H4.2: the response says nothing about the app's currency.
+      expect(body).not.toHaveProperty("appCurrency");
+      expect(body.warnings.join(" ")).not.toMatch(/refused on push/);
     },
   );
 

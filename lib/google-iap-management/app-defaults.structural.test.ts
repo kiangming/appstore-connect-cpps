@@ -284,9 +284,9 @@ describe("G — one bulk-import gate, and the app's currency/language are not in
     expect(touching).toEqual(["DEFAULTS_COLUMNS", "declareAppDefault", "getAppDefaults"].sort());
   });
 
-  it("the bulk-import page shows the note the SAME currency both routes price with (app.default_currency)", () => {
-    expect(code.get(BULK_PAGE)).toMatch(/appDefaultCurrency=\{app\.default_currency\}/);
-    expect(code.get(PREVIEW)).toMatch(/appCurrency: app\.default_currency \?\? null/);
+  it("H4.2: neither the bulk-import page nor the preview route hands the app's currency to anything (the file is the only price source)", () => {
+    expect(code.get(BULK_PAGE)).not.toMatch(/default_currency|appDefaultCurrency/);
+    expect(code.get(PREVIEW)).not.toMatch(/default_currency|appDefaultCurrency|appCurrency/);
   });
 
   it.each([PREVIEW, EXECUTE])("%s goes through the shared gate", (file) => {

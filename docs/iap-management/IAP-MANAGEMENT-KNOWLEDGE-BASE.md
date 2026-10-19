@@ -8918,3 +8918,47 @@ lỗi), nên chienky sẽ được đóng dấu "đầy đủ" trên một lư�
 
 ⚠ Còn mở (C6 / D5): một lượt đọc `incoming_below_50pct_of_cached` vẫn được đóng dấu; fallback legacy
 có thể trả tập con; vòng phân trang dừng im lặng sau 100 trang (`[GOOGLE-refresh-stamps-degraded-read]`).
+
+### 35.3 ⭐ H4 — currency của FILE là nguồn giá DUY NHẤT (arc `arc-google-h4-file-currency-pricing`, 2026-10-18)
+
+**Nguồn đầy đủ:** design doc trên, §5.3 (bản đồ S-a…S-i) và đoạn "H4.2 — định giá preview + orchestrator".
+Test ghim: `app/api/google-iap-management/apps/[packageName]/bulk-import/file-currency-invariance.test.ts` (T1/T2/Q8).
+
+- **Một choke point (P1):** `lib/google-iap-management/orchestration/file-price.ts` — `filePriceOf` (giá chính)
+  và `fileRegionPriceOf` (GT). Parser, tra tier ở preview, anchor quy đổi, `defaultPrice`, neo của giá custom
+  đều đọc giá file qua đây. File này không nhận currency của app dưới bất kỳ tên nào (test structural).
+- **Từ chối là từ chối DÒNG, không bao giờ thay bằng giá khác.** Hai loại ở orchestrator:
+  `file_price_invalid` (giá file sai) và `conversion_failed` (Q7: giá file không phải USD mà quy đổi của Google
+  LỖI — các nước không có trong tier/custom sẽ không có giá, và không có version catalog để ghim (Hotfix 9) —
+  hoặc quy đổi KHÔNG CÓ giá US — vùng US sẽ nhận số tiền không phải USD). Lý do ghi theo đúng nhánh. Dòng
+  USD vẫn gửi. Cả hai cộng vào `priceRefusedRows`. Execute route đếm chúng là `failed` khi đóng dấu Hub,
+  và `import_batches` cũng vậy trên cả ba nhánh ⇒ một batch có dòng bị từ chối KHÔNG thể đọc là "đã xong
+  hết" (P5). T1 ghi trạng thái Hub thật cho từng ô.
+- **Q8 — bỏ hẳn fallback legacy của đường batch upsert.** Fallback `inappproducts.batchUpdate` đòi
+  `defaultPrice` theo currency của app — chính là chỗ currency app lọt vào giá. Từ H4.2:
+  `batchUpsertInAppProducts` ném nguyên lỗi API mới (`publisher-client.ts`, catch "H4.2 (Q8): no fallback"),
+  không gọi API cũ lần nào (test đếm lời gọi = 0). 5 chỗ fallback khác vẫn còn — chunk D4 riêng.
+- **Overwrite đi CÙNG thư viện giá với CREATE.** `decision` chỉ đổi cờ `isOverwrite` (`allowMissing`);
+  `onetime-product-adapter.ts` dựng cùng mảng `buildRegionalPricing` cho cả hai và chỉ thay pricing của
+  purchase option đích. T1 chạy cả CREATE lẫn OVERWRITE và đòi request gửi Google giống hệt nhau
+  trên 4 currency app (NULL/TWD/USD/VND). H4 chỉ đụng phần GIÁ của Overwrite; phần "thay mù"
+  (AVAILABLE ép, auto-ACTIVATE, mask thuế) vẫn là D10.
+- **⚠ Thu hẹp Hotfix 5 (Manager 2026-10-18, a).** Hotfix 5 (`decimalToMicros`, `price-conversion.ts`) cố ý
+  nhận số 0 lẻ ở cuối: "23000.00" VND = 23000. Với currency **0 chữ số thập phân** (VND, IDR, KRW, JPY,
+  TWD… theo `getCurrencyDecimals`), một ô **CHỮ** có "." hoặc "," thường là **dấu phân cách nghìn**:
+  "26.000" là 26 nghìn, nhưng bị đọc thành 26 ⇒ giá thấp đi 1000 lần mà không ai thấy. Từ H4.2,
+  `filePriceOf` từ chối dòng đó, lý do "it may be a thousands separator (26.000 = 26 thousand?)".
+  **Giữ nguyên** cho currency CÓ số lẻ ("0.990" USD = 0.99) và cho ô **SỐ** của Excel (parser truyền
+  `cell: "number"` qua `cellKind`; một số không mang dấu phân cách). Chuỗi gửi tới execute route là CHỮ.
+  ⚠ **"Ô SỐ" phải là số THẬT** (review H4.2, ĐÃ ĐO): với file chữ (CSV/TSV/HTML) SheetJS mặc định ĐOÁN số
+  ⇒ "26.000" thành SỐ 26 và lách luật. Parser đọc với `raw: true` ⇒ ô của file chữ luôn là CHỮ; ô xlsx
+  giữ kiểu đã lưu. Bài học chung: một luật dựa trên "kiểu ô" chỉ đúng khi kiểu ô do người viết file quyết
+  định, không do thư viện đoán.
+- **Giá 0 bị từ chối (b)** — giá chính hay GT, mọi cách viết ("0", "0.00").
+- **GT:** thiếu một trong hai ô, currency ngoài bảng GT, cặp vùng/currency Google không bán
+  (CNY→CN, ARS→AR) ⇒ từ chối dòng, có lý do. Header GT sai hoa/thường, hoặc chỉ có MỘT trong hai cột
+  (`GT Price` mà không có `GT Currency`, hay gõ sai "GT Curency") ⇒ từ chối file — trước đó mọi GT bị bỏ im
+  lặng. "GT Price"/"GT Currency" viết đúng
+  không bị luật "header lạ có chữ price" bắt nhầm (test).
+- **Phương pháp lật T1:** bảng kỳ vọng `EXPECTED_H4` suy TAY từ Q1–Q7 trước khi chạy; một bản build
+  từ chối mọi dòng phải ĐỎ (có guard chống thoái hoá: 84 ô được gửi). Khớp ngay lượt chạy đầu.

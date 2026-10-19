@@ -19,8 +19,9 @@
  * parser reads the currency from the header ONLY (H4.1): exactly one
  * "Price (XXX)" column, in a currency Google Play bills in; a header
  * without its currency is refused. This const is the EMISSION canonical
- * form only — the parser accepts any "Price (XXX)". (The Notes text below
- * still describes Cycle 43 cross-currency; it changes with H4.2/H4.4.)
+ * form only — the parser accepts any "Price (XXX)". The Notes text below
+ * describes H4.2: the file's price, in its header currency, is the only
+ * price source — the app's currency takes no part.
  *
  * The locale map previously lived inline in excel-parser.ts (which
  * re-exports it for back-compat). Map keys are unique by construction,
@@ -349,17 +350,17 @@ function googleNotesRows(selected?: readonly string[]): (string | number)[][] {
     [
       GOOGLE_PRICE_HEADER,
       "REQUIRED",
-      "⚠ US DOLLARS (USD) — ALWAYS, even when the app's default currency is not USD. The tool resolves the app-currency price from your pricing template during import (cross-currency). Example: 0.99 here means USD 0.99, NOT 0.99 of the app currency. Rows with an empty price are skipped with a warning.",
+      "⚠ US DOLLARS (USD) — the currency is the one in this header, whatever the app's own currency is; the app's currency is not used. Example: 0.99 here means USD 0.99. A pricing template is matched by the tier named after the Product ID, else by this price in USD; other countries are converted by Google from this price. To price in another currency, rename the header (e.g. \"Price (VND)\") — exactly one price column per file. Rows with an empty price are skipped with a warning; a 0 price, or more decimals than the currency allows, keeps the row out. In a currency without decimals (VND, JPY…) write the number without separators: \"26.000\" typed as text keeps the row out (it may mean 26 thousand).",
     ],
     [
       GOOGLE_GT_PRICE_HEADER,
       "Optional",
-      "Override price, in the currency given in GT Currency. Must be filled together with GT Currency or the override is dropped with a warning.",
+      "Override price for ONE country, in the currency given in GT Currency. Fill GT Price and GT Currency both, or neither — one without the other keeps the row out. A 0 price, more decimals than the currency allows, or a \".\" / \",\" in a currency without decimals keeps the row out. A pricing-template tier that matches the row, or custom prices, replace the GT.",
     ],
     [
       GOOGLE_GT_CURRENCY_HEADER,
       "Optional",
-      'Currency code for GT Price, e.g. "VND" — mapped to that currency\'s primary region.',
+      'Currency code for GT Price, e.g. "VND" — mapped to that currency\'s primary region. A currency outside the GT list, or one Google Play does not bill that region in, keeps the row out. Write both headers exactly "GT Price" / "GT Currency", and keep both columns or neither — otherwise the file is refused.',
     ],
     ...(chosen.length > 0
       ? [
@@ -383,7 +384,7 @@ function googleNotesRows(selected?: readonly string[]): (string | number)[][] {
         ]),
     [],
     [
-      `UNIT REMINDER: "${GOOGLE_PRICE_HEADER}" is US dollars — NOT the app's default currency. GT Price is a PRICE in the GT Currency you specify on the same row (posted to Google Play as that currency's region price) — it is NOT an exchange rate.`,
+      `UNIT REMINDER: "${GOOGLE_PRICE_HEADER}" is US dollars — the header's currency, not the app's. GT Price is a PRICE in the GT Currency you specify on the same row (posted to Google Play as that currency's region price) — it is NOT an exchange rate.`,
     ],
     [],
     [

@@ -253,65 +253,11 @@ export function summarizeCustomPrices(
   return { total: rows.length, customised, atTemplate, blank };
 }
 
-/**
- * The app-currency guard, evaluated at SAVE rather than at push.
- *
- * ⚠ SCOPE — this is REQUIRED ONLY UNDER A TEMPLATE SOURCE. The caller
- * decides; this function just reports whether an app-currency entry
- * exists. Do not re-generalise it to "always required" (the Q6 answer was
- * locked when custom prices were template-only, and that scope has since
- * widened):
- *
- *   - TEMPLATE source: the custom set REPLACES the full ~170-country set,
- *     so it is the only possible source of `defaultPrice`. Google requires
- *     one, in the app's configured currency. Missing → the orchestrator
- *     refuses (`custom_no_app_currency_entry`), which is correct but far
- *     too late — by then the Manager has typed ~170 prices and pushed. The
- *     dialog runs this at Save so they learn it while they can still fix
- *     it; the server refusal stays the backstop, not the first notice.
- *   - GOOGLE CONVERSION: the custom set is a SPARSE OVERLAY and
- *     `defaultPrice` comes from the file's base price. Enforcing this
- *     there would block someone overriding three countries, none of them
- *     the app's own — entirely legitimate. Callers must NOT gate Save on
- *     it under that source.
- */
-export function findAppCurrencyEntry(
-  rows: ReadonlyArray<CustomPriceRow>,
-  appDefaultCurrency: string | null | undefined,
-): { ok: true; regionCode: string } | { ok: false; reason: string } {
-  const want = (appDefaultCurrency ?? "").trim().toUpperCase();
-  if (!want) {
-    return {
-      ok: false,
-      reason:
-        "This app has no currency set. Set it on the app page (App currency & language) before setting custom prices.",
-    };
-  }
-  const priced = rows.filter(
-    (r) => r.customDecimal !== null && norm(r.currency) === want,
-  );
-  if (priced.length === 0) {
-    return {
-      ok: false,
-      reason: `Google needs a ${want} price to use as this product's default. Set a price for at least one ${want} country before saving.`,
-    };
-  }
-  return { ok: true, regionCode: priced[0].regionCode };
-}
-
-/** The custom-prices dialog's Save gate on the app currency. Template sources
- *  only: there the app-currency entry is the only possible defaultPrice.
- *  Under Google Conversion the set is a sparse overlay, so Save is never
- *  gated. ONE function — the dialog and the route-level pricing test
- *  (bulk-import/file-currency-invariance.test.ts) both call it. */
-export function customAppCurrencyGate(
-  rows: ReadonlyArray<CustomPriceRow>,
-  args: { isGoogleConversion: boolean; appDefaultCurrency: string | null | undefined },
-): { ok: true; regionCode: string } | { ok: false; reason: string } {
-  return args.isGoogleConversion
-    ? { ok: true, regionCode: "" }
-    : findAppCurrencyEntry(rows, args.appDefaultCurrency);
-}
+/* H4.2 (Manager Q6, 2026-10-17): the Save gate that demanded a custom price
+ * in the APP's currency (findAppCurrencyEntry / customAppCurrencyGate) is
+ * gone — defaultPrice and the conversion base are always the file's price,
+ * so no currency is special. Removed together with the orchestrator's twin
+ * refusal (custom_no_app_currency_entry). */
 
 export interface SuspiciousDrop {
   regionCode: string;

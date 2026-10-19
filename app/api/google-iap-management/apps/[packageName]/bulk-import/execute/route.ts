@@ -83,14 +83,12 @@ interface ExecuteBody {
     chosenTierIdentifier?: string | null;
     defaultTierIdentifier?: string | null;
     tierCandidateCount?: number;
-    /** Cycle 43: parser provenance of the row's baseCurrency. "explicit"
-     *  when the Excel header was "Price (XXX)" (header-first cross-currency
-     *  trigger applies); "inferred" when generic "Price"/"Default Price"/
-     *  "Base Price" (value-based fallback). Legacy clients that don't
-     *  send this default to "inferred" (preserves pre-Cycle-43 behavior). */
+    /** Cycle 43 parser provenance of baseCurrency. Since H4.2 it changes
+     *  nothing (there is no cross-currency branch); removed with the
+     *  execute re-check in H4.3 (Q9). */
     priceHeaderSource?: "explicit" | "inferred";
-    /** Phase 3 — per-item custom prices. Only ever sent for template
-     *  sources on non-skipped rows; see the validation below. */
+    /** Phase 3 — per-item custom prices. Sent under every pricing source,
+     *  on non-skipped rows; see the validation below. */
     customPrices?: {
       entries?: Array<{ region?: string; currency?: string; priceDecimal?: string }>;
       baselineTier?: string | null;
@@ -222,9 +220,7 @@ export async function POST(
             ? r.defaultTierIdentifier
             : null,
         tierCandidateCount: typeof r.tierCandidateCount === "number" ? r.tierCandidateCount : 0,
-        // Cycle 43 header-first cross-currency trigger needs the parser's
-        // provenance. Default "inferred" for legacy clients (pre-Cycle-43
-        // wizard) so detection falls back to the value-based path.
+        // No effect on pricing since H4.2; removed in H4.3 (Q9).
         priceHeaderSource:
           r.priceHeaderSource === "explicit" ? "explicit" : "inferred",
         // Phase 3 — parsed + re-validated below.
@@ -309,30 +305,15 @@ export async function POST(
         sourceFilename: body.sourceFilename ?? null,
         rows,
         actorEmail: session.user.email ?? null,
-        // Cycle 43 cross-currency resolution needs the app's default
-        // currency to pick the matching entry from a template tier
-        // (e.g. the tier's VND entry when the app's default currency is
-        // VND). Null is tolerated by the orchestrator: no app currency ⇒ no
-        // cross-currency trigger at all; custom prices under a template are
-        // refused (they need an app-currency entry).
-        // ⚠ H4 [2026-10-16]: measured to violate "the file currency is the
-        //   only source of prices"; fix awaiting the gate. Deployed
-        //   behaviour kept as is.
-        appDefaultCurrency: app.default_currency,
+        // ⚠ H4.2: NO app currency — the file is the only price source.
       });
 
       // ── Hub-tracking terminal status (SUCCESS/FAILED/PARTIAL) ──────────
-      // Cross-currency refusals fold into "skipped" — neither a success
-      // nor a Google-side failure (status-mapping.ts:18-21).
-      //
-      // CUSTOM refusals do NOT (Q5 / P5, the status principle). A
-      // cross-currency refusal is the tool declining to guess; a custom
-      // refusal is a price the Manager explicitly set that did not get
-      // applied. Closing the Hub run SUCCESS for that would report
-      // something that plainly did not happen. Counted as failed for the
-      // TERMINAL STATUS ONLY — the returned counters keep custom
-      // refusals in `rowsRefused`, so the result screen and audit log
-      // are unchanged and cross-currency semantics are untouched.
+      // Refused rows are not "skipped" when a price the Manager stated did
+      // not reach Google (P5, the status principle): CUSTOM refusals (Q5)
+      // and, since H4.2, FILE-PRICE refusals (file_price_invalid,
+      // conversion_failed) count as failed for the TERMINAL STATUS ONLY —
+      // the returned counters keep them in `rowsRefused`.
       const succeeded = result.rowsCreated + result.rowsOverwritten;
       const terminal = computeGoogleBulkImportTerminalStatus({
         total: result.rowsTotal,
@@ -341,7 +322,7 @@ export async function POST(
         // this field would make the sum NaN, and `NaN === 0` is false, so
         // every clean batch would close FAILED. Cheap guard against a
         // partial/legacy result object.
-        failed: result.rowsFailed + (result.customRefusedRows ?? 0),
+        failed: result.rowsFailed + (result.customRefusedRows ?? 0) + (result.priceRefusedRows ?? 0),
       });
       tracking.status = terminal.status;
       tracking.errorMessage = terminal.errorMessage;

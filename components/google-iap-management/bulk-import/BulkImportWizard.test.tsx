@@ -117,8 +117,6 @@ function renderWizard(
   mirror: {
     iapsLastSyncedAt: string | null;
     iapsSyncReadError?: string | null;
-    /** apps.default_currency as the page passes it (undefined ⇒ "USD"). */
-    appCurrency?: string | null;
   } = {
     // D0 — default scenario: the IAP list HAS been refreshed.
     iapsLastSyncedAt: "2026-10-16T03:25:10.000Z",
@@ -129,7 +127,6 @@ function renderWizard(
       packageName="com.example.app"
       appId="app-uuid-1"
       appDisplayName="Test App"
-      appDefaultCurrency={mirror.appCurrency === undefined ? "USD" : mirror.appCurrency}
       iapsLastSyncedAt={mirror.iapsLastSyncedAt}
       iapsSyncReadError={mirror.iapsSyncReadError ?? null}
     />,
@@ -858,11 +855,11 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     return fetchMock;
   }
 
-  it.each([["TWD"], [null]])(
-    "app currency %s ⇒ Preview ENABLED once the IAP list is refreshed — no currency/language banner, no block",
-    async (appCurrency) => {
+  it.each([["refreshed"]])(
+    "IAP list %s ⇒ Preview ENABLED — no currency/language banner, no block (the wizard takes no app currency at all)",
+    async () => {
       installBasicFetch();
-      const { container } = renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z", appCurrency });
+      const { container } = renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z" });
       expect(screen.queryByTestId("app-defaults-banner")).toBeNull();
       await goToUploadStep();
       selectFile(container);
@@ -871,54 +868,45 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
   );
 
   // Every sentence is MEASURED behaviour of the pricing code at this commit
-  // (H4 census 2026-10-16, updated by H4.1). Pinned verbatim so the wording
-  // cannot change silently. ⚠ A text pin CANNOT detect a pricing change — the
-  // route-level T1 (bulk-import/file-currency-invariance.test.ts) does; each
-  // H4 step that changes pricing updates this note in the same commit.
-  const LEAD =
+  // (H4.2: the app's currency takes no part in pricing). Pinned verbatim so
+  // the wording cannot change silently. ⚠ A text pin CANNOT detect a pricing
+  // change — the route-level T1 (bulk-import/file-currency-invariance.test.ts)
+  // does; each H4 step that changes pricing updates this note in the same commit.
+  const NOTE =
     "How prices are read from the file. The file needs exactly one Price (XXX) column (e.g. Price (USD)), in a " +
-    "currency Google Play bills in, and prices are read in that currency. A price header without its currency " +
-    "(Price / Default Price / Base Price) or a second price column refuses the file; a row whose price or GT price " +
-    "has more decimals than its currency allows is not imported. GT Price + GT Currency override their one " +
-    "country, except when a pricing template tier matches the row (the tier's price is used) or the row has " +
-    "custom prices (they replace it).";
-  const withCurrency = (x: string) =>
-    LEAD +
-    `When a row's price column names a currency other than this app's currency, ${x} (shown on the app page — it ` +
-    "may still be a tool guess): with a pricing template the row takes the tier " +
-    "whose price in that currency matches (none ⇒ refused; several ⇒ you pick), and countries the tier does not list " +
-    `are converted by Google from the tier's ${x} price — a tier with no ${x} price refuses the row. With Google ` +
-    "Conversion the row is refused unless you set custom prices for it; then a " +
-    `${x} custom price, if you set one, becomes the conversion base.` +
-    `Custom prices with a pricing template must include a ${x} price, and it becomes the conversion base.`;
+    "currency Google Play bills in, and prices are read in that currency only — the app's currency is not used. " +
+    "A price header without its currency (Price / Default Price / Base Price) or a second price column refuses the " +
+    "file; a row whose price or GT price cannot be sent exactly as written (more decimals than its currency " +
+    'allows, 0, or a "." / "," in a currency without decimals) is not imported.' +
+    "With a pricing template, a row takes the tier named after its SKU, else the tier whose price in the file's " +
+    "currency equals the file's price; countries the tier does not list, and rows with no matching tier, are " +
+    "converted by Google from the file's price. With Google Conversion every country is converted from the " +
+    "file's price." +
+    "GT Price + GT Currency (both, or neither) override their one country, except when a tier matches the row — " +
+    "the tier's prices replace the GT, and a country the tier does not list is then converted by Google — or the " +
+    "row has custom prices (they replace it). Custom prices overlay the file's price, which stays the conversion " +
+    "base." +
+    "If Google's conversion fails or returns no US price, a row whose price is not in USD is refused — the " +
+    "countries it does not list would have no price. A USD row is still sent.";
 
-  it.each([
-    ["TWD", withCurrency("TWD")],
-    ["USD", withCurrency("USD")],
-    [
-      null,
-      LEAD +
-        "This app has no currency set (see the app page): every row is priced from the currency its price column " +
-        "names." +
-        "Custom prices with a pricing template are refused (they need an app currency).",
-    ],
-  ])("note text, app currency %s — verbatim", (appCurrency, expected) => {
+  it("note text — verbatim, ONE text: nothing in it depends on the app's currency", () => {
     installBasicFetch();
-    renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z", appCurrency });
+    renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z" });
     const note = screen.getByTestId("pricing-currency-note");
-    expect(note.textContent).toBe(expected);
+    expect(note.textContent).toBe(NOTE);
+    expect(note).not.toHaveAttribute("data-app-currency");
     expect(note.textContent).not.toMatch(/warning:|before importing|must (set|declare)|interpreted in the app|Google enforces/i);
   });
 
-  it.each([["TWD"], [null]])(
-    "app currency %s ⇒ clicking Preview sends the preview — no confirm(), no client-side block, no upload error",
-    async (appCurrency) => {
+  it.each([["refreshed"]])(
+    "IAP list %s ⇒ clicking Preview sends the preview — no confirm(), no client-side block, no upload error",
+    async () => {
       const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
       const fetchMock = installBasicFetch(() => ({
         ok: true,
-        json: async () => ({ rows: [], warnings: [], counts: { total: 0, existing: 0, new: 0 }, appCurrency }),
+        json: async () => ({ rows: [], warnings: [], counts: { total: 0, existing: 0, new: 0 } }),
       }));
-      const { container } = renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z", appCurrency });
+      const { container } = renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z" });
       await goToUploadStep();
       selectFile(container);
       await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
@@ -956,7 +944,7 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     },
   );
 
-  it("Tier column: a REFUSED row says 'Not sent — refused', a sent row 'Auto-converted by Google'; the note follows the server's currency", async () => {
+  it("Tier column: a REFUSED row says 'Not sent — refused', a sent row 'Auto-converted by Google'", async () => {
     const row = (sku: string, resolution: unknown) => ({
       rowNumber: 1, sku, baseCurrency: "USD", basePriceDecimal: "0.99", regionOverrides: [], listings: [],
       exists: false, tierCandidates: [], defaultTierSelection: null, tierMatchedBy: "none", resolution,
@@ -970,11 +958,9 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
         ],
         warnings: [],
         counts: { total: 2, existing: 0, new: 2 },
-        appCurrency: "TWD",
       }),
     }));
-    const { container } = renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z", appCurrency: "USD" });
-    expect(screen.getByTestId("pricing-currency-note")).toHaveAttribute("data-app-currency", "USD");
+    const { container } = renderWizard({ iapsLastSyncedAt: "2026-10-16T03:25:10.000Z" });
     await goToUploadStep();
     selectFile(container);
     await waitFor(() => expect(screen.getByRole("button", { name: /^Preview/ })).toBeEnabled());
@@ -983,8 +969,6 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     });
     await waitFor(() => expect(screen.getByText("Not sent — refused")).toBeInTheDocument());
     expect(screen.getAllByText("Auto-converted by Google")).toHaveLength(1);
-    // The note now describes the currency the server priced THIS preview with.
-    expect(screen.getByTestId("pricing-currency-note")).toHaveAttribute("data-app-currency", "TWD");
   });
 
   it("server says IMPORT_READINESS_READ_FAILED ⇒ the mirror banner turns 'unreadable' and Preview re-blocks", async () => {
@@ -1057,7 +1041,7 @@ describe("BulkImportWizard (Google) — execute body = the shared builder's outp
       if (url.includes(START_URL)) return Promise.resolve({ ok: true, json: async () => ({ run_id: "run-guard" }) });
       if (url.includes(CANCEL_URL)) return Promise.resolve({ ok: true, json: async () => ({}) });
       if (url.includes(PREVIEW_URL_FRAGMENT)) {
-        return Promise.resolve({ ok: true, json: async () => ({ rows: previewRows, warnings: [], appCurrency: "USD" }) });
+        return Promise.resolve({ ok: true, json: async () => ({ rows: previewRows, warnings: [] }) });
       }
       if (url.includes(EXECUTE_URL_FRAGMENT)) return Promise.resolve(successExecuteResponse());
       return Promise.reject(new Error(`unexpected fetch: ${url}`));

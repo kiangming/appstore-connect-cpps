@@ -7,17 +7,18 @@
  * style second phase).
  *
  * Driven by "did anything fail", not "did everything succeed":
- *   - failed === 0                  → SUCCESS (incl. all-skipped, all
- *                                      cross-currency-refused, or a mix of
- *                                      succeeded/skipped/refused with zero
+ *   - failed === 0                  → SUCCESS (incl. all-skipped, a mix
+ *                                      of succeeded/skipped with zero
  *                                      failures, or total === 0)
  *   - failed > 0 && succeeded === 0 → FAILED
  *   - failed > 0 && succeeded > 0   → PARTIAL
  *
- * `rowsRefused` (Cycle 43 cross-currency fail-soft) is folded into the
- * "skipped" bucket — a refusal is soft (the row wasn't sent to Google, not
- * that Google rejected it), so it's neither a success nor a failure, same
- * treatment as a Manager-chosen SKIP disposition.
+ * ⚠ A REFUSED row arrives here inside `failed` (KB P5, H4.2): the execute
+ * route adds every refusal kind — file_price_invalid, conversion_failed,
+ * custom_invalid_price — to the orchestrator's rowsFailed. A refusal means
+ * a price the Manager stated was NOT written, so it is never a soft skip;
+ * only a Manager-chosen SKIP is "skipped". (Before H4.2 the cross-currency
+ * refusals were folded into "skipped"; that branch is gone.)
  *
  * Early-return route exits (before any row is processed — bad JSON,
  * missing rows, no Google account, etc.) are NOT computed here; the route

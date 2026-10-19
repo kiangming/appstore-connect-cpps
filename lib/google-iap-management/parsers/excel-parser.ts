@@ -31,6 +31,7 @@ import {
   filePriceOf,
   fileRegionPriceOf,
   PLAY_BILLING_CURRENCIES,
+  type FileCell,
 } from "../orchestration/file-price";
 import {
   GOOGLE_DATA_SHEET_NAME,
@@ -65,9 +66,9 @@ export { LOCALE_NAME_TO_BCP47 };
  *    catalog (23) and which are refused (exactly CNY, ARS). This table is the
  *    ONLY source — the old COMMON_REGIONS fallback is gone. */
 const CURRENCY_TO_REGION_OVERRIDES: Record<string, string> = {
-  // The Manager's template uses VND as the prototypical GT currency. If a
-  // row's GT Currency is not in this map the parser drops the override with
-  // a warning.
+  // The Manager's template uses VND as the prototypical GT currency. A
+  // row whose GT Currency is not in this map is REFUSED (H4.2) — before,
+  // the override was dropped with a warning.
   USD: "US",
   EUR: "DE",
   GBP: "GB",
@@ -166,7 +167,14 @@ export type PriceColumnResult =
   | { kind: "ok"; columnIndex: number; currencyCode: string; headerText: string }
   | {
       kind: "error";
-      reason: "none" | "multiple" | "no_currency" | "not_play_currency" | "unrecognised";
+      reason:
+        | "none"
+        | "multiple"
+        | "no_currency"
+        | "not_play_currency"
+        | "unrecognised"
+        | "gt_header_case"
+        | "gt_column_missing";
       message: string;
     };
 
@@ -181,17 +189,51 @@ export function resolvePriceColumn(
 ): PriceColumnResult {
   const found: Array<{ columnIndex: number; header: string; currency: string | null }> = [];
   const unrecognised: string[] = [];
+  const gtMiscased: Array<{ header: string; exact: string }> = [];
   for (let c = 0; c < headerRow.length; c += 1) {
     const raw = headerRow[c];
     if (raw === undefined || raw === null) continue;
     const header = String(raw).trim();
     if (FIXED_HEADERS.has(header)) continue; // "GT Price" is not a price column
+    // The GT columns are matched EXACTLY; "gt price" / "Gt Currency" would
+    // be ignored and the GT dropped for every row without a word (H4.2).
+    const gtExact = [GOOGLE_GT_PRICE_HEADER, GOOGLE_GT_CURRENCY_HEADER].find(
+      (h) => h.toLowerCase() === header.replace(/\s+/g, " ").toLowerCase(),
+    );
+    if (gtExact) {
+      gtMiscased.push({ header, exact: gtExact });
+      continue;
+    }
     const m = header.match(PRICE_HEADER);
     if (m) {
       found.push({ columnIndex: c, header, currency: m[1] ? m[1].toUpperCase() : null });
     } else if (LOOKS_LIKE_PRICE.test(header)) {
       unrecognised.push(header);
     }
+  }
+  if (gtMiscased.length > 0) {
+    return {
+      kind: "error",
+      reason: "gt_header_case",
+      message: gtMiscased.map((g) => `Header "${g.header}": write it exactly "${g.exact}".`).join(" "),
+    };
+  }
+  // H4.2 — the GT is read only when BOTH exact headers exist. One without
+  // the other ("GT Curency", a missing column) would drop every GT price in
+  // the file without a word, and those countries would get a converted
+  // price the file did not state. Same rule as a half-filled GT cell pair.
+  const headers = new Set(headerRow.map((h) => (h === undefined || h === null ? "" : String(h).trim())));
+  const hasGtPrice = headers.has(GOOGLE_GT_PRICE_HEADER);
+  const hasGtCurrency = headers.has(GOOGLE_GT_CURRENCY_HEADER);
+  if (hasGtPrice !== hasGtCurrency) {
+    const [present, missing] = hasGtPrice
+      ? [GOOGLE_GT_PRICE_HEADER, GOOGLE_GT_CURRENCY_HEADER]
+      : [GOOGLE_GT_CURRENCY_HEADER, GOOGLE_GT_PRICE_HEADER];
+    return {
+      kind: "error",
+      reason: "gt_column_missing",
+      message: `The file has a "${present}" column but no "${missing}" column — add "${missing}" (written exactly), or remove "${present}". A GT needs both.`,
+    };
   }
   // H4.1 Q10 — no silent first-wins: a column that looks like a price but is
   // not read would leave the Manager believing it was.
@@ -311,6 +353,12 @@ function cellString(
   return String(cell.v).trim();
 }
 
+/** "number" for an Excel NUMBER cell, else "text" (filePriceOf needs it to
+ *  tell a typed "26.000" from the number 26000). */
+function cellKind(ws: XLSX.WorkSheet, r: number, c: number): FileCell {
+  return ws[XLSX.utils.encode_cell({ r, c })]?.t === "n" ? "number" : "text";
+}
+
 function cellDecimal(
   ws: XLSX.WorkSheet,
   r: number,
@@ -338,13 +386,13 @@ function cellDecimal(
  * The parser is tolerant:
  *   - Unrecognised locale columns surface as warnings, not errors.
  *   - Rows missing a SKU are skipped (template often has trailing blanks).
- *   - GT Price + GT Currency are paired; if only one is set, or the GT
- *     Currency is not in the GT table, the override is dropped with a
- *     warning.
- *   - H4.1: a row whose price (or GT price) cannot be honoured exactly —
- *     not a valid decimal, or more decimals than its currency allows — is
- *     NOT imported, with a per-row warning. It is never sent with some
- *     other price instead (filePriceOf / fileRegionPriceOf).
+ *   - H4.1/H4.2: a row whose price or GT price cannot be honoured exactly
+ *     is NOT imported (per-row warning + `refusedRows`): not a valid
+ *     decimal, more decimals than its currency allows, 0, a "." / ","
+ *     typed in a no-decimals currency, a GT in a pair Google does not bill,
+ *     a GT Currency outside the GT table, or only one of GT Price / GT
+ *     Currency filled. It is never sent with some other price instead
+ *     (filePriceOf / fileRegionPriceOf).
  *
  * Hard errors that block the entire file:
  *   - Workbook can't be opened.
@@ -364,7 +412,11 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
 
   let wb: XLSX.WorkBook;
   try {
-    wb = XLSX.read(buffer, { type: "buffer" });
+    // H4.2 (a) — raw: a text-format upload (CSV, TSV, HTML) must stay TEXT.
+    // Without it SheetJS guesses numbers: "26.000" under Price (VND) became
+    // the NUMBER 26 and skipped the thousands-separator refusal (measured).
+    // xlsx cells keep their stored type either way.
+    wb = XLSX.read(buffer, { type: "buffer", raw: true });
   } catch (err) {
     errors.push(
       `Failed to read workbook: ${err instanceof Error ? err.message : String(err)}`,
@@ -456,7 +508,11 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
     // row is not imported. Never substituted by a conversion or another
     // currency. Both are checked so one upload names every problem.
     const reasons: string[] = [];
-    const filePrice = filePriceOf({ currency: resolvedCurrency, priceDecimal: basePriceDecimal });
+    const filePrice = filePriceOf({
+      currency: resolvedCurrency,
+      priceDecimal: basePriceDecimal,
+      cell: cellKind(ws, r, priceCol),
+    });
     if (!filePrice.ok) {
       reasons.push(`"${priceResolution.headerText}" = "${basePriceDecimal}" — ${filePrice.reason}`);
     }
@@ -470,7 +526,12 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
       if (hasPrice && hasCurrency) {
         const region = regionForCurrency(gtCurrency);
         if (region) {
-          const gt = fileRegionPriceOf({ region, currency: gtCurrency, priceDecimal: gtPriceDecimal });
+          const gt = fileRegionPriceOf({
+            region,
+            currency: gtCurrency,
+            priceDecimal: gtPriceDecimal,
+            cell: cellKind(ws, r, idx.gtPrice),
+          });
           if (gt.ok) {
             regionOverrides.push({
               region,
@@ -481,13 +542,18 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
             reasons.push(`GT Price "${gtPriceDecimal}" ${gtCurrency} — ${gt.reason}`);
           }
         } else {
-          warnings.push(
-            `Row ${r + 1} (SKU "${sku}"): GT Currency "${gtCurrency}" not in region map; override dropped.`,
+          // H4.2 (Manager 2026-10-18): a GT the tool cannot place refuses
+          // the row, like every other GT error — before, the GT was dropped
+          // and that country got a converted price the file did not state.
+          reasons.push(
+            `GT Currency "${gtCurrency}" is not a currency the GT column supports (one region per currency: ${Object.keys(CURRENCY_TO_REGION_OVERRIDES).join(", ")}).`,
           );
         }
       } else if (hasPrice !== hasCurrency) {
-        warnings.push(
-          `Row ${r + 1} (SKU "${sku}"): GT Price + GT Currency must be set together; override dropped.`,
+        reasons.push(
+          hasPrice
+            ? `GT Price "${gtPriceDecimal}" has no GT Currency — fill both or neither.`
+            : `GT Currency "${gtCurrency}" has no GT Price — fill both or neither.`,
         );
       }
     }

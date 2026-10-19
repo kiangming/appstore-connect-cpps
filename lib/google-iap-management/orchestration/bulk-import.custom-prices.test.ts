@@ -5,7 +5,7 @@
  * UNCHANGED under a template source". It exists to pin the guard at the
  * top of the template-resolution loop:
  *
- *   if (row.crossCurrencyRefusal || row.resolvedDefaultPrice || row.customPrices)
+ *   if (row.priceRefusal || row.customPrices)
  *
  * Without `|| row.customPrices`, the loop below reassigns
  * `row.regionOverrides = entries.map(...)` from the matched tier and the
@@ -92,7 +92,6 @@ const INPUT_BASE = {
   packageName: "com.vng.cashknight",
   sourceFilename: "iaps.xlsx",
   actorEmail: "manager@vng.com.vn",
-  appDefaultCurrency: "VND",
 };
 
 function lastUpsertInputs() {
@@ -132,14 +131,9 @@ describe("executeBulkImport — per-item custom prices", () => {
       US: { currency: "USD", priceMicros: "12340000" },
       VN: { currency: "VND", priceMicros: "199000000000" },
     });
-    // Q6 UNDER A TEMPLATE SOURCE: the custom set replaces the whole
-    // price set, so defaultPrice must come from its app-currency (VND)
-    // entry. Under Google Conversion the rule does NOT apply — see the
-    // sparse-overlay tests below.
-    expect(body.defaultPrice).toEqual({
-      currency: "VND",
-      priceMicros: "199000000000",
-    });
+    // H4.2 (Q6): defaultPrice is the FILE's price under every source — no
+    // custom entry is special because of the app's currency.
+    expect(body.defaultPrice).toEqual({ currency: "USD", priceMicros: "9990000" });
   });
 
   it("does not consult the template at all for a custom row", async () => {
@@ -169,21 +163,16 @@ describe("executeBulkImport — per-item custom prices", () => {
     expect(inputs[1].body.prices!.VN.priceMicros).toBe("249000000000"); // template
   });
 
-  it("custom WINS over cross-currency: no conversion is attempted", async () => {
-    // USD price in a VND app would normally trigger the cross-currency
-    // pre-pass; the custom set is absolute, so there is nothing to convert.
-    const row = customRow({ baseCurrency: "USD", basePriceDecimal: "9.99" });
-    const res = await executeBulkImport({} as never, {
+  it("H4.2 (Q6): a custom row's conversion base is the FILE's price — the custom VND entry does not replace it", async () => {
+    await executeBulkImport({} as never, {
       ...INPUT_BASE,
       pricingSource: "default_template",
-      rows: [row],
+      rows: [customRow()],
     });
-    expect(res.rowsRefused).toBe(0);
-    expect(res.customPricedRows).toBe(1);
-    expect(lastUpsertInputs()[0].body.defaultPrice!.currency).toBe("VND");
+    expect(buildRegionMapFromBasePrice).toHaveBeenCalledWith(expect.anything(), "com.vng.cashknight", "9990000", "USD");
   });
 
-  it("REFUSES (never falls back to template) when no entry carries the app currency", async () => {
+  it("H4.2 (Q6): a custom set with an entry in no particular currency is APPLIED under a template (no app-currency requirement)", async () => {
     const row = customRow({
       customPrices: {
         entries: [{ region: "US", currency: "USD", priceDecimal: "12.34" }],
@@ -196,11 +185,10 @@ describe("executeBulkImport — per-item custom prices", () => {
       pricingSource: "default_template",
       rows: [row],
     });
-    expect(res.customRefusedRows).toBe(1);
-    expect(res.refusedRows[0].kind).toBe("custom_no_app_currency_entry");
-    expect(res.refusedRows[0].reason).toContain("no VND entry");
-    // Nothing was sent — the row did NOT quietly ship template prices.
-    expect(batchUpsertInAppProducts).not.toHaveBeenCalled();
+    expect(res.customRefusedRows).toBe(0);
+    expect(res.customPricedRows).toBe(1);
+    expect(lastUpsertInputs()[0].body.prices!.US.priceMicros).toBe("12340000");
+    expect(lastUpsertInputs()[0].body.defaultPrice).toEqual({ currency: "USD", priceMicros: "9990000" });
   });
 
   it("REFUSES an invalid price with a message naming row, SKU, value and reason", async () => {
@@ -318,35 +306,14 @@ describe("executeBulkImport — per-item custom prices", () => {
     expect(body.defaultPrice).toEqual({ currency: "USD", priceMicros: "9990000" });
   });
 
-  it("an app-currency entry set under Google Conversion WINS as defaultPrice (explicit beats base price)", async () => {
+  it("H4.2 (Q6): under Google Conversion too, a VND custom entry does NOT become defaultPrice — the file's price stays", async () => {
     const res = await executeBulkImport({} as never, {
       ...INPUT_BASE,
       pricingSource: "google_default",
-      rows: [customRow()], // carries a VND entry; app currency is VND
+      rows: [customRow()],
     });
     expect(res.customRefusedRows).toBe(0);
-    expect(lastUpsertInputs()[0].body.defaultPrice).toEqual({
-      currency: "VND",
-      priceMicros: "199000000000",
-    });
-  });
-
-  it("UNCHANGED under a TEMPLATE source: a missing app-currency entry still refuses", async () => {
-    const res = await executeBulkImport({} as never, {
-      ...INPUT_BASE,
-      pricingSource: "default_template",
-      rows: [
-        customRow({
-          customPrices: {
-            entries: [{ region: "US", currency: "USD", priceDecimal: "12.34" }],
-            baselineTier: "tier_999",
-            editedAt: null,
-          },
-        }),
-      ],
-    });
-    expect(res.customRefusedRows).toBe(1);
-    expect(res.refusedRows[0].kind).toBe("custom_no_app_currency_entry");
+    expect(lastUpsertInputs()[0].body.defaultPrice).toEqual({ currency: "USD", priceMicros: "9990000" });
   });
 
   it("B6: perRowDiagnostic records provenance for a custom row under Google Conversion", async () => {
@@ -421,15 +388,9 @@ describe("executeBulkImport — per-item custom prices", () => {
   /**
    * Pins the `|| row.customPrices` clause specifically.
    *
-   * The anchor test above does NOT pin it — on the success path
-   * `resolvedDefaultPrice` is already set by the custom pre-pass, which
-   * makes the guard's earlier clause do the skipping. (Verified by
-   * mutation: deleting `|| row.customPrices` leaves the anchor green;
-   * deleting the resolvedDefaultPrice stamp turns it red.)
-   *
-   * Where the clause DOES earn its place is a REFUSED custom row: it has
-   * no resolvedDefaultPrice, so without this clause it falls into the
-   * template loop, gets `row.regionOverrides` overwritten with template
+   * Since H4.2 `row.customPrices` is the ONLY clause protecting custom rows
+   * (the resolvedDefaultPrice stamp is gone). A REFUSED custom row without
+   * it falls into the template loop, gets `row.regionOverrides` overwritten with template
    * entries, and emits a SECOND diagnostic claiming provenance
    * "template". The audit would then show a row the Manager marked
    * Custom as template-priced — a false provenance record, and a latent
@@ -442,7 +403,8 @@ describe("executeBulkImport — per-item custom prices", () => {
       rows: [
         customRow({
           customPrices: {
-            entries: [{ region: "US", currency: "USD", priceDecimal: "12.34" }],
+            // Refused because the price is invalid for VND (0 decimals).
+            entries: [{ region: "VN", currency: "VND", priceDecimal: "1.5" }],
             baselineTier: "tier_999",
             editedAt: null,
           },
@@ -469,7 +431,8 @@ describe("executeBulkImport — per-item custom prices", () => {
       rows: [
         customRow({
           customPrices: {
-            entries: [{ region: "US", currency: "USD", priceDecimal: "12.34" }],
+            // Refused because the price is invalid for VND (0 decimals).
+            entries: [{ region: "VN", currency: "VND", priceDecimal: "1.5" }],
             baselineTier: "tier_999",
             editedAt: null,
           },

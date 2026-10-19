@@ -946,6 +946,11 @@ nhau không; (2) vì sao TWD hiện 6 chữ số — gợi ý duy nhất đã th
 (`microsToDecimal(…, 6)`); giá lên dây đúng `Money{TWD, units "33"}`, và 33 TWD là
 entry của template. Ưu tiên thấp. Chi tiết: `design-bulk-import-existence-overwrite-safety.md` §1 E3.
 
+⟶ **2026-10-18 — ĐÓNG bởi H4.2.** Dòng "0.99 USD → 33.000000 TWD" là giá đã resolve theo entry
+currency-app của tier (`appCurrencyPrice`, `microsToDecimal(…, 6)` ở nhánh cross-currency của preview).
+H4.2 xoá hẳn nhánh đó (preview không còn gọi `microsToDecimal`, không còn trả `appCurrencyPrice`); banner
+"theo currency của app" đã bị C2.1 thay, và câu ghi chú giá H4.2 không còn nhắc currency app.
+
 ---
 
 ## `[GOOGLE-refresh-flips-app-currency]` ⚠ — Refresh IAP ghi đè currency/language của app bằng heuristic
@@ -1015,6 +1020,11 @@ Wizard không chặn trước (`computePrecisionViolations` bỏ qua dòng khôn
 CustomPricesDialog cho Save khi không có entry currency app dưới Google Conversion). Xử lý trong
 chunk H4 (currency trong file là nguồn duy nhất) — C2.1 không đổi logic định giá.
 
+⟶ **2026-10-18 — ĐÓNG bởi H4.1 + H4.2.** Header `Price` (không currency) bị từ chối từ H4.1; từ H4.2
+mọi dòng (kể cả custom) neo vào giá file đã qua `filePriceOf` ở pre-pass của orchestrator — giá FILE (và
+GT) sai bị từ chối TỪNG DÒNG (`file_price_invalid`), không còn ném ra ngoài try. (Entry của TIER thì vẫn
+có thể ném — xem `[GOOGLE-bulk-import-db-throws-outside-try]`.)
+
 ---
 
 ## `[GOOGLE-parser-sheet-offset-columns]` — sheet có vùng dữ liệu không bắt đầu ở cột A ⇒ mọi cột đọc lệch
@@ -1050,6 +1060,30 @@ probe ở `:912` có bọc. Lỗi DB ⇒ cả request lỗi, `import_batches` k�
 `IN_PROGRESS`. Trong khi đó cảnh báo ở preview hứa "affected rows will be REFUSED at push time
 (per-row fail-soft)" (`preview/route.ts:440`) — sai. H4.2 xoá nhánh cross-currency (`:553-599`) và
 đổi lỗi GIÁ thành từ chối dòng; các lần tra template còn lại vẫn mở sau H4.
+
+⟶ **2026-10-18 — H4.2:** ba lần tra của nhánh cross-currency (`:553`, `:566`, `:599` cũ) đã bị xoá cùng
+nhánh đó, và lỗi GIÁ CỦA FILE (giá chính + GT) giờ là từ chối từng dòng. CÒN MỞ:
+- các lần tra template còn lại vẫn ngoài try — `templateExists`, `findTemplateId`, tier đã chọn, SKU,
+  entries của probe (số dòng đã đổi sau H4.2; tra bằng tên hàm trong `bulk-import.ts`);
+- **entry của tier sai độ chính xác** (ĐÃ ĐO ở review H4.2): parser template đổi giá không kèm currency
+  (`pricing-template-parser.ts` `decimalToMicros(decimal)`), nên tier có TW = TWD 30.5 được lưu. Khi một
+  dòng khớp tier đó, `buildProduct` → `decimalToMicros(r.priceDecimal, r.currency)` ném NGOÀI try ⇒ cả
+  batch 500 (dòng hợp lệ cũng không gửi), `import_batches` kẹt `IN_PROGRESS`. Sửa đúng chỗ: kiểm độ chính
+  xác theo currency MỘT lần khi tải template lên (cùng luật `getCurrencyDecimals`).
+
+---
+
+## `[GOOGLE-custom-prices-separator-zero]` — giá CUSTOM chưa áp luật (a) dấu phân cách / (b) giá 0
+
+**GHI NHẬN 2026-10-18 (review H4.2, ĐÃ ĐO).** Quyết định (a)/(b) của Manager nêu ô FILE và GT. Giá custom
+gõ trong dialog đi đường khác: `validateCustomPrices` → `validateDecimalForCurrency` (dialog),
+`execute/route.ts` (cùng hàm), `decimalToMicros` (pre-pass custom của orchestrator). Cả ba nhận "26.000" VND
+(= 26 VND, Hotfix 5 cho số 0 lẻ ở cuối) và "0". Dialog có cảnh báo `flagSuspiciousDrops` khi có cột tham
+chiếu (tier / giá quy đổi), nhưng không chặn Save. Google trả gì cho 26 VND / 0 JPY: CHƯA BIẾT.
+⚠ Validator và `RegionPriceCell` dùng chung với form sửa đơn lẻ (header `CustomPricesDialog.tsx` cấm hai
+nơi lệch nhau) ⇒ mở rộng (a)/(b) đổi luôn form đơn lẻ. **Cần Manager:** có áp (a)/(b) cho giá gõ tay từng
+nước không? Nếu có: thêm luật MỘT lần trong `validateDecimalForCurrency` (hoặc một wrapper cả hai bề mặt
+gọi) — route và orchestrator thừa hưởng; không vá riêng dialog.
 
 ---
 

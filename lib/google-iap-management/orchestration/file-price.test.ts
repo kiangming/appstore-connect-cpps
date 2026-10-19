@@ -21,7 +21,7 @@ describe("filePriceOf", () => {
   });
 
   it("more decimals than the currency allows, or not a number ⇒ refused with the precision module's own words", () => {
-    expect(filePriceOf({ currency: "TWD", priceDecimal: "30.5" })).toEqual({
+    expect(filePriceOf({ currency: "TWD", priceDecimal: "30.5", cell: "number" })).toEqual({
       ok: false,
       reason: 'TWD only accepts whole numbers (got "30.5"). Google rejects fractional values for this currency.',
     });
@@ -32,6 +32,34 @@ describe("filePriceOf", () => {
 
   it("the currency list IS the measured Play catalog (one source)", () => {
     expect([...PLAY_BILLING_CURRENCIES].sort()).toEqual([...new Set(PLAY_REGIONS.map((r) => r.currency))].sort());
+  });
+});
+
+describe("H4.2 (a) thousands separators, (b) zero", () => {
+  it("(a) a no-decimals currency typed as TEXT with '.' or ',' ⇒ refused; a NUMBER keeps its reading", () => {
+    for (const raw of ["26.000", "26,000", "30.5"]) {
+      const r = filePriceOf({ currency: "VND", priceDecimal: raw });
+      expect(r.ok).toBe(false);
+      expect(!r.ok && r.reason).toMatch(/it may be a thousands separator \(26\.000 = 26 thousand\?\)/);
+    }
+    expect(filePriceOf({ currency: "VND", priceDecimal: "26000", cell: "number" })).toEqual({ ok: true, currency: "VND", priceMicros: "26000000000" });
+    expect(filePriceOf({ currency: "VND", priceDecimal: "26000" }).ok).toBe(true);
+    // Every no-decimals currency, not just VND.
+    for (const c of ["IDR", "KRW", "JPY", "TWD"]) expect(filePriceOf({ currency: c, priceDecimal: "1.000" }).ok).toBe(false);
+  });
+
+  it("(a) Hotfix 5 kept for currencies WITH decimals: '0.990' USD is 0.99", () => {
+    expect(filePriceOf({ currency: "USD", priceDecimal: "0.990" })).toEqual({ ok: true, currency: "USD", priceMicros: "990000" });
+  });
+
+  it("(b) 0 in any spelling ⇒ refused, for the main price and a GT", () => {
+    for (const raw of ["0", "0.00", "0.000000"]) {
+      expect(filePriceOf({ currency: "USD", priceDecimal: raw })).toEqual({
+        ok: false,
+        reason: "the price is 0 — a 0 price is not accepted; enter the real price.",
+      });
+    }
+    expect(fileRegionPriceOf({ region: "VN", currency: "VND", priceDecimal: "0", cell: "number" }).ok).toBe(false);
   });
 });
 

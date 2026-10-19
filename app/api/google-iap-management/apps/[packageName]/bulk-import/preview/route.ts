@@ -19,20 +19,13 @@ import { getAppByPackage } from "@/lib/google-iap-management/repository/apps";
 import { listIapsForApp } from "@/lib/google-iap-management/repository/iaps";
 import { listAccounts } from "@/lib/google-iap-management/repository/google-accounts";
 import { parseIapTemplate } from "@/lib/google-iap-management/parsers/excel-parser";
-import { decimalToMicros, microsToDecimal } from "@/lib/google-iap-management/google/price-conversion";
+import { filePriceOf } from "@/lib/google-iap-management/orchestration/file-price";
 import {
   findRowCandidates,
   type TemplateScopeRef,
   getPrimaryTierFromCandidates,
   type TierCandidate,
 } from "@/lib/google-iap-management/queries/templates";
-import {
-  detectCrossCurrencyTrigger,
-  findCrossCurrencyCandidates,
-  resolveAppCurrencyEntryForTier,
-  fileDecimalToAnchorMicros,
-  REFUSAL_REASONS,
-} from "@/lib/google-iap-management/orchestration/cross-currency";
 import {
   readActiveAccountId,
   resolveActiveAccountId,
@@ -126,9 +119,8 @@ export async function POST(
   })();
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  // H4.1: the parser takes NO app currency — a price header without its
-  // currency is refused (Q1). ⚠ The app currency still takes part in pricing
-  // BELOW (cross-currency trigger + tier entry) until H4.2 removes it.
+  // H4: the parser takes NO app currency — a price header without its
+  // currency is refused (Q1), and nothing below reads it either (H4.2).
   const parsed = parseIapTemplate(buffer);
   if (parsed.errors.length > 0) {
     return NextResponse.json(
@@ -156,20 +148,11 @@ export async function POST(
   }
   const existingSkus = new Set(existing.map((i) => i.sku));
 
-  // Per-row candidate lookup. Two branches:
-  //   - SAME-currency (raw price fits row.baseCurrency precision): use
-  //     Hotfix 19 findRowCandidates (SKU + (row.baseCurrency, baseMicros)).
-  //   - CROSS-currency (raw price violates row.baseCurrency precision,
-  //     e.g. "4.99" in a VND app): Cycle 43 — re-interpret Price as a
-  //     USD anchor, look up template tiers by (USD, anchorMicros). When
-  //     exactly 1 candidate is found, also resolve the app-currency
-  //     entry so the wizard can show the RESOLVED app-currency price
-  //     before push. When 0 or >1, surface refusal/needs-choice.
-  //
-  // Skipped when pricingSource is google_default: that path can't
-  // resolve cross-currency (no template) — refusals are surfaced
-  // inline so the wizard can flag rows up front.
-  const appCurrencyNorm = (app.default_currency ?? "").trim().toUpperCase();
+  // Per-row candidate lookup — ONE path for every row (H4.2, Manager Q2):
+  // the tier named after the SKU first, then the tier whose price in the
+  // FILE's currency equals the FILE's price (findRowCandidates). The app's
+  // currency takes no part; there is no cross-currency branch any more.
+  // Google Conversion has no template: no lookup.
   // G1b — MỘT ref cho cả route. `app` đến từ getAppByPackage(accountId, …)
   // nên account sở hữu app == accountId theo cấu trúc.
   const templateRef: TemplateScopeRef =
@@ -177,223 +160,40 @@ export async function POST(
       ? { scope: "APP", appId: app.id, accountId: null }
       : { scope: "ACCOUNT", accountId: app.google_console_account_id, appId: null };
 
-  type RowResolution =
-    | { kind: "same_currency" }
-    | {
-        kind: "cross_currency_resolved";
-        anchorUsdMicros: string;
-        chosenTier: string;
-        appCurrencyPrice: {
-          currency: string;
-          priceMicros: string;
-          priceDecimal: string;
-        };
-      }
-    | { kind: "cross_currency_needs_choice"; anchorUsdMicros: string }
-    | {
-        kind: "cross_currency_refused";
-        anchorUsdMicros: string | null;
-        reason: string;
-        refusalKind:
-          | "google_default"
-          | "template_miss"
-          | "missing_entries"
-          | "no_app_currency_entry";
-      };
-
   type RowCandidateData = {
     candidates: TierCandidate[];
     defaultTierSelection: string | null;
     matchedBy: "sku" | "currency_price" | "none";
-    resolution: RowResolution;
   };
+  const NO_CANDIDATES: RowCandidateData = { candidates: [], defaultTierSelection: null, matchedBy: "none" };
   let candidateLookupError: string | null = null;
 
   const candidateData: RowCandidateData[] = await withConcurrency(
     parsed.rows,
     CANDIDATE_LOOKUP_CONCURRENCY,
     async (row): Promise<RowCandidateData> => {
-      const trigger = detectCrossCurrencyTrigger({
-        basePriceDecimal: row.basePriceDecimal,
-        baseCurrency: row.baseCurrency,
-        priceHeaderSource: row.priceHeaderSource,
-        appDefaultCurrency: app.default_currency,
-      });
-
-      if (trigger) {
-        // Cross-currency row: surface resolution outcome up front so
-        // the wizard's preview shows the resolved app-currency price
-        // (or refusal reason) before push instead of failing only at
-        // push time. Anchor currency comes from the trigger — XXX for
-        // explicit "Price (XXX)" headers, USD for the value-based
-        // fallback path.
-        const anchorMicros = fileDecimalToAnchorMicros(
-          row.basePriceDecimal,
-          trigger.anchorCurrency,
-        );
-        if (pricingSource === "google_default" || !appCurrencyNorm) {
-          return {
-            candidates: [],
-            defaultTierSelection: null,
-            matchedBy: "none",
-            resolution: {
-              kind: "cross_currency_refused",
-              anchorUsdMicros: anchorMicros,
-              reason: REFUSAL_REASONS.googleDefault(
-                appCurrencyNorm || row.baseCurrency || "(unknown)",
-                row.basePriceDecimal,
-                trigger.anchorCurrency,
-              ),
-              refusalKind: "google_default",
-            },
-          };
-        }
-        try {
-          const crossCandidates = await findCrossCurrencyCandidates({
-            ...templateRef,
-            filePriceDecimal: row.basePriceDecimal,
-            anchorCurrency: trigger.anchorCurrency,
-          });
-          if (crossCandidates.length === 0) {
-            return {
-              candidates: [],
-              defaultTierSelection: null,
-              matchedBy: "none",
-              resolution: {
-                kind: "cross_currency_refused",
-                anchorUsdMicros: anchorMicros,
-                reason: REFUSAL_REASONS.templateMiss(
-                  appCurrencyNorm,
-                  row.basePriceDecimal,
-                  trigger.anchorCurrency,
-                ),
-                refusalKind: "template_miss",
-              },
-            };
-          }
-          if (crossCandidates.length > 1) {
-            // Surface as needs-choice; wizard reuses the existing
-            // Hotfix 19 multi-candidate dropdown.
-            return {
-              candidates: crossCandidates,
-              defaultTierSelection: getPrimaryTierFromCandidates(
-                crossCandidates,
-              ),
-              matchedBy: "currency_price",
-              resolution: {
-                kind: "cross_currency_needs_choice",
-                anchorUsdMicros: anchorMicros ?? "",
-              },
-            };
-          }
-          // Exactly 1 candidate — auto-resolve so preview shows the
-          // exact app-currency amount the push will send.
-          const tier = crossCandidates[0];
-          const outcome = await resolveAppCurrencyEntryForTier({
-            ...templateRef,
-            identifier: tier.identifier,
-            appDefaultCurrency: appCurrencyNorm,
-          });
-          if (outcome.kind === "resolved") {
-            return {
-              candidates: crossCandidates,
-              defaultTierSelection: tier.identifier,
-              matchedBy: "currency_price",
-              resolution: {
-                kind: "cross_currency_resolved",
-                anchorUsdMicros: anchorMicros ?? "",
-                chosenTier: tier.identifier,
-                appCurrencyPrice: {
-                  currency: outcome.entry.currency,
-                  priceMicros: outcome.entry.priceMicros,
-                  priceDecimal: microsToDecimal(outcome.entry.priceMicros, 6),
-                },
-              },
-            };
-          }
-          // Tier matched the anchor price but has no entry for the
-          // app's currency, or has no entries at all — surface as
-          // refusal.
-          const refusalReason =
-            outcome.kind === "missing-entries"
-              ? REFUSAL_REASONS.missingEntries(tier.identifier)
-              : REFUSAL_REASONS.noAppCurrencyEntry(
-                  tier.identifier,
-                  appCurrencyNorm,
-                );
-          const refusalKind =
-            outcome.kind === "missing-entries"
-              ? ("missing_entries" as const)
-              : ("no_app_currency_entry" as const);
-          return {
-            candidates: crossCandidates,
-            defaultTierSelection: tier.identifier,
-            matchedBy: "currency_price",
-            resolution: {
-              kind: "cross_currency_refused",
-              anchorUsdMicros: anchorMicros,
-              reason: refusalReason,
-              refusalKind,
-            },
-          };
-        } catch (err) {
-          candidateLookupError =
-            err instanceof Error ? err.message : String(err);
-          console.warn(
-            `[google-iap:bulk-import:preview] cross-currency lookup failed sku=${row.sku} err="${candidateLookupError}"`,
-          );
-          return {
-            candidates: [],
-            defaultTierSelection: null,
-            matchedBy: "none",
-            resolution: {
-              kind: "cross_currency_refused",
-              anchorUsdMicros: anchorMicros,
-              reason: `Cross-currency lookup failed: ${candidateLookupError}`,
-              refusalKind: "template_miss",
-            },
-          };
-        }
-      }
-
-      // Same-currency path: existing Hotfix 19 lookup, unchanged.
-      if (pricingSource === "google_default") {
-        return {
-          candidates: [],
-          defaultTierSelection: null,
-          matchedBy: "none",
-          resolution: { kind: "same_currency" },
-        };
-      }
+      if (pricingSource === "google_default") return NO_CANDIDATES;
       try {
-        const baseMicros = decimalToMicros(
-          row.basePriceDecimal,
-          row.baseCurrency,
-        );
+        // The parser already refused rows whose file price is invalid.
+        const filePrice = filePriceOf({ currency: row.baseCurrency, priceDecimal: row.basePriceDecimal });
+        if (!filePrice.ok) throw new Error(filePrice.reason);
         const result = await findRowCandidates({
           ...templateRef,
           sku: row.sku,
-          currencyCode: row.baseCurrency,
-          priceMicros: baseMicros,
+          currencyCode: filePrice.currency,
+          priceMicros: filePrice.priceMicros,
         });
         return {
           candidates: result.candidates,
           defaultTierSelection: getPrimaryTierFromCandidates(result.candidates),
           matchedBy: result.matchedBy,
-          resolution: { kind: "same_currency" },
         };
       } catch (err) {
-        candidateLookupError =
-          err instanceof Error ? err.message : String(err);
+        candidateLookupError = err instanceof Error ? err.message : String(err);
         console.warn(
           `[google-iap:bulk-import:preview] candidate lookup failed sku=${row.sku} err="${candidateLookupError}"`,
         );
-        return {
-          candidates: [],
-          defaultTierSelection: null,
-          matchedBy: "none",
-          resolution: { kind: "same_currency" },
-        };
+        return NO_CANDIDATES;
       }
     },
   );
@@ -404,37 +204,18 @@ export async function POST(
     tierCandidates: candidateData[i].candidates,
     defaultTierSelection: candidateData[i].defaultTierSelection,
     tierMatchedBy: candidateData[i].matchedBy,
-    // Cycle 43 cross-currency resolution outcome (one of:
-    // same_currency / cross_currency_resolved / cross_currency_needs_choice
-    // / cross_currency_refused). Wizard renders resolved app-currency
-    // price or refusal banner based on `resolution.kind`.
-    resolution: candidateData[i].resolution,
+    // Every row is priced from its own file price since H4.2; the
+    // cross-currency kinds the wizard still knows are no longer produced.
+    resolution: { kind: "same_currency" as const },
   }));
 
   const ambiguousCount = rows.filter((r) => r.tierCandidates.length > 1).length;
-  const crossCurrencyResolvedCount = rows.filter(
-    (r) => r.resolution.kind === "cross_currency_resolved",
-  ).length;
-  const crossCurrencyRefusedCount = rows.filter(
-    (r) => r.resolution.kind === "cross_currency_refused",
-  ).length;
-  const crossCurrencyNeedsChoiceCount = rows.filter(
-    (r) => r.resolution.kind === "cross_currency_needs_choice",
-  ).length;
   const warningsOut = [...parsed.warnings];
   if (candidateLookupError) {
-    // Corrected wording (Cycle 43): the old "fall through to
-    // auto-bootstrap at push time" message was untrue — the push path
-    // re-throws the same precision error. The new message states the
-    // actual behavior: rows are resolved-from-template, marked
-    // needs-choice, or refused.
+    // H4.2 — the old text promised a per-row refusal at push time, which the
+    // push path never did (BACKLOG [GOOGLE-bulk-import-db-throws-outside-try]).
     warningsOut.push(
-      `Tier candidate lookup failed for one or more rows (${candidateLookupError}); affected rows will be REFUSED at push time (per-row fail-soft) instead of crashing the batch.`,
-    );
-  }
-  if (crossCurrencyRefusedCount > 0) {
-    warningsOut.push(
-      `${crossCurrencyRefusedCount} row(s) cannot be resolved and will be refused on push (per-row fail-soft). Inspect the Resolved price column for the reason on each refused row.`,
+      `Tier lookup failed for one or more rows (${candidateLookupError}); those rows show no tier here. Run the preview again before pushing.`,
     );
   }
 
@@ -444,9 +225,6 @@ export async function POST(
     // D3 — when the mirror these EXISTS/NEW flags came from was last filled
     // completely. Read at the same moment as the mirror itself.
     iapsLastSyncedAt: gate.iapsLastSyncedAt,
-    // H4.6 — the app currency this preview was priced with (the wizard's
-    // pricing note describes it). Display only.
-    appCurrency: app.default_currency ?? null,
     rows,
     // H4.1 — rows the file states but the tool cannot honour exactly (price
     // or GT price). Not in `rows`; the wizard names them and blocks Push.
@@ -458,11 +236,6 @@ export async function POST(
       existing: rows.filter((r) => r.exists).length,
       new: rows.filter((r) => !r.exists).length,
       ambiguous: ambiguousCount,
-      // Cycle 43 cross-currency counts so the wizard banner can show a
-      // single-line summary ("3 resolved, 1 refused, 1 needs choice").
-      crossCurrencyResolved: crossCurrencyResolvedCount,
-      crossCurrencyRefused: crossCurrencyRefusedCount,
-      crossCurrencyNeedsChoice: crossCurrencyNeedsChoiceCount,
     },
   });
 }

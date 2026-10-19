@@ -92,8 +92,43 @@ describe("resolvePriceColumn — H4.1: exactly ONE price column, and it names a 
     },
   );
 
-  it("'GT Price' is not a price column", () => {
-    expect(resolvePriceColumn(["Product ID", "Price (USD)", "GT Price", "GT Currency"])).toMatchObject({ kind: "ok", currencyCode: "USD" });
+  it("'GT Price' / 'GT Currency' written exactly are NOT caught as price columns (Manager 2026-10-18, decision 3)", () => {
+    expect(resolvePriceColumn(["Product ID", "Price (USD)", "GT Price", "GT Currency"])).toEqual({
+      kind: "ok",
+      columnIndex: 1,
+      currencyCode: "USD",
+      headerText: "Price (USD)",
+    });
+  });
+
+  it("a GT header in another case would be ignored silently ⇒ refused with 'write it exactly'", () => {
+    const out = resolvePriceColumn(["Product ID", "Price (USD)", "gt price", "Gt  Currency"]);
+    expect(out).toEqual({
+      kind: "error",
+      reason: "gt_header_case",
+      message: 'Header "gt price": write it exactly "GT Price". Header "Gt  Currency": write it exactly "GT Currency".',
+    });
+  });
+
+  it("H4.2: a GT Price column without a GT Currency column (or the reverse, or a misspelt one) refuses the FILE — never every GT dropped silently", () => {
+    for (const [headers, present, missing] of [
+      [["Product ID", "Price (USD)", "GT Price"], "GT Price", "GT Currency"],
+      [["Product ID", "Price (USD)", "GT Price", "GT Curency"], "GT Price", "GT Currency"],
+      [["Product ID", "Price (USD)", "GT Currency"], "GT Currency", "GT Price"],
+      [["Product ID", "Price (USD)", "GT Amount", "GT Currency"], "GT Currency", "GT Price"],
+    ] as const) {
+      expect(resolvePriceColumn([...headers])).toEqual({
+        kind: "error",
+        reason: "gt_column_missing",
+        message: `The file has a "${present}" column but no "${missing}" column — add "${missing}" (written exactly), or remove "${present}". A GT needs both.`,
+      });
+    }
+    // Neither GT column is fine: the GT is optional.
+    expect(resolvePriceColumn(["Product ID", "Price (USD)"]).kind).toBe("ok");
+    // End to end: the file is refused, no row is read.
+    const result = parseIapTemplate(makeWorkbook([["Product ID", "Price (VND)", "GT Price"], ["sku.a", 26000, 25000]]));
+    expect(result.rows).toEqual([]);
+    expect(result.errors.join(" ")).toMatch(/has a "GT Price" column but no "GT Currency" column/);
   });
 
   it("no price column at all ⇒ error naming the only accepted shape", () => {
@@ -217,25 +252,29 @@ describe("parseIapTemplate", () => {
     expect(result.rows[0].listings).toHaveLength(0);
   });
 
-  it("drops override when GT Currency is unmapped, warns", () => {
+  it("H4.2: a GT Currency outside the GT table REFUSES the row (before: GT dropped, row imported)", () => {
     const buf = makeWorkbook([
       ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
       ["sku.a", 0.99, 100, "XYZ"],
     ]);
     const result = parseIapTemplate(buf);
-    expect(result.rows[0].regionOverrides).toEqual([]);
-    expect(result.warnings.join("\n")).toMatch(/XYZ/);
+    expect(result.rows).toEqual([]);
+    expect(result.refusedRows).toHaveLength(1);
+    expect(result.refusedRows[0].reason).toMatch(/^GT Currency "XYZ" is not a currency the GT column supports \(one region per currency: USD, EUR, /);
   });
 
-  it("warns and drops override when GT Price/Currency mismatched", () => {
+  it("H4.2: only one of GT Price / GT Currency filled REFUSES the row, naming which is missing", () => {
     const buf = makeWorkbook([
       ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
       ["sku.a", 0.99, 100, ""],
       ["sku.b", 0.99, "", "VND"],
     ]);
     const result = parseIapTemplate(buf);
-    expect(result.rows.every((r) => r.regionOverrides.length === 0)).toBe(true);
-    expect(result.warnings.length).toBeGreaterThanOrEqual(2);
+    expect(result.rows).toEqual([]);
+    expect(result.refusedRows).toEqual([
+      { rowNumber: 2, sku: "sku.a", reason: 'GT Price "100" has no GT Currency — fill both or neither.' },
+      { rowNumber: 3, sku: "sku.b", reason: 'GT Currency "VND" has no GT Price — fill both or neither.' },
+    ]);
   });
 
   it("skips rows with missing Price (USD), keeps valid neighbours", () => {
@@ -284,7 +323,7 @@ describe("parseIapTemplate", () => {
   it("H4.1: a price with more decimals than its currency allows ⇒ that ROW is not imported (warning), neighbours are", () => {
     const buf = makeWorkbook([
       ["Product ID", "Price (TWD)"],
-      ["sku.a", "30.5"],
+      ["sku.a", 30.5],
       ["sku.b", 30],
     ]);
     const result = parseIapTemplate(buf);
@@ -314,7 +353,7 @@ describe("parseIapTemplate", () => {
   it("H4.1 Q10: a GT price with more decimals than its currency allows ⇒ the ROW is not imported (never sent without its GT)", () => {
     const buf = makeWorkbook([
       ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
-      ["sku.a", 0.99, "26000.5", "VND"],
+      ["sku.a", 0.99, 26000.5, "VND"],
       ["sku.b", 0.99, 26000, "VND"],
     ]);
     const result = parseIapTemplate(buf);
@@ -342,7 +381,7 @@ describe("parseIapTemplate", () => {
   it("H4.1: a row with BOTH a bad price and a bad GT names both in one message", () => {
     const buf = makeWorkbook([
       ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
-      ["sku.a", "0.999", "26000.5", "VND"],
+      ["sku.a", "0.999", 26000.5, "VND"],
     ]);
     const result = parseIapTemplate(buf);
     expect(result.refusedRows).toHaveLength(1);
@@ -385,6 +424,62 @@ describe("parseIapTemplate", () => {
       ["sku.a", 25000],
     ]);
     expect(parseIapTemplate(buf).rows[0].priceHeaderSource).toBe("explicit");
+  });
+});
+
+describe("H4.2 — thousands separators and zero prices (Manager 2026-10-18)", () => {
+  it("(a) '26.000' typed as TEXT in a VND column ⇒ row refused (may be a thousands separator); the NUMBER 26000 is read as is", () => {
+    const buf = makeWorkbook([
+      ["Product ID", "Price (VND)", "GT Price", "GT Currency"],
+      ["sku.text", "26.000", "", ""],
+      ["sku.comma", "26,000", "", ""],
+      ["sku.number", 26000, "", ""],
+      ["sku.gt", 26000, "25.000", "VND"],
+    ]);
+    const result = parseIapTemplate(buf);
+    expect(result.rows.map((r) => [r.sku, r.basePriceDecimal])).toEqual([["sku.number", "26000"]]);
+    expect(result.refusedRows.map((r) => r.reason)).toEqual([
+      '"Price (VND)" = "26.000" — "26.000" has a "." but VND has no decimals — it may be a thousands separator (26.000 = 26 thousand?). Write a whole number without separators, e.g. 26000.',
+      '"Price (VND)" = "26,000" — "26,000" has a "," but VND has no decimals — it may be a thousands separator (26.000 = 26 thousand?). Write a whole number without separators, e.g. 26000.',
+      'GT Price "25.000" VND — "25.000" has a "." but VND has no decimals — it may be a thousands separator (26.000 = 26 thousand?). Write a whole number without separators, e.g. 26000.',
+    ]);
+  });
+
+  it("(a) a CSV / text upload stays TEXT: '26.000' VND is refused there too, never read as the number 26", () => {
+    const csv = Buffer.from(
+      "Product ID,Price (VND),GT Price,GT Currency\nsku.sep,26.000,,\nsku.ok,26000,,\nsku.gt,26000,25.000,VND\n",
+      "utf8",
+    );
+    const result = parseIapTemplate(csv);
+    expect(result.rows.map((r) => [r.sku, r.basePriceDecimal])).toEqual([["sku.ok", "26000"]]);
+    expect(result.refusedRows.map((r) => r.sku)).toEqual(["sku.sep", "sku.gt"]);
+    expect(result.refusedRows.every((r) => /it may be a thousands separator/.test(r.reason))).toBe(true);
+  });
+
+  it("(a) Hotfix 5's trailing zeros stay accepted for a currency WITH decimals: '0.990' USD", () => {
+    const buf = makeWorkbook([
+      ["Product ID", "Price (USD)"],
+      ["sku.a", "0.990"],
+    ]);
+    const result = parseIapTemplate(buf);
+    expect(result.refusedRows).toEqual([]);
+    expect(result.rows[0].basePriceDecimal).toBe("0.990");
+  });
+
+  it("(b) a 0 price or a 0 GT ⇒ row refused with a clear reason", () => {
+    const buf = makeWorkbook([
+      ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
+      ["sku.zero", 0, "", ""],
+      ["sku.zero-text", "0.00", "", ""],
+      ["sku.gt-zero", 0.99, 0, "VND"],
+    ]);
+    const result = parseIapTemplate(buf);
+    expect(result.rows).toEqual([]);
+    expect(result.refusedRows).toEqual([
+      { rowNumber: 2, sku: "sku.zero", reason: '"Price (USD)" = "0" — the price is 0 — a 0 price is not accepted; enter the real price.' },
+      { rowNumber: 3, sku: "sku.zero-text", reason: '"Price (USD)" = "0.00" — the price is 0 — a 0 price is not accepted; enter the real price.' },
+      { rowNumber: 4, sku: "sku.gt-zero", reason: 'GT Price "0" VND — the price is 0 — a 0 price is not accepted; enter the real price.' },
+    ]);
   });
 });
 

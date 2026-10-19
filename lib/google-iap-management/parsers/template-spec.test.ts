@@ -326,6 +326,28 @@ describe("locale selection — anti-drift stays EXACT per selection", () => {
   });
 });
 
+describe("H4.2 — the Notes sheet says what the parser does with prices and GT", () => {
+  // The Notes sheet is what the team reads before filling the file. Each
+  // sentence below is a parser rule pinned in excel-parser.test.ts; a rule
+  // change that does not touch these words fails here.
+  const spec = googleIapTemplateSpec();
+  const note = (header: string) => spec.notesRows.find((r) => r[0] === header)?.[2] ?? "";
+
+  it("Price: the header currency only; 0, extra decimals and a thousands separator in a no-decimals currency keep the row out", () => {
+    expect(note("Price (USD)")).toContain("the app's currency is not used");
+    expect(note("Price (USD)")).toContain("a 0 price, or more decimals than the currency allows, keeps the row out");
+    expect(note("Price (USD)")).toContain('"26.000" typed as text keeps the row out (it may mean 26 thousand)');
+  });
+
+  it("GT Price / GT Currency: both or neither, refusals keep the row out — never 'dropped with a warning'", () => {
+    expect(note("GT Price")).toContain("Fill GT Price and GT Currency both, or neither — one without the other keeps the row out.");
+    expect(note("GT Price")).toContain("A pricing-template tier that matches the row, or custom prices, replace the GT.");
+    expect(note("GT Currency")).toContain("A currency outside the GT list, or one Google Play does not bill that region in, keeps the row out.");
+    expect(note("GT Currency")).toContain('Write both headers exactly "GT Price" / "GT Currency", and keep both columns or neither — otherwise the file is refused.');
+    expect(spec.notesRows.map((r) => r.join(" ")).join(" ")).not.toMatch(/dropped with a warning/);
+  });
+});
+
 describe("locale selection — sample rows + notes adapt", () => {
   it("a single-locale selection fills THAT locale's pair", () => {
     const spec = googleIapTemplateSpec(["Japanese"]);
