@@ -1,9 +1,13 @@
 # Import lại file export Matrix view vào Pricing Template (Apple) — CENSUS + KHẢ THI + THIẾT KẾ
 
 **Tag:** `[TEMPLATE-xlsx-reimport]` · **Module:** Apple IAP Management ·
-**Trạng thái:** census xong + một vòng phản biện, **chờ Manager chốt P7**. Chưa
-code. Thiết kế đề xuất cần **1 migration (chỉ thêm một function, không đổi bảng)**
-— §5.4.
+**Trạng thái (2026-10-19):** Manager **đổi ngữ nghĩa** — "file là sự thật duy nhất".
+Census lại theo ngữ nghĩa mới ở **LƯỢT 2** ngay dưới đây — đó là phần HIỆN HÀNH; chờ
+Manager chốt câu ⛔ ở §L2.6. Chưa code. Phần lượt 1 bên dưới giữ nguyên làm bằng chứng;
+mục nào bỏ theo quyết định Manager có đánh dấu **⛔ BỎ theo quyết định Manager
+2026-10-19** tại chỗ (không xoá), bảng đối chiếu đầy đủ ở §L2.7.
+*(Trạng thái lượt 1, đã thay: "census xong + một vòng phản biện, chờ Manager chốt P7;
+thiết kế cần 1 migration — §5.4".)*
 
 > **Yêu cầu Manager.** Trong Settings → Pricing templates (Default pricing / Per-app
 > pricing): **format A** = file template dùng để IMPORT; **format B** = file .xlsx
@@ -43,7 +47,665 @@ code. Thiết kế đề xuất cần **1 migration (chỉ thêm một function,
 
 ---
 
+# ⭐ LƯỢT 2 (2026-10-19) — NGỮ NGHĨA "FILE LÀ SỰ THẬT DUY NHẤT" — HIỆN HÀNH
+
+> **Quyết định Manager 2026-10-19 (nguyên văn):**
+> 1. **FILE LÀ SỰ THẬT DUY NHẤT.** Import xong, template = đúng những gì trong file.
+>    KHÔNG quan tâm template đã có gì trước đó (khớp khoá REPLACE-ONLY Q-A).
+> 2. **Ô CÓ GIÁ** ⇒ override đúng giá đó.
+> 3. **Ô TRỐNG** ⇒ không override ⇒ theo giá Apple. Xoá trống một ô đang override =
+>    bỏ override, quay về theo giá Apple.
+>
+> ⇒ KHÔNG cần cơ chế "nhận biết ô đã sửa": không so với trạng thái hiện tại, không ảnh
+> chụp lúc export, không dò xung đột khi người khác sửa giữa chừng.
+> ⇒ **BÀI NGHIỆM THU SỐ MỘT:** export B rồi import lại NGUYÊN TRẠNG ⇒ template KHÔNG ĐỔI
+> GÌ — không ô thừa hưởng nào thành override.
+> Kèm: **KHÔNG** dùng heuristic "ô có giá bằng giá Apple hiện tại thì coi là thừa hưởng".
+
+**Hệ quả cho bản này.** Cơ chế M1/M2/M3 (template_id, digest, `_import_info` làm thẻ
+phiên bản, planner gộp), ca f, và giao thức `plan_hash` **bỏ theo quyết định Manager**.
+Mỗi mục bỏ có đánh dấu tại chỗ ở lượt 1. §L2.7 là bảng KEEP / CHANGE / DROPPED cho từng
+mục cũ.
+
+**Lượt 2 được làm thế nào.**
+- 4 lane độc lập + 1 critic dò lại từng `file:line` và chạy lại các phép đo nghi ngờ:
+  - danh tính nước + currency;
+  - độ đầy đủ của export;
+  - đường ghi + tier + số;
+  - preview + giá Apple + scope.
+- Fixture thật:
+  - template A thật `docs/iap-management/templates/price-tiers-template.xlsx` (95 tier × 175
+    nước = 16 625 entry, 0 warning, 43 currency) → parser thật → `replaceTemplate` thật trên
+    fake `iapDb` → `POST` thật của route export → đọc lại bằng SheetJS;
+  - đường đọc và ràng buộc DB đo trên **Postgres 17.5 thật (PGlite)**, dùng DDL đọc nguyên
+    văn từ migration.
+- Không gọi Apple hay Supabase thật. Repo không đổi trong lúc đo; probe nằm ở scratchpad
+  của phiên.
+- Nhãn bằng chứng như bảng ở trên. Mọi `file:line` tại `aa1fb49` (code Apple không đổi từ
+  commit gốc `ac3043f` của lượt 1 — diff rỗng trên mọi đường dẫn Apple).
+
+## L2.1 P1 — Census hai format (lượt 1 §1.1–§1.3 vẫn đúng; đo lại + bổ sung)
+
+Đo lại trên template thật, kết quả khớp lượt 1:
+- **A** (`lib/iap-management/parsers/price-tiers.ts`):
+  - sheet đầu phải tên `price_tiers`;
+  - hàng 1 là `Tên (AAA_CCC)` — regex `TERRITORY_HEADER_RE` `:37`, chỉ ở cột lẻ; mã và
+    currency lấy từ header, tên bị bỏ;
+  - hàng 2 là `Price`/`Proceeds`; dòng = tier, cặp cột = territory;
+  - ô trống ⇒ không entry (`isBlankCell` `:109-113`) = khoá **Q-I** (KB:187).
+- **B** (`lib/iap-management/xlsx-template-matrix-export.ts`): ĐÃ ĐO.
+  - Đúng 1 sheet `Default Template` / `Per-App Template`.
+  - Hàng 1 **chỉ tên** nước: `headerRow1.push(market.name, null)` `:205`; tên từ
+    `territoryName(code)` (`queries/template-matrix.ts:157`).
+  - Hàng 2 là `Price | Currency`.
+  - Ô có entry ghi số + currency **của chính ô đó** (`:223`); ô không entry ghi `·` vào
+    **cả hai** nửa (`:216-221`, hằng `:78`).
+  - Không numFmt. Parser A đọc B ⇒ 422 `Expected sheet "price_tiers" but found "Default
+    Template"`.
+
+**Bổ sung lượt 2:**
+- **B mang 1/175 mã nước.** Quét đủ 10 part ZIP: chỉ có `XKS`, vì `territoryName` rơi về
+  chính mã với Kosovo (`components/iap-management/view-detail/territory-name.ts:43`).
+  Không có `(AAA_CCC)` hay `(AAA)` nào. ĐÃ ĐO.
+- **Tên không phải danh tính ổn định.** ĐÃ ĐO:
+  - tên trong file A của Manager khác tên B ở 16/175 nước (`Korea, Republic of` vs
+    `South Korea`, BRN, CIV, MKD, TZA, GMB…);
+  - hai hệ tên trong repo (`APPLE_TERRITORY_CATALOG` vs `territoryName`) lệch nhau 7/175.
+- Màn hình hiện tên + badge currency của cột (`MatrixTable.tsx:79-82`), không hiện mã.
+  Twin Google cũng chỉ ghi tên (`lib/google-iap-management/xlsx-template-matrix-export.ts:351`).
+- Route export chỉ log WARN/ERROR, không log lần export thành công ⇒ **số file B đã phát
+  cho team: CHƯA BIẾT** (cần Manager).
+
+## L2.2 P2 — ⭐ B THƯA HAY ĐẦY: **B THƯA**
+
+**Bằng chứng** (ĐÃ ĐO ở cả 4 lane, cộng ĐỌC CODE):
+- Writer ghi `·` vào ô không có entry (`:216-221`). Không chỗ nào ghi giá Apple (grep).
+- Template thật (lưới đầy) ⇒ 16 625 ô số, 0 ô `·`. Fixture thưa 11 entry ⇒ 11 ô số + 18 ô `·`.
+- Per-App 12 entry ⇒ đúng 12 ô số. Không lọt giá chỉ-có-ở-Default: composer chỉ gắn giá
+  Default vào ô đã có entry Per-App (`template-matrix.ts:133-140`).
+
+⇒ **Phương án hai sheet** (`Template` + `Effective prices`) của Manager chỉ đặt ra khi B
+ĐẦY ⇒ **không kích hoạt**. Nếu vẫn muốn một sheet `Effective prices` chỉ để xem, nó vấp
+đúng kết quả §L2.5: không có nguồn "giá Apple hiện tại" nào mà không phải gọi Apple.
+
+**B đọc theo luật 1–3:**
+- Ô số ⇒ override đúng giá đó (luật 2).
+- `·`, ô trống, ô stub (Numbers đệm), cột/dòng không có trong file ⇒ không override ⇒ giá
+  Apple (luật 3, luật 1).
+- ⇒ Đọc nguyên văn thì "không ô thừa hưởng nào thành override" đúng **do cấu tạo**: không
+  cần heuristic, không so với DB, không so với Apple.
+- Per-App: `·` = **giá Apple, KHÔNG phải giá Default**. Orchestrator đọc đúng MỘT template
+  (`lib/iap-management/apple/pricing-orchestration.ts:423-438`); thiếu template thì lùi về
+  APPLE (`:429-434`).
+- Ô Currency cạnh một ô Price trống/`·` ⇒ bỏ qua (Excel giữ `USD` cạnh ô Price vừa xoá —
+  đo lượt 1, ca d).
+- Màu cam + note của Per-App ⇒ bỏ qua. Note còn chứa giá Default ⇒ reader không được đọc
+  comments.
+
+**⚠ Thưa là điều kiện CẦN, chưa ĐỦ.** `·` hoặc "vắng mặt" chỉ nói thật khi đủ cả ba:
+1. đường đọc của export không sót dòng;
+2. file chứa **mọi** nước của template;
+3. file nói được cột nào là nước nào.
+
+Hỏng một điều ⇒ một override bị đọc thành "không có" ⇒ luật 1 xoá nó **im lặng** ⇒ bài
+số một đỏ. Hôm nay **cả ba đều hỏng được** (§L2.3).
+
+**Phương án (a) "parser nhận B → chuẩn hoá về entry thưa của A" còn thiếu gì để qua bài
+số một:**
+
+| # | Thiếu | Bằng chứng | Chặn bài #1? |
+|---|---|---|---|
+| 1 | **Mã nước trong file** | B chỉ có tên (L2.1); đảo tên → mã bị cấm (KB §4.20 `:964-996`), thư viện trượt 4/175 (CHN, LAO, MAC, XKS) — ĐÃ ĐO | **CÓ** — phải sửa EXPORT; file B cũ ⇒ từ chối |
+| 2 | **File đã lọc / thiếu nước** | §L2.3.6 — file Asia-only xoá 12 255/16 625 override; file không mang dấu hiệu đã lọc — ĐÃ ĐO | **CÓ** — cần Manager chốt (Q-B) |
+| 3 | **Đường đọc sót dòng (R6)** | §L2.3.6 — PG 17.5 thật: sót 1 225–1 400/16 625, route vẫn 200, 0 log — ĐÃ ĐO | **CÓ** — phải sửa export (O0 + O2/O3/O4) |
+| 4 | **Proceeds** | B không có ⇒ mọi lần ghi đặt NULL (16 625/16 625, ĐÃ ĐO) | Câu định nghĩa bài #1 (Q-A/Q-G) |
+| 5 | **Currency của override mới** | ô `·` → gõ giá thì ô Currency vẫn `·` (ĐÃ ĐO) | Không chặn bài #1; chặn luật 2 cho ô mới (Q-D) |
+| 6 | **Scope** | file không mang account/app (0 hit mọi part) | **CÓ** nếu import qua Settings — chip ≠ TopNav (Q-E) |
+
+## L2.3 P3 — Chỗ dễ sai (theo luật mới)
+
+### L2.3.1 Round-trip số
+
+- Cột giá: `customer_price NUMERIC(18,4) NOT NULL`, `proceeds NUMERIC(18,4)`
+  (`supabase/migrations/20260519000000_iap_mgmt_pricing_templates.sql:58`, `:61`).
+  CÓ TRONG SCHEMA.
+- Writer dùng `Number()`, không đặt numFmt (General).
+- **ĐÃ ĐO (round-trip đủ):**
+  - 16 625/16 625 giá đi writer → SheetJS bằng nhau theo `Object.is` với giá trị gốc; 0
+    lệch; currency 16 625/16 625 bằng nhau.
+  - Ghi lại **toàn bộ** 16 625 `<v>` sang dạng 17 chữ số kiểu Excel (13 005 chuỗi đổi) ⇒
+    SheetJS vẫn đọc ra đúng 16 625/16 625.
+  - Danh sách 24 giá trị khó (gồm chuỗi `"1.9900"`, `"49000.0000"`) qua 24/24.
+- **Sửa §4.2 lượt 1:** luật `Math.round(x·1e4)/1e4 === x` chỉ đúng **dưới 2³⁸ ≈ 2.749e11**,
+  không phải 9.007e11 (ĐÃ ĐO: hỏng đầu tiên ở `274 880 423 993.7410`). Luật thay thế không
+  có trần: `/^\d+(\.\d{1,4})?$/.test(String(x))` — 0 lỗi trên `[0, 9e11)`, nhận dạng 17
+  chữ số của Excel, từ chối `0.30000000000000004` và `1.99999`. Giá thật lớn nhất 2.5e7 ⇒
+  không ảnh hưởng thực tế.
+- **Hơn 4 chữ số thập phân:** A để Postgres làm tròn im lặng — `0.00004 → 0.0000` (một
+  override bằng **0**), `2.99995 → 3.0000` (ĐÃ ĐO). Luật 2 nói "override **đúng** giá đó" ⇒
+  đề xuất B từ chối, A giữ hành vi cũ (Q-J).
+- **Luật ghim bằng test:**
+  - (a) writer → reader: `Object.is(cell.v, Number(db))` cho MỌI entry của template thật,
+    cộng biến thể 17 chữ số;
+  - (b) bài số một (DB trước vs sau): cùng tập khoá (tier_id, territory_code); mỗi khoá
+    currency `===` và `canon(x) = Math.round(Number(x)·1e4)` bằng nhau. Dùng `canon` vì
+    PostgREST trả NUMERIC là số hay chuỗi vẫn CHƯA BIẾT — fake phải có một biến thể trả
+    chuỗi;
+  - (c) luật ô của reader B: `t === 'n'`, hữu hạn, ≥ 0, ≤ 4 chữ số thập phân theo luật
+    regex, kiểm `.f` **trước** `.v`; còn lại ⇒ 422 liệt kê địa chỉ;
+  - (d) trần cứng xa dưới `1e14` (1e14 ⇒ `numeric field overflow`, ĐÃ ĐO).
+
+### L2.3.2 Territory
+
+- B dùng **tên**, A dùng **alpha-3 trong header**, DB lưu alpha-3.
+- KB §4.20 (`IAP-MANAGEMENT-KNOWLEDGE-BASE.md:964-996`) cấm tự viết phép chuyển
+  alpha-2/alpha-3. Đổi tên → mã không có trong chữ của §4.20, nhưng cùng lớp lỗi: rơi về
+  chuỗi thô trông hợp lý, chỉ phép ĐẾM bắt được.
+- Grep `getAlpha3Code|getAlpha2Code` trong code production = 0: repo không có hàm tên → mã.
+- Đảo `territoryName` trên 175 mã snapshot hôm nay là đơn ánh (0 trùng — ĐÃ ĐO), nhưng đó
+  chính là reverse-map bị cấm. Nó phụ thuộc thư viện thả nổi `^7.14.0` (KB P41), bảng
+  override tự viết và snapshot.
+- ⇒ **Mã nước phải nằm trong chính file.** Lượt 1 dựa vào bảng cột trong `_import_info` +
+  đối chiếu DB; cả hai đã bỏ.
+- **Mã trong file phải được kiểm**, vì không tầng nào chặn mã hỏng (ĐÃ ĐO, PGlite):
+  - `territory_code` nhận `'Vietnam'`, `'vnm'`, `''`; parser A nhận mọi `[A-Z]{3}` (kể cả
+    `ZZZ`);
+  - theo luật 1, gõ nhầm `Vietnam (VMN)` ⇒ mọi override VNM biến mất + một entry rác `VMN`,
+    về sau ra `partial-template-fail`.
+  - Kiểm theo danh sách nào: Q-I.
+- **File B cũ (không mã):** chỉ có thể **từ chối rõ ràng** và bảo export lại. Không đoán
+  ngược tên → mã, không dùng `XKS` lỡ có sẵn để nhận một nửa file.
+
+### L2.3.3 Tier
+
+- Cột A của B = `tier_name` (`template-matrix.ts:111`).
+- Parser thật cho đúng 95/95 tier_id từ 95 tên thật, kể cả `Alternate Tier A/B/1..5` →
+  `ALT_*` (ĐÃ ĐO). Ràng buộc: CHECK `20260515010000_iap_mgmt_tier_id_text.sql:45-47`.
+- **A gặp tên lạ thì cảnh báo rồi bỏ dòng** (`price-tiers.ts:229-233`). Dưới luật 1 = **xoá
+  mọi override của tier đó**, và UI chỉ báo "1 parse warning" SAU khi đã ghi ⇒ reader B phải
+  **từ chối (422)**, không cảnh báo.
+- **Gõ sai tạo tier mới toàn cục:**
+  - `Tier 05` → `TIER_05`, `Alternate Tier 1A` → `ALT_1A`: qua CHECK ⇒ upsert vào bảng
+    `price_tiers` **toàn cục** (`templates.ts:619-632`) ⇒ override chuyển sang id mới, id cũ
+    mất override, tier mới hiện trong dropdown tạo lẻ của **mọi** account (ĐÃ ĐO);
+  - `Alternate Tier a` ⇒ đổi tên ALT_A toàn cục (chỉ khác hoa thường).
+  - Lượt 1 R8 hẹp lại: tên không đổi thì upsert vô hại.
+- Bộ sắp xếp:
+  - `compareTiers` của composer (`template-matrix.ts:87-90`) == `compareTierId`
+    (`tier-order.ts:61-78`) trên dữ liệu thật; lệch trên `ALT_1A`;
+  - không ảnh hưởng danh tính (khớp theo tên);
+  - **có** ảnh hưởng thứ tự cột với template thưa: nước chỉ có ở dòng ALT có thể đổi chỗ
+    sau một lần import nguyên trạng (KOR/JPN — ĐÃ ĐO trên fake).
+- Tên `tier_id` thô (rơi về khi thiếu tên) không parse được, nhưng thực tế không tới được
+  (FK NOT NULL + `tier_name` NOT NULL) — CÓ TRONG SCHEMA.
+
+### L2.3.4 Khoá hiện có + P1 (một đường ghi)
+
+- **Hội tụ đúng nghĩa P1** (ĐÃ ĐO): B → `PriceTiersParseResult` (proceeds `null`) → **chính
+  `replaceTemplate`, không đổi byte nào**.
+  - Template thật qua writer → reader → `replaceTemplate` ⇒ cùng tập entry (16 625 khoá,
+    currency, giá).
+  - `price-tiers.ts`, `flattenTemplateEntries`, `replaceTemplate` giữ nguyên (md5
+    `price-tiers.ts` = `589367186fdcd845afa2fb3fe3fae215`).
+  - Phần mới duy nhất: reader B + nhánh nhận diện ở route.
+- **REPLACE-ONLY (Q-A, KB:179)** chính là luật 1. **Q-K fail-soft (KB:189)** không bị đụng.
+- **`replaceTemplate` không bao giờ no-op — nay là ngữ nghĩa, không phải lỗi.** Mỗi lần
+  ghi, kể cả file y nguyên, giống hệt A hôm nay:
+  - `template_id` mới, `uploaded_at`/`uploaded_by` mới, `source_filename` = tên file B;
+  - `origin_note` → NULL (insert `templates.ts:647-657` không set) ⇒ pill "migrated" biến mất;
+  - `created_count` = số dòng đã chèn = cả template — đúng, vì B thật sự thay toàn bộ (mối
+    lo §5.4 lượt 1 biến mất).
+
+  ⇒ Bài số một phải định nghĩa trên **tập entry** (Q-A).
+- **Transaction (R7) HẾT là BLOCKER** (ĐÃ ĐO): đứt tạm giữa chừng (chunk 5) ⇒ upload lại
+  **đúng file đó** cho ra đúng trạng thái file — file là trạng thái đích đầy đủ, không có
+  kiểm id nên không có 409. Còn lại, giống A hôm nay:
+  - **Lỗi tất định sau bước xoá thì thử lại không chữa:** tràn `NUMERIC` (1e14), trùng
+    (tier, nước) ⇒ template dở (ĐÃ ĐO). ⇒ Reader B **phải từ chối trước** mọi thứ Postgres
+    sẽ từ chối sau bước xoá. Trùng dòng tier thì hỏng ở upsert, TRƯỚC bước xoá (PGlite: lỗi
+    `21000`) ⇒ an toàn.
+  - **Cửa sổ đọc dở:** trong lúc ghi, orchestrator / bulk import thấy template thiếu tier
+    (ĐÃ ĐO: 29/95 tier ở chunk 5).
+  - **MỚI:** export đúng lúc người khác đang ghi ⇒ file dở dang (200, 29/95 tier) ⇒ theo
+    luật 1, import lại file đó làm **cụt** template. O0 (§L2.3.6) không bắt được, vì count
+    khớp với trạng thái dở (Q-L).
+  - Lỗi trả 500 + lỗi thô (`pricing-templates/route.ts:210-214`); không câu nào nói
+    "template đang dở — upload lại đúng file này".
+
+### L2.3.5 Scope
+
+- **File không mang scope** (ĐÃ ĐO: grep account id, template id, app UUID, bundle id,
+  `ACCOUNT`, `scope` trong mọi part ⇒ 0 hit). Chỉ còn tên sheet — nói *loại* scope, không
+  nói *của ai*.
+- **Chip ≠ TopNav vẫn sống** (ĐỌC CODE, ĐÃ ĐO lại):
+  - tab Default ghi vào account của **chip**: `form.append("account_id",
+    selectedAccountId)` (`app/(dashboard)/iap-management/settings/pricing-tiers/DefaultTemplateTab.tsx:96`);
+  - link "Open matrix view" không mang account (`:287`, `:303`);
+  - trang matrix + route export đọc account **TopNav** (`default-matrix/page.tsx:18-19`,
+    `matrix-export/route.ts:153`), và màn không hiện tên account.
+- **File của account khác không lộ trong diff:** file account B so với account A ra 7 ô
+  đổi nhỏ (tỉ lệ 1.02–1.14), không cờ nào bắn (ĐÃ ĐO) ⇒ **chặn hay cảnh báo đều cần ghi
+  scope vào file lúc export**.
+- Phân quyền:
+  - export + trang Default matrix mở cho member;
+  - upload ACCOUNT chỉ admin (`pricing-templates/route.ts:97-102`);
+  - upload APP không có cổng admin, và đường `apple_app_id` gọi Apple + ghi DB **trước**
+    khi parse (`:143-161`).
+- ⇒ Q-E (P6).
+
+### L2.3.6 (MỚI) Export có ĐẦY ĐỦ không — tiền điều kiện của bài số một
+
+Theo luật 1, cái gì vắng trong file bị **XOÁ** khi import. Bài số một vì thế đòi export
+phải đầy đủ. Hôm nay nó hỏng theo ba đường độc lập:
+
+**(i) Bộ lọc — R1.**
+- Nút Export gửi `territories: visibleMarkets.map(m => m.code)`
+  (`components/iap-management/pricing-templates/DefaultMatrixView.tsx:69`,
+  `PerAppMatrixView.tsx:88`); route chỉ giữ các mã đó (`matrix-export/route.ts:212-214`).
+- **File không mang dấu hiệu đã lọc** (ĐÃ ĐO): so từng part, file Asia-only chỉ khác file
+  đủ ở `sheet1.xml` + `sharedStrings.xml`.
+- Import nguyên văn file Asia-only ⇒ **xoá 12 255/16 625 override** ở 129 nước (ĐÃ ĐO).
+- ⇒ Luật 1 và bài số một **mâu thuẫn nhau trên file đã lọc** (Q-B).
+- Câu "file = ảnh chụp màn, đúng tập nước sau lọc" (KB §21.1 `:6386-6397`; route `:4-5`;
+  writer `:4-8`) có còn ràng buộc file **import được** không: Q-B.
+
+**(i′) R1b — MỚI: file KHÔNG lọc cũng có thể thiếu nước.**
+- Guard 409 của route chỉ một chiều: chỉ chặn "client xin nước mà server không có"
+  (`:185-202`). Phép đếm `:220-225` so với `requested.size`, không so với
+  `matrix.markets.length`.
+- ⇒ Template **thêm** KOR sau khi trang đã tải ⇒ export vẫn 200, thiếu KOR ⇒ import lại xoá
+  95 override KOR (ĐÃ ĐO).
+
+**(ii) Đường đọc — R6.** `fetchAllEntries` (`template-matrix.ts:210-236`):
+- `count` là một request riêng, các trang là request khác (không cùng snapshot);
+- `.range()` không `.order()`;
+- không kiểm `rowsRead == count`, không kiểm khoá distinct;
+- composer ghi đè ô trùng im lặng (`:119-122`).
+
+Đo trên Postgres 17.5 thật (PGlite, dữ liệu thật):
+- Planner đổi plan giữa các OFFSET trong CÙNG một lần đọc (Index Scan ↔ Bitmap Heap Scan)
+  ⇒ dòng trùng và dòng sót **bù nhau đúng bằng `count`**: sót **1 225–1 400/16 625**, mất
+  trọn TIER_4…TIER_9.
+- Qua route thật: 200, 0 log, và màn hình hiện **cùng cái lỗ**, không cảnh báo.
+- Critic đo lại độc lập: lật plan xảy ra **cả ở `random_page_cost = 4`** (mặc định) tuỳ
+  dữ liệu/stats ⇒ `SHOW random_page_cost` một mình không trả lời được. Prod: **CHƯA BIẾT**.
+- PostgREST `max_rows` < 1000 ⇒ 8 500/16 625, vẫn 200, 0 log (ĐÃ ĐO trên fake).
+- Ràng buộc Hotfix 24 (không được `ORDER BY tier_id, territory_code` vì cột sẽ thành
+  alphabet — `template-matrix.ts:145-153`) **vẫn đúng** (ĐÃ ĐO).
+- Nhưng thứ tự được bảo vệ đó **tự nó không ổn định**: heap ≠ thứ tự upload ngay cả khi
+  chèn mới (free-space map), và thứ tự hiển thị đổi theo plan (ĐÃ ĐO).
+- `fetchEntries` (`templates.ts:153-160`) **đã** phân trang có `.order(tier_id)
+  .order(territory_code)` ⇒ đường ghi giá Apple đọc template đủ; chỉ đường đọc matrix bị
+  lộ. Twin cùng lỗi: `getTemplateOverview` (`templates.ts:509-514`) ⇒ sửa ở MỘT choke point
+  (P1).
+- **Dưới ngữ nghĩa mới, lỗi hiển thị này thành mất dữ liệu:** không còn digest đỡ, ô sót
+  thành `·` ⇒ import lại xoá override.
+
+**(iii) Proceeds — R2.**
+- B không có proceeds ⇒ mọi lần ghi đặt NULL cho **mọi** entry (ĐÃ ĐO 16 625/16 625).
+- Proceeds chỉ để hiển thị, đúng một bề mặt: cột Proceeds tab Default
+  (`TemplateEntriesTable.tsx:224-226`).
+- Không đường ghi / quyết định nào đọc proceeds: grep `proceeds` trong module Apple;
+  orchestrator chỉ dùng tier / territory / customer_price. CÓ TRONG SCHEMA:
+  "informational" (`20260519000000:59-61`).
+- "Giữ proceeds cho ô không đổi" cần so với trạng thái hiện tại ⇒ trái luật 1 (Q-G).
+
+**(iv) Currency của override mới.**
+- Gõ giá vào ô `·` ⇒ ô Currency vẫn `·` (ĐÃ ĐO).
+- DB nhận **mọi** chuỗi khác NULL: `currency_code TEXT NOT NULL`, không CHECK (`:57`);
+  PGlite nhận `'·'`, `''`, `'vnd'` (ĐÃ ĐO) ⇒ reader ngây thơ ghi `'·'` vào DB im lặng.
+- Đường ghi Apple bỏ qua currency (khớp số tiền theo currency Apple thật của nước đó —
+  `pricing-orchestration.ts:472-474`). Nhưng currency sai vẫn hỏng thật:
+  - USA ≠ `'USD'` ⇒ tier biến mất khỏi bulk import và khỏi giá base USD
+    (`templates.ts:317-320` `.eq("currency_code","USD")`);
+  - `''` ⇒ giá custom Manager gõ biến mất im lặng (ĐÃ ĐO);
+  - nhãn sai dẫn Manager gõ giá theo currency khác.
+- Ô **đã** mang Currency phải ghi đúng giá trị đó (bài số một) — không tính lại. Chỉ ô `·`
+  → giá mới cần một nguồn currency (Q-D):
+  - C1: currency duy nhất của cột trong file (175/175 cột thật có đúng 1);
+  - C2: currency trong header (cần O1b/O2);
+  - C3: `appleCurrencyFor` (`lib/iap-management/apple/apple-territories.snapshot.ts:145-147`
+    — ảnh chụp Apple 2026-08-27, 0 caller production, khớp 175/175 header A thật);
+  - C4: bắt Manager tự gõ.
+  - **Cấm:** `TERRITORY_CATALOG` (KB:939 "currency comes from Apple, never from the territory
+    code"; lệch 96/175 — ĐÃ ĐO), và đọc template hiện tại (trái luật 1).
+
+## L2.4 P4 — Phương án
+
+**Đối chiếu ba ứng viên trong brief:**
+- **(a) chỉ parser nhận B:** không chạy được nếu không đảo tên → mã (bị cấm), và vẫn hở R1 /
+  R1b / R6 ⇒ ❌ một mình.
+- **(b) chỉ sửa export:** điều kiện cần (mã nước, độ phủ, đọc đủ), chưa import được.
+- **(c) kết hợp:** = các phương án dưới.
+- Hai sheet: không cần (B thưa).
+
+**Lõi chung cho cả ba phương án** (giữ P1 — một đường ghi `replaceTemplate`, không pipeline
+thứ hai sau bước parse):
+- **Reader B mới** dưới `lib/iap-management/parsers/` (để fence Excel thấy được). Nó tìm
+  sheet theo **tên**, duyệt các ô thật sự có (không dùng `sheet_to_json` trên `!ref`), và trả
+  `PriceTiersParseResult` với proceeds `null`.
+- **Tiền kiểm chặt:** 422 kèm địa chỉ ô, **không ghi gì**, khi gặp:
+  - tên tier lạ / không chuẩn;
+  - mã nước sai;
+  - trùng (tier, nước);
+  - công thức, ô chữ, số âm, > 4 chữ số thập phân, ≥ trần;
+  - ô Currency bị sửa.
+
+  Đây là thứ thay transaction làm cửa chặn của B.
+- **Nhận diện format** trong route upload hiện có:
+  - 0) file > 10 MB ⇒ parser A (thông báo của nó);
+  - 1) `SheetNames[0] === "price_tiers"` ⇒ A **nguyên văn**;
+  - 2) đúng một tên sheet B ở bất kỳ vị trí nào (Numbers chèn `Export Summary` lên đầu) và
+    không có `price_tiers` ⇒ B;
+  - 3) còn lại ⇒ gọi `parsePriceTiersXlsx` nguyên văn (422 của A).
+
+  ĐÃ ĐO trên 13 hình dạng file: mọi kết quả của A không đổi.
+- **Câu báo khi ghi đứt:** "template đang dở — upload lại đúng file này".
+- **O0 ở export, bắt buộc:** `rowsRead == count == distinct(tier|territory)`; lệch ⇒ từ chối
+  export. O0 bắt mọi ca dup+sót đã đo và ca `max_rows`.
+
+**PA1 — Đọc B theo luật 1, sửa export cho đủ** (tối thiểu, 0 migration, không preview)
+
+| | |
+|---|---|
+| Làm gì | **Export:** header `Vietnam (VNM_VND)` (O1b — đúng regex của A, mang cả mã lẫn currency, cho thêm cột); lọc: F-a hoặc F-b′ (Q-B); đọc đủ: O0 + O2 (nội dung đọc có thứ tự PK như `fetchEntries`, thứ tự cột vẫn lấy như hôm nay) ở MỘT chỗ, phủ cả `getTemplateOverview`. **Import:** reader B + nhận diện, qua 3 nút Replace sẵn có (confirm "thay toàn bộ" và toast "N entries" của chúng giờ đúng nghĩa với B); currency C2 + ô Currency bị sửa ⇒ 422 (D2); proceeds NULL. **R4:** link "Open matrix view" mang `?account=<chip>`, trang + route export dùng account đó (đối chiếu danh sách account thật), màn hiện tên account |
+| Số file (ước) | nguồn ~10–11 (writer, route export, `template-matrix.ts`, `templates.ts`, MỚI reader + spec dùng chung writer↔reader, route upload, `DefaultTemplateTab.tsx`, `default-matrix/page.tsx`, `DefaultMatrixView.tsx`, helper download) · test ~8–9 (2 writer, route export, reader mới, nhánh B route upload, round-trip file thật, fake đảo trang, fence Excel, trang `?account=`) · docs 5 · **migration 0** |
+| Rủi ro | header file khác màn (§21.1) — trừ khi màn cũng hiện mã; mọi file B cũ bị từ chối; cửa sổ "export lúc đang ghi" còn; thứ tự cột không bảo đảm; không preview ⇒ file sai account / file xoá hàng loạt chỉ bị chặn bởi luật cấu trúc; Numbers gắn `@` ⇒ ô gõ sau đó thành chữ (Q-K); lệch twin Google |
+| CHẮC (ĐÃ ĐO) | P1 một đường ghi; số 16 625/16 625; B thưa; nhận diện không đổi kết quả A; O2 đủ dữ liệu 16/16; trùng tier chặn trước bước xoá |
+| CHƯA BIẾT | prod có dính R6 không; Google Sheets; PostgREST trả NUMERIC dạng gì; bất thường currency trên prod (V1–V5) |
+
+Biến thể **F-b′** của PA1 giữ được §21.1 cho file xem:
+- "Export XLSX" giữ nguyên (file đúng màn, chỉ tên, không mã) ⇒ import tự từ chối như B cũ;
+- nút mới "Export để sửa" xuất đủ nước, có mã;
+- chính chỗ chứa mã kiêm luôn dấu "file import được".
+
+**PA2 — PA1 + preview chỉ hiển thị + scope stamp + nút import trên Matrix view**
+
+| | |
+|---|---|
+| Làm gì | preview đọc template hiện tại **chỉ để HIỂN THỊ**, không bao giờ dùng làm tập ghi (§L2.5); stamp scope (một dòng hiện, hoặc sheet info `hidden`) so với đích lấy từ REQUEST ⇒ 409 `SCOPE_MISMATCH`; nút "Nhập file" cạnh "Export XLSX" (`MatrixFilterBar.tsx:83-94`), gửi `account_id`/`app_id` từ props server; import Default chỉ cho admin; 3 nút Settings: từ chối file B kèm câu hướng dẫn, hoặc dùng chung component preview |
+| Số file (ước) | nguồn ~17–20 (PA1 + nút + modal preview + diff thuần + helper client + hai view matrix + trang Per-App + `intent` ở route) · test ~12–14 · docs 5 · migration 0 |
+| Rủi ro | Manager phải đồng ý đọc trạng thái hiện tại để hiển thị (Q-F); twin surface (2 màn matrix, +3 bề mặt Settings) ⇒ P1/P8; toast phải lấy số từ diff tính lại lúc commit (P5); stamp trong sheet `hidden` hiện ra ở Numbers; file chưa có stamp chặn hay cảnh báo |
+| CHẮC | file sai account không phát hiện được nếu không có stamp (ĐÃ ĐO); diff 0/0/0 trên file nguyên trạng (ĐÃ ĐO) |
+| CHƯA BIẾT | ngân sách + độ trễ nếu preview gọi Apple (O1-a, tối đa ~89 request) |
+
+**PA3 — PA1 hoặc PA2 + 1 migration (Path G): `sort_order` + RPC thay template nguyên tử
+cho CẢ A lẫn B**
+
+| | |
+|---|---|
+| Làm gì | cột `sort_order` trên entries (tiền lệ Google `supabase/migrations/20260831000000_google_iap_mgmt_account_templates_m1_additive.sql`); function xoá + chèn trong MỘT transaction; các đường đọc `ORDER BY` PK / `sort_order` ⇒ đủ dữ liệu, tất định; xoá cửa sổ đọc-dở và trạng thái dở tất định; thứ tự cột vào được bài số một |
+| Số file (ước) | +1 migration · +3–4 nguồn · +3–4 test (SQL verify, tiêm lỗi giữa chừng, round-trip thứ tự cột) · KB · **chặn PUSH** tới khi Manager chạy SQL + verify, không chặn code |
+| Rủi ro | backfill từ thứ tự vật lý hiện tại có thể đóng băng một thứ tự đã sai; kích thước payload RPC (~1.5–2 MB) CHƯA BIẾT; A đổi hành vi ở đúng một điểm (lỗi giữa chừng ⇒ rollback) |
+| CHẮC | có tiền lệ Google; đọc có thứ tự đủ dữ liệu trong mọi lần đo |
+
+**Không đề xuất:**
+- **Chuyển B sang workbook A rồi chạy parser A.** ĐÃ ĐO cho cùng kết quả trên file sạch,
+  nhưng thừa hưởng luật dễ dãi của A (xoá dấu phẩy, nhận số âm, cảnh báo-rồi-bỏ) ⇒ dưới
+  luật 1 thành xoá im lặng.
+- **Short-circuit "file = DB ⇒ không ghi".**
+  - Đó là một phép so với trạng thái hiện tại làm ĐỔI hành vi, trái luật 1.
+  - Nó gây gãy: file y nguyên giữ cả 16 625 proceeds, sửa đúng 1 ô thì mất hết.
+  - Bài số một (tập entry) không cần nó: luôn ghi vẫn ra cùng tập entry (ĐÃ ĐO).
+
+## L2.5 P5 — Preview + parity + test + mutation
+
+### L2.5.1 Preview diff (đề xuất — chưa chốt; có preview hay không là Q-F)
+
+**"Giá Apple sẽ áp" — census nguồn** (Q-R):
+- **Không** có nguồn tin được nào mà không gọi Apple:
+  - không bảng DB nào cache giá Apple (grep `CREATE TABLE` mọi migration `iap_mgmt`);
+  - bảng legacy `price_tier_territories` là file Manager upload cũ, toàn cục (không có
+    account), theo tier địa phương — tiền lệ J-1 đã từ chối nó làm nguồn giá
+    (`lib/iap-management/queries/price-point-donor.ts:17-25`);
+  - template GLOBAL đã xoá (M-2);
+  - cache chỉ sống trong một request.
+- Nguồn duy nhất là câu trả lời của chính Apple:
+  `GET /v1/inAppPurchasePricePoints/{usaPointId}/equalizations`.
+  - 0 caller trong repo; endpoint mới ⇒ áp checklist KB §10.3.
+  - Tốn 1 + d request, d = số giá base USD khác nhau (≤ 88 với file thật) ⇒ tối đa ~89
+    request / preview ≈ 2.5 % ngân sách giờ của một key.
+  - Cần một IAP donor + credentials của **account đích**.
+- **Giá Apple tính theo giá base USD, không theo tier địa phương**, và base khác nhau theo
+  đường tạo IAP:
+  - bulk import lấy ô USA của template (`bulk-import/execute/route.ts:488`, `:567-569`);
+  - tạo lẻ / cập nhật lấy bảng legacy (`create-on-apple/route.ts:317-320`,
+    `update-on-apple/route.ts:325-328`).
+
+  ⇒ Cùng một ô có thể có hai "giá Apple".
+- Template không bao giờ định giá lại IAP đã có trên Apple ⇒ "sẽ áp" nghĩa là ở lần
+  tạo/cập nhật/bulk import SAU, theo quy đổi của Apple lúc đó.
+- Lựa chọn:
+  - O1-a: gọi equalizations, có trần, lỗi thì hiện không số;
+  - O1-a′: catalog từng nước + "cùng chỉ số p" — giả thuyết mới đo trên 2 dòng USD;
+  - O1-b: chỉ ghi "theo giá Apple (tự quy đổi)", 0 lần gọi;
+  - O1-c: giá bảng legacy, ghi rõ "không phải giá Apple" — trái J-1;
+  - O1-d: mặc định O1-b, có nút "Xem giá Apple".
+
+**Giao diện đề xuất:**
+```
+┌ Nhập file vào Default template · <Tên account> (<account_id>) ───────────────┐
+│ File: apple-pricing-template-default-20261019.xlsx · Nhận diện: Matrix (B)   │
+│ [tuỳ Q-E] File export từ: <account> ✓ khớp | !! khác account đích            │
+│ Sau khi ghi, template = ĐÚNG nội dung file này.                              │
+│   + 1 override mới   ~ 2 đổi giá   − 2 bỏ override (về giá Apple)            │
+│   = 7 giữ nguyên     Sau ghi: 10 override (hiện tại 11)                      │
+│ !! 3 nước có override nhưng KHÔNG có cột trong file → bỏ 8 override          │
+│ !! Cột USA: 1 thay đổi   !! 1 ô lệch >10× (kiểu "49,000" → 49)               │
+│ (i) File không mang proceeds → 9 ô đang có proceeds sẽ thành trống           │
+│ (i) IAP đã có trên Apple giữ nguyên giá; template mới áp cho lần tạo/sửa sau │
+│ Tier    Nước      Hiện tại     File        Loại            Sẽ áp             │
+│ Tier 2  Vietnam   49 000 VND → 49 VND      đổi ×0.001 !!   49 VND            │
+│ Tier 10 Japan     ·          → 1 500       override mới    1 500 JPY         │
+│ Tier 2  Thailand  69 THB     → ·           bỏ override     giá Apple [Q-R]   │
+│ Tier 1  USA       0.99 USD   → (trống)     bỏ (USA) !!     Tier 1 không còn  │
+│                                                            dùng được ở bulk  │
+│                                         [ Huỷ ]  [ Ghi 13 thay đổi ]          │
+└──────────────────────────────────────────────────────────────────────────────┘
+```
+- Per-App: dòng "bỏ override" ghi rõ "về giá Apple (**KHÔNG** phải giá Default)".
+- Tổng số tách hai nhóm: "bỏ" do ô bị xoá/`·`, và "bỏ" do cột vắng.
+- Cột USA có cờ riêng (§4.6 lượt 1, đã đo lại): đổi ô USA đổi tier bulk import chấp nhận
+  VÀ giá base USD; xoá ô USA ⇒ tier không dùng được trong bulk import nguồn template.
+- Cờ độ lớn:
+  - ô đổi giá: 10× / 0.1×;
+  - override mới: so với các tier kề nhau cùng cột trong FILE (thang giá phải đơn điệu).
+  - Cờ chỉ cảnh báo, không chặn. File sai account qua được mọi cờ độ lớn (ĐÃ ĐO) ⇒ cờ không
+    thay được stamp.
+- 0 thay đổi ⇒ preview nói "0 thay đổi". Việc server có ghi hay không: mặc định **vẫn
+  ghi** (xem "Không đề xuất" ở §L2.4) — Manager chốt ở Q-F.
+
+### L2.5.2 Parity — format A không đổi hành vi
+
+- Không đổi byte nào:
+  - `price-tiers.ts` (md5 trên — còn consumer thứ hai là route legacy
+    `pricing-tiers/route.ts:58`);
+  - thứ tự nhánh A của route (auth → form → cổng scope → APP `getApp`/`ensureAppRegistered`
+    → parse 422 → `replaceTemplate` 500);
+  - chuỗi ghi + payload `replaceTemplate` cho file A;
+  - 3 bề mặt upload.
+- Ghim bằng test sẵn có: 11 test `route.scope-rejection.test.ts` (gửi body `"x"` với parser
+  mock — chỉ xanh nếu nhánh 3 ủy quyền cho parser), 11 `price-tiers`, 11 account-isolation,
+  15 smoke.
+- Fence Excel: route không import `xlsx` tĩnh; reader B + nhận diện nằm dưới `parsers/` và
+  thêm vào `PARSERS` (`excel-library-split.structural.test.ts:189-192`). Fence vẫn mù với
+  `await import("xlsx")` (`:224-225`).
+
+### L2.5.3 Test nghiệm thu
+
+| # | Test | Tầng |
+|---|---|---|
+| **T1 — BÀI SỐ MỘT** | writer thật → bytes → reader thật → `replaceTemplate` → DB: **tập entry trước = sau** (khoá + currency + `canon(giá)`). Biến thể: Default · Per-App `showDiff` bật/tắt · file đã qua **Excel thật** · file đã qua **Numbers thật** (fixture do app thật lưu ra, không viết tay — P27). Proceeds khẳng định riêng theo Q-A/Q-G | dưới tầng thấp nhất |
+| T1b | sửa đúng một ô ⇒ mọi entry khác bằng nhau (khoá / currency / giá) | reader + route |
+| T2 | ca a (thừa hưởng giữ thừa hưởng) · b (override giữ giá + currency) · c (ô sửa ⇒ override giá mới) · d (ô xoá trống ⇒ bỏ override — luật 3) · e (Apple đổi giá giữa chừng ⇒ import không đọc Apple lần nào) | reader + route |
+| T3 | số: 16 625 giá thật + biến thể 17 chữ số; DB trả chuỗi `"1.9900"`; > 4 chữ số ⇒ 422; ≥ trần ⇒ 422 | reader |
+| T4 | scope theo Q-E (file account A vào B ⇒ chặn/cảnh báo/qua; đích luôn từ request) | route |
+| T5 | **export đầy đủ:** fake đảo trang + PGlite ép đổi plan ⇒ file đủ HOẶC export bị từ chối, không bao giờ 200 thiếu; R1b (template thêm nước sau khi trang tải) | route export |
+| T6 | cấu trúc: tên tier lạ / không chuẩn, mã nước sai, cột trùng, công thức (3 fixture), ô chữ, ô Currency bị sửa ⇒ 422 liệt kê mọi địa chỉ, 0 lần ghi | reader |
+| T7 | nhận diện: 13 hình dạng file — kết quả A không đổi | route |
+| T8 | parity A (§L2.5.2) | route + parser |
+
+### L2.5.4 Mutation (mỗi cái phải làm một test ĐỎ đúng lý do; áp qua `scripts/mutate.sh`)
+
+| Mutation | Test phải đỏ |
+|---|---|
+| ⭐ Coi ô có giá bằng giá Apple / Default là thừa hưởng (heuristic) | T2 ca e (+ T1 nếu fake trả giá Apple trùng) |
+| ⭐ Ô trống bị **bỏ qua** (giữ override cũ) thay vì bỏ override | T2 ca d |
+| ⭐ Import đọc sheet "Effective prices" (chỉ nếu chọn hai sheet) | T1 |
+| Coi `·` là override ở giá Default/Apple | T1 |
+| Bỏ O0 ở export | T5 |
+| Export lấy danh sách nước của client thay vì server | T5 (R1b) |
+| Reader nhận tên tier lạ kèm warning thay vì 422 | T6 |
+| Lấy currency ô mới từ `TERRITORY_CATALOG` | T2 ca c |
+| Nhận ô Currency đã bị sửa | T6 |
+| Đảo tên → mã thay vì đọc mã trong file | T6 (file B cũ phải bị từ chối) |
+| So `===` thay vì `canon`; luật thập phân cũ | T3 |
+| Kiểm `.v` trước `.f` / bỏ `sheetStubs` | T6 công thức |
+| Cho nhánh B chạy khi `SheetNames[0] === "price_tiers"` | T8 |
+| Bỏ kiểm scope / lấy scope đích từ file (nếu có stamp) | T4 |
+
+## L2.6 P6 — Câu hỏi cho Manager
+
+⛔ = chặn thiết kế · ○ = chốt trước khi code, không đổi hình dạng thiết kế. *(nghiêng)* =
+phương án lane nghiêng về, chỉ để tham khảo.
+
+**Ba câu của brief:**
+- **File sai scope** → Q-E.
+- **Nhận diện A/B:** đề xuất **tự động theo tên sheet** (tên rời nhau; 13 hình dạng file
+  đã đo); file mơ hồ ⇒ câu 422 của A, không đoán (+ Q-V).
+- **Hai sheet:** không kích hoạt — B thưa (§L2.2).
+
+| # | Câu | Lựa chọn |
+|---|---|---|
+| ⛔ **Q-A** | Bài số một "template KHÔNG ĐỔI GÌ" tính trên gì? Import lại nguyên trạng ⇒ tập entry giống hệt 16 625/16 625 (ĐÃ ĐO), nhưng proceeds → NULL, `template_id`/`uploaded_*`/`source_filename` mới, pill "migrated" mất — y như A hôm nay; thứ tự cột không bảo đảm | (i) chỉ tập entry *(nghiêng)* · (ii) + proceeds ⇒ bắt buộc đưa proceeds vào file · (iii) + thứ tự cột ⇒ bắt buộc PA3 · (iv) + metadata ⇒ cần short-circuit (trái luật 1) |
+| ⛔ **Q-B** | File export đã LỌC / thiếu nước: luật 1 + bài số một mâu thuẫn (Asia-only ⇒ xoá 12 255/16 625) | F-a export luôn đủ nước (danh sách server) · F-b′ "Export XLSX" để xem (không mã ⇒ import từ chối) + "Export để sửa" (đủ nước, có mã) *(nghiêng)* · F-c file tự khai độ phủ, import từ chối file thiếu · F-d import nguyên văn + preview báo to |
+| ⛔ **Q-C** | Đưa mã nước vào B | O1a `Vietnam (VNM)` · O1b `Vietnam (VNM_VND)` — giống A, kèm currency *(nghiêng)* · O2 thêm một hàng mã · O3 sheet thông tin theo vị trí (đổi chỗ cột ⇒ lệch im lặng; Numbers làm hiện ra). Kèm: màn có hiện mã cho khớp §21.1 không? twin Google có làm cho đối xứng không? |
+| ⛔ **Q-D** | Currency của override mới (ô `·` → gõ giá) + ô Currency bị sửa | nguồn: C1 cột trong file · C2 header *(nghiêng, cần O1b/O2)* · C3 snapshot Apple · C4 Manager gõ. Ô Currency bị sửa: từ chối kèm địa chỉ *(nghiêng)* · bỏ qua · nhận nguyên văn. Có chuẩn hoá `usd` → `USD`? |
+| ⛔ **Q-E** | Chỗ đặt nút import + scope (câu P6 của brief) | nút: 3 nút Replace ở Settings · cạnh "Export XLSX" trên Matrix view · cả hai. File account/app khác: **chặn** (cần stamp) · **cảnh báo** + bắt xác nhận (cần stamp) · **cho qua** (diff không lộ — ĐÃ ĐO). File chưa có stamp: chặn hay cảnh báo? Sửa chip ≠ TopNav (`?account=` + hiện tên account) trong arc này? File `Per-App Template` vào Default (và ngược lại): từ chối *(nghiêng)* hay cho? |
+| ⛔ **Q-F** | Preview: có được ĐỌC template hiện tại chỉ để HIỂN THỊ không (luật "không so với trạng thái hiện tại" nói về nhận biết ô đã sửa)? Bắt buộc, tuỳ chọn, hay không có? File 0 thay đổi có bỏ qua bước ghi không? | đề xuất: được đọc để hiển thị; file 0 thay đổi **vẫn ghi** (bỏ qua ghi = để trạng thái cũ quyết hành vi, trái luật 1) |
+| ⛔ **Q-G** | Proceeds (đi cặp Q-A) | P-i đưa vào file (đổi bố cục B) · P-ii chấp nhận NULL *(nghiêng)* · P-iii giữ cho ô không đổi (cần so với trạng thái hiện tại) · P-iv bỏ proceeds khỏi template |
+| ○ Q-H | Cột tier: tên lạ ⇒ từ chối cả file (422)? Cho thêm dòng tier MỚI (sẽ hiện cho mọi account)? Từ chối cách viết không chuẩn (`Tier 05`, `Alternate Tier a`)? | đề xuất: từ chối tên lạ + không chuẩn; tier mới — hỏi |
+| ○ Q-I | Kiểm mã nước theo snapshot 175 nước (đóng chặt tới lần refresh) hay mọi `[A-Z]{3}` như A? Áp cho cả A không? | — |
+| ○ Q-J | Giá > 4 chữ số thập phân: B từ chối, A giữ hành vi cũ? | đề xuất: có |
+| ○ Q-K | Ô chữ trông như số (Numbers gắn `@` ⇒ ô gõ sau đó thành chữ) | (i) từ chối mọi ô chữ · (ii) chỉ nhận chuỗi không mơ hồ |
+| ○ Q-L | Cửa sổ "export lúc đang ghi ⇒ file dở": chấp nhận, hay làm PA3? | — |
+| ○ Q-M | Đường đọc: O0 bắt buộc; thêm O2 đọc hai lần *(nghiêng, 0 migration)* · O1 kiểm-rồi-từ-chối (có thể chặn export tới lần ANALYZE sau) · O3/O4 (migration) | — |
+| ○ Q-N | File B cũ: đã phát bao nhiêu, có ai đang sửa dở? Xác nhận: từ chối + bảo export lại, KHÔNG đoán ngược tên → mã | — |
+| ○ Q-O | Hotfix 24: thứ tự cột = thứ tự upload còn là yêu cầu? Nếu còn, chỉ PA3 bảo đảm được (heap ≠ thứ tự upload — ĐÃ ĐO) | — |
+| ○ Q-P | Sửa cấu trúc dưới luật 1: cho thêm/xoá cột, dòng? (phụ thuộc Q-C: O1 thêm cột được, O3 thì không) | — |
+| ○ Q-Q | File 0 override, hoặc thiếu cột USA: luật 1 coi là hợp lệ, nhưng trang hiện "No Default Template uploaded yet" và mọi dòng bulk import nguồn template ra ERROR (`templates.ts:311-327`) — A hôm nay cũng nhận | chặn · cảnh báo · cho qua |
+| ○ Q-R | Giá Apple trong preview (nếu có preview) | O1-a · O1-a′ · O1-b *(nghiêng)* · O1-c · O1-d; hiện base USD nào (bulk, tạo lẻ, cả hai)? |
+| ○ Q-S | App bảng tính Manager dùng thật (Excel / Numbers / Google Sheets)? Google Sheets ⇒ cần một vòng UAT đo thật | — |
+| ○ Q-U | Route legacy `POST /api/iap-management/pricing-tiers` vẫn xoá entry của mọi template mọi account (`queries/price-tiers.ts:334-337`): tắt trong arc này hay arc riêng? | đề xuất: arc riêng, ưu tiên cao |
+| ○ Q-V | File B bị đổi tên sheet sẽ nhận câu lỗi của A. So tên sheet không phân biệt hoa thường? | — |
+
+**Thứ tự chốt gợi ý:** Q-A → Q-G → Q-B → Q-C → Q-D → Q-E → Q-F; các câu ○ chốt song
+song khi code.
+
+## L2.7 Đối chiếu lượt 1 — KEEP / CHANGE / ⛔ DROPPED (bỏ theo quyết định Manager)
+
+| Mục lượt 1 | Kết luận lượt 2 |
+|---|---|
+| TL;DR-1 "B thưa" | **KEEP** (đo lại ×4) |
+| TL;DR-2 "9 đường hỏng, R7 BLOCKER" | **CHANGE** — R7 hết là blocker; R1, R3, R6 thành điều kiện chặn |
+| TL;DR-3 M3 | **⛔ DROPPED** |
+| §1.1–§1.3 | **KEEP** (+ L2.1) |
+| §2.1, §2.3 | **KEEP** |
+| §2.2 giới hạn P37 | **KEEP — nặng hơn**: không còn digest đỡ ⇒ chặn ở export (O0) |
+| R1 file lọc | **CHANGE** — thành hành vi của luật 1, mâu thuẫn bài số một (Q-B); cách vá cũ "giữ nước ngoài phạm vi" đọc trạng thái hiện tại ⇒ bỏ. **Thêm R1b** |
+| R2 proceeds | **CHANGE** — "ô không đổi giữ proceeds" cần so DB ⇒ bỏ; thành câu định nghĩa (Q-A/Q-G) |
+| R3 không mã | **CHANGE → chặn**: mã phải nằm trong file (Q-C) |
+| R4 không scope | **KEEP** (Q-E) |
+| R5 không version | **⛔ DROPPED** — không dò xung đột; hệ quả được chấp nhận: người ghi sau thắng, file cũ import lại đè bản mới hơn |
+| R6 phân trang | **CHANGE → tiền điều kiện**, đã đo trên PG thật |
+| R7 transaction | **CHANGE** — hạ cấp (re-upload chữa được); thêm "export lúc đang ghi"; "409 khi thử lại" bỏ |
+| R8 tên tier toàn cục | **CHANGE (hẹp)** — rủi ro thật là gõ sai tạo id mới |
+| R9 số theo locale | **KEEP** (luật ô reader + cờ độ lớn) |
+| P3 M1 | **⛔ DROPPED** (vẫn cấm) |
+| P3 M2 | **⛔ DROPPED** |
+| P3 M3 + planner (bước 1–3, 5, 7–9), `_import_info` thẻ phiên bản, thứ tự ghi theo nước, commit `plan_hash` | **⛔ DROPPED** — chỉ sống: phân loại ô (bước 6), kiểm cấu trúc (một phần bước 4, trong reader), "đích lấy từ request" (bước 2) |
+| Ca a, d, e | **KEEP** (d: đã chốt bởi luật 3) |
+| Ca b, c | **CHANGE** — proceeds NULL; currency ô mới theo Q-D, không lấy từ dòng DB |
+| Ca f | **⛔ DROPPED** |
+| Ca g | **CHANGE** — thành "file không có mã nước (B cũ) ⇒ từ chối" |
+| §4.1 | **KEEP một phần** — đích từ request; so với manifest bỏ; stamp tuỳ Q-E |
+| §4.2 | **KEEP + SỬA** trần 2³⁸ / luật regex |
+| §4.3 | **CHANGE** — mã lấy từ file, không đối chiếu DB |
+| §4.4 | **CHANGE** — danh tính = tên chuẩn ở cột A; từ chối tên lạ |
+| §4.5 | **KEEP, đơn giản hơn** — `replaceTemplate` không đổi; planner gộp bỏ; "nhánh B không upsert `price_tiers`" bỏ |
+| §4.6 cột USA | **KEEP** (+ file thiếu cột USA, Q-Q) |
+| §4.7 | **KEEP** |
+| §4.8 sửa cấu trúc | **CHANGE** — luật 1 cho phép; tuỳ Q-C/Q-P |
+| §5.1(a)/(b)/(d) | **CHANGE** → PA1/PA2/PA3 ở L2.4 |
+| §5.1(c) M3 | **⛔ DROPPED** |
+| §5.2 | **CHANGE** (làm lại ở L2.4) |
+| §5.3 | **KEEP** nhận diện (tinh thành luật 0–3); giao thức `intent` + `PREVIEW_REQUIRED` chỉ còn nếu preview bắt buộc; mã `TEMPLATE_CHANGED`/`FILE_DB_MISMATCH` **⛔ DROPPED** |
+| §5.4 migration | **CHANGE** — B không cần migration; function nguyên tử thành gia cố tuỳ chọn (PA3) |
+| §6.1 | **CHANGE** — tuỳ chọn, chỉ hiển thị (L2.5.1) |
+| §6.2 | **KEEP** |
+| T1, T1b, T2, T3, T6, T8, T11 | **CHANGE / KEEP** theo L2.5.3 |
+| T5 (digest) | **CHANGE** → test đầy đủ phía export |
+| T7 (`plan_hash`), T9, T10, T12 | **⛔ DROPPED** (T10 chỉ còn nếu PA3) |
+| §6.4 mutation digest / template_id / plan_hash / gộp / "dựng mọi ô thành dòng mới" | **⛔ DROPPED** — còn lại ở L2.5.4 |
+| P7 Q1, Q2 | **đã trả lời** bởi quyết định Manager |
+| P7 Q3, Q16 | **⛔ DROPPED** |
+| P7 Q4–Q15, Q17 | **CHANGE** → Q-A…Q-V ở L2.6 |
+| Phụ lục A | **KEEP + THÊM** (L2.8) |
+| Phụ lục B | **KEEP** phần lớn; `[TEMPLATE-matrix-unordered-paging]` thăng thành **tiền điều kiện**; câu "digest không bao giờ thừa" và "với M3 gap proceeds biến mất" **⛔ DROPPED** |
+
+## L2.8 SQL chỉ đọc cho Manager (thêm vào Phụ lục A)
+
+```sql
+-- V1. Ràng buộc thật trên bảng entries (migration nói: PK + 2 FK, không CHECK currency/territory)
+SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint
+ WHERE conrelid = 'iap_mgmt.price_tier_template_entries'::regclass ORDER BY 1;
+
+-- V3. Nước mang > 1 currency trong cùng một template (A không tạo được; SQL tay thì có)
+SELECT template_id, territory_code, array_agg(DISTINCT currency_code)
+  FROM iap_mgmt.price_tier_template_entries
+ GROUP BY 1,2 HAVING count(DISTINCT currency_code) > 1;
+
+-- V4. Mã sai dạng đang lưu (không phải 3 chữ hoa)
+SELECT template_id, territory_code, currency_code, count(*)
+  FROM iap_mgmt.price_tier_template_entries
+ WHERE territory_code !~ '^[A-Z]{3}$' OR currency_code !~ '^[A-Z]{3}$'
+ GROUP BY 1,2,3;
+
+-- V5. Dòng USA không ghi USD (tier đó vô hình với bulk import, templates.ts:317-320)
+SELECT template_id, tier_id, currency_code FROM iap_mgmt.price_tier_template_entries
+ WHERE territory_code = 'USA' AND currency_code <> 'USD';
+
+-- ALT. Nước chỉ có ở dòng Alternate tier (đổi chỗ cột khi import lại — §L2.3.3)
+SELECT template_id, territory_code FROM iap_mgmt.price_tier_template_entries
+ GROUP BY 1,2 HAVING bool_and(tier_id LIKE 'ALT\_%');
+
+-- R6-a. Kích thước template
+SELECT template_id, count(*) FROM iap_mgmt.price_tier_template_entries
+ GROUP BY 1 ORDER BY 2 DESC;
+-- R6-b. Với template lớn nhất: plan có đổi giữa các OFFSET không (Index Scan … lookup
+--       vs Bitmap Heap / Seq ⇒ R6 đang sống trên prod). Chạy 3 lần: OFFSET 0, 8000, 15000.
+EXPLAIN SELECT tier_id, territory_code, currency_code, customer_price, proceeds
+  FROM iap_mgmt.price_tier_template_entries
+ WHERE template_id = '<id>' LIMIT 1000 OFFSET 0;
+```
+- **V2** (currency lưu ≠ snapshot Apple) cần bảng 175 cặp nước–currency nhúng trong SQL.
+  Theo bài học H4.4, bảng đó phải **sinh từ code** (`apple-territories.snapshot.ts`) và được
+  test ghim, không chép tay ⇒ ship cùng arc code.
+- **Không SQL:** đọc `Max rows` trong Supabase Dashboard → API settings (PostgREST
+  `max_rows`).
+- **Kiểm tay:** export Default matrix không lọc, đếm ô số trong Excel (`=COUNT` trên các cột
+  Price), so với số entry ở tab Default.
+- ⚠ `EXPLAIN` chỉ là ảnh chụp: stats đổi sau mỗi `ANALYZE`, nên một lần đo "ổn" không loại
+  được R6 — O0 vẫn phải xây.
+
+---
+
+# LƯỢT 1 (2026-10-16) — census + thiết kế M3 (giữ làm bằng chứng; các mục bỏ có đánh dấu)
+
 ## TL;DR — câu chặn cửa
+
+> ⛔ **Mục 3 BỎ theo quyết định Manager 2026-10-19** (M3). Mục 1 giữ; mục 2 đổi — xem §L2.2,
+> §L2.3.
 
 1. **B là ma trận THƯA, không phải ĐẦY.** Ô không có entry được ghi ký tự `·`
    (U+00B7) vào **cả ô Price lẫn ô Currency**. Ô có entry ghi số. Trạng thái
@@ -262,6 +924,9 @@ thơ qua REPLACE-ONLY vẫn hỏng theo 9 cách khác, **cách nào cũng im l�
 | **R8** | Tên tier trong file đi vào bảng `price_tiers` toàn cục | một dòng tier gõ khác chữ ⇒ đổi tên tier cho **mọi** account/app (`templates.ts:619-632`) | ĐỌC CODE |
 | **R9** | Nhập số theo locale (máy đo: `en_VN`, dấu thập phân `,`) | Excel biến `49,000` thành **số 49** (VND lệch 1000× — im lặng); `2.49` thành **CHỮ** `"2.49"`; parser A biến chữ `"1,99"` thành **199** và chữ `"49.000"` thành **49** | ĐÃ ĐO (Excel thật, nhập qua `formula local`; `readNumericCell`) |
 
+> 2026-10-19: **R5** ⛔ **BỎ theo quyết định Manager 2026-10-19** (không dò xung đột). R1, R2, R3, R6, R7, R8 **đổi vai** theo
+> ngữ nghĩa mới — xem §L2.3 và bảng §L2.7.
+
 ⇒ **Câu trả lời P2:** B **thưa** về ngữ nghĩa, và `·` là một dấu bền (sống qua Excel
 và Numbers). Round-trip **khả thi**, nhưng **không phải** bằng cách nới parser A
 cho nhận B. Cần (i) sửa export để file mang được scope + version + danh tính dòng/cột
@@ -271,6 +936,11 @@ ghi khi không có gì đổi, (iii) **đường ghi phải nguyên tử** trư�
 ---
 
 ## P3 — CƠ CHẾ NHẬN BIẾT "Ô MANAGER ĐÃ SỬA"
+
+> ⛔ **BỎ theo quyết định Manager 2026-10-19**: toàn bộ P3 (M1, M2, M3, planner, `_import_info` làm thẻ
+> phiên bản, digest, commit `plan_hash`). Manager chốt "KHÔNG cần cơ chế nhận biết ô đã
+> sửa". Chỉ còn sống trong reader B: phân loại ô (bước 6) và kiểm cấu trúc (một phần bước 4)
+> — xem §L2.4, §L2.7. M1 vẫn cấm.
 
 ### M1 — so với giá Apple hiện tại lúc import → ❌ loại
 
@@ -411,6 +1081,10 @@ xung đột sang **409**, không phải 500 (hôm nay mọi lỗi của `replace
 500 — `route.ts:210-214`). Đường ghi cho cả A lẫn B: P7-Q15.
 
 **Bảy ca bắt buộc — với M3:**
+
+> 2026-10-19: ca **f** **BỎ theo quyết định Manager 2026-10-19**; ca **g** đổi thành "file không có mã nước ⇒
+> từ chối"; ca **b, c** đổi (proceeds NULL, currency ô mới theo Q-D); ca **d** đã chốt bởi luật 3.
+> Xem §L2.5.3.
 
 | Ca | Kết quả | Vì sao |
 |---|---|---|
@@ -596,6 +1270,8 @@ chặn được sai account — kể cả ca chip ≠ TopNav đang tồn tại),
 
 **(c) ⭐ (a) + reader B + planner M3 + preview + hàm ghi nguyên tử** — đề xuất.
 
+> ⛔ **BỎ theo quyết định Manager 2026-10-19** (M3). Phương án hiện hành: PA1/PA2/PA3 ở §L2.4.
+
 | | |
 |---|---|
 | Làm gì | **Export:** route dùng `result.header` (hôm nay bị bỏ, `route.ts:172`), gọi `loadBundleId` **trước** khi dựng workbook (hôm nay sau, `:241-242`), tính manifest server-side, **từ chối (500) nếu thiếu `template_id`** — không bao giờ ghi manifest thiếu id; writer thêm `_import_info` **sau** sheet chính (đo: `sheet1.xml`, rels và `comments1.xml` giữ nguyên từng byte, danh sách shared string cũ là tiền tố của danh sách mới). **Import:** reader B (SheetJS, tìm sheet theo tên); planner thuần (P3); route upload hiện có thêm nhánh nhận diện + giao thức `intent` (§5.3); `replaceTemplate` nhận danh sách phẳng + gọi function Postgres nguyên tử; nút **"Nhập file đã sửa"** cạnh **"Export XLSX"** trên Matrix view (P7-Q12) + modal preview; màn Default matrix hiện tên account |
@@ -631,6 +1307,10 @@ trống thay `·`) rồi import B bằng parser A + planner.
 
 ### 5.3 Nhận diện format + giao thức preview/commit ⟲
 
+> 2026-10-19: nhận diện theo tên sheet **giữ** (tinh thành luật 0–3, §L2.4). Giao thức
+> `intent`/`plan_hash` và mã `TEMPLATE_CHANGED`/`FILE_DB_MISMATCH` **BỎ theo quyết định Manager 2026-10-19**; `PREVIEW_REQUIRED`
+> chỉ còn nếu Manager chọn preview bắt buộc (Q-F).
+
 Phía server, trên **cùng** route upload, **sau** cổng auth + phân giải scope (dùng
 chung, không tạo route song sinh):
 
@@ -665,6 +1345,10 @@ hồ thật. Preview **nói ra** format đã nhận diện. (P7-Q6.)
 
 ### 5.4 Migration — một function, không đổi bảng ⟲
 
+> 2026-10-19: **đổi** — dưới ngữ nghĩa mới B **không cần** migration (re-upload đúng file chữa
+> được lần ghi đứt — ĐÃ ĐO). Function nguyên tử thành gia cố tuỳ chọn cho cả A lẫn B (PA3,
+> §L2.4). Các tham số `expectedTemplateId` / `expectedEntryCount` / `plan_hash` **BỎ theo quyết định Manager 2026-10-19**.
+
 Bản nháp nói "không cần migration". **Sai**, vì BLOCKER R7: không có transaction thì
 B không được phép ghi. supabase-js không có transaction phía client
 (`templates.ts:567-573`); cách duy nhất là một function Postgres. Repo đã có tiền lệ
@@ -694,6 +1378,9 @@ B không được phép ghi. supabase-js không có transaction phía client
 ## P6 — PREVIEW + PARITY + TEST
 
 ### 6.1 Preview diff (đề xuất giao diện — chưa chốt)
+
+> 2026-10-19: **đổi** — bản hiện hành ở §L2.5.1 (chỉ hiển thị; bỏ dòng "export từ bản …
+> ✓ vẫn là bản hiện tại" và "163 nước giữ nguyên" — **BỎ theo quyết định Manager 2026-10-19**).
 
 ```
 ┌ Nhập file Matrix đã sửa — Default · VNG Corp (vng-corp) ─────────────────────┐
@@ -748,6 +1435,9 @@ B không được phép ghi. supabase-js không có transaction phía client
 
 ### 6.3 Test nghiệm thu tối thiểu
 
+> 2026-10-19: T5 (digest), T7 (`plan_hash`), T9, T12 **BỎ theo quyết định Manager 2026-10-19**; T10 chỉ còn nếu PA3.
+> Bản hiện hành: §L2.5.3.
+
 **Độ trung thực của fake (bắt buộc, KB §19.6, §25.3):** fake ở tầng `iapDb`/PostgREST;
 NUMERIC trả về **dạng chuỗi** (vì CHƯA BIẾT); phân trang không ORDER BY trả thứ tự
 **không ổn định**; `.eq()` **thật sự lọc**, với **hai account mang giá KHÁC nhau**.
@@ -779,6 +1469,9 @@ Fixture Excel/Numbers: **commit file do app thật lưu ra**, không viết tay 
 
 ### 6.4 Mutation đề xuất (mỗi cái phải ĐỎ)
 
+> 2026-10-19: các mutation về digest / `template_id` / `plan_hash` / gộp nước ngoài phạm vi /
+> "dựng mọi ô số thành dòng mới" **BỎ theo quyết định Manager 2026-10-19**. Bản hiện hành: §L2.5.4.
+
 | Mutation | Test phải đỏ |
 |---|---|
 | Thêm so sánh với giá Apple (hoặc Default) để đoán "thừa hưởng" | **ca e** (Apple đổi giá giữa chừng + khẳng định import **không gọi Apple lần nào**) |
@@ -805,6 +1498,9 @@ Fixture Excel/Numbers: **commit file do app thật lưu ra**, không viết tay 
 ---
 
 ## P7 — CÂU CẦN MANAGER CHỐT
+
+> 2026-10-19: **thay bằng §L2.6.** Q1, Q2 đã được Manager trả lời; Q3, Q16 **BỎ theo quyết định Manager 2026-10-19**;
+> các câu còn lại đổi thành Q-A…Q-V.
 
 > **Q1 — Cơ chế nhận biết ô đã sửa.** Đề xuất **M3** (giá trị ô là trạng thái +
 > `template_id` là điều kiện cần + digest là điều kiện đủ; ảnh chụp là DB). *Lý do:*
@@ -949,6 +1645,9 @@ Và một phép đo Node một dòng (PostgREST trả NUMERIC dạng gì):
       nhưng 9 đường hỏng im lặng R1–R9 nếu import ngây thơ — R7 là BLOCKER
 - [x] P3–P6 cơ chế M3, ca a–g, chỗ dễ sai, phương án, preview, test, mutation
 - [x] Vòng phản biện 4 góc: 1 BLOCKER + 18 MAJOR đã xử lý (⟲)
-- [ ] **Manager chốt P7 (Q1–Q17)** + chạy Phụ lục A
-- [ ] Sau khi chốt: arc code — **1 migration (function), Path G: chặn push tới khi
-      Manager chạy SQL + verify** — cắt nhánh mới ở ranh giới arc
+- [x] ~~Manager chốt P7 (Q1–Q17)~~ — **BỎ theo quyết định Manager 2026-10-19**: ngữ nghĩa "file là sự thật duy nhất"
+- [x] **Lượt 2** (2026-10-19): census lại theo ngữ nghĩa mới — P1, P2 (**B thưa**), P3, P4
+      (PA1/PA2/PA3), P5, P6 (§L2.1–§L2.8)
+- [ ] **Manager chốt §L2.6** (⛔ Q-A, Q-G, Q-B, Q-C, Q-D, Q-E, Q-F) + chạy SQL §L2.8 + Phụ lục A
+- [ ] Sau khi chốt: arc code — PA1/PA2 **0 migration**; PA3 có 1 migration (Path G: chặn push
+      tới khi Manager chạy SQL + verify) — cắt nhánh mới ở ranh giới arc
