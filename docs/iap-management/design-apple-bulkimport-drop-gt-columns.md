@@ -1,6 +1,6 @@
 # [APPLE-bulkimport-drop-gt] Bỏ "GT Price" / "GT Currency" khỏi Bulk Import của Apple — census + thiết kế
 
-**Trạng thái:** census + thiết kế xong (2026-10-20), **CHƯA CODE**, chờ Manager chốt §P4.
+**Trạng thái:** census PASS (`cdd5135`); Manager chốt §P4 (2026-10-20, xem §P4-chốt). G0 (ghim hiện trạng) xong — chờ gate; G1 chưa làm.
 **Nhánh:** `arc-apple-bulkimport-drop-gt-columns` (cắt từ `origin/main` = `bf48692`).
 **Phạm vi:** CHỈ module Apple. Google dùng GT thật (H4) — không đổi một hành vi nào của Google.
 
@@ -218,6 +218,28 @@ Docs chung 2 module: `docs/user-docs/index.html` (Apple: `data-page="apple-bulk-
 > **Q3 — Tên file template full (§1.2, bất biến `template-spec.ts:135-140`).** Nội dung đổi 84 → 82 cột nhưng tên giữ `apple-iap-bulk-import-template.xlsx`. Đề xuất **giữ tên** (đổi là có chủ đích, có ghi; file cũ vẫn nhập được) và sửa câu bất biến. Phương án khác: đổi tên để phân biệt file mới/cũ trong Downloads.
 >
 > **Q4 — Nhãn `import_batches.template_version` (`'iap-items-v1'`).** Đề xuất **giữ**: không ai đọc, và file cũ vẫn được nhận nên nhãn mới cũng không phân biệt được hình dạng file.
+
+## §P4-chốt — Manager quyết (2026-10-20)
+
+- **Q1 = (a):** nhận file cũ, bỏ qua 2 cột GT, KHÔNG kiểm, KHÔNG báo. 2 tên cột cũ nằm trong danh sách "cột cũ đã bỏ" CHỈ cho Apple, để file cũ không sinh cảnh báo "Skipped unexpected header".
+- **Q2 = KHÔNG migration.** Manager chạy trên prod **2026-10-20**:
+  ```sql
+  SELECT action_type, count(*) FROM iap_mgmt.actions_log
+  WHERE payload::text ~* '(base_price|base_currency|gt price|gt currency|gt_price|gt_currency)'
+  GROUP BY 1;
+  ```
+  ⇒ **0 dòng**: `actions_log` chưa từng lưu GT.
+- **Q3 = GIỮ** tên `apple-iap-bulk-import-template.xlsx`; sửa comment bất biến `template-spec.ts:135-140` cho đúng việc nội dung đổi từ 84 xuống 82 cột.
+- **Q4 = GIỮ** `template_version = 'iap-items-v1'`.
+- **Ca chép CẢ DÒNG từ file cũ sang template mới** (§1.4-3, ĐÃ ĐO: GT trượt vào `Display Name` / `Description`, 0 cảnh báo): **KHÔNG thêm code phát hiện.** Lớp chặn:
+  1. câu dặn trong sheet Notes: chép dữ liệu theo từng cột, không chép cả dòng từ template cũ;
+  2. **step 4 Localization** đã hiện từng ô theo nhãn Name / Desc, tô sáng trường khác bản đang bán, TRƯỚC execute ⇒ giá trị GT lọt vào sẽ lộ ở đó;
+  3. một câu cảnh báo ngắn trong user guide (G1).
+
+## Tiến độ
+
+- **G0** — ghim hiện trạng, chưa đổi hành vi (`lib/iap-management/parsers/gt-columns.baseline.test.ts` T1–T3 template + P1–P4 parser; `app/api/iap-management/apps/[appId]/bulk-import/execute/gt-columns.route.test.ts` R1–R2 route thật; `lib/iap-management/parsers/gt-drop.google-parity.test.ts` GP1–GP3 Google). Mutation 5/5 đỏ.
+- **G1** — chưa làm.
 
 ## Phát hiện bên lề (không thuộc arc, ghi để BACKLOG)
 

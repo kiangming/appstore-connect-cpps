@@ -9111,3 +9111,29 @@ Test ghim: `app/api/google-iap-management/apps/[packageName]/bulk-import/file-cu
   `queries/audit-template-entries-h4.sql` tại commit `64557c9`): Q1 0 dòng, Q4 (câu chặn push) 0 dòng; Q2/Q3 không
   cần chạy. ⇒ Luật `tier_price_invalid` của H4.3 không từ chối entry nào đang có trên prod lúc ship. Bảng
   `decimals`/`billed` trong SQL đã được kiểm khớp code tại `64557c9` trước push (test ghim + so từng cặp).
+
+---
+
+## §36 — Bỏ "GT Price" / "GT Currency" khỏi Bulk Import của APPLE (arc `arc-apple-bulkimport-drop-gt-columns`, 2026-10-20)
+
+Design: `docs/iap-management/design-apple-bulkimport-drop-gt-columns.md`. ⚠ CHỈ Apple — Google dùng GT thật (§35, H4); không đổi một hành vi nào của Google.
+
+**Sự thật đã đo (census, trước khi đổi):**
+- GT **không ảnh hưởng gì** tới Apple, DB hay audit: route execute thật, 5 kiểu GT (trống, 23000/VND, -5/zzz, `1,99`, không có cột) ⇒ 17 lời gọi ghi lại giống từng byte; 16 lần ghi DB không chứa GT. Parser đọc GT vào `base_price` / `base_currency`, không code production nào đọc lại.
+- Chỗ kiểm duy nhất: GT Price không phải số ⇒ **từ chối CẢ file** (Step 1 đỏ; execute 422 + Hub FAILED). Bỏ GT ⇒ các file đó được nhận (đúng ý Manager).
+- Parser đọc theo **TÊN** header (`findHeaderIndex`, trim + không phân biệt hoa thường). Ràng buộc vị trí duy nhất: `Description (X)` ngay sau `Display Name (X)`.
+- Không symbol chung nào mang GT với Google. Hai file chung `lib/xlsx-template.ts` và `components/ui/shared/DownloadTemplateButton.tsx` KHÔNG được đụng: Google so NGUYÊN VĂN câu note mẫu (`TEMPLATE_SAMPLE_ROWS_NOTE`, `excel-parser.ts:373`) và cả hai parser dùng chung `TEMPLATE_SAMPLE_PRODUCT_IDS`.
+- **Không cột DB nào lưu GT** (56 migration, grep 0). Manager chạy trên prod **2026-10-20**:
+  ```sql
+  SELECT action_type, count(*) FROM iap_mgmt.actions_log
+   WHERE payload::text ~* '(base_price|base_currency|gt price|gt currency|gt_price|gt_currency)'
+   GROUP BY 1;
+  ```
+  ⇒ **0 dòng**: `actions_log` chưa từng lưu GT ⇒ **không migration**.
+
+**Manager chốt (2026-10-20):** Q1 (a) file cũ còn 2 cột GT ⇒ nhận, bỏ qua, KHÔNG kiểm, KHÔNG báo — 2 tên cột cũ nằm trong danh sách "cột cũ đã bỏ" CHỈ của Apple, để không sinh cảnh báo "Skipped unexpected header". Q2 không migration. Q3 giữ tên file `apple-iap-bulk-import-template.xlsx` (nội dung đổi 84 → 82 cột — sửa câu bất biến ở `template-spec.ts`). Q4 giữ `template_version = 'iap-items-v1'`.
+
+**Bẫy đã đo, có chủ đích KHÔNG chặn bằng code — chép CẢ DÒNG từ file cũ sang template mới:** file cũ có 6 cột đầu, template mới 4 ⇒ dán cả dòng theo vị trí làm giá trị GT trượt vào `Display Name` / `Description` (ĐÃ ĐO: `display_name '23000'`, `description 'VND'`, **0 cảnh báo** — dữ liệu hợp lệ về hình thức, parser không phân biệt được). **Lớp chặn:** (1) câu dặn trong sheet Notes và user guide — chép theo từng cột, không chép cả dòng từ template cũ; (2) **step 4 Localization** hiện từng ô theo nhãn Name / Desc và tô sáng trường khác bản đang bán, TRƯỚC execute ⇒ giá trị GT lọt vào sẽ lộ ở đó.
+
+**Bài học chung:** "chỉ xoá một header khỏi danh sách đã biết" KHÔNG phải "bỏ qua cột đó" — với parser quét cột lạ, header bị xoá trở thành cảnh báo cho mọi file cũ. Muốn file cũ im lặng thì phải nhận diện tên cũ có chủ đích.
+
