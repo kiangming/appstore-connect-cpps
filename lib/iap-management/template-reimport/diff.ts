@@ -32,7 +32,9 @@ export interface DiffChange {
   after: { price: number; currency: string } | null;
   removedBecause?: RemovedBecause;
   /** "usa" — the USA cell (bulk import's accepted tiers + USD base);
-   *  "magnitude" — new/old price ×10 or ÷10 (a locale typo like 49,000 → 49);
+   *  "magnitude" — new/old price MORE than ×10 or LESS than ÷10, strictly
+   *    (design §L2.9 "> 10× hoặc < 0.1×"; an exact ×10 is not flagged). The
+   *    typo it is for — 49,000 read as 49 — is ÷1000;
    *  "ladder" — a new override outside its neighbouring tiers in the file. */
   flags: Array<"usa" | "magnitude" | "ladder">;
 }

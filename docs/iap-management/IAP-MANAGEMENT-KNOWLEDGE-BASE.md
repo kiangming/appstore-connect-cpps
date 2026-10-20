@@ -6530,6 +6530,12 @@ Four concrete gaps, the last one decisive — `proceeds` is not in `MatrixData`
 at all, so round-tripping needs a new read path, not a column rename. Tracked
 as `[TEMPLATE-xlsx-reimport]`.
 
+> ⟲ **Superseded 2026-10-20 (PA2, §21.10).** The `Export XLSX` file still cannot be
+> uploaded back — by design. Round-trip now goes through a SEPARATE export,
+> "Export for editing", and its own import. The proceeds gap did not need a new
+> read path: under "the file is the only truth" proceeds simply become NULL
+> (display-only — no price write reads them).
+
 ### 21.9 ⚠ R6 — a template's entries are read through ONE reader, ordered by the key, proven complete (2026-10-19)
 
 **ĐÃ ĐO (Postgres 17.5 thật — PGlite — với template thật 16 625 entry).** Hai đường đọc
@@ -6568,6 +6574,57 @@ heap scan từ 2000) trên PGlite, thay vì trông chờ ANALYZE tái hiện. Ki
 harness ra 16 625 dòng nhưng chỉ 15 225 khoá, mất trọn TIER_2…TIER_9. Mutation: bỏ
 ORDER BY ⇒ đỏ (15 225 distinct) · bỏ kiểm số dòng ⇒ đỏ · nhảy trang theo PAGE_SIZE ⇒ đỏ
 (`max_rows` 500 chỉ đọc được 8 500) · bỏ thứ tự cột ⇒ đỏ (cột thành alphabet).
+
+### 21.10 ⭐ Round-trip Excel của template: "Export for editing" → "Import edited file" (PA2, 2026-10-20)
+
+Design: `docs/iap-management/design-template-matrix-reimport.md` (lượt 2, §L2.9 — Manager chốt).
+
+**Ngữ nghĩa (Manager 2026-10-19):**
+1. File là sự thật duy nhất — import xong template = đúng file (REPLACE-ONLY Q-A);
+2. ô có giá = override đúng giá đó;
+3. ô trống / `·` = không override ⇒ giá Apple. Với Per-App là giá **Apple**, KHÔNG phải giá Default: orchestrator đọc đúng MỘT template.
+
+⇒ Không có cơ chế "nhận biết ô đã sửa" (không so trạng thái hiện tại, không ảnh chụp, không dò xung đột). **Bài số một** — export để sửa rồi import nguyên trạng ⇒ tập entry (khoá, currency, giá) không đổi — ghim trên Postgres thật với `replaceTemplate` thật.
+
+**Luật rút ra — mỗi luật có test + mutation:**
+- **File để XEM ≠ file để SỬA.**
+  - `Export XLSX` theo bộ lọc của màn (§21.1) và không import được.
+  - `Export for editing` LUÔN đủ mọi nước, đọc từ server, bỏ qua danh sách nước client gửi.
+  - Lý do: dưới luật 1, một nước vắng mặt trong file là một nước BỊ XOÁ override.
+- **Danh tính nằm trong file, không bao giờ suy từ tên** (§4.20):
+  - header `Name (CODE_CUR)` dùng MỘT regex chung với format A (`template-matrix-edit-spec.ts`);
+  - tier là tên chuẩn, phải có trong `price_tiers` và đúng chính tả. Nếu không, `replaceTemplate` sẽ upsert một tier mới hoặc đổi tên tier toàn cục.
+- **Currency là của Apple** (§4.19):
+  - header phải mang đúng `appleCurrencyFor(code)` — cùng snapshot với chỗ khác dùng, không có bảng thứ hai;
+  - ô Currency chỉ được là `·`, trống, hoặc bằng header;
+  - override mới lấy currency theo header.
+  - Prod 2026-10-20 (SQL V2, 14 template / 28 707 entry): 0 entry lệch.
+  - Export từ chối (409) template lưu currency Apple không thu (kể cả mã ngoài snapshot), hoặc một nước giữ 2 currency, để không phát ra file không nạp lại được. Cả hai loại gom vào **MỘT** 409 (sửa = một lượt upload ở Settings, không phải hai).
+  - ⚠ Từ PA2.3 currency trong snapshot là một **cổng**, không chỉ để hiển thị. Nên step 2.7 của runbook refresh (`scripts/territory-snapshot-drift.mjs`) so cả **mã và currency**: so mã thôi thì Apple đổi currency một nước (BGR BGN→EUR, 1/2026) vẫn in "IN SYNC", trong khi hai cổng đòi currency CŨ.
+  - ⚠ Upload format A ở Settings **không** kiểm currency header với Apple (giữ nguyên "format A không đổi một dòng"). File `VNM_USD` lọt qua đó rồi bị Export for editing từ chối — chờ Manager chọn: chấp nhận + ghi doc (đã ghi trong guide), hay thêm cảnh báo không chặn ở format A.
+- **Reader chặt vì lệnh ghi là REPLACE.** Format A cảnh báo-rồi-bỏ dòng; dưới luật 1, bỏ dòng = XOÁ dòng. Nên mọi nghi ngờ đều là từ chối cả file, liệt kê đủ địa chỉ ô, không ghi gì:
+  - công thức (kiểm `.f` trước `.v`);
+  - giá âm, quá 4 chữ số thập phân, quá trần;
+  - chữ mơ hồ (`49.000`, `1,99`);
+  - file 0 giá.
+- **Hai cửa trên MỘT route upload:**
+  - có `intent` (nút trên matrix view) ⇒ chỉ nhận file để sửa;
+  - không `intent` (3 nút Settings) ⇒ format A y như cũ, còn file để sửa bị trả 409 "dùng matrix view" (các nút đó coi mọi 2xx là "đã thay").
+  - File sai cửa bị trả về TRƯỚC mọi thứ, không gọi Apple.
+- **Scope trong file chỉ để ĐỐI CHIẾU.** Đích ghi luôn lấy từ request: trang matrix đang hiện account nào thì ghi vào account đó (§25.2). Sai ⇒ 409 nêu cả hai phía. Lý do: file account khác chỉ hiện như "7 ô đổi nhỏ" trong diff (đã đo), không cờ nào bắt được.
+- **Preview chỉ để HIỂN THỊ** (`template-reimport/diff.ts`, thuần):
+  - commit parse lại file và ghi đúng file; file 0 thay đổi vẫn ghi;
+  - không bao giờ có heuristic "giá bằng giá hiện tại / Apple / Default ⇒ thừa hưởng" (mutation ghim).
+- **Một đường ghi** (P1): reader ra `PriceTiersParseResult` của A, đi qua chính `replaceTemplate`, chỉ thêm tag audit `matrix-edit-v1`. Ghi đứt giữa chừng thì import lại đúng file là chữa xong — không cần migration.
+  - ⚠ "Import lại đúng file" phải **với tới được**. Ghi đứt ở đợt đầu (mọi Per-App: < 1000 entry = một đợt) để lại template 0 entry ⇒ trang matrix hiện màn trống, còn cửa Settings trả 409 cho file để sửa. Nên màn trống của CẢ HAI trang cũng có `Import edited file` (`EmptyMatrixImport`, cùng component, cùng cổng). Ghim: I13b (route) + page test (màn trống). Lời khuyên trong thông báo lỗi mà UI không cho làm theo là một vòng lặp không lối ra.
+  - Commit không thành công (lỗi có mã, 5xx không thân, mạng đứt) ⇒ reload ma trận ngay (nó có thể đã ghi một phần) + toast (sống lâu hơn dialog — reload có thể thay trang bằng màn trống). Không có câu trả lời ⇒ nói "may or may not have been written", không nói "failed" (P5).
+- **Nút ghi** khoá bằng ref vĩnh viễn (P12). Một file mỗi lần: nút import khoá từ lúc chọn file tới lúc dialog đóng (kể cả lúc đang ghi), dialog bẫy Tab, nên kết quả một lần ghi chỉ có thể rơi vào đúng dialog của nó. Byte file đọc MỘT lần lúc chọn — preview và ghi gửi cùng byte.
+- **Màn Default nói account của nó** (R4) — và nói cả cho file: Export for editing của Default gửi `accountId` của TRANG; route so với account của session (dùng chung mọi tab) ⇒ khác thì 409 "reload". Không có nó, đổi account ở tab khác rồi bấm ở tab này ra file của account kia dưới tiêu đề account này.
+- **Bảng xem trước cắt 200 hàng ⇒ thứ tự là một quyết định:** hàng có cờ (USA / ×10 / thang tier) → bỏ override → đổi giá → thêm mới. Cờ ×10 là ngưỡng **chặt** (> ×10, < ÷10 — design §L2.9); lỗi R9 `49,000 → 49` là ÷1000.
+
+**Ngoài phạm vi:**
+- Numbers và Google Sheets CHƯA ĐO (team dùng Excel — Q-S); ai dùng thì đo riêng.
+- UAT bằng Excel thật: `docs/iap-management/uat/pa2-excel/README.md`.
 
 ---
 

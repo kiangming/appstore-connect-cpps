@@ -1,6 +1,6 @@
 "use client";
 
-import { Search, Download } from "lucide-react";
+import { Search, Download, FilePen, Upload } from "lucide-react";
 
 import { APPLE_CONTINENTS, type Continent } from "@/lib/iap-management/apple/territory-continent";
 
@@ -22,6 +22,18 @@ export interface MatrixFilterBarProps {
   onExport: () => void;
   /** True while the server is building the workbook — chặn bấm hai lần. */
   isExporting?: boolean;
+
+  /** PA2.3 (Manager Q-B) — "Export for editing": the WHOLE template, whatever
+   *  the filters show, as a file that can be imported back. */
+  onExportForEditing: () => void;
+  isExportingForEditing?: boolean;
+  /** PA2.3 (Q-E) — "Import edited file", next to the exports. Absent ⇒ no
+   *  button (a member on the Default matrix: the import is admin-only, the
+   *  same gate as uploading a Default template). */
+  onImportEdited?: () => void;
+  /** From choosing a file until its dialog closes (a write included) — one
+   *  file at a time. */
+  isImporting?: boolean;
 }
 
 export const CURRENCY_FILTER_ALL = "ALL";
@@ -39,6 +51,10 @@ export function MatrixFilterBar({
   totalMarketCount,
   onExport,
   isExporting = false,
+  onExportForEditing,
+  isExportingForEditing = false,
+  onImportEdited,
+  isImporting = false,
 }: MatrixFilterBarProps) {
   // ⚠ 0 nước ⇒ không có gì để xuất. Màn ở trạng thái đó đang hiện "No
   // territories match the active filters" (MatrixTable), và route từ chối
@@ -92,6 +108,31 @@ export function MatrixFilterBar({
           <Download className="h-4 w-4" />
           {isExporting ? "Exporting…" : "Export XLSX"}
         </button>
+        {/* ⚠ NOT disabled by the filters: "for editing" is the whole template,
+            never the filtered view (a filtered file would DELETE the hidden
+            territories' overrides on import — Q-B). */}
+        <button
+          type="button"
+          onClick={onExportForEditing}
+          disabled={isExportingForEditing}
+          title="Every territory of the template, in a file you can edit and import back."
+          className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-slate-600 border border-slate-300 hover:bg-white rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+        >
+          <FilePen className="h-4 w-4" />
+          {isExportingForEditing ? "Exporting…" : "Export for editing"}
+        </button>
+        {onImportEdited && (
+          <button
+            type="button"
+            onClick={onImportEdited}
+            disabled={isImporting}
+            title='Import a file made with "Export for editing" — the template becomes exactly the file.'
+            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-[#0071E3] hover:bg-[#0077ED] rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Upload className="h-4 w-4" />
+            {isImporting ? "Importing…" : "Import edited file"}
+          </button>
+        )}
         <div className="ml-auto text-xs text-slate-500">
           Showing{" "}
           <span className="font-semibold text-slate-900">{visibleMarketCount}</span>{" "}

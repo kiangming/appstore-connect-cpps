@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 
@@ -10,7 +10,11 @@ import {
   type Continent,
 } from "@/lib/iap-management/apple/territory-continent";
 import type { MatrixData } from "@/lib/iap-management/queries/template-matrix";
-import { downloadMatrixExport } from "@/lib/iap-management/matrix-export-download";
+import {
+  downloadMatrixExport,
+  downloadMatrixExportForEditing,
+  editExportSuccessMessage,
+} from "@/lib/iap-management/matrix-export-download";
 
 import { MatrixBreadcrumb } from "./MatrixBreadcrumb";
 import {
@@ -18,6 +22,7 @@ import {
   CURRENCY_FILTER_ALL,
 } from "./MatrixFilterBar";
 import { MatrixTable } from "./MatrixTable";
+import { MatrixImport } from "./MatrixImport";
 
 export interface PerAppMatrixViewProps {
   matrix: MatrixData;
@@ -52,6 +57,9 @@ export function PerAppMatrixView({
   );
   const [showDiff, setShowDiff] = useState(defaultTemplateExists);
   const [exporting, setExporting] = useState(false);
+  const [exportingForEditing, setExportingForEditing] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importInput = useRef<HTMLInputElement>(null);
 
   const visibleMarkets = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -105,6 +113,22 @@ export function PerAppMatrixView({
       });
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function handleExportForEditing() {
+    setExportingForEditing(true);
+    const toastId = toast.loading("Building the file for editing…");
+    try {
+      // ⚠ Not the visible territories: the file for editing is the whole
+      // template (Q-B). The server reads it; nothing from this screen decides it.
+      const res = await downloadMatrixExportForEditing({ scope: "per-app", appId });
+      if (!res.ok) toast.error(res.error, { id: toastId });
+      else toast.success(editExportSuccessMessage(res), { id: toastId });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Export failed.", { id: toastId });
+    } finally {
+      setExportingForEditing(false);
     }
   }
 
@@ -188,6 +212,20 @@ export function PerAppMatrixView({
         totalMarketCount={matrix.markets.length}
         onExport={handleExport}
         isExporting={exporting}
+        onExportForEditing={handleExportForEditing}
+        isExportingForEditing={exportingForEditing}
+        // Per-App import is open to members — the same gate as uploading a
+        // Per-App template (Hotfix 11).
+        onImportEdited={() => importInput.current?.click()}
+        isImporting={importing}
+      />
+      <MatrixImport
+        target={{ kind: "APP", appId }}
+        label={`Per-App template · ${appName} (${bundleId})`}
+        isPerApp
+        tierNames={matrix.tiers}
+        inputRef={importInput}
+        onBusyChange={setImporting}
       />
 
       <MatrixTable matrix={matrix} visibleMarkets={visibleMarkets} showDiff={showDiff} />

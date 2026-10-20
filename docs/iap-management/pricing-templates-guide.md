@@ -222,14 +222,117 @@ move:
 | *"No Default template for the active account."* / *"No Per-App template for this app."* | upload the template first |
 | *"The pricing template changed since this page was loaded — it no longer covers: XXX, YYY."* | someone re-uploaded the template while your page was open. **Reload the page**, then export |
 
-### ⚠ This file cannot be uploaded back
+### ⚠ This file cannot be uploaded back — use "Export for editing"
 
-The export uses `Price | Currency`; the **upload** parser expects a sheet
-named `price_tiers` with headers `Country (AAA_CCC)` and sub-columns
-`Price | Proceeds`. They are different shapes, and `proceeds` is not part of
-the matrix data at all — so an exported workbook is **for reading and
-comparing, not for re-uploading**. Round-tripping is deferred on purpose and
-tracked as `[TEMPLATE-xlsx-reimport]` in `TODO.md`.
+`Export XLSX` is a picture of the screen: filtered, with country names but no
+territory codes. Importing it is refused. To change prices in a spreadsheet,
+use the second export below.
+
+## Edit the template in Excel: `Export for editing` → `Import edited file` (2026-10-20)
+
+Both matrix screens also have **`Export for editing`** and **`Import edited
+file`** (on the Default screen the import is for admins only — the same rule as
+uploading a Default template; on a Per-App screen, anyone who may upload a
+Per-App template).
+
+### The rules (Manager, 2026-10-19)
+
+1. **The file is the whole truth.** After the import the template is exactly
+   the file, whatever it held before.
+2. **A cell with a price** is an override at exactly that price.
+3. **An empty or `·` cell** is no override — Apple's own price applies.
+   Clearing a cell that had an override removes it. On a Per-App template that
+   means **Apple's** price, **not** the Default template's.
+
+So a file imported back unchanged changes no tier, territory, currency or
+price. (Proceeds are not in the file; every cell's proceeds is empty after an
+import — they are display-only and no price write reads them. The preview says
+how many cells lose them.)
+
+### The file for editing
+
+- **Every territory of the template, always.** The screen's filters are
+  ignored on purpose: a filtered file would delete the hidden territories'
+  overrides on import.
+- Each territory header carries its code and currency, `Vietnam (VNM_VND)` —
+  the same header as the upload template. The currency is the one Apple bills
+  that territory in.
+- A hidden sheet `_import_info` states which template the file belongs to
+  (the Default of account X, or the Per-App template of app Y). Leave it alone;
+  Excel keeps it hidden.
+- No orange difference marks.
+- Name: `apple-pricing-template-default-for-editing-<stamp>.xlsx` /
+  `apple-pricing-template-per-app-<bundle-id>-for-editing-<stamp>.xlsx`.
+
+### What you may change
+
+Prices; a new price in a `·` cell; clearing a cell. Rows (tiers that already
+exist) and territories may be added, removed or reordered — the preview shows
+every effect.
+
+⚠ A territory is **two columns**, like every territory in the file: the header
+`Name (CODE_CUR)` in the left one (the right one empty), and `Price` /
+`Currency` in row 2. To add one, copy an existing pair of columns and edit it.
+Do not insert a single column — every pair after it shifts, and the whole file
+is refused.
+
+### What is refused — the whole file, nothing written, every problem listed with its cell
+
+| Refused | Example |
+|---|---|
+| a tier that does not exist, or not spelled exactly as stored | `Tier 05`, `Alternate Tier a` |
+| a territory Apple does not sell in; the same territory twice | `ZZZ` |
+| a header currency that is not the one Apple bills | `Japan (JPN_USD)` — Apple bills Japan in JPY |
+| a Currency cell that differs from its header | `USD` under `Vietnam (VNM_VND)` — the currency comes from the header |
+| a formula; a negative price; more than 4 decimals | `=1+1`, `-1`, `1.23456` |
+| text that is not plainly a number | `49.000`, `1,99` (`2.49` typed as text is fine) |
+| a file with no price at all | — use **Remove** in Settings to remove a template |
+| a file of ANOTHER template | another account's Default, another app — 409, naming both |
+| the `Export XLSX` file, an old export, a format-A template file | upload a template file in Settings instead |
+
+### Preview, then write
+
+After you choose the file you see what the import will do — nothing is
+written yet: new overrides, price changes, overrides removed (back to Apple's
+price), unchanged cells, overrides after vs now; and warnings:
+
+- changes in the **USA column** — bulk import reads its tiers and USD base
+  prices from it; a missing USA column means bulk import finds no tier;
+- prices changed more than **×10** (a typo such as `49,000` read as 49);
+- new overrides outside their neighbouring tiers;
+- how many cells lose their proceeds.
+
+No Apple price is shown for a removed override — only "back to Apple's price".
+**Write N changes** writes the file; a file with no changes can still be
+written (the button then says **Write anyway**). With more than 200 changes
+the table shows 200 rows — the flagged ones (USA, ×10, tier ladder) and the
+removed overrides first; the counts always cover every row.
+
+### If the write fails part-way
+
+*"The template may be partially written — import the same file again."*
+Importing the same file again makes the template exactly the file. The matrix
+reloads at once so it shows what is really there. If it now says *"No …
+template uploaded yet"* (the write broke in its first batch — always the case
+for a Per-App template, which fits in one batch), **`Import edited file` is on
+that empty page too**: import the file there. (The Settings upload refuses a
+file for editing — wrong door.) The same button restores a template that was
+removed in Settings, from a file exported for editing before.
+
+If the write got no clear answer (the connection dropped, a 502 / 504 page):
+*"…the template may or may not have been written…"* — the same move: import
+the same file again.
+
+### If "Export for editing" refuses
+
+| Message says | Do |
+|---|---|
+| *"Cannot export for editing: XKS (EUR, USD — Apple bills EUR) hold more than one currency…"* and/or *"VNM (USD, Apple bills VND)"* | the template holds a territory in two currencies, or in a currency Apple does not bill there. Both kinds are listed in ONE message. Fix the template file (one currency per territory, Apple's) and upload it in Settings |
+| *"This page shows the Default template of account A, but the account selected in the top bar is now B…"* | the account was switched in another tab. **Reload the page**, then export (the file would otherwise be B's under A's heading) |
+
+⚠ The Settings upload (format A) does **not** check a header's currency
+against Apple's. A template uploaded there with, say, `Vietnam (VNM_USD)` is
+accepted, and then refused by "Export for editing" with the message above.
 
 ## Replace vs Remove
 

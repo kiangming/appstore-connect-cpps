@@ -1062,7 +1062,7 @@
             <span class="nav-item-label">API Key Pool</span>
             <span class="nav-badge">Admin</span>
           </a>
-          <a class="nav-item" data-page="apple-pricing-matrix" data-keywords="apple pricing matrix bảng giá bang gia tier cross-cutting export xlsx excel xuất file xuat file csv highlight differences amber cam ô trống o trong dấu chấm dau cham freeze cố định cot tier">
+          <a class="nav-item" data-page="apple-pricing-matrix" data-keywords="apple pricing matrix bảng giá bang gia tier cross-cutting export xlsx excel xuất file xuat file csv highlight differences amber cam ô trống o trong dấu chấm dau cham freeze cố định cot tier export for editing import edited file nạp lại nap lai sửa bằng excel sua bang excel round-trip _import_info">
             <span class="nav-item-label">Pricing matrix</span>
             <span class="nav-badge">Chi tiết</span>
           </a>
@@ -2038,9 +2038,9 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <div class="callout-title">⚠️ Công tắc Highlight ảnh hưởng tới FILE, không chỉ tới màn</div>
           <p>Ở màn Per-App, <strong>tắt</strong> công tắc <strong>Highlight differences from Default ★</strong> rồi bấm Export thì file <strong>không có ô hổ phách nào và không có note nào</strong> — vì file phải nói đúng thứ màn đang nói. Muốn file mang dấu so sánh thì <strong>bật công tắc trước khi bấm</strong>.</p>
         </div>
-        <div class="callout callout-warning">
-          <div class="callout-title">⚠️ File xuất ra CHƯA nạp ngược lại được</div>
-          <p>File <code class="inline">.xlsx</code> này là <strong>bản đọc</strong>, không phải file để upload lại — bộ nạp cần sheet <code class="inline">price_tiers</code> với bố cục khác hẳn. Muốn sửa giá thì sửa trên file template gốc rồi upload đè.</p>
+        <div class="callout callout-info">
+          <div class="callout-title">ℹ️ Hai nút export — chỉ file "for editing" nạp ngược lại được</div>
+          <p><strong>Export XLSX</strong> là <strong>bản đọc</strong> của màn (theo bộ lọc) — không nạp lại được. Muốn sửa giá bằng Excel: <strong>Export for editing</strong> → sửa → <strong>Import edited file</strong> (xem bước 5–6 bên dưới).</p>
         </div>
 
         <h2 class="section-title">Cấu trúc giao diện</h2>
@@ -2051,7 +2051,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <thead><tr><th>Tab</th><th>Phạm vi</th><th>Override</th></tr></thead>
           <tbody>
             <tr><td><strong>Default matrix</strong></td><td><strong>Của ASC account đang chọn</strong> — áp dụng cho mọi app của account đó, nếu app không có override.</td><td>Không</td></tr>
-            <tr><td><strong>Per-App matrix</strong></td><td>Override cho 1 app cụ thể (overlay lên Default).</td><td>Có</td></tr>
+            <tr><td><strong>Per-App matrix</strong></td><td>Override cho 1 app cụ thể. Ô không có override trong Per-App ⇒ theo <strong>giá Apple</strong> (KHÔNG lấy giá Default theo từng ô).</td><td>Có</td></tr>
           </tbody>
         </table>
 
@@ -2098,6 +2098,28 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
                 <li><strong>Bộ lọc ảnh hưởng file</strong>: chỉ territory đang hiện sau bộ lọc mới vào file. Lọc còn 0 territory thì nút mờ đi.</li>
               </ul>
               <p>Tên file: <code class="inline">apple-pricing-template-default-&lt;YYYYMMDD-HHmm&gt;.xlsx</code> · <code class="inline">apple-pricing-template-per-app-&lt;bundle-id&gt;-….xlsx</code>.</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Sửa template bằng Excel: Export for editing</div>
+            <div class="step-body">
+              <p>Click <strong>Export for editing</strong>. File này khác file Export XLSX ở 3 điểm:</p>
+              <ul>
+                <li><strong>LUÔN đủ mọi territory</strong> của template — bộ lọc trên màn bị bỏ qua (file thiếu nước thì khi nạp lại sẽ <strong>xoá</strong> override của các nước bị thiếu).</li>
+                <li>Header ghi cả mã + currency: <code class="inline">Vietnam (VNM_VND)</code> — currency là currency Apple thu ở nước đó.</li>
+                <li>Có một sheet ẩn <code class="inline">_import_info</code> ghi file thuộc template nào (Default của account nào / Per-App của app nào). Đừng sửa, đừng xoá.</li>
+              </ul>
+              <p>Sửa trong Excel: đổi giá · gõ giá vào ô <code class="inline">·</code> (thành override mới, currency lấy theo header) · xoá trống ô (bỏ override). Thêm một nước = thêm <strong>HAI cột</strong> như mọi nước khác: header <code class="inline">Tên (MÃ_CUR)</code> ở cột trái (cột phải để trống), dòng 2 ghi <code class="inline">Price</code> / <code class="inline">Currency</code> — chép một cặp cột có sẵn, đừng chèn MỘT cột (mọi cặp phía sau lệch đi, cả file bị từ chối). Lưu bằng Excel (Save, giữ .xlsx).</p>
+            </div>
+          </li>
+          <li class="step">
+            <div class="step-title">Import edited file — xem trước rồi mới ghi</div>
+            <div class="step-body">
+              <p>Click <strong>Import edited file</strong> (màn Default: chỉ admin) → chọn file. Luật: <strong>file là sự thật duy nhất</strong> — nạp xong template = đúng file; ô có giá = override đúng giá đó; ô trống / <code class="inline">·</code> = không override ⇒ theo giá Apple (Per-App: giá Apple, <strong>không phải</strong> giá Default). File không sửa gì nạp lại ⇒ tier, nước, currency, giá của template không đổi gì; riêng <strong>proceeds thành trống</strong> (file không có proceeds — màn xem trước báo trước).</p>
+              <p>Màn xem trước liệt kê: override mới · đổi giá · bỏ override (quay về theo giá Apple) · ô giữ nguyên · số override sau khi ghi; và cảnh báo: thay đổi ở cột USA (bulk import đọc tier + giá USD từ cột này), thiếu cột USA, giá đổi hơn ×10 (lỗi gõ kiểu 49,000 → 49), override mới lệch thang tier, số ô mất proceeds (file không có proceeds). Chưa ghi gì cho tới khi bấm <strong>Write N changes</strong> (hoặc <strong>Write anyway</strong> khi file không đổi gì — vẫn ghi được). Nhiều hơn 200 thay đổi thì bảng chỉ hiện 200 hàng: hàng có cờ (USA / ×10 / thang tier) và hàng bỏ override được xếp lên trước; số đếm luôn đủ.</p>
+              <p><strong>Bị từ chối cả file</strong> (không ghi gì, liệt kê đủ từng ô lỗi): tier không tồn tại / viết sai (<code class="inline">Tier 05</code>) · mã nước Apple không bán · currency trên header khác currency Apple thu (<code class="inline">Japan (JPN_USD)</code>) · ô Currency khác header · công thức · giá âm · quá 4 chữ số lẻ · chữ không rõ là số (<code class="inline">49.000</code>, <code class="inline">1,99</code>) · file không có giá nào · file của template KHÁC (account khác, app khác) · file Export XLSX / file template gốc (upload ở Settings).</p>
+              <p>Ghi lỗi giữa chừng ⇒ <em>"The template may be partially written — import the same file again"</em>: nạp lại đúng file đó là template về đúng file. Ma trận được tải lại ngay để hiện đúng thứ đang có; nếu màn giờ báo <em>"No … template uploaded yet"</em> (ghi đứt ngay đợt đầu) thì nút <strong>Import edited file</strong> vẫn có ngay trên màn trống đó — nạp lại file ở đó (nút upload ở Settings không nhận file "for editing"). Lỗi không có câu trả lời rõ (mạng đứt, 502/504) ⇒ app nói <em>"the template may or may not have been written"</em> — cũng nạp lại đúng file đó.</p>
+              <p><strong>Export for editing bị từ chối</strong> (không ra file): template có nước giữ HAI currency, hoặc giữ currency Apple không thu ở nước đó (một lần báo đủ cả hai loại, kèm currency Apple thu) ⇒ sửa template rồi upload lại ở Settings · màn Default đang hiện account A nhưng thanh trên đã đổi sang account B ở tab khác ⇒ tải lại trang rồi export lại.</p>
             </div>
           </li>
         </ol>
@@ -4140,8 +4162,8 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <tbody>
             <tr><td>Phạm vi</td><td><strong>1 ASC account</strong> — mọi app của account đó</td><td>1 app cụ thể</td></tr>
             <tr><td>Số lượng</td><td>Tối đa 1 / account</td><td>Tối đa 1 / app</td></tr>
-            <tr><td>Override</td><td>—</td><td>Override Default của account đó cho app này</td></tr>
-            <tr><td>Nếu không có</td><td>IAP của account đó không chọn được nguồn Default — rơi về giá auto-equalize của Apple</td><td>Rơi về Default của account</td></tr>
+            <tr><td>Override</td><td>—</td><td>Nguồn giá riêng của app, dùng THAY Default (không trộn từng ô: ô trống của Per-App theo giá Apple, không lấy giá Default)</td></tr>
+            <tr><td>Nếu không có</td><td>IAP của account đó không chọn được nguồn Default — rơi về giá auto-equalize của Apple</td><td>IAP mới được gợi ý nguồn Default; IAP đã lưu nguồn Per-App thì theo giá Apple</td></tr>
             <tr><td>Use case</td><td>Giá chuẩn cho toàn bộ app của một account</td><td>Game đặc biệt (vd: SDK, premium app) — giá khác chuẩn</td></tr>
           </tbody>
         </table>
@@ -4243,7 +4265,7 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
           <li class="step">
             <div class="step-title">Setup Per-App template (nếu cần override)</div>
             <div class="step-body">
-              <p>Tab Per-App → chọn app → upload Excel. Format giống Default nhưng chỉ chứa các tier cần override (không cần đầy đủ — phần thiếu sẽ fallback Default).</p>
+              <p>Tab Per-App → chọn app → upload Excel. Format giống Default nhưng chỉ chứa các ô cần override (không cần đầy đủ). ⚠ Ô nào KHÔNG có trong Per-App thì theo <strong>giá Apple</strong>, KHÔNG lấy giá Default: khi IAP dùng nguồn Per-App, tool đọc đúng MỘT template là Per-App đó.</p>
             </div>
           </li>
           <li class="step">
@@ -4340,8 +4362,8 @@ com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample pro
 
         <h2 class="section-title">Tips và pitfalls</h2>
         <div class="callout callout-tip">
-          <div class="callout-title">💡 Tip — Per-App overlay logic</div>
-          <p>Per-App template chỉ cần chứa tier <em>khác Default</em>. Tool tự fallback Default cho các tier không có trong Per-App — không cần copy toàn bộ Default vào Per-App.</p>
+          <div class="callout-title">💡 Tip — Per-App KHÔNG chồng lên Default theo từng ô</div>
+          <p>Khi IAP dùng nguồn Per-App, tool đọc đúng MỘT template là Per-App đó: ô nào Per-App không có override thì theo <strong>giá Apple</strong>, không lấy giá Default. Muốn một nước giữ giá giống Default thì Per-App phải có ô đó. (Nguồn giá chọn cho từng IAP — Per-App, Default hay Apple; mặc định gợi ý nguồn hẹp nhất. Mỗi IAP lấy giá từ đúng MỘT nguồn đó.)</p>
         </div>
         <div class="callout callout-warning">
           <div class="callout-title">⚠️ Currency mismatch warning</div>

@@ -36,7 +36,8 @@ import {
   IapUnauthorizedError,
 } from "@/lib/iap-management/auth";
 import { getActiveAccount } from "@/lib/get-active-account";
-import { iapDb } from "@/lib/iap-management/db";
+import { getAppIdentity } from "@/lib/iap-management/queries/iaps";
+import { appleCurrencyFor } from "@/lib/iap-management/apple/apple-territories.snapshot";
 import {
   fetchDefaultMatrix,
   fetchPerAppMatrix,
@@ -61,6 +62,7 @@ interface MatrixExportRequestBody {
   territories?: unknown;
   showDiff?: unknown;
   mode?: unknown;
+  accountId?: unknown;
 }
 
 /** Payload đã qua validate — mọi trường ở đây đã có kiểu thật. */
@@ -72,6 +74,9 @@ interface ValidBody {
   requested: Set<string>;
   showDiff: boolean;
   mode: "view" | "edit";
+  /** Edit + Default only: the account the PAGE shows — checked against the
+   *  session's account, never used instead of it. */
+  pageAccountId: string | null;
 }
 
 function badRequest(message: string) {
@@ -85,7 +90,7 @@ function badRequest(message: string) {
  * một file mà người dùng vừa tắt highlight.
  */
 function validate(body: MatrixExportRequestBody): ValidBody | NextResponse {
-  const { scope, appId, territories, showDiff, mode } = body;
+  const { scope, appId, territories, showDiff, mode, accountId } = body;
 
   if (scope !== "default" && scope !== "per-app") {
     return badRequest('Field "scope" must be "default" or "per-app".');
@@ -101,12 +106,21 @@ function validate(body: MatrixExportRequestBody): ValidBody | NextResponse {
     if (scope === "per-app" && (typeof appId !== "string" || appId.trim() === "")) {
       return badRequest('Field "appId" is required when scope is "per-app".');
     }
+    // ⚠ A Default file for editing names its account inside (Q-E), and the
+    // Manager imports it back on the page of THAT account. The account read
+    // below is the session's — shared by every tab — so the page must say
+    // which account it shows, or a switch in another tab exports the other
+    // account's Default under this page's heading.
+    if (scope === "default" && (typeof accountId !== "string" || accountId.trim() === "")) {
+      return badRequest('Field "accountId" (the account this page shows) is required when exporting a Default for editing.');
+    }
     return {
       scope,
       appId: scope === "per-app" ? (appId as string).trim() : null,
       requested: new Set(),
       showDiff: false,
       mode: "edit",
+      pageAccountId: scope === "default" ? (accountId as string).trim() : null,
     };
   }
   if (typeof showDiff !== "boolean") {
@@ -145,29 +159,8 @@ function validate(body: MatrixExportRequestBody): ValidBody | NextResponse {
     requested: new Set(territories as string[]),
     showDiff,
     mode: "view",
+    pageAccountId: null,
   };
-}
-
-async function loadBundleId(appId: string): Promise<string | null> {
-  const { data, error } = await iapDb()
-    .from("apps")
-    .select("bundle_id")
-    .eq("id", appId)
-    .maybeSingle();
-  if (error) throw new Error(`App lookup failed: ${error.message}`);
-  return (data as { bundle_id: string } | null)?.bundle_id ?? null;
-}
-
-async function loadAppIdentity(
-  appId: string,
-): Promise<{ bundle_id: string; name: string } | null> {
-  const { data, error } = await iapDb()
-    .from("apps")
-    .select("bundle_id, name")
-    .eq("id", appId)
-    .maybeSingle();
-  if (error) throw new Error(`App lookup failed: ${error.message}`);
-  return (data as { bundle_id: string; name: string } | null) ?? null;
 }
 
 export async function POST(req: Request) {
@@ -188,7 +181,7 @@ export async function POST(req: Request) {
   }
   const checked = validate(raw);
   if (checked instanceof NextResponse) return checked;
-  const { scope, appId, requested, showDiff, mode } = checked;
+  const { scope, appId, requested, showDiff, mode, pageAccountId } = checked;
 
   try {
     // ⚠ ACCOUNT ĐỌC Ở SERVER, KHÔNG NHẬN TỪ CLIENT. Bài học C-D: một đường
@@ -196,6 +189,22 @@ export async function POST(req: Request) {
     // 1140 ô. Ở đây nó là câu trả lời cho một câu hỏi khác nhưng cùng một kỷ
     // luật — danh tính đến từ session, dữ liệu hiển thị đến từ client.
     const creds = await getActiveAccount();
+    if (pageAccountId !== null && pageAccountId !== creds.id) {
+      await log(
+        LOG_FEATURE,
+        `edit export refused — page account ${pageAccountId} ≠ active account ${creds.id}`,
+        "WARN",
+      );
+      return NextResponse.json(
+        {
+          error:
+            `This page shows the Default template of account ${pageAccountId}, but the account selected ` +
+            `in the top bar is now ${creds.name} (${creds.id}) — reload the page, then export again. No file was made.`,
+          code: "ACCOUNT_CHANGED",
+        },
+        { status: 409 },
+      );
+    }
 
     const result =
       scope === "per-app"
@@ -288,7 +297,7 @@ export async function POST(req: Request) {
     // bundle_id đọc ở SERVER, không nhận từ client — nó đi vào tên file, và
     // tên file đi vào Content-Disposition.
     const bundleId =
-      scope === "per-app" ? ((await loadBundleId(appId as string)) ?? undefined) : undefined;
+      scope === "per-app" ? ((await getAppIdentity(appId as string))?.bundle_id ?? undefined) : undefined;
     const filename = templateMatrixXlsxFilename({ scope, bundleId });
 
     return new NextResponse(new Uint8Array(buffer), {
@@ -329,37 +338,53 @@ async function editExport(args: {
   const { matrix, scope, appId, creds, exportedBy } = args;
   const markets = matrix.markets;
 
-  // Header nói MỘT currency cho cả cột (Q-C); một nước mà template giữ hai
-  // currency thì không ghi được thành một file tự nhất quán. Từ chối, nêu
-  // tên nước — không chọn hộ một currency.
-  const mixed = markets
-    .map((m) => ({
-      code: m.code,
-      currencies: [
-        ...new Set(
-          matrix.tiers
-            .map((t) => matrix.cells[`${t.tier_id}|${m.code}`]?.currency)
-            .filter((c): c is string => c !== undefined),
-        ),
-      ],
-    }))
-    .filter((m) => m.currencies.length > 1);
-  if (mixed.length > 0) {
-    const detail = mixed.map((m) => `${m.code} (${m.currencies.join(", ")})`).join("; ");
-    await log(LOG_FEATURE, `edit export refused — mixed currencies: ${detail}`, "WARN");
+  // Header nói MỘT currency cho cả cột (Q-C), và đó phải là currency Apple
+  // tính cho nước đó (KB §4.19 — import đọc cùng snapshot và sẽ từ chối
+  // header khác). Hai lỗi được gom vào MỘT 409 — sửa template là một lượt
+  // upload ở Settings, không phải hai.
+  //   • nhiều currency trong một nước: không ghi được thành một file tự nhất
+  //     quán — nêu tên nước, không chọn hộ;
+  //   • một currency nhưng không phải của Apple: chỉ có thể là sai. Chỉ xét
+  //     nước KHÔNG lẫn — `m.currency` là currency gặp đầu tiên, chỉ có nghĩa
+  //     khi cột có đúng một currency.
+  // Prod không có nước nào như vậy ngày 2026-10-20 (V2 = 0 dòng).
+  const currenciesOf = (code: string) => [
+    ...new Set(
+      matrix.tiers
+        .map((t) => matrix.cells[`${t.tier_id}|${code}`]?.currency)
+        .filter((c): c is string => c !== undefined),
+    ),
+  ];
+  const appleSays = (code: string) => appleCurrencyFor(code) ?? "— not a territory Apple sells in";
+  const mixed = markets.map((m) => ({ code: m.code, currencies: currenciesOf(m.code) })).filter((m) => m.currencies.length > 1);
+  const mixedCodes = new Set(mixed.map((m) => m.code));
+  const notApple = markets.filter((m) => !mixedCodes.has(m.code) && appleCurrencyFor(m.code) !== m.currency);
+  if (mixed.length > 0 || notApple.length > 0) {
+    const parts = [
+      ...(mixed.length > 0
+        ? [
+            mixed.map((m) => `${m.code} (${m.currencies.join(", ")} — Apple bills ${appleSays(m.code)})`).join("; ") +
+              " hold more than one currency in this template",
+          ]
+        : []),
+      ...(notApple.length > 0
+        ? [notApple.map((m) => `${m.code} (${m.currency}, Apple bills ${appleSays(m.code)})`).join("; ")]
+        : []),
+    ];
+    await log(LOG_FEATURE, `edit export refused — currencies: ${parts.join(" | ")}`, "WARN");
     return NextResponse.json(
       {
         error:
-          `Cannot export for editing: ${detail} hold more than one currency in this template. ` +
-          "An editable file states one currency per territory in its header — fix these " +
-          "territories in the template first.",
+          `Cannot export for editing: ${parts.join(". ")}. An editable file states ONE currency per territory, ` +
+          "the one Apple bills — fix these territories in the template first (upload a corrected template in Settings).",
         mixedCurrencyTerritories: mixed.map((m) => m.code),
+        notAppleCurrencyTerritories: notApple.map((m) => m.code),
       },
       { status: 409 },
     );
   }
 
-  const app = scope === "per-app" ? await loadAppIdentity(appId as string) : null;
+  const app = scope === "per-app" ? await getAppIdentity(appId as string) : null;
   if (scope === "per-app" && !app) {
     return NextResponse.json({ error: "App not found." }, { status: 404 });
   }

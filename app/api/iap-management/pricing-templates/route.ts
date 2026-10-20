@@ -22,6 +22,11 @@ import { listTierNames } from "@/lib/iap-management/queries/price-tiers";
 import { ensureAppRegistered, getAppIdentity } from "@/lib/iap-management/queries/iaps";
 import { diffTemplate } from "@/lib/iap-management/template-reimport/diff";
 import { scopeMismatch, type ImportTarget } from "@/lib/iap-management/template-reimport/scope-check";
+import type {
+  MatrixImportCommitResponse,
+  MatrixImportErrorResponse,
+  MatrixImportPreviewResponse,
+} from "@/lib/iap-management/template-reimport/types";
 import { getActiveAccount } from "@/lib/get-active-account";
 import { findAllAccountsPublic } from "@/lib/asc-account-repository";
 import { getApp } from "@/lib/asc-client";
@@ -360,10 +365,8 @@ async function matrixEditImport(args: {
         `matrix import refused (${err.code}) by ${actor}: ${err.problems.length} problem(s) — ${err.message}`,
         "WARN",
       );
-      return NextResponse.json(
-        { error: err.message, code: err.code, problems: err.problems },
-        { status: 422 },
-      );
+      const body: MatrixImportErrorResponse = { error: err.message, code: err.code, problems: err.problems };
+      return NextResponse.json(body, { status: 422 });
     }
     throw err;
   }
@@ -371,7 +374,8 @@ async function matrixEditImport(args: {
   const mismatch = scopeMismatch(edit.scope, target);
   if (mismatch) {
     await log("iap-pricing-templates", `matrix import refused (SCOPE_MISMATCH) by ${actor}: ${mismatch}`, "WARN");
-    return NextResponse.json({ error: mismatch, code: "SCOPE_MISMATCH" }, { status: 409 });
+    const body: MatrixImportErrorResponse = { error: mismatch, code: "SCOPE_MISMATCH" };
+    return NextResponse.json(body, { status: 409 });
   }
 
   // DISPLAY ONLY — the write below is `edit.parsed`, never anything derived
@@ -389,15 +393,13 @@ async function matrixEditImport(args: {
   });
 
   if (intent === "preview") {
-    return NextResponse.json(
-      {
-        kind: "preview",
-        target,
-        file: { name: file.name, exportedAt: edit.exportedAt, exportedBy: edit.exportedBy },
-        ...diff,
-      },
-      { status: 200 },
-    );
+    const body: MatrixImportPreviewResponse = {
+      kind: "preview",
+      target,
+      file: { name: file.name, exportedAt: edit.exportedAt, exportedBy: edit.exportedBy },
+      ...diff,
+    };
+    return NextResponse.json(body, { status: 200 });
   }
 
   try {
@@ -409,27 +411,23 @@ async function matrixEditImport(args: {
       `matrix import ok by ${actor}: scope=${scope.kind} ${scope.kind === "APP" ? scope.app_id : scope.account_id} ` +
         `entries=${result.inserted_entry_count} added=${diff.totals.added} changed=${diff.totals.changed} removed=${diff.totals.removed}`,
     );
-    return NextResponse.json(
-      {
-        kind: "commit",
-        template_id: result.template_id,
-        inserted_entry_count: result.inserted_entry_count,
-        audit_batch_id: result.audit_batch_id,
-        // Counted against the template as it was at COMMIT time (KB P5) —
-        // not taken from the preview, which may be stale.
-        totals: diff.totals,
-      },
-      { status: 200 },
-    );
+    const body: MatrixImportCommitResponse = {
+      kind: "commit",
+      template_id: result.template_id,
+      inserted_entry_count: result.inserted_entry_count,
+      audit_batch_id: result.audit_batch_id,
+      // Counted against the template as it was at COMMIT time (KB P5) —
+      // not taken from the preview, which may be stale.
+      totals: diff.totals,
+    };
+    return NextResponse.json(body, { status: 200 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Import failed";
     await log("iap-pricing-templates", `matrix import error by ${actor}: ${message}`, "ERROR");
-    return NextResponse.json(
-      {
-        error: `The template may be partially written — import the same file again. (${message})`,
-        code: "WRITE_FAILED",
-      },
-      { status: 500 },
-    );
+    const body: MatrixImportErrorResponse = {
+      error: `The template may be partially written — import the same file again. (${message})`,
+      code: "WRITE_FAILED",
+    };
+    return NextResponse.json(body, { status: 500 });
   }
 }

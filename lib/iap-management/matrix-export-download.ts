@@ -57,24 +57,63 @@ function fallbackMessage(status: number): string {
 export async function downloadMatrixExport(
   req: MatrixExportRequest,
 ): Promise<string | null> {
+  // ⚠ CHỈ bốn trường này. KHÔNG gửi accountId — danh tính do session quyết,
+  // route tự đọc (kỷ luật C-D). KHÔNG gửi defaultTemplateExists — cái file
+  // phải bám là CÔNG TẮC, không phải sự tồn tại của template Default (F1).
+  const res = await postAndDownload(JSON.stringify(req), `apple-pricing-template-${req.scope}.xlsx`);
+  return res.ok ? null : res.error;
+}
+
+export type MatrixEditExportResult =
+  | { ok: true; tierCount: number | null; territoryCount: number | null }
+  | { ok: false; error: string };
+
+/**
+ * PA2.3 — "Export for editing" (Manager Q-B). ⚠ KHÔNG gửi `territories` hay
+ * `showDiff`: file để sửa luôn là CẢ template, đọc ở server — một danh sách
+ * nước từ màn (đã lọc, hoặc cũ) là đúng thứ làm import lại xoá override.
+ *
+ * Default: gửi `accountId` = account TRANG NÀY đang hiện. Route đọc account
+ * từ session (dùng chung mọi tab); đổi account ở tab khác rồi bấm nút ở tab
+ * này sẽ ra file của account KHÁC với tên trên màn — route so hai cái và từ
+ * chối (409) thay vì lặng lẽ xuất nhầm.
+ *
+ * Kết quả mang SỐ TIER / SỐ NƯỚC server thật sự ghi vào file (header
+ * X-Export-*), để toast nói đúng file chứ không phải màn lúc tải trang.
+ */
+export async function downloadMatrixExportForEditing(
+  req: { scope: "default"; accountId: string } | { scope: "per-app"; appId: string },
+): Promise<MatrixEditExportResult> {
+  const body =
+    req.scope === "default"
+      ? { scope: req.scope, accountId: req.accountId, mode: "edit" }
+      : { scope: req.scope, appId: req.appId, mode: "edit" };
+  return postAndDownload(JSON.stringify(body), `apple-pricing-template-${req.scope}-for-editing.xlsx`);
+}
+
+/** The toast after "Export for editing": what the SERVER put in the file. */
+export function editExportSuccessMessage(r: { tierCount: number | null; territoryCount: number | null }): string {
+  return r.tierCount !== null && r.territoryCount !== null
+    ? `Exported for editing: ${r.tierCount} tiers × ${r.territoryCount} territories — the whole template.`
+    : "Exported for editing — the whole template.";
+}
+
+async function postAndDownload(body: string, fallbackFilename: string): Promise<MatrixEditExportResult> {
   const res = await fetch(MATRIX_EXPORT_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    // ⚠ CHỈ bốn trường này. KHÔNG gửi accountId — danh tính do session quyết,
-    // route tự đọc (kỷ luật C-D). KHÔNG gửi defaultTemplateExists — cái file
-    // phải bám là CÔNG TẮC, không phải sự tồn tại của template Default (F1).
-    body: JSON.stringify(req),
+    body,
   });
 
   if (!res.ok) {
     const data = (await res.json().catch(() => ({}))) as { error?: string };
-    return data.error ?? fallbackMessage(res.status);
+    return { ok: false, error: data.error ?? fallbackMessage(res.status) };
   }
 
   const blob = await res.blob();
   const disposition = res.headers.get("Content-Disposition") ?? "";
   const match = /filename="?([^"]+)"?/.exec(disposition);
-  const filename = match?.[1] ?? `apple-pricing-template-${req.scope}.xlsx`;
+  const filename = match?.[1] ?? fallbackFilename;
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -83,5 +122,9 @@ export async function downloadMatrixExport(
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  return null;
+  const count = (name: string) => {
+    const v = res.headers.get(name);
+    return v !== null && /^\d+$/.test(v) ? Number(v) : null;
+  };
+  return { ok: true, tierCount: count("X-Export-Tier-Count"), territoryCount: count("X-Export-Territory-Count") };
 }

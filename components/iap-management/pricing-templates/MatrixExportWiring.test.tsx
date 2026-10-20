@@ -61,6 +61,8 @@ const MATRIX = composeMatrix({
   defaultEntries: [row("TIER_2", "VNM", "VND", 45000)],
 });
 
+const ACCOUNT = { id: "acct-1", name: "Account One" };
+
 let fetchSpy: ReturnType<typeof vi.fn>;
 
 /** Response 200 giả — body không quan trọng, thứ đang đo là REQUEST. */
@@ -91,7 +93,8 @@ function sentBody(): Record<string, unknown> {
   return JSON.parse(String(init.body)) as Record<string, unknown>;
 }
 
-const clickExport = () => fireEvent.click(screen.getByRole("button", { name: /Export/i }));
+// ⚠ "Export XLSX" exactly: PA2.3 added "Export for editing" beside it.
+const clickExport = () => fireEvent.click(screen.getByRole("button", { name: /Export XLSX/i }));
 
 beforeEach(() => {
   fetchSpy = vi.fn().mockResolvedValue(okResponse());
@@ -113,13 +116,13 @@ afterEach(() => {
 
 describe("nút Export — nhãn và trạng thái", () => {
   it("nhãn là 'Export XLSX', không còn 'Export CSV'", () => {
-    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} />);
+    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} account={ACCOUNT} canImport />);
     expect(screen.getByRole("button", { name: /Export XLSX/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Export CSV/i })).toBeNull();
   });
 
   it("bộ lọc ra 0 nước ⇒ nút bị vô hiệu, không gửi request nào", async () => {
-    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} />);
+    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} account={ACCOUNT} canImport />);
     fireEvent.change(screen.getByPlaceholderText(/Search territory/i), {
       target: { value: "khong-co-nuoc-nao-ten-the-nay" },
     });
@@ -132,7 +135,7 @@ describe("nút Export — nhãn và trạng thái", () => {
 
 describe("⚠ C4.2 — Default gửi đúng payload", () => {
   it("scope=default, showDiff=false, không kèm appId/accountId", async () => {
-    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} />);
+    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} account={ACCOUNT} canImport />);
     clickExport();
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
     const body = sentBody();
@@ -144,14 +147,14 @@ describe("⚠ C4.2 — Default gửi đúng payload", () => {
   });
 
   it("territories = đúng tập đang hiện, theo thứ tự matrix", async () => {
-    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} />);
+    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} account={ACCOUNT} canImport />);
     clickExport();
     await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
     expect(sentBody().territories).toEqual(["VNM", "USA", "THA"]);
   });
 
   it("lọc bớt ⇒ territories co lại theo màn", async () => {
-    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} />);
+    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} account={ACCOUNT} canImport />);
     fireEvent.change(screen.getByPlaceholderText(/Search territory/i), {
       target: { value: "viet" },
     });
@@ -234,7 +237,7 @@ describe("⚠ C4.4 — lỗi route đọc được, không nuốt thành toast c
         "The pricing template changed since this page was loaded — it no longer covers: PRT, ITA. Reload and try again.",
       ),
     );
-    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} />);
+    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} account={ACCOUNT} canImport />);
     clickExport();
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     const msg = String((toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0]);
@@ -246,7 +249,7 @@ describe("⚠ C4.4 — lỗi route đọc được, không nuốt thành toast c
   it("400 hiện lý do của route", async () => {
     const { toast } = await import("sonner");
     fetchSpy.mockResolvedValue(errorResponse(400, 'Field "showDiff" must be a boolean.'));
-    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} />);
+    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} account={ACCOUNT} canImport />);
     clickExport();
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(String((toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain(
@@ -259,7 +262,7 @@ describe("⚠ C4.4 — lỗi route đọc được, không nuốt thành toast c
     fetchSpy.mockResolvedValue(
       errorResponse(404, "No Default template for the active account."),
     );
-    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} />);
+    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} account={ACCOUNT} canImport />);
     clickExport();
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(String((toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0])).toMatch(
@@ -270,7 +273,7 @@ describe("⚠ C4.4 — lỗi route đọc được, không nuốt thành toast c
   it("thân lỗi rỗng ⇒ vẫn có câu riêng theo status, không phải một câu cho cả ba", async () => {
     const { toast } = await import("sonner");
     fetchSpy.mockResolvedValue(errorResponse(409));
-    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} />);
+    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} account={ACCOUNT} canImport />);
     clickExport();
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(String((toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0])).toMatch(
@@ -280,7 +283,7 @@ describe("⚠ C4.4 — lỗi route đọc được, không nuốt thành toast c
 
   it("thành công ⇒ toast.success, không phải toast.error", async () => {
     const { toast } = await import("sonner");
-    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} />);
+    render(<DefaultMatrixView matrix={MATRIX} uploadedAt={null} uploadedBy={null} account={ACCOUNT} canImport />);
     clickExport();
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(toast.error).not.toHaveBeenCalled();

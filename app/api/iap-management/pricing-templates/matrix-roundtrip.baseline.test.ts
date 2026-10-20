@@ -58,7 +58,11 @@ vi.mock("@/lib/asc-account-repository", () => ({
   findAllAccountsPublic: vi.fn(async () => [{ id: "acct-pa2", name: "PA2 Test Account" }]),
 }));
 vi.mock("@/lib/logger", () => ({ log: vi.fn() }));
-vi.mock("@/lib/iap-management/queries/iaps", () => ({ ensureAppRegistered: vi.fn() }));
+vi.mock("@/lib/iap-management/queries/iaps", async () => ({
+  // getAppIdentity runs for real (on PGlite): both routes look the app up through it.
+  ...(await vi.importActual<typeof import("@/lib/iap-management/queries/iaps")>("@/lib/iap-management/queries/iaps")),
+  ensureAppRegistered: vi.fn(),
+}));
 vi.mock("@/lib/asc-client", () => ({ getApp: vi.fn() }));
 const dbHolder = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock("@/lib/iap-management/db", () => ({ iapDb: () => dbHolder.current }));

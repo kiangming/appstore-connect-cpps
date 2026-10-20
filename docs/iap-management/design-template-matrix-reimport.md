@@ -760,6 +760,26 @@ EXPLAIN SELECT tier_id, territory_code, currency_code, customer_price, proceeds
 
 Mỗi chunk: gauntlet 4/4 + mutation; commit, chưa push, chờ gate.
 
+**Tiến độ (2026-10-20):**
+- **PA2.0** `ca91fcf` — test ghim hiện trạng.
+- **PA2.1** `8f2d91e` — "Export for editing".
+- **PA2.2** `3a2ac53` — reader + route preview/commit; bài số một xanh trên Postgres thật.
+- **PA2.3** — Manager chốt thêm 2026-10-20:
+  - (1) currency trên header PHẢI bằng currency Apple thu ở nước đó. Prod SQL V2: 175 dòng snapshot / 14 template / 28 707 entry / **0 dòng lệch** ⇒ reader kiểm theo `appleCurrencyFor`, export từ chối template lưu currency khác;
+  - (2) reader vào `XLSX_ALLOWED` + `PARSERS` (làm ở PA2.2, Manager xác nhận ở gate PA2.2);
+  - (3) tra app theo UUID gộp về `getAppIdentity`.
+  - Cùng chunk: UI (hai nút + modal preview + tên account trên màn Default), docs, UAT Excel (`docs/iap-management/uat/pa2-excel/`).
+  - Review đối kháng 4 làn (UI / server / docs / tests) trước commit: 0 BLOCKER, 5 MAJOR, 23 MINOR. Đã sửa trong chunk:
+    - màn trống của cả hai trang matrix có `Import edited file` — không có nó, ghi đứt ở đợt đầu (mọi Per-App) làm lời khuyên "import the same file again" không làm theo được (cửa Settings trả 409);
+    - Export for editing của Default gửi account của TRANG, khác session ⇒ 409 (hai tab);
+    - hai lỗi currency của export gom MỘT 409, nêu currency Apple thu;
+    - step 2.7 của runbook snapshot so cả currency (`scripts/territory-snapshot-drift.mjs`);
+    - dialog: một file mỗi lần (nút khoá tới khi dialog đóng), byte đọc một lần, focus/Esc/Tab, lỗi ghi ⇒ toast + reload, không câu trả lời ⇒ "may or may not have been written", bảng 200 hàng ưu tiên hàng có cờ / bỏ override;
+    - toast export lấy số từ header server;
+    - test: bấm nút thật (P26), Per-App mở cho member (UI + route), cờ ×10 / thang tier (`diff.test.ts`), nội dung preview đủ hàng, toast từ commit, W9 commit thật, U0 ghim file gốc UAT = export hôm nay.
+  - ⏸ Chờ Manager: upload format A ở Settings không kiểm currency header với Apple (giữ "format A không đổi một dòng") — chấp nhận + doc (đã ghi trong guide), hay thêm cảnh báo không chặn?
+- **Còn:** gate PA2.3 + Manager chạy UAT Excel ⇒ test golden ⇒ push cả PA2.
+
 ---
 
 # LƯỢT 1 (2026-10-16) — census + thiết kế M3 (giữ làm bằng chứng; các mục bỏ có đánh dấu)

@@ -355,3 +355,35 @@ export async function loadRealTemplateFile(): Promise<RealTemplateFile> {
   const entries = flattenTemplateEntries(parsed);
   return { bytes, parsed, entries, territoryOrder: [...new Set(entries.map((e) => e.territory_code))] };
 }
+
+/**
+ * PA2.3 — the UAT data behind the Excel fixtures in
+ * docs/iap-management/uat/pa2-excel/ (guide: README.md there). ONE seeding,
+ * used by matrix-reimport.uat-expectations.test.ts — which PINS the committed
+ * base files to what "Export for editing" makes from it today, and
+ * regenerates them under UAT_REGEN_BASE_FILES=1 — AND by the golden test that
+ * reads the files back after the Manager edited them in Excel — so the
+ * expected table and the file can never be about two different templates.
+ *   Default of UAT_ACCOUNT = the real Manager template (16 625 prices).
+ *   Per-App of UAT_APP     = 5 tiers × 5 territories of it, 3 holes.
+ */
+export const UAT_ACCOUNT = { id: "uat-account", name: "UAT Test Account" } as const;
+export const UAT_APP = { id: "uat-app", bundle_id: "com.vng.uat.fixture", name: "UAT Fixture App" } as const;
+export const UAT_PER_APP_TIERS = ["TIER_1", "TIER_2", "TIER_3", "TIER_10", "ALT_A"] as const;
+export const UAT_PER_APP_TERRITORIES = ["USA", "VNM", "THA", "JPN", "DEU"] as const;
+export const UAT_PER_APP_HOLES = ["TIER_2|THA", "TIER_10|JPN", "ALT_A|DEU"] as const;
+
+export async function seedPa2UatFixtures(h: PgIapDb, file: RealTemplateFile): Promise<void> {
+  await h.insertTiers(file.parsed.tiers);
+  await h.insertTemplate(file.entries, { account: UAT_ACCOUNT.id });
+  await h.insertApp(UAT_APP);
+  const tiers = new Set<string>(UAT_PER_APP_TIERS);
+  const codes = new Set<string>(UAT_PER_APP_TERRITORIES);
+  const holes = new Set<string>(UAT_PER_APP_HOLES);
+  await h.insertTemplate(
+    file.entries.filter(
+      (e) => tiers.has(e.tier_id) && codes.has(e.territory_code) && !holes.has(`${e.tier_id}|${e.territory_code}`),
+    ),
+    { app: UAT_APP.id },
+  );
+}

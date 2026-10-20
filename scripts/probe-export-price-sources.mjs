@@ -43,6 +43,7 @@
  */
 import { readFileSync } from "node:fs";
 import { createHmac, createSign } from "node:crypto";
+import { territorySnapshotDrift } from "./territory-snapshot-drift.mjs";
 
 const APP_ID = "6738648909";
 const PRODUCT_ID = "com.vnggames.aoiaf.0.99";
@@ -235,31 +236,37 @@ const snapshotSrc = readFileSync(
   new URL("../lib/iap-management/apple/apple-territories.snapshot.ts", import.meta.url),
   "utf8",
 );
-// ⚠ MATCHES `code: "XXX"`, NOT ANY 3-LETTER STRING. G1b gave every entry a
-// currency, which is also three uppercase letters in quotes — a bare
-// /"[A-Z]{3}"/ would fold USD and EUR into the territory list and report
-// phantom drift on every run. The narrower pattern is the whole guard.
-const snapshot = [
-  ...new Set(
-    [...snapshotSrc.matchAll(/code: "([A-Z]{3})"/g)].map((m) => m[1]),
-  ),
-];
-const live = [...new Set(terrs.data.map((t) => t.id))];
-const added = live.filter((c) => !snapshot.includes(c)).sort();
-const removed = snapshot.filter((c) => !live.includes(c)).sort();
+// Codes AND currencies — see territory-snapshot-drift.mjs for why the
+// currency half became necessary in PA2.3. Same `terrs` response as 2.6b: no
+// extra Apple GET.
+const drift = territorySnapshotDrift(snapshotSrc, terrs.data);
 console.log("\n2.7 snapshot drift (apple-territories.snapshot.ts):");
-console.log("    snapshot count      :", snapshot.length);
-console.log("    live count          :", live.length);
-if (added.length === 0 && removed.length === 0) {
-  console.log("    → IN SYNC. No edit needed.");
+console.log("    snapshot count      :", drift.snapshotCount);
+console.log("    live count          :", drift.liveCount);
+if (drift.inSync) {
+  console.log("    → IN SYNC (codes and currencies). No edit needed.");
 } else {
-  console.log("    ⚠ DRIFTED — edit the snapshot, then re-run the pinned tests.");
-  console.log("    ADDED by Apple      :", added.join(" ") || "(none)");
-  console.log("    REMOVED by Apple    :", removed.join(" ") || "(none)");
+  console.log("    ⚠ DRIFTED — paste 2.6b over the snapshot, then re-run the pinned tests.");
+  console.log("    ADDED by Apple      :", drift.added.join(" ") || "(none)");
+  console.log("    REMOVED by Apple    :", drift.removed.join(" ") || "(none)");
+  console.log(
+    "    CURRENCY CHANGED    :",
+    drift.currencyChanged.map((c) => `${c.code} ${c.snapshot}→${c.live}`).join(" ") || "(none)",
+  );
+  if (drift.unreadCurrencies.length > 0) {
+    console.log(
+      "    ⚠ DETECTOR BROKEN: no currency read for " + drift.unreadCurrencies.join(" ") +
+        " — the snapshot's entry shape changed; fix territory-snapshot-drift.mjs before trusting it.",
+    );
+  }
   console.log(
     "    ⚠ An ADDED territory has no column on an 'all countries' export until",
   );
   console.log("      the snapshot is updated. A REMOVED one exports as an empty `—`.");
+  console.log(
+    "    ⚠ A CHANGED currency blocks 'Export for editing' and the import for that",
+  );
+  console.log("      territory (both insist on the snapshot's currency) until the snapshot is updated.");
 }
 
 console.log(`\nApple GETs used: ${calls}`);

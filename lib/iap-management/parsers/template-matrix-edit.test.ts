@@ -258,6 +258,13 @@ describe("PA2.2 reader — every doubt is a refusal, with its cell address (noth
     ]);
   });
 
+  it("R16 a header currency that is not the one Apple bills (KB §4.19; prod V2 = 0 rows, 2026-10-20) is refused, naming the right one", async () => {
+    const err = await problemsOf(await editFile(small(), (ws) => { ws.getCell("D1").value = "Vietnam (VNM_USD)"; }));
+    expect(err.problems).toEqual([
+      { cell: "D1", message: 'the header says VNM_USD, but Apple bills VNM in VND — write "(VNM_VND)"' },
+    ]);
+  });
+
   it("R13 a value outside the grid (a column with no territory header) is refused", async () => {
     const err = await problemsOf(await editFile(small(), (ws) => { ws.getCell("J4").value = 99; }));
     expect(err.problems).toEqual([{ cell: "J4", message: "has a value but its column has no territory header" }]);

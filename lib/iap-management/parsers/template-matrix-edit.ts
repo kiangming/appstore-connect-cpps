@@ -12,7 +12,9 @@
  *   unknown tier row; under rule 1 a skipped row is a DELETED row. So every
  *   doubt here is a refusal, listed with its cell address, and nothing is
  *   written: unknown or non-canonical tier names (Q-H), territory codes Apple
- *   does not sell in (Q-I), more than 4 decimals (Q-J), ambiguous text
+ *   does not sell in (Q-I), a header currency that is not the one Apple
+ *   bills that territory in (Manager 2026-10-20 — prod V2 = 0 rows), more
+ *   than 4 decimals (Q-J), ambiguous text
  *   (Q-K), a Currency cell that contradicts its header (Q-D), formulas, and a
  *   file with no price at all (Q-Q — an empty file must not empty a template).
  *
@@ -25,7 +27,7 @@
  */
 import * as XLSX from "xlsx";
 
-import { APPLE_TERRITORIES_ALPHA3 } from "../apple/apple-territories.snapshot";
+import { APPLE_TERRITORIES_ALPHA3, appleCurrencyFor } from "../apple/apple-territories.snapshot";
 import {
   EDIT_FORMAT,
   EDIT_FORMAT_VERSION,
@@ -288,6 +290,19 @@ export async function parseMatrixEditFile(
     const [, , code, currency] = m;
     if (!KNOWN_TERRITORIES.has(code)) {
       problems.push({ cell: addr(0, c), message: `"${code}" is not a territory Apple sells in` });
+      badHeaderPairs.add(k);
+      continue;
+    }
+    // ⚠ Apple bills each territory in ONE fixed currency (KB §4.19). A header
+    // with another currency is an entry that cannot be right — and it would
+    // surface only when the price reaches an IAP. Same snapshot the export
+    // and the territory list use (KB P1 — no second table).
+    const appleCurrency = appleCurrencyFor(code);
+    if (appleCurrency !== currency) {
+      problems.push({
+        cell: addr(0, c),
+        message: `the header says ${code}_${currency}, but Apple bills ${code} in ${appleCurrency} — write "(${code}_${appleCurrency})"`,
+      });
       badHeaderPairs.add(k);
       continue;
     }

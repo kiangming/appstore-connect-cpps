@@ -9,8 +9,10 @@ import { getActiveAccount } from "@/lib/get-active-account";
 import { iapDb } from "@/lib/iap-management/db";
 import { fetchPerAppMatrix } from "@/lib/iap-management/queries/template-matrix";
 import { templateExists } from "@/lib/iap-management/queries/templates";
+import { listTierNames } from "@/lib/iap-management/queries/price-tiers";
 import { MatrixBreadcrumb } from "@/components/iap-management/pricing-templates/MatrixBreadcrumb";
 import { PerAppMatrixView } from "@/components/iap-management/pricing-templates/PerAppMatrixView";
+import { EmptyMatrixImport } from "@/components/iap-management/pricing-templates/EmptyMatrixImport";
 
 interface PageProps {
   params: { appId: string };
@@ -50,6 +52,10 @@ export default async function PerAppMatrixPage({ params }: PageProps) {
   ]);
 
   if (!result) {
+    // PA2.3 — an edit file can still be imported here (open to members, like
+    // a Per-App upload): the only door for "import the same file again" after
+    // a write that broke part-way, or for restoring a deleted template.
+    const tierNames = [...(await listTierNames())].map(([tier_id, tier_name]) => ({ tier_id, tier_name }));
     return (
       <div className="p-8 max-w-3xl">
         <MatrixBreadcrumb
@@ -77,9 +83,12 @@ export default async function PerAppMatrixPage({ params }: PageProps) {
             No Per-App template uploaded yet
           </p>
           <p className="text-sm text-slate-500 mt-1 max-w-md mx-auto mb-5">
-            Per-App templates override the Default Template for this specific
-            app. When no Per-App template exists, the Default Template values
-            apply.
+            A Per-App template is this app&apos;s own price list — an empty
+            cell gets Apple&apos;s price, never the Default&apos;s. Without one,
+            new IAPs are offered the Default Template as their pricing source;
+            an IAP already saved with the Per-App source gets Apple&apos;s
+            prices. You can also import a file made with &ldquo;Export for
+            editing&rdquo;.
           </p>
           <div className="flex items-center justify-center gap-3">
             <Link
@@ -89,6 +98,12 @@ export default async function PerAppMatrixPage({ params }: PageProps) {
               <Upload className="h-4 w-4" />
               Upload Per-App Template
             </Link>
+            <EmptyMatrixImport
+              target={{ kind: "APP", appId: app.id }}
+              label={`Per-App template · ${app.name} (${app.bundle_id})`}
+              isPerApp
+              tierNames={tierNames}
+            />
             {hasDefault && (
               <Link
                 href="/iap-management/settings/pricing-tiers/default-matrix"

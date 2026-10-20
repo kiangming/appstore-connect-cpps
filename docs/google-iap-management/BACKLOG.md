@@ -66,8 +66,12 @@ cần sheet tên `price_tiers`, header dạng `VN - VND - Vietnam` ở hàng đ�
 ⇒ Round-trip không phải đổi tên cột, mà là **một chế độ ghi thứ hai**. Chưa ai
 yêu cầu, nên chưa làm.
 
-*(Đối chiếu: Apple có mục tương đương `[TEMPLATE-xlsx-reimport]`, KB §21.8 —
-nhưng lý do khác: bên Apple thiếu hẳn `proceeds` trong `MatrixData`.)*
+*(Đối chiếu: Apple có mục tương đương `[TEMPLATE-xlsx-reimport]` — **Apple đã làm (PA2,
+2026-10-20, KB §21.10)**, và KHÔNG bằng "chế độ ghi thứ hai": một export RIÊNG "Export for
+editing" (đủ mọi nước, header `Name (CODE_CUR)`, sheet scope ẩn) + reader chặt đổi về cấu trúc
+của bộ nạp, rồi đi CHUNG đường ghi REPLACE. Ngữ nghĩa "file là sự thật duy nhất", proceeds thành
+NULL. Nếu làm cho Google: census riêng trước — Google khác ở micros, `sort_order`, khoá
+`packageName` (KB P8, đừng port 1:1).)*
 
 ---
 

@@ -60,6 +60,7 @@ vi.mock("@/lib/iap-management/db", () => ({ iapDb: () => dbHolder.current }));
 
 import { POST as exportPOST } from "./matrix-export/route";
 import { POST as uploadPOST } from "./route";
+import { fetchDefaultMatrix, fetchPerAppMatrix } from "@/lib/iap-management/queries/template-matrix";
 
 let h: PgIapDb;
 let file: RealTemplateFile;
@@ -98,7 +99,8 @@ async function exportForEditing(body: Record<string, unknown>, as: { id: string;
     new Request("http://localhost/api/iap-management/pricing-templates/matrix-export", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...body, mode: "edit" }),
+      // A Default is exported from ITS page, which states the account (PA2.3).
+      body: JSON.stringify({ ...body, ...(body.scope === "default" ? { accountId: as.id } : {}), mode: "edit" }),
     }),
   );
   expect(res.status).toBe(200);
@@ -316,6 +318,20 @@ describe("PA2.2 — each file through its own door; format A's gates", () => {
     expect(getApp).not.toHaveBeenCalled();
   });
 
+  it("I11b a MEMBER imports into a Per-App: preview 200 and commit 200, the template written (open to members, like a Per-App upload)", async () => {
+    const original = await exportForEditing({ scope: "per-app", appId: APP_X.id });
+    const edited = await editBytes(original, (ws) => {
+      ws.getCell(tierRow(ws, "Tier 1"), priceColumn(ws, "USA")).value = 0.89;
+    });
+    session.role = "member";
+    const preview = await upload(edited, { intent: "preview", scope: "APP", app_id: APP_X.id });
+    expect(preview.status).toBe(200);
+    const commit = await upload(edited, { intent: "commit", scope: "APP", app_id: APP_X.id });
+    expect(commit.status).toBe(200);
+    const usaTier1 = (await entriesOf({ app: APP_X.id })).find((e) => e.tier_id === "TIER_1" && e.territory_code === "USA");
+    expect(Number(usaTier1?.customer_price)).toBe(0.89);
+  });
+
   it("I12 a reader refusal comes back as 422 with every problem's cell", async () => {
     const original = await exportForEditing({ scope: "per-app", appId: APP_X.id });
     const bad = await editBytes(original, (ws) => {
@@ -346,5 +362,32 @@ describe("PA2.2 — a write that breaks part-way", () => {
     const again = await upload(bytes, { intent: "commit", scope: "ACCOUNT", account_id: ACCT_A.id });
     expect(again.status).toBe(200);
     expect(entrySet(await entriesOf({ account: ACCT_A.id }))).toEqual(before);
+  });
+
+  it("I13b broken at the FIRST batch (every Per-App, a Default too): the page goes empty, Settings refuses the file — the matrix import, which the empty page now has, repairs it", async () => {
+    const cases: Array<{
+      exportBody: Record<string, unknown>;
+      fields: Record<string, string>;
+      where: { account: string } | { app: string };
+      page: () => Promise<unknown>;
+    }> = [
+      { exportBody: { scope: "per-app", appId: APP_X.id }, fields: { scope: "APP", app_id: APP_X.id }, where: { app: APP_X.id }, page: () => fetchPerAppMatrix(APP_X.id, ACCT_A.id) },
+      { exportBody: { scope: "default" }, fields: { scope: "ACCOUNT", account_id: ACCT_A.id }, where: { account: ACCT_A.id }, page: () => fetchDefaultMatrix(ACCT_A.id) },
+    ];
+    for (const s of cases) {
+      const before = entrySet(await entriesOf(s.where));
+      const bytes = await exportForEditing(s.exportBody);
+      h.resetKnobs(); // the insert counter restarts: 0 = this commit's first batch
+      h.knobs.failEntriesInsertAt = 0;
+      const broken = await upload(bytes, { intent: "commit", ...s.fields });
+      expect(broken.status).toBe(500);
+      h.knobs.failEntriesInsertAt = null;
+      expect(await s.page()).toBeNull(); // the matrix page shows its empty state
+      const settings = await upload(bytes, { ...s.fields }); // the Settings door (no intent)
+      expect(settings.status).toBe(409);
+      const again = await upload(bytes, { intent: "commit", ...s.fields }); // the empty page's import
+      expect(again.status).toBe(200);
+      expect(entrySet(await entriesOf(s.where))).toEqual(before);
+    }
   });
 });

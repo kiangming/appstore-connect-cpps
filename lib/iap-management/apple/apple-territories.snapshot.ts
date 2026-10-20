@@ -9,7 +9,9 @@
  *                ASC_PRIVATE_KEY="$(cat AuthKey_XXXX.p8)" \
  *                node scripts/probe-export-price-sources.mjs
  *              Step 2.6b prints the whole table as TypeScript between copy
- *              markers; step 2.7 DIFFS the codes against this file.
+ *              markers; step 2.7 DIFFS the codes AND the currencies against
+ *              this file (since PA2.3 the currency is a gate on "Export for
+ *              editing" and its import — scripts/territory-snapshot-drift.mjs).
  *
  * ⚠ PASTE 2.6b, DO NOT RETYPE IT. The block is emitted already shaped like the
  * array below precisely so no human transcribes 175 rows. The last hand-built
