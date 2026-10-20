@@ -347,7 +347,8 @@ async function editExport(args: {
   //   • một currency nhưng không phải của Apple: chỉ có thể là sai. Chỉ xét
   //     nước KHÔNG lẫn — `m.currency` là currency gặp đầu tiên, chỉ có nghĩa
   //     khi cột có đúng một currency.
-  // Prod không có nước nào như vậy ngày 2026-10-20 (V2 = 0 dòng).
+  // Prod: docs/iap-management/queries/verify-pa2-export-currency.sql (V2) liệt
+  // kê đúng các nước mà khối này từ chối — chạy trước push; 2026-10-20 = 0 dòng.
   const currenciesOf = (code: string) => [
     ...new Set(
       matrix.tiers

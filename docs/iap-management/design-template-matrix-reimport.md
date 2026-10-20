@@ -777,8 +777,8 @@ Mỗi chunk: gauntlet 4/4 + mutation; commit, chưa push, chờ gate.
     - dialog: một file mỗi lần (nút khoá tới khi dialog đóng), byte đọc một lần, focus/Esc/Tab, lỗi ghi ⇒ toast + reload, không câu trả lời ⇒ "may or may not have been written", bảng 200 hàng ưu tiên hàng có cờ / bỏ override;
     - toast export lấy số từ header server;
     - test: bấm nút thật (P26), Per-App mở cho member (UI + route), cờ ×10 / thang tier (`diff.test.ts`), nội dung preview đủ hàng, toast từ commit, W9 commit thật, U0 ghim file gốc UAT = export hôm nay.
-  - ⏸ Chờ Manager: upload format A ở Settings không kiểm currency header với Apple (giữ "format A không đổi một dòng") — chấp nhận + doc (đã ghi trong guide), hay thêm cảnh báo không chặn?
-- **Còn:** gate PA2.3 + Manager chạy UAT Excel ⇒ test golden ⇒ push cả PA2.
+  - **Gate PA2.3 PASS** `26dd65b` (2026-10-20). Format A không kiểm currency header với Apple: Manager chọn **chấp nhận** (prod 0 ô lệch, guide ghi cách sửa); cảnh báo không chặn ⇒ BACKLOG [IAP-formatA-header-currency-warning]. Ba mục chưa làm ⇒ BACKLOG [TEMPLATE-reimport-focus-return], [TEMPLATE-reimport-header-currency-cells], [TEMPLATE-reimport-other-spreadsheet-apps].
+- **Còn:** SQL V2 chạy lại trên prod trước push (≠ 0 dòng ⇒ DỪNG, Manager quyết) + Manager chạy UAT Excel ⇒ test golden đọc chính 3 file ⇒ push cả PA2.
 
 ---
 
