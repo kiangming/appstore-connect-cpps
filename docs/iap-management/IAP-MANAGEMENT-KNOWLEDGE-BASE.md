@@ -6579,6 +6579,8 @@ ORDER BY ⇒ đỏ (15 225 distinct) · bỏ kiểm số dòng ⇒ đỏ · nh�
 
 Design: `docs/iap-management/design-template-matrix-reimport.md` (lượt 2, §L2.9 — Manager chốt).
 
+**Shipped 2026-10-20:** `c95388d..bf48692` trên `origin/main` (10 commit, 0 migration). UAT bằng Microsoft Excel for Mac 16 khớp bảng kỳ vọng viết trước (`matrix-reimport.excel-golden.test.ts`); SQL V2 trước push = 0 dòng lỗi.
+
 **Ngữ nghĩa (Manager 2026-10-19):**
 1. File là sự thật duy nhất — import xong template = đúng file (REPLACE-ONLY Q-A);
 2. ô có giá = override đúng giá đó;
