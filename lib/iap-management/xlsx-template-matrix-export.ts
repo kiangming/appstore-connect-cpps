@@ -48,6 +48,7 @@ import ExcelJS from "exceljs";
 import { formatPrice } from "./matrix-price-format";
 import {
   EDIT_INFO_SHEET,
+  MATRIX_SHEET_NAME,
   editInfoRows,
   formatTerritoryHeader,
   type EditExportInfo,
@@ -121,10 +122,8 @@ const HEADER_ROW_COUNT = 2;
 
 const SUBHEADERS = ["Price", "Currency"] as const;
 
-const SHEET_NAME: Record<TemplateMatrixScope, string> = {
-  default: "Default Template",
-  "per-app": "Per-App Template",
-};
+// Tên sheet chính — hằng dùng chung với reader của file "for editing".
+const SHEET_NAME: Record<TemplateMatrixScope, string> = MATRIX_SHEET_NAME;
 
 // ── Spec trung gian, toạ độ 0-INDEXED ────────────────────────────────────────
 // Cùng cách làm với xlsx-export.ts: mọi thứ ở trên dựng dữ liệu thuần bằng

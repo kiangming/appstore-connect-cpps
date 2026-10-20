@@ -183,12 +183,23 @@ const XLSX_ALLOWED = new Set<string>([
   // Test helper: writes with exceljs, reads back with xlsx so the assertions
   // see the FILE rather than an object model that was never serialised.
   "lib/google-iap-management/__fixtures__/read-workbook.ts",
+  // ── [TEMPLATE-xlsx-reimport] PA2.2 ──────────────────────────────────────────
+  // The READER of the Apple "Export for editing" file — the other half of the
+  // matrix export writer (which stays on exceljs, above). A reader of a
+  // Manager-edited workbook, so it reads with xlsx like every upload parser,
+  // and it is pinned in PARSERS below so it cannot drift to exceljs. It
+  // imports xlsx STATICALLY on purpose: format A's parser loads it with
+  // `await import("xlsx")`, which this fence cannot see
+  // ([EXCEL-fence-dynamic-import]); this one is in plain sight.
+  "lib/iap-management/parsers/template-matrix-edit.ts",
 ]);
 
 /** Parsers read Manager-uploaded workbooks. These must stay on xlsx. */
 const PARSERS = [
   "lib/google-iap-management/parsers/pricing-template-parser.ts",
   "lib/google-iap-management/parsers/excel-parser.ts",
+  // PA2.2 — reads the Apple "Export for editing" file the Manager edited.
+  "lib/iap-management/parsers/template-matrix-edit.ts",
 ];
 
 function sourceFiles(): string[] {

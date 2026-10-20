@@ -9,9 +9,11 @@
  * the SQL PostgREST would send (filters, ORDER BY, LIMIT/OFFSET literal) and
  * runs it on PGlite.
  *
- * Only what the read paths and the matrix export use is implemented: select
- * (+ exact head count), eq, is, order, range, maybeSingle. Writes go through
- * plain SQL helpers (`insertTemplate`), shaped like `replaceTemplate`'s.
+ * Implemented: what the read paths, the matrix export AND `replaceTemplate`
+ * use — select (+ exact head count), eq, is, order, range, maybeSingle,
+ * single, insert / upsert (+ `.select()` returning), update, delete. Errors
+ * come back as `{ error }` like supabase-js, never thrown. Seeding goes
+ * through plain SQL helpers (`insertTemplate`), shaped like replaceTemplate's.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -25,7 +27,9 @@ import type { FlatTemplateEntry, PriceTiersParseResult } from "../parsers/price-
 export const IAP_TEMPLATE_DDL = `
 create schema iap_mgmt;
 create table iap_mgmt.apps (id text primary key, bundle_id text not null, name text not null default '');
-create table iap_mgmt.price_tiers (tier_id text primary key, tier_name text not null);
+create table iap_mgmt.price_tiers (
+  tier_id text primary key, tier_name text not null,
+  imported_at timestamptz not null default now(), imported_by text not null default 'seed');
 create table iap_mgmt.price_tier_templates (
   id uuid primary key default gen_random_uuid(),
   scope_type text not null, scope_account_id text, scope_app_id text,
@@ -41,6 +45,18 @@ create table iap_mgmt.price_tier_template_entries (
   primary key (template_id, tier_id, territory_code));
 create index idx_iap_mgmt_price_tier_template_entries_lookup
   on iap_mgmt.price_tier_template_entries(template_id, tier_id);
+create table iap_mgmt.import_batches (
+  id uuid primary key default gen_random_uuid(), app_id text,
+  imported_at timestamptz not null default now(), imported_by text not null,
+  template_version text, total_rows int not null default 0, created_count int not null default 0,
+  status text not null default 'PENDING' check (status in ('PENDING', 'IN_PROGRESS', 'COMPLETE', 'FAILED')),
+  notes text);
+create table iap_mgmt.actions_log (
+  id uuid primary key default gen_random_uuid(),
+  batch_id uuid references iap_mgmt.import_batches(id) on delete set null,
+  actor text not null,
+  action_type text not null check (action_type in ('PRICE_TIER_IMPORT', 'BULK_IMPORT_BATCH')),
+  payload jsonb not null default '{}'::jsonb, created_at timestamptz not null default now());
 `;
 
 export interface FakeKnobs {
@@ -53,6 +69,9 @@ export interface FakeKnobs {
   afterEntriesPage: null | ((n: number) => Promise<void>);
   /** Make the count request return null (no Content-Range). */
   nullCount: boolean;
+  /** Fail the n-th (0-based) INSERT into price_tier_template_entries — a
+   *  write that breaks part-way (after the old template was deleted). */
+  failEntriesInsertAt: number | null;
 }
 
 type Row = Record<string, unknown>;
@@ -74,10 +93,22 @@ export interface PgIapDb {
 export async function createPgIapDb(): Promise<PgIapDb> {
   const pg = new PGlite();
   await pg.exec(IAP_TEMPLATE_DDL);
-  const knobs: FakeKnobs = { forceSplitAt: null, maxRows: null, afterEntriesPage: null, nullCount: false };
+  const knobs: FakeKnobs = {
+    forceSplitAt: null,
+    maxRows: null,
+    afterEntriesPage: null,
+    nullCount: false,
+    failEntriesInsertAt: null,
+  };
   let entriesPagesServed = 0;
+  let entriesInserts = 0;
+  const sqlValue = (v: unknown) => (v !== null && typeof v === "object" ? JSON.stringify(v) : v);
 
   class Query {
+    private op: "select" | "insert" | "upsert" | "update" | "delete" = "select";
+    private payload: Row | Row[] | null = null;
+    private onConflict: string | null = null;
+    private returning: string | null = null;
     private cols = "*";
     private head = false;
     private filters: Array<[string, unknown]> = [];
@@ -85,8 +116,32 @@ export async function createPgIapDb(): Promise<PgIapDb> {
     private rng: [number, number] | null = null;
     constructor(private readonly table: string) {}
     select(cols: string, opts?: { count?: string; head?: boolean }) {
+      if (this.op !== "select") {
+        this.returning = cols;
+        return this;
+      }
       this.cols = cols;
       this.head = opts?.head === true;
+      return this;
+    }
+    insert(payload: Row | Row[]) {
+      this.op = "insert";
+      this.payload = payload;
+      return this;
+    }
+    upsert(payload: Row | Row[], opts?: { onConflict?: string }) {
+      this.op = "upsert";
+      this.payload = payload;
+      this.onConflict = opts?.onConflict ?? null;
+      return this;
+    }
+    update(payload: Row) {
+      this.op = "update";
+      this.payload = payload;
+      return this;
+    }
+    delete() {
+      this.op = "delete";
       return this;
     }
     eq(col: string, val: unknown) {
@@ -105,7 +160,69 @@ export async function createPgIapDb(): Promise<PgIapDb> {
       this.rng = [from, to];
       return this;
     }
-    private async run(): Promise<{ data: Row[] | null; error: null; count: number | null }> {
+    private async run(): Promise<{ data: Row[] | null; error: { message: string } | null; count: number | null }> {
+      try {
+        return this.op === "select" ? await this.runSelect() : await this.runWrite();
+      } catch (err) {
+        return { data: null, error: { message: err instanceof Error ? err.message : String(err) }, count: null };
+      }
+    }
+    private whereClause(params: unknown[]): string {
+      const where = this.filters.map(([c, v]) => {
+        if (v === null) return `${c} is null`;
+        params.push(sqlValue(v));
+        return `${c} = $${params.length}`;
+      });
+      return where.length ? ` where ${where.join(" and ")}` : "";
+    }
+    private async runWrite(): Promise<{ data: Row[] | null; error: { message: string } | null; count: number | null }> {
+      const params: unknown[] = [];
+      const ret = this.returning ? ` returning ${this.returning}` : "";
+      if (this.op === "delete") {
+        const w = this.whereClause(params);
+        const r = await pg.query<Row>(`delete from iap_mgmt.${this.table}${w}${ret}`, params);
+        return { data: r.rows, error: null, count: null };
+      }
+      if (this.op === "update") {
+        const sets = Object.entries(this.payload as Row).map(([c, v]) => {
+          params.push(sqlValue(v));
+          return `${c} = $${params.length}`;
+        });
+        const w = this.whereClause(params);
+        const r = await pg.query<Row>(`update iap_mgmt.${this.table} set ${sets.join(", ")}${w}${ret}`, params);
+        return { data: r.rows, error: null, count: null };
+      }
+      // insert / upsert
+      const rows = Array.isArray(this.payload) ? this.payload : [this.payload as Row];
+      if (this.table === "price_tier_template_entries") {
+        const n = entriesInserts++;
+        if (knobs.failEntriesInsertAt !== null && n === knobs.failEntriesInsertAt) {
+          return { data: null, error: { message: "simulated: connection reset during entries insert" }, count: null };
+        }
+      }
+      if (rows.length === 0) return { data: [], error: null, count: null };
+      const cols = Object.keys(rows[0]);
+      const tuples = rows.map((row) => {
+        const ph = cols.map((c) => {
+          params.push(sqlValue(row[c]));
+          return `$${params.length}`;
+        });
+        return `(${ph.join(", ")})`;
+      });
+      const conflict =
+        this.op === "upsert" && this.onConflict
+          ? ` on conflict (${this.onConflict}) do update set ${cols
+              .filter((c) => c !== this.onConflict)
+              .map((c) => `${c} = excluded.${c}`)
+              .join(", ")}`
+          : "";
+      const r = await pg.query<Row>(
+        `insert into iap_mgmt.${this.table} (${cols.join(", ")}) values ${tuples.join(", ")}${conflict}${ret}`,
+        params,
+      );
+      return { data: r.rows, error: null, count: null };
+    }
+    private async runSelect(): Promise<{ data: Row[] | null; error: { message: string } | null; count: number | null }> {
       const params: unknown[] = [];
       const where = this.filters.map(([c, v]) => {
         if (v === null) return `${c} is null`;
@@ -143,9 +260,17 @@ export async function createPgIapDb(): Promise<PgIapDb> {
     }
     async maybeSingle() {
       const r = await this.run();
+      if (r.error) return { data: null, error: r.error };
       const rows = r.data ?? [];
       if (rows.length > 1) return { data: null, error: { message: "multiple rows" } };
       return { data: rows[0] ?? null, error: null };
+    }
+    async single() {
+      const r = await this.run();
+      if (r.error) return { data: null, error: r.error };
+      const rows = r.data ?? [];
+      if (rows.length !== 1) return { data: null, error: { message: `expected 1 row, got ${rows.length}` } };
+      return { data: rows[0], error: null };
     }
     then<A, B>(onOk: (v: unknown) => A, onErr?: (e: unknown) => B) {
       return this.run().then(onOk, onErr);
@@ -161,7 +286,9 @@ export async function createPgIapDb(): Promise<PgIapDb> {
       knobs.maxRows = null;
       knobs.afterEntriesPage = null;
       knobs.nullCount = false;
+      knobs.failEntriesInsertAt = null;
       entriesPagesServed = 0;
+      entriesInserts = 0;
     },
     async insertTiers(tiers) {
       const values = tiers.map((_, i) => `($${2 * i + 1}, $${2 * i + 2})`).join(", ");

@@ -79,7 +79,7 @@ interface TerritorySpec {
   proceeds_col: number;
 }
 
-interface TierIdDecoded {
+export interface TierIdDecoded {
   tier_id: string;
   is_alternate: boolean;
 }
@@ -90,7 +90,7 @@ interface TierIdDecoded {
  * Returns null for unrecognised tier-name shapes — those rows are dropped
  * with a warning.
  */
-function tierIdFromName(name: string): TierIdDecoded | null {
+export function tierIdFromName(name: string): TierIdDecoded | null {
   if (name === "Free Tier") {
     return { tier_id: "FREE", is_alternate: false };
   }

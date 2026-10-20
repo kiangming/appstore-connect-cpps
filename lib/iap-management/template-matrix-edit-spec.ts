@@ -33,6 +33,13 @@ export function formatTerritoryHeader(name: string, code: string, currency: stri
   return `${name} (${code}_${currency})`;
 }
 
+/** The main sheet's name, per scope — the writer names it, the reader looks
+ *  for it. (Moved here from the writer, unchanged.) */
+export const MATRIX_SHEET_NAME = {
+  default: "Default Template",
+  "per-app": "Per-App Template",
+} as const;
+
 /** The sheet that states where the file belongs. Found BY NAME (Numbers puts an
  *  "Export Summary" sheet first — measured), written hidden: Excel keeps it
  *  hidden; Numbers shows it but keeps its content (measured, §2.3). Its values

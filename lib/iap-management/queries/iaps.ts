@@ -99,6 +99,20 @@ export async function findAppByAppleId(
  * key. Returns the internal UUID for FK use. Apps registry is independent
  * from Store Management's app registry (Q3 lock).
  */
+/** PA2.2 — an app row by its internal UUID, for naming it in messages.
+ *  Never calls Apple; null when the app is not registered. */
+export async function getAppIdentity(
+  appId: string,
+): Promise<{ id: string; bundle_id: string; name: string } | null> {
+  const { data, error } = await iapDb()
+    .from("apps")
+    .select("id, bundle_id, name")
+    .eq("id", appId)
+    .maybeSingle();
+  if (error) throw new Error(`App lookup failed: ${error.message}`);
+  return (data as { id: string; bundle_id: string; name: string } | null) ?? null;
+}
+
 export async function ensureAppRegistered(info: IapAppInfo): Promise<string> {
   const db = iapDb();
 

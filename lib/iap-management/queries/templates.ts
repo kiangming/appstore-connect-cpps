@@ -524,6 +524,10 @@ export async function replaceTemplate(
   parsed: PriceTiersParseResult,
   uploadedBy: string,
   sourceFilename: string | null,
+  /** PA2.2 — the "Export for editing" import tags its audit batch
+   *  ("matrix-edit-v1"). Absent ⇒ format A's tag, exactly as before (the A
+   *  upload never passes this — pinned by matrix-roundtrip.baseline B0.3). */
+  options?: { templateVersion?: string },
 ): Promise<ReplaceTemplateResult> {
   const db = iapDb();
   const flatEntries = flattenTemplateEntries(parsed);
@@ -545,7 +549,8 @@ export async function replaceTemplate(
       app_id: scope_app_id,
       imported_by: uploadedBy,
       template_version:
-        scope_type === "ACCOUNT" ? "account-template-v1" : "app-template-v1",
+        options?.templateVersion ??
+        (scope_type === "ACCOUNT" ? "account-template-v1" : "app-template-v1"),
       total_rows: flatEntries.length,
       status: "IN_PROGRESS",
       notes: `Pricing template upload (${scope_type}): ${flatEntries.length} entries across ${parsed.tiers.length} tiers × ${parsed.territory_count} territories`,

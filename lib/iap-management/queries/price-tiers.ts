@@ -210,6 +210,17 @@ export function resolveTierByUsdPrice(
   return candidates.length > 0 ? candidates[0].tier_id : null;
 }
 
+/** PA2.2 — `tier_id → tier_name` of the global tier table: the tiers an
+ *  "Export for editing" file may name, spelled the one accepted way. */
+export async function listTierNames(): Promise<Map<string, string>> {
+  const db = iapDb();
+  const res = await db.from("price_tiers").select("tier_id, tier_name");
+  if (res.error) throw new Error(`Failed to list tier names: ${res.error.message}`);
+  return new Map(
+    ((res.data ?? []) as Array<{ tier_id: string; tier_name: string }>).map((t) => [t.tier_id, t.tier_name]),
+  );
+}
+
 export async function listTiers(): Promise<PriceTierRow[]> {
   const db = iapDb();
   const [tiersRes, usdRes] = await Promise.all([
