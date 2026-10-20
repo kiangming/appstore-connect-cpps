@@ -9118,6 +9118,8 @@ Test ghim: `app/api/google-iap-management/apps/[packageName]/bulk-import/file-cu
 
 ## §36 — Bỏ "GT Price" / "GT Currency" khỏi Bulk Import của APPLE (arc `arc-apple-bulkimport-drop-gt-columns`, 2026-10-20)
 
+**Shipped 2026-10-20:** `bf48692..121f2b1` trên `origin/main` (3 commit, 0 migration).
+
 Design: `docs/iap-management/design-apple-bulkimport-drop-gt-columns.md`. ⚠ CHỈ Apple — Google dùng GT thật (§35, H4); không đổi một hành vi nào của Google.
 
 **Sự thật đã đo (census, trước khi đổi):**
