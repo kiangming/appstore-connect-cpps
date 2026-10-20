@@ -4,6 +4,12 @@
  * Xuất ma trận Pricing Template (Default hoặc Per-App) ra .xlsx — đúng thứ
  * màn "View matrix" đang hiện, đúng tập nước đang hiện sau bộ lọc.
  *
+ * PA2 (Manager 2026-10-19, Q-B) — `mode: "edit"` là "Export for editing":
+ * file để SỬA rồi import lại. LUÔN đủ mọi nước của template, đọc từ server
+ * (không bao giờ từ danh sách nước client — R1 / R1b), header `Name (CODE_CUR)`
+ * và một sheet ẩn nói file thuộc template nào. Vắng `mode` ⇒ file để xem,
+ * y hệt trước PA2.
+ *
  * ─── VÌ SAO LÀ ROUTE SERVER CHỨ KHÔNG DỰNG FILE Ở CLIENT ───────────────────
  *
  * Đường CSV cũ dựng file ngay trong trình duyệt (`triggerCsvDownload`). Không
@@ -34,6 +40,7 @@ import { iapDb } from "@/lib/iap-management/db";
 import {
   fetchDefaultMatrix,
   fetchPerAppMatrix,
+  type MatrixData,
   type MatrixMarket,
 } from "@/lib/iap-management/queries/template-matrix";
 import {
@@ -41,6 +48,7 @@ import {
   templateMatrixXlsxFilename,
   type TemplateMatrixScope,
 } from "@/lib/iap-management/xlsx-template-matrix-export";
+import type { EditExportInfo } from "@/lib/iap-management/template-matrix-edit-spec";
 import { log } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -52,15 +60,18 @@ interface MatrixExportRequestBody {
   appId?: unknown;
   territories?: unknown;
   showDiff?: unknown;
+  mode?: unknown;
 }
 
 /** Payload đã qua validate — mọi trường ở đây đã có kiểu thật. */
 interface ValidBody {
   scope: TemplateMatrixScope;
   appId: string | null;
-  /** Mã nước client xin, ĐÃ khử trùng lặp. Dùng làm BỘ LỌC, không phải thứ tự. */
+  /** Mã nước client xin, ĐÃ khử trùng lặp. Dùng làm BỘ LỌC, không phải thứ tự.
+   *  Chỉ có nghĩa ở mode "view". */
   requested: Set<string>;
   showDiff: boolean;
+  mode: "view" | "edit";
 }
 
 function badRequest(message: string) {
@@ -74,10 +85,29 @@ function badRequest(message: string) {
  * một file mà người dùng vừa tắt highlight.
  */
 function validate(body: MatrixExportRequestBody): ValidBody | NextResponse {
-  const { scope, appId, territories, showDiff } = body;
+  const { scope, appId, territories, showDiff, mode } = body;
 
   if (scope !== "default" && scope !== "per-app") {
     return badRequest('Field "scope" must be "default" or "per-app".');
+  }
+  if (mode !== undefined && mode !== "view" && mode !== "edit") {
+    return badRequest('Field "mode" must be "view" or "edit".');
+  }
+  if (mode === "edit") {
+    // ⚠ PA2 Q-B — `territories` và `showDiff` KHÔNG được đọc ở mode này, kể
+    // cả khi client gửi: file để sửa luôn là CẢ template, và ô của nó không
+    // mang tô màu diff (note của diff chứa giá Default — thứ import không
+    // được đọc). Không có gì từ client quyết định nội dung file.
+    if (scope === "per-app" && (typeof appId !== "string" || appId.trim() === "")) {
+      return badRequest('Field "appId" is required when scope is "per-app".');
+    }
+    return {
+      scope,
+      appId: scope === "per-app" ? (appId as string).trim() : null,
+      requested: new Set(),
+      showDiff: false,
+      mode: "edit",
+    };
   }
   if (typeof showDiff !== "boolean") {
     return badRequest('Field "showDiff" must be a boolean.');
@@ -114,6 +144,7 @@ function validate(body: MatrixExportRequestBody): ValidBody | NextResponse {
     // một client gửi 3 lần "USA" không thể làm phép đếm ấy tự đúng.
     requested: new Set(territories as string[]),
     showDiff,
+    mode: "view",
   };
 }
 
@@ -127,9 +158,23 @@ async function loadBundleId(appId: string): Promise<string | null> {
   return (data as { bundle_id: string } | null)?.bundle_id ?? null;
 }
 
+async function loadAppIdentity(
+  appId: string,
+): Promise<{ bundle_id: string; name: string } | null> {
+  const { data, error } = await iapDb()
+    .from("apps")
+    .select("bundle_id, name")
+    .eq("id", appId)
+    .maybeSingle();
+  if (error) throw new Error(`App lookup failed: ${error.message}`);
+  return (data as { bundle_id: string; name: string } | null) ?? null;
+}
+
 export async function POST(req: Request) {
+  let exportedBy = "unknown";
   try {
-    await requireIapSession();
+    const session = await requireIapSession();
+    exportedBy = session?.user?.email ?? "unknown";
   } catch (err) {
     if (err instanceof IapUnauthorizedError) {
       return NextResponse.json({ error: err.message }, { status: 401 });
@@ -143,7 +188,7 @@ export async function POST(req: Request) {
   }
   const checked = validate(raw);
   if (checked instanceof NextResponse) return checked;
-  const { scope, appId, requested, showDiff } = checked;
+  const { scope, appId, requested, showDiff, mode } = checked;
 
   try {
     // ⚠ ACCOUNT ĐỌC Ở SERVER, KHÔNG NHẬN TỪ CLIENT. Bài học C-D: một đường
@@ -170,6 +215,10 @@ export async function POST(req: Request) {
     }
 
     const { matrix } = result;
+
+    if (mode === "edit") {
+      return await editExport({ matrix, scope, appId, creds, exportedBy });
+    }
 
     // ── Mã lạ → 409, KHÔNG im lặng bỏ ────────────────────────────────────────
     //
@@ -259,4 +308,91 @@ export async function POST(req: Request) {
     await log(LOG_FEATURE, `export failed: ${message}`, "ERROR");
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+/**
+ * PA2 "Export for editing" (Manager 2026-10-19, Q-B / Q-C / Q-E).
+ *
+ * ⚠ MỌI nước của template, theo thứ tự `matrix.markets` (Hotfix 24) — đọc từ
+ *   server. Theo luật "file là sự thật duy nhất", một nước vắng mặt trong file
+ *   là một nước BỊ XOÁ override khi import lại; nên file để sửa không bao giờ
+ *   được thiếu nước: không lọc theo màn (R1), không tin danh sách client
+ *   (R1b — client có thể chưa biết một nước template vừa thêm).
+ */
+async function editExport(args: {
+  matrix: MatrixData;
+  scope: TemplateMatrixScope;
+  appId: string | null;
+  creds: { id: string; name: string };
+  exportedBy: string;
+}): Promise<NextResponse> {
+  const { matrix, scope, appId, creds, exportedBy } = args;
+  const markets = matrix.markets;
+
+  // Header nói MỘT currency cho cả cột (Q-C); một nước mà template giữ hai
+  // currency thì không ghi được thành một file tự nhất quán. Từ chối, nêu
+  // tên nước — không chọn hộ một currency.
+  const mixed = markets
+    .map((m) => ({
+      code: m.code,
+      currencies: [
+        ...new Set(
+          matrix.tiers
+            .map((t) => matrix.cells[`${t.tier_id}|${m.code}`]?.currency)
+            .filter((c): c is string => c !== undefined),
+        ),
+      ],
+    }))
+    .filter((m) => m.currencies.length > 1);
+  if (mixed.length > 0) {
+    const detail = mixed.map((m) => `${m.code} (${m.currencies.join(", ")})`).join("; ");
+    await log(LOG_FEATURE, `edit export refused — mixed currencies: ${detail}`, "WARN");
+    return NextResponse.json(
+      {
+        error:
+          `Cannot export for editing: ${detail} hold more than one currency in this template. ` +
+          "An editable file states one currency per territory in its header — fix these " +
+          "territories in the template first.",
+        mixedCurrencyTerritories: mixed.map((m) => m.code),
+      },
+      { status: 409 },
+    );
+  }
+
+  const app = scope === "per-app" ? await loadAppIdentity(appId as string) : null;
+  if (scope === "per-app" && !app) {
+    return NextResponse.json({ error: "App not found." }, { status: 404 });
+  }
+  const info: EditExportInfo = {
+    scope:
+      scope === "per-app"
+        ? { kind: "APP", appId: appId as string, bundleId: app!.bundle_id, appName: app!.name }
+        : { kind: "ACCOUNT", accountId: creds.id, accountName: creds.name },
+    exportedAt: new Date().toISOString(),
+    exportedBy,
+  };
+
+  const workbook = buildTemplateMatrixWorkbook({
+    matrix,
+    visibleMarkets: markets,
+    showDiff: false,
+    scope,
+    edit: info,
+  });
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  const filename = templateMatrixXlsxFilename({
+    scope,
+    bundleId: app?.bundle_id,
+    forEditing: true,
+  });
+  return new NextResponse(new Uint8Array(buffer), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "X-Export-Tier-Count": String(matrix.tiers.length),
+      "X-Export-Territory-Count": String(markets.length),
+      "X-Export-Mode": "edit",
+    },
+  });
 }

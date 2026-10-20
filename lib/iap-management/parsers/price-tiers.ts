@@ -32,9 +32,12 @@
  *   or vice versa — still parsed, but flagged).
  */
 
+// The territory header regex is shared with the "Export for editing" file
+// (PA2) — moved, unchanged, to the module both formats read from.
+import { TERRITORY_HEADER_RE } from "../template-matrix-edit-spec";
+
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const EXPECTED_SHEET_NAME = "price_tiers";
-const TERRITORY_HEADER_RE = /^(.+?)\s*\(([A-Z]{3})_([A-Z]{3})\)\s*$/;
 
 export interface ParsedTerritoryPrice {
   territory_code: string;

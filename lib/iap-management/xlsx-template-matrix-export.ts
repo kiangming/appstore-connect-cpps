@@ -46,6 +46,12 @@
 import ExcelJS from "exceljs";
 
 import { formatPrice } from "./matrix-price-format";
+import {
+  EDIT_INFO_SHEET,
+  editInfoRows,
+  formatTerritoryHeader,
+  type EditExportInfo,
+} from "./template-matrix-edit-spec";
 import type {
   MatrixCell,
   MatrixData,
@@ -63,6 +69,11 @@ export interface TemplateMatrixExportInput {
   /** F1 — công tắc "Highlight differences" trên màn. Per-App mới có. */
   showDiff: boolean;
   scope: TemplateMatrixScope;
+  /** PA2 — "Export for editing" (Manager Q-B/Q-C/Q-E). Có ⇒ header mang mã
+   *  + currency (`Vietnam (VNM_VND)`) và file có thêm sheet thông tin ẩn
+   *  nói nó thuộc template nào. Vắng ⇒ file ĐỂ XEM, đúng từng byte như trước
+   *  PA2 (ghim ở matrix-roundtrip.baseline.test.ts B0.4). */
+  edit?: EditExportInfo;
 }
 
 /**
@@ -202,7 +213,13 @@ export function buildTemplateMatrixSheetSpec(
     // mã alpha-3; khi ISO không biết mã đó (Kosovo `XKS`) nó rơi về chính mã,
     // và màn đang hiện đúng chuỗi đó. Sửa chỗ này là sửa `territoryName`, mà
     // hàm đó dùng chung với View Detail + export item list ⇒ arc riêng.
-    headerRow1.push(market.name, null);
+    // PA2 Q-C — file "for editing": `Name (CODE_CUR)`, đúng hình dạng header
+    // của format A (cùng một regex đọc lại, template-matrix-edit-spec.ts).
+    // Danh tính nước nằm ở MÃ, không ở tên (KB §4.20).
+    headerRow1.push(
+      input.edit ? formatTerritoryHeader(market.name, market.code, market.currency) : market.name,
+      null,
+    );
     headerRow2.push(...SUBHEADERS);
   }
 
@@ -219,6 +236,15 @@ export function buildTemplateMatrixSheetSpec(
           // trong khi cả hai đang trả lời cùng một câu hỏi.
           row.push(EMPTY_CELL, EMPTY_CELL);
           continue;
+        }
+        // ⚠ PA2 — header của file "for editing" nói MỘT currency cho cả cột;
+        // một ô khác currency đó sẽ làm file tự mâu thuẫn. Route đã từ chối
+        // template như vậy với câu báo rõ; đây là chốt thứ hai, không bao giờ
+        // được là chốt duy nhất.
+        if (input.edit && cell.currency !== market.currency) {
+          throw new Error(
+            `Export for editing: ${market.code} holds ${cell.currency} in ${tier.tier_id} but the column says ${market.currency}.`,
+          );
         }
         row.push(priceCellValue(cell.customerPrice), cell.currency);
       }
@@ -334,15 +360,37 @@ export function buildTemplateMatrixWorkbook(
 ): ExcelJS.Workbook {
   const wb = new ExcelJS.Workbook();
   addSheet(wb, SHEET_NAME[input.scope], buildTemplateMatrixSheetSpec(input));
+  if (input.edit) {
+    // SAU sheet chính: sheet chính vẫn là sheet đầu, đúng như file để xem.
+    addSheet(wb, EDIT_INFO_SHEET, buildEditInfoSheetSpec(input.edit), "hidden");
+  }
   return wb;
+}
+
+/** Sheet thông tin của file "for editing": hai cột key / value. */
+function buildEditInfoSheetSpec(info: EditExportInfo): SheetSpec {
+  return {
+    aoa: editInfoRows(info),
+    widths: [16, 48],
+    merges: [],
+    styles: [],
+    freeze: { cols: 0, rows: 1 },
+  };
 }
 
 /**
  * ⚠ CHỖ DUY NHẤT TRONG MODULE NÀY LÁI exceljs. Mọi thứ ở trên là dữ liệu
  * thuần, 0-index; hàm này đổi sang 1-index đúng một lần.
  */
-function addSheet(wb: ExcelJS.Workbook, name: string, spec: SheetSpec): void {
-  const ws = wb.addWorksheet(name);
+function addSheet(
+  wb: ExcelJS.Workbook,
+  name: string,
+  spec: SheetSpec,
+  state?: "hidden",
+): void {
+  // ⚠ Không truyền options cho sheet thường: file để xem phải ra đúng từng
+  // byte như trước PA2.
+  const ws = state ? wb.addWorksheet(name, { state }) : wb.addWorksheet(name);
   for (const row of spec.aoa) {
     ws.addRow(row.map((v) => v ?? null));
   }
@@ -381,18 +429,21 @@ export function templateMatrixXlsxFilename(args: {
   scope: TemplateMatrixScope;
   bundleId?: string;
   now?: Date;
+  /** PA2 — file "for editing" nói điều đó ngay trên tên file. */
+  forEditing?: boolean;
 }): string {
   const d = args.now ?? new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   const stamp =
     `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
     `-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  const edit = args.forEditing ? "-for-editing" : "";
   if (args.scope === "per-app") {
     // Chặn ký tự lạ trước khi nó vào Content-Disposition.
     const slug = (args.bundleId ?? "app").replace(/[^a-z0-9._-]+/gi, "_");
-    return `apple-pricing-template-per-app-${slug}-${stamp}.xlsx`;
+    return `apple-pricing-template-per-app-${slug}${edit}-${stamp}.xlsx`;
   }
-  return `apple-pricing-template-default-${stamp}.xlsx`;
+  return `apple-pricing-template-default${edit}-${stamp}.xlsx`;
 }
 
 export { EMPTY_CELL, DIFF_FONT_COLOR, FIXED_COLUMN_COUNT, HEADER_ROW_COUNT };
