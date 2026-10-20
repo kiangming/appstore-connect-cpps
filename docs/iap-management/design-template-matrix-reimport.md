@@ -779,7 +779,7 @@ Mỗi chunk: gauntlet 4/4 + mutation; commit, chưa push, chờ gate.
     - test: bấm nút thật (P26), Per-App mở cho member (UI + route), cờ ×10 / thang tier (`diff.test.ts`), nội dung preview đủ hàng, toast từ commit, W9 commit thật, U0 ghim file gốc UAT = export hôm nay.
   - **Gate PA2.3 PASS** `26dd65b` (2026-10-20). Format A không kiểm currency header với Apple: Manager chọn **chấp nhận** (prod 0 ô lệch, guide ghi cách sửa); cảnh báo không chặn ⇒ BACKLOG [IAP-formatA-header-currency-warning]. Ba mục chưa làm ⇒ BACKLOG [TEMPLATE-reimport-focus-return], [TEMPLATE-reimport-header-currency-cells], [TEMPLATE-reimport-other-spreadsheet-apps].
 - SQL V2 chạy lại trên prod trước push (2026-10-20, file `docs/iap-management/queries/verify-pa2-export-currency.sql`): V2-a 175 / 14 template / 28 707 entry; V2 chỉ dòng TOTAL — 0 dòng lỗi ✓.
-- **Còn:** Manager chạy UAT Excel ⇒ test golden đọc chính 3 file ⇒ push cả PA2.
+- UAT Excel ✓ (2026-10-20): 3 file Manager lưu bằng Microsoft Excel for Mac 16 (`docs/iap-management/uat/pa2-excel/F*-excel.xlsx`); test golden `matrix-reimport.excel-golden.test.ts` đọc thẳng chúng, 4/4 khớp đúng bảng viết trước. ⇒ push cả PA2.
 
 ---
 
