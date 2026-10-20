@@ -1,19 +1,20 @@
 /**
- * [APPLE-bulkimport-drop-gt] G0 — the REAL execute route with GT Price /
- * GT Currency in the file, pinned before the change (Manager 2026-10-20;
- * design docs/iap-management/design-apple-bulkimport-drop-gt-columns.md §1.3).
+ * [APPLE-bulkimport-drop-gt] The REAL execute route with GT Price / GT
+ * Currency still in the file (Manager 2026-10-20; design
+ * docs/iap-management/design-apple-bulkimport-drop-gt-columns.md §1.3).
  *
  * The real route, the real parser (from a file made by the real template
  * generator), the real conflict resolution / tier enrichment / localization
  * selection. Every Apple, DB and Hub boundary is replaced by a recorder, so
  * the test sees EVERYTHING the route would send or write.
  *
- * Pinned today:
- *   R1 GT does not reach Apple, the DB or the audit: every kind of GT the
- *      parser accepts gives the SAME recorded calls as an empty GT.
- *   R2 a GT Price that is not a number rejects the file: 422, the Hub run
- *      closes FAILED with the parser's message, nothing sent, nothing written.
- * G1 flips R2 (the file is then accepted, like any other).
+ * Pinned:
+ *   R1 GT does not reach Apple, the DB or the audit: every kind of GT gives
+ *      the SAME recorded calls as an empty GT, and as no GT columns at all.
+ *   R2 a GT Price that is not a number no longer rejects the file — the
+ *      batch runs exactly like a file without GT. (G0, c7fc479, pinned the
+ *      old behaviour here: 422, Hub FAILED, nothing sent; G1 flipped it —
+ *      Manager: "không cần kiểm tra hai cột này".)
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as XLSX from "xlsx";
@@ -218,10 +219,10 @@ const names = (calls: Array<[string, unknown]>) => calls.map(([n]) => n);
 const writes = (calls: Array<[string, unknown]>) =>
   names(calls).filter((n) => n.startsWith("apple.") || /^db\..*\.(insert|upsert|update)$/.test(n) || n.startsWith("pricing."));
 
-describe("G0 — the execute route TODAY with GT in the file", () => {
+describe("the execute route with GT still in the file", () => {
   beforeEach(() => vi.spyOn(console, "log").mockImplementation(() => {}));
 
-  it("R1 GT never reaches Apple, the DB or the audit: every accepted kind of GT ⇒ the SAME recorded calls as an empty GT", async () => {
+  it("R1 GT never reaches Apple, the DB or the audit: every kind of GT ⇒ the SAME recorded calls as an empty GT", async () => {
     const empty = await run({ price: "", currency: "" });
     expect(empty.out.status).toBe(200);
     // Not vacuous: the batch really creates, overwrites, prices and writes.
@@ -249,12 +250,15 @@ describe("G0 — the execute route TODAY with GT in the file", () => {
     expect(filled.text).not.toMatch(/987654|ZQXCUR|base_price|base_currency/);
   }, 60_000);
 
-  it("R2 a GT Price that is not a number rejects the file: 422, Hub FAILED with the parser's message, nothing sent or written", async () => {
-    const { out } = await run({ price: "abc", currency: "VND" });
-    expect(out.status).toBe(422);
-    expect(out.body).toEqual({ error: expect.stringMatching(/^Row \d+: expected numeric GT Price, got "abc"$/) });
-    const hub = out.calls.filter(([n]) => n === "hub.finalize").map(([, a]) => a);
-    expect(hub).toEqual([["RUN-GT", "FAILED", (out.body as { error: string }).error]]);
-    expect(writes(out.calls)).toEqual([]);
+  it("R2 a GT Price that is not a number is ACCEPTED: the batch runs exactly like a file without GT (sends to Apple, writes the DB)", async () => {
+    const noGt = await run("ABSENT");
+    expect(noGt.out.status).toBe(200);
+    for (const price of ["abc", "23 000", true]) {
+      const junk = await run({ price, currency: "VND" });
+      expect(junk.text, String(price)).toBe(noGt.text);
+    }
+    // …and it really is a full batch, not an early exit.
+    expect(writes(noGt.out.calls)).toEqual(expect.arrayContaining(["apple.createInAppPurchase", "db.iaps.upsert", "db.actions_log.insert"]));
+    expect(noGt.out.calls.filter(([n]) => n === "hub.finalize").map(([, a]) => (a as unknown[])[1])).not.toContain("FAILED");
   }, 30_000);
 });

@@ -67,8 +67,6 @@ const MINIMAL_PARSE_RESULT: IapItemsParseResult = {
       type: "CONSUMABLE",
       type_source: "DEFAULT",
       price_usd: 0, // resolveTierByUsdPrice(0, ...) => "FREE", no tier list needed
-      base_price: 0,
-      base_currency: "USD",
       localizations: [],
       warnings: [],
     },
@@ -276,8 +274,10 @@ describe("BulkImportWizard — template download call site", () => {
     await waitFor(() => expect(downloadXlsxTemplate).toHaveBeenCalled());
     const spec = downloadXlsxTemplate.mock.calls[0][0];
     expect(spec.filename).toBe("apple-iap-bulk-import-template-core.xlsx");
-    expect(spec.headers.length).toBe(6);
-    expect(spec.headers).toContain("Reference Name"); // Apple-only core column
+    // Apple's and Google's core templates are BOTH 4 columns since the GT
+    // drop (2026-10-20) — tell them apart by CONTENT, not by length.
+    expect(spec.headers).toEqual(["Product ID", "Reference Name", "Type", "Price (USD)"]);
+    expect(spec.headers).not.toContain("GT Price"); // Google's core has it
   });
 });
 

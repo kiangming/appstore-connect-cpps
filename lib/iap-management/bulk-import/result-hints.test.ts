@@ -23,8 +23,6 @@ function makeItem(
     type,
     type_source: "COLUMN",
     price_usd: 0.99,
-    base_price: 0.99,
-    base_currency: "USD",
     localizations: [],
     warnings: [],
   };

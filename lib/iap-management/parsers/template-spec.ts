@@ -13,7 +13,9 @@
  * a type — no xlsx, no server-only deps — so the client wizard can
  * import these consts without dragging anything heavy into the bundle.
  *
- * Canonical shape: 6 lead headers + 39 locale pairs = 84 columns.
+ * Canonical shape: 4 lead headers + 39 locale pairs = 82 columns.
+ * (GT Price / GT Currency were dropped 2026-10-20 — never applied for
+ * Apple; old files still import, see APPLE_RETIRED_LEAD_HEADERS.)
  * Lead-header matching in the parser is trimmed + case-insensitive
  * (Hotfix 27 / §3.3 lock); only Product ID + Reference Name are
  * required. Locale pairs MUST be adjacent (Display Name immediately
@@ -54,9 +56,21 @@ export const APPLE_LEAD_HEADERS = {
   referenceName: "Reference Name",
   type: "Type",
   priceUsd: "Price (USD)",
-  gtPrice: "GT Price",
-  gtCurrency: "GT Currency",
 } as const;
+
+/** Lead headers the template USED to carry and no longer does
+ *  ([APPLE-bulkimport-drop-gt], Manager 2026-10-20, Q1 (a)): "GT Price" /
+ *  "GT Currency" were parsed but never applied for Apple — Apple pricing
+ *  comes from Price (USD) → tier → price schedule. Files made before still
+ *  have them; the parser RECOGNISES these names (trimmed, any case) so such
+ *  a file imports exactly like a new one: the columns are not read, not
+ *  checked, and raise no "unexpected header" warning.
+ *  ⚠ Apple only — Google's GT Price / GT Currency are real and live in the
+ *  Google module's own template spec. */
+export const APPLE_RETIRED_LEAD_HEADERS: readonly string[] = [
+  "GT Price",
+  "GT Currency",
+];
 
 /** Emission order of the lead headers in the generated template. */
 export const APPLE_LEAD_HEADER_ROW: readonly string[] =
@@ -134,10 +148,12 @@ export const APPLE_LOCALE_OPTIONS: readonly LocaleOption[] = [
 
 /** Locale whose pair the SAMPLE rows fill. "First selected in canonical
  *  order" with one deliberate exception: Vietnamese wins when it is in
- *  the selection. That keeps the FULL template byte-identical to the
- *  pre-picker file (whose samples came from the Manager's own
- *  Vietnamese source rows) — the full selection also keeps the original
- *  filename, so its content must not silently change either. */
+ *  the selection, so the FULL template's samples stay the Manager's own
+ *  Vietnamese source rows.
+ *  ⚠ The full selection keeps the ORIGINAL filename
+ *  (apple-iap-bulk-import-template.xlsx), so its content must never change
+ *  silently. It changed ONCE, on purpose: 2026-10-20, GT Price / GT
+ *  Currency dropped, 84 → 82 columns (Manager Q3 — keep the name). */
 function preferredSampleLocale(chosen: readonly string[]): string | undefined {
   return chosen.includes("Vietnamese") ? "Vietnamese" : chosen[0];
 }
@@ -150,9 +166,9 @@ export function appleLocalePairHeaders(
   );
 }
 
-/** Canonical header row for a selection: 6 lead columns ALWAYS, plus a
+/** Canonical header row for a selection: 4 lead columns ALWAYS, plus a
  *  pair per selected locale in canonical order. `undefined` = full set
- *  (6 + 39×2 = 84 columns); `[]` = core-only (6 columns), the picker's
+ *  (4 + 39×2 = 82 columns); `[]` = core-only (4 columns), the picker's
  *  default path. */
 export function appleTemplateHeaders(selected?: readonly string[]): string[] {
   return [...APPLE_LEAD_HEADER_ROW, ...appleLocalePairHeaders(selected)];
@@ -161,24 +177,47 @@ export function appleTemplateHeaders(selected?: readonly string[]): string[] {
 /** Example-row values, genericized from the Manager's source file
  *  (apple-item-iap-test.xlsx, August 2026). Product IDs come from the
  *  shared TEMPLATE_SAMPLE_PRODUCT_IDS skip list. USD prices are the
- *  Manager's (0.49 / 4.09 / 12.49). GT Price / GT Currency are left
- *  BLANK, deviating from the source's constant 23000/VND: those columns
- *  are currently NOT applied for Apple (parsed into base_price/
- *  base_currency, consumed nowhere downstream — Apple pricing comes
- *  from Price (USD) → tier inference → price schedule), and filling an
- *  inert column would teach a wrong pattern. The locale pair is filled
- *  for the FIRST SELECTED locale (canonical order) so an imported copy
- *  is metadata-complete; with zero locales selected the rows carry no
+ *  Manager's (0.49 / 4.09 / 12.49). The locale pair is filled for the
+ *  sample locale (preferredSampleLocale) so an imported copy is
+ *  metadata-complete; with zero locales selected the rows carry no
  *  locale cells at all. */
 const SAMPLE_ROW_VALUES = TEMPLATE_SAMPLE_PRODUCT_IDS.map((id, i) => ({
   productId: id,
   referenceName: `Sample product 0${i + 1}`,
   priceUsd: [0.49, 4.09, 12.49][i],
-  gtPrice: "",
-  gtCurrency: "",
   displayName: `Sample product 0${i + 1}`,
   description: `Sample product 0${i + 1} - import, default price template`,
 }));
+
+/** The 3 sample products as rows UNDER `headers`, every value placed by
+ *  header NAME. ONE builder for the data sheet AND the Notes
+ *  illustration, so neither can drift from its own header row — the
+ *  Notes table used to be a positional array, and removing two columns
+ *  left it two cells out of line with no error. A header the row needs
+ *  but `headers` lacks throws (a programming error, never user input). */
+function sampleRows(
+  headers: readonly string[],
+  sampleLocale: string | undefined,
+): (string | number)[][] {
+  const col = (name: string) => {
+    const i = headers.indexOf(name);
+    if (i < 0) throw new Error(`sample row: the header row has no "${name}" column`);
+    return i;
+  };
+  return SAMPLE_ROW_VALUES.map((v) => {
+    const row: (string | number)[] = headers.map(() => "");
+    row[col(APPLE_LEAD_HEADERS.productId)] = v.productId;
+    row[col(APPLE_LEAD_HEADERS.referenceName)] = v.referenceName;
+    // Type left empty on purpose — demonstrates the Hotfix 27 default
+    // (empty → CONSUMABLE), matching the Manager's source rows.
+    row[col(APPLE_LEAD_HEADERS.priceUsd)] = v.priceUsd;
+    if (sampleLocale !== undefined) {
+      row[col(`Display Name (${sampleLocale})`)] = v.displayName;
+      row[col(`Description (${sampleLocale})`)] = v.description;
+    }
+    return row;
+  });
+}
 
 /** The pre-filled data-sheet rows: 3 samples, a spacer, and the visible
  *  delete-me warning in a row whose Product ID cell is EMPTY (both
@@ -187,29 +226,16 @@ const SAMPLE_ROW_VALUES = TEMPLATE_SAMPLE_PRODUCT_IDS.map((id, i) => ({
 export function appleTemplateDataRows(
   selected?: readonly string[],
 ): (string | number)[][] {
-  const headers = appleTemplateHeaders(selected);
-  const col = (name: string) => headers.indexOf(name);
   const sampleLocale = preferredSampleLocale(
     resolveSelectedLocales(APPLE_LOCALE_NAMES, selected),
   );
-  const rows = SAMPLE_ROW_VALUES.map((v) => {
-    const row: (string | number)[] = headers.map(() => "");
-    row[col(APPLE_LEAD_HEADERS.productId)] = v.productId;
-    row[col(APPLE_LEAD_HEADERS.referenceName)] = v.referenceName;
-    // Type left empty on purpose — demonstrates the Hotfix 27 default
-    // (empty → CONSUMABLE), matching the Manager's source rows.
-    row[col(APPLE_LEAD_HEADERS.priceUsd)] = v.priceUsd;
-    row[col(APPLE_LEAD_HEADERS.gtPrice)] = v.gtPrice;
-    row[col(APPLE_LEAD_HEADERS.gtCurrency)] = v.gtCurrency;
-    if (sampleLocale !== undefined) {
-      row[col(`Display Name (${sampleLocale})`)] = v.displayName;
-      row[col(`Description (${sampleLocale})`)] = v.description;
-    }
-    return row;
-  });
   // Truly empty spacer ([] → no cells written), then the note with an
   // EMPTY Product ID cell so the parser ignores the row.
-  return [...rows, [], ["", TEMPLATE_SAMPLE_ROWS_NOTE]];
+  return [
+    ...sampleRows(appleTemplateHeaders(selected), sampleLocale),
+    [],
+    ["", TEMPLATE_SAMPLE_ROWS_NOTE],
+  ];
 }
 
 /** Per-lead-column notes metadata. Keyed over APPLE_LEAD_HEADERS so a
@@ -237,16 +263,6 @@ const LEAD_NOTES: Record<
     meaning:
       "Numeric price in US DOLLARS (USD) — used to infer the Apple price tier from your pricing template. Empty → the pricing stage is skipped for that row.",
   },
-  gtPrice: {
-    required: "Optional",
-    meaning:
-      "⚠ Currently NOT applied for Apple: the import parses this column (with GT Currency) but nothing downstream consumes it — Apple pricing comes from Price (USD) → tier inference → price schedule. Safe to leave blank (the sample rows do).",
-  },
-  gtCurrency: {
-    required: "Optional",
-    meaning:
-      '⚠ Currently NOT applied for Apple — see GT Price. Currency code for GT Price, e.g. "VND", if you fill the pair anyway.',
-  },
 };
 
 function appleNotesRows(selected?: readonly string[]): (string | number)[][] {
@@ -255,6 +271,12 @@ function appleNotesRows(selected?: readonly string[]): (string | number)[][] {
   ) as (keyof typeof APPLE_LEAD_HEADERS)[];
   const chosen = resolveSelectedLocales(APPLE_LOCALE_NAMES, selected);
   const sampleLocale = preferredSampleLocale(chosen);
+  const noteTableHeaders = [
+    ...APPLE_LEAD_HEADER_ROW,
+    ...(sampleLocale !== undefined
+      ? [`Display Name (${sampleLocale})`, `Description (${sampleLocale})`]
+      : []),
+  ];
   return [
     ["Apple IAP bulk-import template — how to fill"],
     [],
@@ -288,29 +310,20 @@ function appleNotesRows(selected?: readonly string[]): (string | number)[][] {
         ]),
     [],
     [
-      `UNIT REMINDER: "${APPLE_LEAD_HEADERS.priceUsd}" is US dollars — it is what actually drives Apple pricing (tier inference → price schedule). GT Price / GT Currency are parsed but currently NOT applied for Apple; if filled, GT Price is a PRICE in GT Currency, NOT an exchange rate.`,
+      `UNIT REMINDER: "${APPLE_LEAD_HEADERS.priceUsd}" is US dollars — it is what drives Apple pricing (tier inference → price schedule).`,
+    ],
+    [
+      "COPYING FROM ANOTHER FILE: copy column by column, under the same headers — never paste whole rows from an older template. Its columns can differ from this one, and a pasted row puts values under the wrong headers without any error.",
     ],
     [],
     [
       `SAMPLE ROWS: the "${APPLE_DATA_SHEET_NAME}" sheet comes PRE-FILLED with the 3 sample rows below. Delete them or replace them with your real products. Rows keeping the sample Product IDs (${TEMPLATE_SAMPLE_PRODUCT_IDS.join(", ")}) are skipped automatically on import — any other Product ID in the data sheet is imported as a REAL store product.`,
     ],
     // The illustrative table mirrors THIS file's columns — never a
-    // column the selection excluded.
-    [
-      ...APPLE_LEAD_HEADER_ROW,
-      ...(sampleLocale !== undefined
-        ? [`Display Name (${sampleLocale})`, `Description (${sampleLocale})`]
-        : []),
-    ],
-    ...SAMPLE_ROW_VALUES.map((v) => [
-      v.productId,
-      v.referenceName,
-      "",
-      v.priceUsd,
-      v.gtPrice,
-      v.gtCurrency,
-      ...(sampleLocale !== undefined ? [v.displayName, v.description] : []),
-    ]),
+    // column the selection excluded — and its rows come from the SAME
+    // by-name builder as the data sheet.
+    noteTableHeaders,
+    ...sampleRows(noteTableHeaders, sampleLocale),
   ];
 }
 
@@ -318,8 +331,8 @@ function appleNotesRows(selected?: readonly string[]): (string | number)[][] {
  *  downloadXlsxTemplate.
  *
  *  `selectedLocaleNames` comes from the download modal's locale picker:
- *  `undefined` = FULL set (pre-picker behaviour, byte-identical output
- *  and filename), `[]` = core columns only (the picker's default path,
+ *  `undefined` = FULL set (every locale, the original filename — see
+ *  preferredSampleLocale), `[]` = core columns only (the picker's default path,
  *  nothing pre-ticked). Names are keys of APPLE_LOCALE_OPTIONS /
  *  locale-map.json; unknown names are ignored by resolveSelectedLocales
  *  rather than emitting a header no parser would match. */

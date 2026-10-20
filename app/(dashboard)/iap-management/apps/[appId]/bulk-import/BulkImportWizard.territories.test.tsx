@@ -114,8 +114,6 @@ function parsedItems(n = 2) {
       type: "CONSUMABLE" as const,
       type_source: "DEFAULT" as const,
       price_usd: 0,
-      base_price: 0,
-      base_currency: "USD",
       localizations: [],
       warnings: [],
     })),

@@ -55,7 +55,7 @@ function parsed(localizations = [
     items: [{
       row_index: 1, product_id: PID, reference_name: "Item box ingame",
       type: "CONSUMABLE" as const, type_source: "DEFAULT" as const,
-      price_usd: 0, base_price: 0, base_currency: "USD",
+      price_usd: 0,
       localizations, warnings: [],
     }],
     skipped_locales: [], locale_pair_count: localizations.length,

@@ -77,8 +77,6 @@ const MINIMAL_PARSE_RESULT: IapItemsParseResult = {
       type: "CONSUMABLE",
       type_source: "DEFAULT",
       price_usd: 0,
-      base_price: 0,
-      base_currency: "USD",
       localizations: [],
       warnings: [],
     },

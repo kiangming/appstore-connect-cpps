@@ -14,8 +14,6 @@ const LEAD = [
   "Reference Name",
   "Type",
   "Price (USD)",
-  "GT Price",
-  "GT Currency",
   "Display Name (English (U.S.))",
   "Description (English (U.S.))",
 ];
@@ -36,8 +34,6 @@ function rowWith(opts: { type?: string; price?: number; name?: string } = {}) {
     "Test Product",
     opts.type ?? "",
     opts.price ?? 0.99,
-    23000,
-    "VND",
     "Test", // Display Name (en-US)
     "Test desc", // Description (en-US)
   ];
@@ -96,8 +92,6 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
         "Type",
         "Reference Name",
         "Price (USD)",
-        "GT Price",
-        "GT Currency",
         "Display Name (English (U.S.))",
         "Description (English (U.S.))",
       ],
@@ -106,8 +100,6 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
         "NON_CONSUMABLE",
         "Reordered Test",
         4.99,
-        23000,
-        "VND",
         "Test",
         "Test desc",
       ],
@@ -125,8 +117,6 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
     expect(result.items[0].type).toBe("NON_CONSUMABLE");
     expect(result.items[0].type_source).toBe("COLUMN");
     expect(result.items[0].price_usd).toBe(4.99);
-    expect(result.items[0].base_price).toBe(23000);
-    expect(result.items[0].base_currency).toBe("VND");
     expect(result.items[0].localizations).toHaveLength(1);
   });
 
@@ -138,13 +128,11 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
         "Product ID",
         "Reference Name",
         "Price (USD)",
-        "GT Price",
-        "GT Currency",
         "Display Name (English (U.S.))",
         "Description (English (U.S.))",
       ],
-      ["com.vng.a", "Product A", 0.99, 23000, "VND", "A", "Adesc"],
-      ["com.vng.b", "Product B", 4.99, 115000, "VND", "B", "Bdesc"],
+      ["com.vng.a", "Product A", 0.99, "A", "Adesc"],
+      ["com.vng.b", "Product B", 4.99, "B", "Bdesc"],
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
@@ -160,10 +148,10 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
     }
   });
 
-  it("Hotfix 27 — Price (USD) / GT Price / GT Currency columns absent → safe defaults", async () => {
+  it("Hotfix 27 — Type / Price (USD) columns absent → safe defaults", async () => {
     // Per §3.3 institutional lock, only Product ID + Reference Name are
-    // truly required. Other columns become 0 / "" defaults; downstream
-    // pricing stage gracefully skips with `skipped-no-tier`.
+    // truly required. Other columns become defaults; downstream pricing
+    // stage gracefully skips with `skipped-no-tier`.
     const ws = XLSX.utils.aoa_to_sheet([
       [
         "Product ID",
@@ -186,9 +174,8 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
       type: "CONSUMABLE",
       type_source: "DEFAULT",
       price_usd: 0,
-      base_price: 0,
-      base_currency: "",
     });
+    expect(result.items[0]).not.toHaveProperty("base_price");
     // Locale pair still works even though no lead pricing columns exist.
     expect(result.items[0].localizations).toHaveLength(1);
   });
@@ -200,8 +187,6 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
         "Empty Price Row",
         "", // Type empty → CONSUMABLE
         "", // Price (USD) empty → 0 (Hotfix 27 — was a row error pre-fix)
-        "", // GT Price empty → 0
-        "", // GT Currency empty → ""
         "Name",
         "Desc",
       ],
@@ -212,8 +197,6 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
       type: "CONSUMABLE",
       type_source: "DEFAULT",
       price_usd: 0,
-      base_price: 0,
-      base_currency: "",
     });
   });
 
@@ -261,10 +244,8 @@ describe("parseIapItemsXlsx Type column (Manager IAP.h2 lock)", () => {
         "REFERENCE NAME",     // uppercase
         "Type",
         "Price (USD)",
-        "GT Price",
-        "GT Currency",
       ],
-      ["com.vng.case", "Case Test", "", 0.99, 23000, "VND"],
+      ["com.vng.case", "Case Test", "", 0.99],
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Sheet1");

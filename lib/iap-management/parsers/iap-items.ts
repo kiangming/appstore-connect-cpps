@@ -21,11 +21,11 @@
  *   "Price (USD)"          optional — numeric, drives tier inference downstream.
  *                                     Empty / column absent → 0 (pricing stage
  *                                     skips with `skipped-no-tier`).
- *   "GT Price"             optional — numeric, base-territory price. Empty /
- *                                     column absent → 0.
- *   "GT Currency"          optional — string, base-territory currency code.
- *                                     Empty / column absent → "" (pricing
- *                                     stage skips on missing base currency).
+ *
+ *   Retired columns (APPLE_RETIRED_LEAD_HEADERS — "GT Price", "GT Currency",
+ *   dropped 2026-10-20, never applied for Apple): recognised by name so a
+ *   file made before still imports exactly like a new one — NOT read, NOT
+ *   checked, NO warning (Manager Q1 (a)).
  *
  *   Locale pair columns (any position after the lead columns):
  *           [Display Name (<Locale Name>), Description (<Locale Name>)]
@@ -53,6 +53,7 @@ import {
   APPLE_DATA_SHEET_NAME,
   APPLE_LEAD_HEADERS,
   APPLE_REQUIRED_LEAD_HEADERS,
+  APPLE_RETIRED_LEAD_HEADERS,
   APPLE_TYPE_VALUES,
 } from "./template-spec";
 import { TEMPLATE_SAMPLE_PRODUCT_IDS } from "@/lib/xlsx-template";
@@ -68,8 +69,9 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 /** Only these two columns are REQUIRED. Everything else has a safe default
  *  per the §3.3 institutional lock (Hotfix 27 restoration). The other lead
- *  headers the parser recognises are "Type" / "Price (USD)" / "GT Price" /
- *  "GT Currency" — all optional. Canonical names live in template-spec.ts,
+ *  headers the parser recognises are "Type" / "Price (USD)" — both
+ *  optional — plus the retired "GT Price" / "GT Currency", recognised and
+ *  ignored. Canonical names live in template-spec.ts,
  *  shared with the "Download template" generator so parser and template
  *  cannot drift apart. */
 const REQUIRED_LEAD_HEADERS = APPLE_REQUIRED_LEAD_HEADERS;
@@ -92,8 +94,6 @@ export interface ParsedIapItem {
   type: InAppPurchaseType;
   type_source: "COLUMN" | "DEFAULT";  // for audit log (IAP.h2)
   price_usd: number;
-  base_price: number;
-  base_currency: string;
   localizations: ParsedIapLocalization[];
   warnings: string[];       // row-specific warnings (e.g. partial locale fill)
 }
@@ -126,9 +126,11 @@ function readCellString(value: unknown): string {
 /** Hotfix 27 — only invoked when the column EXISTS in the template. A
  *  missing column resolves to col=-1 and the caller short-circuits to
  *  the documented default (0). Empty cells under a present column still
- *  short-circuit to 0 here. Invalid contents (e.g. "abc") remain a
- *  row-level error because the institutional lock distinguishes
- *  "absent/empty → default" from "invalid → row error". */
+ *  short-circuit to 0 here. Invalid contents (e.g. "abc") THROW, and the
+ *  throw rejects the WHOLE FILE (parseIapItemsXlsx does not catch it;
+ *  Step 1 shows it, the execute route answers 422) — the lock
+ *  distinguishes "absent/empty → default" from "invalid → refused".
+ *  Used for "Price (USD)" only since the GT columns were retired. */
 function readOptionalCellNumber(
   value: unknown,
   label: string,
@@ -163,8 +165,6 @@ interface LeadColumnIndex {
   referenceName: number;
   type: number;
   priceUsd: number;
-  gtPrice: number;
-  gtCurrency: number;
 }
 
 /** Read a known column by its resolved index; returns "" when the column
@@ -257,8 +257,6 @@ export async function parseIapItemsXlsx(
     referenceName: findHeaderIndex(header, APPLE_LEAD_HEADERS.referenceName),
     type: findHeaderIndex(header, APPLE_LEAD_HEADERS.type),
     priceUsd: findHeaderIndex(header, APPLE_LEAD_HEADERS.priceUsd),
-    gtPrice: findHeaderIndex(header, APPLE_LEAD_HEADERS.gtPrice),
-    gtCurrency: findHeaderIndex(header, APPLE_LEAD_HEADERS.gtCurrency),
   };
 
   /** The set of column indices already claimed by lead headers. Used below
@@ -267,6 +265,12 @@ export async function parseIapItemsXlsx(
   const leadClaimed = new Set<number>(
     Object.values(leadIdx).filter((i) => i >= 0),
   );
+  // Retired columns (GT Price / GT Currency) are CLAIMED too — so the
+  // locale scan below never calls them "unexpected" — and never read.
+  for (const retired of APPLE_RETIRED_LEAD_HEADERS) {
+    const i = findHeaderIndex(header, retired);
+    if (i >= 0) leadClaimed.add(i);
+  }
 
   // ── Discover locale pair columns ─────────────────────────────────────────
   // Locale columns can appear in any position outside the lead set. We scan
@@ -365,19 +369,13 @@ export async function parseIapItemsXlsx(
       );
     }
 
-    // Price (USD) / GT Price / GT Currency — all optional per §3.3 lock.
-    // Missing column OR empty cell → safe default (0 / 0 / ""). Downstream
-    // pricing-orchestration treats price_usd=0 or empty base_currency as
-    // "no tier to resolve" and skips the pricing stage gracefully.
+    // Price (USD) — optional per §3.3 lock. Missing column OR empty cell
+    // → 0; no tier resolves from 0, so the pricing stage skips that row
+    // (`skipped-no-tier`).
     const priceUsd =
       leadIdx.priceUsd < 0
         ? 0
         : readOptionalCellNumber(row[leadIdx.priceUsd], "Price (USD)", r);
-    const basePrice =
-      leadIdx.gtPrice < 0
-        ? 0
-        : readOptionalCellNumber(row[leadIdx.gtPrice], "GT Price", r);
-    const baseCurrency = readCol(row, leadIdx.gtCurrency);
 
     const itemWarnings: string[] = [];
     const localizations: ParsedIapLocalization[] = [];
@@ -412,8 +410,6 @@ export async function parseIapItemsXlsx(
       type,
       type_source: typeSource,
       price_usd: priceUsd,
-      base_price: basePrice,
-      base_currency: baseCurrency,
       localizations,
       warnings: itemWarnings,
     });

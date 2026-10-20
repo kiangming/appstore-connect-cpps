@@ -15,8 +15,6 @@ function row(overrides: Partial<ParsedIapItem> = {}): ParsedIapItem {
     type: "CONSUMABLE",
     type_source: "DEFAULT",
     price_usd: 0.99,
-    base_price: 23000,
-    base_currency: "VND",
     localizations: [],
     warnings: [],
     ...overrides,

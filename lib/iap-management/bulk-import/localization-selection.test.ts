@@ -28,8 +28,6 @@ const item = (product_id: string, locales: string[]): ParsedIapItem => ({
   type: "CONSUMABLE",
   type_source: "DEFAULT",
   price_usd: 1,
-  base_price: 0,
-  base_currency: "USD",
   localizations: locales.map(loc),
   warnings: [],
 });

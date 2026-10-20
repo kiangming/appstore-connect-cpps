@@ -93,8 +93,6 @@ function withLocales() {
         type: "CONSUMABLE" as const,
         type_source: "DEFAULT" as const,
         price_usd: 0,
-        base_price: 0,
-        base_currency: "USD",
         localizations: [
           {
             locale: "vi",

@@ -5,7 +5,8 @@
  *
  *   price-tiers-template.xlsx: 88 standard tiers + 7 alternate tiers,
  *                              175 territories, sheet name "price_tiers".
- *   item-iap-template.xlsx:    84 columns (6 lead incl. Type + 39 locale
+ *   item-iap-template.xlsx:    84 columns (6 lead incl. Type and the
+ *                              retired GT Price / GT Currency + 39 locale
  *                              pairs), 3 sample data rows. Data sheet is
  *                              named "Sheet1" → exercises the first-sheet
  *                              FALLBACK of the by-name sheet selection.
@@ -111,8 +112,10 @@ describe("parseIapItemsXlsx — Manager template (post-IAP.h2 Type column)", () 
     expect(sample.product_id).toBe("com.vng.example.product1");
     expect(sample.reference_name).toBe("Example 1");
     expect(sample.price_usd).toBe(0.99);
-    expect(sample.base_price).toBe(23000);
-    expect(sample.base_currency).toBe("VND");
+    // The legacy file still carries GT Price / GT Currency (23000 / VND):
+    // retired columns, recognised and ignored — not read, no warning.
+    expect(sample).not.toHaveProperty("base_price");
+    expect(result.warnings).toEqual([]);
   });
 
   it("Type column empty in samples → defaults to CONSUMABLE with type_source=DEFAULT", async () => {

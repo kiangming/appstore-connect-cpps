@@ -31,8 +31,6 @@ function item(
     type: "CONSUMABLE",
     type_source: "DEFAULT",
     price_usd: 1,
-    base_price: 0,
-    base_currency: "USD",
     localizations: locales.map((l) => loc(l.locale, l.name, l.desc)),
     warnings,
   };

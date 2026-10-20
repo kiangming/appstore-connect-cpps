@@ -25,10 +25,10 @@
  * route `tier_overrides` and `availability_selection` already take — and be
  * applied here, to data the server produced.
  *
- * ⚠ THIS IS NOT THE "PARSE BUT IGNORE" PATTERN. `template-spec.ts` notes that
- * GT Price / GT Currency are parsed and "consumed nowhere downstream". That is
- * a SILENT drop, and silent drops are the exact bug class this arc exists to
- * kill. Everything dropped here is counted and reported.
+ * ⚠ THIS IS NOT A "PARSE BUT IGNORE" PATTERN — data parsed and then silently
+ * consumed nowhere (the Apple GT Price / GT Currency columns were exactly that
+ * until they were retired, 2026-10-20). Silent drops are the bug class this
+ * arc exists to kill: everything dropped here is counted and reported.
  */
 import type { ParsedIapItem } from "../parsers/iap-items";
 

@@ -69,8 +69,6 @@ function item(product_id: string, price_usd: number): ParsedIapItem {
     type: "CONSUMABLE",
     type_source: "DEFAULT",
     price_usd,
-    base_price: price_usd,
-    base_currency: "USD",
     localizations: [],
     warnings: [],
   };

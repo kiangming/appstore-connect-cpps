@@ -152,7 +152,7 @@ End-to-end pricing import + IAP CRUD + bulk import.
 | # | Action | Expected |
 |---|---|---|
 | 29.D.1 | "Bulk Import" button | Navigate to `/iap-management/apps/[appId]/bulk-import` (dedicated route, not modal). |
-| 29.D.2 | Step 1 upload | Drop `item-iap-template.xlsx` | Success card: "3 IAPs · 39 locale pairs detected. Type source: 0 from column, 3 defaulted to Consumable." |
+| 29.D.2 | Step 1 upload | Drop `item-iap-template.xlsx` | Success card: "3 IAPs · 39 locale pairs detected. Type source: 0 from column, 3 defaulted to Consumable." (⟲ 2026-10-20, KB §36: unchanged — the file's GT Price / GT Currency are retired columns, recognised and ignored; no warning line.) |
 | 29.D.3 | Type-column branches | Open the .xlsx, set Type col for row 2 to "NON_CONSUMABLE", save, re-upload | Success card updates: "Type source: 1 from column, 2 defaulted to Consumable." Step 3 row 2 Type badge reads `non consumable` with a `column` mini-badge. |
 | 29.D.4 | Type-column invalid value | Set Type col for row 2 to "INVALID" | Parser throws a 422 error during Step 1 with message: "Invalid Type value 'INVALID'. Expected CONSUMABLE / NON_CONSUMABLE / NON_RENEWING_SUBSCRIPTION." |
 | 29.D.5 | Step 2 screenshots | Drop the three `com.vng.example.product{1,2,3}.jpg` samples | Tally: Matched 3 / Unmatched 0 / Missing 0. Per-file table shows method = "literal" (dots preserved) for all 3. |

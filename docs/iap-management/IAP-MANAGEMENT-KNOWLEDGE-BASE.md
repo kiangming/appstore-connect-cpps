@@ -1212,7 +1212,7 @@ pagination/
   page-slice.ts                             list-page client pagination math (IAP.o.7b)
 
 parsers/
-  iap-items.ts                              84-col XLSX parser (with Type column)
+  iap-items.ts                              82-col XLSX parser (with Type column; 84-col files with the retired GT columns still read — §36)
   price-tiers.ts                            sparse template parser (Cycle 30 Q-I)
   screenshot-matcher.ts                     literal + normalized matching (Q-IAP.h2)
 
@@ -1367,7 +1367,7 @@ from a single `STEP` / `STEP_LABELS` / `STEP_ORDER` block, guarded by
 `BulkImportWizard.steps.structural.test.tsx`. **This KB list is NOT covered by
 that guard — it is prose.** If you add a step, update it here by hand.
 
-1. **Step 1 — Excel**: upload/parse of the 84-column template
+1. **Step 1 — Excel**: upload/parse of the 82-column template (84 before 2026-10-20, §36)
    client-side. Template download is offered in the wizard HEADER (every
    step) and on the apps-list page — one shared component
    (`components/ui/shared/DownloadTemplateButton.tsx`) across all four
@@ -2055,6 +2055,8 @@ documented default:
 | Price (USD) | `0` (downstream pricing stage skips with `skipped-no-tier`) |
 | GT Price | `0` |
 | GT Currency | `""` |
+
+> ⟲ **2026-10-20 (§36):** GT Price / GT Currency are no longer Apple lead headers. `leadIdx` has no `gtPrice` / `gtCurrency`; the two names are `APPLE_RETIRED_LEAD_HEADERS` — recognised (claimed, trimmed, any case) so an old file raises no "unexpected header", never read, never checked. `ParsedIapItem` has no `base_price` / `base_currency`.
 
 Locale-pair detection (`Display Name (X)` / `Description (X)`) now
 scans non-lead columns at any position, not just `LEAD_HEADERS.length+`,
@@ -9134,6 +9136,8 @@ Design: `docs/iap-management/design-apple-bulkimport-drop-gt-columns.md`. ⚠ CH
 **Manager chốt (2026-10-20):** Q1 (a) file cũ còn 2 cột GT ⇒ nhận, bỏ qua, KHÔNG kiểm, KHÔNG báo — 2 tên cột cũ nằm trong danh sách "cột cũ đã bỏ" CHỈ của Apple, để không sinh cảnh báo "Skipped unexpected header". Q2 không migration. Q3 giữ tên file `apple-iap-bulk-import-template.xlsx` (nội dung đổi 84 → 82 cột — sửa câu bất biến ở `template-spec.ts`). Q4 giữ `template_version = 'iap-items-v1'`.
 
 **Bẫy đã đo, có chủ đích KHÔNG chặn bằng code — chép CẢ DÒNG từ file cũ sang template mới:** file cũ có 6 cột đầu, template mới 4 ⇒ dán cả dòng theo vị trí làm giá trị GT trượt vào `Display Name` / `Description` (ĐÃ ĐO: `display_name '23000'`, `description 'VND'`, **0 cảnh báo** — dữ liệu hợp lệ về hình thức, parser không phân biệt được). **Lớp chặn:** (1) câu dặn trong sheet Notes và user guide — chép theo từng cột, không chép cả dòng từ template cũ; (2) **step 4 Localization** hiện từng ô theo nhãn Name / Desc và tô sáng trường khác bản đang bán, TRƯỚC execute ⇒ giá trị GT lọt vào sẽ lộ ở đó.
+
+**Đã làm (G1):** template core 4 · 1 locale 6 · đủ 82 (tên file giữ nguyên); Notes không còn nhắc GT, có câu dặn chép theo từng cột; bảng minh hoạ Notes và dòng mẫu sheet dữ liệu dựng bằng MỘT hàm theo tên header (`sampleRows`, `template-spec.ts`). Parser bỏ đọc/kiểm GT, bỏ `base_price` / `base_currency`; `APPLE_RETIRED_LEAD_HEADERS` giữ chỗ 2 tên cũ. Ghim: `gt-columns.baseline.test.ts` (template + parser: file cũ mọi kiểu GT, mọi vị trí ⇒ y hệt file mới, 0 cảnh báo), `gt-columns.route.test.ts` (route execute thật: GT rác ⇒ chạy như file không GT), `gt-drop.google-parity.test.ts` (Google không đổi một byte).
 
 **Bài học chung:** "chỉ xoá một header khỏi danh sách đã biết" KHÔNG phải "bỏ qua cột đó" — với parser quét cột lạ, header bị xoá trở thành cảnh báo cho mọi file cũ. Muốn file cũ im lặng thì phải nhận diện tên cũ có chủ đích.
 

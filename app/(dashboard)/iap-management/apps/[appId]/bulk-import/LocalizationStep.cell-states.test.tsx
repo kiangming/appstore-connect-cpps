@@ -25,8 +25,6 @@ const item = (locales = ["vi", "en-US"]): ParsedIapItem =>
     type: "CONSUMABLE",
     type_source: "DEFAULT",
     price_usd: 0,
-    base_price: 0,
-    base_currency: "USD",
     localizations: locales.map((l) => ({
       locale: l,
       locale_name: l === "vi" ? "Vietnamese" : "English (U.S.)",

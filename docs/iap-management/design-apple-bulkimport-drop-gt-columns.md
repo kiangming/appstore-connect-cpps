@@ -1,6 +1,6 @@
 # [APPLE-bulkimport-drop-gt] Bỏ "GT Price" / "GT Currency" khỏi Bulk Import của Apple — census + thiết kế
 
-**Trạng thái:** census PASS (`cdd5135`); Manager chốt §P4 (2026-10-20, xem §P4-chốt). G0 (ghim hiện trạng) xong — chờ gate; G1 chưa làm.
+**Trạng thái:** census PASS (`cdd5135`); Manager chốt §P4 (2026-10-20, xem §P4-chốt). G0 PASS (`c7fc479`). G1 xong — chờ gate.
 **Nhánh:** `arc-apple-bulkimport-drop-gt-columns` (cắt từ `origin/main` = `bf48692`).
 **Phạm vi:** CHỈ module Apple. Google dùng GT thật (H4) — không đổi một hành vi nào của Google.
 
@@ -239,7 +239,7 @@ Docs chung 2 module: `docs/user-docs/index.html` (Apple: `data-page="apple-bulk-
 ## Tiến độ
 
 - **G0** — ghim hiện trạng, chưa đổi hành vi (`lib/iap-management/parsers/gt-columns.baseline.test.ts` T1–T3 template + P1–P4 parser; `app/api/iap-management/apps/[appId]/bulk-import/execute/gt-columns.route.test.ts` R1–R2 route thật; `lib/iap-management/parsers/gt-drop.google-parity.test.ts` GP1–GP3 Google). Mutation 5/5 đỏ.
-- **G1** — chưa làm.
+- **G1** — template core 4 · 1 locale 6 · đủ 82 (tên file giữ); Notes viết lại, không nhắc GT, có câu dặn chép theo cột; bảng minh hoạ + dòng mẫu dựng bằng MỘT hàm theo tên header (`sampleRows`). Parser bỏ đọc/kiểm GT, bỏ `base_*`, thêm `APPLE_RETIRED_LEAD_HEADERS`. Comment sai đã sửa (`iap-items.ts` doc header, `readOptionalCellNumber`, đoạn Price (USD); `template-spec.ts` bất biến tên file; `localization-selection.ts`). Test G0 sửa có chủ đích (T1–T3, P1–P4, R2 lật). User guide + KB §36 + ghi chú ⟲ ở design cũ / UAT-MV28-30.
 
 ## Phát hiện bên lề (không thuộc arc, ghi để BACKLOG)
 

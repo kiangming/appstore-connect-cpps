@@ -1332,7 +1332,7 @@
                 <li><strong>IAP Items</strong> — sheet dữ liệu, gồm dòng header + <strong>3 dòng sample</strong> (Product ID <code class="inline">com.vngg.tool.product.sample01–03</code>). Điền mỗi IAP 1 dòng. <em>Không đổi tên sheet</em> — tool tìm sheet theo đúng tên này (file cũ để dữ liệu ở "Sheet1" vẫn đọc được qua fallback sheet đầu tiên).</li>
                 <li><strong>Notes</strong> — giải thích từng cột + bảng ví dụ, viết bằng <strong>tiếng Anh</strong> (quy ước của tool). Import bỏ qua sheet này — giữ hay xóa đều được.</li>
               </ul>
-              <p style="margin-top:8px;">Số cột tuỳ lựa chọn: <strong>6 cột core luôn có</strong> + 2 cột cho mỗi locale đã chọn (chọn đủ 39 locale = 84 cột). Cột core không nằm trong form chọn — không bao giờ bị bỏ:</p>
+              <p style="margin-top:8px;">Số cột tuỳ lựa chọn: <strong>4 cột core luôn có</strong> + 2 cột cho mỗi locale đã chọn (chọn đủ 39 locale = 82 cột). Cột core không nằm trong form chọn — không bao giờ bị bỏ:</p>
               <table class="docs-table" style="margin-top:8px;">
                 <thead><tr><th>Cột</th><th>Mô tả</th><th>Bắt buộc</th></tr></thead>
                 <tbody>
@@ -1340,11 +1340,15 @@
                   <tr><td><code class="inline">Reference Name</code></td><td>Tên nội bộ (≤ 64 ký tự)</td><td>Có</td></tr>
                   <tr><td><code class="inline">Type</code></td><td><code class="inline">CONSUMABLE</code> / <code class="inline">NON_CONSUMABLE</code> / <code class="inline">NON_RENEWING_SUBSCRIPTION</code> — trống (hoặc xóa cả cột) → mặc định <code class="inline">CONSUMABLE</code></td><td>Không · Hotfix 27</td></tr>
                   <tr><td><code class="inline">Price (USD)</code></td><td>Giá USD — tool dùng để suy price tier từ pricing template. Trống → bỏ qua pricing cho dòng đó</td><td>Không</td></tr>
-                  <tr><td><code class="inline">GT Price</code> + <code class="inline">GT Currency</code></td><td>⚠️ Hiện <strong>KHÔNG áp dụng cho Apple</strong> — tool parse nhưng không dùng ở đâu; giá Apple đến từ <code class="inline">Price (USD)</code> → tier → price schedule. Để trống (sample rows để trống)</td><td>Không</td></tr>
                   <tr><td><code class="inline">Display Name (Locale)</code> + <code class="inline">Description (Locale)</code></td><td>Một cặp cột cho mỗi locale bạn chọn ở form (0–39 cặp) — điền cả 2 ô của 1 cặp, hoặc bỏ trống cả 2 (locale đó được bỏ qua)</td><td>Không</td></tr>
                 </tbody>
               </table>
-              <p style="margin-top:8px;">Header match theo <strong>tên cột</strong> (không theo vị trí); 6 cột đầu không phân biệt hoa thường.</p>
+              <p style="margin-top:8px;">Header match theo <strong>tên cột</strong> (không theo vị trí); 4 cột đầu không phân biệt hoa thường.</p>
+              <p style="margin-top:8px;"><strong>File cũ</strong> (tải trước 2026-10-20) có thêm 2 cột giá cũ ngay sau <code class="inline">Price (USD)</code> — vẫn import bình thường: tool bỏ qua 2 cột đó, không kiểm, không báo (chúng chưa bao giờ được dùng cho Apple; giá Apple đến từ <code class="inline">Price (USD)</code> → tier → price schedule).</p>
+              <div class="callout callout-warning" style="margin-top:8px;">
+                <div class="callout-title">⚠️ Không chép CẢ DÒNG từ template cũ sang template mới</div>
+                <p>Template cũ có 6 cột đầu, template mới có 4 — dán cả dòng theo vị trí sẽ đẩy giá trị sang <strong>sai cột</strong> (vd. giá ở cột cũ rơi vào Display Name) mà tool <strong>không báo lỗi</strong>. Chép theo <strong>từng cột</strong>, dưới đúng header. Trước khi chạy, kiểm lại ở step <strong>Localization</strong>: từng ô Name / Desc hiện đúng chữ bạn định ghi.</p>
+              </div>
               <div class="callout callout-warning" style="margin-top:8px;">
                 <div class="callout-title">⚠️ 3 dòng sample — THAY bằng dữ liệu thật, hoặc xóa rồi thêm dòng của bạn</div>
                 <p>Dòng giữ nguyên Product ID dạng sample được tool <strong>tự động bỏ qua</strong> khi import — hiển thị rõ warning <em>"3 example row(s) skipped… delete the sample rows or replace them with your data"</em>, không tính là lỗi. Nếu upload file mà <strong>chưa</strong> thay/xóa sample: import tìm thấy <strong>0 IAP</strong> và nút <strong>Next</strong> ở Step 1 bị disable — đây là nhầm lẫn thường gặp nhất lần đầu dùng. Mọi Product ID <em>khác</em> trong sheet IAP Items sẽ được import thành IAP <strong>thật</strong> trên App Store Connect. Sample rows điền sẵn cặp cột của locale đầu tiên trong lựa chọn (Vietnamese nếu có); template không chọn locale nào thì sample chỉ có cột core.</p>
@@ -1961,13 +1965,13 @@
               Copy
             </button>
           </div>
-<pre><span class="tok-c">// 6 cột core + 1 cặp Display Name/Description cho mỗi locale đã chọn (ví dụ này: chọn đủ 39 → 84 cột). 3 dòng sample có sẵn.</span>
-<span class="tok-c">// Hotfix 27: Type optional — trống → CONSUMABLE. GT Price/GT Currency hiện KHÔNG áp dụng cho Apple → để trống.</span>
+<pre><span class="tok-c">// 4 cột core + 1 cặp Display Name/Description cho mỗi locale đã chọn (ví dụ này: chọn đủ 39 → 82 cột). 3 dòng sample có sẵn.</span>
+<span class="tok-c">// Hotfix 27: Type optional — trống → CONSUMABLE.</span>
 <span class="tok-c">// Dòng giữ Product ID sample bị tool bỏ qua khi import — thay bằng Product ID thật của bạn.</span>
-<span class="tok-n">Product ID | Reference Name | Type | Price (USD) | GT Price | GT Currency | Display Name (Vietnamese) | Description (Vietnamese) | …</span>
-com.vngg.tool.product.sample01 | Sample product 01 |  | 0.49  |  |  | Sample product 01 | Sample product 01 - import, default price template
-com.vngg.tool.product.sample02 | Sample product 02 |  | 4.09  |  |  | Sample product 02 | Sample product 02 - import, default price template
-com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 |  |  | Sample product 03 | Sample product 03 - import, default price template</pre>
+<span class="tok-n">Product ID | Reference Name | Type | Price (USD) | Display Name (Vietnamese) | Description (Vietnamese) | …</span>
+com.vngg.tool.product.sample01 | Sample product 01 |  | 0.49  | Sample product 01 | Sample product 01 - import, default price template
+com.vngg.tool.product.sample02 | Sample product 02 |  | 4.09  | Sample product 02 | Sample product 02 - import, default price template
+com.vngg.tool.product.sample03 | Sample product 03 |  | 12.49 | Sample product 03 | Sample product 03 - import, default price template</pre>
         </div>
 
         <h2 class="section-title">Tips và pitfalls</h2>

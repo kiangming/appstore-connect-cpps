@@ -42,8 +42,6 @@ function makeDataRow(headers: string[], productId: string): unknown[] {
   row[headers.indexOf("Reference Name")] = `Ref ${productId}`;
   row[headers.indexOf("Type")] = "CONSUMABLE";
   row[headers.indexOf("Price (USD)")] = 0.99;
-  row[headers.indexOf("GT Price")] = 23000;
-  row[headers.indexOf("GT Currency")] = "VND";
   row[headers.indexOf("Display Name (English (U.S.))")] = "Name en-US";
   row[headers.indexOf("Description (English (U.S.))")] = "Desc en-US";
   row[headers.indexOf("Display Name (Vietnamese)")] = "Name vi";
@@ -52,14 +50,17 @@ function makeDataRow(headers: string[], productId: string): unknown[] {
 }
 
 describe("anti-drift — generated headers equal the parser contract", () => {
-  it("is exactly 6 lead + 39 adjacent locale pairs = 84 columns", () => {
+  it("is exactly 4 lead + 39 adjacent locale pairs = 82 columns (GT Price / GT Currency dropped 2026-10-20)", () => {
     const headers = appleTemplateHeaders();
     expect(APPLE_LOCALE_NAMES.length).toBe(39);
-    expect(headers.length).toBe(6 + 39 * 2);
-    expect(headers.slice(0, 6)).toEqual([...APPLE_LEAD_HEADER_ROW]);
+    expect(headers.length).toBe(4 + 39 * 2);
+    // Spelled out, not compared with APPLE_LEAD_HEADER_ROW (which would
+    // compare the constant with itself).
+    expect(headers.slice(0, 4)).toEqual(["Product ID", "Reference Name", "Type", "Price (USD)"]);
+    expect(APPLE_LEAD_HEADER_ROW).toEqual(headers.slice(0, 4));
     APPLE_LOCALE_NAMES.forEach((name, i) => {
-      expect(headers[6 + 2 * i]).toBe(`Display Name (${name})`);
-      expect(headers[6 + 2 * i + 1]).toBe(`Description (${name})`);
+      expect(headers[4 + 2 * i]).toBe(`Display Name (${name})`);
+      expect(headers[4 + 2 * i + 1]).toBe(`Description (${name})`);
     });
     // No duplicate columns, and every parser-required header is present.
     expect(new Set(headers).size).toBe(headers.length);
@@ -161,8 +162,7 @@ describe("round-trip — generated template parses cleanly through the real pars
     expect(item.type).toBe("CONSUMABLE");
     expect(item.type_source).toBe("COLUMN");
     expect(item.price_usd).toBe(0.99);
-    expect(item.base_price).toBe(23000);
-    expect(item.base_currency).toBe("VND");
+    expect(item).not.toHaveProperty("base_price");
     expect(item.warnings).toEqual([]);
     expect(item.localizations.map((l) => l.locale).sort()).toEqual([
       "en-US",
@@ -297,8 +297,8 @@ describe("locale selection — anti-drift stays EXACT per selection", () => {
     }
   });
 
-  it("the FULL set is still pinned to 84 columns (catches a new core column or locale-map growth)", () => {
-    expect(appleTemplateHeaders().length).toBe(6 + 39 * 2);
+  it("the FULL set is still pinned to 82 columns (catches a new core column or locale-map growth)", () => {
+    expect(appleTemplateHeaders().length).toBe(4 + 39 * 2);
     expect(appleTemplateHeaders(APPLE_LOCALE_NAMES)).toEqual(
       appleTemplateHeaders(),
     );
@@ -361,15 +361,17 @@ describe("locale selection — sample rows adapt", () => {
     );
     expect(sampleRows.length).toBe(3);
     for (const row of sampleRows) {
-      // Core cells only — nothing beyond the 6 core columns.
+      // Core cells only — nothing beyond the 4 core columns.
       expect(row.length).toBeLessThanOrEqual(APPLE_LEAD_HEADER_ROW.length);
     }
     // Notes sheet documents the absence instead of a locale column.
     const notesText = spec.notesRows.map((r) => r.join(" | ")).join("\n");
     expect(notesText).toContain("(no locale columns)");
     expect(notesText).not.toContain("Display Name (");
-    // The two GT statements survive in every variant.
-    expect(notesText).toContain("Currently NOT applied for Apple");
+    // The retired GT columns are mentioned nowhere; the copy-by-column
+    // advice is there in every variant.
+    expect(notesText).not.toMatch(/GT (Price|Currency)/i);
+    expect(notesText).toContain("COPYING FROM ANOTHER FILE: copy column by column");
   });
 });
 
@@ -408,7 +410,7 @@ describe("locale selection — ROUND-TRIP through the real parser", () => {
     const wb = buildTemplateWorkbook(XLSX, spec);
     XLSX.utils.sheet_add_aoa(
       wb.Sheets[APPLE_DATA_SHEET_NAME],
-      [["com.test.core", "Core row", "", 1.99, "", ""]],
+      [["com.test.core", "Core row", "", 1.99]],
       { origin: -1 },
     );
 
@@ -431,12 +433,10 @@ describe("locale selection — ROUND-TRIP through the real parser", () => {
       "Description (Korean)",
       "Type",
       "Price (USD)",
-      "GT Price",
-      "GT Currency",
     ];
     const ws = XLSX.utils.aoa_to_sheet([
       headers,
-      ["com.test.ko", "Ref K", "ko name", "ko desc", "", 0.49, "", ""],
+      ["com.test.ko", "Ref K", "ko name", "ko desc", "", 0.49],
     ]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, APPLE_DATA_SHEET_NAME);

@@ -110,6 +110,7 @@ Kết quả: `ParsedIapItem.localizations: ParsedIapLocalization[]` — `{locale
 ### P1.2b Tiền lệ "parse nhưng KHÔNG dùng"
 
 `template-spec.ts:166-167` nói thẳng: GT Price / GT Currency *"are currently NOT applied for Apple (parsed into `base_price`/`base_currency`, **consumed nowhere downstream**)"*. Grep xác nhận: ngoài parser + type, không nơi nào đọc chúng.
+  ⟲ *2026-10-20 (KB §36):* hai cột GT đã bị bỏ khỏi Apple — parser không còn đọc, `base_price` / `base_currency` không còn; tên cũ được nhận diện và bỏ qua.
 
 ⚠ **Khuôn này KHÔNG nên tái dùng cho localization.** Nó là bỏ qua **im lặng** — người dùng không thấy gì. Đó đúng là lớp lỗi arc này sinh ra để diệt: 20 dòng hỏng vì tool làm một việc mà Manager không biết nó sẽ làm. Bỏ qua phải **hiển thị được và chọn được**.
 

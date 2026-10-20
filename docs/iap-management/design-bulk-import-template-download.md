@@ -1,5 +1,7 @@
 # Bulk Import "Download template" — Investigation & Design (Apple + Google)
 
+> ⟲ **2026-10-20 — Apple GT Price / GT Currency DROPPED** (`docs/iap-management/design-apple-bulkimport-drop-gt-columns.md`, KB §36). Every APPLE statement below about the two GT columns, "6 lead / 84 columns" and the GT notes is history: the Apple template is now 4 lead + 39×2 = 82 columns, the Notes never mention GT, and the parser recognises the two old names as retired (not read, no warning). GOOGLE statements are unchanged — Google's GT is real.
+
 **Status: IMPLEMENTED (August 2026).** Manager sign-off resolved the open
 questions as: G.1 → FIXED `Price (USD)` header (verified safe: the parser
 reads the header currency explicitly — `resolvePriceColumn` Pass 1 — so a

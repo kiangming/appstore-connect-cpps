@@ -1,5 +1,7 @@
 # Bulk Import Template — Locale Selection Before Download — Investigation & Design
 
+> ⟲ **2026-10-20 (KB §36):** the APPLE full template is now 82 columns (GT Price / GT Currency dropped); its filename was kept on purpose (Manager Q3), so "byte-identical to the pre-picker file" no longer holds for Apple — it changed once, deliberately. The Apple GT statement in the Notes is gone; the Google one stays.
+
 **Status: IMPLEMENTED (August 2026).** Shipped as designed, with these
 resolutions to §I: risk I.1 → a Preview-time WARNING in the Google wizard
 (names the affected SKUs, derived live from per-row Overwrite decisions)
