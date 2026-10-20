@@ -19,6 +19,9 @@
 --   snapshot, and also checks that V2 lists exactly what the export refuses.
 --
 -- Runs: 2026-10-20 (before PA2.3) — 175 / 14 templates / 28 707 entries / 0 rows.
+--       2026-10-20 (gate PA2.3 passed, before the PA2 push; this file) —
+--       V2-a 175 / 14 / 28 707; V2 = the TOTAL row only:
+--       "TOTAL: 0 problem rows · 14 templates · 28707 entries scanned".
 -- ═══════════════════════════════════════════════════════════════════════════
 
 
