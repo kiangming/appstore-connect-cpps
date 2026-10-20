@@ -698,6 +698,68 @@ EXPLAIN SELECT tier_id, territory_code, currency_code, customer_price, proceeds
 - ⚠ `EXPLAIN` chỉ là ảnh chụp: stats đổi sau mỗi `ANALYZE`, nên một lần đo "ổn" không loại
   được R6 — O0 vẫn phải xây.
 
+## L2.9 ⭐ Manager CHỐT (2026-10-19 / 20) — kế hoạch PA2 ĐÃ DUYỆT
+
+**Câu chặn thiết kế (§L2.6):**
+- **Q-A:** bài số một so trên **tập entry** (khoá tier + nước, currency, giá).
+- **Q-G:** CHẤP NHẬN proceeds thành NULL sau import, với điều kiện đã xác nhận bằng code:
+  không đường ghi giá nào đọc proceeds.
+  - Cách tra: grep `proceeds` trong module Apple, bỏ test và comment. 0 lần ở
+    `pricing-orchestration.ts`, bulk import `execute/route.ts`, `create-on-apple`,
+    `update-on-apple`, custom-prices baseline.
+  - Proceeds chỉ để hiển thị: `TemplateEntriesTable.tsx:224-225`.
+- **Q-B: HAI NÚT.**
+  - "Export XLSX": để xem, lọc theo nước đang hiện như hôm nay.
+  - "Export for editing": LUÔN xuất ĐỦ mọi nước của template, đọc từ server, không dựa vào danh
+    sách nước client ⇒ hết R1 và R1b.
+  - Import CHỈ nhận file "for editing".
+- **Q-C:** header `Vietnam (VNM_VND)`.
+- **Q-D:** currency của override mới lấy từ HEADER. Ô Currency khác header ⇒ từ chối, lý do rõ.
+- **Q-E:** nút import NGAY trên matrix view, cạnh nút export. File "for editing" ghi scope (loại
+  template + account/app id). Sai scope ⇒ CHẶN, thông báo rõ file thuộc account/app nào.
+  Chép template giữa account = tính năng riêng (BACKLOG).
+- **Q-F:** CÓ preview diff: thêm / đổi / bỏ override ("quay về theo giá Apple") + tổng số.
+  - Được đọc template hiện tại CHỈ để hiển thị; khi ghi, file vẫn là sự thật duy nhất.
+  - BỎ con số "giá Apple sẽ áp".
+  - File 0 thay đổi vẫn cho ghi.
+- **Phương án: PA2** (0 migration). Không PA3: ghi đứt giữa chừng thì upload lại đúng file là chữa
+  được.
+
+**Mặc định giữ nguyên:**
+- **Q-H:** tier lạ / không chuẩn / không có trong `price_tiers` ⇒ từ chối; cho thêm dòng của tier đã
+  có trong `price_tiers`.
+- **Q-I:** mã nước kiểm theo snapshot 175 nước; format A không đổi.
+- **Q-J:** > 4 chữ số thập phân ⇒ từ chối.
+- **Q-K:** chỉ nhận chuỗi không mơ hồ.
+- **Q-L:** chấp nhận cửa sổ "export lúc đang ghi".
+- **Q-N:** file B cũ ⇒ từ chối, bảo export lại.
+- **Q-P:** cho thêm / xoá / đổi chỗ dòng, cột (danh tính lấy từ header); mọi thay đổi hiện trong
+  preview.
+- **Q-Q:** file 0 giá ⇒ từ chối (file rỗng không được xoá sạch template); thiếu cột USA ⇒ cảnh báo
+  trong preview.
+- **Q-U:** route legacy xoá mọi tier ⇒ arc riêng.
+- Nhãn nút tiếng Anh như UI hiện tại.
+
+**Ba câu khác:**
+- `?account=` vào link "Open matrix view": **KHÔNG** cần — scope đã ghi trong file, màn hiện
+  tên account.
+- PA2 làm trên nhánh `arc-matrix-reimport-design` (3 commit docs đi cùng code).
+- **Q-S: Manager dùng EXCEL.** Fixture UAT ở PA2.3 làm bằng Excel thật: agent soạn trước danh sách ô
+  → giá trị; Manager export, sửa đúng các ô đó, lưu bằng Excel, gửi lại.
+  **Numbers và Google Sheets: CHƯA ĐO, ngoài phạm vi UAT lần này** (team dùng Excel). Ai dùng hai
+  app đó sau này thì đo riêng.
+
+**R6 (tiền điều kiện) đã lên `main`:** `c95388d` (KB §21.9).
+
+**Thứ tự chunk:**
+- PA2.0: test ghim hiện trạng;
+- PA2.1: "Export for editing" — route + writer, chưa có nút;
+- PA2.2: reader `parsers/template-matrix-edit.ts` + route upload thêm `intent=preview|commit`, scope,
+  diff;
+- PA2.3: UI (hai nút + modal preview + tên account trên màn) + docs + fixture Excel.
+
+Mỗi chunk: gauntlet 4/4 + mutation; commit, chưa push, chờ gate.
+
 ---
 
 # LƯỢT 1 (2026-10-16) — census + thiết kế M3 (giữ làm bằng chứng; các mục bỏ có đánh dấu)

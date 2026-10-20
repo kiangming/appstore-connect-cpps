@@ -15,17 +15,15 @@
  * (heap) scan from 2000 on. Data = the real Manager template file, inserted
  * in the order `replaceTemplate` inserts it.
  *
- * The DB layer below is a PostgREST-shaped fake: it turns the supabase-js
- * calls the repository makes into the SQL PostgREST would send (filters,
- * ORDER BY, LIMIT/OFFSET) and runs it on PGlite.
+ * The DB layer is the shared PostgREST-shaped fake over PGlite
+ * (`pglite-iap-db.test-helper.ts`).
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-import { PGlite } from "@electric-sql/pglite";
 
-import { parsePriceTiersXlsx, flattenTemplateEntries } from "../parsers/price-tiers";
 import type { FlatTemplateEntry } from "../parsers/price-tiers";
+import { createPgIapDb, loadRealTemplateFile, type PgIapDb } from "./pglite-iap-db.test-helper";
 
 vi.mock("@/lib/asc-account-repository", () => ({ findAllAccounts: vi.fn() }));
 const dbHolder = vi.hoisted(() => ({ current: null as unknown }));
@@ -38,159 +36,23 @@ import { composeMatrix, fetchDefaultMatrix } from "./template-matrix";
 const ROOT = process.cwd();
 const ACCOUNT = "acct-r6";
 
-// The entries table exactly as the migration declares it (PK + lookup index
-// + FKs) — pinned against the migration file in the last test.
-const DDL = `
-create schema iap_mgmt;
-create table iap_mgmt.price_tiers (tier_id text primary key, tier_name text not null);
-create table iap_mgmt.price_tier_templates (
-  id uuid primary key default gen_random_uuid(),
-  scope_type text not null, scope_account_id text, scope_app_id text,
-  uploaded_at timestamptz not null default now(), uploaded_by text not null,
-  source_filename text, origin_note text);
-create table iap_mgmt.price_tier_template_entries (
-  template_id    uuid           not null references iap_mgmt.price_tier_templates(id) on delete cascade,
-  tier_id        text           not null references iap_mgmt.price_tiers(tier_id) on delete cascade,
-  territory_code text           not null,
-  currency_code  text           not null,
-  customer_price numeric(18, 4) not null,
-  proceeds       numeric(18, 4),
-  primary key (template_id, tier_id, territory_code));
-create index idx_iap_mgmt_price_tier_template_entries_lookup
-  on iap_mgmt.price_tier_template_entries(template_id, tier_id);
-`;
-
-/** Knobs of the fake PostgREST. */
-const knobs = {
-  /** Force the planner per entries page (R6). */
-  forceSplitAt: null as number | null,
-  /** PostgREST `db-max-rows`: caps every response. */
-  maxRows: null as number | null,
-  /** Runs after the n-th entries page (0-based). */
-  afterEntriesPage: null as null | ((n: number) => Promise<void>),
-  /** Make the count request return null (no Content-Range). */
-  nullCount: false,
-};
-let entriesPagesServed = 0;
-
-type Row = Record<string, unknown>;
-
-function makeDb(pg: PGlite) {
-  class Query {
-    private cols = "*";
-    private head = false;
-    private filters: Array<[string, unknown]> = [];
-    private orders: Array<[string, boolean]> = [];
-    private rng: [number, number] | null = null;
-    constructor(private readonly table: string) {}
-    select(cols: string, opts?: { count?: string; head?: boolean }) {
-      this.cols = cols;
-      this.head = opts?.head === true;
-      return this;
-    }
-    eq(col: string, val: unknown) {
-      this.filters.push([col, val]);
-      return this;
-    }
-    is(col: string, val: unknown) {
-      this.filters.push([col, val]);
-      return this;
-    }
-    order(col: string, opts?: { ascending?: boolean }) {
-      this.orders.push([col, opts?.ascending !== false]);
-      return this;
-    }
-    range(from: number, to: number) {
-      this.rng = [from, to];
-      return this;
-    }
-    private async run(): Promise<{ data: Row[] | null; error: null; count: number | null }> {
-      const params: unknown[] = [];
-      const where = this.filters.map(([c, v]) => {
-        if (v === null) return `${c} is null`;
-        params.push(v);
-        return `${c} = $${params.length}`;
-      });
-      const w = where.length ? ` where ${where.join(" and ")}` : "";
-      if (this.head) {
-        const r = await pg.query<{ n: number }>(
-          `select count(*)::int as n from iap_mgmt.${this.table}${w}`,
-          params,
-        );
-        return { data: null, error: null, count: knobs.nullCount ? null : r.rows[0].n };
-      }
-      const ord = this.orders.length
-        ? ` order by ${this.orders.map(([c, a]) => `${c} ${a ? "asc" : "desc"}`).join(", ")}`
-        : "";
-      const lim = this.rng ? ` limit ${this.rng[1] - this.rng[0] + 1} offset ${this.rng[0]}` : "";
-      const isEntriesPage = this.table === "price_tier_template_entries" && this.rng !== null;
-      if (isEntriesPage && knobs.forceSplitAt !== null) {
-        // The census-observed split: index order first, heap order after.
-        await pg.exec(
-          this.rng![0] < knobs.forceSplitAt
-            ? "set enable_seqscan = off; set enable_bitmapscan = off; set enable_indexscan = on;"
-            : "set enable_indexscan = off; set enable_indexonlyscan = off; set enable_bitmapscan = off; set enable_seqscan = on;",
-        );
-      }
-      const r = await pg.query<Row>(`select ${this.cols} from iap_mgmt.${this.table}${w}${ord}${lim}`, params);
-      if (isEntriesPage) await pg.exec("reset all;");
-      let rows = r.rows;
-      if (knobs.maxRows !== null && rows.length > knobs.maxRows) rows = rows.slice(0, knobs.maxRows);
-      if (isEntriesPage && knobs.afterEntriesPage) await knobs.afterEntriesPage(entriesPagesServed);
-      if (isEntriesPage) entriesPagesServed += 1;
-      return { data: rows, error: null, count: null };
-    }
-    async maybeSingle() {
-      const r = await this.run();
-      const rows = r.data ?? [];
-      if (rows.length > 1) return { data: null, error: { message: "multiple rows" } };
-      return { data: rows[0] ?? null, error: null };
-    }
-    then<A, B>(onOk: (v: unknown) => A, onErr?: (e: unknown) => B) {
-      return this.run().then(onOk, onErr);
-    }
-  }
-  return { from: (table: string) => new Query(table) };
-}
-
-let pg: PGlite;
+let h: PgIapDb;
 let fileEntries: FlatTemplateEntry[];
 let fileTerritoryOrder: string[];
 let templateId: string;
 
-async function insertTemplate(entries: FlatTemplateEntry[], account = ACCOUNT): Promise<string> {
-  const id = (
-    await pg.query<{ id: string }>(
-      "insert into iap_mgmt.price_tier_templates (scope_type, scope_account_id, uploaded_by, source_filename) " +
-        "values ('ACCOUNT', $1, 'manager@example.test', 'price-tiers-template.xlsx') returning id",
-      [account],
-    )
-  ).rows[0].id;
-  // Same shape as replaceTemplate: 1 000-row chunks, in flatten order.
-  for (let i = 0; i < entries.length; i += 1000) {
-    const chunk = entries.slice(i, i + 1000);
-    const values: string[] = [];
-    const params: unknown[] = [];
-    chunk.forEach((e, j) => {
-      const b = j * 6;
-      values.push(`($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6})`);
-      params.push(id, e.tier_id, e.territory_code, e.currency_code, e.customer_price, e.proceeds);
-    });
-    await pg.query(
-      `insert into iap_mgmt.price_tier_template_entries
-         (template_id, tier_id, territory_code, currency_code, customer_price, proceeds)
-       values ${values.join(", ")}`,
-      params,
-    );
-  }
-  return id;
+/** The slice of the fake's query builder the legacy read uses. */
+interface LegacyQuery extends PromiseLike<unknown> {
+  select(cols: string, opts?: { count?: string; head?: boolean }): LegacyQuery;
+  eq(col: string, val: unknown): LegacyQuery;
+  range(from: number, to: number): LegacyQuery;
 }
 
 /** What `fetchAllEntries` did before R6: count, then pages with NO ORDER BY,
  *  offset += 1000, no check. Kept here only to prove the harness reproduces
  *  the defect the fix is about. */
 async function legacyUnorderedRead(id: string): Promise<FlatTemplateEntry[]> {
-  const db = dbHolder.current as ReturnType<typeof makeDb>;
+  const db = h.db as { from: (table: string) => LegacyQuery };
   const countRes = (await db
     .from("price_tier_template_entries")
     .select("template_id", { count: "exact", head: true })
@@ -211,29 +73,18 @@ const keyOf = (e: { tier_id: string; territory_code: string }) => `${e.tier_id}|
 const canon = (x: unknown) => Math.round(Number(x) * 1e4);
 
 beforeAll(async () => {
-  const buf = fs.readFileSync(path.join(ROOT, "docs/iap-management/templates/price-tiers-template.xlsx"));
-  const parsed = await parsePriceTiersXlsx(new File([buf], "price-tiers-template.xlsx"));
-  fileEntries = flattenTemplateEntries(parsed);
-  fileTerritoryOrder = [...new Set(fileEntries.map((e) => e.territory_code))];
-
-  pg = new PGlite();
-  await pg.exec(DDL);
-  const tierValues = parsed.tiers.map((_, i) => `($${2 * i + 1}, $${2 * i + 2})`).join(", ");
-  await pg.query(
-    `insert into iap_mgmt.price_tiers (tier_id, tier_name) values ${tierValues}`,
-    parsed.tiers.flatMap((t) => [t.tier_id, t.tier_name]),
-  );
-  templateId = await insertTemplate(fileEntries);
-  await pg.exec("analyze;");
-  dbHolder.current = makeDb(pg);
+  const file = await loadRealTemplateFile();
+  fileEntries = file.entries;
+  fileTerritoryOrder = file.territoryOrder;
+  h = await createPgIapDb();
+  await h.insertTiers(file.parsed.tiers);
+  templateId = await h.insertTemplate(fileEntries, { account: ACCOUNT });
+  dbHolder.current = h.db;
 }, 60_000);
 
 beforeEach(() => {
-  knobs.forceSplitAt = 2000;
-  knobs.maxRows = null;
-  knobs.afterEntriesPage = null;
-  knobs.nullCount = false;
-  entriesPagesServed = 0;
+  h.resetKnobs();
+  h.knobs.forceSplitAt = 2000;
 });
 
 describe("R6 — template entries are read completely or not at all (real Postgres)", () => {
@@ -288,16 +139,16 @@ describe("R6 — template entries are read completely or not at all (real Postgr
   });
 
   it("PostgREST max_rows below the page size: still complete (pages advance by rows received)", async () => {
-    knobs.maxRows = 500;
+    h.knobs.maxRows = 500;
     const rows = await readTemplateEntries(templateId);
     expect(rows).toHaveLength(16_625);
     expect(new Set(rows.map(keyOf)).size).toBe(16_625);
   });
 
   it("template replaced while being read ⇒ a clear error, never the partial rows", async () => {
-    const victim = await insertTemplate(fileEntries.slice(0, 3_000), "acct-victim");
-    knobs.afterEntriesPage = async (n) => {
-      if (n === 0) await pg.query("delete from iap_mgmt.price_tier_templates where id = $1", [victim]);
+    const victim = await h.insertTemplate(fileEntries.slice(0, 3_000), { account: "acct-victim" });
+    h.knobs.afterEntriesPage = async (n) => {
+      if (n === 0) await h.pg.query("delete from iap_mgmt.price_tier_templates where id = $1", [victim]);
     };
     const err = await readTemplateEntries(victim).then(
       () => null,
@@ -309,7 +160,7 @@ describe("R6 — template entries are read completely or not at all (real Postgr
   });
 
   it("a count that cannot be had ⇒ an error, not an empty template", async () => {
-    knobs.nullCount = true;
+    h.knobs.nullCount = true;
     await expect(readTemplateEntries(templateId)).rejects.toThrow(/count unavailable/);
   });
 
