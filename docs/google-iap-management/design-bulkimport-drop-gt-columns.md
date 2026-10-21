@@ -1,6 +1,6 @@
 # [GOOGLE-bulkimport-drop-gt] Bỏ "GT Price" / "GT Currency" khỏi Bulk Import của Google — census + thiết kế
 
-**Trạng thái:** census PASS (`e733bfa`). Manager làm rõ + chốt §P4 (2026-10-21, xem §P4-chốt — **đổi hướng so với đề xuất census**). Đang làm bước A (đo ảnh hưởng quá khứ, chỉ đọc); G0/G1 chưa làm.
+**Trạng thái:** census PASS (`e733bfa`). Manager làm rõ + chốt §P4 (2026-10-21, xem §P4-chốt — **đổi hướng so với đề xuất census**). Bước A PASS (`d2cbfcc`) — Manager chạy SQL `audit-gt-past-impact` trên prod 2026-10-21: **không cần sửa giá quá khứ** (§A-kết quả). G0 (ghim hiện trạng) xong — §G0, chờ gate; G1 chưa làm.
 **Nhánh:** `arc-google-bulkimport-drop-gt-columns` (từ `origin/main` = `121f2b1`).
 **Phạm vi:** module Google. Apple không đổi hành vi (Apple đã bỏ GT — KB §36).
 
@@ -234,11 +234,45 @@ User guide section Google (dòng §1.3, kể cả **5460** số cột 4 → 2 / 
 - Chỉ đọc trên Google nếu cần chắc giá HIỆN TẠI: Export list (1 lần gọi / app) hoặc cột "Price live on Google" ở trang item. ⚠ KHÔNG bấm "Refresh" ở danh sách IAP hay "Sync from Google" ở trang item — hai nút đó GHI mirror.
 - Không chứng minh được: giá trị GT đã gõ; GT bằng/sát giá quy đổi; sửa trên Console sau lần ghi cuối của mirror; SKU trạng thái C.
 
+### A-kết quả — SQL `audit-gt-past-impact` chạy trên prod (Manager, 2026-10-21)
+
+Bước A: **PASS** (`d2cbfcc`). Kết luận nguyên văn Manager báo:
+
+- 99 batch trước H4.4, 1 542 dòng ghi thành công; 58 dòng SKU liệt kê (A=14, B=0, C=44, D/N/X=0, unaccounted=0).
+- GT CÒN NẰM TRÊN GOOGLE chỉ ở com.vng.passsdk: 11 SKU com.vngg.tool.product0000025…0000035 (4 batch google_default 2026-07-16, minhgv), VN = VND 23000 cho mọi mức giá (0.99 / 1.99 / 22.99 USD), mirror_state A. Manager xác nhận passsdk là APP THỬ NGHIỆM ⇒ KHÔNG sửa giá.
+- funzap.portal (39 SKU, google_default 2026-08-07): mirror_state C, giá VN hiện tại = giá tier (batch default_template 2026-08-20 ghi đè) ⇒ không còn GT.
+- cookierun.oven.smash (4 SKU, google_default 2026-06-01): mirror_state C, giá VN dạng quy đổi (~26 300/USD), đã đọc lại từ Google 2026-10-16 ⇒ không còn dấu GT.
+- Mọi batch template có audit: 0 dòng "không khớp tier" ⇒ GT chưa từng có tác dụng ở template.
+- 6 batch không có audit: rows_success = 0 ⇒ không ghi gì.
+
+⇒ **Kết luận: KHÔNG cần sửa giá quá khứ trên production.**
+
+Lỗ "ô số 26.000" ở CỘT GIÁ CHÍNH (§A-thêm): giữ BACKLOG `[GOOGLE-bulk-import-price-magnitude]`, **ƯU TIÊN CAO — arc kế tiếp sau arc này**. Không sửa trong arc này.
+
 ### A-thêm — Lỗ hổng "ô SỐ 26.000 = 26" ở cột giá CHÍNH
 
 - **Có, và rộng hơn GT** (ĐÃ ĐO): `Price (VND)` ô số 26 ⇒ neo quy đổi VND 26 cho MỌI vùng, VN = VND 26, Hub SUCCESS; cũng nhận VND 598, JPY 12, KRW 1, IDR 15; `Price (USD)` 1999 / 26000 / 99999 cũng được nhận. Không có kiểm độ lớn nào ở đường bulk (`flagSuspiciousDrops` chỉ ở dialog Custom). Trước H4.2, cả ô CHỮ `"26.000"` cũng được nhận (preview hiện "VND 26.000", gửi VND 26).
 - Google có giá sàn theo vùng cho giá purchase option không: **CHƯA BIẾT** — repo không có phản hồi thật nào; các câu "Google enforces floors" trong docs/code là chưa đo.
 - Bỏ GT không đóng lỗ hổng này ⇒ BACKLOG `[GOOGLE-bulk-import-price-magnitude]`. Không sửa trong arc này.
+
+## G0 — ghim hiện trạng (2026-10-21, chưa đổi hành vi)
+
+Hai file test mới, code thật (generator, parser, route preview + execute, orchestrator, publisher-client, adapter; Google mock, DB in-memory — dùng lại bộ giả của `file-currency-invariance.test.ts`). G1 sửa hai file này **có chủ đích** — diff của G1 là biên bản của thay đổi; riêng R3 phải giữ nguyên.
+
+- `lib/google-iap-management/parsers/gt-columns.baseline.test.ts`
+  - **T1** 2 sheet; C1/D1 = `GT Price` / `GT Currency`; core 4 · 1 locale 6 · 3 locale 10 · đủ 168; tên file.
+  - **T2** dòng mẫu GT 26000 / 52000 / 598000 VND (ô SỐ), mọi biến thể. **T3 / T3b** Notes N9, N10 (dòng GT) + N14 / N13 (UNIT REMINDER) nguyên văn, bảng minh hoạ có cột GT. **T4** bảng Notes khớp sheet dữ liệu theo TÊN header. **T5** đúng 9 ô nhắc GT (core).
+  - **P1** GT được nhận ⇒ một override cho vùng của currency (kể cả `vnd`, EUR→DE, ô SỐ 26 ⇒ VND 26). **P2** 14 kiểu GT ⇒ từ chối DÒNG, lý do nguyên văn. **P3** 7 kiểu header ⇒ từ chối CẢ FILE. **P4** đọc theo TÊN (xáo cột; template 168 cột). **P5** dòng không Product ID: GT Price ⇒ từ chối, GT Currency một mình ⇒ bỏ qua. **P6** bẫy Q6 hôm nay được nhận (Title `26000`, Description `VND`). **P7** file mẫu cũ của Manager: 3 dòng, VN = VND 23000.
+- `app/api/google-iap-management/apps/[packageName]/bulk-import/gt-columns.route.test.ts`
+  - **R1** GT 23000 VND đè giá: Google Conversion ⇒ VN 25740 → 23000 (chỉ VN đổi; neo vẫn là giá file); tier khớp (Tier 1 / App 1) ⇒ request giống hệt file không GT; giá 1.49 không tier ⇒ VN 38740 → 23000 dưới CẢ 3 nguồn; cột GT trống ⇒ giống hệt file không cột GT; CREATE = OVERWRITE; template sinh thật đi y như file tay.
+  - **R2** các kiểu ô GT qua preview + execute: `vnd` và ô SỐ 26 được gửi (VN = VND 26, Hub SUCCESS); 8 kiểu ⇒ dòng bị từ chối, dòng còn lại vẫn gửi, Hub PARTIAL; header sai ⇒ 422, không gửi gì.
+  - **R3 ⭐ (Q4) Custom prices — PHẢI GIỮ NGUYÊN qua G1:** sha16 của mọi thứ gửi Google, đo trên code G0: bộ "VN 27000 + JP 170" create `0477007610482d16` / overwrite `0af70780997ede5f`; bộ "TW 35" create `c4ef1d79aab5d536` / overwrite `80f7b27430df1d37` — giống nhau dưới cả 3 nguồn, có hay không GT trong file (24 lượt).
+  - **R4** tab cũ / POST thẳng: route nhận `regionOverrides` từ client (VN 26000 ⇒ gửi, giống từng byte GT trong file; JP 170 ⇒ gửi; tier khớp thì tier thay; giá sai ⇒ `file_price_invalid`); `PRICING_RULE` = `file-currency-only/v1`; thiếu ⇒ 409.
+  - **R5** audit `per_row_pricing.gt` / `gt_outcome`: none · kept · replaced_by_tier · replaced_by_custom · not_sent (Skip, bị từ chối ở execute).
+  - **R6** bẫy Q6 ở route: listing `vi` = `26000` / `VND` (en-US chép theo) được gửi, CREATE và OVERWRITE.
+- **Mutation 10/10 đỏ** (qua `scripts/mutate.sh`, khôi phục md5 khớp): Notes đổi chữ (T3, T3b, GP1) · GT mẫu đổi (T2, T3, T3b, GP1) · parser thôi đọc GT (R1b/c/e, R2a, R4a, R5, P1, P4, P7, GP2) · orchestrator bỏ GT dòng không custom (R1b/c/e, R2a, R4a/b, R5 — R3 xanh) · route bỏ `regionOverrides` client (như trên — R3 xanh) · route đổi giá custom (chỉ R3a/b) · audit `kept`→`sent` (R5) · bỏ kiểm hoa/thường header GT (P3, R2c) · đổi cách đọc Title số (P6, R6) · bỏ kiểm GT ở pre-pass orchestrator (R4b).
+- **Test có sẵn đã ghim GT, G1 sẽ sửa có chủ đích (khai từng cái ở G1):** `file-currency-invariance.test.ts` (F5/F10/F11 trong `EXPECTED_H4`, luật "GT not kept", hình dạng audit `gt: null, gt_outcome: "none"`); `excel-parser.test.ts` (các ca GT); `template-spec.test.ts` (header 4 cột, Notes); `file-price.test.ts` (`fileRegionPriceOf`); `bulk-import.price-refusals.test.ts` (GT trong pre-pass); `components/google-iap-management/bulk-import/BulkImportWizard.test.ts` (`gtPlanOf`), `BulkImportWizard.custom-prices.test.tsx` (dòng GT), `BulkImportWizard.test.tsx` (câu chữ ghi chú giá, dòng GT, lý do từ chối GT); Apple `gt-drop.google-parity.test.ts` GP1–GP2 (Q7).
+- Baseline Apple: 46 file / 489 test xanh (không đổi). Gauntlet: typecheck sạch · 425 file / 5914 test xanh (1 skip có sẵn) · lint 0 lỗi · build xanh.
 
 ## Phát hiện bên lề (không thuộc arc)
 

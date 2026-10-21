@@ -1140,6 +1140,8 @@ adapter lấy từ vùng US (hoặc vùng đầu) của phản hồi Google, kh�
 
 ## `[GOOGLE-bulk-import-price-magnitude]` — giá chính lệch ~1000× (ô SỐ "26.000" = 26; USD 1999) được nhận và gửi; bulk không kiểm độ lớn giá
 
+**⚠ ƯU TIÊN CAO — arc kế tiếp sau arc GT** (Manager 2026-10-21, sau khi xem bước A).
+
 **GHI NHẬN 2026-10-21** (arc `arc-google-bulkimport-drop-gt-columns`, bước A, ĐÃ ĐO trên mock — không gọi Google). Không làm trong arc GT.
 
 - **Hiện trạng.** Lỗ hổng "ô SỐ 26.000 ⇒ VND 26" mà census GT ghi lại cũng có ở CỘT GIÁ CHÍNH, và rộng hơn: giá chính là neo quy đổi cho mọi vùng.
