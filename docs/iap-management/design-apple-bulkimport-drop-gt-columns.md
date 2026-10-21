@@ -4,6 +4,8 @@
 **Nhánh:** `arc-apple-bulkimport-drop-gt-columns` (cắt từ `origin/main` = `bf48692`).
 **Phạm vi:** CHỈ module Apple. Google dùng GT thật (H4) — không đổi một hành vi nào của Google.
 
+> ⟲ **2026-10-21 — quyết định trên đã bị ĐẢO (Manager Q7, arc `[GOOGLE-bulkimport-drop-gt]`).** Team chưa bao giờ muốn dùng GT làm giá; Google cũng bỏ hai cột (design `docs/google-iap-management/design-bulkimport-drop-gt-columns.md`, KB §37). Test GP1–GP2 (`gt-drop.google-parity.test.ts`) được ghim lại có chủ đích theo template / parser Google MỚI; GP3 giữ nguyên. Các câu "Google giữ GT" bên dưới là lịch sử của arc Apple, không còn đúng.
+
 Nhãn: **ĐÃ ĐO** (đã chạy code thật, có output) · **ĐỌC CODE** (file:line) · **CÓ TRONG SCHEMA** (migration) · **CHƯA BIẾT**.
 Cách đo: 6 làn census độc lập + 1 làn rà sót, chạy code thật (generator, parser, route execute thật; chỉ giả lập Apple HTTP / Supabase / Hub) trong scratch, repo không đổi.
 

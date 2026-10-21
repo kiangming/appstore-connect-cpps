@@ -601,6 +601,7 @@ không khớp tier; custom xuất hiện nguyên văn; chặn suy biến (F3 ≠
   cơ chế đóng hàng — các chỗ ném đó vẫn là lỗi cả batch, không phải từ chối dòng (BACKLOG). Batch đóng bởi
   finally vẫn có một dòng audit (`closed_by: "finally"`, `pricing_rule`, `price_header`, nguyên nhân), và log
   ghi nguyên nhân. Giới hạn: nếu chính lần GHI đóng hàng thất bại, hàng còn `IN_PROGRESS` (có log).
+- ⟲ 2026-10-21 ([GOOGLE-bulkimport-drop-gt], design `design-bulkimport-drop-gt-columns.md`): GT không còn được đọc; `pricing_rule` lên `file-currency-only/v2`, `gt` / `gt_outcome` bỏ khỏi `per_row_pricing`, thêm `gt_rows_with_data`. Đoạn dưới là thiết kế H4.4 tại thời điểm đó.
 - **Audit (§5.4 mục 8):** payload `BULK_IMPORT_BATCH` thêm `pricing_rule: "file-currency-only/v1"`,
   `price_header` (header giá đúng như file ghi — parser → preview → wizard → builder → route → orchestrator;
   đây là dữ kiện mà audit cũ không có, §5.3) và `per_row_pricing` cho mọi dòng gửi trong `rows` (dòng bị

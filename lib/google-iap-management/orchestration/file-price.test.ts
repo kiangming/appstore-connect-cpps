@@ -8,7 +8,6 @@ import { join } from "node:path";
 
 import {
   filePriceOf,
-  fileRegionPriceOf,
   PLAY_BILLING_CURRENCIES,
   statedPriceError,
   statedPriceOf,
@@ -69,14 +68,14 @@ describe("H4.2 (a) thousands separators, (b) zero", () => {
     expect(filePriceOf({ currency: "USD", priceDecimal: "0.990" })).toEqual({ ok: true, currency: "USD", priceMicros: "990000" });
   });
 
-  it("(b) 0 in any spelling ⇒ refused, for the main price and a GT", () => {
+  it("(b) 0 in any spelling ⇒ refused (G1: the GT half went with fileRegionPriceOf)", () => {
     for (const raw of ["0", "0.00", "0.000000"]) {
       expect(filePriceOf({ currency: "USD", priceDecimal: raw })).toEqual({
         ok: false,
         reason: "the price is 0 — a 0 price is not accepted; enter the real price.",
       });
     }
-    expect(fileRegionPriceOf({ region: "VN", currency: "VND", priceDecimal: "0", cell: "number" }).ok).toBe(false);
+    expect(filePriceOf({ currency: "VND", priceDecimal: "0", cell: "number" }).ok).toBe(false);
   });
 });
 
@@ -130,28 +129,12 @@ describe("H4.3 — storedRegionPriceOf: a tier entry the tool holds as micros", 
   });
 });
 
-describe("fileRegionPriceOf (a GT override)", () => {
-  it("region billed in that currency ⇒ ok", () => {
-    expect(fileRegionPriceOf({ region: "VN", currency: "VND", priceDecimal: "26000" })).toEqual({
-      ok: true,
-      currency: "VND",
-      priceMicros: "26000000000",
-    });
-  });
-
-  it("pair not in the catalog ⇒ refused, naming what Google bills instead", () => {
-    expect(fileRegionPriceOf({ region: "AR", currency: "ARS", priceDecimal: "900" })).toEqual({
-      ok: false,
-      reason: "Google Play bills AR in USD, not ARS.",
-    });
-    expect(fileRegionPriceOf({ region: "CN", currency: "CNY", priceDecimal: "7" })).toEqual({
-      ok: false,
-      reason: "CN is not a region Google Play sells in.",
-    });
-  });
-
-  it("precision is checked against the GT currency", () => {
-    expect(fileRegionPriceOf({ region: "VN", currency: "VND", priceDecimal: "26000.5" }).ok).toBe(false);
+// [GOOGLE-bulkimport-drop-gt] G1 — the "fileRegionPriceOf (a GT override)"
+// block is gone with the function: its only callers read the GT.
+describe("[GOOGLE-bulkimport-drop-gt] — no GT reader left in the choke point", () => {
+  it("file-price.ts no longer exports fileRegionPriceOf", async () => {
+    const mod: Record<string, unknown> = await import("./file-price");
+    expect("fileRegionPriceOf" in mod).toBe(false);
   });
 });
 

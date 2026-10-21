@@ -25,9 +25,6 @@ import { getCurrencyDecimals } from "../google/currency-precision";
 /** Currencies Google Play bills in — the pinned 173-region catalog. */
 export const PLAY_BILLING_CURRENCIES: ReadonlySet<string> = new Set(PLAY_REGIONS.map((r) => r.currency));
 
-/** Region code → the currency Google Play bills that region in. */
-const BILLED_IN: ReadonlyMap<string, string> = new Map(PLAY_REGIONS.map((r) => [r.code, r.currency]));
-
 export type FilePrice =
   | { ok: true; currency: string; priceMicros: string }
   | { ok: false; reason: string };
@@ -132,28 +129,4 @@ export function storedRegionPriceOf(o: { currency: string; priceMicros: string }
     return { ok: false, reason: err instanceof Error ? err.message : String(err) };
   }
   return statedPriceOf({ currency: o.currency, priceDecimal: decimal, cell: "number" });
-}
-
-/** A GT override: a price for ONE region, in the currency Google bills that
- *  region in. Refused when the pair does not match the catalog (Google would
- *  not bill that region in that currency) or the price breaks the currency's
- *  precision. */
-export function fileRegionPriceOf(o: {
-  region: string;
-  currency: string;
-  priceDecimal: string;
-  cell?: FileCell;
-}): FilePrice {
-  const region = o.region.trim().toUpperCase();
-  const currency = o.currency.trim().toUpperCase();
-  const billed = BILLED_IN.get(region);
-  if (billed !== currency) {
-    return {
-      ok: false,
-      reason: billed
-        ? `Google Play bills ${region} in ${billed}, not ${currency}.`
-        : `${region} is not a region Google Play sells in.`,
-    };
-  }
-  return filePriceOf({ currency, priceDecimal: o.priceDecimal, cell: o.cell });
 }

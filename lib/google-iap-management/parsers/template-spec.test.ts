@@ -40,8 +40,6 @@ function makeDataRow(headers: string[], sku: string): unknown[] {
   const row: unknown[] = headers.map(() => "");
   row[headers.indexOf("Product ID")] = sku;
   row[headers.indexOf(GOOGLE_PRICE_HEADER)] = 0.99;
-  row[headers.indexOf("GT Price")] = 23000;
-  row[headers.indexOf("GT Currency")] = "VND";
   row[headers.indexOf("Title (English (United States))")] = "Title en-US";
   row[headers.indexOf("Description (English (United States))")] = "Desc en-US";
   row[headers.indexOf("Title (Vietnamese)")] = "Title vi";
@@ -50,14 +48,14 @@ function makeDataRow(headers: string[], sku: string): unknown[] {
 }
 
 describe("anti-drift — generated headers equal the parser contract", () => {
-  it("is exactly 4 lead + 82 locale pairs = 168 columns, no duplicates", () => {
+  it("is exactly 2 lead + 82 locale pairs = 166 columns, no duplicates ([GOOGLE-bulkimport-drop-gt]: was 4 + 164 = 168, with GT Price / GT Currency)", () => {
     const headers = googleTemplateHeaders();
     expect(GOOGLE_LOCALE_NAMES.length).toBe(82);
-    expect(headers.length).toBe(4 + 82 * 2);
-    expect(headers.slice(0, 4)).toEqual([...GOOGLE_LEAD_HEADER_ROW]);
+    expect(headers.length).toBe(2 + 82 * 2);
+    expect(headers.slice(0, 2)).toEqual([...GOOGLE_LEAD_HEADER_ROW]);
     GOOGLE_LOCALE_NAMES.forEach((name, i) => {
-      expect(headers[4 + 2 * i]).toBe(`Title (${name})`);
-      expect(headers[4 + 2 * i + 1]).toBe(`Description (${name})`);
+      expect(headers[2 + 2 * i]).toBe(`Title (${name})`);
+      expect(headers[2 + 2 * i + 1]).toBe(`Description (${name})`);
     });
     // The legacy v1 artifact shipped duplicate locale pairs (English ×3,
     // Persian ×4 — silently last-win in the parser). The generated
@@ -83,9 +81,10 @@ describe("anti-drift — generated headers equal the parser contract", () => {
     ]);
   });
 
-  it("full-set sample rows still fill Vietnamese (byte-compat with the pre-picker file)", () => {
-    // The FULL selection keeps the original filename, so its CONTENT must
-    // not drift either. Headers are identical under any sample-locale
+  it("full-set sample rows still fill Vietnamese (as the pre-picker file did)", () => {
+    // The FULL selection keeps the original filename, so its samples must
+    // not drift silently (its columns changed ON PURPOSE with
+    // [GOOGLE-bulkimport-drop-gt]: 166, no GT). Headers are identical under any sample-locale
     // rule, so the header assertions above cannot catch this: a change to
     // preferredSampleLocale() (e.g. to plain "first canonical") would
     // silently switch these samples to Afrikaans. Mirrors the Apple pin.
@@ -161,9 +160,8 @@ describe("round-trip — generated template parses cleanly through the real pars
     expect(row.sku).toBe("com.test.roundtrip1");
     expect(row.baseCurrency).toBe("USD");
     expect(row.basePriceDecimal).toBe("0.99");
-    expect(row.regionOverrides).toEqual([
-      { region: "VN", currency: "VND", priceDecimal: "23000" },
-    ]);
+    // G1: the generated template has no GT column to report.
+    expect(result.retiredGtColumns).toBeNull();
     expect(
       row.listings.map((l) => l.locale).sort(),
     ).toEqual(["en-US", "vi"]);
@@ -283,8 +281,8 @@ describe("locale selection — anti-drift stays EXACT per selection", () => {
     }
   });
 
-  it("the FULL set is still pinned to 168 columns (catches a new core column or locale-map growth)", () => {
-    expect(googleTemplateHeaders().length).toBe(4 + 82 * 2);
+  it("the FULL set is still pinned to 166 columns (catches a new core column or locale-map growth; 168 before [GOOGLE-bulkimport-drop-gt])", () => {
+    expect(googleTemplateHeaders().length).toBe(2 + 82 * 2);
     expect(googleTemplateHeaders(GOOGLE_LOCALE_NAMES)).toEqual(
       googleTemplateHeaders(),
     );
@@ -324,7 +322,7 @@ describe("locale selection — anti-drift stays EXACT per selection", () => {
   });
 });
 
-describe("H4.2 — the Notes sheet says what the parser does with prices and GT", () => {
+describe("H4.2 — the Notes sheet says what the parser does with prices", () => {
   // The Notes sheet is what the team reads before filling the file. Each
   // sentence below is a parser rule pinned in excel-parser.test.ts; a rule
   // change that does not touch these words fails here.
@@ -337,12 +335,15 @@ describe("H4.2 — the Notes sheet says what the parser does with prices and GT"
     expect(note("Price (USD)")).toContain('"26.000" typed as text keeps the row out (it may mean 26 thousand)');
   });
 
-  it("GT Price / GT Currency: both or neither, refusals keep the row out — never 'dropped with a warning'", () => {
-    expect(note("GT Price")).toContain("Fill GT Price and GT Currency both, or neither — one without the other keeps the row out.");
-    expect(note("GT Price")).toContain("A pricing-template tier that matches the row, or custom prices, replace the GT.");
-    expect(note("GT Currency")).toContain("A currency outside the GT list, or one Google Play does not bill that region in, keeps the row out.");
-    expect(note("GT Currency")).toContain('Write both headers exactly "GT Price" / "GT Currency", and keep both columns or neither — otherwise the file is refused.');
-    expect(spec.notesRows.map((r) => r.join(" ")).join(" ")).not.toMatch(/dropped with a warning/);
+  // [GOOGLE-bulkimport-drop-gt] G1 — was "GT Price / GT Currency: both or
+  // neither, refusals keep the row out": the columns are gone and never read.
+  it("no GT line any more — the Notes never mention GT; they say to copy column by column; never 'dropped with a warning'", () => {
+    expect(note("GT Price")).toBe("");
+    expect(note("GT Currency")).toBe("");
+    const all = spec.notesRows.map((r) => r.join(" ")).join(" ");
+    expect(all).not.toMatch(/\bGT\b/);
+    expect(all).toContain("COPYING FROM ANOTHER FILE: copy column by column, under the same headers — never paste whole rows from an older template.");
+    expect(all).not.toMatch(/dropped with a warning/);
   });
 });
 
@@ -376,8 +377,10 @@ describe("locale selection — sample rows + notes adapt", () => {
     expect(notesText).toContain("SKU-titled en-US listing");
     expect(notesText).toContain("title is the SKU itself");
     expect(notesText).not.toContain("Title (");
-    // GT statement survives in every variant.
-    expect(notesText).toContain("NOT an exchange rate");
+    // The copy-by-column advice survives in every variant (G1: this pinned
+    // the GT "NOT an exchange rate" statement).
+    expect(notesText).toContain("COPYING FROM ANOTHER FILE");
+    expect(notesText).not.toMatch(/\bGT\b/);
   });
 });
 

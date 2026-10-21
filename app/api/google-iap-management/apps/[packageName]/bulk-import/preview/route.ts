@@ -37,6 +37,7 @@ import {
   mirrorReadFailedMessage,
   readBulkImportGate,
 } from "@/lib/google-iap-management/bulk-import-mirror-gate";
+import { PRICING_RULE } from "@/lib/google-iap-management/bulk-import-contract";
 
 type PricingSource = "google_default" | "default_template" | "app_template";
 const VALID_PRICING_SOURCES: PricingSource[] = [
@@ -94,6 +95,24 @@ export async function POST(
     form = await req.formData();
   } catch {
     return NextResponse.json({ error: "Invalid multipart body." }, { status: 400 });
+  }
+
+  // [GOOGLE-bulkimport-drop-gt] — the twin of the execute route's check
+  // (KB P1). A tab opened before an update runs the OLD wizard code against
+  // THIS response shape: before PRICING_RULE v2 its preview read each row's
+  // `regionOverrides` (gone with the GT) and crashed the page — with a Hub run
+  // already opened. Refuse here, before anything is read, with the same
+  // "reload" answer the execute route gives.
+  if (form.get("pricing_rule") !== PRICING_RULE) {
+    return NextResponse.json(
+      {
+        error:
+          "The tool was updated since this page was opened. Nothing was read. Reload this page, then upload the file " +
+          "again.",
+        code: "PREVIEW_OUTDATED",
+      },
+      { status: 409 },
+    );
   }
 
   const file = form.get("file");
@@ -165,7 +184,7 @@ export async function POST(
     defaultTierSelection: string | null;
     /** H4.3 — "lookup_failed": the lookup threw, so "no tier" is NOT known
      *  (the push re-runs it and may still find one). The wizard says so
-     *  instead of "Auto-converted by Google" / "GT will be sent". */
+     *  instead of "Auto-converted by Google". */
     matchedBy: "sku" | "currency_price" | "none" | "lookup_failed";
   };
   const NO_CANDIDATES: RowCandidateData = { candidates: [], defaultTierSelection: null, matchedBy: "none" };
@@ -226,13 +245,17 @@ export async function POST(
     // completely. Read at the same moment as the mirror itself.
     iapsLastSyncedAt: gate.iapsLastSyncedAt,
     rows,
-    // Rows of the file the tool will not import, each with its reason (price
-    // or GT that cannot be honoured exactly, empty price, no Product ID).
-    // Not in `rows`. H4.3: the wizard shows them IN the preview table and
+    // Rows of the file the tool will not import, each with its reason (a
+    // price that cannot be honoured exactly, empty price, no Product ID, an
+    // old row pasted whole — Q6). Not in `rows`. H4.3: the wizard shows them IN the preview table and
     // lets the Manager push the rest after confirming how many are left out.
     refusedRows: parsed.refusedRows,
     // H4.4 — echoed into the execute body for the import audit.
     priceHeader: parsed.priceHeader ?? null,
+    // [GOOGLE-bulkimport-drop-gt] (Manager Q1) — the retired GT columns, if
+    // the file still has them: the wizard shows googleRetiredGtWarning
+    // (never blocks Push) and echoes the count into the audit (Q5).
+    retiredGtColumns: parsed.retiredGtColumns ?? null,
     warnings: warningsOut,
     counts: {
       total: rows.length,

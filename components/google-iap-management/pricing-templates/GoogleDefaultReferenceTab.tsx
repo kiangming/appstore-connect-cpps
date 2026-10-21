@@ -59,9 +59,9 @@ export function GoogleDefaultReferenceTab() {
             </span>
             <span>
               Use the row&apos;s base price and let Google convert it into
-              every other country. Optional manual region overrides
-              (template column GT Price/Currency, or per-IAP form input)
-              win over the conversion.
+              every other country. Optional manual region prices (Custom
+              prices in the bulk-import Preview, or per-IAP form input) win
+              over the conversion.
             </span>
           </li>
         </ul>

@@ -44,6 +44,11 @@
  *          FileCase (anchor = the header currency + value; refusals only where
  *          Q7 / the file says so; the US price is always USD; GT and custom
  *          prices verbatim where they apply) + degeneracy guards.
+ *   G1 [GOOGLE-bulkimport-drop-gt] (Manager 2026-10-21, Q1) — the GT is never
+ *          read: F5 / F10 / F11 (files that still have GT columns, one with a
+ *          GT too precise to send) now price EXACTLY like F2 / F2 / F3, so the
+ *          hand table's three GT rows changed on purpose and F10 is no longer
+ *          refused (96 sent). Every other cell is as H4.2 derived it.
  * ⚠ Q8 is covered by its own route-level test below: v3 rejects ⇒ the error
  *   comes back verbatim and structured, inappproducts.batchUpdate is called
  *   0 times. In the matrix itself v3 always succeeds.
@@ -208,9 +213,9 @@ import {
   previewRowsFromResponse,
   seedTierSelections,
 } from "@/components/google-iap-management/bulk-import/execute-payload";
-import { regionForCurrency } from "@/lib/google-iap-management/parsers/excel-parser";
 import type { PreviewRow } from "@/components/google-iap-management/bulk-import/BulkImportWizard";
 import type { CustomPriceSet } from "@/components/google-iap-management/bulk-import/CustomPricesDialog";
+import { PRICING_RULE } from "@/lib/google-iap-management/bulk-import-contract";
 
 /* ── Fixtures ─────────────────────────────────────────────────────────── */
 
@@ -334,9 +339,9 @@ function rowAsTheFileStatesIt(f: FileCase, decision: Decision): PreviewRow {
     sku: f.sku ?? SKU,
     baseCurrency: currency,
     basePriceDecimal: String(f.value),
-    regionOverrides: f.gt
-      ? [{ region: regionForCurrency(f.gt[1]) ?? "", currency: f.gt[1], priceDecimal: String(f.gt[0]) }]
-      : [],
+    // G1: no GT — a stale tab's regionOverrides are refused by the route
+    // (gt-columns.route.test.ts R4), and the preview never refuses a row for
+    // its GT any more, so no such row reaches this path.
     listings: [],
     exists: decision === "overwrite",
     decision,
@@ -418,6 +423,7 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
   const form = new FormData();
   form.append("file", workbook(f));
   form.append("pricingSource", source);
+  form.append("pricing_rule", PRICING_RULE);
   const pres = await PREVIEW(new Request("http://probe/preview", { method: "POST", body: form }), ctx);
   const pbody = (await pres.json()) as {
     rows?: Array<Omit<PreviewRow, "decision">>;
@@ -427,6 +433,7 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
     error?: string;
     code?: string;
     errors?: string[];
+    retiredGtColumns?: { rowsWithData: number } | null;
   };
   if (!pres.ok || !pbody.rows) {
     const preview = `PREVIEW ${pres.status} ${pbody.code ?? ""} ${pbody.error ?? (pbody.errors ?? []).join(" · ")}`.trim();
@@ -494,6 +501,7 @@ async function runOnce(f: FileCase, source: Source, appCurrency: AppCurrency, de
     // H4.3 — what the wizard sends: the rows the preview refused, left out.
     droppedRows: pbody.refusedRows ?? [],
     priceHeader: pbody.priceHeader ?? null,
+    gtRowsWithData: pbody.retiredGtColumns?.rowsWithData ?? null,
   });
 
   // ── Server side. Sent even when the Push gate would block: a stale tab
@@ -613,9 +621,11 @@ function grouping(byCurrency: Map<AppCurrency, Outcome>): string {
 // templates in seedTables().
 //   Q2 tier = the SKU's own tier, else the tier whose price in the FILE's
 //      currency equals the FILE's price; anchor = defaultPrice = file price.
-//   Q3 no tier ⇒ Google conversion of the file price (GT kept).
+//   Q3 no tier ⇒ Google conversion of the file price (GT kept — until G1).
 //   Q4 Google Conversion never refuses on currency.
 //   Q5 GT kept unless a tier matched or custom prices (they replace it).
+//      ⟲ G1 [GOOGLE-bulkimport-drop-gt] (Manager Q1, 2026-10-21): the GT is
+//      never read ⇒ F5 = F2, F10 = F2, F11 = F3 (the three rows marked G1).
 //   Q6 custom: anchor = file price, no app-currency entry, no Save gate.
 //   Q7 conversion failed + file price not USD ⇒ refused (conversion_failed).
 //   Choke point: a file price the server cannot send as written ⇒ refused
@@ -628,13 +638,11 @@ const C_TWD = "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30,
 const TIER1_BY_TWD = "anchor TWD 30 · DE=EUR 0.86, JP=JPY 160, KR=KRW 1313, TW=TWD 30, US=USD 0.99, VN=VND 25000";
 const C_VND = "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 1, VN=VND 26000";
 const APP1_BY_VND = "anchor VND 26000 · DE=EUR 0.92, JP=JPY 150, KR=KRW 1400, TW=TWD 32, US=USD 0.99, VN=VND 26000";
-const GT_KEPT_ON_C_USD = "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 32, US=USD 0.99, VN=VND 26000";
 const CUSTOM_ON_C_USD = "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 170, KR=KRW 1386, TW=TWD 35, US=USD 0.99, VN=VND 25740";
 const CONVERSION_FAILED = "REFUSED conversion_failed · anchor TWD 30 · no batchUpdate";
 const SKU_TIER = "anchor USD 0.99 · DE=EUR 0.91, JP=JPY 149, KR=KRW 1386, TW=TWD 90, US=USD 2.99, VN=VND 75000";
 const REFUSED_IN_FILE =
   "CLIENT: Push blocked (1 row(s) refused in the file) · DIRECT POST: · REFUSED file_price_invalid · no batchUpdate";
-const GT_KEPT_ON_C_TWD = "anchor TWD 30 · DE=EUR 0.86, JP=JPY 141, KR=KRW 1313, TW=TWD 30, US=USD 0.94, VN=VND 26000";
 
 const EXPECTED_H4: Record<string, string> = {
   "F1 'Price' 0.99 · google_default": P422,
@@ -649,7 +657,7 @@ const EXPECTED_H4: Record<string, string> = {
   "F4 'Price (VND)' 26000 · google_default": C_VND,
   "F4 'Price (VND)' 26000 · default_template": C_VND,
   "F4 'Price (VND)' 26000 · app_template": APP1_BY_VND,
-  "F5 'Price (USD)' 0.99 + GT 26000 VND · google_default": GT_KEPT_ON_C_USD,
+  "F5 'Price (USD)' 0.99 + GT 26000 VND · google_default": C_USD, // G1 — was GT_KEPT_ON_C_USD (VN 26000)
   "F5 'Price (USD)' 0.99 + GT 26000 VND · default_template": TIER1_BY_USD,
   "F5 'Price (USD)' 0.99 + GT 26000 VND · app_template": APP1_BY_USD,
   "F6 'Price (USD)' 0.99 + custom TW 35 / JP 170 · google_default": CUSTOM_ON_C_USD,
@@ -664,12 +672,12 @@ const EXPECTED_H4: Record<string, string> = {
   "F9 'Price (TWD)' 30.5 (too precise for TWD) · google_default": REFUSED_IN_FILE,
   "F9 'Price (TWD)' 30.5 (too precise for TWD) · default_template": REFUSED_IN_FILE,
   "F9 'Price (TWD)' 30.5 (too precise for TWD) · app_template": REFUSED_IN_FILE,
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · google_default": REFUSED_IN_FILE,
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · default_template": REFUSED_IN_FILE,
-  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · app_template": REFUSED_IN_FILE,
-  "F11 'Price (TWD)' 30 + GT 26000 VND · google_default": GT_KEPT_ON_C_TWD,
+  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · google_default": C_USD, // G1 — was REFUSED_IN_FILE
+  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · default_template": TIER1_BY_USD, // G1 — was REFUSED_IN_FILE
+  "F10 'Price (USD)' 0.99 + GT 26000.5 VND (GT too precise) · app_template": APP1_BY_USD, // G1 — was REFUSED_IN_FILE
+  "F11 'Price (TWD)' 30 + GT 26000 VND · google_default": C_TWD, // G1 — was GT_KEPT_ON_C_TWD (VN 26000)
   "F11 'Price (TWD)' 30 + GT 26000 VND · default_template": TIER1_BY_TWD,
-  "F11 'Price (TWD)' 30 + GT 26000 VND · app_template": GT_KEPT_ON_C_TWD,
+  "F11 'Price (TWD)' 30 + GT 26000 VND · app_template": C_TWD, // G1 — was GT_KEPT_ON_C_TWD (VN 26000)
 };
 
 function stripComments(src: string): string {
@@ -727,9 +735,10 @@ describe("T1 — same file ⇒ same Google request whatever the app currency (H4
     // Not vacuous: every cell that sends a CREATE also sends an OVERWRITE.
     const sentCreates = [...outcomes.values()].flatMap((m) => [...m.values()]).filter((o) => o.calls.batch === 1).length;
     expect(sentOverwrites).toBe(sentCreates);
-    // Exact, updated per H4 step (H4.0: 92, H4.1: 82) — a build that refuses
-    // far more rows than it should cannot slip past a loose bound.
-    expect(sentCreates).toBe(84);
+    // Exact, updated per H4 step (H4.0: 92, H4.1: 82, H4.2: 84; G1: F10 is no
+    // longer refused for its GT, +12) — a build that refuses far more rows
+    // than it should cannot slip past a loose bound.
+    expect(sentCreates).toBe(96);
   });
 
   it("H4.2 (1) — the app's currency changes NOTHING: one outcome per file · source for USD/TWD/VND/none, CREATE and OVERWRITE", () => {
@@ -758,7 +767,8 @@ describe("T1 — same file ⇒ same Google request whatever the app currency (H4
     for (const f of FILES) {
       const headerCurrency = f.header.match(/\(([A-Z]{3})\)/)?.[1] ?? null;
       const id = f.id.split(" ")[0];
-      const expectedRefusals = id === "F7" ? ["conversion_failed"] : id === "F9" || id === "F10" ? ["file_price_invalid"] : [];
+      // G1: F10's GT is never read — it is not refused any more.
+      const expectedRefusals = id === "F7" ? ["conversion_failed"] : id === "F9" ? ["file_price_invalid"] : [];
       for (const s of SOURCES) {
         for (const c of APP_CURRENCIES) {
           const o = outcomes.get(key(f, s))?.get(c);
@@ -784,9 +794,19 @@ describe("T1 — same file ⇒ same Google request whatever the app currency (H4
           for (const e of f.custom ?? []) {
             if (o.facts.prices[e.region] !== `${e.currency} ${e.priceDecimal}`) say(k, c, `custom ${e.region}`);
           }
-          // With no template involved, the GT region carries the GT value (Q5).
-          if (f.gt && s === "google_default" && o.facts.prices[regionForCurrency(f.gt[1]) ?? ""] !== `${f.gt[1]} ${f.gt[0]}`) {
-            say(k, c, "GT not kept under Google Conversion");
+          // G1 (Manager Q1) — the GT never reaches Google: a file with GT sends
+          // EXACTLY what the same file without it sends (F5 / F10 ↔ F2,
+          // F11 ↔ F3) — the full request and state calls, not just one country.
+          if (f.gt) {
+            const twin = FILES.find((x) => x.id.startsWith(id === "F11" ? "F3 " : "F2 "));
+            const t = twin && outcomes.get(key(twin, s))?.get(c);
+            const sent = (x: Outcome) => {
+              const { requests, states } = JSON.parse(x.full) as { requests?: unknown; states?: unknown };
+              return requests === undefined ? null : JSON.stringify({ requests, states });
+            };
+            if (!t || sent(o) === null || sent(o) !== sent(t)) {
+              say(k, c, "a file's GT changed the Google request");
+            }
           }
         }
       }
@@ -810,9 +830,10 @@ describe("T1 — same file ⇒ same Google request whatever the app currency (H4
       }
     }
     expect(wrong).toEqual([]);
-    // F7 (conversion_failed), F9 + F10 (file_price_invalid): 3 files × 3 sources × 4 currencies × 2 decisions.
-    expect(refusedCells).toBe(72);
-    expect(sentCells).toBe(84 * 2);
+    // F7 (conversion_failed), F9 (file_price_invalid): 2 files × 3 sources × 4 currencies × 2 decisions
+    // (G1: F10 is no longer refused — was 3 files, 72).
+    expect(refusedCells).toBe(48);
+    expect(sentCells).toBe(96 * 2);
   });
 
   it("H4.2 — degeneracy guards: refusing everything, or ignoring the file's currency, is RED", () => {
@@ -922,6 +943,7 @@ describe("Q8 — the batch upsert has NO legacy fallback (Manager 2026-10-17)", 
     const form = new FormData();
     form.append("file", workbook(f));
     form.append("pricingSource", "google_default");
+    form.append("pricing_rule", PRICING_RULE);
     const pres = await PREVIEW(new Request("http://probe/preview", { method: "POST", body: form }), ctx);
     const pbody = (await pres.json()) as { rows: Array<Omit<PreviewRow, "decision">> };
     const rows = previewRowsFromResponse(pbody.rows);
@@ -937,6 +959,7 @@ describe("Q8 — the batch upsert has NO legacy fallback (Manager 2026-10-17)", 
             rows: buildExecuteRows(rows, { tierSelections: seedTierSelections(rows), customPrices: {}, activeCustomSkus: new Set() }),
             droppedRows: [],
             priceHeader: null,
+            gtRowsWithData: null,
           }),
         ),
       }),
@@ -991,6 +1014,7 @@ describe("H4.3 — push the rest: rows refused in the file are left out, and cou
     const form = new FormData();
     form.append("file", new File([new Uint8Array(buf)], "rest.xlsx"));
     form.append("pricingSource", "google_default");
+    form.append("pricing_rule", PRICING_RULE);
     const pres = await PREVIEW(new Request("http://probe/preview", { method: "POST", body: form }), ctx);
     const pbody = (await pres.json()) as {
       rows: Array<Omit<PreviewRow, "decision">>;
@@ -1018,6 +1042,7 @@ describe("H4.3 — push the rest: rows refused in the file are left out, and cou
             rows: buildExecuteRows(rows, { tierSelections: seedTierSelections(rows), customPrices: {}, activeCustomSkus: new Set() }),
             droppedRows: pbody.refusedRows,
             priceHeader: pbody.priceHeader,
+            gtRowsWithData: null,
           }),
         ),
       }),
@@ -1047,8 +1072,10 @@ describe("H4.3 — push the rest: rows refused in the file are left out, and cou
     // H4.4 — the audit records the rule, the file's header (parser → preview →
     // wizard builder → route → orchestrator) and how each row was priced.
     const a = audit.payloads.at(-1) as Record<string, unknown>;
-    expect(a.pricing_rule).toBe("file-currency-only/v1");
+    expect(a.pricing_rule).toBe("file-currency-only/v2");
     expect(a.price_header).toBe("Price (USD)");
+    // G1 (Manager Q5): the file has no GT column; per_row_pricing has no gt keys.
+    expect(a.gt_rows_with_data).toBeNull();
     expect(a.per_row_pricing).toEqual([
       {
         row_number: 2,
@@ -1056,8 +1083,6 @@ describe("H4.3 — push the rest: rows refused in the file are left out, and cou
         decision: "create",
         file_currency: "USD",
         file_price: "0.99",
-        gt: null,
-        gt_outcome: "none",
         anchor: { currency: "USD", price_micros: "990000" },
         regions_version: "2025/03",
         regions_version_from: "conversion",

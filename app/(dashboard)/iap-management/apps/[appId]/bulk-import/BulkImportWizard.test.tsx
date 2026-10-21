@@ -274,10 +274,11 @@ describe("BulkImportWizard — template download call site", () => {
     await waitFor(() => expect(downloadXlsxTemplate).toHaveBeenCalled());
     const spec = downloadXlsxTemplate.mock.calls[0][0];
     expect(spec.filename).toBe("apple-iap-bulk-import-template-core.xlsx");
-    // Apple's and Google's core templates are BOTH 4 columns since the GT
-    // drop (2026-10-20) — tell them apart by CONTENT, not by length.
+    // Tell Apple's and Google's core templates apart by CONTENT, not by
+    // length (both were 4 columns after Apple's GT drop, 2026-10-20; Google's
+    // is 2 since its own, 2026-10-21 — neither has GT Price any more).
     expect(spec.headers).toEqual(["Product ID", "Reference Name", "Type", "Price (USD)"]);
-    expect(spec.headers).not.toContain("GT Price"); // Google's core has it
+    expect(spec.headers).not.toContain("GT Price");
   });
 });
 

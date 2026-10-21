@@ -240,9 +240,9 @@ describe("executeBulkImport — per-item custom prices", () => {
     // The old restriction assumed the template clobber could reach this
     // path. It cannot: the template-resolution loop is gated on
     // `pricingSource !== "google_default"`, so regionOverrides flows
-    // straight through to buildProduct. Per-country overrides have always
-    // worked here via the file's GT-Price column; this raises the ceiling
-    // from one country to ~170.
+    // straight through to buildProduct. (The file's GT-Price column used to
+    // give one country its own price here; since [GOOGLE-bulkimport-drop-gt]
+    // custom prices are the only way, for up to ~170 countries.)
     const res = await executeBulkImport({} as never, {
       ...INPUT_BASE,
       pricingSource: "google_default",

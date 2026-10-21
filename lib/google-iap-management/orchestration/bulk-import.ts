@@ -57,7 +57,6 @@ import { withConcurrency } from "@/lib/iap-management/concurrency";
 import { PRICING_SOURCE_LABELS } from "../pricing-source-labels";
 import type {
   ParsedIapRow,
-  ParsedRegionOverride,
   ParsedListing,
 } from "../parsers/excel-parser";
 import type { ParsedPricingEntry } from "../parsers/pricing-template-parser";
@@ -68,7 +67,7 @@ import {
   findTemplateId,
   type TemplateScopeRef,
 } from "../queries/templates";
-import { filePriceOf, fileRegionPriceOf, statedPriceOf, storedRegionPriceOf } from "./file-price";
+import { filePriceOf, statedPriceOf, storedRegionPriceOf } from "./file-price";
 import { describeGoogleError } from "../google/google-error-descriptor";
 import { PRICING_RULE } from "../bulk-import-contract";
 
@@ -81,7 +80,22 @@ const REGIONS_BOOTSTRAP_CONCURRENCY = 5;
 export type PricingSource = "google_default" | "default_template" | "app_template";
 export type RowDecision = "overwrite" | "skip" | "create";
 
+/** One country's price, in the currency Google bills it in. */
+export interface RegionOverride {
+  region: string;
+  currency: string;
+  priceDecimal: string;
+}
+
 export interface BulkImportRow extends ParsedIapRow {
+  /** SERVER-SIDE carrier of the row's per-country prices: its custom set
+   *  (custom pre-pass) or its matched tier's entries (template loop) —
+   *  buildProduct's only source of region prices; Google converts every
+   *  other country from the file price. Always EMPTY on input:
+   *  [GOOGLE-bulkimport-drop-gt] (Manager Q4, 2026-10-21) — the file's GT
+   *  used to arrive here and be posted as that country's price; the parser
+   *  no longer reads it and the execute route refuses a client-sent one. */
+  regionOverrides: RegionOverride[];
   /** Manager decision for this row. "create" = SKU not yet on Google;
    *  "overwrite" = SKU exists, push the update; "skip" = leave as-is. */
   decision: RowDecision;
@@ -101,8 +115,8 @@ export interface BulkImportRow extends ParsedIapRow {
   tierCandidateCount?: number;
   /** A price refusal — per-row fail-soft: excluded from the batch,
    *  audit-logged, returned in `refusedRows`. Never replaced by another price.
-   *   - `file_price_invalid` (H4.2): the price / GT the FILE states cannot be
-   *     sent exactly (filePriceOf / fileRegionPriceOf refused it);
+   *   - `file_price_invalid` (H4.2): the price the FILE states cannot be
+   *     sent exactly (filePriceOf refused it);
    *   - `conversion_failed` (H4.2, Manager Q7): Google's conversion of the
    *     file price failed, or returned no US price, and the file price is
    *     not USD;
@@ -126,7 +140,7 @@ export interface BulkImportRow extends ParsedIapRow {
    *  loop (see the guard below) — that is what stops the template from
    *  overwriting these values. */
   customPrices?: {
-    entries: ParsedRegionOverride[];
+    entries: RegionOverride[];
     baselineTier: string | null;
     /** ISO timestamp stamped when the dialog saved — audit provenance. */
     editedAt?: string | null;
@@ -160,6 +174,11 @@ export interface BulkImportInput {
   droppedRows?: Array<{ rowNumber: number; sku: string; reason: string }>;
   /** H4.4 — the file's price header as the preview read it. Audit only. */
   priceHeader?: string | null;
+  /** [GOOGLE-bulkimport-drop-gt] (Manager Q5) — rows of the file with data in
+   *  the retired GT columns, as the preview counted them; null = the file had
+   *  no GT column. Audit only: how often the preview's GT notice was shown.
+   *  Never a price — GT values never reach the server. */
+  gtRowsWithData?: number | null;
   actorEmail: string | null;
   // ⚠ H4 (Manager 2026-10-16): NO app currency. The currency written in the
   //   file is the only price source; this input type deliberately has no
@@ -225,7 +244,7 @@ export function buildProduct(
   }
 
   const prices: NonNullable<InAppProduct["prices"]> = {};
-  for (const r of row.regionOverrides as ParsedRegionOverride[]) {
+  for (const r of row.regionOverrides) {
     if (!r.priceDecimal.trim()) continue;
     prices[r.region] = {
       currency: r.currency.trim().toUpperCase(),
@@ -385,6 +404,7 @@ export async function executeBulkImport(
           pricing_source: input.pricingSource,
           pricing_rule: PRICING_RULE,
           price_header: input.priceHeader ?? null,
+          gt_rows_with_data: input.gtRowsWithData ?? null,
           rows_total: total,
           rows_skipped: skipped,
           rows_failed: total - skipped,
@@ -432,37 +452,34 @@ async function runBulkImport(
   batch: BatchTracker,
 ): Promise<BulkImportResult> {
   const { batchId } = batch;
-  // H4.4 audit — the GT exactly as the FILE stated it, before custom prices
-  // or a tier replace the row's overrides.
-  // Keyed by the row OBJECT (rowNumber is not guaranteed unique in a direct
-  // POST); rows are mutated in place below, so the object is the identity.
-  const fileGtByRow = new Map(input.rows.map((r) => [r, (r.regionOverrides as ParsedRegionOverride[])[0] ?? null]));
-  const customAppliedRows = new Set<BulkImportRow>();
-  const tierAppliedRows = new Set<BulkImportRow>();
+  // [GOOGLE-bulkimport-drop-gt] (Manager Q4) — a row's region prices are set
+  // HERE (custom pre-pass, template loop), never handed in: the execute route
+  // refuses client-sent ones. A caller that hands some in is a programming
+  // error — thrown before anything is sent (the finally closes the batch
+  // FAILED), never posted as a price. Twin of the route's check.
+  const handedIn = input.rows.find((r) => r.regionOverrides.length > 0);
+  if (handedIn) {
+    throw new Error(
+      `executeBulkImport: row ${handedIn.rowNumber} (${handedIn.sku}) came with regionOverrides — a row's region prices come only from its custom set or its matched tier.`,
+    );
+  }
   const actionableRows = input.rows.filter((r) => r.decision !== "skip");
   const skippedCount = input.rows.length - actionableRows.length;
 
   // ── H4.2 file-price pre-pass — the FILE is the only price source ───────
   //
-  // Every actionable row's price and file GT overrides go through the ONE
-  // choke point (file-price.ts) before anything else. A price that cannot
-  // be sent exactly as the file states it refuses THE ROW (per-row
-  // fail-soft) — it never crashes the batch (decimalToMicros used to throw
+  // Every actionable row's price goes through the ONE choke point
+  // (file-price.ts) before anything else. A price that cannot be sent
+  // exactly as the file states it refuses THE ROW (per-row fail-soft) — it never crashes the batch (decimalToMicros used to throw
   // outside any try) and is never replaced by another price. The app
   // currency takes no part: there is no cross-currency branch any more.
   let priceRefusedRows = 0;
   for (const row of actionableRows) {
-    const reasons: string[] = [];
     const base = filePriceOf({ currency: row.baseCurrency, priceDecimal: row.basePriceDecimal });
-    if (!base.ok) reasons.push(`price "${row.basePriceDecimal}" ${row.baseCurrency} — ${base.reason}`);
-    for (const o of row.regionOverrides as ParsedRegionOverride[]) {
-      const gt = fileRegionPriceOf({ region: o.region, currency: o.currency, priceDecimal: o.priceDecimal });
-      if (!gt.ok) reasons.push(`GT ${o.region} "${o.priceDecimal}" ${o.currency} — ${gt.reason}`);
-    }
-    if (reasons.length > 0) {
+    if (!base.ok) {
       row.priceRefusal = {
         kind: "file_price_invalid",
-        reason: `Row ${row.rowNumber} (${row.sku}): ${reasons.join(" ")} Row not sent.`,
+        reason: `Row ${row.rowNumber} (${row.sku}): price "${row.basePriceDecimal}" ${row.baseCurrency} — ${base.reason} Row not sent.`,
       };
       priceRefusedRows += 1;
       console.info(`[google-iap:bulk-import] refused sku=${row.sku} kind=file_price_invalid`);
@@ -472,8 +489,7 @@ async function runBulkImport(
   // ── Custom-price pre-pass (Phase 3) ────────────────────────────────
   //
   // Custom prices are ABSOLUTE and already denominated per country: they
-  // replace the row's overrides (the file's GT included — Q5 unchanged) and
-  // skip the template loop. H4.2 (Q6): the conversion anchor and
+  // become the row's region prices and skip the template loop. H4.2 (Q6): the conversion anchor and
   // defaultPrice stay the FILE's price; a custom set needs no entry in any
   // particular currency (the app-currency requirement is gone, client and
   // server alike).
@@ -541,7 +557,6 @@ async function runBulkImport(
       priceDecimal: microsToDecimal(p.priceMicros, 6),
     }));
     customPricedRows += 1;
-    customAppliedRows.add(row);
     console.info(
       `[google-iap:bulk-import:custom-prices] applied sku=${row.sku} source=${input.pricingSource} entries=${priced.length} default=file-price baseline_tier=${row.customPrices.baselineTier ?? "-"}`,
     );
@@ -860,7 +875,6 @@ async function runBulkImport(
           currency: e.currency,
           priceDecimal: microsToDecimal(e.priceMicros, 6),
         }));
-        tierAppliedRows.add(row);
         templateMatchCount += 1;
         if (matchStrategy === "sku") templateMatchBySku += 1;
         else if (matchStrategy === "currency_price")
@@ -975,10 +989,10 @@ async function runBulkImport(
     },
   );
 
-  // Build per-row InAppProduct. Manager region overrides (already in
-  // row.regionOverrides after the template-resolution loop above) win
-  // over auto-converted catalog values — explicit intent beats
-  // catalog defaults.
+  // Build per-row InAppProduct. The row's own region prices — its custom set
+  // or its matched tier's entries, in row.regionOverrides after the passes
+  // above — win over the auto-converted catalog values: explicit intent
+  // beats catalog defaults.
   const prepared: Array<{
     row: BulkImportRow;
     input: { body: InAppProduct; regionsVersion?: string; isOverwrite: boolean };
@@ -1095,8 +1109,9 @@ async function runBulkImport(
 
   // H4.4 — how EACH row sent in `rows` was priced (design §5.4 item 8): its
   // file currency and price, the anchor Google was asked to convert from,
-  // the catalog version the request pinned, what happened to its GT, and its
-  // outcome. Rows dropped in the file are in `refused_rows` (kind
+  // the catalog version the request pinned, and its outcome. (Before
+  // [GOOGLE-bulkimport-drop-gt] it also held the row's `gt` / `gt_outcome` —
+  // audit rows under pricing_rule v1; Manager Q5.) Rows dropped in the file are in `refused_rows` (kind
   // refused_in_file). `outcome` is final only after the push — rows in the
   // request start as "in_request" and are resolved below (written /
   // google_failed / cache_sync_failed / google_rejected): a row Google did
@@ -1106,7 +1121,6 @@ async function runBulkImport(
   type RowOutcome = string;
   const perRowPricingByRow = new Map(
     input.rows.map((r) => {
-      const gt = fileGtByRow.get(r) ?? null;
       const refusal = r.customPriceRefusal ?? r.priceRefusal ?? null;
       const outcome: RowOutcome =
         r.decision === "skip" ? "skipped" : refusal ? refusal.kind : sentVersionByRow.has(r) ? "in_request" : "not_sent";
@@ -1118,16 +1132,6 @@ async function runBulkImport(
           decision: r.decision,
           file_currency: r.baseCurrency,
           file_price: r.basePriceDecimal,
-          gt: gt ? { region: gt.region, currency: gt.currency, price: gt.priceDecimal } : null,
-          gt_outcome: !gt
-            ? "none"
-            : !sentVersionByRow.has(r)
-              ? "not_sent"
-              : customAppliedRows.has(r)
-                ? "replaced_by_custom"
-                : tierAppliedRows.has(r)
-                  ? "replaced_by_tier"
-                  : "kept",
           // The price Google was asked to convert from (also when it failed).
           anchor: bootstrapByRow.get(r)?.anchor ?? null,
           // The catalog version the REQUEST pinned (Hotfix 9): the conversion's,
@@ -1178,6 +1182,7 @@ async function runBulkImport(
         // and how each row was priced (per_row_pricing, built above).
         pricing_rule: PRICING_RULE,
         price_header: input.priceHeader ?? null,
+        gt_rows_with_data: input.gtRowsWithData ?? null,
         per_row_pricing: perRowPricing,
         rows_total: rowsTotal,
         rows_skipped: skippedCount,
@@ -1282,6 +1287,7 @@ async function runBulkImport(
         // and how each row was priced (per_row_pricing, built above).
         pricing_rule: PRICING_RULE,
         price_header: input.priceHeader ?? null,
+        gt_rows_with_data: input.gtRowsWithData ?? null,
         per_row_pricing: perRowPricing,
         rows_total: rowsTotal,
         rows_skipped: skippedCount,
@@ -1321,6 +1327,7 @@ async function runBulkImport(
       // and how each row was priced (per_row_pricing, built above).
       pricing_rule: PRICING_RULE,
       price_header: input.priceHeader ?? null,
+      gt_rows_with_data: input.gtRowsWithData ?? null,
       per_row_pricing: perRowPricing,
       template_matched_rows: templateMatchCount,
       // Hotfix 15 → Hotfix 16: split per match strategy so a future

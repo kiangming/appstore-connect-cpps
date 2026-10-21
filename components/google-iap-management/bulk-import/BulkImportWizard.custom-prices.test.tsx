@@ -36,7 +36,6 @@ function previewRow(over: Partial<Record<string, unknown>> = {}) {
     sku: "gem_pack_large",
     baseCurrency: "USD",
     basePriceDecimal: "9.99",
-    regionOverrides: [],
     listings: [{ locale: "en-US", title: "Gem Pack", description: "d" }],
     exists: false,
     tierCandidates: [
@@ -405,28 +404,15 @@ describe("BulkImportWizard — per-item custom prices", () => {
     expect(screen.queryByText(/thousands separator/)).not.toBeInTheDocument();
   });
 
-  it("H4.3 (Q5): the GT line says what the push does — replaced by the matched tier (VN price known), then by custom once a set is saved", async () => {
-    vi.stubGlobal(
-      "fetch",
-      installFetch({ previewSequence: [[previewRow({ regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "26000" }] })]] }),
-    );
-    render(<BulkImportWizard {...PROPS} />);
-    fireEvent.click(await screen.findByRole("radio", { name: /Default Template/ }));
-    await goToPreview();
-    const gt = screen.getByTestId("gt-status");
-    expect(gt).toHaveAttribute("data-state", "replaced_by_tier");
-    expect(gt).toHaveTextContent('GT VN 26000 VND · replaced by tier "tier_999" (VN 249000 VND)');
-    await setCustomPrice("199000");
-    expect(screen.getByTestId("gt-status")).toHaveAttribute("data-state", "replaced_by_custom");
-    expect(screen.getByTestId("gt-status")).toHaveTextContent("GT VN 26000 VND · replaced by custom (VN 199000 VND)");
-  });
-
-  it("H4.3 (Q5): template source, no tier matched, lookup FAILED ⇒ the GT is 'unknown — run Preview again', never 'will be sent'", async () => {
+  // [GOOGLE-bulkimport-drop-gt] G1 — the test "the GT line says what the push
+  // does — replaced by the matched tier, then by custom" is gone with the GT
+  // line (the GT is never read, Manager Q1). The next one pinned the GT line
+  // of a lookup-failed row; its tier half stays.
+  it("template source, no tier matched, lookup FAILED ⇒ the row says so; no GT line any more", async () => {
     vi.stubGlobal(
       "fetch",
       installFetch({
         previewSequence: [[previewRow({
-          regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "26000" }],
           tierCandidates: [],
           defaultTierSelection: null,
           tierMatchedBy: "lookup_failed",
@@ -436,8 +422,8 @@ describe("BulkImportWizard — per-item custom prices", () => {
     render(<BulkImportWizard {...PROPS} />);
     fireEvent.click(await screen.findByRole("radio", { name: /Default Template/ }));
     await goToPreview();
-    expect(screen.getByTestId("gt-status")).toHaveAttribute("data-state", "unknown_lookup_failed");
     expect(screen.getByTestId("tier-lookup-failed")).toBeInTheDocument();
+    expect(screen.queryByTestId("gt-status")).toBeNull();
   });
 
   it("blank countries state the Google-conversion fallback explicitly", async () => {

@@ -1,5 +1,7 @@
 # Google Bulk Import — Pricing-source relabel + per-item Custom prices
 
+> ⟲ 2026-10-21 ([GOOGLE-bulkimport-drop-gt]): the file's GT Price / GT Currency columns are no longer read — custom prices are THE way to give one country its own price. Mentions of the "GT-Price override" below are history.
+
 **STATUS: IMPLEMENTED (August 2026).** Phase 1 (relabel/reorder) shipped
 in `af75202`; Phase 2+3 (per-item custom prices) in `12e1100` (SC1
 RegionPriceCell) → `f19391a` (SC2 model + routes) → `a122968` (SC3 dialog

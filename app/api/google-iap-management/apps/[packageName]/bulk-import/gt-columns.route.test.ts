@@ -4,9 +4,16 @@
  * Google, end to end (Manager 2026-10-21; design
  * docs/google-iap-management/design-bulkimport-drop-gt-columns.md).
  *
- * G0 pins the behaviour BEFORE the change. G1 edits this file on purpose —
- * its diff is the record of what the change did. One block is the exception:
- * R3 (custom prices, Manager Q4) must stay byte-identical through G1.
+ * G0 (2e3c3e0) pinned the behaviour BEFORE the change; G1 edited this file on
+ * purpose — its diff is the record of what the change did:
+ *   - R1/R2: a file's GT — any value, any header spelling — changes NOTHING
+ *     that reaches Google (Manager Q1); the preview reports it, Push goes on;
+ *   - R4: the route refuses client-sent regionOverrides; PRICING_RULE v2 (Q4);
+ *   - R5: the audit no longer holds gt / gt_outcome, it counts GT rows (Q5);
+ *   - R6: an old row pasted whole is refused (Q6).
+ * One block is the exception: R3 (custom prices, Manager Q4) is
+ * byte-identical — its pinned fingerprints were measured on G0's code and
+ * G1 did not touch them.
  *
  * WHAT RUNS FOR REAL: the preview route, the execute route, the parser, the
  * file-price choke point, the orchestrator, the template queries, the
@@ -24,6 +31,8 @@
  */
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as XLSX from "xlsx";
 
 const PKG = "com.vnggames.gtprobe";
@@ -299,10 +308,11 @@ interface RunOpts {
 interface Outcome {
   preview: {
     status: number;
-    rows: Array<{ sku: string; regionOverrides: unknown }>;
+    rows: Array<{ sku: string }>;
     refused: Array<{ rowNumber: number; sku: string; reason: string }>;
     warnings: string[];
     errors: string[];
+    retiredGtColumns: unknown;
   };
   execute: { status: number; error?: string; code?: string; refusedKinds: string[]; rowsCreated?: number; rowsOverwritten?: number } | null;
   /** batchUpdate request bodies + purchase-option state calls — everything sent. */
@@ -334,6 +344,7 @@ async function run(o: RunOpts): Promise<Outcome> {
   const form = new FormData();
   form.append("file", o.file);
   form.append("pricingSource", o.source);
+  form.append("pricing_rule", PRICING_RULE);
   const pres = await PREVIEW(new Request("http://probe/preview", { method: "POST", body: form }), ctx);
   const pbody = (await pres.json()) as {
     rows?: Array<Omit<PreviewRow, "decision">>;
@@ -341,13 +352,15 @@ async function run(o: RunOpts): Promise<Outcome> {
     priceHeader?: string | null;
     warnings?: string[];
     errors?: string[];
+    retiredGtColumns?: { rowsWithData: number } | null;
   };
   const preview = {
     status: pres.status,
-    rows: (pbody.rows ?? []).map((r) => ({ sku: r.sku, regionOverrides: r.regionOverrides })),
+    rows: (pbody.rows ?? []).map((r) => ({ sku: r.sku })),
     refused: pbody.refusedRows ?? [],
     warnings: pbody.warnings ?? [],
     errors: pbody.errors ?? [],
+    retiredGtColumns: pbody.retiredGtColumns,
   };
   const empty = { requests: [], states: [] };
   if (!pres.ok || !pbody.rows) {
@@ -370,6 +383,7 @@ async function run(o: RunOpts): Promise<Outcome> {
     }),
     droppedRows: pbody.refusedRows ?? [],
     priceHeader: pbody.priceHeader ?? null,
+    gtRowsWithData: pbody.retiredGtColumns?.rowsWithData ?? null,
   });
   if (o.tamper) body = o.tamper(structuredClone(body));
 
@@ -429,15 +443,6 @@ async function run(o: RunOpts): Promise<Outcome> {
   };
 }
 
-/** per_row_pricing[].gt / gt_outcome of the last batch, by SKU. */
-const gtAudit = (o: Outcome) =>
-  Object.fromEntries(
-    ((o.audit?.per_row_pricing ?? []) as Array<{ sku: string; gt: unknown; gt_outcome: string }>).map((r) => [
-      r.sku,
-      { gt: r.gt, gt_outcome: r.gt_outcome },
-    ]),
-  );
-
 beforeAll(() => {
   for (const m of ["info", "warn", "log", "error"] as const) vi.spyOn(console, m).mockImplementation(() => {});
   st.fakeErrors = [];
@@ -462,48 +467,47 @@ const CONVERTED_099 = { DE: "EUR 0.91", JP: "JPY 149", KR: "KRW 1386", TW: "TWD 
 const GT = { [H.gtPrice]: 23000, [H.gtCurrency]: "VND" };
 const DECISIONS = ["create", "overwrite"] as const;
 
-describe("R1 — GT overrides the price only where the row is priced by CONVERSION (G0: today's behaviour)", () => {
+describe("R1 — a file's GT changes NOTHING that reaches Google (Manager Q1: never read, never sent)", () => {
   const plain = file(NO_GT, [row()]);
   const gtEmpty = file(WITH_GT, [row()]);
   const gt = file(WITH_GT, [row(GT)]);
   const plainNoTier = file(NO_GT, [row({ [H.price]: 1.49 })]);
   const gtNoTier = file(WITH_GT, [row({ [H.price]: 1.49, ...GT })]);
 
-  it("R1a GT columns present but EMPTY ⇒ the same Google request as a file without them — every source, CREATE and OVERWRITE; no warning", async () => {
+  it("R1a GT columns present but EMPTY ⇒ the same Google request as a file without them — every source, CREATE and OVERWRITE; the LIGHT notice, Push goes through", async () => {
     for (const source of SOURCES) for (const decision of DECISIONS) {
       const a = await run({ file: plain, source, decision });
       const b = await run({ file: gtEmpty, source, decision });
       expect(b.sent.requests, `${source} ${decision}`).toHaveLength(1);
       expect(sha(b.sent), `${source} ${decision}`).toBe(sha(a.sent));
-      expect(b.preview.warnings).toEqual([]);
+      expect([a.preview.retiredGtColumns, b.preview.retiredGtColumns]).toEqual([null, { rowsWithData: 0 }]);
+      expect(b.preview.warnings).toEqual(a.preview.warnings);
       expect(b.hub).toBe("SUCCESS");
     }
   });
 
-  it("R1b USD 0.99 + GT 23000 VND: Google Conversion ⇒ VN = VND 23000 instead of the converted 25740, nothing else moves; a MATCHED tier (Tier 1 / App 1) ⇒ the GT is dropped — request identical to the file without GT", async () => {
+  it("R1b USD 0.99 + GT 23000 VND ⇒ byte-identical to the file without GT under ALL THREE sources (Google Conversion: VN stays the converted 25740 — G0 sent 23000; a matched tier: its own VN)", async () => {
     for (const decision of DECISIONS) {
-      const conv = await run({ file: gt, source: "google_default", decision });
-      const convPlain = await run({ file: plain, source: "google_default", decision });
-      expect(convPlain.prices[SKU]).toEqual(CONVERTED_099);
-      expect(priceDiff(convPlain, conv), decision).toEqual({ VN: ["VND 25740", "VND 23000"] });
-      expect(conv.anchors).toEqual(["USD 0.99"]); // the anchor is the file price, never the GT
-      expect(conv.preview.rows).toEqual([{ sku: SKU, regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "23000" }] }]);
-      expect([conv.preview.warnings, conv.hub]).toEqual([[], "SUCCESS"]);
-      for (const [source, vn] of [["default_template", "VND 25000"], ["app_template", "VND 26000"]] as const) {
-        const tier = await run({ file: gt, source, decision });
-        const tierPlain = await run({ file: plain, source, decision });
-        expect(tier.prices[SKU]?.VN, `${source} ${decision}`).toBe(vn);
-        expect(sha(tier.sent), `${source} ${decision}`).toBe(sha(tierPlain.sent));
+      for (const [source, vn] of [["google_default", "VND 25740"], ["default_template", "VND 25000"], ["app_template", "VND 26000"]] as const) {
+        const withGt = await run({ file: gt, source, decision });
+        const without = await run({ file: plain, source, decision });
+        expect(withGt.prices[SKU]?.VN, `${source} ${decision}`).toBe(vn);
+        expect(sha(withGt.sent), `${source} ${decision}`).toBe(sha(without.sent));
+        expect(priceDiff(without, withGt)).toEqual({});
+        expect(withGt.anchors).toEqual(["USD 0.99"]);
+        expect([withGt.preview.retiredGtColumns, withGt.preview.refused, withGt.hub]).toEqual([{ rowsWithData: 1 }, [], "SUCCESS"]);
       }
     }
+    const conv = await run({ file: gt, source: "google_default" });
+    expect(conv.prices[SKU]).toEqual(CONVERTED_099);
   });
 
-  it("R1c USD 1.49 — NO tier in either template — + GT 23000 VND ⇒ VN = VND 23000 under ALL THREE sources (the file without GT gets the converted 38740)", async () => {
+  it("R1c USD 1.49 — no tier anywhere — + GT 23000 VND ⇒ VN = the converted VND 38740 under ALL THREE sources (G0 sent 23000)", async () => {
     for (const source of SOURCES) for (const decision of DECISIONS) {
       const withGt = await run({ file: gtNoTier, source, decision });
       const without = await run({ file: plainNoTier, source, decision });
-      expect(without.prices[SKU]?.VN, `${source} ${decision}`).toBe("VND 38740");
-      expect(priceDiff(without, withGt), `${source} ${decision}`).toEqual({ VN: ["VND 38740", "VND 23000"] });
+      expect(withGt.prices[SKU]?.VN, `${source} ${decision}`).toBe("VND 38740");
+      expect(sha(withGt.sent), `${source} ${decision}`).toBe(sha(without.sent));
       expect(withGt.hub).toBe("SUCCESS");
     }
   });
@@ -516,78 +520,75 @@ describe("R1 — GT overrides the price only where the row is priced by CONVERSI
     }
   });
 
-  it("R1e the REAL generated template (1 locale), GT filled under its own header ⇒ read and sent the same way", async () => {
+  it("R1e the NEW template (1 locale, real generator) imports right; an OLD file — the Manager's legacy template, VN 23000 on every row — sends exactly what the same rows without GT send", async () => {
     const spec = googleIapTemplateSpec(["Vietnamese"]);
+    expect(spec.headers).toEqual([H.id, H.price, H.title, H.desc]);
     const wb = buildTemplateWorkbook(XLSX, spec);
-    const r = spec.headers.map(() => null as unknown);
-    const set = (h: string, v: unknown) => (r[spec.headers.indexOf(h)] = v);
-    set(H.id, SKU);
-    set(H.price, 0.99);
-    set(H.gtPrice, 23000);
-    set(H.gtCurrency, "VND");
-    set(H.title, "Kim cương");
-    set(H.desc, "Gói kim cương");
-    XLSX.utils.sheet_add_aoa(wb.Sheets[GOOGLE_DATA_SHEET_NAME], [r], { origin: -1 });
+    XLSX.utils.sheet_add_aoa(wb.Sheets[GOOGLE_DATA_SHEET_NAME], [[SKU, 0.99, "Kim cương", "Gói kim cương"]], { origin: -1 });
     const tf = new File([new Uint8Array(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer)], spec.filename);
     const viaTemplate = await run({ file: tf, source: "google_default" });
-    const viaHandFile = await run({ file: gt, source: "google_default" });
-    expect(viaTemplate.prices[SKU]?.VN).toBe("VND 23000");
-    expect(sha(viaTemplate.sent)).toBe(sha(viaHandFile.sent));
-    // The template's own sample rows are skipped, and say so.
+    expect(viaTemplate.prices[SKU]).toEqual(CONVERTED_099);
+    expect(sha(viaTemplate.sent)).toBe(sha((await run({ file: plain, source: "google_default" })).sent));
+    expect([viaTemplate.preview.retiredGtColumns, viaTemplate.hub]).toEqual([null, "SUCCESS"]);
     expect(viaTemplate.preview.warnings).toEqual([
       "3 example row(s) skipped (sample Product IDs from the template) — delete the sample rows or replace them with your data.",
     ]);
+
+    const legacy = readFileSync(join(process.cwd(), "docs/google-iap-management/templates/template-item-iap-google.xlsx"));
+    const legacyRun = await run({ file: new File([new Uint8Array(legacy)], "template-item-iap-google.xlsx"), source: "google_default" });
+    const skus = ["com.vng.example.product1", "com.vng.example.product2", "com.vng.example.product3"];
+    const sameRowsNoGt = await run({
+      file: file(
+        ["Product ID", "Price (USD)", "Title (Afrikaans)", "Description (Afrikaans)"],
+        skus.map((sku, i) => ({ "Product ID": sku, "Price (USD)": 0.99, "Title (Afrikaans)": `Example ${i + 1}`, "Description (Afrikaans)": `Example ${i + 1}` })),
+      ),
+      source: "google_default",
+    });
+    expect(Object.keys(legacyRun.prices)).toEqual(skus);
+    expect(skus.map((s) => legacyRun.prices[s]?.VN)).toEqual(["VND 25740", "VND 25740", "VND 25740"]);
+    expect(sha(legacyRun.sent)).toBe(sha(sameRowsNoGt.sent));
+    expect([legacyRun.preview.retiredGtColumns, legacyRun.hub]).toEqual([{ rowsWithData: 3 }, "SUCCESS"]);
   });
 });
 
-describe("R2 — every kind of GT cell, through preview + execute (Google Conversion, CREATE)", () => {
+describe("R2 — every kind of GT cell, and every GT header spelling: ignored — nothing refused, nothing sent from it (Google Conversion, CREATE)", () => {
   /** Row 2 = a clean row (SKU2), row 3 = the row carrying the GT. */
   const twoRows = (gtPrice: unknown, gtCurrency: unknown) =>
     file(WITH_GT, [row({ [H.id]: SKU2 }), row({ [H.gtPrice]: gtPrice, [H.gtCurrency]: gtCurrency })]);
+  const noGtTwoRows = file(NO_GT, [row({ [H.id]: SKU2 }), row()]);
 
-  it("R2a accepted and SENT: VND 26000 with currency \"vnd\" ⇒ VN 26000; the NUMBER 26 (what Excel stores for a typed 26.000) ⇒ VN = VND 26 — 1000× too low, Hub SUCCESS", async () => {
-    const lower = await run({ file: twoRows(26000, "vnd"), source: "google_default" });
-    expect(lower.prices[SKU]?.VN).toBe("VND 26000");
-    const num26 = await run({ file: twoRows(26, "VND"), source: "google_default" });
-    expect(num26.preview.refused).toEqual([]);
-    expect(num26.prices[SKU]?.VN).toBe("VND 26");
-    expect(num26.prices[SKU2]?.VN).toBe("VND 25740");
-    expect([num26.hub, num26.preview.warnings]).toEqual(["SUCCESS", []]);
-  });
-
-  it("R2b refused ROW (the rest is pushed, Hub PARTIAL): junk, separator text, half-filled pair, 0, too precise, a currency outside the GT table, a pair Google does not bill", async () => {
-    const cases: Array<[string, unknown, unknown, string]> = [
-      ["junk", "abc", "VND", 'GT Price "abc" VND — Decimal price must be a non-negative number (got "abc").'],
-      ["separator", "26.000", "VND", 'GT Price "26.000" VND — "26.000" has a "." but VND has no decimals — it may be a thousands separator (26.000 = 26 thousand?). Write a whole number without separators, e.g. 26000.'],
-      ["price only", 26000, null, 'GT Price "26000" has no GT Currency — fill both or neither.'],
-      ["currency only", null, "VND", 'GT Currency "VND" has no GT Price — fill both or neither.'],
-      ["zero", 0, "VND", 'GT Price "0" VND — the price is 0 — a 0 price is not accepted; enter the real price.'],
-      ["too precise", "26000.5", "VND", 'GT Price "26000.5" VND — VND only accepts whole numbers (got "26000.5"). Google rejects fractional values for this currency.'],
-      ["not in the GT table", 26000, "XYZ", 'GT Currency "XYZ" is not a currency the GT column supports (one region per currency: USD, EUR, GBP, JPY, KRW, CNY, TWD, HKD, INR, IDR, THB, VND, PHP, SGD, MYR, AUD, NZD, CAD, MXN, BRL, ARS, RUB, TRY, SAR, AED).'],
-      ["not billed", 100, "CNY", 'GT Price "100" CNY — CN is not a region Google Play sells in.'],
+  it("R2a valid, junk, half-filled, 0, too precise, the NUMBER 26, a currency outside the old GT table or not billed ⇒ both rows sent, byte-identical to the file without GT; the notice counts the row; Hub SUCCESS (G0: VN 26 sent / 8 kinds refused)", async () => {
+    const base = await run({ file: noGtTwoRows, source: "google_default" });
+    expect(base.prices[SKU]?.VN).toBe("VND 25740");
+    const kinds: Array<[unknown, unknown]> = [
+      [26000, "vnd"], [26, "VND"], ["abc", "VND"], ["26.000", "VND"], [26000, null], [null, "VND"],
+      [0, "VND"], ["26000.5", "VND"], [26000, "XYZ"], [100, "CNY"],
     ];
-    for (const [label, p, c, reason] of cases) {
+    for (const [p, c] of kinds) {
       const o = await run({ file: twoRows(p, c), source: "google_default" });
-      expect(o.preview.refused, label).toEqual([{ rowNumber: 3, sku: SKU, reason }]);
-      expect(o.preview.rows.map((r) => r.sku), label).toEqual([SKU2]);
-      expect(o.execute?.refusedKinds, label).toEqual(["refused_in_file"]);
-      expect(Object.keys(o.prices), label).toEqual([SKU2]);
-      expect(o.hub, label).toBe("PARTIAL");
+      const at = `GT ${String(p)} / ${String(c)}`;
+      expect(o.preview.refused, at).toEqual([]);
+      expect(o.preview.rows.map((r) => r.sku), at).toEqual([SKU2, SKU]);
+      expect(o.preview.retiredGtColumns, at).toEqual({ rowsWithData: 1 });
+      expect(o.execute?.refusedKinds, at).toEqual([]);
+      expect(sha(o.sent), at).toBe(sha(base.sent));
+      expect(o.hub, at).toBe("SUCCESS");
     }
   });
 
-  it("R2c refused FILE (preview 422, nothing sent): a GT header in the wrong case, or only one of the two GT columns", async () => {
-    const miscased = await run({
-      file: file([H.id, H.price, "gt price", H.gtCurrency], [row({ "gt price": 26000, [H.gtCurrency]: "VND" })]),
-      source: "google_default",
-    });
-    expect([miscased.preview.status, miscased.preview.errors]).toEqual([422, ['Header "gt price": write it exactly "GT Price".']]);
-    const onlyPrice = await run({ file: file([H.id, H.price, H.gtPrice], [row({ [H.gtPrice]: 26000 })]), source: "google_default" });
-    expect([onlyPrice.preview.status, onlyPrice.preview.errors]).toEqual([
-      422,
-      ['The file has a "GT Price" column but no "GT Currency" column — add "GT Currency" (written exactly), or remove "GT Price". A GT needs both.'],
-    ]);
-    expect([miscased.execute, onlyPrice.execute, g.batch.mock.calls.length]).toEqual([null, null, 0]);
+  it("R2b a GT header in another case, or only ONE of the two GT columns ⇒ preview 200, the file is imported as if the column were not there (gate G0; G0 answered 422)", async () => {
+    const base = await run({ file: file(NO_GT, [row()]), source: "google_default" });
+    const files = {
+      "gt price + GT Currency": file([H.id, H.price, "gt price", H.gtCurrency, H.title, H.desc], [row({ "gt price": 26000, [H.gtCurrency]: "VND" })]),
+      "GT Price only": file([H.id, H.price, H.gtPrice, H.title, H.desc], [row({ [H.gtPrice]: 26000 })]),
+      "GT Currency only": file([H.id, H.price, H.gtCurrency, H.title, H.desc], [row({ [H.gtCurrency]: "VND" })]),
+    };
+    for (const [label, f] of Object.entries(files)) {
+      const o = await run({ file: f, source: "google_default" });
+      expect([o.preview.status, o.preview.errors, o.preview.retiredGtColumns], label).toEqual([200, [], { rowsWithData: 1 }]);
+      expect(sha(o.sent), label).toBe(sha(base.sent));
+      expect(o.hub, label).toBe("SUCCESS");
+    }
   });
 });
 
@@ -630,91 +631,117 @@ describe("R3 — custom prices: BYTE-IDENTICAL through G1 (Manager Q4 — region
   });
 });
 
-describe("R4 — a stale tab / direct POST that carries regionOverrides from the CLIENT (G0: accepted)", () => {
+describe("R4 — a stale tab / direct POST that carries regionOverrides from the CLIENT ⇒ refused (Manager Q4)", () => {
   const plain = file(NO_GT, [row()]);
   const withOverrides = (o: unknown) => (b: Record<string, unknown>) => ({
     ...b,
     rows: (b.rows as Array<Record<string, unknown>>).map((r) => ({ ...r, regionOverrides: o })),
   });
+  const REFUSED =
+    "Row 2: regionOverrides is not accepted — a country's own price comes only from a pricing-template tier or Custom prices (GT Price / GT Currency are no longer used). Nothing was sent.";
 
-  it("R4a the route takes them: VN 26000 ⇒ sent as VN = VND 26000 (byte-identical to a file GT); JP 170 ⇒ JP = JPY 170; under a matched tier the tier replaces them", async () => {
-    const vn = await run({ file: plain, source: "google_default", tamper: withOverrides([{ region: "VN", currency: "VND", priceDecimal: "26000" }]) });
-    const fileGt = await run({ file: file(WITH_GT, [row({ [H.gtPrice]: 26000, [H.gtCurrency]: "VND" })]), source: "google_default" });
-    expect(vn.prices[SKU]?.VN).toBe("VND 26000");
-    expect(sha(vn.sent)).toBe(sha(fileGt.sent));
-    const jp = await run({ file: plain, source: "google_default", tamper: withOverrides([{ region: "JP", currency: "JPY", priceDecimal: "170" }]) });
-    expect(jp.prices[SKU]).toEqual({ ...CONVERTED_099, JP: "JPY 170" });
-    const tier = await run({ file: plain, source: "default_template", tamper: withOverrides([{ region: "VN", currency: "VND", priceDecimal: "26000" }]) });
-    expect(tier.prices[SKU]?.VN).toBe("VND 25000");
+  it("R4a ANY non-empty regionOverrides ⇒ 400 REGION_OVERRIDES_REFUSED, under every source; nothing reaches Google; Hub FAILED (G0: VN 26000 / JP 170 were sent)", async () => {
+    const cases: unknown[] = [
+      [{ region: "VN", currency: "VND", priceDecimal: "26000" }],
+      [{ region: "JP", currency: "JPY", priceDecimal: "170" }],
+      [{ region: "VN", currency: "VND", priceDecimal: "26000.5" }],
+      [{}],
+      "VN 26000",
+      { VN: "26000" },
+    ];
+    for (const source of SOURCES) for (const ro of cases) {
+      const o = await run({ file: plain, source, tamper: withOverrides(ro) });
+      const at = `${source} ${JSON.stringify(ro)}`;
+      expect([o.execute?.status, o.execute?.code, o.execute?.error], at).toEqual([400, "REGION_OVERRIDES_REFUSED", REFUSED]);
+      expect([o.sent.requests.length, o.anchors.length, o.hub, o.audit], at).toEqual([0, 0, "FAILED", null]);
+    }
   });
 
-  it("R4b an override the choke point refuses ⇒ the row is refused (file_price_invalid), nothing sent, Hub FAILED", async () => {
-    const o = await run({ file: plain, source: "google_default", tamper: withOverrides([{ region: "VN", currency: "VND", priceDecimal: "26000.5" }]) });
-    expect([o.execute?.status, o.execute?.refusedKinds, o.sent.requests.length, o.hub]).toEqual([200, ["file_price_invalid"], 0, "FAILED"]);
+  it("R4b an EMPTY list (or none) is accepted: byte-identical to the wizard's own body", async () => {
+    const own = await run({ file: plain, source: "google_default" });
+    for (const ro of [[], null, undefined]) {
+      const o = await run({ file: plain, source: "google_default", tamper: withOverrides(ro) });
+      expect([o.execute?.status, sha(o.sent), o.hub], String(ro)).toEqual([200, sha(own.sent), "SUCCESS"]);
+    }
   });
 
-  it("R4c the contract: PRICING_RULE is file-currency-only/v1; a body without it ⇒ 409 PREVIEW_OUTDATED, nothing sent", async () => {
-    expect(PRICING_RULE).toBe("file-currency-only/v1");
-    const o = await run({
+  it("R4c the contract: PRICING_RULE is file-currency-only/v2; a v1 body (a tab opened before) or none ⇒ 409 PREVIEW_OUTDATED, nothing sent", async () => {
+    expect(PRICING_RULE).toBe("file-currency-only/v2");
+    const v1 = await run({ file: plain, source: "google_default", tamper: (b) => ({ ...b, pricing_rule: "file-currency-only/v1" }) });
+    const none = await run({
       file: plain,
       source: "google_default",
       tamper: (b) => Object.fromEntries(Object.entries(b).filter(([k]) => k !== "pricing_rule")),
     });
-    expect([o.execute?.status, o.execute?.code, o.sent.requests.length, o.hub]).toEqual([409, "PREVIEW_OUTDATED", 0, "FAILED"]);
-  });
-});
-
-describe("R5 — the audit records each row's GT (per_row_pricing.gt / gt_outcome — Manager Q5 removes them)", () => {
-  it("R5 none · kept · replaced_by_tier · replaced_by_custom · not_sent (Skip, refused)", async () => {
-    const gtFile = file(WITH_GT, [row({ [H.gtPrice]: 26000, [H.gtCurrency]: "VND" })]);
-    const GT_VN = { region: "VN", currency: "VND", price: "26000" };
-    const cases: Array<[string, () => Promise<Outcome>, unknown]> = [
-      ["no GT", () => run({ file: file(NO_GT, [row()]), source: "google_default" }), { gt: null, gt_outcome: "none" }],
-      ["Google Conversion", () => run({ file: gtFile, source: "google_default" }), { gt: GT_VN, gt_outcome: "kept" }],
-      ["matched tier", () => run({ file: gtFile, source: "default_template" }), { gt: GT_VN, gt_outcome: "replaced_by_tier" }],
-      [
-        "custom",
-        () => run({ file: gtFile, source: "google_default", custom: { [SKU]: [{ region: "TW", currency: "TWD", priceDecimal: "35" }] } }),
-        { gt: GT_VN, gt_outcome: "replaced_by_custom" },
-      ],
-      ["Skip", () => run({ file: gtFile, source: "google_default", decision: "skip" }), { gt: GT_VN, gt_outcome: "not_sent" }],
-      [
-        "refused at execute",
-        () =>
-          run({
-            file: file(NO_GT, [row()]),
-            source: "google_default",
-            tamper: (b) => ({
-              ...b,
-              rows: (b.rows as Array<Record<string, unknown>>).map((r) => ({
-                ...r,
-                regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "26000.5" }],
-              })),
-            }),
-          }),
-        { gt: { region: "VN", currency: "VND", price: "26000.5" }, gt_outcome: "not_sent" },
-      ],
-    ];
-    // One at a time: every run resets the shared fakes.
-    for (const [label, start, expected] of cases) {
-      const o = await start();
-      expect(gtAudit(o)[SKU], label).toEqual(expected);
-      expect(o.audit?.pricing_rule, label).toBe("file-currency-only/v1");
+    for (const o of [v1, none]) {
+      expect([o.execute?.status, o.execute?.code, o.sent.requests.length, o.hub]).toEqual([409, "PREVIEW_OUTDATED", 0, "FAILED"]);
+      expect(o.execute?.error).toBe(
+        "The tool was updated since this page was opened: this preview was made with an older version, which priced rows " +
+          "differently (the app's currency, or the GT Price column). Nothing was sent. Reload this page, then upload the file " +
+          "and run Preview again.",
+      );
     }
   });
 });
 
-describe("R6 — an old row pasted WHOLE into a file without GT columns (Manager Q6) — G0: accepted", () => {
-  it("R6 Title (Vietnamese) = 26000, Description (Vietnamese) = VND ⇒ imported with that listing (and en-US copied from it), CREATE and OVERWRITE, Hub SUCCESS", async () => {
-    const pasted = file(NO_GT, [row({ [H.title]: 26000, [H.desc]: "VND" })]);
+describe("R5 — the audit counts the rows with GT, never their values (Manager Q5: per_row_pricing.gt / gt_outcome are gone)", () => {
+  it("R5 gt_rows_with_data = the preview's count (null: no GT column; 0: columns but empty); per_row_pricing has no gt key; pricing_rule v2", async () => {
+    const gtFile = file(WITH_GT, [row({ [H.gtPrice]: 26000, [H.gtCurrency]: "VND" }), row({ [H.id]: SKU2, [H.gtCurrency]: "VND" })]);
+    const cases: Array<[string, () => Promise<Outcome>, number | null]> = [
+      ["no GT column", () => run({ file: file(NO_GT, [row()]), source: "google_default" }), null],
+      ["GT columns, empty", () => run({ file: file(WITH_GT, [row()]), source: "google_default" }), 0],
+      ["2 rows with GT", () => run({ file: gtFile, source: "google_default" }), 2],
+      ["2 rows with GT, matched tier", () => run({ file: gtFile, source: "default_template" }), 2],
+      [
+        "2 rows with GT, custom",
+        () => run({ file: gtFile, source: "google_default", custom: { [SKU]: [{ region: "TW", currency: "TWD", priceDecimal: "35" }] } }),
+        2,
+      ],
+      ["2 rows with GT, Skip", () => run({ file: gtFile, source: "google_default", decision: "skip" }), 2],
+    ];
+    // One at a time: every run resets the shared fakes.
+    for (const [label, start, expected] of cases) {
+      const o = await start();
+      expect(o.audit?.gt_rows_with_data, label).toBe(expected);
+      expect(o.audit?.pricing_rule, label).toBe("file-currency-only/v2");
+      const perRow = (o.audit?.per_row_pricing ?? []) as Array<Record<string, unknown>>;
+      expect(perRow.length, label).toBeGreaterThan(0);
+      for (const r of perRow) {
+        expect(Object.keys(r), label).toEqual([
+          "row_number", "sku", "decision", "file_currency", "file_price", "anchor", "regions_version", "regions_version_from", "outcome",
+        ]);
+      }
+      expect(JSON.stringify(o.audit), label).not.toMatch(/"gt"|gt_outcome|26000"|"VND 26000/);
+    }
+  });
+});
+
+describe("R6 — an old row pasted WHOLE into a file without GT columns ⇒ refused (Manager Q6), CREATE and OVERWRITE", () => {
+  const REASON =
+    '"Title (Vietnamese)" = "26000" và "Description (Vietnamese)" = "VND": có vẻ dữ liệu bị lệch cột — đừng chép cả dòng từ template cũ; hãy chép theo từng cột.';
+
+  it("R6a the shifted row is refused in the preview; pushing the rest sends only the other row — its listing never reaches Google; Hub PARTIAL (G0: '26000' / 'VND' sent as the vi + en-US listing)", async () => {
+    const pasted = file(NO_GT, [row({ [H.id]: SKU2 }), row({ [H.title]: 26000, [H.desc]: "VND" })]);
     for (const decision of DECISIONS) {
       const o = await run({ file: pasted, source: "google_default", decision });
-      expect(o.preview.refused, decision).toEqual([]);
-      expect(o.listings[SKU], decision).toEqual([
-        { languageCode: "vi", title: "26000", description: "VND" },
-        { languageCode: "en-US", title: "26000", description: "VND" },
+      expect(o.preview.refused, decision).toEqual([{ rowNumber: 3, sku: SKU, reason: REASON }]);
+      expect(o.preview.rows.map((r) => r.sku), decision).toEqual([SKU2]);
+      expect(o.execute?.refusedKinds, decision).toEqual(["refused_in_file"]);
+      expect(Object.keys(o.listings), decision).toEqual([SKU2]);
+      expect(o.listings[SKU2], decision).toEqual([
+        { languageCode: "vi", title: "Kim cương", description: "Gói kim cương" },
+        { languageCode: "en-US", title: "Kim cương", description: "Gói kim cương" },
       ]);
-      expect(o.hub, decision).toBe("SUCCESS");
+      expect(JSON.stringify(o.sent), decision).not.toMatch(/"title":"26000"/);
+      expect(o.hub, decision).toBe("PARTIAL");
+    }
+  });
+
+  it("R6b only BOTH conditions refuse: a numeric title with a real description, or a real title with \"VND\", is imported as written", async () => {
+    for (const [title, desc] of [[26000, "Gói kim cương"], ["Kim cương", "VND"]] as const) {
+      const o = await run({ file: file(NO_GT, [row({ [H.title]: title, [H.desc]: desc })]), source: "google_default", decision: "overwrite" });
+      expect([o.preview.refused, o.hub], `${title} / ${desc}`).toEqual([[], "SUCCESS"]);
+      expect((o.listings[SKU] as Array<{ title: string }>)[0], `${title} / ${desc}`).toEqual({ languageCode: "vi", title: String(title), description: desc });
     }
   });
 });

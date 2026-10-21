@@ -360,9 +360,9 @@ the app before importing (since October 2026, H4).
 - **`Google Conversion`:** every country is converted by Google from the
   file's price — so the US price is the file's price only when the file is
   in USD.
-- **GT Price + GT Currency** override their one country, except when a tier
-  matches the row (the tier's prices replace the GT) or the row has custom
-  prices (they replace it). Step 3 shows, per row, what happens to its GT.
+- **A country's own price** comes only from a matched tier or from custom
+  prices (Step 3). The retired `GT Price` / `GT Currency` columns of an old
+  file are never used ([GOOGLE-bulkimport-drop-gt], 2026-10-21 — see Step 2).
 
 > `Google Conversion` was labelled `Google default` before August 2026.
 > Only the label changed: the stored value is still `google_default` in
@@ -451,14 +451,24 @@ header NAME, not position):
   second price column, when another column looks like a price but is not
   `Price (XXX)` (e.g. `Price USD`, `Unit price`), or when XXX is not a
   currency Google Play bills in.
-- **GT Price** + **GT Currency** — a REAL per-region store price (e.g.
-  `26000` + `VND` = the actual 26,000₫ price for the VN region), NOT an
-  exchange rate. Optional; fill both or neither (the region is derived
-  from the currency — one region per GT currency). Same price rules as
-  the Price column. Write the headers exactly `GT Price` / `GT Currency`
-  and keep both columns or neither — otherwise the file is refused.
 - paired `Title (LangName)` / `Description (LangName)` per locale (82
   supported)
+
+**`GT Price` / `GT Currency` are gone from the template** (2026-10-21,
+[GOOGLE-bulkimport-drop-gt]: the team filled them but never meant them as
+prices, and the tool posted GT Price as that country's price). An old file
+that still has them imports as if they were not there: they are never read,
+checked or sent — in any case or spelling, one column alone included, and a
+row with only GT cells is an empty row. Step 3 shows a notice (with the
+number of rows that still have GT data) but never blocks Push and never
+refuses a row; clear the cells or delete the two columns. To give one
+country its own price, use **Custom prices** in Step 3.
+
+**Copy from an old file column by column, under the same headers — never
+whole rows.** A row pasted by position into a file without the GT columns
+puts the GT pair under Title / Description; a row whose Title is a bare
+number and whose Description is exactly three capital letters (e.g.
+`26000` / `VND`), in any locale, is refused ("có vẻ dữ liệu bị lệch cột").
 
 Legacy files that keep data in the first sheet (e.g. `Sheet1`, like the
 old `docs/google-iap-management/templates/template-item-iap-google.xlsx`
@@ -471,10 +481,9 @@ status (New · Exists). For existing SKUs, pick **Overwrite** or
 **Skip** — **Push to Google Play** is gated until every row has a
 decision. Bulk actions ("Set all Overwrite" / "Set all Skip") apply to
 existing rows only. A pricing note at the top of the wizard ("Prices come
-only from the file", shown on every step) restates the rules of Step 1,
-and each row with a GT says what the push will do with it (`will be sent`
-· `replaced by tier …` · `replaced by custom …` · `depends on the tier you
-pick`).
+only from the file", shown on every step) restates the rules of Step 1. A
+file that still has the GT columns gets a notice above the table (never a
+gate — see Step 2).
 
 **A row that cannot be imported is shown IN the table**, marked
 **Not imported** with its reason, and counted in a red notice above it.
@@ -482,17 +491,15 @@ It is never sent with some other price instead. A row is not imported
 when:
 
 - its price is empty;
-- its price or GT price is not a number, is 0, or has more decimals than
-  its currency allows;
+- its price is not a number, is 0, or has more decimals than its currency
+  allows;
 - in a currency without decimals (VND, IDR, KRW, JPY, TWD, HUF…) its price
-  or GT price is typed as **text** with a "." or "," — `26.000` may mean 26
-  thousand: write `26000` (a NUMBER cell is fine, even when Excel displays
-  it with a thousands separator);
-- only one of GT Price / GT Currency is filled;
-- its GT Currency is not in the GT list, or is not the currency Google Play
-  bills that region in (`CNY` — Google Play does not sell in China; `ARS` —
-  Google bills Argentina in USD);
-- it has data (price, GT Price, title or description) but no Product ID.
+  is typed as **text** with a "." or "," — `26.000` may mean 26 thousand:
+  write `26000` (a NUMBER cell is fine, even when Excel displays it with a
+  thousands separator);
+- in any locale, its Title is a bare number and its Description exactly
+  three capital letters — an old row pasted whole, shifted (see Step 2);
+- it has data (price, title or description) but no Product ID.
 
 If other rows can be imported, **Push** first opens a confirmation that
 names every row left out — **Go back** sends nothing; **Leave them out and
@@ -582,8 +589,8 @@ pricing source.
 ### Step 4 — Execute
 
 Before writing, the server asks Google to convert each row's **file price**
-into every country (one `convertRegionPrices` call per row; tier, custom and
-GT prices win where present), and reads the live product of each Overwrite
+into every country (one `convertRegionPrices` call per row; tier and custom
+prices win where present), and reads the live product of each Overwrite
 row once, so its other purchase options are kept (API reference §13). It
 then sends ONE `monetization.onetimeproducts.batchUpdate` call
 (`allowMissing: true` for new SKUs, `false` for Overwrite rows) and sets
@@ -610,7 +617,7 @@ below are the `kind` the audit log records for each refused row:
 | Reason | Meaning |
 |---|---|
 | `refused_in_file` | Marked **Not imported** in Step 3 (reason kept) and left out when you confirmed Push. Fix the file and import the row again. |
-| `file_price_invalid` | The row's price or GT price cannot be sent exactly as written — the Step 3 checks, run again on the server. |
+| `file_price_invalid` | The row's price cannot be sent exactly as written — the Step 3 checks, run again on the server. |
 | `tier_price_invalid` | The matched pricing-template tier holds a price that cannot be sent (more decimals than its currency allows, or 0). The reason names the tier and the country. Fix the tier in Settings → Pricing Templates, then import the row again. |
 | `conversion_failed` | The file price is not in USD and Google's conversion of it failed, or left the row with no US price. The reason says which failure it was: **temporary** (network, Google 5xx, 408, 429) — not the row's data, run the row again later; **Google rejected the price as invalid** (400 `INVALID_ARGUMENT`) — check the price; **an access, account or app problem** (any other 4xx, e.g. 403) — fix the access, then run again. A USD row is still sent: its file price is the US price. |
 | `custom_invalid_price` | A custom price breaks the price rules (precision, 0, `26.000`-style text in a currency without decimals), an entry is missing its country, currency or amount, or the custom set is empty. Fix it in the dialog and re-push. |

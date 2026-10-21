@@ -9054,6 +9054,7 @@ Test ghim: `app/api/google-iap-management/apps/[packageName]/bulk-import/file-cu
   ⇒ "26.000" thành SỐ 26 và lách luật. Parser đọc với `raw: true` ⇒ ô của file chữ luôn là CHỮ; ô xlsx
   giữ kiểu đã lưu. Bài học chung: một luật dựa trên "kiểu ô" chỉ đúng khi kiểu ô do người viết file quyết
   định, không do thư viện đoán.
+- ⟲ 2026-10-21 ([GOOGLE-bulkimport-drop-gt], §37): các luật GT dưới đây không còn — GT không bao giờ được đọc; file cũ có cột GT chỉ nhận cảnh báo.
 - **Giá 0 bị từ chối (b)** — giá chính hay GT, mọi cách viết ("0", "0.00").
 - **GT:** thiếu một trong hai ô, currency ngoài bảng GT, cặp vùng/currency Google không bán
   (CNY→CN, ARS→AR) ⇒ từ chối dòng, có lý do. Header GT sai hoa/thường, hoặc chỉ có MỘT trong hai cột
@@ -9121,6 +9122,7 @@ Test ghim: `app/api/google-iap-management/apps/[packageName]/bulk-import/file-cu
 **Shipped 2026-10-20:** `bf48692..121f2b1` trên `origin/main` (3 commit, 0 migration).
 
 Design: `docs/iap-management/design-apple-bulkimport-drop-gt-columns.md`. ⚠ CHỈ Apple — Google dùng GT thật (§35, H4); không đổi một hành vi nào của Google.
+> ⟲ **2026-10-21 — câu trên đã bị ĐẢO (Manager Q7, §37):** team không bao giờ muốn dùng GT làm giá, Google cũng bỏ GT. GP1–GP2 ghim lại theo Google mới, GP3 giữ. Mục §36 dưới đây là lịch sử của arc Apple.
 
 **Sự thật đã đo (census, trước khi đổi):**
 - GT **không ảnh hưởng gì** tới Apple, DB hay audit: route execute thật, 5 kiểu GT (trống, 23000/VND, -5/zzz, `1,99`, không có cột) ⇒ 17 lời gọi ghi lại giống từng byte; 16 lần ghi DB không chứa GT. Parser đọc GT vào `base_price` / `base_currency`, không code production nào đọc lại.
@@ -9158,6 +9160,16 @@ Design: `docs/google-iap-management/design-bulkimport-drop-gt-columns.md`. ⚠ K
 **Bước A — ảnh hưởng quá khứ (PASS `d2cbfcc`; Manager chạy `docs/google-iap-management/queries/audit-gt-past-impact.sql` trên prod 2026-10-21, kết luận nguyên văn):** 99 batch trước H4.4, 1 542 dòng ghi thành công; 58 dòng SKU liệt kê (A=14, B=0, C=44, D/N/X=0, unaccounted=0). GT còn nằm trên Google chỉ ở com.vng.passsdk: 11 SKU com.vngg.tool.product0000025…0000035 (4 batch google_default 2026-07-16, minhgv), VN = VND 23000 cho mọi mức giá (0.99 / 1.99 / 22.99 USD), mirror_state A — passsdk là APP THỬ NGHIỆM ⇒ không sửa giá. funzap.portal (39 SKU, google_default 2026-08-07): mirror_state C, giá VN hiện tại = giá tier (batch default_template 2026-08-20 ghi đè) ⇒ không còn GT. cookierun.oven.smash (4 SKU, google_default 2026-06-01): mirror_state C, giá VN dạng quy đổi (~26 300/USD), đã đọc lại từ Google 2026-10-16 ⇒ không còn dấu GT. Mọi batch template có audit: 0 dòng "không khớp tier" ⇒ GT chưa từng có tác dụng ở template. 6 batch không audit: rows_success = 0 ⇒ không ghi gì. ⇒ **KHÔNG cần sửa giá quá khứ trên production.** Lỗ "ô số 26.000" ở cột giá CHÍNH: BACKLOG `[GOOGLE-bulk-import-price-magnitude]`, ƯU TIÊN CAO — arc kế tiếp.
 
 **G0 (ghim hiện trạng, 2026-10-21):** `lib/google-iap-management/parsers/gt-columns.baseline.test.ts` + `app/api/google-iap-management/apps/[packageName]/bulk-import/gt-columns.route.test.ts`; mutation 10/10 đỏ. ⚠ R3 ghim sha của request Custom prices (Q4) — G1 không được đổi. Chi tiết: design §G0.
+
+**G1 (2026-10-21) — đã làm:**
+- **Template:** bỏ 2 cột ⇒ core 2 · 1 locale 4 · 3 locale 8 · đủ 166 (tên file giữ). Dòng mẫu và bảng minh hoạ Notes dựng bằng MỘT hàm theo tên header (`sampleRows`, như Apple); Notes không còn chữ GT, thêm câu "COPYING FROM ANOTHER FILE: copy column by column…".
+- **Parser:** không đọc / không kiểm GT; bỏ bảng currency→vùng (`CURRENCY_TO_REGION_OVERRIDES`, `regionForCurrency`); `ParsedIapRow` không còn `regionOverrides`. Hai tên cũ được NHẬN DIỆN (`isRetiredGtHeader`: mọi kiểu hoa/thường/khoảng trắng, một cột lẻ cũng được — duyệt gate G0) để không bị coi là cột giá (nếu không MỌI file cũ bị từ chối). Báo `retiredGtColumns: { rowsWithData }` (đếm mọi dòng có ô GT, kể cả dòng mẫu và dòng không Product ID). Dòng chỉ có GT = dòng trống. Ranh giới (Manager CHẤP NHẬN ở gate G1): `GT Curency` (gõ sai) là cột lạ bị bỏ qua như mọi cột lạ; `GT Price (VND)` vẫn "trông như cột giá" ⇒ từ chối file (luật H4.1 Q10 — template chưa từng sinh header đó; không nới luật H4). Giới hạn thứ hai (CHẤP NHẬN): số dòng GT tính cả 3 dòng mẫu của template cũ.
+- **Q6:** Title số thuần (`/^\d+(?:[.,]\d+)*$/`) **và** Description đúng 3 chữ in hoa ở cùng một locale ⇒ từ chối dòng, lý do nêu đúng 2 header + giá trị + "có vẻ dữ liệu bị lệch cột — đừng chép cả dòng từ template cũ; hãy chép theo từng cột." Mọi locale; parser không biết CREATE/Overwrite nên áp cho cả hai.
+- **`file-price.ts`:** bỏ `fileRegionPriceOf` (+ bảng `BILLED_IN` chỉ nó dùng).
+- **Route execute:** `regionOverrides` khác rỗng từ client ⇒ 400 `REGION_OVERRIDES_REFUSED`, không gửi gì (rỗng / không có ⇒ nhận). `PRICING_RULE` = `file-currency-only/v2` ⇒ tab cũ (v1) nhận 409 `PREVIEW_OUTDATED` — ở execute, và (mới, twin P1) ở **preview**: đổi HÌNH DẠNG response preview làm code wizard cũ crash (đo ở review G1), nên preview cũng kiểm hợp đồng trước khi đọc file. Orchestrator thêm lớp thứ hai: hàng truyền vào đã có `regionOverrides` ⇒ ném lỗi trước khi gửi (finally đóng batch FAILED). `regionOverrides` giữ làm chỗ chứa giá custom / tier PHÍA SERVER.
+- **Audit (Q5):** bỏ `per_row_pricing[].gt` / `gt_outcome`; thêm `gt_rows_with_data` (null = file không có cột GT) ở MỌI đường audit (thành công, không-gì-để-gửi, catch, finally).
+- **Wizard:** bỏ `gtPlanOf` / `GtLine`; khung `retired-gt-notice` phía trên bảng Preview (câu Q1 / câu nhẹ đã duyệt, `googleRetiredGtWarning` trong `template-spec.ts`) — KHÔNG khoá Push, không từ chối dòng; body execute mang `gtRowsWithData`.
+- **R3 (Custom prices, Q4):** fingerprint request gửi Google đo trên code G0 — giữ nguyên từng byte (khối test không đổi một ký tự).
 
 **Bài học:** "cột tuỳ chọn mà team luôn điền" + "tool âm thầm dùng nó" = rủi ro lớn hơn một cột bị bỏ quên — hỏi ý định của người điền trước khi coi một cột là tính năng.
 

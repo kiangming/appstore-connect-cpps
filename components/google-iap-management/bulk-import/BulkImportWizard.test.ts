@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { computePrecisionViolations, gtPlanOf } from "./execute-payload";
+import { buildExecuteRequestBody, buildExecuteRows, computePrecisionViolations } from "./execute-payload";
 import type { PreviewRow } from "./BulkImportWizard";
 
 function row(overrides: Partial<PreviewRow>): PreviewRow {
@@ -22,7 +22,6 @@ function row(overrides: Partial<PreviewRow>): PreviewRow {
     sku: "com.example.sku",
     baseCurrency: "USD",
     basePriceDecimal: "0.99",
-    regionOverrides: [],
     listings: [],
     exists: false,
     decision: "create",
@@ -124,42 +123,26 @@ describe("computePrecisionViolations (Hotfix 28)", () => {
   });
 });
 
-describe("H4.3 (Q5) — gtPlanOf: what the push does with a row's GT, every branch", () => {
-  const GT = { region: "VN", currency: "VND", priceDecimal: "26000" };
-  const T1 = { identifier: "T1", templateId: "t", regionCount: 3, vnCurrency: "VND", vnPriceMicros: "25000000000", vnPriceDecimal: "25000" };
-  const NO_VN = { ...T1, identifier: "T2", vnCurrency: null, vnPriceMicros: null, vnPriceDecimal: null };
-  const base = { pricingSource: "default_template" as const, tierSelections: {} as Record<number, string>, customPrices: {}, activeCustomSkus: new Set<string>() };
-  const custom = (entries: Array<{ region: string; currency: string; priceDecimal: string }>) => ({
-    customPrices: { "com.example.sku": { entries, baseline: { kind: "none" as const }, editedAt: "x" } },
-    activeCustomSkus: new Set(["com.example.sku"]),
-  });
-
-  it.each([
-    ["no GT", row({}), base, { kind: "none" }],
-    ["Skip", row({ regionOverrides: [GT], decision: "skip" }), base, { kind: "skip", gt: GT }],
-    ["Google Conversion", row({ regionOverrides: [GT] }), { ...base, pricingSource: "google_default" as const }, { kind: "sent", gt: GT }],
-    ["template, no tier matched", row({ regionOverrides: [GT] }), base, { kind: "sent", gt: GT }],
-    ["custom set WITH the GT country", row({ regionOverrides: [GT] }), { ...base, ...custom([{ region: "VN", currency: "VND", priceDecimal: "27000" }]) },
-      { kind: "replaced_by_custom", gt: GT, customEntry: { currency: "VND", priceDecimal: "27000" } }],
-    ["custom set WITHOUT the GT country", row({ regionOverrides: [GT] }), { ...base, ...custom([{ region: "US", currency: "USD", priceDecimal: "1" }]) },
-      { kind: "replaced_by_custom", gt: GT, customEntry: null }],
-    ["tier with a VN price", row({ regionOverrides: [GT], tierCandidates: [T1] }), { ...base, tierSelections: { 2: "T1" } },
-      { kind: "replaced_by_tier", gt: GT, tier: "T1", tierEntry: { kind: "known", currency: "VND", priceDecimal: "25000" } }],
-    ["tier without a VN price", row({ regionOverrides: [GT], tierCandidates: [NO_VN] }), { ...base, tierSelections: { 2: "T2" } },
-      { kind: "replaced_by_tier", gt: GT, tier: "T2", tierEntry: { kind: "absent" } }],
-    ["tier, GT in another country (price unknown on the client)", row({ regionOverrides: [{ region: "JP", currency: "JPY", priceDecimal: "160" }], tierCandidates: [T1] }), { ...base, tierSelections: { 2: "T1" } },
-      { kind: "replaced_by_tier", gt: { region: "JP", currency: "JPY", priceDecimal: "160" }, tier: "T1", tierEntry: { kind: "unknown" } }],
-    ["candidates but no tier picked", row({ regionOverrides: [GT], tierCandidates: [T1, NO_VN] }), base, { kind: "pending_tier", gt: GT }],
-    ["tier lookup failed", row({ regionOverrides: [GT], tierMatchedBy: "lookup_failed" }), base, { kind: "unknown_lookup_failed", gt: GT }],
-  ])("%s", (_label, r, state, expected) => {
-    expect(gtPlanOf(r, state)).toEqual(expected);
-  });
-
-  it("custom beats a tier (the custom pre-pass replaces the GT before the template loop); Skip beats both", () => {
-    const r = row({ regionOverrides: [GT], tierCandidates: [T1] });
-    const st = { ...base, tierSelections: { 2: "T1" }, ...custom([{ region: "VN", currency: "VND", priceDecimal: "27000" }]) };
-    expect(gtPlanOf(r, st).kind).toBe("replaced_by_custom");
-    expect(gtPlanOf({ ...r, decision: "skip" }, st).kind).toBe("skip");
+// [GOOGLE-bulkimport-drop-gt] G1 — the "gtPlanOf" block (what the push did
+// with a row's GT, every branch) is gone with the function: the GT is never
+// read, so there is nothing to plan or to show (Manager Q1).
+describe("[GOOGLE-bulkimport-drop-gt] — the execute body: no region price from the client, the GT count for the audit", () => {
+  it("buildExecuteRows sends no regionOverrides (the route refuses them — Q4); the body carries pricing_rule v2 and gtRowsWithData (Q5)", () => {
+    const rows = buildExecuteRows([row({}), row({ rowNumber: 3, sku: "com.example.b" })], {
+      tierSelections: {},
+      customPrices: {},
+      activeCustomSkus: new Set(),
+    });
+    expect(rows.map((r) => Object.keys(r).includes("regionOverrides"))).toEqual([false, false]);
+    const body = buildExecuteRequestBody({
+      pricingSource: "google_default",
+      sourceFilename: "f.xlsx",
+      hubRunId: null,
+      rows,
+      droppedRows: [],
+      priceHeader: "Price (USD)",
+      gtRowsWithData: 3,
+    });
+    expect(body).toMatchObject({ pricing_rule: "file-currency-only/v2", priceHeader: "Price (USD)", gtRowsWithData: 3 });
   });
 });
-

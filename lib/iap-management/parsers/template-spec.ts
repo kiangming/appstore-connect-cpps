@@ -65,8 +65,9 @@ export const APPLE_LEAD_HEADERS = {
  *  have them; the parser RECOGNISES these names (trimmed, any case) so such
  *  a file imports exactly like a new one: the columns are not read, not
  *  checked, and raise no "unexpected header" warning.
- *  ⚠ Apple only — Google's GT Price / GT Currency are real and live in the
- *  Google module's own template spec. */
+ *  ⚠ Apple only. (⟲ 2026-10-21, Manager Q7: Google retired its own GT columns
+ *  too — GOOGLE_RETIRED_GT_HEADERS in the Google module's template spec;
+ *  until then they were real Google prices.) */
 export const APPLE_RETIRED_LEAD_HEADERS: readonly string[] = [
   "GT Price",
   "GT Currency",

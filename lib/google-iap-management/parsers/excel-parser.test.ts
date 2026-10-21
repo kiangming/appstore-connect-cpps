@@ -1,14 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as XLSX from "xlsx";
 
-import {
-  gtCurrencyRegionPairs,
-  parseIapTemplate,
-  regionForCurrency,
-  resolvePriceColumn,
-} from "./excel-parser";
-import { PLAY_REGIONS } from "../google/play-regions.snapshot";
-import { fileRegionPriceOf } from "../orchestration/file-price";
+import { parseIapTemplate, resolvePriceColumn } from "./excel-parser";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -101,34 +94,35 @@ describe("resolvePriceColumn — H4.1: exactly ONE price column, and it names a 
     });
   });
 
-  it("a GT header in another case would be ignored silently ⇒ refused with 'write it exactly'", () => {
-    const out = resolvePriceColumn(["Product ID", "Price (USD)", "gt price", "Gt  Currency"]);
-    expect(out).toEqual({
-      kind: "error",
-      reason: "gt_header_case",
-      message: 'Header "gt price": write it exactly "GT Price". Header "Gt  Currency": write it exactly "GT Currency".',
+  // [GOOGLE-bulkimport-drop-gt] G1 — was "a GT header in another case ⇒
+  // refused with 'write it exactly'" and "one GT column without the other
+  // refuses the FILE": both guarded the GT being READ. It never is now, so
+  // neither is a reason to refuse a file (gate G0, 2026-10-21).
+  it("the retired GT headers in ANY case or spacing are not price columns either — the file is not refused", () => {
+    expect(resolvePriceColumn(["Product ID", "Price (USD)", "gt price", "Gt  Currency"])).toEqual({
+      kind: "ok",
+      columnIndex: 1,
+      currencyCode: "USD",
+      headerText: "Price (USD)",
     });
   });
 
-  it("H4.2: a GT Price column without a GT Currency column (or the reverse, or a misspelt one) refuses the FILE — never every GT dropped silently", () => {
-    for (const [headers, present, missing] of [
-      [["Product ID", "Price (USD)", "GT Price"], "GT Price", "GT Currency"],
-      [["Product ID", "Price (USD)", "GT Price", "GT Curency"], "GT Price", "GT Currency"],
-      [["Product ID", "Price (USD)", "GT Currency"], "GT Currency", "GT Price"],
-      [["Product ID", "Price (USD)", "GT Amount", "GT Currency"], "GT Currency", "GT Price"],
-    ] as const) {
-      expect(resolvePriceColumn([...headers])).toEqual({
-        kind: "error",
-        reason: "gt_column_missing",
-        message: `The file has a "${present}" column but no "${missing}" column — add "${missing}" (written exactly), or remove "${present}". A GT needs both.`,
-      });
+  it("one GT column without the other, or a misspelt one, no longer refuses the FILE — the GT is never read", () => {
+    for (const headers of [
+      ["Product ID", "Price (USD)", "GT Price"],
+      ["Product ID", "Price (USD)", "GT Price", "GT Curency"],
+      ["Product ID", "Price (USD)", "GT Currency"],
+      ["Product ID", "Price (USD)", "GT Amount", "GT Currency"],
+    ]) {
+      expect(resolvePriceColumn(headers)).toMatchObject({ kind: "ok", currencyCode: "USD" });
     }
-    // Neither GT column is fine: the GT is optional.
-    expect(resolvePriceColumn(["Product ID", "Price (USD)"]).kind).toBe("ok");
-    // End to end: the file is refused, no row is read.
+    // End to end: the row is read, nothing taken from the GT column.
     const result = parseIapTemplate(makeWorkbook([["Product ID", "Price (VND)", "GT Price"], ["sku.a", 26000, 25000]]));
-    expect(result.rows).toEqual([]);
-    expect(result.errors.join(" ")).toMatch(/has a "GT Price" column but no "GT Currency" column/);
+    expect([result.errors, result.rows.map((r) => [r.sku, r.basePriceDecimal]), result.retiredGtColumns]).toEqual([
+      [],
+      [["sku.a", "26000"]],
+      { rowsWithData: 1 },
+    ]);
   });
 
   it("no price column at all ⇒ error naming the only accepted shape", () => {
@@ -137,29 +131,8 @@ describe("resolvePriceColumn — H4.1: exactly ONE price column, and it names a 
   });
 });
 
-describe("GT currency → region table", () => {
-  it("maps known currencies to their one region", () => {
-    expect(regionForCurrency("VND")).toBe("VN");
-    expect(regionForCurrency("usd")).toBe("US");
-    expect(regionForCurrency(" thb ")).toBe("TH");
-  });
-
-  it("returns null for unknown currencies (no COMMON_REGIONS fallback any more)", () => {
-    expect(regionForCurrency("XYZ")).toBeNull();
-  });
-
-  it("against the measured catalog: 23 entries are billed in their currency; exactly CNY and ARS are not — and fileRegionPriceOf refuses them", () => {
-    const billed = new Map(PLAY_REGIONS.map((r) => [r.code, r.currency]));
-    const pairs = gtCurrencyRegionPairs();
-    const matching = pairs.filter(({ currency, region }) => billed.get(region) === currency);
-    const notBilled = pairs.filter(({ currency, region }) => billed.get(region) !== currency);
-    expect(matching).toHaveLength(23);
-    expect(notBilled.map((p) => p.currency).sort()).toEqual(["ARS", "CNY"]);
-    for (const p of notBilled) {
-      expect(fileRegionPriceOf({ region: p.region, currency: p.currency, priceDecimal: "1" }).ok).toBe(false);
-    }
-  });
-});
+// [GOOGLE-bulkimport-drop-gt] G1 — the "GT currency → region table" block is
+// gone with the table: the parser no longer maps a GT Currency to a region.
 
 describe("parseIapTemplate", () => {
   it("parses a minimal valid template", () => {
@@ -192,9 +165,9 @@ describe("parseIapTemplate", () => {
     expect(row.sku).toBe("com.example.pack1");
     expect(row.baseCurrency).toBe("USD");
     expect(row.basePriceDecimal).toBe("0.99");
-    expect(row.regionOverrides).toEqual([
-      { region: "VN", currency: "VND", priceDecimal: "25000" },
-    ]);
+    // G1: the GT is not read — no override, only counted.
+    expect("regionOverrides" in row).toBe(false);
+    expect(result.retiredGtColumns).toEqual({ rowsWithData: 1 });
     expect(row.listings).toEqual(
       expect.arrayContaining([
         { locale: "en-US", title: "Small Pack", description: "200 gems" },
@@ -252,29 +225,19 @@ describe("parseIapTemplate", () => {
     expect(result.rows[0].listings).toHaveLength(0);
   });
 
-  it("H4.2: a GT Currency outside the GT table REFUSES the row (before: GT dropped, row imported)", () => {
+  // [GOOGLE-bulkimport-drop-gt] G1 — the next GT tests used to pin a row
+  // REFUSED for its GT (a currency outside the GT table; one of the pair
+  // filled). The GT is not read any more (Manager Q1): such rows import.
+  it("G1: a GT Currency outside the old GT table, or only one of GT Price / GT Currency filled ⇒ the row IMPORTS (the GT is not read)", () => {
     const buf = makeWorkbook([
       ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
       ["sku.a", 0.99, 100, "XYZ"],
+      ["sku.b", 0.99, 100, ""],
+      ["sku.c", 0.99, "", "VND"],
     ]);
     const result = parseIapTemplate(buf);
-    expect(result.rows).toEqual([]);
-    expect(result.refusedRows).toHaveLength(1);
-    expect(result.refusedRows[0].reason).toMatch(/^GT Currency "XYZ" is not a currency the GT column supports \(one region per currency: USD, EUR, /);
-  });
-
-  it("H4.2: only one of GT Price / GT Currency filled REFUSES the row, naming which is missing", () => {
-    const buf = makeWorkbook([
-      ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
-      ["sku.a", 0.99, 100, ""],
-      ["sku.b", 0.99, "", "VND"],
-    ]);
-    const result = parseIapTemplate(buf);
-    expect(result.rows).toEqual([]);
-    expect(result.refusedRows).toEqual([
-      { rowNumber: 2, sku: "sku.a", reason: 'GT Price "100" has no GT Currency — fill both or neither.' },
-      { rowNumber: 3, sku: "sku.b", reason: 'GT Currency "VND" has no GT Price — fill both or neither.' },
-    ]);
+    expect(result.rows.map((r) => r.sku)).toEqual(["sku.a", "sku.b", "sku.c"]);
+    expect([result.refusedRows, result.warnings, result.retiredGtColumns]).toEqual([[], [], { rowsWithData: 3 }]);
   });
 
   it("skips rows with missing Price (USD), keeps valid neighbours", () => {
@@ -350,45 +313,27 @@ describe("parseIapTemplate", () => {
     expect(result.warnings.join("\n")).not.toMatch(/No data rows found/);
   });
 
-  it("H4.1 Q10: a GT price with more decimals than its currency allows ⇒ the ROW is not imported (never sent without its GT)", () => {
+  // G1 — were "a GT too precise / in CNY / ARS refuses its row": the GT is
+  // not read, so those rows import; with a bad PRICE, only the price is named.
+  it("G1: a GT too precise, or in a pair Google does not bill (CNY / ARS) ⇒ the row IMPORTS", () => {
     const buf = makeWorkbook([
       ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
       ["sku.a", 0.99, 26000.5, "VND"],
-      ["sku.b", 0.99, 26000, "VND"],
+      ["sku.b", 0.99, 7, "CNY"],
+      ["sku.c", 0.99, 900, "ARS"],
     ]);
     const result = parseIapTemplate(buf);
-    expect(result.rows.map((r) => r.sku)).toEqual(["sku.b"]);
-    expect(result.rows[0].regionOverrides).toEqual([{ region: "VN", currency: "VND", priceDecimal: "26000" }]);
-    expect(result.warnings).toContain(
-      'Row 2 (SKU "sku.a"): GT Price "26000.5" VND — VND only accepts whole numbers (got "26000.5"). Google rejects fractional values for this currency. Row not imported.',
-    );
+    expect([result.rows.map((r) => r.sku), result.refusedRows, result.warnings]).toEqual([["sku.a", "sku.b", "sku.c"], [], []]);
   });
 
-  it("H4.1: a GT in CNY / ARS REFUSES its row with Google's real billing (CN not sold; AR billed in USD) — never dropped and replaced by a converted price", () => {
-    const buf = makeWorkbook([
-      ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
-      ["sku.a", 0.99, 7, "CNY"],
-      ["sku.b", 0.99, 900, "ARS"],
-    ]);
-    const result = parseIapTemplate(buf);
-    expect(result.rows).toEqual([]);
-    expect(result.refusedRows).toEqual([
-      { rowNumber: 2, sku: "sku.a", reason: 'GT Price "7" CNY — CN is not a region Google Play sells in.' },
-      { rowNumber: 3, sku: "sku.b", reason: 'GT Price "900" ARS — Google Play bills AR in USD, not ARS.' },
-    ]);
-  });
-
-  it("H4.1: a row with BOTH a bad price and a bad GT names both in one message", () => {
+  it("G1: a row with a bad price AND a bad GT names only the price — the GT is never checked", () => {
     const buf = makeWorkbook([
       ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
       ["sku.a", "0.999", 26000.5, "VND"],
     ]);
     const result = parseIapTemplate(buf);
     expect(result.refusedRows).toHaveLength(1);
-    expect(result.refusedRows[0].reason).toBe(
-      '"Price (USD)" = "0.999" — USD supports at most 2 decimal places (got "0.999" with 3). ' +
-        'GT Price "26000.5" VND — VND only accepts whole numbers (got "26000.5"). Google rejects fractional values for this currency.',
-    );
+    expect(result.refusedRows[0].reason).toBe('"Price (USD)" = "0.999" — USD supports at most 2 decimal places (got "0.999" with 3).');
   });
 
   it("H4.1: the not-imported summary counts refused AND blank-price rows, and still appears next to the sample-row message", () => {
@@ -405,16 +350,16 @@ describe("parseIapTemplate", () => {
   });
 
   it("H4.1: numeric cells — float noise reads as its 6-decimal value; a REAL extra decimal reaches the precision check and refuses the row", () => {
+    // G1: the GT-column half of this test (25999.99999999996 ⇒ "26000") is
+    // gone with the GT read.
     const buf = makeWorkbook([
-      ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
-      ["sku.noise", 0.1 + 0.2, 25999.99999999996, "VND"],
-      ["sku.real", 4.9999999, "", ""],
-      ["sku.tiny", 0.0000001, "", ""],
+      ["Product ID", "Price (USD)"],
+      ["sku.noise", 0.1 + 0.2],
+      ["sku.real", 4.9999999],
+      ["sku.tiny", 0.0000001],
     ]);
     const result = parseIapTemplate(buf);
-    expect(result.rows.map((r) => [r.sku, r.basePriceDecimal, r.regionOverrides[0]?.priceDecimal])).toEqual([
-      ["sku.noise", "0.3", "26000"],
-    ]);
+    expect(result.rows.map((r) => [r.sku, r.basePriceDecimal])).toEqual([["sku.noise", "0.3"]]);
     expect(result.refusedRows.map((r) => r.sku)).toEqual(["sku.real", "sku.tiny"]);
   });
 
@@ -439,11 +384,11 @@ describe("H4.2 — thousands separators and zero prices (Manager 2026-10-18)", (
       ["sku.gt", 26000, "25.000", "VND"],
     ]);
     const result = parseIapTemplate(buf);
-    expect(result.rows.map((r) => [r.sku, r.basePriceDecimal])).toEqual([["sku.number", "26000"]]);
+    // G1: sku.gt imports — its "25.000" GT is not read (was refused).
+    expect(result.rows.map((r) => [r.sku, r.basePriceDecimal])).toEqual([["sku.number", "26000"], ["sku.gt", "26000"]]);
     expect(result.refusedRows.map((r) => r.reason)).toEqual([
       '"Price (VND)" = "26.000" — "26.000" has a "." but VND has no decimals — it may be a thousands separator (26.000 = 26 thousand?). Write a whole number without separators, e.g. 26000.',
       '"Price (VND)" = "26,000" — "26,000" has a "," but VND has no decimals — it may be a thousands separator (26.000 = 26 thousand?). Write a whole number without separators, e.g. 26000.',
-      'GT Price "25.000" VND — "25.000" has a "." but VND has no decimals — it may be a thousands separator (26.000 = 26 thousand?). Write a whole number without separators, e.g. 26000.',
     ]);
   });
 
@@ -453,8 +398,9 @@ describe("H4.2 — thousands separators and zero prices (Manager 2026-10-18)", (
       "utf8",
     );
     const result = parseIapTemplate(csv);
-    expect(result.rows.map((r) => [r.sku, r.basePriceDecimal])).toEqual([["sku.ok", "26000"]]);
-    expect(result.refusedRows.map((r) => r.sku)).toEqual(["sku.sep", "sku.gt"]);
+    // G1: sku.gt imports — its GT is not read (was refused).
+    expect(result.rows.map((r) => [r.sku, r.basePriceDecimal])).toEqual([["sku.ok", "26000"], ["sku.gt", "26000"]]);
+    expect(result.refusedRows.map((r) => r.sku)).toEqual(["sku.sep"]);
     expect(result.refusedRows.every((r) => /it may be a thousands separator/.test(r.reason))).toBe(true);
   });
 
@@ -468,7 +414,7 @@ describe("H4.2 — thousands separators and zero prices (Manager 2026-10-18)", (
     expect(result.rows[0].basePriceDecimal).toBe("0.990");
   });
 
-  it("(b) a 0 price or a 0 GT ⇒ row refused with a clear reason", () => {
+  it("(b) a 0 price ⇒ row refused with a clear reason; a 0 GT is not read (G1: was refused)", () => {
     const buf = makeWorkbook([
       ["Product ID", "Price (USD)", "GT Price", "GT Currency"],
       ["sku.zero", 0, "", ""],
@@ -476,11 +422,10 @@ describe("H4.2 — thousands separators and zero prices (Manager 2026-10-18)", (
       ["sku.gt-zero", 0.99, 0, "VND"],
     ]);
     const result = parseIapTemplate(buf);
-    expect(result.rows).toEqual([]);
+    expect(result.rows.map((r) => r.sku)).toEqual(["sku.gt-zero"]);
     expect(result.refusedRows).toEqual([
       { rowNumber: 2, sku: "sku.zero", reason: '"Price (USD)" = "0" — the price is 0 — a 0 price is not accepted; enter the real price.' },
       { rowNumber: 3, sku: "sku.zero-text", reason: '"Price (USD)" = "0.00" — the price is 0 — a 0 price is not accepted; enter the real price.' },
-      { rowNumber: 4, sku: "sku.gt-zero", reason: 'GT Price "0" VND — the price is 0 — a 0 price is not accepted; enter the real price.' },
     ]);
   });
 });

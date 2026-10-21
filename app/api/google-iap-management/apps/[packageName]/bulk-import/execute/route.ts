@@ -78,12 +78,17 @@ interface ExecuteBody {
   droppedRows?: Array<{ rowNumber?: number; sku?: string; reason?: string }>;
   /** H4.4 — the file's price header as the preview read it (audit only). */
   priceHeader?: string | null;
+  /** [GOOGLE-bulkimport-drop-gt] (Manager Q5) — rows of the file with data in
+   *  the retired GT columns, as the preview counted them (audit only). */
+  gtRowsWithData?: number | null;
   rows?: Array<{
     rowNumber?: number;
     sku?: string;
     baseCurrency?: string;
     basePriceDecimal?: string;
-    regionOverrides?: Array<{ region: string; currency: string; priceDecimal: string }>;
+    /** REFUSED when non-empty — see the check below. Only a tab built before
+     *  [GOOGLE-bulkimport-drop-gt] or a direct POST sends it. */
+    regionOverrides?: unknown;
     listings?: Array<{ locale: string; title: string; description: string }>;
     decision?: RowDecision;
     // Hotfix 19 — explicit tier selection from the wizard's Preview step.
@@ -173,18 +178,18 @@ export async function POST(
       return NextResponse.json(refusal.body, { status: refusal.status });
     }
 
-    // H4.3 — a request built before H4 cannot be priced from the file: the
-    // old preview read a bare "Price" header as the APP's currency and matched
-    // tiers cross-currency, and its rows do not say so (the old
-    // `priceHeaderSource` marker is gone). Refuse the whole request, before
-    // anything is written, and say how to fix it.
+    // H4.3 — a request built under an older rule cannot be trusted to be
+    // priced from the file's price column alone (PRICING_RULE: v1 read a bare
+    // "Price" header as the APP's currency before H4; before v2 each row
+    // carried its GT as a price). Its rows do not say so. Refuse the whole
+    // request, before anything is written, and say how to fix it.
     if (body.pricing_rule !== PRICING_RULE) {
       // ⚠ "Reload": the stale tab runs the OLD wizard code — uploading again
       // in the same tab would build the same old body and get this again.
       tracking.errorMessage =
         "The tool was updated since this page was opened: this preview was made with an older version, which " +
-        "could price rows in the app's currency. Nothing was sent. Reload this page, then upload the file and " +
-        "run Preview again.";
+        "priced rows differently (the app's currency, or the GT Price column). Nothing was sent. Reload this " +
+        "page, then upload the file and run Preview again.";
       return NextResponse.json(
         { error: tracking.errorMessage, code: "PREVIEW_OUTDATED" },
         { status: 409 },
@@ -207,13 +212,23 @@ export async function POST(
     const isStr = (v: unknown): v is string => typeof v === "string";
     const rows: BulkImportRow[] = [];
     for (const r of body.rows) {
+      // [GOOGLE-bulkimport-drop-gt] (Manager Q4, 2026-10-21) — a country's own
+      // price comes only from a pricing-template tier or a custom set, both
+      // resolved server-side. A client-sent override is the retired GT (a tab
+      // built before PRICING_RULE v2, or a direct POST), which the server used
+      // to post as that country's price. The whole request is refused, before
+      // anything is sent — never dropped silently. An empty list is accepted.
+      if (r.regionOverrides !== undefined && r.regionOverrides !== null && !(Array.isArray(r.regionOverrides) && r.regionOverrides.length === 0)) {
+        tracking.errorMessage =
+          `Row ${r.rowNumber ?? "?"}: regionOverrides is not accepted — a country's own price comes only from a ` +
+          "pricing-template tier or Custom prices (GT Price / GT Currency are no longer used). Nothing was sent.";
+        return NextResponse.json({ error: tracking.errorMessage, code: "REGION_OVERRIDES_REFUSED" }, { status: 400 });
+      }
       if (
-        !Array.isArray(r.regionOverrides ?? []) ||
-        !(r.regionOverrides ?? []).every((ro) => ro && isStr(ro.region) && isStr(ro.currency) && isStr(ro.priceDecimal)) ||
         !Array.isArray(r.listings ?? []) ||
         !(r.listings ?? []).every((l) => l && isStr(l.locale) && isStr(l.title ?? "") && isStr(l.description ?? ""))
       ) {
-        tracking.errorMessage = `Row ${r.rowNumber ?? "?"}: regionOverrides / listings are malformed.`;
+        tracking.errorMessage = `Row ${r.rowNumber ?? "?"}: listings are malformed.`;
         return NextResponse.json({ error: tracking.errorMessage }, { status: 400 });
       }
       if (!r.sku || !r.basePriceDecimal || !r.baseCurrency) {
@@ -230,11 +245,8 @@ export async function POST(
         sku: r.sku.trim(),
         baseCurrency: r.baseCurrency.trim(),
         basePriceDecimal: r.basePriceDecimal.trim(),
-        regionOverrides: (r.regionOverrides ?? []).map((ro) => ({
-          region: ro.region.trim(),
-          currency: ro.currency.trim(),
-          priceDecimal: ro.priceDecimal.trim(),
-        })),
+        // Filled server-side only: the custom pre-pass / the tier loop.
+        regionOverrides: [],
         listings: (r.listings ?? []).map((l) => ({
           locale: l.locale.trim(),
           title: l.title ?? "",
@@ -269,8 +281,8 @@ export async function POST(
         // gated on `pricingSource !== "google_default"`, so
         // regionOverrides flows straight through to buildProduct. Under
         // Google Conversion the set is a sparse overlay on the base
-        // price, which is what the file's GT-Price column has always
-        // done; this just raises the ceiling from one country to ~170.
+        // price: the countries it lists get its prices, every other
+        // country Google's conversion of the file price.
         // A MALFORMED ENTRY — or an empty set — REFUSES THIS ROW ONLY; it
         // must never 400 the whole batch (one bad row cannot block 99 good
         // ones). An empty set reaches the orchestrator, which refuses it
@@ -357,6 +369,11 @@ export async function POST(
         rows,
         droppedRows,
         priceHeader: isStr(body.priceHeader) ? body.priceHeader.slice(0, 100) : null,
+        // Audit only — a count, never a price (Manager Q5).
+        gtRowsWithData:
+          typeof body.gtRowsWithData === "number" && Number.isSafeInteger(body.gtRowsWithData) && body.gtRowsWithData >= 0
+            ? body.gtRowsWithData
+            : null,
         actorEmail: session.user.email ?? null,
         // ⚠ H4.2: NO app currency — the file is the only price source.
       });

@@ -1,13 +1,18 @@
 /**
- * [APPLE-bulkimport-drop-gt] G0 — GOOGLE must not change (Manager 2026-10-20:
- * "Google có GT Price / GT Currency DÙNG THẬT — KHÔNG được đổi hành vi
- * Google"). Lives on the Apple side on purpose: the Apple change touches no
- * Google file, so `git diff -- '*google-iap-management*'` stays empty.
+ * [APPLE-bulkimport-drop-gt] G0 — fingerprints of Google's bulk-import
+ * template and parser, so a change on one side cannot leak into the other
+ * unnoticed. Lives on the Apple side on purpose.
  *
- * Fingerprints of what Google's REAL generator and REAL parser produce
- * today (values measured by the census, design §1.5), plus the two shared
- * constants both parsers read. Any of them moving means the Apple change
- * leaked into Google.
+ * ⟲ 2026-10-21 — [GOOGLE-bulkimport-drop-gt] (Manager Q7): the Manager
+ *   REVERSED the 2026-10-20 decision "Google có GT Price / GT Currency DÙNG
+ *   THẬT — KHÔNG được đổi hành vi Google". The team never meant GT as a price;
+ *   Google now drops the two columns too. GP1 and GP2 were re-pinned on
+ *   purpose in that arc's G1, to Google's NEW template (2 lead columns) and
+ *   parser (the GT is never read); GP3 — the constants both parsers share —
+ *   is unchanged. The G0 values (2e3c3e0) are in the git history.
+ *
+ * Any fingerprint moving outside a Google arc means the change leaked across
+ * modules.
  */
 import { describe, it, expect } from "vitest";
 import crypto from "node:crypto";
@@ -31,14 +36,14 @@ const csvOf = (wb: XLSX.WorkBook) => {
 };
 
 describe("G0 — Google's bulk-import template and parser, fingerprinted", () => {
-  it("GP1 the template, for every kind of locale selection: spec and written workbook unchanged", () => {
+  it("GP1 the template, for every kind of locale selection: spec and written workbook unchanged (re-pinned 2026-10-21, Q7: no GT columns)", () => {
     const cases: Array<[string, string[] | undefined, string, string]> = [
-      ["full", undefined, "5543ac9c12f51872", "7293a61d4ffd2165"],
-      ["core", [], "377ec5880739f1b1", "1ea5cf18bd04db6e"],
-      ["vi", ["Vietnamese"], "c3f67b2f4218bcbd", "34cacd6f00d64ea6"],
-      ["first3", GOOGLE_LOCALE_NAMES.slice(0, 3) as string[], "01231ba16baada68", "ab1def466760d849"],
+      ["full", undefined, "08fc57b2b76e62f6", "bba210acbe8780ae"],
+      ["core", [], "a474f52865de3b35", "c510864e96539c6a"],
+      ["vi", ["Vietnamese"], "684c858613f7231b", "7846af2f6b2ed8ab"],
+      ["first3", GOOGLE_LOCALE_NAMES.slice(0, 3) as string[], "83b2a36520da72e2", "38e8ff086046cd3a"],
     ];
-    expect(GOOGLE_LEAD_HEADER_ROW).toEqual(["Product ID", "Price (USD)", "GT Price", "GT Currency"]);
+    expect(GOOGLE_LEAD_HEADER_ROW).toEqual(["Product ID", "Price (USD)"]);
     for (const [label, sel, specSha, workbookSha] of cases) {
       const spec = googleIapTemplateSpec(sel);
       expect(sha(JSON.stringify(spec)), `${label} spec`).toBe(specSha);
@@ -46,27 +51,26 @@ describe("G0 — Google's bulk-import template and parser, fingerprinted", () =>
     }
   });
 
-  it("GP2 the parser still reads a GT row as a VN override, and the legacy Google file parses the same", () => {
+  it("GP2 the parser reads a row of the new template, and the legacy Google file — GT columns included — parses with NO GT read (re-pinned 2026-10-21, Q7)", () => {
     const spec = googleIapTemplateSpec(["Vietnamese"]);
     const wb = buildTemplateWorkbook(XLSX, spec);
     const row = spec.headers.map(() => "" as string | number);
-    row[spec.headers.indexOf("Product ID")] = "com.parity.gt";
+    row[spec.headers.indexOf("Product ID")] = "com.parity.row";
     row[spec.headers.indexOf("Price (USD)")] = 0.99;
-    row[spec.headers.indexOf("GT Price")] = 26000;
-    row[spec.headers.indexOf("GT Currency")] = "VND";
     row[spec.headers.indexOf("Title (Vietnamese)")] = "T";
     row[spec.headers.indexOf("Description (Vietnamese)")] = "D";
     XLSX.utils.sheet_add_aoa(wb.Sheets[GOOGLE_DATA_SHEET_NAME], [row], { origin: -1 });
     const r = parseIapTemplate(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer);
-    expect(r.rows.map((x) => ({ sku: x.sku, base: `${x.basePriceDecimal} ${x.baseCurrency}`, gt: x.regionOverrides }))).toEqual([
-      { sku: "com.parity.gt", base: "0.99 USD", gt: [{ region: "VN", currency: "VND", priceDecimal: "26000" }] },
+    expect(r.rows.map((x) => ({ sku: x.sku, base: `${x.basePriceDecimal} ${x.baseCurrency}`, listings: x.listings }))).toEqual([
+      { sku: "com.parity.row", base: "0.99 USD", listings: [{ locale: "vi", title: "T", description: "D" }] },
     ]);
-    expect([r.skippedSampleRows.length, r.refusedRows, r.errors]).toEqual([3, [], []]);
+    expect([r.skippedSampleRows.length, r.refusedRows, r.errors, r.retiredGtColumns]).toEqual([3, [], [], null]);
 
     const legacy = parseIapTemplate(readFileSync(join(process.cwd(), "docs/google-iap-management/templates/template-item-iap-google.xlsx")));
     expect(legacy.rows).toHaveLength(3);
-    expect(legacy.rows[0]?.regionOverrides).toEqual([{ region: "VN", currency: "VND", priceDecimal: "23000" }]);
-    expect(sha(JSON.stringify(legacy))).toBe("379b164101f0b7c1");
+    expect(legacy.rows.every((x) => !("regionOverrides" in x))).toBe(true);
+    expect(legacy.retiredGtColumns).toEqual({ rowsWithData: 3 });
+    expect(sha(JSON.stringify(legacy))).toBe("870d712eea375517");
   });
 
   it("GP3 the two constants BOTH parsers read are untouched (Google matches the note verbatim)", () => {

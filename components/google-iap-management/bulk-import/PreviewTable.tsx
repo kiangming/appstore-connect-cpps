@@ -3,7 +3,6 @@
 import { Check, AlertTriangle, ArrowRight, XCircle, Pencil } from "lucide-react";
 
 import type { PreviewRefusedRow, PreviewRow, PreviewTierCandidate } from "./BulkImportWizard";
-import type { GtPlan } from "./execute-payload";
 
 /** Sentinel for the dropdown's Custom entry. It is a TRIGGER ONLY and is
  *  intercepted in the change handler — it must never be stored as the
@@ -19,9 +18,6 @@ interface Props {
    *  Rendered in the same table, in file order, with no decision / tier /
    *  custom controls: nothing here can make them pushable. */
   refusedRows?: ReadonlyArray<PreviewRefusedRow>;
-  /** H4.3 (Q5) — what happens to each row's GT at push, by rowNumber
-   *  (gtPlanOf — the same state the execute body is built from). */
-  gtPlans?: Readonly<Record<number, GtPlan>>;
   onRowDecisionChange: (rowNumber: number, decision: "overwrite" | "skip") => void;
   // Hotfix 19 — tier-selection plumbing.
   tierSelections: Record<number, string>;
@@ -67,7 +63,6 @@ function formatTierLabel(c: PreviewTierCandidate): string {
 export function PreviewTable({
   rows,
   refusedRows = [],
-  gtPlans = {},
   onRowDecisionChange,
   tierSelections,
   onTierSelectionChange,
@@ -196,7 +191,6 @@ export function PreviewTable({
                       <span className="font-semibold">custom</span>
                     </div>
                   )}
-                  <GtLine plan={gtPlans[row.rowNumber]} />
                 </td>
                 <td className="px-3 py-2.5 text-xs">
                   {customCount !== undefined ? (
@@ -350,52 +344,6 @@ export function PreviewTable({
           })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-/** H4.3 (Q5) — the row's GT and what the push does with it. Words only for
- *  what is known: a tier's price is known for VN alone (TierCandidate). */
-function GtLine({ plan }: { plan: GtPlan | undefined }) {
-  if (!plan || plan.kind === "none") return null;
-  const gt = `GT ${plan.gt.region} ${plan.gt.priceDecimal} ${plan.gt.currency}`;
-  let text: string;
-  let tone = "text-slate-600";
-  switch (plan.kind) {
-    case "sent":
-      text = `${gt} · will be sent`;
-      tone = "text-emerald-700";
-      break;
-    case "skip":
-      text = `${gt} · not sent (row set to Skip)`;
-      break;
-    case "replaced_by_custom":
-      text = plan.customEntry
-        ? `${gt} · replaced by custom (${plan.gt.region} ${plan.customEntry.priceDecimal} ${plan.customEntry.currency})`
-        : `${gt} · replaced by custom — ${plan.gt.region} is not in the custom set, so Google converts it from the file's price`;
-      tone = "text-violet-700";
-      break;
-    case "replaced_by_tier":
-      text =
-        plan.tierEntry.kind === "known"
-          ? `${gt} · replaced by tier "${plan.tier}" (${plan.gt.region} ${plan.tierEntry.priceDecimal} ${plan.tierEntry.currency})`
-          : plan.tierEntry.kind === "absent"
-            ? `${gt} · replaced by tier "${plan.tier}" — the tier has no ${plan.gt.region} price, so Google converts it from the file's price`
-            : `${gt} · replaced by tier "${plan.tier}" — ${plan.gt.region} gets the tier's price, or Google's conversion if the tier has none`;
-      tone = "text-amber-700";
-      break;
-    case "pending_tier":
-      text = `${gt} · depends on the tier you pick`;
-      tone = "text-amber-700";
-      break;
-    case "unknown_lookup_failed":
-      text = `${gt} · unknown — the tier lookup failed; run Preview again`;
-      tone = "text-amber-700";
-      break;
-  }
-  return (
-    <div data-testid="gt-status" data-state={plan.kind} className={`mt-0.5 text-[10px] font-sans text-right ${tone}`}>
-      {text}
     </div>
   );
 }

@@ -7,14 +7,16 @@
  * for legacy files (the v1 Manager artifact used "Sheet1"). The generated
  * "Download template" ships a Notes sheet alongside — ignored here.
  *
- * Template shape (data sheet):
- *   Col A:  Product ID (SKU)
- *   Col B:  Price (XXX)              — base price, decimal, in currency XXX
- *                                       (H4: the header MUST name the currency)
- *   Col C:  GT Price                  — optional "Game Tier" override decimal
- *   Col D:  GT Currency               — currency for col C (e.g. "VND")
- *   Col E+: alternating Title/Description columns, one pair per locale
- *           "Title (English (United States))" / "Description (English (United States))"
+ * Template shape (data sheet) — columns are matched BY HEADER NAME, in any
+ * order:
+ *   Product ID                — SKU
+ *   Price (XXX)               — base price, decimal, in currency XXX
+ *                               (H4: the header MUST name the currency)
+ *   Title (<Locale>) / Description (<Locale>) — one pair per locale, e.g.
+ *     "Title (English (United States))" / "Description (English (United States))"
+ *   GT Price / GT Currency    — RETIRED ([GOOGLE-bulkimport-drop-gt], Manager
+ *                               2026-10-21): recognised, never read — see
+ *                               GOOGLE_RETIRED_GT_HEADERS.
  *
  * Q-GIAP.D: format pinned down by Manager template delivery
  * (2026-05-21). The parser tolerates extra columns and skips
@@ -29,16 +31,15 @@ import * as XLSX from "xlsx";
 
 import {
   filePriceOf,
-  fileRegionPriceOf,
   PLAY_BILLING_CURRENCIES,
   type FileCell,
 } from "../orchestration/file-price";
 import {
   GOOGLE_DATA_SHEET_NAME,
   GOOGLE_PRODUCT_ID_HEADER,
-  GOOGLE_GT_PRICE_HEADER,
-  GOOGLE_GT_CURRENCY_HEADER,
+  GOOGLE_RETIRED_GT_HEADERS,
   LOCALE_NAME_TO_BCP47,
+  type RetiredGtColumns,
 } from "./template-spec";
 import { TEMPLATE_SAMPLE_PRODUCT_IDS, TEMPLATE_SAMPLE_ROWS_NOTE } from "@/lib/xlsx-template";
 
@@ -56,65 +57,10 @@ const SAMPLE_PRODUCT_ID_SET = new Set<string>(TEMPLATE_SAMPLE_PRODUCT_IDS);
  *  Re-exported for back-compat. */
 export { LOCALE_NAME_TO_BCP47 };
 
-/** GT Currency → the ONE region a GT Price is meant for.
- *  ⚠ An entry is NOT trusted to be billable: every GT goes through
- *    fileRegionPriceOf, which checks the pair against the measured catalog
- *    (play-regions.snapshot.ts). CNY→CN (CN is not sold) and ARS→AR (Google
- *    bills AR in USD) are KEPT on purpose so such a GT refuses its row with
- *    Google's real billing, rather than being dropped and replaced by a
- *    converted price (H4.1). The parser test pins which entries match the
- *    catalog (23) and which are refused (exactly CNY, ARS). This table is the
- *    ONLY source — the old COMMON_REGIONS fallback is gone. */
-const CURRENCY_TO_REGION_OVERRIDES: Record<string, string> = {
-  // The Manager's template uses VND as the prototypical GT currency. A
-  // row whose GT Currency is not in this map is REFUSED (H4.2) — before,
-  // the override was dropped with a warning.
-  USD: "US",
-  EUR: "DE",
-  GBP: "GB",
-  JPY: "JP",
-  KRW: "KR",
-  CNY: "CN",
-  TWD: "TW",
-  HKD: "HK",
-  INR: "IN",
-  IDR: "ID",
-  THB: "TH",
-  VND: "VN",
-  PHP: "PH",
-  SGD: "SG",
-  MYR: "MY",
-  AUD: "AU",
-  NZD: "NZ",
-  CAD: "CA",
-  MXN: "MX",
-  BRL: "BR",
-  ARS: "AR",
-  RUB: "RU",
-  TRY: "TR",
-  SAR: "SA",
-  AED: "AE",
-};
-
-export function regionForCurrency(currency: string): string | null {
-  return CURRENCY_TO_REGION_OVERRIDES[currency.trim().toUpperCase()] ?? null;
-}
-
-/** The GT table as pairs — for the catalog-consistency test. */
-export function gtCurrencyRegionPairs(): ReadonlyArray<{ currency: string; region: string }> {
-  return Object.entries(CURRENCY_TO_REGION_OVERRIDES).map(([currency, region]) => ({ currency, region }));
-}
-
 export interface ParsedListing {
   locale: string;
   title: string;
   description: string;
-}
-
-export interface ParsedRegionOverride {
-  region: string;
-  currency: string;
-  priceDecimal: string;
 }
 
 export interface ParsedIapRow {
@@ -123,7 +69,6 @@ export interface ParsedIapRow {
   sku: string;
   baseCurrency: string;
   basePriceDecimal: string;
-  regionOverrides: ParsedRegionOverride[];
   listings: ParsedListing[];
   // (Cycle 43's `priceHeaderSource` is gone — H4.3, Q9: since H4.1 the
   // currency always comes from the header, and the execute route refuses a
@@ -141,11 +86,12 @@ export interface ParseResult {
   rows: ParsedIapRow[];
   warnings: string[];
   errors: string[];
-  /** Rows of the file NOT imported, each with its reason: a price or GT
-   *  that cannot be honoured exactly (H4.1), an empty price, or no Product
-   *  ID on a row that has data (H4.3 — "no row disappears silently"). Also
-   *  in `warnings`; the wizard shows them in the preview table and the
-   *  Manager may push the rest after confirming. */
+  /** Rows of the file NOT imported, each with its reason: a price that
+   *  cannot be honoured exactly (H4.1), an empty price, no Product ID on a
+   *  row that has data (H4.3 — "no row disappears silently"), or an old row
+   *  pasted whole under the wrong headers (Manager Q6). Also in `warnings`;
+   *  the wizard shows them in the preview table and the Manager may push
+   *  the rest after confirming. */
   refusedRows: RefusedFileRow[];
   /** Template example rows skipped by Product ID (TEMPLATE_SAMPLE_PRODUCT_IDS).
    *  Explicit outcome — not errors, not silently dropped. */
@@ -154,15 +100,23 @@ export interface ParseResult {
    *  when it resolved. Recorded in the import audit: the header was the one
    *  fact past audits could not recover. */
   priceHeader?: string;
+  /** [GOOGLE-bulkimport-drop-gt] — the retired GT columns, when the file
+   *  still has one (Manager Q1): never read; the preview warns
+   *  (googleRetiredGtWarning) and the import audit records the count. Set
+   *  whenever the header row was read. */
+  retiredGtColumns?: RetiredGtColumns;
 }
 
-/** Column headers we recognise as non-locale at the start of the sheet.
- *  Price headers are NOT listed: they go through `resolvePriceColumn`. */
-const FIXED_HEADERS = new Set([
-  GOOGLE_PRODUCT_ID_HEADER,
-  GOOGLE_GT_PRICE_HEADER,
-  GOOGLE_GT_CURRENCY_HEADER,
-]);
+/** "GT Price" / "GT Currency" in any case or spacing ("gt price",
+ *  "GT  Currency") — the retired columns (GOOGLE_RETIRED_GT_HEADERS).
+ *  Recognised so they are NEVER taken for a price column (that would refuse
+ *  every file in circulation) and never read. Gate G0 (2026-10-21): any
+ *  spelling of the two names, and either one alone, is ignored with the
+ *  preview notice — no longer a reason to refuse the file. */
+const RETIRED_GT = new Set(GOOGLE_RETIRED_GT_HEADERS.map((h) => h.toLowerCase()));
+function isRetiredGtHeader(header: string): boolean {
+  return RETIRED_GT.has(header.replace(/\s+/g, " ").trim().toLowerCase());
+}
 
 /** The price column, or why the file cannot be priced from its header.
  *  H4.1 (Manager Q1, Q10 — 2026-10-17): exactly ONE price column, and its
@@ -176,9 +130,7 @@ export type PriceColumnResult =
         | "multiple"
         | "no_currency"
         | "not_play_currency"
-        | "unrecognised"
-        | "gt_header_case"
-        | "gt_column_missing";
+        | "unrecognised";
       message: string;
     };
 
@@ -193,51 +145,17 @@ export function resolvePriceColumn(
 ): PriceColumnResult {
   const found: Array<{ columnIndex: number; header: string; currency: string | null }> = [];
   const unrecognised: string[] = [];
-  const gtMiscased: Array<{ header: string; exact: string }> = [];
   for (let c = 0; c < headerRow.length; c += 1) {
     const raw = headerRow[c];
     if (raw === undefined || raw === null) continue;
     const header = String(raw).trim();
-    if (FIXED_HEADERS.has(header)) continue; // "GT Price" is not a price column
-    // The GT columns are matched EXACTLY; "gt price" / "Gt Currency" would
-    // be ignored and the GT dropped for every row without a word (H4.2).
-    const gtExact = [GOOGLE_GT_PRICE_HEADER, GOOGLE_GT_CURRENCY_HEADER].find(
-      (h) => h.toLowerCase() === header.replace(/\s+/g, " ").toLowerCase(),
-    );
-    if (gtExact) {
-      gtMiscased.push({ header, exact: gtExact });
-      continue;
-    }
+    if (isRetiredGtHeader(header)) continue; // "GT Price" is not a price column
     const m = header.match(PRICE_HEADER);
     if (m) {
       found.push({ columnIndex: c, header, currency: m[1] ? m[1].toUpperCase() : null });
     } else if (LOOKS_LIKE_PRICE.test(header)) {
       unrecognised.push(header);
     }
-  }
-  if (gtMiscased.length > 0) {
-    return {
-      kind: "error",
-      reason: "gt_header_case",
-      message: gtMiscased.map((g) => `Header "${g.header}": write it exactly "${g.exact}".`).join(" "),
-    };
-  }
-  // H4.2 — the GT is read only when BOTH exact headers exist. One without
-  // the other ("GT Curency", a missing column) would drop every GT price in
-  // the file without a word, and those countries would get a converted
-  // price the file did not state. Same rule as a half-filled GT cell pair.
-  const headers = new Set(headerRow.map((h) => (h === undefined || h === null ? "" : String(h).trim())));
-  const hasGtPrice = headers.has(GOOGLE_GT_PRICE_HEADER);
-  const hasGtCurrency = headers.has(GOOGLE_GT_CURRENCY_HEADER);
-  if (hasGtPrice !== hasGtCurrency) {
-    const [present, missing] = hasGtPrice
-      ? [GOOGLE_GT_PRICE_HEADER, GOOGLE_GT_CURRENCY_HEADER]
-      : [GOOGLE_GT_CURRENCY_HEADER, GOOGLE_GT_PRICE_HEADER];
-    return {
-      kind: "error",
-      reason: "gt_column_missing",
-      message: `The file has a "${present}" column but no "${missing}" column — add "${missing}" (written exactly), or remove "${present}". A GT needs both.`,
-    };
   }
   // H4.1 Q10 — no silent first-wins: a column that looks like a price but is
   // not read would leave the Manager believing it was.
@@ -287,8 +205,8 @@ export function resolvePriceColumn(
 interface ColumnIndex {
   sku?: number;
   price: PriceColumnResult;
-  gtPrice?: number;
-  gtCurrency?: number;
+  /** The retired GT columns present (any of the two, any spelling). */
+  retiredGt: number[];
   /** locale → [titleCol, descCol] */
   locales: Map<string, { titleCol?: number; descCol?: number }>;
   unknownLocales: Set<string>;
@@ -298,6 +216,7 @@ function indexColumns(headerRow: Array<string | number | undefined>): ColumnInde
   const idx: ColumnIndex = {
     // The price column goes through its resolver before the per-cell loop.
     price: resolvePriceColumn(headerRow),
+    retiredGt: [],
     locales: new Map(),
     unknownLocales: new Set(),
   };
@@ -309,11 +228,8 @@ function indexColumns(headerRow: Array<string | number | undefined>): ColumnInde
     if (header === "") continue;
 
     if (header === GOOGLE_PRODUCT_ID_HEADER) idx.sku = c;
-    else if (header === GOOGLE_GT_PRICE_HEADER) idx.gtPrice = c;
-    else if (header === GOOGLE_GT_CURRENCY_HEADER) idx.gtCurrency = c;
-    else if (FIXED_HEADERS.has(header)) {
-      /* already handled */
-    } else if (idx.price.kind === "ok" && idx.price.columnIndex === c) {
+    else if (isRetiredGtHeader(header)) idx.retiredGt.push(c);
+    else if (idx.price.kind === "ok" && idx.price.columnIndex === c) {
       /* price column — handled by resolvePriceColumn above */
     } else {
       const titleMatch = header.match(/^Title \((.+)\)$/);
@@ -358,9 +274,10 @@ function cellString(
 }
 
 /** H4.3 — does a row with NO Product ID still state a product? Only the
- *  columns that describe one count: the price, the GT price, a title or a
- *  description. A formula whose result is empty / 0 / FALSE (a helper column
- *  dragged down past the data), a stray GT Currency filled down, an unknown
+ *  columns that describe one count: the price, a title or a description. A
+ *  formula whose result is empty / 0 / FALSE (a helper column dragged down
+ *  past the data), the retired GT columns (gate G0, 2026-10-21: a row with
+ *  only GT is an empty row — still counted in the GT notice), an unknown
  *  column, and the generated template's own "delete the sample rows" note do
  *  not — those rows are not products the Manager wrote, and refusing them
  *  would bury the real refusals (and could refuse thousands of rows). */
@@ -374,6 +291,12 @@ function rowStatesAProduct(ws: XLSX.WorkSheet, r: number, cols: number[]): boole
   }
   return false;
 }
+
+/** Manager Q6 — a Title that is a bare number ("26000", "1.29", a NUMBER
+ *  cell) and a Description of exactly three capital letters ("VND"): the
+ *  shape of an old GT Price / GT Currency pair shifted one pair to the right. */
+const PASTED_GT_TITLE = /^\d+(?:[.,]\d+)*$/;
+const PASTED_GT_DESCRIPTION = /^[A-Z]{3}$/;
 
 /** "number" for an Excel NUMBER cell, else "text" (filePriceOf needs it to
  *  tell a typed "26.000" from the number 26000). */
@@ -407,17 +330,20 @@ function cellDecimal(
  *
  * The parser is tolerant:
  *   - Unrecognised locale columns surface as warnings, not errors.
- *   - H4.3: a row that states a product (price, GT price, title or
- *     description) but has no Product ID is a refused row with a reason;
- *     anything else without one (empty rows, helper formulas, the template's
- *     own note) is ignored. An empty price is a refused row too.
- *   - H4.1/H4.2: a row whose price or GT price cannot be honoured exactly
- *     is NOT imported (per-row warning + `refusedRows`): not a valid
- *     decimal, more decimals than its currency allows, 0, a "." / ","
- *     typed in a no-decimals currency, a GT in a pair Google does not bill,
- *     a GT Currency outside the GT table, or only one of GT Price / GT
- *     Currency filled. It is never sent with some other price instead
- *     (filePriceOf / fileRegionPriceOf).
+ *   - H4.3: a row that states a product (price, title or description) but
+ *     has no Product ID is a refused row with a reason; anything else
+ *     without one (empty rows, helper formulas, GT cells, the template's own
+ *     note) is ignored. An empty price is a refused row too.
+ *   - H4.1/H4.2: a row whose price cannot be honoured exactly is NOT
+ *     imported (per-row warning + `refusedRows`): not a valid decimal, more
+ *     decimals than its currency allows, 0, a "." / "," typed in a
+ *     no-decimals currency. It is never sent with some other price instead
+ *     (filePriceOf).
+ *   - Manager Q6: a row whose Title is a bare number AND whose Description is
+ *     exactly three capital letters, in any locale, is NOT imported — an old
+ *     row pasted whole, its GT pair shifted under Title / Description.
+ *   - [GOOGLE-bulkimport-drop-gt]: GT Price / GT Currency are never read —
+ *     whatever they hold. `retiredGtColumns` says what is left in them.
  *
  * Hard errors that block the entire file:
  *   - Workbook can't be opened.
@@ -511,15 +437,18 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
 
   const productCols = [
     priceCol,
-    ...(idx.gtPrice !== undefined ? [idx.gtPrice] : []),
     ...[...idx.locales.values()].flatMap((l) => [l.titleCol, l.descCol]).filter((c): c is number => c !== undefined),
   ];
+  // Every row below the header with something in a GT cell — whether or not
+  // the row is imported (GOOGLE_RETIRED_GT_HEADERS: counted, never read).
+  let gtRowsWithData = 0;
   const refuse = (rowNumber: number, sku: string, reason: string) => {
     warnings.push(`Row ${rowNumber} (SKU "${sku}"): ${reason} Row not imported.`);
     refusedRows.push({ rowNumber, sku, reason });
   };
 
   for (let r = range.s.r + 1; r <= range.e.r; r += 1) {
+    if (idx.retiredGt.some((c) => cellString(ws, r, c) !== "")) gtRowsWithData += 1;
     const sku = cellString(ws, r, skuCol);
     if (sku === "") {
       // H4.3 — a row that states a product but has no Product ID used to
@@ -542,9 +471,9 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
       continue;
     }
 
-    // H4.1 — the file's price (and GT price) must be honoured exactly, or the
-    // row is not imported. Never substituted by a conversion or another
-    // currency. Both are checked so one upload names every problem.
+    // H4.1 — the file's price must be honoured exactly, or the row is not
+    // imported. Never substituted by a conversion or another currency. Every
+    // check below runs, so one upload names every problem of the row.
     const reasons: string[] = [];
     const filePrice = filePriceOf({
       currency: resolvedCurrency,
@@ -555,52 +484,6 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
       reasons.push(`"${priceResolution.headerText}" = "${basePriceDecimal}" — ${filePrice.reason}`);
     }
 
-    const regionOverrides: ParsedRegionOverride[] = [];
-    if (idx.gtPrice !== undefined && idx.gtCurrency !== undefined) {
-      const gtPriceDecimal = cellDecimal(ws, r, idx.gtPrice);
-      const gtCurrency = cellString(ws, r, idx.gtCurrency).toUpperCase();
-      const hasPrice = gtPriceDecimal !== "";
-      const hasCurrency = gtCurrency !== "";
-      if (hasPrice && hasCurrency) {
-        const region = regionForCurrency(gtCurrency);
-        if (region) {
-          const gt = fileRegionPriceOf({
-            region,
-            currency: gtCurrency,
-            priceDecimal: gtPriceDecimal,
-            cell: cellKind(ws, r, idx.gtPrice),
-          });
-          if (gt.ok) {
-            regionOverrides.push({
-              region,
-              currency: gtCurrency,
-              priceDecimal: gtPriceDecimal,
-            });
-          } else {
-            reasons.push(`GT Price "${gtPriceDecimal}" ${gtCurrency} — ${gt.reason}`);
-          }
-        } else {
-          // H4.2 (Manager 2026-10-18): a GT the tool cannot place refuses
-          // the row, like every other GT error — before, the GT was dropped
-          // and that country got a converted price the file did not state.
-          reasons.push(
-            `GT Currency "${gtCurrency}" is not a currency the GT column supports (one region per currency: ${Object.keys(CURRENCY_TO_REGION_OVERRIDES).join(", ")}).`,
-          );
-        }
-      } else if (hasPrice !== hasCurrency) {
-        reasons.push(
-          hasPrice
-            ? `GT Price "${gtPriceDecimal}" has no GT Currency — fill both or neither.`
-            : `GT Currency "${gtCurrency}" has no GT Price — fill both or neither.`,
-        );
-      }
-    }
-
-    if (reasons.length > 0) {
-      refuse(r + 1, sku, reasons.join(" "));
-      continue;
-    }
-
     const listings: ParsedListing[] = [];
     for (const [locale, cols] of idx.locales) {
       const title =
@@ -609,6 +492,26 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
         cols.descCol !== undefined ? cellString(ws, r, cols.descCol) : "";
       if (title === "" && description === "") continue;
       listings.push({ locale, title, description });
+      // Manager Q6 (2026-10-21) — an old row ("…, 0.99, 26000, VND, title,
+      // description") pasted whole into a file without the GT columns puts
+      // the GT pair under Title / Description, with no other sign. Google
+      // has no Localization step: on Overwrite the live listing would become
+      // "26000" / "VND". Narrow on purpose — BOTH must hold.
+      if (
+        cols.titleCol !== undefined &&
+        cols.descCol !== undefined &&
+        PASTED_GT_TITLE.test(title) &&
+        PASTED_GT_DESCRIPTION.test(description)
+      ) {
+        reasons.push(
+          `"${headerRow[cols.titleCol]}" = "${title}" và "${headerRow[cols.descCol]}" = "${description}": có vẻ dữ liệu bị lệch cột — đừng chép cả dòng từ template cũ; hãy chép theo từng cột.`,
+        );
+      }
+    }
+
+    if (reasons.length > 0) {
+      refuse(r + 1, sku, reasons.join(" "));
+      continue;
     }
 
     rows.push({
@@ -620,7 +523,6 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
       // + Hotfix 16 generalisation) both consume this field.
       baseCurrency: resolvedCurrency,
       basePriceDecimal,
-      regionOverrides,
       listings,
     });
   }
@@ -640,5 +542,13 @@ export function parseIapTemplate(buffer: ArrayBuffer | Buffer): ParseResult {
     warnings.push("No data rows found after the header.");
   }
 
-  return { rows, warnings, errors, refusedRows, skippedSampleRows, priceHeader: priceResolution.headerText };
+  return {
+    rows,
+    warnings,
+    errors,
+    refusedRows,
+    skippedSampleRows,
+    priceHeader: priceResolution.headerText,
+    retiredGtColumns: idx.retiredGt.length > 0 ? { rowsWithData: gtRowsWithData } : null,
+  };
 }

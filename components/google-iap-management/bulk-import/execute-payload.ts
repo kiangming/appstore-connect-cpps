@@ -70,7 +70,8 @@ export function buildExecuteRows(
     // captures the real fetch body fails on any rewrite here).
     baseCurrency: r.baseCurrency,
     basePriceDecimal: r.basePriceDecimal,
-    regionOverrides: r.regionOverrides,
+    // ⚠ No regionOverrides: [GOOGLE-bulkimport-drop-gt] (Manager Q4) — the
+    // route refuses them; a country's own price is a tier or a custom set.
     listings: r.listings,
     decision: r.decision,
     // Hotfix 19: explicit tier selection (null when no
@@ -130,6 +131,10 @@ export function buildExecuteRequestBody(args: {
   /** H4.4 — the file's price header as the preview read it, for the import
    *  audit (informational: pricing reads each row's currency). */
   priceHeader: string | null;
+  /** [GOOGLE-bulkimport-drop-gt] (Manager Q5) — rows with data in the retired
+   *  GT columns, as the preview counted them; null = no GT column. Audit
+   *  only — required so no caller forgets it. */
+  gtRowsWithData: number | null;
 }) {
   return {
     // H4.3 — the execute route refuses a request without it (a pre-H4 tab).
@@ -140,6 +145,7 @@ export function buildExecuteRequestBody(args: {
     rows: args.rows,
     droppedRows: args.droppedRows.map((d) => ({ rowNumber: d.rowNumber, sku: d.sku, reason: d.reason })),
     priceHeader: args.priceHeader,
+    gtRowsWithData: args.gtRowsWithData,
   };
 }
 
@@ -160,71 +166,4 @@ export function computePrecisionViolations(
     }
   }
   return violations;
-}
-
-/** The file's GT (GT Price + GT Currency — one country per row). */
-export type PreviewGt = { region: string; currency: string; priceDecimal: string };
-
-/**
- * H4.3 — Manager Q5: what happens to a row's GT at push, for the preview
- * table. Q5 does NOT change the GT's semantics; this only SAYS them:
- *   - custom prices replace the GT, under every source (bulk-import.ts
- *     custom pre-pass);
- *   - under Google Conversion the GT is sent (no template loop);
- *   - under a template, a matched tier's entries replace ALL overrides, the
- *     GT included — even when the tier does not list the GT's country (then
- *     Google converts it); no tier ⇒ the GT is sent.
- * ⚠ Reads EXACTLY the expressions buildExecuteRows sends (the tier selection
- *   by rowNumber, the active-custom set), so the label is what the push does
- *   with the same state. It cannot know a template edited after the preview.
- * ⚠ The client knows a tier's price only for VN (TierCandidate). For another
- *   country it says "the tier's price, or Google's conversion" — never a
- *   number it does not have.
- */
-export type GtPlan =
-  | { kind: "none" }
-  | { kind: "skip"; gt: PreviewGt }
-  | { kind: "sent"; gt: PreviewGt }
-  | { kind: "replaced_by_custom"; gt: PreviewGt; customEntry: { currency: string; priceDecimal: string } | null }
-  | {
-      kind: "replaced_by_tier";
-      gt: PreviewGt;
-      tier: string;
-      tierEntry: { kind: "known"; currency: string; priceDecimal: string } | { kind: "absent" } | { kind: "unknown" };
-    }
-  | { kind: "pending_tier"; gt: PreviewGt }
-  | { kind: "unknown_lookup_failed"; gt: PreviewGt };
-
-export function gtPlanOf(
-  row: Pick<PreviewRow, "rowNumber" | "sku" | "decision" | "regionOverrides" | "tierCandidates" | "tierMatchedBy">,
-  state: {
-    pricingSource: PricingSource | null;
-    tierSelections: Readonly<Record<number, string>>;
-    customPrices: Readonly<Record<string, CustomPriceSet>>;
-    activeCustomSkus: ReadonlySet<string>;
-  },
-): GtPlan {
-  const gt = row.regionOverrides[0];
-  if (!gt) return { kind: "none" };
-  if (row.decision === "skip") return { kind: "skip", gt };
-  if (state.activeCustomSkus.has(row.sku)) {
-    const e = state.customPrices[row.sku]?.entries.find((x) => x.region === gt.region);
-    return { kind: "replaced_by_custom", gt, customEntry: e ? { currency: e.currency, priceDecimal: e.priceDecimal } : null };
-  }
-  if (state.pricingSource === "google_default") return { kind: "sent", gt };
-  const tier = state.tierSelections[row.rowNumber] ?? null;
-  if (tier) {
-    const candidate = row.tierCandidates.find((c) => c.identifier === tier);
-    let tierEntry: Extract<GtPlan, { kind: "replaced_by_tier" }>["tierEntry"] = { kind: "unknown" };
-    if (gt.region === "VN" && candidate) {
-      tierEntry =
-        candidate.vnCurrency && candidate.vnPriceDecimal
-          ? { kind: "known", currency: candidate.vnCurrency, priceDecimal: candidate.vnPriceDecimal }
-          : { kind: "absent" };
-    }
-    return { kind: "replaced_by_tier", gt, tier, tierEntry };
-  }
-  if (row.tierCandidates.length > 0) return { kind: "pending_tier", gt };
-  if (row.tierMatchedBy === "lookup_failed") return { kind: "unknown_lookup_failed", gt };
-  return { kind: "sent", gt };
 }

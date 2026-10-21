@@ -50,7 +50,8 @@
 --     giá duy nhất (không cross-currency; custom không cần entry currency app; header "Price" chung
 --     bị từ chối). Batch tạo SAU giờ push H4 nằm NGOÀI runbook này: H4-2 vẫn gắn era 'E3' cho chúng
 --     và có thể ra nhãn A? / B? — nhãn đó SAI với chúng (bỏ qua, hoặc lọc created_at < giờ push H4).
---     Batch từ E4 mang payload pricing_rule = 'file-currency-only/v1' (H4.4) — dùng nó để nhận ra.
+--     Batch từ E4 mang payload pricing_rule (H4.4: 'file-currency-only/v1'; từ 2026-10-21, [GOOGLE-bulkimport-drop-gt]:
+--     'file-currency-only/v2') — nhận ra bằng  payload ? 'pricing_rule'  (mọi batch từ H4.4), đừng so đúng 'v1'.
 -- ============================================================
 
 

@@ -14,7 +14,9 @@
  * there: the client wizard must be able to import this module without
  * pulling xlsx into the initial bundle), no server-only deps.
  *
- * Canonical shape: 4 lead headers + 82 locale pairs = 168 columns.
+ * Canonical shape: 2 lead headers + 82 locale pairs = 166 columns.
+ * ([GOOGLE-bulkimport-drop-gt], 2026-10-21: "GT Price" / "GT Currency" are no
+ * longer emitted; old files still import, see GOOGLE_RETIRED_GT_HEADERS.)
  * The price header is FIXED "Price (USD)" — Manager decision. The
  * parser reads the currency from the header ONLY (H4.1): exactly one
  * "Price (XXX)" column, in a currency Google Play bills in; a header
@@ -60,16 +62,45 @@ export const GOOGLE_PRODUCT_ID_HEADER = "Product ID";
  *  the parser reads the currency from this header only, and the app's
  *  currency takes no part in bulk-import pricing (H4 — module doc above). */
 export const GOOGLE_PRICE_HEADER = "Price (USD)";
-export const GOOGLE_GT_PRICE_HEADER = "GT Price";
-export const GOOGLE_GT_CURRENCY_HEADER = "GT Currency";
+
+/** Lead headers the template USED to carry and no longer does
+ *  ([GOOGLE-bulkimport-drop-gt], Manager 2026-10-21, Q1). The team filled
+ *  them but never meant them as prices, while the tool posted GT Price as
+ *  that currency's region price — a bug against that intent. Files made
+ *  before still have them; the parser RECOGNISES these names (any case or
+ *  spacing, either one alone) and NEVER reads them: not as a price, not
+ *  checked, not sent. The preview says so (googleRetiredGtWarning) without
+ *  blocking anything. Removing the names from the parser altogether would
+ *  refuse every file in circulation: "GT Price" looks like a price column. */
+export const GOOGLE_RETIRED_GT_HEADERS: readonly string[] = ["GT Price", "GT Currency"];
+
+/** What the parser found of the retired GT columns (null = none in the file).
+ *  `rowsWithData` counts every row below the header with a non-empty GT
+ *  cell — template sample rows and rows with no Product ID included: it
+ *  measures what is left in those columns, not what is imported. */
+export type RetiredGtColumns = { rowsWithData: number } | null;
+
+/** THE wording of the preview's GT notice (Manager Q1, approved at gate G0
+ *  2026-10-21). Never blocks Push, never refuses a row — the columns are
+ *  ignored either way. null when the file has no GT column. */
+export function googleRetiredGtWarning(gt: RetiredGtColumns): { kind: "data" | "empty"; text: string } | null {
+  if (!gt) return null;
+  if (gt.rowsWithData > 0) {
+    return {
+      kind: "data",
+      text:
+        "File còn dữ liệu ở cột GT Price / GT Currency. Tool KHÔNG dùng hai cột này cho Google — giá chỉ lấy từ cột Price. " +
+        `Hãy xoá trống dữ liệu hoặc xoá hẳn hai cột này trong file. Số dòng có điền GT: ${gt.rowsWithData}.`,
+    };
+  }
+  return {
+    kind: "empty",
+    text: "File còn hai cột GT Price / GT Currency (trống). Tool không dùng hai cột này — có thể xoá hẳn hai cột khỏi file.",
+  };
+}
 
 /** Emission order of the lead headers in the generated template. */
-export const GOOGLE_LEAD_HEADER_ROW: readonly string[] = [
-  GOOGLE_PRODUCT_ID_HEADER,
-  GOOGLE_PRICE_HEADER,
-  GOOGLE_GT_PRICE_HEADER,
-  GOOGLE_GT_CURRENCY_HEADER,
-];
+export const GOOGLE_LEAD_HEADER_ROW: readonly string[] = [GOOGLE_PRODUCT_ID_HEADER, GOOGLE_PRICE_HEADER];
 
 /** Manager-display locale name → Google Play BCP-47 locale code.
  *  82 entries — the parser matches Title/Description headers against
@@ -258,10 +289,9 @@ export const GOOGLE_LOCALE_OPTIONS: readonly LocaleOption[] = [
 
 /** Locale whose pair the SAMPLE rows fill. "First selected in canonical
  *  order" with one deliberate exception: Vietnamese wins when it is in
- *  the selection. That keeps the FULL template byte-identical to the
- *  pre-picker file (whose samples came from the Manager's own
- *  Vietnamese source rows) — the full selection also keeps the original
- *  filename, so its content must not silently change either. */
+ *  the selection — the pre-picker file's samples came from the Manager's
+ *  own Vietnamese source rows, and the full selection keeps that file's
+ *  samples and filename. */
 function preferredSampleLocale(chosen: readonly string[]): string | undefined {
   return chosen.includes("Vietnamese") ? "Vietnamese" : chosen[0];
 }
@@ -274,69 +304,77 @@ export function googleLocalePairHeaders(
   );
 }
 
-/** Canonical header row for a selection: 4 lead columns ALWAYS, plus a
+/** Canonical header row for a selection: 2 lead columns ALWAYS, plus a
  *  pair per selected locale in canonical order. `undefined` = full set
- *  (4 + 82×2 = 168 columns); `[]` = core-only (4 columns), the picker's
+ *  (2 + 82×2 = 166 columns); `[]` = core-only (2 columns), the picker's
  *  default path. */
 export function googleTemplateHeaders(selected?: readonly string[]): string[] {
   return [...GOOGLE_LEAD_HEADER_ROW, ...googleLocalePairHeaders(selected)];
 }
 
 /** Example-row values, genericized from the Manager's source file
- *  (template-item-iap-google.xlsx, August 2026; its junk 4th row —
- *  backtick-only GT Price — excluded; its Product-ID/Title numbering
- *  mismatch reconciled to a consistent sampleNN ↔ "Sample product NN").
- *  Product IDs come from the shared TEMPLATE_SAMPLE_PRODUCT_IDS skip
- *  list. USD prices are the Manager's (0.99 / 1.99 / 22.99). GT Price
- *  deviates from the source's constant 23000: it is posted as a literal
- *  VN-region store PRICE (orchestration/bulk-import.ts prices map), not
- *  an exchange rate, so the samples carry per-row illustrative VND
- *  prices (~26,000 VND/USD, rounded to thousands) instead. */
+ *  (template-item-iap-google.xlsx, August 2026; its junk 4th row
+ *  excluded; its Product-ID/Title numbering mismatch reconciled to a
+ *  consistent sampleNN ↔ "Sample product NN"). Product IDs come from the
+ *  shared TEMPLATE_SAMPLE_PRODUCT_IDS skip list. USD prices are the
+ *  Manager's (0.99 / 1.99 / 22.99). */
 const SAMPLE_ROW_VALUES = TEMPLATE_SAMPLE_PRODUCT_IDS.map((id, i) => ({
   productId: id,
   priceUsd: [0.99, 1.99, 22.99][i],
-  gtPrice: [26000, 52000, 598000][i],
-  gtCurrency: "VND",
   title: `Sample product 0${i + 1}`,
   description: `Sample product 0${i + 1} - import, default price template`,
 }));
 
-/** The pre-filled data-sheet rows: 3 samples, a spacer, and the visible
- *  delete-me warning in a row whose Product ID cell is EMPTY. Since H4.3 a
- *  SKU-less row that states a product (price, GT price, title or
- *  description) is REFUSED, not skipped — the note sits in the price
- *  column, so the parser recognises it by its exact text
- *  (TEMPLATE_SAMPLE_ROWS_NOTE, excel-parser.ts rowStatesAProduct) and
- *  ignores it; it never parses or refuses as data.
- *  A sample row NEVER references a column absent from the selection. */
-export function googleTemplateDataRows(
-  selected?: readonly string[],
-): (string | number)[][] {
-  const headers = googleTemplateHeaders(selected);
-  const col = (name: string) => headers.indexOf(name);
-  const sampleLocale = preferredSampleLocale(
-    resolveSelectedLocales(GOOGLE_LOCALE_NAMES, selected),
-  );
-  const rows = SAMPLE_ROW_VALUES.map((v) => {
+/** The 3 sample products as rows UNDER `headers`, every value placed by
+ *  header NAME. ONE builder for the data sheet AND the Notes illustration,
+ *  so neither can drift from its own header row (the Notes table used to
+ *  be a positional array — Apple's lesson when it dropped the same two
+ *  columns). A header the row needs but `headers` lacks throws (a
+ *  programming error, never user input). */
+function sampleRows(headers: readonly string[], sampleLocale: string | undefined): (string | number)[][] {
+  const col = (name: string) => {
+    const i = headers.indexOf(name);
+    if (i < 0) throw new Error(`sample row: the header row has no "${name}" column`);
+    return i;
+  };
+  return SAMPLE_ROW_VALUES.map((v) => {
     const row: (string | number)[] = headers.map(() => "");
     row[col(GOOGLE_PRODUCT_ID_HEADER)] = v.productId;
     row[col(GOOGLE_PRICE_HEADER)] = v.priceUsd;
-    row[col(GOOGLE_GT_PRICE_HEADER)] = v.gtPrice;
-    row[col(GOOGLE_GT_CURRENCY_HEADER)] = v.gtCurrency;
     if (sampleLocale !== undefined) {
       row[col(`Title (${sampleLocale})`)] = v.title;
       row[col(`Description (${sampleLocale})`)] = v.description;
     }
     return row;
   });
+}
+
+/** The pre-filled data-sheet rows: 3 samples, a spacer, and the visible
+ *  delete-me warning in a row whose Product ID cell is EMPTY. Since H4.3 a
+ *  SKU-less row that states a product (price, title or description) is
+ *  REFUSED, not skipped — the note sits in the price column, so the parser
+ *  recognises it by its exact text (TEMPLATE_SAMPLE_ROWS_NOTE,
+ *  excel-parser.ts rowStatesAProduct) and ignores it; it never parses or
+ *  refuses as data.
+ *  A sample row NEVER references a column absent from the selection. */
+export function googleTemplateDataRows(
+  selected?: readonly string[],
+): (string | number)[][] {
+  const sampleLocale = preferredSampleLocale(
+    resolveSelectedLocales(GOOGLE_LOCALE_NAMES, selected),
+  );
   // Truly empty spacer ([] → no cells written), then the note with an
   // EMPTY Product ID cell so the parser ignores the row.
-  return [...rows, [], ["", TEMPLATE_SAMPLE_ROWS_NOTE]];
+  return [...sampleRows(googleTemplateHeaders(selected), sampleLocale), [], ["", TEMPLATE_SAMPLE_ROWS_NOTE]];
 }
 
 function googleNotesRows(selected?: readonly string[]): (string | number)[][] {
   const chosen = resolveSelectedLocales(GOOGLE_LOCALE_NAMES, selected);
   const sampleLocale = preferredSampleLocale(chosen);
+  const noteTableHeaders = [
+    ...GOOGLE_LEAD_HEADER_ROW,
+    ...(sampleLocale !== undefined ? [`Title (${sampleLocale})`, `Description (${sampleLocale})`] : []),
+  ];
   return [
     ["Google IAP bulk-import template — how to fill"],
     [],
@@ -357,16 +395,6 @@ function googleNotesRows(selected?: readonly string[]): (string | number)[][] {
       GOOGLE_PRICE_HEADER,
       "REQUIRED",
       "⚠ US DOLLARS (USD) — the currency is the one in this header, whatever the app's own currency is; the app's currency is not used. Example: 0.99 here means USD 0.99. A pricing template is matched by the tier named after the Product ID, else by this price in the header's currency; other countries are converted by Google from this price. To price in another currency, rename the header (e.g. \"Price (VND)\") to a currency Google Play bills in — exactly one price column per file. A header without its currency (\"Price\", \"Default Price\", \"Base Price\") or a second price column refuses the whole file. A row with an empty price is not imported (the preview lists it with the reason); a 0 price, or more decimals than the currency allows, keeps the row out. In a currency without decimals (VND, JPY…) write the number without separators: \"26.000\" typed as text keeps the row out (it may mean 26 thousand).",
-    ],
-    [
-      GOOGLE_GT_PRICE_HEADER,
-      "Optional",
-      "Override price for ONE country, in the currency given in GT Currency. Fill GT Price and GT Currency both, or neither — one without the other keeps the row out. A 0 price, more decimals than the currency allows, or a \".\" / \",\" in a currency without decimals keeps the row out. A pricing-template tier that matches the row, or custom prices, replace the GT.",
-    ],
-    [
-      GOOGLE_GT_CURRENCY_HEADER,
-      "Optional",
-      'Currency code for GT Price, e.g. "VND" — mapped to that currency\'s primary region. A currency outside the GT list, or one Google Play does not bill that region in, keeps the row out. Write both headers exactly "GT Price" / "GT Currency", and keep both columns or neither — otherwise the file is refused.',
     ],
     ...(chosen.length > 0
       ? [
@@ -390,27 +418,20 @@ function googleNotesRows(selected?: readonly string[]): (string | number)[][] {
         ]),
     [],
     [
-      `UNIT REMINDER: "${GOOGLE_PRICE_HEADER}" is US dollars — the header's currency, not the app's. GT Price is a PRICE in the GT Currency you specify on the same row (posted to Google Play as that currency's region price) — it is NOT an exchange rate.`,
+      `UNIT REMINDER: "${GOOGLE_PRICE_HEADER}" is US dollars — the header's currency, not the app's.`,
+    ],
+    [
+      "COPYING FROM ANOTHER FILE: copy column by column, under the same headers — never paste whole rows from an older template. Its columns can differ from this one, and a pasted row puts values under the wrong headers — a price can end up as a product's title.",
     ],
     [],
     [
       `SAMPLE ROWS: the "${GOOGLE_DATA_SHEET_NAME}" sheet comes PRE-FILLED with the 3 sample rows below. Delete them or replace them with your real products. Rows keeping the sample Product IDs (${TEMPLATE_SAMPLE_PRODUCT_IDS.join(", ")}) are skipped automatically on import — any other Product ID in the data sheet is imported as a REAL store product.`,
     ],
     // The illustrative table mirrors THIS file's columns — never a
-    // column the selection excluded.
-    [
-      ...GOOGLE_LEAD_HEADER_ROW,
-      ...(sampleLocale !== undefined
-        ? [`Title (${sampleLocale})`, `Description (${sampleLocale})`]
-        : []),
-    ],
-    ...SAMPLE_ROW_VALUES.map((v) => [
-      v.productId,
-      v.priceUsd,
-      v.gtPrice,
-      v.gtCurrency,
-      ...(sampleLocale !== undefined ? [v.title, v.description] : []),
-    ]),
+    // column the selection excluded — and its rows come from the SAME
+    // by-name builder as the data sheet.
+    noteTableHeaders,
+    ...sampleRows(noteTableHeaders, sampleLocale),
   ];
 }
 
@@ -418,8 +439,10 @@ function googleNotesRows(selected?: readonly string[]): (string | number)[][] {
  *  downloadXlsxTemplate.
  *
  *  `selectedLocaleNames` comes from the download modal's locale picker:
- *  `undefined` = FULL set (pre-picker behaviour, byte-identical output
- *  and filename), `[]` = core columns only (the picker's default path,
+ *  `undefined` = FULL set (every locale, the original filename and
+ *  Vietnamese samples — see preferredSampleLocale; its content changed on
+ *  purpose with [GOOGLE-bulkimport-drop-gt]: 166 columns, no GT), `[]` = core
+ *  columns only (the picker's default path,
  *  nothing pre-ticked). Names are keys of GOOGLE_LOCALE_OPTIONS /
  *  LOCALE_NAME_TO_BCP47; unknown names are ignored by
  *  resolveSelectedLocales rather than emitting a header no parser would

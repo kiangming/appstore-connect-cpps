@@ -309,7 +309,7 @@ describe("Google bulk-import execute — per-item custom prices (SC4)", () => {
     // The 400 assumed the template clobber could reach that path. It
     // cannot — the template-resolution loop is gated on a template
     // source, so under Google Conversion the set is a sparse overlay on
-    // the base price, exactly like the file's GT-Price column.
+    // the base price (what the retired GT-Price column did for one country).
     executeBulkImport.mockResolvedValue(okResult);
     const res = await POST(
       jsonReq({ hub_run_id: "run-c2", pricingSource: "google_default", rows: [templateRow] }),

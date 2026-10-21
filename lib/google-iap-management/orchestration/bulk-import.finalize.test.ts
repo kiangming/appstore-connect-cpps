@@ -102,18 +102,33 @@ describe("H4.4 — import_batches always ends in a terminal state (finalize-in-f
     templateExists.mockRejectedValue(new Error("canceling statement due to statement timeout"));
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     await expect(
-      executeBulkImport({} as never, { ...INPUT, pricingSource: "default_template", priceHeader: "Price (VND)", rows: [row(2)] }),
+      executeBulkImport({} as never, { ...INPUT, pricingSource: "default_template", priceHeader: "Price (VND)", gtRowsWithData: 2, rows: [row(2)] }),
     ).rejects.toThrow(/statement timeout/);
     expect(spy.mock.calls.map((c) => String(c[0])).some((l) => /closing it FAILED \(finally\) err=".*statement timeout/.test(l))).toBe(true);
     const payload = (appendAction.mock.calls.at(-1) as unknown as [{ payload: Record<string, unknown> }])[0].payload;
     expect(payload).toMatchObject({
       batch_id: "batch-1",
-      pricing_rule: "file-currency-only/v1",
+      // G1 ([GOOGLE-bulkimport-drop-gt]): rule v2, and the GT count (Manager Q5).
+      pricing_rule: "file-currency-only/v2",
       price_header: "Price (VND)",
+      gt_rows_with_data: 2,
       closed_by: "finally",
       rows_failed: 1,
     });
     expect(String(payload.error)).toMatch(/statement timeout/);
+    spy.mockRestore();
+  });
+
+  it("[GOOGLE-bulkimport-drop-gt] a row handed in WITH regionOverrides throws before anything is sent — and the finally closes the batch FAILED", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      executeBulkImport({} as never, {
+        ...INPUT,
+        pricingSource: "google_default",
+        rows: [row(2, { regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "26000" }] })],
+      }),
+    ).rejects.toThrow(/came with regionOverrides/);
+    expect(updates).toEqual([expect.objectContaining({ status: "FAILED", rows_success: 0, rows_failed: 1 })]);
     spy.mockRestore();
   });
 

@@ -26,17 +26,17 @@ import {
   buildExecuteRequestBody,
   buildExecuteRows,
   computePrecisionViolations,
-  gtPlanOf,
   previewRowsFromResponse,
   seedTierSelections,
-  type GtPlan,
 } from "./execute-payload";
 import { PricingSourceSelector } from "@/components/google-iap-management/iap-form/PricingSourceSelector";
 import { PRICING_SOURCE_LABELS } from "@/lib/google-iap-management/pricing-source-labels";
-import { MAX_DROPPED_ROWS } from "@/lib/google-iap-management/bulk-import-contract";
+import { MAX_DROPPED_ROWS, PRICING_RULE } from "@/lib/google-iap-management/bulk-import-contract";
 import {
   googleIapTemplateSpec,
+  googleRetiredGtWarning,
   GOOGLE_LOCALE_OPTIONS,
+  type RetiredGtColumns,
 } from "@/lib/google-iap-management/parsers/template-spec";
 import { DownloadTemplateButton } from "@/components/ui/shared/DownloadTemplateButton";
 
@@ -47,12 +47,6 @@ export interface PreviewListing {
   locale: string;
   title: string;
   description: string;
-}
-
-export interface PreviewRegionOverride {
-  region: string;
-  currency: string;
-  priceDecimal: string;
 }
 
 /** Hotfix 19: candidate-tier descriptor returned by the Preview API per
@@ -71,7 +65,6 @@ export interface PreviewRow {
   sku: string;
   baseCurrency: string;
   basePriceDecimal: string;
-  regionOverrides: PreviewRegionOverride[];
   listings: PreviewListing[];
   exists: boolean;
   decision: RowDecision;
@@ -86,8 +79,8 @@ export interface PreviewRow {
 }
 
 /** A row of the file the tool will not import, with the reason (preview
- *  `refusedRows`): a price / GT that cannot be honoured exactly, an empty
- *  price, no Product ID. H4.3: shown IN the preview table; the Manager may
+ *  `refusedRows`): a price that cannot be honoured exactly, an empty price,
+ *  no Product ID, an old row pasted whole (Manager Q6). H4.3: shown IN the preview table; the Manager may
  *  push the rest after confirming; sent to the server as `droppedRows` so
  *  Done, the audit and the Hub count them. */
 export interface PreviewRefusedRow {
@@ -252,6 +245,9 @@ export function BulkImportWizard({
   const [confirmPushOpen, setConfirmPushOpen] = useState(false);
   /** H4.4 — the file's price header, for the import audit. */
   const [priceHeader, setPriceHeader] = useState<string | null>(null);
+  /** [GOOGLE-bulkimport-drop-gt] — the retired GT columns of the previewed
+   *  file (Manager Q1): a notice, never a gate; the count goes to the audit. */
+  const [retiredGt, setRetiredGt] = useState<RetiredGtColumns>(null);
   useEffect(() => {
     if (step !== "preview") setConfirmPushOpen(false);
   }, [step]);
@@ -458,16 +454,6 @@ export function BulkImportWizard({
     [previewRows],
   );
 
-  /** H4.3 (Q5) — what happens to each row's GT at push, from the SAME state
-   *  the execute body is built from (gtPlanOf, execute-payload.ts). */
-  const gtPlans = useMemo(() => {
-    const out: Record<number, GtPlan> = {};
-    for (const r of previewRows) {
-      out[r.rowNumber] = gtPlanOf(r, { pricingSource, tierSelections, customPrices, activeCustomSkus });
-    }
-    return out;
-  }, [previewRows, pricingSource, tierSelections, customPrices, activeCustomSkus]);
-
   /** The parser lists each refused row in its warnings too; the table and the
    *  summary above it already show them — not a third time here. */
   const visibleWarnings = useMemo(
@@ -524,6 +510,9 @@ export function BulkImportWizard({
       // Hotfix 19: thread pricingSource so the API can look up
       // candidate tiers per row server-side.
       form.append("pricingSource", pricingSource);
+      // The contract this tab was built under — the preview route refuses
+      // another (a tab opened before an update gets "reload", not a crash).
+      form.append("pricing_rule", PRICING_RULE);
       const res = await fetch(
         `/api/google-iap-management/apps/${encodeURIComponent(packageName)}/bulk-import/preview`,
         { method: "POST", body: form },
@@ -538,6 +527,7 @@ export function BulkImportWizard({
         iapsLastSyncedAt?: string | null;
         refusedRows?: Array<{ rowNumber: number; sku: string; reason: string }>;
         priceHeader?: string | null;
+        retiredGtColumns?: RetiredGtColumns;
       };
       if (!res.ok) {
         applyGateRefusal(body);
@@ -556,6 +546,7 @@ export function BulkImportWizard({
       setPreviewWarnings(body.warnings ?? []);
       setFileRefusedRows(body.refusedRows ?? []);
       setPriceHeader(body.priceHeader ?? null);
+      setRetiredGt(body.retiredGtColumns ?? null);
       setTierSelections(seedSelections);
       if (body.iapsLastSyncedAt) setMirrorSyncedAt(body.iapsLastSyncedAt);
 
@@ -752,6 +743,7 @@ export function BulkImportWizard({
               }),
               droppedRows: fileRefusedRows,
               priceHeader,
+              gtRowsWithData: retiredGt?.rowsWithData ?? null,
             }),
           ),
         },
@@ -848,8 +840,8 @@ export function BulkImportWizard({
             template modes, each row takes the tier named after its SKU, else
             the tier whose price in the file&apos;s currency equals the
             file&apos;s price; rows without a matching tier fall back to{" "}
-            <strong>Google Conversion</strong> — the file&apos;s price + GT
-            Price override, converted by Google into every other country.
+            <strong>Google Conversion</strong> — the file&apos;s price,
+            converted by Google into every other country.
           </p>
           <PricingSourceSelector
             value={pricingSource}
@@ -1108,6 +1100,8 @@ export function BulkImportWizard({
             </div>
           )}
 
+          <RetiredGtNotice gt={retiredGt} />
+
           {visibleWarnings.length > 0 && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
               <p className="text-xs font-medium text-amber-900 mb-1">
@@ -1170,7 +1164,6 @@ export function BulkImportWizard({
           <PreviewTable
             rows={previewRows}
             refusedRows={fileRefusedRows}
-            gtPlans={gtPlans}
             onRowDecisionChange={setRowDecision}
             tierSelections={tierSelections}
             onTierSelectionChange={setRowTierSelection}
@@ -1483,6 +1476,7 @@ export function BulkImportWizard({
                     setPreviewWarnings([]);
                     setFileRefusedRows([]);
                     setPriceHeader(null);
+                    setRetiredGt(null);
                     setConfirmPushOpen(false);
                     setExecuteResult(null);
                     // Reset the tracking state machine for a fresh cycle —
@@ -1539,9 +1533,9 @@ function PricingCurrencyNote() {
       exactly one {code("Price (XXX)")} column (e.g. {code("Price (USD)")}), in a currency Google
       Play bills in, and prices are read in that currency only — the app&apos;s currency is not
       used. A price header without its currency ({code("Price")} / Default Price / Base Price) or a
-      second price column refuses the file; a row whose price or GT price cannot be sent exactly as
-      written (more decimals than its currency allows, 0, or a &quot;.&quot; / &quot;,&quot; in a
-      currency without decimals) is not imported.
+      second price column refuses the file; a row whose price cannot be sent exactly as written
+      (more decimals than its currency allows, 0, or a &quot;.&quot; / &quot;,&quot; in a currency
+      without decimals) is not imported.
       <ul className="mt-1 ml-4 list-disc space-y-0.5">
         <li>
           With a pricing template, a row takes the tier named after its SKU, else the tier whose
@@ -1550,16 +1544,41 @@ function PricingCurrencyNote() {
           With Google Conversion every country is converted from the file&apos;s price.
         </li>
         <li>
-          GT Price + GT Currency (both, or neither) override their one country, except when a tier
-          matches the row — the tier&apos;s prices replace the GT, and a country the tier does not
-          list is then converted by Google — or the row has custom prices (they replace it). Custom
-          prices overlay the file&apos;s price, which stays the conversion base.
+          A country gets its own price only from a matched tier or from custom prices; custom
+          prices overlay the file&apos;s price, which stays the conversion base. GT Price / GT
+          Currency columns, if the file still has them, are not used.
         </li>
         <li>
           If Google&apos;s conversion fails (usually temporary — run the row again later) or returns no
           US price, a row whose price is not in USD is refused. A USD row is still sent.
         </li>
       </ul>
+    </div>
+  );
+}
+
+/**
+ * [GOOGLE-bulkimport-drop-gt] (Manager Q1; wording approved at gate G0,
+ * 2026-10-21) — the file still has the retired GT columns. A NOTICE only: it
+ * never disables Push and never refuses a row — the columns are ignored
+ * either way (excel-parser.ts). Rendered above the preview table, so it is
+ * read before Push.
+ */
+function RetiredGtNotice({ gt }: { gt: RetiredGtColumns }) {
+  const notice = googleRetiredGtWarning(gt);
+  if (!notice) return null;
+  return (
+    <div
+      role="status"
+      data-testid="retired-gt-notice"
+      data-state={notice.kind}
+      className={
+        notice.kind === "data"
+          ? "bg-amber-50 border border-amber-300 rounded-lg p-3 text-xs text-amber-900"
+          : "bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs text-slate-700"
+      }
+    >
+      {notice.text}
     </div>
   );
 }

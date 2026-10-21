@@ -31,7 +31,7 @@ function installFetch(refusedCount: number) {
         json: async () => ({
           rows: [
             {
-              rowNumber: 1, sku: "sku1", baseCurrency: "USD", basePriceDecimal: "0.99", regionOverrides: [], listings: [],
+              rowNumber: 1, sku: "sku1", baseCurrency: "USD", basePriceDecimal: "0.99", listings: [],
               exists: false, tierCandidates: [], defaultTierSelection: null, tierMatchedBy: "none",
             },
           ],

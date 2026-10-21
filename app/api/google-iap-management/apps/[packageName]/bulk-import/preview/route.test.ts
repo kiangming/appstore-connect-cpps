@@ -58,6 +58,7 @@ vi.mock("@/lib/google-iap-management/queries/templates", () => ({
 
 import { POST } from "./route";
 import * as templateQueries from "@/lib/google-iap-management/queries/templates";
+import { PRICING_RULE } from "@/lib/google-iap-management/bulk-import-contract";
 
 const ctx = { params: { packageName: "com.vnggames.ballisticherotwid" } };
 
@@ -65,6 +66,7 @@ function previewReq(pricingSource = "google_default"): Request {
   const form = new FormData();
   form.append("file", new File(["x"], "items.xlsx"));
   form.append("pricingSource", pricingSource);
+  form.append("pricing_rule", PRICING_RULE);
   return new Request("http://localhost/api/x", { method: "POST", body: form });
 }
 
@@ -74,7 +76,6 @@ function parsedRow(sku: string, rowNumber: number) {
     sku,
     baseCurrency: "USD",
     basePriceDecimal: "0.99",
-    regionOverrides: [],
     listings: [],
   };
 }
@@ -295,4 +296,26 @@ describe("Google bulk-import preview — C2.1: the app's currency/language are N
     expect(body.warnings).toEqual(["parser says hi"]);
   });
 
+});
+
+describe("[GOOGLE-bulkimport-drop-gt] — the preview checks the contract too (twin of the execute route's PRICING_RULE check)", () => {
+  it("no pricing_rule, or an older one (a tab opened before the update) ⇒ 409 PREVIEW_OUTDATED; the file is not even parsed", async () => {
+    for (const rule of [null, "file-currency-only/v1"]) {
+      parseIapTemplate.mockClear();
+      const form = new FormData();
+      form.append("file", new File(["x"], "items.xlsx"));
+      form.append("pricingSource", "google_default");
+      if (rule) form.append("pricing_rule", rule);
+      const res = await POST(new Request("http://localhost/api/x", { method: "POST", body: form }), ctx);
+      expect(res.status, String(rule)).toBe(409);
+      expect(await res.json()).toEqual({
+        error: "The tool was updated since this page was opened. Nothing was read. Reload this page, then upload the file again.",
+        code: "PREVIEW_OUTDATED",
+      });
+      expect(parseIapTemplate).not.toHaveBeenCalled();
+    }
+    // The current rule passes.
+    expect((await POST(previewReq(), ctx)).status).toBe(200);
+    expect(PRICING_RULE).toBe("file-currency-only/v2");
+  });
 });

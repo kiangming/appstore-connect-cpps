@@ -67,7 +67,8 @@ describe("AppsListClient (Google) — template download call site", () => {
     await waitFor(() => expect(downloadXlsxTemplate).toHaveBeenCalled());
     const spec = downloadXlsxTemplate.mock.calls[0][0];
     expect(spec.filename).toBe("google-iap-bulk-import-template-core.xlsx");
-    expect(spec.headers.length).toBe(4);
+    // [GOOGLE-bulkimport-drop-gt] G1: 2 lead columns (was 4, with GT Price / GT Currency).
+    expect(spec.headers).toEqual(["Product ID", "Price (USD)"]);
     expect(spec.headers).toContain("Price (USD)");
     expect(spec.headers).not.toContain("Reference Name"); // Apple-only
   });

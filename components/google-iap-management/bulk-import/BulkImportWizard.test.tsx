@@ -52,7 +52,6 @@ function previewResponse() {
           sku: "sku1",
           baseCurrency: "USD",
           basePriceDecimal: "0.99",
-          regionOverrides: [],
           listings: [],
           exists: false,
           tierCandidates: [],
@@ -225,7 +224,8 @@ describe("BulkImportWizard (Google) — template download call site", () => {
     await waitFor(() => expect(downloadXlsxTemplate).toHaveBeenCalled());
     const spec = downloadXlsxTemplate.mock.calls[0][0];
     expect(spec.filename).toBe("google-iap-bulk-import-template-core.xlsx");
-    expect(spec.headers.length).toBe(4);
+    // [GOOGLE-bulkimport-drop-gt] G1: 2 lead columns (was 4, with GT Price / GT Currency).
+    expect(spec.headers).toEqual(["Product ID", "Price (USD)"]);
     expect(spec.headers).toContain("Price (USD)");
     expect(spec.headers).not.toContain("Reference Name"); // Apple-only
   });
@@ -243,7 +243,6 @@ function existingRowPreviewResponse(listings: unknown[]) {
           sku: "sku.exists",
           baseCurrency: "USD",
           basePriceDecimal: "0.99",
-          regionOverrides: [],
           listings,
           exists: true,
           tierCandidates: [],
@@ -877,16 +876,17 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     "Prices come only from the file. The file needs exactly one Price (XXX) column (e.g. Price (USD)), in a " +
     "currency Google Play bills in, and prices are read in that currency only — the app's currency is not used. " +
     "A price header without its currency (Price / Default Price / Base Price) or a second price column refuses the " +
-    "file; a row whose price or GT price cannot be sent exactly as written (more decimals than its currency " +
-    'allows, 0, or a "." / "," in a currency without decimals) is not imported.' +
+    "file; a row whose price cannot be sent exactly as written (more decimals than its currency allows, 0, or a " +
+    '"." / "," in a currency without decimals) is not imported.' +
     "With a pricing template, a row takes the tier named after its SKU, else the tier whose price in the file's " +
     "currency equals the file's price; countries the tier does not list, and rows with no matching tier, are " +
     "converted by Google from the file's price. With Google Conversion every country is converted from the " +
     "file's price." +
-    "GT Price + GT Currency (both, or neither) override their one country, except when a tier matches the row — " +
-    "the tier's prices replace the GT, and a country the tier does not list is then converted by Google — or the " +
-    "row has custom prices (they replace it). Custom prices overlay the file's price, which stays the conversion " +
-    "base." +
+    // [GOOGLE-bulkimport-drop-gt] G1 — was the GT sentence ("GT Price + GT
+    // Currency … override their one country …"): the GT is never read now.
+    "A country gets its own price only from a matched tier or from custom prices; custom prices overlay the " +
+    "file's price, which stays the conversion base. GT Price / GT Currency columns, if the file still has them, " +
+    "are not used." +
     "If Google's conversion fails (usually temporary — run the row again later) or returns no US price, a row " +
     "whose price is not in USD is refused. A USD row is still sent.";
 
@@ -945,10 +945,11 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     },
   );
 
-  it("H4.3: a row whose tier lookup FAILED says so — never 'Auto-converted by Google' — and its GT is 'unknown'; a plain no-tier row with a GT says 'will be sent'", async () => {
+  // G1 ([GOOGLE-bulkimport-drop-gt]) — this test also pinned each row's GT
+  // line ("unknown" / "will be sent"); the line is gone with the GT read.
+  it("H4.3: a row whose tier lookup FAILED says so — never 'Auto-converted by Google'; no row carries a GT line any more", async () => {
     const row = (rowNumber: number, sku: string, tierMatchedBy: string) => ({
-      rowNumber, sku, baseCurrency: "USD", basePriceDecimal: "0.99",
-      regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "26000" }], listings: [],
+      rowNumber, sku, baseCurrency: "USD", basePriceDecimal: "0.99", listings: [],
       exists: false, tierCandidates: [], defaultTierSelection: null, tierMatchedBy,
     });
     installBasicFetch(() => ({
@@ -968,12 +969,7 @@ describe("BulkImportWizard (Google) — C2.1 pricing note, no currency/language 
     });
     await waitFor(() => expect(screen.getByTestId("tier-lookup-failed")).toBeInTheDocument());
     expect(screen.getAllByText("Auto-converted by Google")).toHaveLength(1);
-    // Google Conversion (availability failed ⇒ google_default): no template
-    // runs, so a GT is sent whatever the tier flag says (gtPlanOf follows the
-    // source first). The template-source labels are pinned in
-    // BulkImportWizard.custom-prices.test.tsx.
-    expect(screen.getAllByTestId("gt-status").map((e) => e.getAttribute("data-state"))).toEqual(["sent", "sent"]);
-    expect(screen.getAllByTestId("gt-status")[1]).toHaveTextContent("GT VN 26000 VND · will be sent");
+    expect(screen.queryAllByTestId("gt-status")).toEqual([]);
   });
 
   it("server says IMPORT_READINESS_READ_FAILED ⇒ the mirror banner turns 'unreadable' and Preview re-blocks", async () => {
@@ -1016,7 +1012,6 @@ describe("BulkImportWizard (Google) — execute body = the shared builder's outp
         sku: "sku.a",
         baseCurrency: "USD",
         basePriceDecimal: "0.99",
-        regionOverrides: [{ region: "VN", currency: "VND", priceDecimal: "26000" }],
         listings: [],
         exists: false,
         tierCandidates: [
@@ -1030,7 +1025,6 @@ describe("BulkImportWizard (Google) — execute body = the shared builder's outp
         sku: "sku.b",
         baseCurrency: "TWD",
         basePriceDecimal: "30",
-        regionOverrides: [],
         listings: [],
         exists: false,
         tierCandidates: [],
@@ -1044,7 +1038,10 @@ describe("BulkImportWizard (Google) — execute body = the shared builder's outp
       if (url.includes(START_URL)) return Promise.resolve({ ok: true, json: async () => ({ run_id: "run-guard" }) });
       if (url.includes(CANCEL_URL)) return Promise.resolve({ ok: true, json: async () => ({}) });
       if (url.includes(PREVIEW_URL_FRAGMENT)) {
-        return Promise.resolve({ ok: true, json: async () => ({ rows: previewRows, warnings: [], priceHeader: "Price (USD)" }) });
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ rows: previewRows, warnings: [], priceHeader: "Price (USD)", retiredGtColumns: { rowsWithData: 2 } }),
+        });
       }
       if (url.includes(EXECUTE_URL_FRAGMENT)) return Promise.resolve(successExecuteResponse());
       return Promise.reject(new Error(`unexpected fetch: ${url}`));
@@ -1072,8 +1069,13 @@ describe("BulkImportWizard (Google) — execute body = the shared builder's outp
       }),
       droppedRows: [],
       priceHeader: "Price (USD)",
+      gtRowsWithData: 2,
     });
     expect(executeBody).toEqual(JSON.parse(JSON.stringify(expected)));
+    // [GOOGLE-bulkimport-drop-gt] — the GT count for the audit (Q5); no row
+    // carries a region price from the client (Q4).
+    expect(executeBody.gtRowsWithData).toBe(2);
+    expect(executeBody.rows.map((r: Record<string, unknown>) => "regionOverrides" in r)).toEqual([false, false]);
     // The builder really was exercised on both branches it encodes.
     expect(executeBody.rows[0].chosenTierIdentifier).toBe("Tier 1");
     // H4.3 — the pricing rule the route checks; no priceHeaderSource any more.
@@ -1090,7 +1092,8 @@ describe("BulkImportWizard (Google) — execute body = the shared builder's outp
  * No row disappears silently.
  */
 describe("BulkImportWizard (Google) — refused rows in the table, push the rest after confirming (H4.3)", () => {
-  const REFUSED = { rowNumber: 3, sku: "sku.bad", reason: 'GT Price "26000.5" VND — VND only accepts whole numbers.' };
+  // G1: was a GT reason — a GT can no longer refuse a row.
+  const REFUSED = { rowNumber: 3, sku: "sku.bad", reason: '"Price (VND)" = "26000.5" — VND only accepts whole numbers.' };
 
   function installPushFetch(opts: {
     rows?: unknown[];
@@ -1275,7 +1278,7 @@ describe("BulkImportWizard (Google) — refused rows in the table, push the rest
       if (url.includes(CANCEL_URL)) return Promise.resolve({ ok: true, json: async () => ({}) });
       if (url.includes(PREVIEW_URL_FRAGMENT)) {
         previewCall += 1;
-        const base = { rowNumber: 1, sku: "sku1", baseCurrency: "USD", basePriceDecimal: "0.99", regionOverrides: [], listings: [], tierCandidates: [], defaultTierSelection: null, tierMatchedBy: "none" };
+        const base = { rowNumber: 1, sku: "sku1", baseCurrency: "USD", basePriceDecimal: "0.99", listings: [], tierCandidates: [], defaultTierSelection: null, tierMatchedBy: "none" };
         return Promise.resolve({
           ok: true,
           json: async () => ({ rows: [{ ...base, exists: previewCall > 1 }], refusedRows: [REFUSED], warnings: [] }),
@@ -1310,5 +1313,81 @@ describe("BulkImportWizard (Google) — refused rows in the table, push the rest
     expect(heading).toHaveAttribute("data-state", "complete");
     expect(heading).toHaveTextContent("Bulk import complete");
     expect(screen.queryByTestId("done-refused-rows")).toBeNull();
+  });
+});
+
+/**
+ * [GOOGLE-bulkimport-drop-gt] (Manager Q1; wording approved at gate G0,
+ * 2026-10-21) — a file that still has the retired GT columns: the preview
+ * says so, IN WORDS, above the table — and that is all it does. Push stays
+ * enabled, no row is refused, the execute body carries only the count.
+ */
+describe("BulkImportWizard (Google) — the retired GT columns notice (never a gate)", () => {
+  function installGtFetch(retiredGtColumns: unknown) {
+    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes(AVAILABILITY_URL_FRAGMENT)) return Promise.resolve({ ok: false, json: async () => ({}) });
+      if (url.includes(START_URL)) return Promise.resolve({ ok: true, json: async () => ({ run_id: "run-gt" }) });
+      if (url.includes(CANCEL_URL)) return Promise.resolve({ ok: true, json: async () => ({}) });
+      if (url.includes(PREVIEW_URL_FRAGMENT)) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ ...(await previewResponse().json()), priceHeader: "Price (USD)", retiredGtColumns }),
+        });
+      }
+      if (url.includes(EXECUTE_URL_FRAGMENT)) return Promise.resolve(successExecuteResponse());
+      return Promise.reject(new Error(`unexpected fetch: ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+  const executeBodyOf = (fetchMock: ReturnType<typeof vi.fn>) => {
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).includes(EXECUTE_URL_FRAGMENT));
+    return call ? JSON.parse((call[1] as RequestInit).body as string) : null;
+  };
+
+  it.each([
+    [
+      { rowsWithData: 3 },
+      "data",
+      "File còn dữ liệu ở cột GT Price / GT Currency. Tool KHÔNG dùng hai cột này cho Google — giá chỉ lấy từ cột Price. Hãy xoá trống dữ liệu hoặc xoá hẳn hai cột này trong file. Số dòng có điền GT: 3.",
+      3,
+    ],
+    [
+      { rowsWithData: 0 },
+      "empty",
+      "File còn hai cột GT Price / GT Currency (trống). Tool không dùng hai cột này — có thể xoá hẳn hai cột khỏi file.",
+      0,
+    ],
+  ])("GT columns %j ⇒ the %s notice, word for word, before Push; Push is ENABLED and sends — no confirm, nothing refused; the body carries the count", async (gt, kind, text, count) => {
+    const fetchMock = installGtFetch(gt);
+    const { container } = renderWizard();
+    await goToPreviewAndAdoptRun(container, fetchMock);
+    const notice = await screen.findByTestId("retired-gt-notice");
+    expect(notice).toHaveAttribute("data-state", kind);
+    // The preview request carries the contract (the route refuses a stale tab).
+    const previewCall = fetchMock.mock.calls.find((c) => String(c[0]).includes(PREVIEW_URL_FRAGMENT));
+    expect(((previewCall?.[1] as RequestInit).body as FormData).get("pricing_rule")).toBe("file-currency-only/v2");
+    expect(notice.textContent).toBe(text);
+    // Above the table and the Push button, in document order.
+    const push = screen.getByRole("button", { name: /Push to Google Play/ });
+    expect(notice.compareDocumentPosition(push) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(push).toBeEnabled();
+    expect(screen.queryByTestId("file-refused-rows")).toBeNull();
+    await clickExecuteAndSettle();
+    expect(screen.queryByTestId("push-confirm")).toBeNull();
+    await waitFor(() => expect(executeBodyOf(fetchMock)).not.toBeNull());
+    expect(executeBodyOf(fetchMock)).toMatchObject({ gtRowsWithData: count, droppedRows: [] });
+  });
+
+  it("no GT column ⇒ no notice, and the body says null", async () => {
+    const fetchMock = installGtFetch(null);
+    const { container } = renderWizard();
+    await goToPreviewAndAdoptRun(container, fetchMock);
+    await screen.findByRole("button", { name: /Push to Google Play/ });
+    expect(screen.queryByTestId("retired-gt-notice")).toBeNull();
+    await clickExecuteAndSettle();
+    await waitFor(() => expect(executeBodyOf(fetchMock)).not.toBeNull());
+    expect(executeBodyOf(fetchMock).gtRowsWithData).toBeNull();
   });
 });
