@@ -1138,6 +1138,24 @@ adapter lấy từ vùng US (hoặc vùng đầu) của phản hồi Google, kh�
 
 ---
 
+## `[GOOGLE-bulk-import-price-magnitude]` — giá chính lệch ~1000× (ô SỐ "26.000" = 26; USD 1999) được nhận và gửi; bulk không kiểm độ lớn giá
+
+**GHI NHẬN 2026-10-21** (arc `arc-google-bulkimport-drop-gt-columns`, bước A, ĐÃ ĐO trên mock — không gọi Google). Không làm trong arc GT.
+
+- **Hiện trạng.** Lỗ hổng "ô SỐ 26.000 ⇒ VND 26" mà census GT ghi lại cũng có ở CỘT GIÁ CHÍNH, và rộng hơn: giá chính là neo quy đổi cho mọi vùng.
+  - Parser thật nhận `Price (VND)` = ô SỐ 26 (cũng nhận JPY 12, KRW 1, IDR 15, VND 598); server kiểm lại vẫn qua.
+  - Đầu-cuối: VND 26 dưới cả 3 nguồn ⇒ neo VND 26, VN = VND 26, Hub SUCCESS. `Price (USD)` 1999 / 26000 / 99999 được nhận, Hub SUCCESS.
+  - Không có sàn hay trần nào ngoài "≠ 0" và độ chính xác. `flagSuspiciousDrops` chỉ có ở dialog Custom (`CustomPricesDialog.tsx:252`).
+- **Là chủ ý của H4.2 (a).** Ô SỐ giữ cách đọc (`file-price.ts:56-73`; `operational-guide.md:489`). Từ ô SỐ 26 không thể biết người dùng gõ "26.000" ⇒ chặn theo kiểu ô ở parser là KHÔNG đủ; chỉ kiểm ĐỘ LỚN mới bắt được.
+- **Quá khứ.** Code trước H4.2 (`58a5be2`) nhận cả ô CHỮ "26.000": preview hiện "VND 26.000" nhưng gửi VND 26 ⇒ các import 06–10/2026 có thể đã đẩy giá chính thấp 1000×.
+- **CHƯA BIẾT.** Google có sàn / trần theo vùng cho giá purchase option không, và trả gì cho neo VND 26. Repo không có phản hồi thật nào; câu "Google enforces floors… fails the whole batch" (`operational-guide.md:556-561`, `custom-prices.ts`, `currency-precision.ts`) chưa từng được đo. Với phản hồi giả: quy đổi 400 ⇒ chỉ dòng đó `conversion_failed`, Hub PARTIAL; `batchUpdate` 400 ⇒ CẢ batch FAILED, kể cả dòng đúng.
+- **Bỏ GT không đóng mục này.**
+- **Phương án (cần Manager quyết chặn hay chỉ cảnh báo, và ngưỡng):**
+  - (1) Ở orchestrator, dùng chính kết quả `convertRegionPrices` đã gọi cho mỗi dòng: giá US quy ra < ngưỡng (vd 0.10) hoặc > ngưỡng (vd 500) ⇒ từ chối dòng (kind mới `price_out_of_range`). Áp được cho mọi currency, không cần bảng tỷ giá, nhưng chỉ biết lúc Push.
+  - (2) Ở preview, cảnh báo + hộp xác nhận (cơ chế H4.3) với ngưỡng tĩnh theo currency (VND/IDR < 1000, KRW < 100, JPY < 10…, USD > 500). Biết sớm hơn, nhưng là bảng tay.
+  - (3) Khi OVERWRITE: so với giá live trong mirror (`iap_prices`); lệch > 100× ⇒ cảnh báo.
+  - Không ghi thử lên Google chỉ để đo sàn. Bulk import Apple có cùng luật ô SỐ không: CHƯA ĐO (KB P8).
+
 ## `[GOOGLE-single-edit-server-price-rules]` — sửa/tạo đơn lẻ: server chưa áp (a)/(b), tier sai được gửi thẳng
 
 **GHI NHẬN 2026-10-19 (map H4.3, ĐÃ ĐỌC code).** Từ H4.3 form đơn lẻ chặn "26.000" (VND…) và giá 0 ở CLIENT

@@ -9143,3 +9143,17 @@ Design: `docs/iap-management/design-apple-bulkimport-drop-gt-columns.md`. ⚠ CH
 
 **Bài học chung:** "chỉ xoá một header khỏi danh sách đã biết" KHÔNG phải "bỏ qua cột đó" — với parser quét cột lạ, header bị xoá trở thành cảnh báo cho mọi file cũ. Muốn file cũ im lặng thì phải nhận diện tên cũ có chủ đích.
 
+---
+
+## §37 — Bỏ "GT Price" / "GT Currency" khỏi Bulk Import của GOOGLE (arc `arc-google-bulkimport-drop-gt-columns`, 2026-10-21)
+
+Design: `docs/google-iap-management/design-bulkimport-drop-gt-columns.md`. ⚠ Khác §36 (Apple): GT của Google ĐỔI GIÁ THẬT.
+
+**Sự thật đã đo (census `e733bfa`):** GT được gửi lên Google và đè giá vùng ứng với GT Currency (VND→VN…) khi dòng định giá bằng quy đổi — nguồn Google Conversion, hoặc template mà không tier nào khớp; tier khớp hoặc custom prices thì GT đã bị bỏ. 756 lượt đo, CREATE = OVERWRITE. Xoá GT khỏi `FIXED_HEADERS` ⇒ mọi file đang lưu hành bị từ chối cả file ("GT Price" trông như cột giá).
+
+**Manager làm rõ (2026-10-21):** team luôn điền GT nhưng không bao giờ muốn dùng làm giá; GT bị gửi lên Google là LỖI so với ý định. Quyết: cảnh báo-không-chặn-không-dùng (Q1), `PRICING_RULE` v2 + route từ chối `regionOverrides` từ client (Q4), bỏ audit `gt`/`gt_outcome` và ghi số dòng có điền GT (Q5), từ chối dòng Title số thuần + Description 3 chữ in hoa (Q6), đảo quyết định 2026-10-20 "không đổi Google" (Q7). Chi tiết: design §P4-chốt.
+
+**SQL định cỡ (Manager chạy 2026-10-21, `docs/google-iap-management/queries/census-google-gt-usage.sql`):** khối B 99 = 93 audit trước H4.4 + 6 import_batches không audit (2026-06-01 → 2026-10-15), shape 1 = 0 ⇒ chưa có import nào từ H4.4; khối A toàn 0 (chưa có dữ liệu); khối C 93 lượt trước H4.4, GT không được ghi ⇒ CHƯA BIẾT.
+
+**Bài học:** "cột tuỳ chọn mà team luôn điền" + "tool âm thầm dùng nó" = rủi ro lớn hơn một cột bị bỏ quên — hỏi ý định của người điền trước khi coi một cột là tính năng.
+

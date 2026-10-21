@@ -1,6 +1,6 @@
 # [GOOGLE-bulkimport-drop-gt] Bỏ "GT Price" / "GT Currency" khỏi Bulk Import của Google — census + thiết kế
 
-**Trạng thái:** census + thiết kế xong (2026-10-21), **CHƯA CODE**, chờ Manager chốt §P4 + kết quả SQL §1.4.
+**Trạng thái:** census PASS (`e733bfa`). Manager làm rõ + chốt §P4 (2026-10-21, xem §P4-chốt — **đổi hướng so với đề xuất census**). Đang làm bước A (đo ảnh hưởng quá khứ, chỉ đọc); G0/G1 chưa làm.
 **Nhánh:** `arc-google-bulkimport-drop-gt-columns` (từ `origin/main` = `121f2b1`).
 **Phạm vi:** module Google. Apple không đổi hành vi (Apple đã bỏ GT — KB §36).
 
@@ -139,7 +139,7 @@ Biến thể (c′): chỉ từ chối dòng mà GT **lẽ ra được giữ** (
 - **Audit:** bỏ `gt` / `gt_outcome` khỏi `per_row_pricing` (hoặc giữ `null` — Q5); dòng bị từ chối vì ô GT nằm trong `refused_rows` (đếm được).
 - **Wizard:** bỏ `PreviewGt` / `gtPlanOf` / `GtLine`; sửa copy (`BulkImportWizard.tsx:851, 1535-1556`); `GoogleDefaultReferenceTab.tsx:63`.
 - **Bất biến H4 giữ nguyên:** T1 (currency app không ảnh hưởng giá) — fixture GT F5/F10/F11 sửa có chủ đích, các ô khác giữ; luật giá chính (`filePriceOf` / `statedPriceOf`), refused rows, Push the rest, mirror gate C1/C2, Q7 (code giữ; chỉ mất đường GT-trên-US).
-- Mất theo (ghi rõ): lỗ hổng ô SỐ `26.000` ⇒ VND 26 biến mất cùng GT.
+- Mất theo (ghi rõ): lỗ hổng ô SỐ `26.000` ⇒ VND 26 biến mất **ở cột GT**. ⚠ Cột giá CHÍNH có cùng lỗ hổng và rộng hơn (§A-thêm) — bỏ GT không đóng nó; BACKLOG `[GOOGLE-bulk-import-price-magnitude]`.
 
 ### 2.4 Docs
 
@@ -174,6 +174,71 @@ User guide section Google (dòng §1.3, kể cả **5460** số cột 4 → 2 / 
 > **Q7 — Xác nhận đảo quyết định 2026-10-20** ("Google dùng GT thật — không đổi hành vi Google", ghi ở KB §36, design Apple, lời giải thích test GP). Arc này sẽ sửa các chỗ đó.
 >
 > **Q8 — SQL §1.4** phải chạy trên prod **trước** khi code bỏ GT deploy (khuyến nghị: trước khi chốt Q1).
+
+## §P4-chốt — Manager làm rõ + quyết (2026-10-21)
+
+**Bối cảnh Manager làm rõ:** team LUÔN điền GT Price / GT Currency trong file Google, nhưng KHÔNG BAO GIỜ có nhu cầu dùng chúng làm giá thật; Manager tưởng GT không được gửi lên Google. Census đo NGƯỢC LẠI (§1.2). ⇒ Ý định của team: GT không bao giờ có tác dụng ⇒ **GT bị gửi lên Google là LỖI so với ý định**, không phải tính năng cần giữ hay thay thế.
+
+- **Q1 = file có hai cột GT ⇒ HIỆN CẢNH BÁO, KHÔNG CHẶN, KHÔNG DÙNG GT** (thay cho đề xuất (c) của census). GT không bao giờ được đọc làm giá, không kiểm hợp lệ, không gửi lên Google — dù ô có điền hay không, dù giá trị hợp lệ hay rác. Preview hiện cảnh báo bằng CÂU CHỮ (không chỉ số đếm), trước nút Push: cột GT có dữ liệu ⇒ câu báo + số dòng có điền GT; cột GT có mà trống ⇒ cảnh báo nhẹ, gợi ý xoá hai cột. Không chặn Push, không từ chối dòng. Giữ hai tên trong `FIXED_HEADERS`. Server cũng bỏ qua GT (không tin client). Câu chữ cuối: agent đề xuất, Manager duyệt ở gate.
+- **Q2 =** không cần cách thay thế; một dòng trong user guide: muốn đặt giá riêng một vùng thì dùng Custom prices.
+- **Q3 =** không migration.
+- **Q4 =** `PRICING_RULE` → `file-currency-only/v2`; route từ chối `regionOverrides` khác rỗng do client gửi. ⚠ Bắt buộc test chứng minh Custom prices vẫn đúng từng byte như hôm nay (`regionOverrides` vẫn chở giá tier/custom phía server).
+- **Q5 =** bỏ trường audit `gt` / `gt_outcome`; dòng audit cũ giữ nguyên; v2 phân biệt hai thời kỳ. Audit mới ghi **số dòng có điền GT** (biết cảnh báo đã hiện bao nhiêu lần), không ghi giá trị GT.
+- **Q6 = (ii):** Title là số thuần VÀ Description đúng 3 chữ cái in hoa ⇒ TỪ CHỐI DÒNG, lý do "có vẻ dữ liệu bị lệch cột — đừng chép cả dòng từ template cũ". Mọi locale, CREATE và Overwrite. Lý do khác Apple: Google không có step Localization. Thêm câu dặn chép theo từng cột vào Notes + user guide.
+- **Q7 =** xác nhận đảo quyết định 2026-10-20 "không đổi hành vi Google" — yêu cầu mới (2026-10-21). Sửa KB §36, design Apple, test GP1–GP2 có chủ đích, ghi lý do + ngày. GP3 giữ.
+- **Q8 =** trước deploy, in lại KHỐI A để Manager chạy lần nữa; `gt_kept_on_google > 0` ⇒ báo danh sách, KHÔNG chặn push.
+
+**Kết quả SQL §1.4 — Manager chạy trên prod 2026-10-21** (`queries/census-google-gt-usage.sql`, nguyên văn Manager báo):
+- **Khối B:** 99 = 93 audit dạng trước H4.4 + 6 `import_batches` không có audit (2026-06-01 → 2026-10-15). Shape 1 = 0, shape 3 = 0 ⇒ chưa có lượt import Google nào kể từ H4.4.
+- **Khối A:** TOTAL toàn 0 — vì chưa có dữ liệu, KHÔNG phải "không ai dùng".
+- **Khối C:** 93 lượt trước H4.4, `gt_trace` = 0, GT không được ghi lại ⇒ CHƯA BIẾT. Người từng import: anhdnt, tiennvt, huongtnd2, thulm2, minhgv. Lượt `google_default` thấy trong kết quả: funzap.portal (tiennvt, 2026-08-07, 39 dòng, `yu.xlsx`) · com.vng.passsdk (minhgv, 2026-07-16, 12 dòng, `template-item-iap-google.xlsx`) · com.vng.cookierun.oven.smash (tiennvt, 2026-06-01, 4 dòng, `anhdo.xlsx`).
+- 6 `import_batches` không có audit: hiện tượng trước H4.4 (trước finalize-in-finally), không liên quan GT, không điều tra.
+
+## §A — Ảnh hưởng quá khứ (bước A, chỉ đọc, 2026-10-21)
+
+Đo bằng 5 làn + rà sót: chạy **code cũ của từng commit** (57 commit đụng đường giá, 2026-05-20 → H4.4) lấy bằng `git archive`, Google mock và ghi lại body; FX giả. Không ghi gì lên Google, không Refresh.
+
+### A1 — GT đè giá Google từ khi nào, có đúng mọi phiên bản không
+
+- **GT nằm trong request gửi Google ngay từ commit bulk import Google đầu tiên** (`b762211`, 2026-05-21). Không có giai đoạn nào wizard bỏ `regionOverrides`, GT đi tới vùng khác (bảng currency→vùng không đổi; VND→VN), hay OVERWRITE khác CREATE. Khi API v3 lỗi và rơi về API cũ, body cũ cũng mang GT (ĐÃ ĐO).
+- Nhưng GT **chỉ thật sự lên Google** ở dòng (1) được ghi theo **giá quy đổi** (Google Conversion, hoặc template không tier nào khớp, không có custom) **và** (2) không bị từ chối / không làm hỏng batch vì currency. Điều kiện (2) đổi theo giai đoạn:
+
+| Giai đoạn (code) | Điều kiện để GT lên Google (ĐÃ ĐO) |
+|---|---|
+| P1–P2 `18840e1` → `ab203ad` (2026-05-21 → khoảng 2026-06-01) | wizard ghi đè currency của dòng bằng currency app: app USD / chưa có currency ⇒ GT lên; app VND + file `Price (USD)` 0.99 ⇒ execute 500, không gửi gì; app VND + file `Price (VND)` (số nguyên) ⇒ **GT lên** |
+| P3 `84d64b6` / `a54f9fe` → `375b735` (2026-06-01 → 2026-10-19 21:26 +07) | currency của **cột giá trong file khớp currency app** (hoặc app chưa có currency) ⇒ GT lên; khác ⇒ dòng **bị từ chối** (`google_default` / `template_miss`), không gửi. Riêng `84d64b6` (sống 31 phút): app USD + file `Price (VND)` ⇒ gửi USD 25000 + GT |
+| Custom prices (template từ 2026-08-08 00:13; mọi nguồn từ 2026-08-08 17:44) | dòng Custom ⇒ GT bị thay |
+| P4 H4 (từ 2026-10-19 21:26) | mọi app, không phụ thuộc currency app — **chưa có import nào** (SQL khối B) |
+
+- Giờ push trước 2026-06-29 và giờ Railway deploy: **CHƯA BIẾT** (reflog bắt đầu 2026-06-29). Không cần cho batch có audit — key trong payload cho biết code nào đã ghi; chỉ cần cho 6 batch không audit.
+
+### A2 — Batch Google Conversion (chắc chắn bị ảnh hưởng nếu file có điền GT và dòng không bị từ chối)
+
+- Ba lượt Manager thấy (funzap.portal 2026-08-07 · com.vng.passsdk 2026-07-16 · cookierun.oven.smash 2026-06-01) đều chạy code P2/P3 ⇒ GT đã lên ở mọi dòng **được ghi** (không bị từ chối vì currency, không custom).
+- ⚠ Khối C của census gộp theo app × người × nguồn (cộng số dòng, gộp tên file, min/max ngày) và in giờ theo timezone phiên SQL (có thể UTC) ⇒ mỗi "lượt" có thể là nhiều batch. SQL mới liệt kê từng batch.
+- Audit trước H4.4 **không có danh sách SKU** cho batch Google Conversion (`per_row_diagnostic` rỗng — chỉ có dòng custom); chỉ có số đếm và `refused_rows`. SKU lấy từ **mirror** theo cửa sổ thời gian quanh batch: CREATE gần như đủ (`iaps.created_at`), OVERWRITE là mức sàn.
+- **Danh sách đủ chưa:** section 2 của `queries/audit-gt-past-impact.sql` liệt kê MỌI batch trước H4.4 với `pricing_source` ⇒ Manager xác nhận.
+
+### A3 — Batch template: dòng KHÔNG khớp tier
+
+- **Nhận diện được kèm SKU** cho mọi audit ghi trên đường thành công từ Hotfix 18 (`88f3750`, 2026-05-22): `per_row_diagnostic` có `match_strategy = 'none'`, `entries_count = 0`, `price_provenance` thiếu hoặc `'auto_bootstrap'` (ĐÃ ĐO trên 9 phiên bản). **Giá trị GT không được ghi** (`vn_price_decimal` luôn NULL) ⇒ phải đọc trong file.
+- CHƯA BIẾT: code ≤ `b15e7b9` (≤ 2026-05-22 16:37, không có diag); `f07bc38` (chỉ có số đếm); batch mà lời gọi Google ném lỗi (`error`); batch không có audit; batch có `rows_failed > 0` (không biết dòng nào hỏng).
+- Manager chọn tier / chấp nhận mặc định **không bao giờ** làm dòng rơi về "không tier + quy đổi" (ĐÃ ĐO).
+- Nguồn ngoài DB: log Railway `final_body … template_vn=` = GT VN của dòng không khớp (ĐỌC CODE); thời hạn lưu log CHƯA BIẾT.
+
+### A4 — Kiểm hiện trạng rẻ nhất
+
+- **Mirror được ghi lại sau MỖI bulk import** (`syncIapFromGoogle` trên response `batchUpdate`), không chỉ khi Refresh ⇒ đủ để đọc giá vùng GT của từng SKU **tại lần ghi cuối** mà không gọi Google (ĐÃ ĐO).
+- Giá "lẽ ra": dòng template ⇒ tier VN hiện tại (DB; template có thể đã upload lại); dòng quy đổi ⇒ giá quy đổi lúc import **không được lưu ở đâu** — chỉ có giá quy đổi HÔM NAY qua `GET /api/google-iap-management/regions/catalog` (một lần gọi Google chỉ đọc, `convertRegionPrices`).
+- **SQL:** `docs/google-iap-management/queries/audit-gt-past-impact.sql` (một câu SELECT, đã đo; section 1 = từng SKU + trạng thái mirror A/B/C + `gt_per_usd` + `tier_vn_today` + `convert_today_url`; section 2 = từng batch; section 3 = TOTAL).
+- Chỉ đọc trên Google nếu cần chắc giá HIỆN TẠI: Export list (1 lần gọi / app) hoặc cột "Price live on Google" ở trang item. ⚠ KHÔNG bấm "Refresh" ở danh sách IAP hay "Sync from Google" ở trang item — hai nút đó GHI mirror.
+- Không chứng minh được: giá trị GT đã gõ; GT bằng/sát giá quy đổi; sửa trên Console sau lần ghi cuối của mirror; SKU trạng thái C.
+
+### A-thêm — Lỗ hổng "ô SỐ 26.000 = 26" ở cột giá CHÍNH
+
+- **Có, và rộng hơn GT** (ĐÃ ĐO): `Price (VND)` ô số 26 ⇒ neo quy đổi VND 26 cho MỌI vùng, VN = VND 26, Hub SUCCESS; cũng nhận VND 598, JPY 12, KRW 1, IDR 15; `Price (USD)` 1999 / 26000 / 99999 cũng được nhận. Không có kiểm độ lớn nào ở đường bulk (`flagSuspiciousDrops` chỉ ở dialog Custom). Trước H4.2, cả ô CHỮ `"26.000"` cũng được nhận (preview hiện "VND 26.000", gửi VND 26).
+- Google có giá sàn theo vùng cho giá purchase option không: **CHƯA BIẾT** — repo không có phản hồi thật nào; các câu "Google enforces floors" trong docs/code là chưa đo.
+- Bỏ GT không đóng lỗ hổng này ⇒ BACKLOG `[GOOGLE-bulk-import-price-magnitude]`. Không sửa trong arc này.
 
 ## Phát hiện bên lề (không thuộc arc)
 
