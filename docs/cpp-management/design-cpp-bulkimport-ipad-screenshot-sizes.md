@@ -1,6 +1,6 @@
 # [CPP-bulkimport-ipad-screenshot-sizes] Bulk Import CPP — hỗ trợ các kích thước screenshot iPad mới — census + thiết kế
 
-**Trạng thái:** census PASS (`f92ff4e`). Manager chốt Q1–Q7 (2026-11-06, §P6-chốt). G0 PASS (`23f715e`). **G1 xong** (§G1) — chờ gate G1; sau gate push `2371c8e` + `f92ff4e` + `23f715e` + G1 một lượt, rồi UAT ngay sau deploy (`uat-ipad-screenshot-sizes.md`).
+**Trạng thái:** census PASS (`f92ff4e`). Manager chốt Q1–Q7 (2026-11-06, §P6-chốt). G0 PASS (`23f715e`). G1 PASS (`725a11b`). G1b (§G1b) xong ⇒ push `2371c8e..G1b` (5 commit) một lượt. **Chờ Manager chạy UAT** ngay sau deploy (`uat-ipad-screenshot-sizes.md`).
 **Nhánh:** `arc-cpp-bulkimport-ipad-screenshot-sizes` (từ `origin/main` = `1a87a75`).
 **Phạm vi:** module CPP Manager — step upload screenshot của Bulk Import. Twin path liệt kê ở §1.5.
 
@@ -510,8 +510,39 @@ Ba file test mới + một helper. Kỳ vọng viết TAY, không đọc từ co
 - **Bộ C:** chỉ 11", để xem cảnh báo.
 
 **Giới hạn đã biết (không chặn):**
-- Đếm "ảnh đã có" đọc `relationships.appScreenshots.data` từ GET `?include=appScreenshots` mà không truyền `limit[appScreenshots]`. Mặc định của Apple: CHƯA BIẾT. Nếu mặc định < 10, số đếm có thể thiếu ⇒ tool để lọt (Apple vẫn chặn lúc reserve).
+- ~~Đếm "ảnh đã có" không truyền `limit[appScreenshots]`~~ ⇒ sửa ở §G1b.
 - Câu lỗi + cảnh báo chỉ hiện khi mở locale; footer có số đếm.
+
+## §G1b — đếm ảnh có sẵn: limit tường minh + đọc `included[]` (gate G1, Manager 2026-11-06)
+
+**Gate G1:** PASS (`725a11b`). Yêu cầu một chỉnh trước push: GET đếm ảnh dùng `?include=appScreenshots` KHÔNG truyền limit. Mặc định của Apple CHƯA BIẾT — cùng họ bẫy KB §4.1 (danh sách quan hệ bị cắt).
+
+**Đã làm:**
+- **Limit tường minh.** `lib/asc-client.ts` `getLocalizationScreenshotSets` ⇒ `?include=appScreenshots&limit[appScreenshots]=50`. 50 là maximum theo OAS (CÓ TRONG SCHEMA): `#/paths/~1v1~1appCustomProductPageLocalizations~1{id}~1appScreenshotSets/get/parameters`, `limit[appScreenshots]` `maximum: 50`.
+  - Hàm này phục vụ MỌI GET set screenshot của CPP (2 dialog bulk + editor) ⇒ mọi chỗ đều nhận danh sách đầy đủ hơn.
+  - Apple nhận tham số này thật hay không: CÓ TRONG SCHEMA, CHƯA ĐO. UAT bước 5 (DevTools trên editor) đi qua đúng request này.
+- **Đếm từ `included[]`** — hàm thuần `countScreenshotsPerSet` (`lib/cpp/screenshot-upload.ts`).
+  - ⚠ Ràng buộc JSON:API (CLAUDE.md): screenshot trong `included[]` KHÔNG mang tham chiếu về set. "Đúng set" chỉ xác định được qua danh sách ID của chính set.
+  - Mỗi set: `max(độ dài danh sách ID của set, meta.paging.total nếu Apple gửi)`.
+  - Ảnh trong `included[]` mà không set nào liệt kê = dấu vết danh sách bị cắt (§4.1):
+    - locale chỉ có 1 set ⇒ gán hết cho set đó (đếm = mọi ảnh trong `included[]`);
+    - nhiều set ⇒ không biết ảnh thuộc set nào ⇒ `null` (không đếm, không cảnh báo 13", không đoán — KB P7).
+  - Lúc viết có một nhánh "đếm `included` ∩ ID của set". Nhánh này luôn ≤ độ dài danh sách nên vô tác dụng ⇒ đã bỏ trước commit.
+
+**Test:**
+- `lib/asc-client.test.ts`: assert nguyên URL có `limit[appScreenshots]=50`.
+- `countScreenshotsPerSet`, 6 ca: danh sách đủ; 1 set, danh sách bị cắt còn 3 trong khi `included` có 10 ⇒ 10; nhiều set + ảnh không ai liệt kê ⇒ `null`; `meta.paging.total` lớn hơn; resource khác loại không tính; set rỗng.
+- Routing, cả 2 dialog: mock nay trả `included[]` thật.
+  - Set 11" có sẵn **10 ảnh + 1 ảnh 11" mới ⇒ bị chặn**, câu "11 (10 already on Apple + 1 new)".
+  - Như trên, nhưng danh sách quan hệ bị cắt còn 3 ⇒ vẫn đếm 10, vẫn chặn.
+  - 10 ảnh trong set 11" + 1 ảnh 13" mới ⇒ KHÔNG chặn (đếm theo từng display type).
+
+**Mutation 4/4 đỏ** (`scripts/mutate.sh`, `status` sạch):
+- bỏ tham số limit (1);
+- chỉ đếm theo `relationships.data`, bỏ phần `included` (4);
+- nhiều set mà vẫn trả số (đoán) (1);
+- bỏ `meta.paging.total` (1).
+
 
 **Gauntlet:** typecheck sạch · 432 file / 6073 test xanh (1 skip có sẵn; G0: 428 / 5958) · lint 0 lỗi · build xanh.
 

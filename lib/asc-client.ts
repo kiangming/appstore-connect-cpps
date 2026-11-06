@@ -468,6 +468,13 @@ export async function getCppVersionLocalizations(
   );
 }
 
+/**
+ * `limit[appScreenshots]=50` is passed EXPLICITLY (the OAS maximum,
+ * #/paths/~1v1~1appCustomProductPageLocalizations~1{id}~1appScreenshotSets/get/parameters):
+ * Apple's default for an included relation is not declared, and Apple has been
+ * seen to cut relationship lists (IAP KB §4.1). Bulk import counts the
+ * screenshots already in each set from this response (max 10 per set).
+ */
 export async function getLocalizationScreenshotSets(
   creds: AscCredentials,
   localizationId: string
@@ -475,7 +482,7 @@ export async function getLocalizationScreenshotSets(
   return ascFetch<AscApiResponse<AppScreenshotSet[]>>(
     creds,
     "GET",
-    `/v1/appCustomProductPageLocalizations/${localizationId}/appScreenshotSets?include=appScreenshots`
+    `/v1/appCustomProductPageLocalizations/${localizationId}/appScreenshotSets?include=appScreenshots&limit[appScreenshots]=50`
   );
 }
 

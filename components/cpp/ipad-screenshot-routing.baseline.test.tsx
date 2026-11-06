@@ -35,8 +35,12 @@ type SetType = string;
 interface ExistingLocale {
   locale: string;
   locId: string;
-  /** `count` = screenshots already in the set on Apple (default 0). */
-  sets: Array<{ id: string; type: SetType; count?: number }>;
+  /**
+   * `count` = screenshots already in the set on Apple (default 0), all sent in
+   * `included[]`. `listed` = how many of them the set's relationship list
+   * names (default = count) — lower simulates Apple cutting it (KB §4.1).
+   */
+  sets: Array<{ id: string; type: SetType; count?: number; listed?: number }>;
 }
 interface Scenario {
   existing: ExistingLocale[];
@@ -47,7 +51,7 @@ type Req = ["POST set", string, SetType] | ["upload", string, string];
 
 function installFetch(scenario: Scenario) {
   const requests: Req[] = [];
-  const setsByLoc = new Map<string, Array<{ id: string; type: SetType; count?: number }>>(
+  const setsByLoc = new Map<string, Array<{ id: string; type: SetType; count?: number; listed?: number }>>(
     scenario.existing.map((l) => [l.locId, l.sets]),
   );
   const localizations = scenario.existing.map((l) => ({
@@ -78,15 +82,18 @@ function installFetch(scenario: Scenario) {
     if (url.startsWith("/api/asc/screenshot-sets?") && method === "GET") {
       const locId = new URL(url, "http://x").searchParams.get("localizationId") ?? "";
       const sets = setsByLoc.get(locId) ?? [];
+      const shotsOf = (s: { id: string; count?: number }) =>
+        Array.from({ length: s.count ?? 0 }, (_, i) => ({ type: "appScreenshots", id: `${s.id}-ss${i}` }));
       return ok({
         data: sets.map((s) => ({
           type: "appScreenshotSets",
           id: s.id,
           attributes: { screenshotDisplayType: s.type },
           relationships: {
-            appScreenshots: { data: Array.from({ length: s.count ?? 0 }, (_, i) => ({ type: "appScreenshots", id: `${s.id}-ss${i}` })) },
+            appScreenshots: { data: shotsOf(s).slice(0, s.listed ?? s.count ?? 0) },
           },
         })),
+        included: sets.flatMap(shotsOf),
       });
     }
     if (url === "/api/asc/screenshot-sets" && method === "POST") {
@@ -421,6 +428,32 @@ describe.each([MANY, ONE])("G1 — iPad images routed by size — $name", (d) =>
     });
     expect(screen.getByRole("button", { name: /Import All/ })).toBeDisabled();
     expect(container.textContent).toContain('Too many screenshots for iPad 11": 11 (8 already on Apple + 3 new) — max 10');
+  });
+
+  it("G1b: 10 already in the 11\" set + 1 new 11\" ⇒ counted in full, blocked", async () => {
+    const { container } = await previewOnly(d, {
+      existing: [{ locale: "en-US", locId: "loc-en", sets: [{ id: "set-11", type: "APP_IPAD_PRO_3GEN_11", count: 10 }] }],
+      files: ["en-US/screenshots/ipad/01-11in-1668x2388.png"],
+    });
+    expect(screen.getByRole("button", { name: /Import All/ })).toBeDisabled();
+    expect(container.textContent).toContain('Too many screenshots for iPad 11": 11 (10 already on Apple + 1 new) — max 10');
+  });
+
+  it("G1b: 10 already, Apple's relationship list CUT to 3 (KB §4.1) ⇒ still 10 from included[], blocked", async () => {
+    const { container } = await previewOnly(d, {
+      existing: [{ locale: "en-US", locId: "loc-en", sets: [{ id: "set-11", type: "APP_IPAD_PRO_3GEN_11", count: 10, listed: 3 }] }],
+      files: ["en-US/screenshots/ipad/01-11in-1668x2388.png"],
+    });
+    expect(screen.getByRole("button", { name: /Import All/ })).toBeDisabled();
+    expect(container.textContent).toContain('Too many screenshots for iPad 11": 11 (10 already on Apple + 1 new) — max 10');
+  });
+
+  it("G1b: 10 already in the 11\" set, the new image is 13\" ⇒ not blocked (counted per display type)", async () => {
+    await previewOnly(d, {
+      existing: [{ locale: "en-US", locId: "loc-en", sets: [{ id: "set-11", type: "APP_IPAD_PRO_3GEN_11", count: 10 }] }],
+      files: ["en-US/screenshots/ipad/01-13in-2064x2752.png"],
+    });
+    expect(screen.getByRole("button", { name: /Import All/ })).not.toBeDisabled();
   });
 
   it("only 11\" images but the locale already has a 13\" set ⇒ no warning", async () => {

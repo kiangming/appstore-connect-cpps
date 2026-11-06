@@ -9,7 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { getApps } from "./asc-client";
+import { getApps, getLocalizationScreenshotSets } from "./asc-client";
 import type { AscCredentials } from "./asc-jwt";
 
 vi.mock("./asc-jwt", () => ({
@@ -204,5 +204,19 @@ describe("getApps (Hotfix 20 — cursor pagination)", () => {
         "Content-Type": "application/json",
       });
     }
+  });
+});
+
+describe("getLocalizationScreenshotSets — explicit relation limit (arc [CPP-bulkimport-ipad-screenshot-sizes] G1b)", () => {
+  it("asks for include=appScreenshots WITH limit[appScreenshots]=50 (OAS maximum; Apple's default is undeclared, KB §4.1)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ data: [], included: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getLocalizationScreenshotSets(creds, "loc-1");
+
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      `${ASC_BASE}/v1/appCustomProductPageLocalizations/loc-1/appScreenshotSets?include=appScreenshots&limit[appScreenshots]=50`,
+    );
   });
 });

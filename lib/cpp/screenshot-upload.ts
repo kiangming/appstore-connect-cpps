@@ -9,7 +9,7 @@
  * iPhone is unchanged: the caller still resolves one iPhone display type
  * (existing set / default) and passes all iPhone files as one group.
  */
-import type { AppScreenshotSet, AscApiResponse, ScreenshotDisplayType } from "@/types/asc";
+import type { AppScreenshotSet, ScreenshotDisplayType } from "@/types/asc";
 import {
   IPAD_REQUIRED_DISPLAY_TYPE,
   IPAD_SCREENSHOT_SPECS,
@@ -38,10 +38,55 @@ export function groupIpadScreenshots(
   return groups;
 }
 
+interface ScreenshotSetsResponse {
+  data?: AppScreenshotSet[];
+  included?: Array<{ type: string; id: string }>;
+}
+
+/**
+ * Screenshots already in each set, from one `GET …/appScreenshotSets
+ * ?include=appScreenshots&limit[appScreenshots]=50` response.
+ *
+ * Not from `relationships.appScreenshots.data` alone: Apple has been seen to
+ * cut that relationship list while `included` stays complete (IAP KB §4.1).
+ * But an included screenshot carries NO link back to its set (JSON:API —
+ * CLAUDE.md "JSON:API quy tắc"), so a set's own id list is the only thing
+ * that says which included screenshot is whose. Hence:
+ *   - per set: max(its id list's length, `meta.paging.total` when Apple sends it);
+ *   - included screenshots that NO set lists = the cut list's fingerprint:
+ *     one set ⇒ they are all that set's (count = every included screenshot);
+ *     several sets ⇒ which set is unknown ⇒ `null` — no count, no 13"
+ *     warning, rather than a guess (KB P7).
+ */
+export function countScreenshotsPerSet(
+  d: ScreenshotSetsResponse,
+): Map<ScreenshotDisplayType, number> | null {
+  const sets = d.data ?? [];
+  const included = (d.included ?? []).filter((r) => r.type === "appScreenshots");
+  const listed = new Set<string>();
+  const counts = new Map<ScreenshotDisplayType, number>();
+  for (const set of sets) {
+    const rel = (set.relationships as {
+      appScreenshots?: { data?: Array<{ id: string }>; meta?: { paging?: { total?: number } } };
+    } | undefined)?.appScreenshots;
+    const ids = (rel?.data ?? []).map((r) => r.id);
+    ids.forEach((id) => listed.add(id));
+    counts.set(set.attributes.screenshotDisplayType, Math.max(ids.length, rel?.meta?.paging?.total ?? 0));
+  }
+  const unlisted = included.filter((s) => !listed.has(s.id)).length;
+  if (unlisted > 0) {
+    if (sets.length !== 1) return null;
+    const only = sets[0].attributes.screenshotDisplayType;
+    counts.set(only, Math.max(counts.get(only) ?? 0, included.length));
+  }
+  return counts;
+}
+
 /**
  * Existing screenshot count per display type of a localization, read once at
- * Preview. `null` = could not be read (the caller then skips the 13" warning
- * rather than guess — KB P7, prefer a missed signal over a wrong one).
+ * Preview. `null` = could not be read or not attributable (the caller then
+ * skips the 13" warning rather than guess — KB P7, prefer a missed signal over
+ * a wrong one).
  */
 export async function fetchExistingScreenshotCounts(
   localizationId: string,
@@ -49,13 +94,7 @@ export async function fetchExistingScreenshotCounts(
   try {
     const res = await fetch(`/api/asc/screenshot-sets?localizationId=${localizationId}`);
     if (!res.ok) return null;
-    const d = (await res.json()) as AscApiResponse<AppScreenshotSet[]>;
-    const counts = new Map<ScreenshotDisplayType, number>();
-    for (const set of d.data ?? []) {
-      const rels = set.relationships as { appScreenshots?: { data?: unknown[] } } | undefined;
-      counts.set(set.attributes.screenshotDisplayType, rels?.appScreenshots?.data?.length ?? 0);
-    }
-    return counts;
+    return countScreenshotsPerSet((await res.json()) as ScreenshotSetsResponse);
   } catch {
     return null;
   }

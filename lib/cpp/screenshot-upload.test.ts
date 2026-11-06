@@ -6,7 +6,7 @@
  */
 import { describe, it, expect } from "vitest";
 import type { ScreenshotDisplayType } from "@/types/asc";
-import { checkIpadGroups, groupIpadScreenshots } from "./screenshot-upload";
+import { checkIpadGroups, countScreenshotsPerSet, groupIpadScreenshots } from "./screenshot-upload";
 
 const f = (name: string) => new File(["x"], name);
 const NO_13_WARNING =
@@ -87,5 +87,71 @@ describe("checkIpadGroups — the 13\" warning (Q3: warn, never block)", () => {
 
   it("the warning never adds an error", () => {
     expect(checkIpadGroups(only11, new Map()).errors).toEqual([]);
+  });
+});
+
+describe("countScreenshotsPerSet — from included[], with the set's own id list (G1b)", () => {
+  const shots = (prefix: string, n: number) =>
+    Array.from({ length: n }, (_, i) => ({ type: "appScreenshots", id: `${prefix}${i}` }));
+  const set = (id: string, type: string, ids: string[], total?: number) => ({
+    type: "appScreenshotSets",
+    id,
+    attributes: { screenshotDisplayType: type },
+    relationships: {
+      appScreenshots: {
+        data: ids.map((x) => ({ type: "appScreenshots", id: x })),
+        ...(total !== undefined ? { meta: { paging: { total, limit: 50 } } } : {}),
+      },
+    },
+  });
+  type Resp = Parameters<typeof countScreenshotsPerSet>[0];
+  const ids = (prefix: string, n: number) => shots(prefix, n).map((x) => x.id);
+
+  it("full lists: 10 in the 13\" set, 3 in the 11\" set", () => {
+    const d = {
+      data: [set("s13", "APP_IPAD_PRO_3GEN_129", ids("a", 10)), set("s11", "APP_IPAD_PRO_3GEN_11", ids("b", 3))],
+      included: [...shots("a", 10), ...shots("b", 3)],
+    } as unknown as Resp;
+    expect(Object.fromEntries(countScreenshotsPerSet(d) ?? [])).toEqual({
+      APP_IPAD_PRO_3GEN_129: 10,
+      APP_IPAD_PRO_3GEN_11: 3,
+    });
+  });
+
+  it("one set, relationship list CUT to 3 ids, included has all 10 ⇒ 10 (KB §4.1 fingerprint)", () => {
+    const d = {
+      data: [set("s11", "APP_IPAD_PRO_3GEN_11", ids("a", 3))],
+      included: shots("a", 10),
+    } as unknown as Resp;
+    expect(countScreenshotsPerSet(d)?.get("APP_IPAD_PRO_3GEN_11")).toBe(10);
+  });
+
+  it("several sets + included screenshots no set lists ⇒ null (cannot attribute, no guess)", () => {
+    const d = {
+      data: [set("s13", "APP_IPAD_PRO_3GEN_129", ids("a", 2)), set("s11", "APP_IPAD_PRO_3GEN_11", ids("b", 2))],
+      included: [...shots("a", 2), ...shots("b", 2), ...shots("orphan", 3)],
+    } as unknown as Resp;
+    expect(countScreenshotsPerSet(d)).toBeNull();
+  });
+
+  it("meta.paging.total wins when larger than what was listed", () => {
+    const d = {
+      data: [set("s11", "APP_IPAD_PRO_3GEN_11", ids("a", 3), 9)],
+      included: shots("a", 3),
+    } as unknown as Resp;
+    expect(countScreenshotsPerSet(d)?.get("APP_IPAD_PRO_3GEN_11")).toBe(9);
+  });
+
+  it("an included resource of another type is not a screenshot", () => {
+    const d = {
+      data: [set("s13", "APP_IPAD_PRO_3GEN_129", ids("a", 1))],
+      included: [...shots("a", 1), { type: "appCustomProductPageLocalizations", id: "x" }],
+    } as unknown as Resp;
+    expect(countScreenshotsPerSet(d)?.get("APP_IPAD_PRO_3GEN_129")).toBe(1);
+  });
+
+  it("empty set ⇒ 0; no sets ⇒ empty map", () => {
+    expect(countScreenshotsPerSet({ data: [set("s", "APP_IPAD_97", [])], included: [] } as unknown as Resp)?.get("APP_IPAD_97")).toBe(0);
+    expect(countScreenshotsPerSet({ data: [], included: [] })?.size).toBe(0);
   });
 });
