@@ -1,6 +1,6 @@
 # [CPP-bulkimport-ipad-screenshot-sizes] Bulk Import CPP — hỗ trợ các kích thước screenshot iPad mới — census + thiết kế
 
-**Trạng thái:** census + thiết kế (2026-11-06). **KHÔNG CODE.** Chờ Manager chốt §P6.
+**Trạng thái:** census PASS (`f92ff4e`). Manager chốt Q1–Q7 (2026-11-06, §P6-chốt). **G0 xong** (§G0) — chờ gate G0; G1 chưa làm.
 **Nhánh:** `arc-cpp-bulkimport-ipad-screenshot-sizes` (từ `origin/main` = `1a87a75`).
 **Phạm vi:** module CPP Manager — step upload screenshot của Bulk Import. Twin path liệt kê ở §1.5.
 
@@ -102,7 +102,7 @@ Cannot read image file — file may be corrupted                                
 | Đường | File | Display type chọn thế nào | Kiểm kích thước |
 |---|---|---|---|
 | **CPP Bulk Import** (nhiều CPP) | `components/cpp/CppBulkImportDialog.tsx` | §1.3 (`:34-37`, `:589-622`, `:806-845`) | `validateScreenshot(f, device)` `:432` |
-| **Asset Bulk Import** (một CPP) | `components/cpp/BulkImportDialog.tsx` | **Bản sao** của cùng logic: mặc định `:27-28`, CPP-wide `:259-285`, theo locale `:382-405`, lấy hoặc tạo set `:407-430`, upload `:457-475`. Comment ở dialog nhiều CPP xác nhận là bản chép (`CppBulkImportDialog.tsx:534` "mirrors BulkImportDialog.uploadLocale") | `validateScreenshot` `:186`; chặn `:499-506`, `:837` |
+| **Asset Bulk Import** (một CPP) | `components/cpp/BulkImportDialog.tsx` — parser **riêng** `lib/parseFolderStructure.ts:54-57` (cùng luật thư mục, `<root>/<locale>/…`; bổ sung ở G0) | **Bản sao** của cùng logic: mặc định `:27-28`, CPP-wide `:259-285`, theo locale `:382-405`, lấy hoặc tạo set `:407-430`, upload `:457-475`. Comment ở dialog nhiều CPP xác nhận là bản chép (`CppBulkImportDialog.tsx:534` "mirrors BulkImportDialog.uploadLocale") | `validateScreenshot` `:186`; chặn `:499-506`, `:837` |
 | **CPP Editor** (tay, một locale) | `components/cpp/LocalizationManager.tsx` | Người dùng thả ảnh vào dropzone của một set **đã có** (`:889-930`). Locale chưa có set iPad ⇒ fallback `APP_IPAD_PRO_3GEN_129` (`:856-859`). Không thể thêm set loại thứ hai khi đã có một set (chỉ render dropzone của set đã có) | `validateScreenshot(f, device)`, với `device` suy từ **tên** display type (`:522`: `includes("IPHONE")`) ⇒ kiểm theo bảng iPad chung, **không theo set đích**. Hệ quả: thả ảnh 11" vào set 11" có sẵn vẫn bị từ chối, còn ảnh 13" thả vào set 11" lại qua. Đếm tối đa 10 (`:537-543`) |
 | `AssetUploader` | `components/upload/AssetUploader.tsx` | — | **Không kiểm gì.** Không được import ở đâu (grep `AssetUploader`: 0 chỗ dùng) ⇒ code chết |
 | IAP review screenshot | `app/api/iap-management/.../create-on-apple/route.ts:72-73`, `update-on-apple/route.ts:63-66` | Resource khác (screenshot review IAP), **không có** `ScreenshotDisplayType` | Chỉ ≤ 8MB + PNG/JPEG. Ngoài phạm vi |
@@ -370,7 +370,58 @@ Kiểm ở bước Preview như hôm nay (client; chặn Import như hôm nay). 
 
 ---
 
-## Phát hiện bên lề (không thuộc arc — đề xuất ghi BACKLOG khi Manager duyệt)
+## §P6-chốt — Manager quyết (2026-11-06)
+
+- **Q1 = (A):** 2048×2732 / 2732×2048 luôn vào `APP_IPAD_PRO_3GEN_129`.
+- **Q2 = KHÔNG chặn bằng M2.** Map theo bảng §3.1 (SUY LUẬN), ghi nguồn `"Apple docs via Manager 2026-11-06"`. Thay M2 bằng **UAT end-to-end ngay sau deploy**: bộ ảnh + hướng dẫn commit cùng G1. Một kích thước nằm sai ô hoặc báo lỗi ⇒ sửa đúng một dòng trong bảng spec, hotfix. M1 (chỉ đọc) làm nếu có sẵn dữ liệu, không chặn gì.
+- **Q3 =** không chặn. Cảnh báo ở Preview khi locale có ảnh iPad mà sau import sẽ không có set `APP_IPAD_PRO_3GEN_129`. Import không bị khoá.
+- **Q4 = S3:** bảng spec `lib/cpp/screenshot-specs.ts` + `classifyScreenshot` + một hàm chọn / tạo set + upload dùng chung cho `CppBulkImportDialog` và `BulkImportDialog`; editor kiểm theo SET ĐÍCH; label / mặc định lấy từ bảng; đếm tối đa 10 ảnh mỗi display type ở bulk.
+- **Q5 = ĐỔI:** ảnh iPad phân loại theo kích thước, gom theo display type, mỗi type một set (dùng lại set có sẵn cùng type, không tạo trùng). Hành vi cũ ghim ở G0, lật có chủ đích ở G1.
+- **Q6 =** iPhone ngoài phạm vi ⇒ BACKLOG `[CPP-iphone-screenshot-sizes]` **ƯU TIÊN CAO** + `[CPP-iphone-default-mismatch]`.
+- **Q7 =** ngoài phạm vi ⇒ BACKLOG `[CPP-editor-add-second-set]`.
+- **Phát hiện bên lề:** ghi BACKLOG như đề xuất (`docs/cpp-management/BACKLOG.md`). `[CPP-asset-delivery-state-unread]` **ƯU TIÊN CAO** — map sai hay Apple xử lý lỗi đều im lặng; UAT là lớp chặn duy nhất của arc này. iPhone và Preview video GIỮ NGUYÊN.
+
+## §G0 — ghim hiện trạng (2026-11-06, chưa đổi hành vi)
+
+Ba file test mới + một helper. Kỳ vọng viết TAY, không đọc từ code đang thử.
+
+- **Helper** `components/cpp/__fixtures__/screenshot-files.ts`:
+  - `installFakeImage()` thay `Image` bằng bản giả trả kích thước ghi trong TÊN file (`…-2064x2752.png`); tên chứa `corrupt` ⇒ `onerror`. Code thật vẫn chạy đủ `createObjectURL` → `new Image()` → `onload`.
+  - `fileAt(path)` tạo `File` có `webkitRelativePath`.
+- **`lib/asset-validator.screenshot-sizes.test.ts`** (40 test):
+  - 8 kích thước nhận hôm nay (4 iPad + 4 iPhone) ⇒ OK — parity, phải giữ sau G1.
+  - Chéo thiết bị ⇒ REJECT (4 + 4).
+  - **[lật ở G1]** 20 kích thước còn lại của danh sách Apple ⇒ REJECT cho cả `ipad` lẫn `iphone`.
+  - Câu lỗi nguyên văn: iPad sai cỡ, ảnh iPad trong `iphone`, ảnh không đọc được.
+- **`lib/screenshot-folder-parsers.baseline.test.ts`** (2 test): **cả hai** parser (`parseCppFolderStructure`, `parseFolderStructure`) × 8 đường dẫn ⇒ đúng thiết bị / bị bỏ qua. G1 giữ nguyên luật này.
+- **`components/cpp/ipad-screenshot-routing.baseline.test.tsx`** (15 test): parser thật + validator thật, chỉ giả `fetch`. Mỗi kịch bản ghi dãy `POST screenshot-sets` + `upload` (set id, tên file). Chạy `describe.each` qua **cả hai dialog** (twin):
+
+| # | Kịch bản | Dãy request ghim | G1 |
+|---|---|---|---|
+| R1 | chưa có set iPad, ảnh 2064×2752 + 2048×2732 | POST `APP_IPAD_PRO_3GEN_129` ⇒ 2 upload vào set mới, theo thứ tự tên file | giữ |
+| R2 | locale có set 13" | 2 upload vào set 13", không POST | giữ |
+| R3 | locale có set 11" | ảnh 13" vào **set 11"** | **lật** |
+| R4 | locale có set 13" rồi 11" | set iPad **cuối** (11") thắng | **lật** |
+| R5 | set của chính locale (11") vs locale ready đầu (13") | set của chính locale thắng | **lật** |
+| R6 | locale mới, locale ready đầu có set 11" | POST **`APP_IPAD_PRO_3GEN_11`** cho ảnh 13" | **lật** |
+| R7 | ảnh 1668×2388 | "blocked (invalid assets)", Import All bị khoá | **lật** |
+| R8 | (chỉ dialog nhiều CPP) CPP mới tinh | POST `APP_IPAD_PRO_3GEN_129` trên localization tạo cùng CPP | giữ |
+
+- **Mutation 11/11 đỏ** (`scripts/mutate.sh`; md5 trước = sau cho từng file; `mutate.sh status` sạch):
+  - bỏ 2048×2732 khỏi bảng iPad (10 đỏ);
+  - thêm 1668×2388 vào bảng iPad (4);
+  - đổi câu lỗi (2);
+  - mặc định iPad của dialog nhiều CPP → `APP_IPAD_PRO_129` (2);
+  - mặc định iPad của dialog một CPP → `APP_IPAD_PRO_129` (1);
+  - dialog một CPP bỏ dò set theo locale (1);
+  - dialog nhiều CPP bỏ dò set theo locale (1);
+  - set iPad ĐẦU thắng thay vì CUỐI (1);
+  - dialog nhiều CPP bỏ dò type của locale ready (1);
+  - parser nhiều CPP phân biệt hoa thường (1);
+  - parser một CPP nhận thư mục con sâu hơn (1).
+  - ⚠ Lần chạy đầu, mutation "dialog một CPP bỏ dò set theo locale" **xanh**: ở mọi kịch bản lúc đó, set của chính locale trùng với set của locale ready đầu. Đã thêm R5 để tách hai tầng ⇒ đỏ (KB P17).
+
+## Phát hiện bên lề (đã ghi `docs/cpp-management/BACKLOG.md`, Manager duyệt 2026-11-06)
 
 - `[CPP-asset-delivery-state-unread]` — cả 3 đường upload không đọc `assetDeliveryState` sau commit ⇒ ảnh/video Apple xử lý thất bại vẫn hiện "uploaded successfully" (§2.3). Cùng họ KB P5 (status principle).
 - `[CPP-screenshot-set-409-dead-branch]` — `/api/asc/screenshot-sets` (`route.ts:40-44`) và `/api/asc/preview-sets` (`route.ts:43`) trả 500 cho mọi lỗi ⇒ nhánh 409 (set + preview set) của 2 dialog là code chết (§2.3).
