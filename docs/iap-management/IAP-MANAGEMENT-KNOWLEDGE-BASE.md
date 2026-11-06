@@ -9171,5 +9171,7 @@ Design: `docs/google-iap-management/design-bulkimport-drop-gt-columns.md`. ⚠ K
 - **Wizard:** bỏ `gtPlanOf` / `GtLine`; khung `retired-gt-notice` phía trên bảng Preview (câu Q1 / câu nhẹ đã duyệt, `googleRetiredGtWarning` trong `template-spec.ts`) — KHÔNG khoá Push, không từ chối dòng; body execute mang `gtRowsWithData`.
 - **R3 (Custom prices, Q4):** fingerprint request gửi Google đo trên code G0 — giữ nguyên từng byte (khối test không đổi một ký tự).
 
+**Q8 lần 2 + push (Manager chạy KHỐI A trên prod 2026-10-21, ghi lại 2026-11-06):** 1 batch — `gdo.projectx5`, tiennvt, 2026-10-21 04:17 UTC, lượt import đầu tiên kể từ H4.4 — 8/8 dòng điền GT, **tier thay GT cả 8**, `gt_kept_on_google = 0`, `gt_shape_unexpected = 0` ⇒ GT không thành giá thật ở đâu; xác nhận "team luôn điền GT". Đã push `121f2b1..1a87a75` (4 commit, 0 migration). Chi tiết: design §Q8-lần-2.
+
 **Bài học:** "cột tuỳ chọn mà team luôn điền" + "tool âm thầm dùng nó" = rủi ro lớn hơn một cột bị bỏ quên — hỏi ý định của người điền trước khi coi một cột là tính năng.
 

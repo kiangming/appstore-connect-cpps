@@ -1142,6 +1142,12 @@ adapter lấy từ vùng US (hoặc vùng đầu) của phản hồi Google, kh�
 
 **⚠ ƯU TIÊN CAO — arc kế tiếp sau arc GT** (Manager 2026-10-21, sau khi xem bước A).
 
+**⏸ HOÃN 2026-11-06 (Manager có việc gấp hơn: arc CPP `arc-cpp-bulkimport-ipad-screenshot-sizes`).** Arc chưa bắt đầu:
+nhánh `arc-google-bulk-import-price-magnitude` được cắt 2026-10-21 ở `1a87a75`, 0 commit, đã xoá bằng `git branch -d`
+⇒ **cắt lại từ `origin/main` khi mở arc.** Phác thảo census đã trình Manager (2026-10-21) ghi nguyên ở cuối mục này
+(§Phác thảo census). Lời cho phép của Manager kèm theo: **gọi `convertRegionPrices` với neo VND 26 — ĐÃ CHO PHÉP
+khi arc mở lại.**
+
 **GHI NHẬN 2026-10-21** (arc `arc-google-bulkimport-drop-gt-columns`, bước A, ĐÃ ĐO trên mock — không gọi Google). Không làm trong arc GT.
 
 - **Hiện trạng.** Lỗ hổng "ô SỐ 26.000 ⇒ VND 26" mà census GT ghi lại cũng có ở CỘT GIÁ CHÍNH, và rộng hơn: giá chính là neo quy đổi cho mọi vùng.
@@ -1157,6 +1163,24 @@ adapter lấy từ vùng US (hoặc vùng đầu) của phản hồi Google, kh�
   - (2) Ở preview, cảnh báo + hộp xác nhận (cơ chế H4.3) với ngưỡng tĩnh theo currency (VND/IDR < 1000, KRW < 100, JPY < 10…, USD > 500). Biết sớm hơn, nhưng là bảng tay.
   - (3) Khi OVERWRITE: so với giá live trong mirror (`iap_prices`); lệch > 100× ⇒ cảnh báo.
   - Không ghi thử lên Google chỉ để đo sàn. Bulk import Apple có cùng luật ô SỐ không: CHƯA ĐO (KB P8).
+
+### §Phác thảo census (đã trình Manager 2026-10-21 — CHƯA LÀM; mọi bước chỉ đọc, không ghi gì lên Google)
+
+1. **Hiện trạng trên `1a87a75`:** đo theo độ lớn giá mọi đường nhận giá chính chấp nhận gì.
+   - Các đường: ô số vs ô chữ ở parser, preview, lớp kiểm lại ở server, dialog Custom prices (`flagSuspiciousDrops`), và form đơn lẻ.
+   - Trọng tâm: tiền không số lẻ (VND, JPY, KRW, IDR, TWD) và USD 1999 / 99999.
+2. **Ảnh hưởng quá khứ (một câu SQL trên mirror + audit log):** SKU có giá quy ra dưới USD 0.10 hoặc trên USD 500, hoặc VN dưới VND 1000, theo từng app.
+   - Riêng: cửa sổ trước H4.2 (`58a5be2`), khi ô chữ "26.000" được gửi thành 26.
+3. **Google có sàn / trần không?** Hiện CHƯA BIẾT.
+   - Cách đo rẻ nhất: gọi `convertRegionPrices` với neo VND 26. Lệnh này chỉ tính quy đổi, không ghi gì, nhưng vẫn là một lệnh gọi Google ⇒ cần Manager cho phép. **⇒ Manager ĐÃ CHO PHÉP (2026-11-06), áp dụng khi arc mở lại.**
+4. **Phương án (1), (2), (3) ở trên:**
+   - (1) từ chối dòng ở orchestrator, dựa trên kết quả quy đổi;
+   - (2) cảnh báo ở Preview, ngưỡng tĩnh theo currency;
+   - (3) khi Overwrite, so với giá live trong mirror.
+
+   Với mỗi phương án: bao nhiêu dòng prod thực ra đúng mà vẫn bị gắn cờ, đo bằng phân bố giá thật từ SQL. Kèm kiểm các bất biến H4: từ chối áp cho một dòng và không bao giờ thay bằng giá khác; "push the rest" vẫn chạy; audit có kind từ chối mới.
+5. **Parity Apple (KB P8):** bulk import Apple có cùng luật ô SỐ không? Chỉ đo, không đổi gì.
+6. **Câu cần Manager chốt:** chặn hay chỉ cảnh báo; các ngưỡng; có áp cho giá tier và custom không; form đơn lẻ có trong phạm vi không.
 
 ## `[GOOGLE-single-edit-server-price-rules]` — sửa/tạo đơn lẻ: server chưa áp (a)/(b), tier sai được gửi thẳng
 

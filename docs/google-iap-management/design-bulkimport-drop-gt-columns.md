@@ -1,6 +1,6 @@
 # [GOOGLE-bulkimport-drop-gt] Bỏ "GT Price" / "GT Currency" khỏi Bulk Import của Google — census + thiết kế
 
-**Trạng thái:** census PASS (`e733bfa`). Manager làm rõ + chốt §P4 (2026-10-21, xem §P4-chốt — **đổi hướng so với đề xuất census**). Bước A PASS (`d2cbfcc`) — Manager chạy SQL `audit-gt-past-impact` trên prod 2026-10-21: **không cần sửa giá quá khứ** (§A-kết quả). G0 PASS (`2e3c3e0`). G1 PASS (gate G1 2026-10-21: duyệt câu chữ, chấp nhận 2 giới hạn, duyệt thông báo team). Chờ Manager chạy lại KHỐI A (Q8) rồi push.
+**Trạng thái:** census PASS (`e733bfa`). Manager làm rõ + chốt §P4 (2026-10-21, xem §P4-chốt — **đổi hướng so với đề xuất census**). Bước A PASS (`d2cbfcc`) — Manager chạy SQL `audit-gt-past-impact` trên prod 2026-10-21: **không cần sửa giá quá khứ** (§A-kết quả). G0 PASS (`2e3c3e0`). G1 PASS (gate G1 2026-10-21: duyệt câu chữ, chấp nhận 2 giới hạn, duyệt thông báo team). Q8 lần 2 PASS (§Q8-lần-2) ⇒ **đã push `121f2b1..1a87a75`** (4 commit, 0 migration). Arc ĐÓNG.
 **Nhánh:** `arc-google-bulkimport-drop-gt-columns` (từ `origin/main` = `121f2b1`).
 **Phạm vi:** module Google. Apple không đổi hành vi (Apple đã bỏ GT — KB §36).
 
@@ -305,6 +305,19 @@ Theo §P4-chốt + duyệt gate G0 (2026-10-21): header GT viết kiểu nào, h
 > - **Chép từ file cũ: chép theo từng cột, đúng header — đừng chép cả dòng.** Dòng dán theo vị trí sẽ lệch cột; dòng có Title là số và Description là 3 chữ in hoa (vd `26000` / `VND`) sẽ bị từ chối.
 > - **Muốn đặt giá riêng cho một quốc gia:** dùng **Custom prices** ở bước Preview (cột Tier → Custom…).
 > - Tab Bulk Import mở từ trước khi cập nhật sẽ báo "The tool was updated…": tải lại trang rồi upload lại file.
+
+## §Q8-lần-2 — chạy lại KHỐI A trên prod trước push (Manager, 2026-10-21; ghi lại 2026-11-06)
+
+Nguồn: `queries/census-google-gt-usage.sql`, khối `G4-A`, nguyên văn kết quả Manager báo.
+
+| package_name | actor_email | batches_recorded | batches_with_gt | rows_in_audit | rows_with_gt | gt_kept | gt_kept_on_google | gt_kept_not_written | gt_replaced_by_tier | gt_replaced_by_custom | gt_not_sent | gt_refused_in_file | gt_shape_unexpected | batch (UTC) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| == TOTAL == | — | 1 | 1 | 8 | 8 | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 | 2026-10-21 04:17:05 |
+| gdo.projectx5 (app `8695d054-…`) | tiennvt@vng.com.vn | 1 | 1 | 8 | 8 | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 | 2026-10-21 04:17:05 |
+
+- **Đọc:** lượt import đầu tiên kể từ H4.4. 8/8 dòng có điền GT, **tier thay GT cả 8**, `gt_kept_on_google = 0` ⇒ GT không thành giá thật ở đâu cả, không có danh sách phải báo. `gt_shape_unexpected = 0` ⇒ audit đúng dạng H4.4 (code G1 chưa deploy lúc đó).
+- **Xác nhận lời Manager ở §P4-chốt:** team luôn điền GT (8/8 dòng của một người dùng thật).
+- Push không bị chặn (Q8 = báo danh sách, không chặn) ⇒ đã push `121f2b1..1a87a75`.
 
 ## Phát hiện bên lề (không thuộc arc)
 
