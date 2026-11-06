@@ -160,6 +160,17 @@ ten-folder-bat-ky/
 - Tên folder locale: BCP-47 (`en-US`, `vi`) hoặc tên Apple (`English (U.S.)`, `Vietnamese`) — cả hai đều được
 - File ảnh/video xử lý theo **thứ tự tên file** (a → z) — đặt số ở đầu tên để kiểm soát thứ tự
 - Các thư mục `screenshots/`, `previews/`, `iphone/`, `ipad/` đều optional
+- **Ảnh iPad tự vào đúng loại màn hình theo kích thước ảnh** — để chung mọi cỡ trong `screenshots/ipad/`. Tối đa 10 ảnh mỗi loại màn hình. Thiếu ảnh 13" ⇒ tool cảnh báo (Apple bắt buộc 13" nếu app chạy trên iPad) nhưng không chặn.
+
+  | Loại màn hình iPad | Kích thước ảnh (dọc · ngang) |
+  |---|---|
+  | 13" | 2064×2752 · 2752×2064 · 2048×2732 · 2732×2048 |
+  | 12.9" | 2048×2732 · 2732×2048 — trùng 13", tool luôn đưa vào 13" (Apple dùng ảnh 13" thu nhỏ cho 12.9") |
+  | 11" | 1488×2266 · 2266×1488 · 1512×2316 · 2316×1512 · 1668×2420 · 2420×1668 · 1668×2388 · 2388×1668 · 1640×2360 · 2360×1640 |
+  | 10.5" | 1668×2224 · 2224×1668 |
+  | 9.7" | 1536×2008 · 1536×2048 · 2048×1496 · 2048×1536 · 768×1004 · 768×1024 · 1024×748 · 1024×768 |
+
+  Ảnh iPhone (giữ nguyên): 1284×2778 · 2778×1284 · 1242×2688 · 2688×1242.
 
 ### Bước 2 — Tiến hành import
 
@@ -523,7 +534,7 @@ Batch gồm 3 CPP, 3 locale (English, Vietnamese, Japanese):
 A: Theo thứ tự tên file (a → z). Đặt số ở đầu tên file để kiểm soát: `01_home.png`, `02_feature.png`, `03_checkout.png`.
 
 **Q: Có thể upload riêng ảnh iPhone và iPad không?**
-A: Có. Đặt ảnh iPhone vào `screenshots/iphone/`, iPad vào `screenshots/ipad/`. Nếu chỉ có `iphone/` thì chỉ upload cho iPhone.
+A: Có. Đặt ảnh iPhone vào `screenshots/iphone/`, iPad vào `screenshots/ipad/`. Nếu chỉ có `iphone/` thì chỉ upload cho iPhone. Ảnh iPad mọi cỡ để chung trong `ipad/` — tool tự chia vào 13" / 11" / 10.5" / 9.7" theo kích thước.
 
 **Q: Tôi vừa upload nhầm ảnh, có xóa được không?**
 A: CPP Manager chưa hỗ trợ xóa ảnh đơn lẻ qua UI. Vui lòng đăng nhập trực tiếp vào App Store Connect để xóa.

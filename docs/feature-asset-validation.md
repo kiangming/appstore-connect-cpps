@@ -29,10 +29,20 @@ NEXT_PUBLIC_ASSET_VALIDATION_DEEP=true   # true = ffmpeg.wasm | false = basic on
 
 ### Screenshot
 
-| Device | Valid resolutions | Min | Max |
-|---|---|---|---|
-| iPhone | 1284×2778, 2778×1284, 1242×2688, 2688×1242 | 3 | 10 |
-| iPad | 2064×2752, 2752×2064, 2048×2732, 2732×2048 | 3 | 10 |
+Nguồn sự thật DUY NHẤT: `lib/cpp/screenshot-specs.ts` (arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06). Kích thước theo tài liệu Apple (Manager cung cấp 2026-11-06); map nhóm → display type là SUY LUẬN, xác nhận bằng UAT (`docs/cpp-management/uat-ipad-screenshot-sizes.md`).
+
+| Device / loại màn hình | Display type | Valid resolutions |
+|---|---|---|
+| iPhone (giữ nguyên, ngoài phạm vi arc) | set có sẵn / mặc định `APP_IPHONE_65` | 1284×2778, 2778×1284, 1242×2688, 2688×1242 |
+| iPad 13" | `APP_IPAD_PRO_3GEN_129` | 2064×2752, 2752×2064, 2048×2732, 2732×2048 |
+| iPad 12.9" | `APP_IPAD_PRO_129` | 2048×2732, 2732×2048 — ⚠ trùng 13" ⇒ bulk luôn gửi vào 13" (Q1); chỉ editor thả vào set 12.9" có sẵn mới vào đây |
+| iPad 11" | `APP_IPAD_PRO_3GEN_11` | 1488×2266, 2266×1488, 1512×2316, 2316×1512, 1668×2420, 2420×1668, 1668×2388, 2388×1668, 1640×2360, 2360×1640 |
+| iPad 10.5" | `APP_IPAD_105` | 1668×2224, 2224×1668 |
+| iPad 9.7" | `APP_IPAD_97` | 1536×2008, 1536×2048, 2048×1496, 2048×1536, 768×1004, 768×1024, 1024×748, 1024×768 |
+
+- **Bulk Import (2 dialog):** ảnh iPad được phân loại THEO KÍCH THƯỚC vào display type, mỗi type một set (dùng lại set có sẵn cùng type). Tối đa 10 ảnh mỗi type, tính cả ảnh đã có trên Apple. Locale có ảnh iPad mà không có set 13" ⇒ cảnh báo, không chặn.
+- **Editor:** kiểm theo SET ĐÍCH (ảnh 11" vào set 11" được nhận; ảnh 13" vào set 11" bị từ chối).
+- Tối thiểu 3 ảnh: không kiểm (luật lúc submit).
 
 Đọc qua: `new Image()` → `width/height`
 

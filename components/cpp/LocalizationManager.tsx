@@ -15,12 +15,13 @@ import {
 } from "lucide-react";
 import { BulkImportDialog } from "@/components/cpp/BulkImportDialog";
 import {
-  validateScreenshot,
+  validateScreenshotForDisplayType,
   validateVideo,
   validateScreenshotCount,
   validateVideoCount,
   type DeviceType,
 } from "@/lib/asset-validator";
+import { IPAD_REQUIRED_DISPLAY_TYPE, displayTypeLabel } from "@/lib/cpp/screenshot-specs";
 import { localeNameFromCode, ALL_APPLE_LOCALES } from "@/lib/locale-utils";
 import type {
   AppCustomProductPageLocalization,
@@ -34,18 +35,6 @@ import type {
 } from "@/types/asc";
 
 const ALL_LOCALES = ALL_APPLE_LOCALES;
-
-const SCREENSHOT_TYPES: { value: ScreenshotDisplayType; label: string }[] = [
-  { value: "APP_IPHONE_67", label: 'iPhone 6.7"' },
-  { value: "APP_IPHONE_65", label: 'iPhone 6.5"' },
-  { value: "APP_IPHONE_61", label: 'iPhone 6.1"' },
-  { value: "APP_IPHONE_55", label: 'iPhone 5.5"' },
-  { value: "APP_IPHONE_47", label: 'iPhone 4.7"' },
-  { value: "APP_IPAD_PRO_3GEN_129", label: 'iPad Pro 12.9" (3rd gen)' },
-  { value: "APP_IPAD_PRO_3GEN_11", label: 'iPad Pro 11"' },
-  { value: "APP_IPAD_PRO_129", label: 'iPad Pro 12.9"' },
-  { value: "APP_IPAD_105", label: 'iPad 10.5"' },
-];
 
 const PREVIEW_TYPES: { value: PreviewType; label: string }[] = [
   { value: "IPHONE_67", label: 'iPhone 6.7" (14 Pro Max, 15, 16 series)' },
@@ -396,17 +385,10 @@ function LocalizationRow({ localization, cppId: _cppId }: LocalizationRowProps) 
 
         setScreenshotSetCache(cache);
         setScreenshotsByType(byType);
-        const types = sets.map((s) => {
-          const found = SCREENSHOT_TYPES.find(
-            (t) => t.value === s.attributes.screenshotDisplayType
-          );
-          return (
-            found ?? {
-              value: s.attributes.screenshotDisplayType,
-              label: s.attributes.screenshotDisplayType,
-            }
-          );
-        });
+        const types = sets.map((s) => ({
+          value: s.attributes.screenshotDisplayType,
+          label: displayTypeLabel(s.attributes.screenshotDisplayType),
+        }));
         setAvailableScreenshotTypes(types);
       }
 
@@ -526,9 +508,10 @@ function LocalizationRow({ localization, cppId: _cppId }: LocalizationRowProps) 
     const rejections: Array<{ name: string; errors: string[] }> = [];
     const valid: File[] = [];
 
+    // Checked against the TARGET set's sizes, not the device (Manager Q4).
     await Promise.all(
       files.map(async (f) => {
-        const result = await validateScreenshot(f, device);
+        const result = await validateScreenshotForDisplayType(f, type);
         if (result.ok) valid.push(f);
         else rejections.push({ name: f.name, errors: result.errors });
       })
@@ -856,7 +839,7 @@ function LocalizationRow({ localization, cppId: _cppId }: LocalizationRowProps) 
                 {activeScreenshotTypes.length === 0 ? (() => {
                   const fallback = (screenshotTab === "iphone"
                     ? "APP_IPHONE_67"
-                    : "APP_IPAD_PRO_3GEN_129") as ScreenshotDisplayType;
+                    : IPAD_REQUIRED_DISPLAY_TYPE) as ScreenshotDisplayType;
                   const staged = stagedByScreenshotType[fallback] ?? [];
                   return (
                     <div className="mb-4">

@@ -203,8 +203,9 @@ Step 3 — Detect CPP-wide device types (kế thừa từ BulkImportDialog):
   → Tìm locale "ready" đầu tiên có localizationId
   → fetch GET /api/asc/screenshot-sets?localizationId=...
   → fetch GET /api/asc/preview-sets?localizationId=...
-  → extract cppIphoneSS, cppIpadSS, cppIphonePV, cppIpadPV
-  → Fallback: APP_IPHONE_65 / APP_IPAD_PRO_3GEN_129
+  → extract cppIphoneSS, cppIphonePV, cppIpadPV
+  → Fallback: APP_IPHONE_65
+  ⚠ Từ arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06: screenshot iPad theo KÍCH THƯỚC ảnh (mỗi display type một set), không còn cppIpadSS
 
 Step 4 — Upload từng locale (sequential trong CPP):
   → Gọi uploadLocale(locale, deviceDefaults, onFile)
@@ -484,7 +485,7 @@ User                  CppBulkImportDialog      API Routes         ASC API
 | A4 | CPP existing → không tạo lại, chỉ merge locale + assets | ✅ |
 | A5 | **Concurrency = 2** CPPs song song; từng CPP xử lý locale tuần tự bên trong | ✅ |
 | A6 | Modal dialog, không navigate away | ✅ |
-| A7 | Device type defaults: `APP_IPHONE_65` / `APP_IPAD_PRO_3GEN_129` | ✅ |
+| A7 | Device type defaults: `APP_IPHONE_65`; iPad screenshot theo kích thước ảnh (arc iPad sizes 2026-11-06) | ✅ |
 | A8 | Không submit CPP for review — chỉ tạo ở trạng thái `PREPARE_FOR_SUBMISSION` | ✅ |
 | A9 | Folder bắt đầu bằng `_` hoặc `.` bị skip tự động | ✅ |
 | A10 | **[MỚI]** `primary-locale.txt` đặt ở root folder, không phải trong từng CPP folder | ✅ Thay đổi so với design v1 |

@@ -63,6 +63,15 @@ Nguồn chung của các mục dưới đây: census arc `[CPP-bulkimport-ipad-s
 - Union `ScreenshotDisplayType` thiếu `APP_IPHONE_58` (`types/asc.ts:102-114`).
 - **Đường đúng:** đồng bộ khi làm `[CPP-asset-delivery-state-unread]` / `[CPP-iphone-screenshot-sizes]`.
 
+## `[CPP-two-folder-parsers]` — hai parser thư mục cho hai dialog bulk
+
+Manager 2026-11-06 (gate G0): KHÔNG gộp trong arc iPad (G1 không đổi luật thư mục).
+
+- **Hiện trạng (ĐỌC CODE + test G0 `lib/screenshot-folder-parsers.baseline.test.ts`):**
+  - `lib/parseCppFolderStructure.ts` (nhiều CPP, `<root>/<CPP>/<locale>/…`) và `lib/parseFolderStructure.ts` (một CPP, `<root>/<locale>/…`) chép cùng luật `screenshots/<iphone|ipad>/<file>`, `previews/…`, `promo.txt`, sắp xếp theo tên.
+  - Test G0 ghim cả hai trên cùng 8 đường dẫn.
+- **Đường đúng:** khi có dịp đụng luật thư mục (vd `[CPP-bulk-folder-silent-skip]`), gộp về một hàm đọc phần `<locale>/…` dùng chung, mỗi dialog chỉ khác tiền tố.
+
 ## `[CPP-editor-add-second-set]` — editor không thêm được set loại thứ hai
 
 Manager 2026-11-06 (Q7): ngoài phạm vi arc iPad.

@@ -161,6 +161,7 @@ preview.attributes.previewImage?.templateUrl  // dùng previewImage, không ph�
 
 ### Screenshot Set management
 - `screenshotDisplayType` → group theo device: `APP_IPHONE_65`, `APP_IPAD_PRO_3GEN_129`, v.v.
+- Bảng kích thước ↔ display type: `lib/cpp/screenshot-specs.ts` (nguồn duy nhất). Bulk import: ảnh iPad chọn set THEO KÍCH THƯỚC qua `lib/cpp/screenshot-upload.ts` (dùng chung cho 2 dialog) — arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06
 - Một localization có thể có nhiều set (một per device type)
 - 409 Conflict khi tạo set đã tồn tại → re-fetch để lấy ID
 

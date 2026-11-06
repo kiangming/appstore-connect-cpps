@@ -124,8 +124,9 @@ User clicks "Import All"
       → tìm readyPlan đầu tiên có localizationId
       → fetch GET /api/asc/screenshot-sets?localizationId=...
       → fetch GET /api/asc/preview-sets?localizationId=...
-      → extract iPhone/iPad device types từ existing sets
-      → lưu vào deviceDefaults (fallback nếu fetch thất bại: APP_IPHONE_65 / APP_IPAD_PRO_3GEN_129)
+      → extract iPhone device type (+ preview types) từ existing sets
+      → lưu vào deviceDefaults (fallback nếu fetch thất bại: APP_IPHONE_65)
+      ⚠ Từ arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06: screenshot iPad KHÔNG còn theo set có sẵn / mặc định — mỗi ảnh vào set của display type ứng với KÍCH THƯỚC ảnh (`lib/cpp/screenshot-specs.ts`, upload qua `lib/cpp/screenshot-upload.ts`)
   → for each locale (sequential):
       → uploadLocale(plan, deviceDefaults, onFile)
 ```
@@ -192,7 +193,7 @@ Step 4 — Upload previews:
 **Fallback defaults** (khi không detect được):
 ```typescript
 const DEFAULT_IPHONE_SCREENSHOT = "APP_IPHONE_65";   // iPhone 6.5"
-const DEFAULT_IPAD_SCREENSHOT   = "APP_IPAD_PRO_3GEN_129";
+// DEFAULT_IPAD_SCREENSHOT: bỏ — screenshot iPad chọn set theo kích thước ảnh
 const DEFAULT_IPHONE_PREVIEW    = "IPHONE_65";
 const DEFAULT_IPAD_PREVIEW      = "IPAD_PRO_3GEN_129";
 ```
@@ -266,7 +267,7 @@ interface Props {                     // BulkImportDialog props
 | Screenshot set đã tồn tại (409 conflict) | Re-fetch để lấy ID hiện tại, tiếp tục |
 | Upload file thất bại | Retry 1 lần sau 1s; nếu vẫn lỗi → locale báo failed, tiếp tục batch |
 | ASC API 5xx | Retry 1 lần sau 1s (`fetchWithRetry`) |
-| Detect device type thất bại | Dùng defaults (`APP_IPHONE_65` / `APP_IPAD_PRO_3GEN_129`) |
+| Detect device type thất bại | Dùng default `APP_IPHONE_65` (iPhone). iPad: theo kích thước ảnh, không cần detect |
 
 ---
 

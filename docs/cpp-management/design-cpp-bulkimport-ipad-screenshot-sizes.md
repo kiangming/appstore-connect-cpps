@@ -1,6 +1,6 @@
 # [CPP-bulkimport-ipad-screenshot-sizes] Bulk Import CPP — hỗ trợ các kích thước screenshot iPad mới — census + thiết kế
 
-**Trạng thái:** census PASS (`f92ff4e`). Manager chốt Q1–Q7 (2026-11-06, §P6-chốt). **G0 xong** (§G0) — chờ gate G0; G1 chưa làm.
+**Trạng thái:** census PASS (`f92ff4e`). Manager chốt Q1–Q7 (2026-11-06, §P6-chốt). G0 PASS (`23f715e`). **G1 xong** (§G1) — chờ gate G1; sau gate push `2371c8e` + `f92ff4e` + `23f715e` + G1 một lượt, rồi UAT ngay sau deploy (`uat-ipad-screenshot-sizes.md`).
 **Nhánh:** `arc-cpp-bulkimport-ipad-screenshot-sizes` (từ `origin/main` = `1a87a75`).
 **Phạm vi:** module CPP Manager — step upload screenshot của Bulk Import. Twin path liệt kê ở §1.5.
 
@@ -420,6 +420,100 @@ Ba file test mới + một helper. Kỳ vọng viết TAY, không đọc từ co
   - parser nhiều CPP phân biệt hoa thường (1);
   - parser một CPP nhận thư mục con sâu hơn (1).
   - ⚠ Lần chạy đầu, mutation "dialog một CPP bỏ dò set theo locale" **xanh**: ở mọi kịch bản lúc đó, set của chính locale trùng với set của locale ready đầu. Đã thêm R5 để tách hai tầng ⇒ đỏ (KB P17).
+
+## §G1 — thực hiện (2026-11-06)
+
+**Gate G0 (Manager, 2026-11-06):** PASS. Parser thứ hai (`lib/parseFolderStructure.ts`) KHÔNG gộp trong arc — G1 không đổi luật thư mục ⇒ BACKLOG `[CPP-two-folder-parsers]`.
+
+**Đã làm:**
+- **`lib/cpp/screenshot-specs.ts` — bảng duy nhất.**
+  - `IPAD_SCREENSHOT_SPECS`: 5 display type × kích thước × label × `source` = `"Apple docs via Manager 2026-11-06"`. Thứ tự = ưu tiên ⇒ 2048×2732 / 2732×2048 vào `APP_IPAD_PRO_3GEN_129` (Q1).
+  - `IPHONE_SCREENSHOT_SIZES`: 4 kích thước, giữ nguyên.
+  - `IPAD_REQUIRED_DISPLAY_TYPE`, `MAX_SCREENSHOTS_PER_SET` = 10.
+  - `SCREENSHOT_DISPLAY_TYPE_LABELS`: label iPad đổi thành `iPad 13"` / `12.9"` / `11"` / `10.5"` / `9.7"`; label iPhone giữ nguyên.
+  - Hàm: `classifyIpadScreenshot`, `sizesForDisplayType`, `screenshotSizeError` (câu §4.3 + gợi ý ảnh iPhone nằm nhầm `ipad/`; câu iPhone GIỮ NGUYÊN), `screenshotSizeErrorForDisplayType` (editor; với set 13" câu y hệt hôm nay, thêm vế "this is an iPad X size, not iPad Y").
+- **`lib/asset-validator.ts`:**
+  - Bỏ bảng riêng, đọc từ spec.
+  - `validateScreenshot` giữ nguyên hình dạng kết quả (test parity G0 xanh, không sửa).
+  - Thêm `checkScreenshot` (trả kèm `displayType` cho iPad) và `validateScreenshotForDisplayType` (editor).
+- **`lib/cpp/screenshot-upload.ts` — dùng chung cho 2 dialog:**
+  - `groupIpadScreenshots`: theo thứ tự spec (13" trước), giữ thứ tự tên file trong mỗi nhóm.
+  - `fetchExistingScreenshotCounts`: GET chỉ-đọc ở Preview, chỉ cho locale đã có trên Apple VÀ có ảnh iPad.
+  - `checkIpadGroups`:
+    - tối đa 10 mỗi type, **tính cả ảnh đã có** ⇒ lỗi, chặn;
+    - không có set 13" sau import ⇒ cảnh báo, không chặn; khi đọc set lỗi (`null`) thì KHÔNG cảnh báo (KB P7).
+  - `uploadScreenshotGroups`: lấy hoặc tạo set mỗi type (dùng lại set có sẵn, 409 fallback như cũ), upload theo thứ tự.
+- **Hai dialog** (`CppBulkImportDialog`, `BulkImportDialog`):
+  - Bỏ `DEFAULT_IPAD_SCREENSHOT`, `cppIpadSS`, `ipadSS` và bản sao `getOrCreateSS`; gọi `uploadScreenshotGroups` với `[iPhone group (giữ luật cũ), ...iPad groups]`.
+  - Preview: dòng `iPad 13": a, b` cho mỗi type; khung cảnh báo; footer "N locale(s) without iPad 13" screenshots".
+  - Khung "Expected folder structure" thêm `screenshots/ipad/` + dòng tự phân loại. Ở dialog nhiều CPP, khung cũ còn **thiếu thư mục locale** (`Summer Campaign/screenshots/iphone/` — parser không nhận) ⇒ sửa luôn.
+  - Preview video GIỮ NGUYÊN.
+- **Editor** (`LocalizationManager`): kiểm theo SET ĐÍCH (`validateScreenshotForDisplayType`); label từ bảng (thêm label cho `APP_IPAD_97`); fallback iPad = `IPAD_REQUIRED_DISPLAY_TYPE`. Fallback iPhone `APP_IPHONE_67` giữ nguyên (BACKLOG `[CPP-iphone-default-mismatch]`).
+- **`CppDetailPanel`:** label screenshot từ bảng.
+- **Docs §1.6:** `feature-asset-validation.md` (bảng mới), `user-guide.md` (bảng kích thước + FAQ), `architecture.md`, `bulk-import-design.md`, `feature-cpp-bulk-import-design.md`, `feature-cpp-editor.md`, `CURRENT-STATE.md`. ⚠ `user-guide.docx` / `.pdf` KHÔNG sinh lại (không có script; lần cuối cập nhật tay cùng commit với `.md` ở `2588dae`).
+
+**Lật có chủ đích (khai đích danh):**
+- Validator:
+  - khối "20 kích thước còn lại" (REJECT ⇒ OK cho `ipad`, vẫn REJECT cho `iphone`);
+  - câu lỗi iPad sai cỡ ⇒ câu §4.3.
+- Routing, mỗi ca ở cả 2 dialog, tiêu đề ghi "was: …":
+  - R3: set 11" có sẵn ⇒ ảnh 13" vào **set 13" mới**;
+  - R4: có cả set 13" lẫn 11" ⇒ ảnh 13" vào **set 13"**;
+  - R5: set của ja (11") ⇒ ảnh 13" vào **set 13" mới trên ja**;
+  - R6: locale mới ⇒ POST **`APP_IPAD_PRO_3GEN_129`**, không kế thừa 11";
+  - R7: ảnh 11" ⇒ **được nhận**, POST `APP_IPAD_PRO_3GEN_11`, có cảnh báo, Import không khoá.
+- **Giữ nguyên, xanh không sửa thân test:** R1, R2, R8, parity validator (8 OK + chéo thiết bị), 2 parser, các test Hub-tracking cũ của dialog.
+
+**Test mới:**
+- `lib/cpp/screenshot-specs.test.ts`: bảng 26 dòng viết TAY × display type; không gì vào 12.9"; kích thước theo set đích; câu lỗi nguyên văn; label.
+- `lib/cpp/screenshot-upload.test.ts`: thứ tự nhóm; đếm 10 (kể cả ảnh có sẵn); cảnh báo 13" (6 ca, kể cả `null`).
+- Routing (`describe.each` 2 dialog):
+  - thư mục trộn 13" + 11" ⇒ 2 set, đúng thứ tự tên file;
+  - mỗi nhóm một ảnh ⇒ 4 set, không bao giờ 12.9";
+  - set 11" có sẵn được dùng lại;
+  - iPhone giữ nguyên (POST `APP_IPHONE_65`; set `APP_IPHONE_67` có sẵn được dùng lại; iPhone đi trước iPad);
+  - Preview liệt kê theo loại màn hình;
+  - ảnh sai cỡ ⇒ chặn + câu §4.3;
+  - ảnh iPhone trong `ipad/` ⇒ chặn + gợi ý;
+  - 11 ảnh ⇒ chặn; 8 có sẵn + 3 ⇒ chặn;
+  - không cảnh báo khi đã có set 13"; câu cảnh báo hiện trong locale.
+- **Twin:** cùng bộ ảnh qua 2 dialog ⇒ **cùng dãy request**.
+- Editor (`LocalizationManager.screenshot-target.test.tsx`, component thật): 11" vào set 11" ⇒ nhận; 13" vào set 11" ⇒ từ chối; 13" vào set 13" ⇒ nhận; 11" vào set 13" ⇒ từ chối, kèm câu; label từ bảng.
+- `lib/cpp/uat-ipad-kit.test.ts`: kích thước THẬT (đọc header IHDR) của từng PNG trong bộ UAT ⇒ phân loại đúng ô ghi trong tên file; RGB không alpha.
+
+**Mutation 14/14 đỏ** (`scripts/mutate.sh`, md5 trước = sau, `status` sạch):
+
+| # | Mutation | Đỏ |
+|---|---|---|
+| 1 | bỏ 1640×2360 khỏi bảng | 12 |
+| 2 | map 1668×2388 (11") sang 13" | 22 |
+| 3 | đổi display type của 2064×2752 (cũ) sang `APP_IPAD_PRO_129` | 38 |
+| 4 | đảo ưu tiên 2048×2732 | 20 |
+| 5a | dialog một CPP quay về luật "set iPad cuối" | 8 |
+| 5b | dialog nhiều CPP quay về luật "set iPad cuối" | 8 |
+| 6 | câu lỗi bỏ danh sách kích thước hợp lệ | 5 |
+| 7 | editor kiểm theo thiết bị | 2 |
+| 8a | bỏ cảnh báo 13" | 5 |
+| 8b | cảnh báo 13" khoá Import | 5 |
+| 9 | bỏ đếm ảnh có sẵn | 3 |
+| 10 | bỏ giới hạn 10 | 6 |
+| 11 | iPhone đi sau iPad | 2 |
+| 12 | Preview không ghi loại màn hình | 1 |
+
+(1–8 = 8 kiểu của §5.3; 9–12 thêm cho các chỗ mới.)
+
+**Bộ UAT** (thay M2, Q2):
+- Hướng dẫn: `docs/cpp-management/uat-ipad-screenshot-sizes.md`.
+- Ảnh: `docs/cpp-management/uat-ipad-screenshot-sizes/` — 26 PNG, 432 KB. Sinh bằng `scripts/uat/gen-ipad-screenshot-kit.py` (Python thuần, không phụ thuộc gì); mỗi ảnh đã kiểm bằng `sips` (đúng kích thước, RGB, không alpha).
+- **Bộ A** (import): 24 ảnh = 24 kích thước KHÁC NHAU của danh sách 26 dòng. 2 dòng 12.9" trùng 13", nên ảnh `03` / `04` in "13" / 12.9"" và **ô 12.9" phải trống** (Q1).
+- **Bộ B:** 1600×2400, phải bị chặn.
+- **Bộ C:** chỉ 11", để xem cảnh báo.
+
+**Giới hạn đã biết (không chặn):**
+- Đếm "ảnh đã có" đọc `relationships.appScreenshots.data` từ GET `?include=appScreenshots` mà không truyền `limit[appScreenshots]`. Mặc định của Apple: CHƯA BIẾT. Nếu mặc định < 10, số đếm có thể thiếu ⇒ tool để lọt (Apple vẫn chặn lúc reserve).
+- Câu lỗi + cảnh báo chỉ hiện khi mở locale; footer có số đếm.
+
+**Gauntlet:** typecheck sạch · 432 file / 6073 test xanh (1 skip có sẵn; G0: 428 / 5958) · lint 0 lỗi · build xanh.
 
 ## Phát hiện bên lề (đã ghi `docs/cpp-management/BACKLOG.md`, Manager duyệt 2026-11-06)
 

@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { X, ExternalLink, ChevronRight, Link } from "lucide-react";
-import type { AppCustomProductPage, AppScreenshot, AppPreview, CppState, ScreenshotDisplayType, PreviewType } from "@/types/asc";
+import type { AppCustomProductPage, AppScreenshot, AppPreview, CppState, PreviewType } from "@/types/asc";
 import { resolveVisibility } from "@/types/asc";
 import { localeNameFromCode } from "@/lib/locale-utils";
+import { displayTypeLabel } from "@/lib/cpp/screenshot-specs";
 import type { VersionWithLocalizations, LocalizationWithMedia } from "@/app/api/asc/cpps/[cppId]/route";
 
 interface PanelData {
@@ -34,21 +35,6 @@ const STATE_LABELS: Record<CppState, string> = {
   IN_REVIEW: "In Review",
   APPROVED: "Approved",
   REJECTED: "Rejected",
-};
-
-const SCREENSHOT_TYPE_LABELS: Record<ScreenshotDisplayType, string> = {
-  APP_IPHONE_67: "iPhone 6.7\"",
-  APP_IPHONE_65: "iPhone 6.5\"",
-  APP_IPHONE_61: "iPhone 6.1\"",
-  APP_IPHONE_55: "iPhone 5.5\"",
-  APP_IPHONE_47: "iPhone 4.7\"",
-  APP_IPHONE_40: "iPhone 4\"",
-  APP_IPHONE_35: "iPhone 3.5\"",
-  APP_IPAD_PRO_3GEN_129: "iPad Pro 12.9\" (3rd gen)",
-  APP_IPAD_PRO_3GEN_11: "iPad Pro 11\"",
-  APP_IPAD_PRO_129: "iPad Pro 12.9\"",
-  APP_IPAD_105: "iPad 10.5\"",
-  APP_IPAD_97: "iPad 9.7\"",
 };
 
 const PREVIEW_TYPE_LABELS: Record<PreviewType, string> = {
@@ -141,7 +127,7 @@ function LocalizationRow({ loc }: { loc: LocalizationWithMedia }) {
                   .map(({ set, screenshots }) => (
                     <div key={set.id}>
                       <p className="text-xs text-slate-400 mb-1.5">
-                        {SCREENSHOT_TYPE_LABELS[set.attributes.screenshotDisplayType] ?? set.attributes.screenshotDisplayType}
+                        {displayTypeLabel(set.attributes.screenshotDisplayType)}
                         <span className="ml-1 text-slate-300">({screenshots.length})</span>
                       </p>
                       <div className="flex gap-1.5 flex-wrap">

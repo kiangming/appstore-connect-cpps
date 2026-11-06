@@ -23,7 +23,15 @@ import { parseCppFolderStructure } from "@/lib/parseCppFolderStructure";
 import { parseMetadataXlsx } from "@/lib/parseMetadataXlsx";
 import type { ExcelMetadata } from "@/lib/parseMetadataXlsx";
 import { localeNameFromCode } from "@/lib/locale-utils";
-import { validateScreenshot, validateVideo } from "@/lib/asset-validator";
+import { checkScreenshot, validateVideo } from "@/lib/asset-validator";
+import { displayTypeLabel } from "@/lib/cpp/screenshot-specs";
+import {
+  checkIpadGroups,
+  fetchExistingScreenshotCounts,
+  groupIpadScreenshots,
+  uploadScreenshotGroups,
+  type ScreenshotGroup,
+} from "@/lib/cpp/screenshot-upload";
 import {
   computeBulkImportTerminalStatus,
   deriveTerminalStatusOnUnexpectedError,
@@ -32,7 +40,6 @@ import {
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 const DEFAULT_IPHONE_SCREENSHOT: ScreenshotDisplayType = "APP_IPHONE_65";
-const DEFAULT_IPAD_SCREENSHOT: ScreenshotDisplayType = "APP_IPAD_PRO_3GEN_129";
 const DEFAULT_IPHONE_PREVIEW: PreviewType = "IPHONE_65";
 const DEFAULT_IPAD_PREVIEW: PreviewType = "IPAD_PRO_3GEN_129";
 
@@ -45,6 +52,7 @@ type Step = "drop" | "validating" | "preview" | "uploading" | "done";
 
 interface DeviceValidation {
   screenshotErrors: string[];
+  screenshotWarnings: string[];
   previewErrors: string[];
   previewWarnings: string[];
 }
@@ -58,6 +66,8 @@ interface LocaleCppImportPlan {
   localizationId: string | null;
   excluded: boolean;
   validation: { iphone: DeviceValidation; ipad: DeviceValidation } | null;
+  /** iPad images grouped by the display type their SIZE maps to (shared lib/cpp/screenshot-upload.ts). */
+  ipadScreenshotGroups: ScreenshotGroup[];
 }
 
 interface CppImportPlan {
@@ -91,7 +101,6 @@ interface CppProgress {
 
 type DeviceDefaults = {
   cppIphoneSS: ScreenshotDisplayType;
-  cppIpadSS: ScreenshotDisplayType;
   cppIphonePV: PreviewType;
   cppIpadPV: PreviewType;
 };
@@ -417,6 +426,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
 
             // ── Asset validation ────────────────────────────────────────────
             let validation: LocaleCppImportPlan["validation"] = null;
+            let ipadScreenshotGroups: ScreenshotGroup[] = [];
             if (localeStatus !== "skip") {
               async function validateDevice(
                 device: "iphone" | "ipad"
@@ -424,22 +434,39 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                 const ssFiles = localeData.screenshotFiles[device];
                 const pvFiles = localeData.previewFiles[device];
                 const screenshotErrors: string[] = [];
+                const screenshotWarnings: string[] = [];
                 const previewErrors: string[] = [];
                 const previewWarnings: string[] = [];
 
-                await Promise.all([
-                  ...ssFiles.map(async (f) => {
-                    const r = await validateScreenshot(f, device);
-                    if (!r.ok) screenshotErrors.push(...r.errors.map((e) => `${f.name}: ${e}`));
-                  }),
+                const [ssChecks] = await Promise.all([
+                  Promise.all(ssFiles.map((f) => checkScreenshot(f, device))),
                   ...pvFiles.map(async (f) => {
                     const r = await validateVideo(f, device);
                     if (!r.ok) previewErrors.push(...r.errors.map((e) => `${f.name}: ${e}`));
                     else previewWarnings.push(...r.warnings.map((w) => `${f.name}: ${w}`));
                   }),
                 ]);
+                // Results in file-name order (Promise.all keeps input order).
+                ssChecks.forEach((r, i) => {
+                  if (!r.ok) screenshotErrors.push(...r.errors.map((e) => `${ssFiles[i].name}: ${e}`));
+                });
 
-                return { screenshotErrors, previewErrors, previewWarnings };
+                if (device === "ipad" && ssFiles.length > 0) {
+                  ipadScreenshotGroups = groupIpadScreenshots(
+                    ssChecks.flatMap((r, i) =>
+                      r.displayType ? [{ file: ssFiles[i], displayType: r.displayType }] : []
+                    )
+                  );
+                  // Known-empty for a locale not on Apple yet; null when the read fails.
+                  const existing = localizationId
+                    ? await fetchExistingScreenshotCounts(localizationId)
+                    : new Map<ScreenshotDisplayType, number>();
+                  const checks = checkIpadGroups(ipadScreenshotGroups, existing);
+                  screenshotErrors.push(...checks.errors);
+                  screenshotWarnings.push(...checks.warnings);
+                }
+
+                return { screenshotErrors, screenshotWarnings, previewErrors, previewWarnings };
               }
 
               const [iphoneVal, ipadVal] = await Promise.all([
@@ -458,6 +485,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
               localizationId,
               excluded: localeStatus === "skip",
               validation,
+              ipadScreenshotGroups,
             };
           })
         );
@@ -590,7 +618,6 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
     const ssCache = new Map<ScreenshotDisplayType, string>();
     const pvCache = new Map<PreviewType, string>();
     let iphoneSS: ScreenshotDisplayType = deviceDefaults.cppIphoneSS;
-    let ipadSS: ScreenshotDisplayType = deviceDefaults.cppIpadSS;
     let iphonePV: PreviewType = deviceDefaults.cppIphonePV;
     let ipadPV: PreviewType = deviceDefaults.cppIpadPV;
 
@@ -605,7 +632,6 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
           const t = set.attributes.screenshotDisplayType;
           ssCache.set(t, set.id);
           if (t.startsWith("APP_IPHONE")) iphoneSS = t;
-          if (t.startsWith("APP_IPAD")) ipadSS = t;
         }
       }
       if (pRes.ok) {
@@ -619,31 +645,6 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
       }
     } catch {
       /* use defaults */
-    }
-
-    async function getOrCreateSS(type: ScreenshotDisplayType): Promise<string> {
-      if (ssCache.has(type)) return ssCache.get(type)!;
-      const res = await fetchWithBackoff(() =>
-        fetch("/api/asc/screenshot-sets", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ localizationId, screenshotDisplayType: type }),
-        })
-      );
-      if (!res.ok) {
-        if (res.status === 409) {
-          const r2 = await fetch(`/api/asc/screenshot-sets?localizationId=${localizationId}`);
-          if (r2.ok) {
-            const d = (await r2.json()) as { data?: AppScreenshotSet[] };
-            const found = d.data?.find((s) => s.attributes.screenshotDisplayType === type);
-            if (found) { ssCache.set(type, found.id); return found.id; }
-          }
-        }
-        throw new Error(`Failed to get screenshot set for ${type}`);
-      }
-      const d = (await res.json()) as { data: AppScreenshotSet };
-      ssCache.set(type, d.data.id);
-      return d.data.id;
     }
 
     async function getOrCreatePV(type: PreviewType): Promise<string> {
@@ -671,27 +672,18 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
       return d.data.id;
     }
 
-    // Step 3: Upload screenshots
-    for (const [files, type] of [
-      [plan.screenshotFiles.iphone, iphoneSS],
-      [plan.screenshotFiles.ipad, ipadSS],
-    ] as [File[], ScreenshotDisplayType][]) {
-      if (files.length === 0) continue;
-      const setId = await getOrCreateSS(type);
-      for (const file of files) {
-        onFile(file.name);
-        const fd = new FormData();
-        fd.append("screenshotSetId", setId);
-        fd.append("file", file);
-        const res = await fetchWithBackoff(() =>
-          fetch("/api/asc/upload", { method: "POST", body: fd })
-        );
-        if (!res.ok) {
-          const err = (await res.json().catch(() => ({}))) as { error?: string };
-          throw new Error(err.error ?? `Failed to upload ${file.name}`);
-        }
-      }
-    }
+    // Step 3: Upload screenshots — iPhone as one group (unchanged), iPad
+    // grouped by the display type each image's size maps to (shared helper).
+    await uploadScreenshotGroups({
+      localizationId,
+      groups: [
+        { displayType: iphoneSS, files: plan.screenshotFiles.iphone },
+        ...plan.ipadScreenshotGroups,
+      ],
+      setCache: ssCache,
+      retry: (fn) => fetchWithBackoff(fn),
+      onFile,
+    });
 
     // Step 4: Upload previews
     for (const [files, type] of [
@@ -805,7 +797,6 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
 
       // Step 3: Detect CPP-wide device types from first "ready" locale
       let cppIphoneSS: ScreenshotDisplayType = DEFAULT_IPHONE_SCREENSHOT;
-      let cppIpadSS: ScreenshotDisplayType = DEFAULT_IPAD_SCREENSHOT;
       let cppIphonePV: PreviewType = DEFAULT_IPHONE_PREVIEW;
       let cppIpadPV: PreviewType = DEFAULT_IPAD_PREVIEW;
 
@@ -826,7 +817,6 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
             for (const set of d.data ?? []) {
               const t = set.attributes.screenshotDisplayType;
               if (t.startsWith("APP_IPHONE")) cppIphoneSS = t;
-              if (t.startsWith("APP_IPAD")) cppIpadSS = t;
             }
           }
           if (pRes.ok) {
@@ -842,7 +832,7 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
         }
       }
 
-      const deviceDefaults: DeviceDefaults = { cppIphoneSS, cppIpadSS, cppIphonePV, cppIpadPV };
+      const deviceDefaults: DeviceDefaults = { cppIphoneSS, cppIphonePV, cppIpadPV };
 
       // Step 4: Upload each active locale (sequential within this CPP)
       const activeLocales = plan.locales.filter((l) => !l.excluded && l.status !== "skip");
@@ -1036,6 +1026,10 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
 
   // ── Derived ─────────────────────────────────────────────────────────────────
   const activeCppCount = plans.filter((p) => !p.excluded && p.status !== "skip").length;
+  const no13LocaleCount = plans
+    .filter((p) => !p.excluded)
+    .flatMap((p) => p.locales)
+    .filter((l) => !l.excluded && (l.validation?.ipad.screenshotWarnings.length ?? 0) > 0).length;
   const notInAppLocaleCount = plans
     .filter((p) => !p.excluded)
     .flatMap((p) => p.locales)
@@ -1133,11 +1127,16 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
 ├── primary-locale.txt   ← "en-US" (shared for all CPPs)
 ├── metadata.xlsx        ← optional: deepLink + promoText
 ├── Summer Campaign/
-│   ├── screenshots/iphone/
-│   └── previews/iphone/
+│   └── en-US/
+│       ├── screenshots/iphone/
+│       ├── screenshots/ipad/
+│       └── previews/iphone/
 └── Holiday Sale/
     └── ja/
         └── screenshots/iphone/`}</pre>
+                  <p className="mt-2 text-xs text-slate-500">
+                    iPad screenshots are sorted into iPad 13&quot; / 12.9&quot; / 11&quot; / 10.5&quot; / 9.7&quot; automatically by image size.
+                  </p>
                 </div>
 
                 <input
@@ -1348,11 +1347,11 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                                               iPhone: {localePlan.screenshotFiles.iphone.map((f) => f.name).join(", ")}
                                             </p>
                                           )}
-                                          {localePlan.screenshotFiles.ipad.length > 0 && (
-                                            <p className="text-xs text-slate-500">
-                                              iPad: {localePlan.screenshotFiles.ipad.map((f) => f.name).join(", ")}
+                                          {localePlan.ipadScreenshotGroups.map((g) => (
+                                            <p key={g.displayType} className="text-xs text-slate-500">
+                                              {displayTypeLabel(g.displayType)}: {g.files.map((f) => f.name).join(", ")}
                                             </p>
-                                          )}
+                                          ))}
                                         </div>
                                       )}
                                       {totalPV > 0 && (
@@ -1387,7 +1386,8 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                                           {(["iphone", "ipad"] as const).map((device) => {
                                             const v = localePlan.validation![device];
                                             const allErrors = [...v.screenshotErrors, ...v.previewErrors];
-                                            if (allErrors.length === 0 && v.previewWarnings.length === 0) return null;
+                                            const allWarnings = [...v.screenshotWarnings, ...v.previewWarnings];
+                                            if (allErrors.length === 0 && allWarnings.length === 0) return null;
                                             return (
                                               <div key={device}>
                                                 {allErrors.length > 0 && (
@@ -1398,10 +1398,10 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                                                     ))}
                                                   </div>
                                                 )}
-                                                {v.previewWarnings.length > 0 && (
+                                                {allWarnings.length > 0 && (
                                                   <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 space-y-0.5">
                                                     <p className="text-xs font-semibold text-amber-700 capitalize">{device} — warnings</p>
-                                                    {v.previewWarnings.map((w, i) => (
+                                                    {allWarnings.map((w, i) => (
                                                       <p key={i} className="text-xs text-amber-600">{w}</p>
                                                     ))}
                                                   </div>
@@ -1514,6 +1514,11 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
                       {validationBlockCount > 0 && (
                         <span className="text-red-600 ml-1">
                           · {validationBlockCount} CPP{validationBlockCount !== 1 ? "s" : ""} blocked (invalid assets)
+                        </span>
+                      )}
+                      {no13LocaleCount > 0 && (
+                        <span className="text-amber-600 ml-1">
+                          · {no13LocaleCount} locale{no13LocaleCount !== 1 ? "s" : ""} without iPad 13&quot; screenshots
                         </span>
                       )}
                     </span>

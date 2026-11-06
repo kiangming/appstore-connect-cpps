@@ -8,6 +8,13 @@
  *   false → basic validation only (resolution, duration, size, format) + checklist warnings
  */
 
+import type { ScreenshotDisplayType } from "@/types/asc";
+import {
+  classifyIpadScreenshot,
+  screenshotSizeError,
+  screenshotSizeErrorForDisplayType,
+} from "@/lib/cpp/screenshot-specs";
+
 export type DeviceType = "iphone" | "ipad";
 
 export interface ValidationResult {
@@ -17,17 +24,8 @@ export interface ValidationResult {
 }
 
 // ── Screenshot rules ──────────────────────────────────────────────────────────
-
-const SCREENSHOT_SIZES: Record<DeviceType, Array<{ w: number; h: number }>> = {
-  iphone: [
-    { w: 1284, h: 2778 }, { w: 2778, h: 1284 },
-    { w: 1242, h: 2688 }, { w: 2688, h: 1242 },
-  ],
-  ipad: [
-    { w: 2064, h: 2752 }, { w: 2752, h: 2064 },
-    { w: 2048, h: 2732 }, { w: 2732, h: 2048 },
-  ],
-};
+// Sizes live in ONE table: lib/cpp/screenshot-specs.ts (arc
+// [CPP-bulkimport-ipad-screenshot-sizes]).
 
 export const SCREENSHOT_LIMITS: Record<DeviceType, { min: number; max: number }> = {
   iphone: { min: 3, max: 10 },
@@ -109,26 +107,51 @@ function formatValidSizes(sizes: Array<{ w: number; h: number }>): string {
 
 // ── Screenshot validation ─────────────────────────────────────────────────────
 
+const UNREADABLE_IMAGE = "Cannot read image file — file may be corrupted";
+
+export interface ScreenshotCheck extends ValidationResult {
+  /** iPad only: the display type the image's size maps to (null when invalid / iPhone). */
+  displayType: ScreenshotDisplayType | null;
+}
+
+/**
+ * Bulk import: validate an image for the device folder it sits in and, for
+ * iPad, classify it by size into a display type.
+ */
+export async function checkScreenshot(file: File, device: DeviceType): Promise<ScreenshotCheck> {
+  let w: number;
+  let h: number;
+  try {
+    ({ w, h } = await getImageDimensions(file));
+  } catch {
+    return { ok: false, errors: [UNREADABLE_IMAGE], warnings: [], displayType: null };
+  }
+  const error = screenshotSizeError(device, w, h);
+  if (error) return { ok: false, errors: [error], warnings: [], displayType: null };
+  const displayType = device === "ipad" ? classifyIpadScreenshot(w, h)?.displayType ?? null : null;
+  return { ok: true, errors: [], warnings: [], displayType };
+}
+
 export async function validateScreenshot(
   file: File,
   device: DeviceType
 ): Promise<ValidationResult> {
-  const errors: string[] = [];
+  const { ok, errors, warnings } = await checkScreenshot(file, device);
+  return { ok, errors, warnings };
+}
 
+/** Editor: validate an image against the set it is dropped on (Manager Q4). */
+export async function validateScreenshotForDisplayType(
+  file: File,
+  type: ScreenshotDisplayType
+): Promise<ValidationResult> {
   try {
     const { w, h } = await getImageDimensions(file);
-    const validSizes = SCREENSHOT_SIZES[device];
-
-    if (!matchesSize({ w, h }, validSizes)) {
-      errors.push(
-        `Resolution: got ${w}×${h} — expected one of: ${formatValidSizes(validSizes)}`
-      );
-    }
+    const error = screenshotSizeErrorForDisplayType(type, w, h);
+    return { ok: !error, errors: error ? [error] : [], warnings: [] };
   } catch {
-    errors.push("Cannot read image file — file may be corrupted");
+    return { ok: false, errors: [UNREADABLE_IMAGE], warnings: [] };
   }
-
-  return { ok: errors.length === 0, errors, warnings: [] };
 }
 
 // ── Video validation — basic ──────────────────────────────────────────────────

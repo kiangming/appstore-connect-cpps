@@ -8,12 +8,14 @@
  * Every expected size below is written BY HAND, never read from
  * lib/asset-validator.ts — a mutated table must turn this file red.
  *
- * ⚠ The block "G0 TODAY — every other size on Apple's list is REJECTED" is the
- * behaviour G1 flips ON PURPOSE (20 iPad sizes become accepted). When G1 lands
- * it is replaced, not deleted silently.
+ * G1 (Manager Q2/Q4/Q5) flipped TWO blocks on purpose, named here:
+ *   - "every other size on Apple's list": 20 iPad sizes were REJECTED, now
+ *     accepted for ipad (still rejected for iphone);
+ *   - "error text — ipad, wrong size": the sentence is now design §4.3's.
+ * Every other block is G0's, unchanged.
  */
 import { describe, it, expect, beforeAll } from "vitest";
-import { validateScreenshot } from "@/lib/asset-validator";
+import { checkScreenshot, validateScreenshot } from "@/lib/asset-validator";
 import { installFakeImage } from "@/components/cpp/__fixtures__/screenshot-files";
 
 beforeAll(() => installFakeImage());
@@ -60,23 +62,43 @@ describe("G0 — cross-device is rejected", () => {
   });
 });
 
-describe("G0 TODAY — every other size on Apple's list is REJECTED (G1 flips this for ipad)", () => {
+describe("[G1 FLIPPED] every other size on Apple's list — was REJECTED, now OK for ipad", () => {
   it("the list is the 20 sizes of design §1.2", () => {
     expect(IPAD_NOT_ACCEPTED_TODAY).toHaveLength(20);
   });
 
-  it.each(IPAD_NOT_ACCEPTED_TODAY)("%s → REJECT for ipad and for iphone", async (size) => {
-    expect((await validateScreenshot(png(`a-${size}.png`), "ipad")).ok).toBe(false);
+  it.each(IPAD_NOT_ACCEPTED_TODAY)("%s → OK for ipad, still REJECT for iphone", async (size) => {
+    expect(await validateScreenshot(png(`a-${size}.png`), "ipad")).toEqual({ ok: true, errors: [], warnings: [] });
     expect((await validateScreenshot(png(`a-${size}.png`), "iphone")).ok).toBe(false);
   });
 });
 
+describe("G1 — checkScreenshot carries the display type for ipad, none for iphone", () => {
+  it("ipad 1668×2388 → APP_IPAD_PRO_3GEN_11; ipad 2048×2732 → APP_IPAD_PRO_3GEN_129 (Q1)", async () => {
+    expect((await checkScreenshot(png("a-1668x2388.png"), "ipad")).displayType).toBe("APP_IPAD_PRO_3GEN_11");
+    expect((await checkScreenshot(png("a-2048x2732.png"), "ipad")).displayType).toBe("APP_IPAD_PRO_3GEN_129");
+  });
+
+  it("iphone 1284×2778 → ok, displayType null (iPhone routing unchanged)", async () => {
+    expect(await checkScreenshot(png("a-1284x2778.png"), "iphone")).toEqual({
+      ok: true, errors: [], warnings: [], displayType: null,
+    });
+  });
+});
+
 describe("G0 — error text, verbatim (design §1.4)", () => {
-  it("ipad, wrong size", async () => {
-    const r = await validateScreenshot(png("11in-1668x2388.png"), "ipad");
+  it("[G1 FLIPPED] ipad, wrong size — design §4.3 sentence", async () => {
+    const r = await validateScreenshot(png("wrong-1600x2400.png"), "ipad");
     expect(r).toEqual({
       ok: false,
-      errors: ["Resolution: got 1668×2388 — expected one of: 2064×2752, 2752×2064, 2048×2732, 2732×2048"],
+      errors: [
+        "1600×2400 is not a valid iPad screenshot size. Valid iPad sizes — " +
+          '13": 2064×2752, 2752×2064, 2048×2732, 2732×2048 · ' +
+          '12.9": 2048×2732, 2732×2048 · ' +
+          '11": 1488×2266, 2266×1488, 1512×2316, 2316×1512, 1668×2420, 2420×1668, 1668×2388, 2388×1668, 1640×2360, 2360×1640 · ' +
+          '10.5": 1668×2224, 2224×1668 · ' +
+          '9.7": 1536×2008, 1536×2048, 2048×1496, 2048×1536, 768×1004, 768×1024, 1024×748, 1024×768',
+      ],
       warnings: [],
     });
   });

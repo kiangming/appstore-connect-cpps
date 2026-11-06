@@ -149,7 +149,9 @@ useEffect(() => {
 ```typescript
 // Screenshots (ScreenshotDisplayType):
 APP_IPHONE_67  APP_IPHONE_65  APP_IPHONE_61  APP_IPHONE_55  APP_IPHONE_47
-APP_IPAD_PRO_3GEN_129  APP_IPAD_PRO_3GEN_11  APP_IPAD_PRO_129  APP_IPAD_105
+APP_IPAD_PRO_3GEN_129  APP_IPAD_PRO_3GEN_11  APP_IPAD_PRO_129  APP_IPAD_105  APP_IPAD_97
+// Label + kích thước hợp lệ của từng type: lib/cpp/screenshot-specs.ts (arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06).
+// Editor kiểm ảnh theo SET ĐÍCH (validateScreenshotForDisplayType), không theo thiết bị.
 
 // Previews (PreviewType):
 IPHONE_67  IPHONE_65  IPHONE_61  IPHONE_58  IPHONE_55  IPHONE_47  IPHONE_40
