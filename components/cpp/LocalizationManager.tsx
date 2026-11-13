@@ -685,17 +685,18 @@ function LocalizationRow({ localization, cppId: _cppId }: LocalizationRowProps) 
     screenshotTab === "iphone" ? iphoneScreenshotTypes : ipadScreenshotTypes;
 
   // Match preview type to the screenshot type of the same device category
-  // ScreenshotDisplayType has "APP_" prefix; PreviewType does not (e.g. APP_IPHONE_65 → IPHONE_65)
-  const matchedIphonePreview = iphoneScreenshotTypes[0]
-    ? availablePreviewTypes.find(
-        (t) => t.value === (iphoneScreenshotTypes[0].value.replace("APP_", "") as PreviewType)
-      ) ?? null
-    : null;
-  const matchedIpadPreview = ipadScreenshotTypes[0]
-    ? availablePreviewTypes.find(
-        (t) => t.value === (ipadScreenshotTypes[0].value.replace("APP_", "") as PreviewType)
-      ) ?? null
-    : null;
+  // ScreenshotDisplayType has "APP_" prefix; PreviewType does not (e.g. APP_IPHONE_65 → IPHONE_65).
+  // No exact match ⇒ the device's FIRST existing preview set: screenshots are routed by image
+  // size (iPad / iPhone screenshot-size arcs) while bulk puts videos in the device's preview
+  // default, so the two types can differ — hiding that video invited a duplicate preview set.
+  const exactPreviewFor = (shot: { value: ScreenshotDisplayType } | undefined) =>
+    shot
+      ? availablePreviewTypes.find((t) => t.value === (shot.value.replace("APP_", "") as PreviewType)) ?? null
+      : null;
+  const firstPreviewOf = (prefix: "IPHONE" | "IPAD") =>
+    availablePreviewTypes.find((t) => t.value.startsWith(prefix)) ?? null;
+  const matchedIphonePreview = exactPreviewFor(iphoneScreenshotTypes[0]) ?? firstPreviewOf("IPHONE");
+  const matchedIpadPreview = exactPreviewFor(ipadScreenshotTypes[0]) ?? firstPreviewOf("IPAD");
   const activePreviewTypes =
     previewTab === "iphone"
       ? matchedIphonePreview ? [matchedIphonePreview] : []

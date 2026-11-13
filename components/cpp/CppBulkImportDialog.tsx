@@ -362,10 +362,14 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
 
         // If existing, fetch its current localizations to get localizationId per locale
         const existingLocaleMap = new Map<string, string>(); // locale → localizationId
+        // false when an existing CPP's localizations could NOT be read: a locale
+        // without an id is then "unknown", not "new" (KB P7 — see existingCounts).
+        let existingLocalesKnown = !existingCppId;
         if (existingCppId) {
           try {
             const res = await fetch(`/api/asc/cpps/${existingCppId}`);
             if (res.ok) {
+              existingLocalesKnown = true;
               const data = (await res.json()) as {
                 versions?: Array<{
                   localizations?: Array<{ localization: { id: string; attributes: { locale: string } } }>;
@@ -430,12 +434,14 @@ export function CppBulkImportDialog({ appId, existingCpps, onClose, onComplete }
             if (localeStatus !== "skip") {
               // Screenshots already on Apple, read at most ONCE per locale and
               // shared by both devices. Known-empty for a locale not on Apple
-              // yet; null when the read fails.
+              // yet; null when the read fails — including when the existing
+              // CPP's localizations themselves could not be read (then the
+              // locale may well be on Apple: no guessed warning, KB P7).
               let existingCountsP: Promise<Map<ScreenshotDisplayType, number> | null> | null = null;
               const existingCounts = () =>
                 (existingCountsP ??= localizationId
                   ? fetchExistingScreenshotCounts(localizationId)
-                  : Promise.resolve(new Map<ScreenshotDisplayType, number>()));
+                  : Promise.resolve(existingLocalesKnown ? new Map<ScreenshotDisplayType, number>() : null));
 
               async function validateDevice(
                 device: "iphone" | "ipad"

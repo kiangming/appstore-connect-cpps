@@ -59,6 +59,7 @@ Nguồn chung của các mục dưới đây: census arc `[CPP-bulkimport-ipad-s
 GHI NHẬN 2026-11-13 (review G1 arc iPhone). Ngoài phạm vi (Manager: Preview video GIỮ NGUYÊN).
 - **Hiện trạng (ĐỌC CODE):** bulk đưa video iPhone vào `IPHONE_65` khi locale / locale ready chưa có preview set (`DEFAULT_IPHONE_PREVIEW`, `CppBulkImportDialog.tsx:42`, `BulkImportDialog.tsx:35`). Editor, khi locale chưa có preview set iPhone nào, đưa video vào `IPHONE_67` (`LocalizationManager.tsx` fallback `matchedIphonePreview?.value ?? "IPHONE_67"`). Cùng họ với `[CPP-iphone-default-mismatch]` (đã đóng cho screenshot).
 - **Đường đúng:** một mặc định preview lấy từ một chỗ (vd bảng spec), quyết theo đúng loại màn hình; cần Manager chốt type video mặc định.
+- **G1c (2026-11-13):** editor nay HIỆN set preview có sẵn đầu tiên của thiết bị khi không khớp type screenshot (hết "giấu video"). Phần còn lại của mục này: mặc định khi locale CHƯA có set preview nào.
 
 ## `[CPP-bulk-folder-silent-skip]` — thư mục con lạ dưới `screenshots/` bị bỏ qua im lặng
 

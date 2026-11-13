@@ -323,6 +323,27 @@ Kỳ vọng viết TAY. Không sửa một ký tự nào của test iPad: harnes
   - editor giấu video preview khi type video khác type screenshot đầu tiên;
   - dialog nhiều CPP coi "đọc localization của CPP thất bại" là "rỗng đã biết".
 
+## §G1c — hai sửa từ review đối kháng, chạm hành vi ngoài kế hoạch G1 (2026-11-13; commit riêng để Manager nhận / bỏ riêng)
+
+**1. Editor giấu video preview khi type video ≠ type screenshot đầu tiên** (review: major, 3/3 xác nhận).
+- **Nguyên nhân:**
+  - Screenshot nay theo kích thước, còn video bulk vẫn vào mặc định của thiết bị (`IPHONE_65` / `IPAD_PRO_3GEN_129`, Preview video giữ nguyên theo quyết định Manager).
+  - Locale import với ảnh Dynamic Island (large) + 1 video ⇒ set screenshot `APP_IPHONE_67`, set preview `IPHONE_65`.
+  - Editor chỉ ghép preview theo type của set screenshot ĐẦU TIÊN (`LocalizationManager.tsx`, `matchedIphonePreview`) ⇒ báo "There's no preview of this device type.". Thả lại video thì tạo set preview thứ hai (`IPHONE_67`).
+  - iPad có cùng lỗi từ G1 iPad (`725a11b`).
+- **Sửa:** không khớp đúng type ⇒ dùng set preview có sẵn ĐẦU TIÊN của thiết bị. Khớp đúng type vẫn thắng.
+- **Hệ quả kèm** (mới, có test): locale chỉ có video, chưa có set screenshot, nay hiện video (trước: trạng thái rỗng).
+- **Không đổi:** đường upload video của bulk; fallback type khi locale chưa có set preview nào (`IPHONE_67` / `IPAD_PRO_3GEN_129`) — lệch với bulk, ghi BACKLOG `[CPP-preview-default-mismatch]`.
+- **Test** `components/cpp/LocalizationManager.preview-match.test.tsx` (5 ca, viết trước, đỏ trên code G1 rồi xanh): iPhone 67 / 65, iPad 11" / 13", khớp đúng type vẫn thắng, chỉ có video, không có set preview.
+
+**2. Dialog nhiều CPP: đọc localization của CPP có sẵn thất bại ⇒ "chưa biết", không phải "rỗng"** (review: minor, 3/3).
+- **Trước:** GET `/api/asc/cpps/{id}` lỗi ⇒ mọi locale `localizationId = null` ⇒ ảnh có sẵn coi là `Map` rỗng ⇒ cảnh báo thiếu set bắt buộc có thể hiện SAI (locale thật ra có set 67 / 13").
+- **Sửa:** `existingLocalesKnown` ⇒ khi đọc lỗi, `existingCounts()` = `null` ⇒ không cảnh báo, không đoán (KB P7). Áp cho **cả iPad** (13") — đổi hành vi iPad ở đúng ca lỗi đọc này.
+- Dialog một CPP không có lần đọc này (localization đến từ prop).
+- **Test** (3 ca trong `iphone-screenshot-routing.test.tsx`): iPhone, iPad, đối chứng đọc thành công.
+
+**Mutation 4/4 đỏ:** bỏ fallback preview iPhone (2) · iPad (1) · preview đầu tiên thắng khớp đúng type (1) · đọc lỗi lại coi là rỗng (2).
+
 ## §UAT-kết quả
 
 *(Chưa chạy — Manager điền sau deploy theo `docs/cpp-management/uat-iphone-screenshot-sizes.md` §"Ghi kết quả".)*

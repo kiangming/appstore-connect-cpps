@@ -26,6 +26,8 @@ export interface ExistingLocale {
 }
 export interface Scenario {
   existing: ExistingLocale[];
+  /** GET /api/asc/cpps/cpp-summer (the existing CPP's localizations) answers 500. */
+  cppReadFails?: boolean;
   /** Paths below `<locale>/`, e.g. `en-US/screenshots/iphone/01-1284x2778.png`. */
   files: string[];
 }
@@ -49,6 +51,9 @@ export function installFetch(scenario: Scenario): Req[] {
     if (url.endsWith("/app-info-localizations") && method === "GET") return ok({ locales: ["en-US", "ja"] });
     if (url === "/api/asc/cpps" && method === "POST") return ok({ data: { id: "cpp-new" } });
     if (/^\/api\/asc\/cpps\/cpp-[^/]+$/.test(url) && method === "GET") {
+      if (scenario.cppReadFails && url.endsWith("cpp-summer")) {
+        return Promise.resolve({ ok: false, status: 500, json: async () => ({ error: "boom" }) });
+      }
       // A brand-new CPP comes back with its primary-locale localization, no sets.
       const locs = url.endsWith("cpp-new")
         ? [{ localization: { id: "loc-primary", attributes: { locale: "en-US" } } }]

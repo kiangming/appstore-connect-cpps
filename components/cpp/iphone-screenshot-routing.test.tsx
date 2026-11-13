@@ -211,3 +211,34 @@ describe("G1 — twin: the same images through both dialogs ⇒ the same request
     expect(one).toEqual(many);
   });
 });
+
+describe("G1c — CppBulkImportDialog: the existing CPP's localizations could not be read ⇒ 'unknown', not 'empty' (KB P7)", () => {
+  it("only Dynamic Island (medium) in a locale of an existing CPP whose read failed ⇒ NO required-set warning (was: warned as if the locale were empty)", async () => {
+    const { container } = await previewOnly(MANY, {
+      existing: [{ locale: "en-US", locId: "loc-en", sets: [{ id: "set-67", type: "APP_IPHONE_67", count: 3 }] }],
+      cppReadFails: true,
+      files: [IP("01-1179x2556.png")],
+    });
+    expect(container.textContent).toContain("iPhone Dynamic Island (medium): 01-1179x2556.png");
+    expect(container.textContent).not.toMatch(/required iPhone screenshots/);
+  });
+
+  it("the same for iPad: only 11\" images ⇒ no iPad 13\" warning when the read failed", async () => {
+    const { container } = await previewOnly(MANY, {
+      existing: [{ locale: "en-US", locId: "loc-en", sets: [{ id: "set-13", type: "APP_IPAD_PRO_3GEN_129", count: 3 }] }],
+      cppReadFails: true,
+      files: ["en-US/screenshots/ipad/01-1668x2388.png"],
+    });
+    expect(container.textContent).toContain('iPad 11": 01-1668x2388.png');
+    expect(container.textContent).not.toMatch(/No iPad 13"|without iPad 13"/);
+  });
+
+  it("control: the read succeeds and the locale really has no required set ⇒ the warning shows", async () => {
+    const { container } = await previewOnly(MANY, {
+      existing: [{ locale: "en-US", locId: "loc-en", sets: [] }],
+      files: [IP("01-1179x2556.png")],
+    });
+    expect(container.textContent).toContain(NO_REQUIRED_IPHONE);
+  });
+});
+
