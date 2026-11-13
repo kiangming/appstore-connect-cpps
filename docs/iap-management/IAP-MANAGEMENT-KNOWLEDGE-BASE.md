@@ -232,6 +232,8 @@ Production-observation-driven cycles. Same Pattern 10 reuse #19 discipline, narr
 
 **Pattern crystallized**: Apple API specification ≠ Apple API behavior. Railway logs = ground truth.
 
+**Also applies outside IAP (2026-11-06, CPP):** CPP screenshot sets are read with `?include=appScreenshots` — the tool now passes `limit[appScreenshots]=50` explicitly (Apple accepts it: measured by UAT, 2026-11-13) and counts a set's existing screenshots with the cut-list fingerprint in mind (`countScreenshotsPerSet`, `lib/cpp/screenshot-upload.ts`; §38).
+
 ### 4.2 customerPrice match discipline (IAP.o.10a / o.11d)
 
 **Symptom**: pricing schedule POST silently does nothing on Apple side. Diagnostic fingerprint: tool's `price_tier_id` doesn't appear in any Apple price-point list.
@@ -9174,4 +9176,26 @@ Design: `docs/google-iap-management/design-bulkimport-drop-gt-columns.md`. ⚠ K
 **Q8 lần 2 + push (Manager chạy KHỐI A trên prod 2026-10-21, ghi lại 2026-11-06):** 1 batch — `gdo.projectx5`, tiennvt, 2026-10-21 04:17 UTC, lượt import đầu tiên kể từ H4.4 — 8/8 dòng điền GT, **tier thay GT cả 8**, `gt_kept_on_google = 0`, `gt_shape_unexpected = 0` ⇒ GT không thành giá thật ở đâu; xác nhận "team luôn điền GT". Đã push `121f2b1..1a87a75` (4 commit, 0 migration). Chi tiết: design §Q8-lần-2.
 
 **Bài học:** "cột tuỳ chọn mà team luôn điền" + "tool âm thầm dùng nó" = rủi ro lớn hơn một cột bị bỏ quên — hỏi ý định của người điền trước khi coi một cột là tính năng.
+
+## §38 — CPP Bulk Import: kích thước screenshot iPad mới (arc `arc-cpp-bulkimport-ipad-screenshot-sizes`, 2026-11-06 → 13)
+
+Design: `docs/cpp-management/design-cpp-bulkimport-ipad-screenshot-sizes.md`. Đã push `1a87a75..3c0afa3` (5 commit, 0 migration). UAT ĐẠT (báo 2026-11-13).
+
+**Sự thật đã đo (census):**
+- Tool KHÔNG chọn display type theo kích thước ảnh: mọi ảnh iPad của một locale vào MỘT set — set iPad cuối cùng đã có / của locale "ready" đầu / mặc định `APP_IPAD_PRO_3GEN_129`.
+- Bảng kích thước iPad chỉ có 4 mục (13"/12.9") ⇒ 20 kích thước 11" / 10.5" / 9.7" bị từ chối.
+- OAS 4.4.1: 5 display type iPad, không giá trị mới, KHÔNG khai kích thước pixel nào.
+- Tool không đọc `assetDeliveryState` ⇒ map sai hay Apple xử lý lỗi đều im lặng.
+
+**Đã làm:**
+- Một bảng spec duy nhất (`lib/cpp/screenshot-specs.ts`; thứ tự = ưu tiên, 2048×2732 ⇒ 13").
+- Một hàm chọn / tạo set + upload dùng chung cho 2 dialog bulk (trước là bản chép).
+- Editor kiểm theo SET ĐÍCH.
+- Tối đa 10 mỗi type, tính cả ảnh có sẵn; cảnh báo thiếu 13" không khoá.
+- iPhone giữ nguyên (BACKLOG CPP `[CPP-iphone-screenshot-sizes]`).
+
+**Ba bài học:**
+1. **UAT end-to-end thay cho phép đo trước khi code** khi OAS không khai gì và thử trên ASC UI tốn công: code theo SUY LUẬN, nhưng (a) bảng tách thành dòng có ghi `source` để sửa đúng một dòng, (b) bộ ảnh UAT in sẵn "ô phải rơi vào" + test ràng bộ ảnh với bảng (đọc IHDR thật), (c) bước DevTools đọc `assetDeliveryState` bù cho chỗ tool chưa đọc. Đổi `source` sang ĐÃ ĐO chỉ cho dòng UAT thực sự đi qua — dòng 12.9" (Q1 không gửi gì vào) vẫn CHƯA ĐO.
+2. **§4.1 không chỉ là IAP:** mọi `?include=<rel>` mà code đếm hay liệt kê phải truyền `limit[<rel>]` tường minh; và vì resource trong `included[]` không mang tham chiếu ngược về cha, "đếm từ `included`" vẫn phải qua danh sách ID của cha — ảnh không cha nào liệt kê là dấu vết bị cắt; không quy được về một cha ⇒ không đoán (P7).
+3. **Mutation phải tách được các tầng:** ở G0, mutation "bỏ dò set theo locale" xanh vì mọi kịch bản có set của locale trùng set của locale ready — thêm một kịch bản tách hai tầng mới đỏ (P17). Ở G1b, một nhánh "đếm `included` ∩ ID" luôn ≤ độ dài danh sách nên vô tác dụng — rà lại trước khi viết mutation thì thấy, đã bỏ.
 

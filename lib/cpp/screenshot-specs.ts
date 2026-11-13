@@ -3,12 +3,15 @@
  * (arc `[CPP-bulkimport-ipad-screenshot-sizes]`, design
  * docs/cpp-management/design-cpp-bulkimport-ipad-screenshot-sizes.md §P4, §P6-chốt).
  *
- * ⚠ CERTAINTY. Which sizes belong to which screen group: Apple docs, as listed
- * by Manager on 2026-11-06. Which group maps to which `ScreenshotDisplayType`:
- * INFERRED (design §3.1) — the OAS (4.4.1) declares no pixel sizes. Manager
- * chose to verify by an end-to-end UAT right after deploy
- * (docs/cpp-management/uat-ipad-screenshot-sizes.md). If an image lands in
- * the wrong ASC slot or fails processing, fix exactly ONE row here.
+ * CERTAINTY (per row, see `source`). Sizes per screen group: Apple docs, as
+ * listed by Manager on 2026-11-06. Group → `ScreenshotDisplayType`: MEASURED
+ * for 13" / 11" / 10.5" / 9.7" by the end-to-end UAT after deploy of
+ * `3c0afa3` (docs/cpp-management/uat-ipad-screenshot-sizes.md, reported
+ * 2026-11-13): every one of the 24 kit images landed in the ASC slot of its
+ * row, `assetDeliveryState` COMPLETE for all 24. The 12.9" row is NOT
+ * measured: Q1 sends its two sizes to 13", so the UAT put nothing in that set
+ * (its slot stayed empty, as intended). The OAS (4.4.1) declares no pixel
+ * sizes. If an image ever lands in the wrong slot, fix exactly ONE row here.
  *
  * iPhone is out of scope (Q6, BACKLOG `[CPP-iphone-screenshot-sizes]`): the
  * four 6.5" sizes are kept as a device-level list, and iPhone images are still
@@ -27,7 +30,9 @@ export interface IpadScreenshotSpec {
   source: string;
 }
 
-const APPLE_DOCS_VIA_MANAGER = "Apple docs via Manager 2026-11-06";
+const MEASURED_BY_UAT = "ĐÃ ĐO qua UAT 2026-11-13 (đường code thật, 3c0afa3)";
+const APPLE_DOCS_VIA_MANAGER_NOT_MEASURED =
+  "Apple docs via Manager 2026-11-06 — CHƯA ĐO: Q1 gửi 2 kích thước này vào 13\", UAT không đưa ảnh nào vào set này";
 
 /**
  * Order = precedence when one size belongs to several groups. 2048×2732 and
@@ -38,13 +43,13 @@ export const IPAD_SCREENSHOT_SPECS: readonly IpadScreenshotSpec[] = [
     displayType: "APP_IPAD_PRO_3GEN_129",
     label: 'iPad 13"',
     sizes: [[2064, 2752], [2752, 2064], [2048, 2732], [2732, 2048]],
-    source: APPLE_DOCS_VIA_MANAGER,
+    source: MEASURED_BY_UAT,
   },
   {
     displayType: "APP_IPAD_PRO_129",
     label: 'iPad 12.9"',
     sizes: [[2048, 2732], [2732, 2048]],
-    source: APPLE_DOCS_VIA_MANAGER,
+    source: APPLE_DOCS_VIA_MANAGER_NOT_MEASURED,
   },
   {
     displayType: "APP_IPAD_PRO_3GEN_11",
@@ -53,13 +58,13 @@ export const IPAD_SCREENSHOT_SPECS: readonly IpadScreenshotSpec[] = [
       [1488, 2266], [2266, 1488], [1512, 2316], [2316, 1512], [1668, 2420],
       [2420, 1668], [1668, 2388], [2388, 1668], [1640, 2360], [2360, 1640],
     ],
-    source: APPLE_DOCS_VIA_MANAGER,
+    source: MEASURED_BY_UAT,
   },
   {
     displayType: "APP_IPAD_105",
     label: 'iPad 10.5"',
     sizes: [[1668, 2224], [2224, 1668]],
-    source: APPLE_DOCS_VIA_MANAGER,
+    source: MEASURED_BY_UAT,
   },
   {
     displayType: "APP_IPAD_97",
@@ -68,7 +73,7 @@ export const IPAD_SCREENSHOT_SPECS: readonly IpadScreenshotSpec[] = [
       [1536, 2008], [1536, 2048], [2048, 1496], [2048, 1536],
       [768, 1004], [768, 1024], [1024, 748], [1024, 768],
     ],
-    source: APPLE_DOCS_VIA_MANAGER,
+    source: MEASURED_BY_UAT,
   },
 ];
 

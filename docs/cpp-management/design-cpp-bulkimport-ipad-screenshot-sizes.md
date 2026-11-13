@@ -1,6 +1,6 @@
 # [CPP-bulkimport-ipad-screenshot-sizes] Bulk Import CPP — hỗ trợ các kích thước screenshot iPad mới — census + thiết kế
 
-**Trạng thái:** census PASS (`f92ff4e`). Manager chốt Q1–Q7 (2026-11-06, §P6-chốt). G0 PASS (`23f715e`). G1 PASS (`725a11b`). G1b (§G1b) xong ⇒ push `2371c8e..G1b` (5 commit) một lượt. **Chờ Manager chạy UAT** ngay sau deploy (`uat-ipad-screenshot-sizes.md`).
+**Trạng thái: ✅ ĐÓNG (2026-11-13).** census PASS (`f92ff4e`) · Manager chốt Q1–Q7 (§P6-chốt) · G0 PASS (`23f715e`) · G1 PASS (`725a11b`) · G1b (`3c0afa3`) · đã push **`1a87a75..3c0afa3`** (5 commit, 0 migration) · **UAT ĐẠT** (§UAT-kết quả).
 **Nhánh:** `arc-cpp-bulkimport-ipad-screenshot-sizes` (từ `origin/main` = `1a87a75`).
 **Phạm vi:** module CPP Manager — step upload screenshot của Bulk Import. Twin path liệt kê ở §1.5.
 
@@ -545,6 +545,25 @@ Ba file test mới + một helper. Kỳ vọng viết TAY, không đọc từ co
 
 
 **Gauntlet:** typecheck sạch · 432 file / 6073 test xanh (1 skip có sẵn; G0: 428 / 5958) · lint 0 lỗi · build xanh.
+
+## §UAT-kết quả — ĐẠT (Manager, báo 2026-11-13)
+
+Manager chạy đủ C → B → A theo `uat-ipad-screenshot-sizes.md` trên app + CPP thử, sau khi Railway deploy `3c0afa3`:
+
+| Bộ / bước | Kết quả |
+|---|---|
+| C — chỉ ảnh 11" | Cảnh báo thiếu 13" hiện, Import KHÔNG bị khoá — ĐẠT |
+| B — 1600×2400 | Bị chặn ở Preview — ĐẠT |
+| A — 24 ảnh | Import xong; mỗi ảnh nằm đúng ô trên ASC (13" 4 · 11" 10 · 10.5" 2 · 9.7" 8); ô 12.9" trống đúng chủ ý (Q1) — ĐẠT |
+| Bước 5 — DevTools | `assetDeliveryState` = **COMPLETE** cả 24 — ĐẠT |
+
+**Mức chắc sau UAT:**
+- **ĐÃ ĐO** (qua đường code thật): map kích thước → display type cho 13" (`APP_IPAD_PRO_3GEN_129`, gồm cả 2048×2732 / 2732×2048), 11" (`APP_IPAD_PRO_3GEN_11`), 10.5" (`APP_IPAD_105`), 9.7" (`APP_IPAD_97`) — đủ 24 kích thước khác nhau. Bảng spec đổi `source` của 4 dòng này thành `"ĐÃ ĐO qua UAT 2026-11-13 (đường code thật, 3c0afa3)"`; dữ liệu không đổi.
+- **ĐÃ ĐO:** Apple nhận `limit[appScreenshots]=50` trên `GET …/appCustomProductPageLocalizations/{id}/appScreenshotSets` (bước 5 đi qua đúng request này).
+- **CHƯA ĐO:** dòng 12.9" (`APP_IPAD_PRO_129`). Q1 gửi cả hai kích thước của nó vào 13", nên UAT không đưa ảnh nào vào set 12.9". Chỉ editor (thả ảnh vào một set 12.9" có sẵn) mới dùng dòng này. `source` giữ "Apple docs via Manager", kèm lý do chưa đo.
+- Ngày ghi trong `source` là ngày Manager báo kết quả (2026-11-13). Ngày chạy UAT cụ thể: không được báo.
+
+**Đóng arc:** range `1a87a75..3c0afa3` trên `origin/main`, 0 migration; commit docs đóng arc sau đó. Thứ tự ưu tiên BACKLOG hiện tại (Manager 2026-11-13): 1. `[GOOGLE-bulk-import-price-magnitude]` (HOÃN, đã có phác thảo census) · 2. `[CPP-iphone-screenshot-sizes]` · 3. `[CPP-asset-delivery-state-unread]`.
 
 ## Phát hiện bên lề (đã ghi `docs/cpp-management/BACKLOG.md`, Manager duyệt 2026-11-06)
 

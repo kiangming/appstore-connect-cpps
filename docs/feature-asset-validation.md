@@ -29,7 +29,7 @@ NEXT_PUBLIC_ASSET_VALIDATION_DEEP=true   # true = ffmpeg.wasm | false = basic on
 
 ### Screenshot
 
-Nguồn sự thật DUY NHẤT: `lib/cpp/screenshot-specs.ts` (arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06). Kích thước theo tài liệu Apple (Manager cung cấp 2026-11-06); map nhóm → display type là SUY LUẬN, xác nhận bằng UAT (`docs/cpp-management/uat-ipad-screenshot-sizes.md`).
+Nguồn sự thật DUY NHẤT: `lib/cpp/screenshot-specs.ts` (arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06). Kích thước theo tài liệu Apple (Manager cung cấp 2026-11-06). Map nhóm → display type **ĐÃ ĐO qua UAT** (báo 2026-11-13, `docs/cpp-management/uat-ipad-screenshot-sizes.md`) cho 13" / 11" / 10.5" / 9.7"; dòng 12.9" CHƯA ĐO (bulk không bao giờ gửi vào set này — Q1).
 
 | Device / loại màn hình | Display type | Valid resolutions |
 |---|---|---|

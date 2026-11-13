@@ -474,6 +474,8 @@ export async function getCppVersionLocalizations(
  * Apple's default for an included relation is not declared, and Apple has been
  * seen to cut relationship lists (IAP KB §4.1). Bulk import counts the
  * screenshots already in each set from this response (max 10 per set).
+ * MEASURED: Apple accepts the parameter on this endpoint (UAT step 5 went
+ * through this exact request after deploy of `3c0afa3`, reported 2026-11-13).
  */
 export async function getLocalizationScreenshotSets(
   creds: AscCredentials,
