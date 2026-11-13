@@ -8,6 +8,8 @@ Nguồn chung của các mục dưới đây: census arc `[CPP-bulkimport-ipad-s
 
 ## `[CPP-iphone-screenshot-sizes]` — bảng iPhone chỉ có 4 kích thước 6.5"
 
+**→ ĐANG LÀM: arc `arc-cpp-bulkimport-iphone-screenshot-sizes`** (mở 2026-11-13; design `docs/cpp-management/design-cpp-bulkimport-iphone-screenshot-sizes.md`).
+
 **⚠ ƯU TIÊN CAO** (Manager 2026-11-06, Q6).
 
 - **Hiện trạng (ĐỌC CODE):** `lib/asset-validator.ts:22-25` chỉ nhận 1284×2778 · 2778×1284 · 1242×2688 · 2688×1242. Mọi kích thước iPhone khác bị từ chối ở client trong cả 3 luồng upload.
@@ -16,11 +18,21 @@ Nguồn chung của các mục dưới đây: census arc `[CPP-bulkimport-ipad-s
 
 ## `[CPP-iphone-default-mismatch]` — mặc định iPhone lệch giữa editor và 2 dialog bulk
 
+**→ ĐANG LÀM: arc `arc-cpp-bulkimport-iphone-screenshot-sizes`** (cùng arc với `[CPP-iphone-screenshot-sizes]`). ĐÃ ĐO ở G0: cùng ảnh 6.5", locale chưa có set ⇒ bulk `APP_IPHONE_65`, editor `APP_IPHONE_67`.
+
 - **Hiện trạng (ĐỌC CODE):**
   - Editor dùng fallback `APP_IPHONE_67` (`components/cpp/LocalizationManager.tsx:857-858`).
   - 2 dialog bulk dùng `APP_IPHONE_65` (`CppBulkImportDialog.tsx:34`, `BulkImportDialog.tsx:27`).
   - Bảng kích thước iPhone chỉ có cỡ 6.5" ⇒ editor đẩy ảnh 6.5" vào set 6.7" khi locale chưa có set iPhone. Apple xử lý ra sao: CHƯA BIẾT.
 - **Đường đúng:** làm cùng `[CPP-iphone-screenshot-sizes]`. Display type đến từ kích thước ảnh, không đến từ một hằng số mặc định.
+
+## `[CPP-iphone-duo-screenshots]` — screenshot iPhone Duo (outer / inner display)
+
+**Hạn chót Apple: 04/2027** — bắt buộc với app dùng iOS 27.1 SDK trở lên; nộp ảnh Duo ⇒ trang sản phẩm có badge "made for iPhone Duo" (THEO TÀI LIỆU APPLE, Manager 2026-11-13).
+
+- **Vì sao chưa làm (D6, Manager 2026-11-13):** OAS 4.4.1 KHÔNG KHAI display type nào cho Duo. Đã tra toàn văn `docs/openapi.oas.v20260717.json`: `DUO` / `IPHONE_69` / `INNER` / `OUTER` ⇒ 0; `#/components/schemas/ScreenshotDisplayType/enum` chỉ có 8 giá trị `APP_IPHONE_*`. Kích thước Duo: 1398×2034 · 2034×1398 (outer) · 2007×2853 · 2853×2007 (inner).
+- **Hôm nay (từ G1 arc iPhone):** ảnh cỡ Duo trong `screenshots/iphone/` bị từ chối với câu riêng: "iPhone Duo is not supported by the App Store Connect API yet; upload it manually on App Store Connect".
+- **Đường đúng khi làm:** khi Apple ra bản OAS có display type Duo ⇒ đối chiếu (enum + có phải 2 type outer / inner không), thêm vào bảng spec như mọi nhóm, UAT. Theo dõi bản OAS mới trước 04/2027.
 
 ## `[CPP-asset-delivery-state-unread]` — tool không đọc `assetDeliveryState` sau commit
 
