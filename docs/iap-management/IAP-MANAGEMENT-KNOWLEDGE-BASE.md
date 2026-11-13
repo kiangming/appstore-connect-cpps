@@ -9199,3 +9199,20 @@ Design: `docs/cpp-management/design-cpp-bulkimport-ipad-screenshot-sizes.md`. Đ
 2. **§4.1 không chỉ là IAP:** mọi `?include=<rel>` mà code đếm hay liệt kê phải truyền `limit[<rel>]` tường minh; và vì resource trong `included[]` không mang tham chiếu ngược về cha, "đếm từ `included`" vẫn phải qua danh sách ID của cha — ảnh không cha nào liệt kê là dấu vết bị cắt; không quy được về một cha ⇒ không đoán (P7).
 3. **Mutation phải tách được các tầng:** ở G0, mutation "bỏ dò set theo locale" xanh vì mọi kịch bản có set của locale trùng set của locale ready — thêm một kịch bản tách hai tầng mới đỏ (P17). Ở G1b, một nhánh "đếm `included` ∩ ID" luôn ≤ độ dài danh sách nên vô tác dụng — rà lại trước khi viết mutation thì thấy, đã bỏ.
 
+## §39 — CPP Bulk Import: kích thước screenshot iPhone (arc `arc-cpp-bulkimport-iphone-screenshot-sizes`, 2026-11-13, đang chờ gate G1 + UAT)
+
+Design: `docs/cpp-management/design-cpp-bulkimport-iphone-screenshot-sizes.md`. Khuôn: §38 (iPad).
+
+**Sự thật đã đo (census):**
+- chỉ 4/36 kích thước iPhone của danh sách Apple được nhận;
+- ảnh iPhone đi luật cũ (set cuối / locale ready / `APP_IPHONE_65`), editor fallback `APP_IPHONE_67` ⇒ lệch mặc định đã đo;
+- OAS 4.4.1 có đúng 8 type `APP_IPHONE_*`, **không có type cho iPhone Duo** ⇒ Duo bị từ chối (BACKLOG CPP `[CPP-iphone-duo-screenshots]`, hạn Apple 04/2027).
+
+**Đã làm (G1):** cùng cơ chế với iPad — bảng spec chung, phân loại theo kích thước, một set mỗi type, editor theo set đích. Map 8 nhóm ↔ 8 type là SUY LUẬN; Face ID (medium) → `APP_IPHONE_58` SUY LUẬN THEO LOẠI TRỪ ⇒ UAT là lớp chặn.
+
+**Bốn bài học:**
+1. **Một phương án hotfix "một dòng" phải được CHẠY THỬ trước khi ghi vào runbook.** Phương án "Face ID (medium) → `APP_IPHONE_61`" (type đã thuộc nhóm khác) với code ban đầu sẽ tạo hai nhóm cùng type ⇒ mỗi ảnh upload hai lần. Agent soát UAT bắt được. Sửa bằng cách làm bảng merge-safe, rồi đo bằng probe qua dialog thật với hotfix áp tạm. Kèm đo luôn "hotfix làm đỏ test nào" (31 test / 6 file) để runbook không nói "không đổi gì khác".
+2. **Hằng "mặc định" / "bắt buộc" suy từ bảng phải được LẤY từ dòng của bảng, không viết cứng** — nếu không, "sửa một dòng" lặng lẽ để chúng lệch. Kiểm bằng mutation hai chỗ (đổi dòng + giữ literal) so với đối chứng.
+3. **"Test của arc trước giữ nguyên" chỉ đúng nếu G0 đã ghim mọi khẳng định sắp đổi, kể cả khẳng định nằm trong file của arc trước** (ở đây 7 ca "iPhone unchanged" trong file iPad). Census G0 phải grep cả file của arc cũ theo thiết bị đang đổi, rồi khai rõ ở gate.
+4. **Đổi luật chọn set screenshot làm lộ chỗ phụ thuộc ngầm ở editor:** editor ghép preview set theo type của set screenshot ĐẦU TIÊN. Khi screenshot theo kích thước còn video theo mặc định, editor giấu video. Đổi một trục (screenshot) phải soát mọi chỗ đọc giả định trục đó trùng trục khác (video).
+

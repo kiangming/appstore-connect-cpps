@@ -1,6 +1,6 @@
 # [CPP-bulkimport-iphone-screenshot-sizes] Bulk Import CPP — screenshot iPhone theo danh sách kích thước Apple mới nhất — census + G0
 
-**Trạng thái:** census xong (2026-11-13) — không phát hiện điều gì trái D1–D9 ⇒ **G0 xong** (§G0), chờ gate G0. G1 chưa làm.
+**Trạng thái:** census PASS (`20d7822`) · G0 PASS (`3d65f57`) · Manager chốt Q-A..Q-D (§P-chốt) · **G1 đang làm** (§G1).
 **Nhánh:** `arc-cpp-bulkimport-iphone-screenshot-sizes` (từ `origin/main` = `82cde53`).
 **Mở BACKLOG:** `[CPP-iphone-screenshot-sizes]` + `[CPP-iphone-default-mismatch]` (arc xử lý cả hai). Ghi mới: `[CPP-iphone-duo-screenshots]` (D6).
 **Khuôn:** arc iPad (`design-cpp-bulkimport-ipad-screenshot-sizes.md`, KB §38).
@@ -207,6 +207,125 @@ Kỳ vọng viết TAY. Không sửa một ký tự nào của test iPad: harnes
 | 11 | editor kiểm iPhone theo set đích | 3 |
 
 - **Gauntlet:** xem commit G0.
+
+## §P-chốt — Gate G0 PASS + Manager quyết Q-A..Q-D (2026-11-13)
+
+**Gate G0:** PASS (`20d7822` census, `3d65f57` G0).
+
+- **Q-A = CÓ.** Gợi ý "looks like an iPhone screenshot" trong `ipad/` dùng bảng iPhone mới (32 kích thước của 8 nhóm). Hành vi chặn/nhận iPad không đổi. Test iPad xanh không sửa, chỉ lật ca `[G1: Q-A]` đã ghim.
+- **Q-B = CHẤP NHẬN.** Fallback của editor lấy từ bảng (Dynamic Island (large) = `APP_IPHONE_67`) và chỉ nhận đúng kích thước nhóm đó. Ảnh 6.5" vào locale chưa có set iPhone ⇒ đi bulk. Ghi user guide.
+- **Q-C = label theo tên nhóm Apple:** `iPhone Dynamic Island (large)` · `iPhone Face ID (large)` · `iPhone Dynamic Island (medium)` · `iPhone Face ID (medium)` · `iPhone Home Button (large)` · `iPhone Home Button (medium)` · `iPhone Home Button (4")` · `iPhone Home Button (3.5")`. Áp ở Preview, editor, `CppDetailPanel`.
+- **Q-D = DUYỆT nguyên văn:** câu Duo, câu cảnh báo D3, câu sai cỡ theo khuôn §4.3 kèm gợi ý D8.
+- **Bộ UAT iPhone:**
+  - 32 kích thước, in chữ lên ảnh;
+  - bộ phụ: Duo, sai cỡ, ảnh iPad trong `iphone/`, chỉ Dynamic Island (medium);
+  - hướng dẫn tiếng Việt, đi từ bộ không import tới bộ import thật;
+  - ⚠ ghi nổi bật: Face ID (medium) → `APP_IPHONE_58` là SUY LUẬN THEO LOẠI TRỪ (ứng viên thay thế `APP_IPHONE_61`).
+- `APP_IPHONE_58` thêm vào union ⇒ đóng phần iPhone của `[CPP-types-asc-gaps]`.
+
+## §G1 — thực hiện (2026-11-13)
+
+**Đã làm (theo D1–D9 + Q-A..Q-D):**
+- **`lib/cpp/screenshot-specs.ts`:**
+  - `IPHONE_SCREENSHOT_SPECS`: 8 nhóm × kích thước × label Q-C × `source` (`"Apple docs via Manager 2026-11-13 — map → display type SUY LUẬN, chờ UAT iPhone"`; Face ID (medium): `… APP_IPHONE_58 SUY LUẬN THEO LOẠI TRỪ (ứng viên thay thế: APP_IPHONE_61) …`).
+  - `IPHONE_DUO_SIZES` bị từ chối với câu Q-D.
+  - `IPHONE_DEFAULT_DISPLAY_TYPE` (D5) và `IPHONE_REQUIRED_DISPLAY_TYPES` (D3) **lấy từ dòng** của bảng theo tên nhóm. Thiếu dòng ⇒ ném lỗi lúc nạp module (không có hằng cũ âm thầm).
+  - `classifyScreenshot` cho cả hai thiết bị.
+  - `screenshotSizeError`: câu §4.3 cho `iphone/` + gợi ý D8; gợi ý Q-A trong `ipad/` dùng đủ 32 kích thước iPhone, không gồm Duo; câu iPad không đổi.
+  - Editor theo set đích cho iPhone (D2); ảnh thuộc set iPhone khác ⇒ câu nêu tên nhóm thật.
+- **Merge-safe** (thêm sau soát UAT, xem dưới): hai dòng được dùng chung một display type ⇒ một set (`groupBySpecs`), kích thước hợp nhất (`sizesOfTypeIn`), nhãn dòng đầu (`labelsOf`).
+- **`types/asc.ts`:** thêm `APP_IPHONE_58`.
+- **`lib/asset-validator.ts`:** `checkScreenshot` trả `displayType` cho iPhone.
+- **`lib/cpp/screenshot-upload.ts`:**
+  - `groupScreenshots(device, …)`;
+  - `checkScreenshotGroups(device, …)`: tối đa 10 mỗi type tính cả ảnh có sẵn (D7), cảnh báo thiếu set bắt buộc (iPad 13"; iPhone 67 hoặc 65, câu Q-D);
+  - `groupIpadScreenshots` / `checkIpadGroups` giữ nguyên chữ ký + hành vi.
+- **Hai dialog:**
+  - bỏ `DEFAULT_IPHONE_SCREENSHOT` / `cppIphoneSS` / `iphoneSS`;
+  - upload `[...nhóm iPhone, ...nhóm iPad]` qua `uploadScreenshotGroups`;
+  - đọc ảnh có sẵn **một lần** mỗi locale, dùng chung cho hai thiết bị;
+  - Preview: mỗi loại màn hình một dòng (nhãn Q-C), cảnh báo trong locale + đếm ở footer (`without required iPhone screenshots`);
+  - dò type preview của locale ready nay chỉ GET `preview-sets` (GET `screenshot-sets` ở đó không còn dùng) — **Preview video giữ nguyên hành vi** (`cppIphonePV` / `cppIpadPV`);
+  - khung "Expected folder structure" thêm dòng iPhone tự phân loại.
+- **Editor:** fallback iPhone = `IPHONE_DEFAULT_DISPLAY_TYPE` (Q-B: chỉ nhận Dynamic Island (large)); label từ bảng (`CppDetailPanel` dùng chung `displayTypeLabel`).
+- **Bộ UAT iPhone** (agent dựng, agent đối kháng soát, tôi sửa theo soát):
+  - `scripts/uat/gen-iphone-screenshot-kit.py`;
+  - 37 PNG (A 32 · B 3 · C 2), kiểm bằng `sips` + IHDR;
+  - `lib/cpp/uat-iphone-kit.test.ts` (kể cả ràng `GROUPS` của script với `SLOT_BY_GROUP`);
+  - hướng dẫn `docs/cpp-management/uat-iphone-screenshot-sizes.md`.
+- **Docs:** `user-guide.md` (bảng iPhone, Q-B, câu chữ, chặn/không chặn), `feature-asset-validation.md`, `feature-cpp-editor.md`, `bulk-import-design.md`, `feature-cpp-bulk-import-design.md`, `CURRENT-STATE.md`, `architecture.md`.
+
+**⚠ Khai báo — test của arc iPad bị sửa (trái với câu "test iPad xanh không sửa" ở §P-chốt / kế hoạch):**
+- 3 file test của arc iPad chứa **7 ca ghim hành vi iPHONE** ("iPhone unchanged / out of scope"). G0 iPhone đã bỏ sót, không gắn nhãn `[G1 FLIPS]`. D1/D2/Q-C/Q-D bắt buộc lật chúng.
+- Đã lật, mỗi ca gắn `[iPhone G1 FLIPPED] … (was: …)`, header mỗi file ghi rõ:
+
+| File | Ca |
+|---|---|
+| `lib/cpp/screenshot-specs.test.ts` | `APP_IPHONE_67` theo set đích (tách thành ca riêng) · câu `iphone/` + D8 · nhãn iPhone Q-C |
+| `lib/asset-validator.screenshot-sizes.test.ts` | `checkScreenshot` iPhone trả `APP_IPHONE_65` · câu `iphone/` + D8 |
+| `components/cpp/ipad-screenshot-routing.baseline.test.tsx` | set 67 có sẵn không còn nhận ảnh 6.5" (× 2 dialog) |
+
+- Thêm: 1 tiêu đề ca iPhone ở file routing iPad đổi chữ "iPhone unchanged", thân giữ nguyên.
+- **Không một khẳng định iPad nào đổi** (diff từng hunk đã soát).
+- Ca `[G1: Q-A]` nằm trong file iPhone (`iphone-screenshot-sizes.baseline.test.ts`), đã lật.
+
+**Lật có chủ đích (file iPhone G0, khai "was: …"):**
+- validator:
+  - 28 cỡ iPhone REJECT ⇒ OK; 4 cỡ Duo vẫn REJECT với câu Duo;
+  - editor: 8 type, mỗi type chỉ nhận nhóm của nó;
+  - ảnh 1179×2556 trong `iphone/` ⇒ nhận; ảnh iPad trong `iphone/` ⇒ gợi ý D8;
+  - Q-A.
+- routing I3–I7 × 2 dialog; editor fallback từ chối ảnh 6.5" (Q-B); set 67 nhận 1290×2796.
+- `[CPP-iphone-default-mismatch]` đóng: cùng ảnh Dynamic Island (large) ⇒ bulk và editor cùng `APP_IPHONE_67`; ảnh 6.5" ⇒ bulk 65, editor từ chối.
+- I1/I2/I8 và ca "set 6.5" nhận ảnh 6.5"" giữ nguyên thân (tiêu đề `describe` bỏ chữ "today").
+- 1 ca mới gắn `[G1 NEW]`.
+
+**Test mới:**
+
+| File | Số ca | Nội dung |
+|---|---|---|
+| `lib/cpp/iphone-screenshot-specs.test.ts` | 92 | bảng 32 dòng viết tay; Duo; 8 type theo set đích; câu nguyên văn; Q-A 32 cỡ; nhãn; mặc định / bắt buộc + ca "đi theo dòng"; merge-safe |
+| `lib/cpp/screenshot-upload.iphone.test.ts` | 13 | thứ tự nhóm; merge-safe; D7; D3 (8 ca, kể cả `null`) |
+| `components/cpp/iphone-screenshot-routing.test.tsx` | 27 | 13 ca × 2 dialog + twin có dãy request viết tay |
+| `components/cpp/LocalizationManager.iphone-target.test.tsx` | 5 | |
+| `lib/cpp/uat-iphone-kit.test.ts` | 42 | |
+
+**Probe merge-safe — ĐÃ ĐO (2026-11-13):**
+- Áp tạm hotfix một dòng "Face ID (medium) → `APP_IPHONE_61`" qua `scripts/mutate.sh`, chạy probe qua **dialog thật** (cả hai).
+- Ảnh `01-fim-1170x2532`, `02-dim-1179x2556`, `03-fim-1125x2436` ⇒ cả hai dialog: `POST set APP_IPHONE_61` **một lần**, 3 upload, mỗi ảnh một lần, hai dialog cùng dãy.
+- `sizesForDisplayType("APP_IPHONE_61")` = 10 kích thước của hai nhóm; `"APP_IPHONE_58"` = []; nhãn 61 = `iPhone Dynamic Island (medium)`, nhãn 58 = tên thô; editor nhận 1170×2532 trên set 61.
+- Khôi phục: md5 khớp.
+- Trước khi sửa merge-safe, cùng hotfix đó khiến code tạo **hai nhóm cùng type** ⇒ mỗi ảnh upload hai lần (agent soát UAT phát hiện).
+
+**Hotfix 58→61 làm đỏ gì — ĐÃ ĐO:** 31 test trong 6 file, 0 file iPad. Danh sách ghi trong runbook của hướng dẫn UAT.
+
+**Mutation 25/25 đỏ** (`scripts/mutate.sh`, md5 trước = sau từng lần, `status` sạch):
+
+| Nhóm | Mutation (số test đỏ) |
+|---|---|
+| 8 kiểu Manager | bỏ 1206×2622 (19) · map Face ID (medium) → 55 (27) · 1284×2778 → 67 (42) · luật cũ ở dialog một CPP (12) / nhiều CPP (11) · bỏ cảnh báo D3 (8) · Duo được nhận (17) · editor mặc định 65 (4) |
+| đổi hành vi iPad | ưu tiên 12.9" (22) · mất gợi ý iPhone trong `ipad/` (37) · nhóm iPad upload trước (4) · iPad dùng type bắt buộc của iPhone (5) |
+| thêm | Q-A về 4 cỡ (29) · bỏ D8 (7) · bỏ giới hạn 10 cho iPhone (6) · editor iPhone không theo set đích (23) · Preview bỏ dòng iPhone, từng dialog (1 / 1) · đổi nhãn Q-C (18) · đổi câu Duo (13) · `checkScreenshot` iPhone không phân loại (41) · bỏ merge-safe: gom nhóm / kích thước / nhãn (1 / 1 / 1) · script UAT in sai type (1) |
+
+- Thêm một kịch bản hai chỗ sửa: hotfix dòng 65→55 nhưng giữ literal 65 ⇒ ca "FOLLOW their rows" đỏ. Đối chứng (lấy từ dòng) ⇒ ca đó xanh.
+
+**Gauntlet G1:** typecheck sạch · 439 file / 6373 test xanh (1 skip có sẵn; G0: 434 / 6190) · lint 0 lỗi · build xanh.
+
+**Review đối kháng** (workflow: 5 góc nhìn ⇒ mỗi phát hiện 3 agent cố bác bỏ, giữ khi ≥ 2/3):
+- 24 phát hiện, 15 xác nhận, 9 bị bác.
+- Đã sửa trong G1:
+  - khai báo test arc iPad + sửa header / tiêu đề;
+  - nhãn `[G1 NEW]`;
+  - mặc định / bắt buộc lấy từ dòng;
+  - hướng dẫn UAT: điều kiện dùng lại CPP (cả set rỗng), runbook hotfix với danh sách đo được, chạy lại UAT trên CPP mới, bản ghi probe;
+  - BACKLOG 409 (mức phơi nhiễm tăng) và `[CPP-preview-default-mismatch]`.
+- Sửa ở commit riêng **G1c** (chạm hành vi ngoài kế hoạch, để Manager nhận / bỏ riêng):
+  - editor giấu video preview khi type video khác type screenshot đầu tiên;
+  - dialog nhiều CPP coi "đọc localization của CPP thất bại" là "rỗng đã biết".
+
+## §UAT-kết quả
+
+*(Chưa chạy — Manager điền sau deploy theo `docs/cpp-management/uat-iphone-screenshot-sizes.md` §"Ghi kết quả".)*
 
 ## G1 — kế hoạch (sau gate G0, theo D1–D9)
 

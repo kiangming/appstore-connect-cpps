@@ -162,6 +162,7 @@ preview.attributes.previewImage?.templateUrl  // dùng previewImage, không ph�
 ### Screenshot Set management
 - `screenshotDisplayType` → group theo device: `APP_IPHONE_65`, `APP_IPAD_PRO_3GEN_129`, v.v.
 - Bảng kích thước ↔ display type: `lib/cpp/screenshot-specs.ts` (nguồn duy nhất). Bulk import: ảnh iPad chọn set THEO KÍCH THƯỚC qua `lib/cpp/screenshot-upload.ts` (dùng chung cho 2 dialog) — arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06
+- iPhone cùng bảng (`IPHONE_SCREENSHOT_SPECS`, 8 loại màn hình, label = tên nhóm Apple) và cùng đường phân loại + chọn/tạo set THEO KÍCH THƯỚC như iPad; bỏ luật cũ "set iPhone cuối / locale ready đầu / `APP_IPHONE_65`". Kích thước Duo (`IPHONE_DUO_SIZES`) bị từ chối. Editor kiểm iPhone theo set đích; fallback khi locale chưa có set iPhone = `APP_IPHONE_67`. Map iPhone → display type SUY LUẬN, chờ UAT. Preview (video) type vẫn dò từ preview set có sẵn — arc `[CPP-bulkimport-iphone-screenshot-sizes]`, 2026-11-13
 - Một localization có thể có nhiều set (một per device type)
 - 409 Conflict khi tạo set đã tồn tại → re-fetch để lấy ID
 
@@ -209,10 +210,11 @@ Key types:
 type CppState = "PREPARE_FOR_SUBMISSION" | "READY_FOR_REVIEW" | "WAITING_FOR_REVIEW"
               | "IN_REVIEW" | "APPROVED" | "REJECTED"
 
-type ScreenshotDisplayType = "APP_IPHONE_67" | "APP_IPHONE_65" | "APP_IPHONE_61"
-                           | "APP_IPHONE_55" | "APP_IPHONE_47"
+type ScreenshotDisplayType = "APP_IPHONE_67" | "APP_IPHONE_65" | "APP_IPHONE_61" | "APP_IPHONE_58"
+                           | "APP_IPHONE_55" | "APP_IPHONE_47" | "APP_IPHONE_40" | "APP_IPHONE_35"
                            | "APP_IPAD_PRO_3GEN_129" | "APP_IPAD_PRO_3GEN_11"
-                           | "APP_IPAD_PRO_129" | "APP_IPAD_105"
+                           | "APP_IPAD_PRO_129" | "APP_IPAD_105" | "APP_IPAD_97"
+                           // APP_IPHONE_58 thêm 2026-11-13 (arc [CPP-bulkimport-iphone-screenshot-sizes])
 
 type PreviewType = "IPHONE_67" | "IPHONE_65" | "IPHONE_61" | "IPHONE_58"
                  | "IPHONE_55" | "IPHONE_47" | "IPHONE_40"

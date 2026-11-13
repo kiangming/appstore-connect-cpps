@@ -39,7 +39,7 @@ Internal tool suite. Tool chính hiện tại: **CPP Manager** (quản lý App S
 | **Delete CPP** (multi-select, 2-step confirm) | `components/cpp/CppList.tsx` + `app/api/asc/cpps/[cppId]/route.ts` | `docs/feature-delete-cpp.md` |
 | **Submit CPP for Review v2** (sequential + retry + partial fail UX) | `components/cpp/CppList.tsx` + 3 routes: `submit/prepare`, `submit/confirm`, `submit/[submissionId]` DELETE. State machine `SubmitPhase`. PartialFailDialog. | `docs/feature-submit-cpp.md` |
 | **Settings — ASC Accounts (Supabase CRUD)** | Admin-only page. Full CRUD: list/add/edit/delete accounts lưu trong Supabase `asc_accounts` table. Private key mã hóa AES-256-GCM. | `docs/feature-settings-asc-accounts.md` |
-| **Asset Validation** (screenshot + video trước upload) | `lib/asset-validator.ts` + `lib/ffmpeg-loader.ts`. Tích hợp vào cả 3 flow upload. Deep mode dùng ffmpeg.wasm. Kích thước screenshot: `lib/cpp/screenshot-specs.ts` (nguồn duy nhất; iPad 13"/12.9"/11"/10.5"/9.7", bulk phân loại theo kích thước — 2026-11-06). | `docs/feature-asset-validation.md` |
+| **Asset Validation** (screenshot + video trước upload) | `lib/asset-validator.ts` + `lib/ffmpeg-loader.ts`. Tích hợp vào cả 3 flow upload. Deep mode dùng ffmpeg.wasm. Kích thước screenshot: `lib/cpp/screenshot-specs.ts` (nguồn duy nhất; iPad 13"/12.9"/11"/10.5"/9.7", bulk phân loại theo kích thước — 2026-11-06; iPhone 8 loại màn hình (Dynamic Island / Face ID / Home Button) cùng bảng, bulk phân loại theo kích thước như iPad, Duo bị từ chối, editor kiểm theo set đích — 2026-11-13, map iPhone → display type SUY LUẬN chờ UAT). | `docs/feature-asset-validation.md` |
 | **Home Hub + Global Sidebar** (session 16) | Hub page: `app/(dashboard)/page.tsx` + `HubPage.tsx`. Sidebar: `components/layout/AppSidebar.tsx`. Layout: `DashboardContent.tsx` (conditional TopNav/AppSubNav). | `docs/feature-home-hub.md` |
 | **VNGGames Hub run tracking — CPP Bulk Import** (4th cross-module Hub-tracking integration) | `lib/cpp-hub-tracking/*` (own `public.cpp_hub_tracking_config` table + Settings page at `app/(dashboard)/settings/hub-tracking/`), client-driven finalize in `CppBulkImportDialog.tsx`. | `docs/cpp-management/design-cpp-hub-tracking.md`; cross-module overview: `docs/iap-management/IAP-MANAGEMENT-KNOWLEDGE-BASE.md` §10.15 |
 
@@ -218,7 +218,7 @@ NEXT_PUBLIC_ASSET_VALIDATION_DEEP=true  # true = ffmpeg.wasm deep | false = basi
 
 5. **Next.js router cache** — Sau khi tạo CPP mới, phải gọi cả `router.push()` lẫn `router.refresh()` để CPP list reload fresh data.
 
-6. **Device type defaults** — Bulk import dùng `APP_IPHONE_65` (6.5"), không phải `APP_IPHONE_67` (6.7"), vì đây là device type thực tế trong ASC data.
+6. **Device type defaults** — ~~Bulk import dùng `APP_IPHONE_65` (6.5"), không phải `APP_IPHONE_67` (6.7"), vì đây là device type thực tế trong ASC data.~~ **Thay đổi 2026-11-13** (arc `[CPP-bulkimport-iphone-screenshot-sizes]`): bulk import không còn mặc định screenshot — ảnh iPhone (như iPad) vào display type theo kích thước ảnh (`lib/cpp/screenshot-specs.ts`). Mặc định iPhone chỉ còn ở fallback của editor khi locale chưa có set iPhone: `IPHONE_DEFAULT_DISPLAY_TYPE` = `APP_IPHONE_67` (Dynamic Island (large); map iPhone → display type SUY LUẬN, chờ UAT iPhone). Preview (video) default vẫn `IPHONE_65`.
 
 7. **Locale display** — Toàn bộ app hiển thị tên locale theo Apple user-friendly format ("Vietnamese", "English (U.S.)"), không phải short-code. Dùng `localeNameFromCode()` từ `lib/locale-utils.ts`. API calls vẫn dùng short-code.
 

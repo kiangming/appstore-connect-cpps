@@ -37,6 +37,7 @@ Cho phép team upload toàn bộ assets (promo text + screenshots + app previews
 - `screenshots/` và `previews/` optional — nếu thiếu, bỏ qua media type đó
 - `iphone/` → map tới iPhone device type của CPP
 - `ipad/` → map tới iPad device type của CPP
+  - ⚠ Cập nhật: hai dòng trên nay chỉ còn đúng cho **preview (video)**. Screenshot `ipad/` (từ arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06) và screenshot `iphone/` (từ arc `[CPP-bulkimport-iphone-screenshot-sizes]`, 2026-11-13) chọn display type THEO KÍCH THƯỚC ảnh, mỗi display type một set (`lib/cpp/screenshot-specs.ts`)
 - File trong `iphone/` và `ipad/` xử lý theo thứ tự lexicographic
 - Subfolder không nhận dạng được bên trong `screenshots/` hoặc `previews/` bị bỏ qua
 
@@ -122,11 +123,14 @@ User clicks "Import All"
   → lọc active = plans không bị excluded và status !== "skip"
   → Detect CPP-wide device types:
       → tìm readyPlan đầu tiên có localizationId
-      → fetch GET /api/asc/screenshot-sets?localizationId=...
+      → fetch GET /api/asc/screenshot-sets?localizationId=...      [BỎ 2026-11-13 — arc iPhone]
       → fetch GET /api/asc/preview-sets?localizationId=...
-      → extract iPhone device type (+ preview types) từ existing sets
+      → extract iPhone device type (+ preview types) từ existing sets   [2026-11-13: chỉ còn preview types]
       → lưu vào deviceDefaults (fallback nếu fetch thất bại: APP_IPHONE_65)
+                                                    [2026-11-13: deviceDefaults = { cppIphonePV, cppIpadPV },
+                                                     fallback IPHONE_65 / IPAD_PRO_3GEN_129]
       ⚠ Từ arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06: screenshot iPad KHÔNG còn theo set có sẵn / mặc định — mỗi ảnh vào set của display type ứng với KÍCH THƯỚC ảnh (`lib/cpp/screenshot-specs.ts`, upload qua `lib/cpp/screenshot-upload.ts`)
+      ⚠ Từ arc `[CPP-bulkimport-iphone-screenshot-sizes]`, 2026-11-13: screenshot iPhone cũng theo KÍCH THƯỚC ảnh, cùng hàm phân loại + chọn/tạo set như iPad — bỏ `cppIphoneSS` và mặc định `APP_IPHONE_65`. Preview (video) types vẫn dò từ preview set có sẵn như trên
   → for each locale (sequential):
       → uploadLocale(plan, deviceDefaults, onFile)
 ```
@@ -147,11 +151,16 @@ Step 1 — Create / Update CPP localization:
 
 Step 2 — Fetch existing sets (để resolve device types cụ thể của locale này):
   → GET /api/asc/screenshot-sets?localizationId=...  → điền ssCache + override iphoneSS/ipadSS
+        [ipadSS bỏ 2026-11-06, iphoneSS bỏ 2026-11-13: ssCache chỉ để DÙNG LẠI set có sẵn theo display type]
   → GET /api/asc/preview-sets?localizationId=...    → điền pvCache + override iphonePV/ipadPV
   → Nếu locale mới tạo (không có existing sets): dùng deviceDefaults từ CPP-wide detection
+        [từ 2026-11-13: chỉ còn cho preview type]
 
 Step 3 — Upload screenshots:
   → for [iphone files, iphoneSS], [ipad files, ipadSS]:
+        [từ 2026-11-13: uploadScreenshotGroups (lib/cpp/screenshot-upload.ts, dùng chung 2 dialog)
+         với groups = [...iphoneScreenshotGroups, ...ipadScreenshotGroups] — mỗi group một display
+         type theo KÍCH THƯỚC ảnh, iPhone trước, iPad sau; trong group giữ thứ tự tên file]
       → getOrCreateSS(type) → screenshotSetId
           (POST /api/asc/screenshot-sets nếu chưa có; xử lý 409 conflict)
       → for each file:
@@ -173,6 +182,8 @@ Step 4 — Upload previews:
 
 **Vấn đề:** Screenshot set của CPP có thể là `APP_IPHONE_65` (6.5") hoặc `APP_IPHONE_67` (6.7") — không thể hardcode.
 
+> ⚠ **Cập nhật 2026-11-13 (arc `[CPP-bulkimport-iphone-screenshot-sizes]`):** cơ chế 2 tầng dưới đây nay chỉ còn áp dụng cho **preview (video)** (`cppIphonePV`, `cppIpadPV`). Screenshot iPhone — như screenshot iPad từ 2026-11-06 — chọn display type THEO KÍCH THƯỚC ảnh (`lib/cpp/screenshot-specs.ts` `IPHONE_SCREENSHOT_SPECS`), không dò từ set có sẵn, không có mặc định. Phần dưới giữ để đọc lịch sử.
+
 **Giải pháp 2-tầng:**
 
 1. **CPP-wide defaults** — trước vòng upload, fetch existing sets của một "ready" locale:
@@ -181,6 +192,7 @@ Step 4 — Upload previews:
    // fetch screenshot-sets + preview-sets của readyPlan
    // extract cppIphoneSS, cppIpadSS, cppIphonePV, cppIpadPV
    const deviceDefaults = { cppIphoneSS, cppIpadSS, cppIphonePV, cppIpadPV };
+   // hiện tại (từ 2026-11-13): chỉ fetch preview-sets; deviceDefaults = { cppIphonePV, cppIpadPV }
    ```
 
 2. **Per-locale override** — bên trong `uploadLocale`, fetch sets của locale đó (nếu đã tồn tại):
@@ -188,11 +200,13 @@ Step 4 — Upload previews:
    let iphoneSS = deviceDefaults.cppIphoneSS; // bắt đầu từ CPP defaults
    // fetch existing sets của localizationId này
    // nếu thấy set iPhone/iPad → override iphoneSS / ipadSS
+   // hiện tại (từ 2026-11-13): không còn iphoneSS / ipadSS — screenshot set đi theo kích thước ảnh;
+   // chỉ còn iphonePV / ipadPV được override từ preview set có sẵn của locale
    ```
 
 **Fallback defaults** (khi không detect được):
 ```typescript
-const DEFAULT_IPHONE_SCREENSHOT = "APP_IPHONE_65";   // iPhone 6.5"
+// DEFAULT_IPHONE_SCREENSHOT: bỏ 2026-11-13 (trước đó "APP_IPHONE_65", iPhone 6.5") — screenshot iPhone chọn set theo kích thước ảnh
 // DEFAULT_IPAD_SCREENSHOT: bỏ — screenshot iPad chọn set theo kích thước ảnh
 const DEFAULT_IPHONE_PREVIEW    = "IPHONE_65";
 const DEFAULT_IPAD_PREVIEW      = "IPAD_PRO_3GEN_129";
@@ -232,6 +246,9 @@ interface ImportPlan {
   previewFiles: { iphone: File[]; ipad: File[] };
   localizationId: string | null;      // null nếu locale chưa tồn tại trong CPP
   excluded: boolean;                  // user có thể bỏ qua locale cụ thể
+  // ảnh đã phân loại theo display type ứng với KÍCH THƯỚC (lib/cpp/screenshot-upload.ts):
+  iphoneScreenshotGroups: ScreenshotGroup[];   // từ 2026-11-13 (arc iPhone)
+  ipadScreenshotGroups: ScreenshotGroup[];     // từ 2026-11-06 (arc iPad)
 }
 
 interface LocaleProgress {
@@ -267,7 +284,7 @@ interface Props {                     // BulkImportDialog props
 | Screenshot set đã tồn tại (409 conflict) | Re-fetch để lấy ID hiện tại, tiếp tục |
 | Upload file thất bại | Retry 1 lần sau 1s; nếu vẫn lỗi → locale báo failed, tiếp tục batch |
 | ASC API 5xx | Retry 1 lần sau 1s (`fetchWithRetry`) |
-| Detect device type thất bại | Dùng default `APP_IPHONE_65` (iPhone). iPad: theo kích thước ảnh, không cần detect |
+| Detect device type thất bại | Preview: dùng default `IPHONE_65` / `IPAD_PRO_3GEN_129`. Screenshot iPhone + iPad: theo kích thước ảnh, không cần detect (iPhone từ 2026-11-13 — trước đó default `APP_IPHONE_65`) |
 
 ---
 
@@ -327,8 +344,9 @@ interface Props {                     // BulkImportDialog props
 | Plain `.txt` cho promo text | JSON manifest, YAML | Đơn giản nhất cho người không technical |
 | Status `not-in-app` riêng biệt | Gộp vào `new-locale` | Cần xử lý thêm bước POST vào app trước; cần UI rõ ràng để user hiểu |
 | `appLocalesFetched` flag | Chỉ check `appLocales.size > 0` | Phân biệt đúng "fetch thất bại" vs "app chưa có locale nào" |
-| CPP-wide device detect trước upload | Detect inline mỗi locale | Một lần fetch cho cả batch; new locales dùng đúng device type của CPP |
-| Default `APP_IPHONE_65` (6.5") | `APP_IPHONE_67` (6.7") | Khớp với device type thực tế trong data từ ASC |
+| CPP-wide device detect trước upload | Detect inline mỗi locale | Một lần fetch cho cả batch; new locales dùng đúng device type của CPP. *(Từ 2026-11-13 chỉ còn cho preview type.)* |
+| ~~Default `APP_IPHONE_65` (6.5")~~ — **thay bởi dòng dưới (2026-11-13)** | `APP_IPHONE_67` (6.7") | Khớp với device type thực tế trong data từ ASC |
+| Screenshot iPhone chọn display type THEO KÍCH THƯỚC ảnh (arc `[CPP-bulkimport-iphone-screenshot-sizes]`, 2026-11-13, Manager D1) | Giữ luật cũ (set iPhone cuối / locale ready đầu / `APP_IPHONE_65`) | Danh sách Apple mới có 8 nhóm iPhone với kích thước khác nhau; luật cũ chỉ nhận 4 cỡ 6.5" và lệch mặc định với editor (bulk 65, editor 67 — `[CPP-iphone-default-mismatch]`). Mặc định iPhone nay chỉ còn ở fallback editor = `APP_IPHONE_67` (Dynamic Island (large), Manager D5; map iPhone → display type SUY LUẬN, chờ UAT iPhone); preview giữ `IPHONE_65` |
 | Retry 1 lần, tiếp tục batch | Abort on first error | Partial success tốt hơn all-or-nothing với batch lớn |
 | Sequential locale processing | Full parallel | Tránh ASC API rate limit; progress tracking đơn giản hơn |
 | Append screenshots (không xoá cũ) | Replace / delete-then-upload | Safe hơn cho MVP; tránh mất data ngoài ý muốn |

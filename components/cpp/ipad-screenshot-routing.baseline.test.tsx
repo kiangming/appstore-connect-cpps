@@ -21,7 +21,12 @@
  * the tag are G0's, unchanged (bodies untouched). The "G1 —" suites below are
  * new: each iPad image goes to the set of the display type its size maps to
  * (lib/cpp/screenshot-specs.ts), one set per type, existing set of the same
- * type reused; iPhone unchanged.
+ * type reused.
+ *
+ * (iPhone was unchanged by the iPad arc.) iPhone arc `[CPP-bulkimport-iphone-screenshot-sizes]` G1 (Manager D1/D2/Q-C/
+ * Q-D): the cases tagged `[iPhone G1 FLIPPED]` pinned iPHONE behaviour of the
+ * iPad arc ("iPhone unchanged / out of scope") and were flipped on purpose,
+ * each title saying what it was. No iPad assertion of this file changed.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
@@ -366,7 +371,7 @@ describe.each([MANY, ONE])("G1 — iPad images routed by size — $name", (d) =>
     ]);
   });
 
-  it("iPhone unchanged: no set ⇒ POST APP_IPHONE_65; iPhone group goes before the iPad groups", async () => {
+  it("iPhone (6.5\" image, by size since the iPhone arc): no set ⇒ POST APP_IPHONE_65; iPhone group goes before the iPad groups", async () => {
     const reqs = await runImport(d, {
       existing: [],
       files: ["en-US/screenshots/ipad/01-13in-2064x2752.png", "en-US/screenshots/iphone/01-1284x2778.png"],
@@ -379,12 +384,15 @@ describe.each([MANY, ONE])("G1 — iPad images routed by size — $name", (d) =>
     ]);
   });
 
-  it("iPhone unchanged: existing APP_IPHONE_67 set is reused", async () => {
+  it("[iPhone G1 FLIPPED] existing APP_IPHONE_67 set is NOT used for a 6.5\" image ⇒ POST APP_IPHONE_65 (was: reused — iPhone routing by size, D1)", async () => {
     const reqs = await runImport(d, {
       existing: [{ locale: "en-US", locId: "loc-en", sets: [{ id: "set-67", type: "APP_IPHONE_67" }] }],
       files: ["en-US/screenshots/iphone/01-1284x2778.png"],
     });
-    expect(reqs).toEqual([["upload", "set-67", "01-1284x2778.png"]]);
+    expect(reqs).toEqual([
+      ["POST set", "loc-en", "APP_IPHONE_65"],
+      ["upload", "set-new-APP_IPHONE_65", "01-1284x2778.png"],
+    ]);
   });
 
   it("Preview lists which images go to which screen type", async () => {

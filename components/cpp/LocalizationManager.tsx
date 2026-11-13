@@ -21,7 +21,11 @@ import {
   validateVideoCount,
   type DeviceType,
 } from "@/lib/asset-validator";
-import { IPAD_REQUIRED_DISPLAY_TYPE, displayTypeLabel } from "@/lib/cpp/screenshot-specs";
+import {
+  IPAD_REQUIRED_DISPLAY_TYPE,
+  IPHONE_DEFAULT_DISPLAY_TYPE,
+  displayTypeLabel,
+} from "@/lib/cpp/screenshot-specs";
 import { localeNameFromCode, ALL_APPLE_LOCALES } from "@/lib/locale-utils";
 import type {
   AppCustomProductPageLocalization,
@@ -838,7 +842,7 @@ function LocalizationRow({ localization, cppId: _cppId }: LocalizationRowProps) 
 
                 {activeScreenshotTypes.length === 0 ? (() => {
                   const fallback = (screenshotTab === "iphone"
-                    ? "APP_IPHONE_67"
+                    ? IPHONE_DEFAULT_DISPLAY_TYPE
                     : IPAD_REQUIRED_DISPLAY_TYPE) as ScreenshotDisplayType;
                   const staged = stagedByScreenshotType[fallback] ?? [];
                   return (

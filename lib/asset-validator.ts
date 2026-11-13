@@ -10,7 +10,7 @@
 
 import type { ScreenshotDisplayType } from "@/types/asc";
 import {
-  classifyIpadScreenshot,
+  classifyScreenshot,
   screenshotSizeError,
   screenshotSizeErrorForDisplayType,
 } from "@/lib/cpp/screenshot-specs";
@@ -110,13 +110,13 @@ function formatValidSizes(sizes: Array<{ w: number; h: number }>): string {
 const UNREADABLE_IMAGE = "Cannot read image file — file may be corrupted";
 
 export interface ScreenshotCheck extends ValidationResult {
-  /** iPad only: the display type the image's size maps to (null when invalid / iPhone). */
+  /** The display type the image's size maps to (iPhone and iPad; null when invalid). */
   displayType: ScreenshotDisplayType | null;
 }
 
 /**
- * Bulk import: validate an image for the device folder it sits in and, for
- * iPad, classify it by size into a display type.
+ * Bulk import: validate an image for the device folder it sits in and
+ * classify it by size into a display type (iPad arc; iPhone arc D1).
  */
 export async function checkScreenshot(file: File, device: DeviceType): Promise<ScreenshotCheck> {
   let w: number;
@@ -128,7 +128,7 @@ export async function checkScreenshot(file: File, device: DeviceType): Promise<S
   }
   const error = screenshotSizeError(device, w, h);
   if (error) return { ok: false, errors: [error], warnings: [], displayType: null };
-  const displayType = device === "ipad" ? classifyIpadScreenshot(w, h)?.displayType ?? null : null;
+  const displayType = classifyScreenshot(device, w, h)?.displayType ?? null;
   return { ok: true, errors: [], warnings: [], displayType };
 }
 

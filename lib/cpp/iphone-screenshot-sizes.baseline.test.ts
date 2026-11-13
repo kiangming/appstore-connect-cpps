@@ -9,9 +9,8 @@
  * BY HAND from Manager's list (Apple docs, 2026-11-13) — never read from
  * lib/cpp/screenshot-specs.ts.
  *
- * Blocks tagged `[G1 FLIPS]` pin behaviour that Manager's D1–D9 change on
- * purpose; G1 replaces them and says so ("was: …"). Untagged blocks must stay
- * green unchanged.
+ * G1 (Manager D1/D2/D6/D8/Q-A) FLIPPED the blocks tagged `[G1 FLIPPED]` on
+ * purpose — each title says what it was. Untagged blocks are G0's, unchanged.
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { validateScreenshot, validateScreenshotForDisplayType } from "@/lib/asset-validator";
@@ -42,13 +41,27 @@ describe("G0 — Face ID (large) 6.5\" sizes are accepted today (parity: still a
   });
 });
 
-describe("[G1 FLIPS] every other size on Apple's iPhone list is REJECTED in iphone/ today", () => {
-  it("32 sizes (28 to become accepted + 4 iPhone Duo, which stays refused — D6)", () => {
+describe("[G1 FLIPPED] the other 32 sizes of Apple's iPhone list — were all REJECTED in iphone/", () => {
+  it("32 sizes (28 now accepted + 4 iPhone Duo, still refused — D6)", () => {
     expect(NOT_ACCEPTED_ROWS).toHaveLength(32);
   });
 
-  it.each(NOT_ACCEPTED_ROWS)("%s %s → REJECT for iphone", async (_g, size) => {
-    expect((await validateScreenshot(png(size), "iphone")).ok).toBe(false);
+  const NOW_ACCEPTED = NOT_ACCEPTED_ROWS.filter(([g]) => g !== "iPhone Duo");
+  const DUO = NOT_ACCEPTED_ROWS.filter(([g]) => g === "iPhone Duo");
+
+  it("28 + 4", () => {
+    expect([NOW_ACCEPTED.length, DUO.length]).toEqual([28, 4]);
+  });
+
+  it.each(NOW_ACCEPTED)("%s %s → OK for iphone (was: REJECT)", async (_g, size) => {
+    expect(await validateScreenshot(png(size), "iphone")).toEqual({ ok: true, errors: [], warnings: [] });
+  });
+
+  it.each(DUO)("%s %s → still REJECT for iphone, now with the Duo sentence (Q-D)", async (_g, size) => {
+    const [w, h] = size.split("x");
+    expect((await validateScreenshot(png(size), "iphone")).errors).toEqual([
+      `${w}×${h} is an iPhone Duo screenshot size — iPhone Duo is not supported by the App Store Connect API yet; upload it manually on App Store Connect.`,
+    ]);
   });
 });
 
@@ -60,25 +73,44 @@ describe("G0 — no iPhone size is an iPad size (stays: every one is REJECTED in
   });
 });
 
-describe("[G1 FLIPS] editor today: EVERY iPhone set accepts exactly the four 6.5\" sizes (not checked against the target set)", () => {
-  const IPHONE_TYPES = ["APP_IPHONE_67", "APP_IPHONE_65", "APP_IPHONE_61", "APP_IPHONE_55", "APP_IPHONE_47", "APP_IPHONE_40", "APP_IPHONE_35"] as const;
+describe("[G1 FLIPPED] editor checks the TARGET set (D2) — was: EVERY iPhone set took exactly the four 6.5\" sizes", () => {
+  // [type, accepts 1284×2778 (Face ID large), accepts 1290×2796 (Dynamic Island large)] — hand-written.
+  const ROWS = [
+    ["APP_IPHONE_67", false, true],
+    ["APP_IPHONE_65", true, false],
+    ["APP_IPHONE_61", false, false],
+    ["APP_IPHONE_58", false, false],
+    ["APP_IPHONE_55", false, false],
+    ["APP_IPHONE_47", false, false],
+    ["APP_IPHONE_40", false, false],
+    ["APP_IPHONE_35", false, false],
+  ] as const;
 
-  it.each(IPHONE_TYPES)("%s: 1284×2778 accepted, 1290×2796 refused", async (type) => {
-    expect((await validateScreenshotForDisplayType(png("1284x2778"), type)).ok).toBe(true);
-    expect((await validateScreenshotForDisplayType(png("1290x2796"), type)).ok).toBe(false);
+  it.each(ROWS)("%s: 1284×2778 → %s, 1290×2796 → %s", async (type, takes65, takes67) => {
+    expect((await validateScreenshotForDisplayType(png("1284x2778"), type)).ok).toBe(takes65);
+    expect((await validateScreenshotForDisplayType(png("1290x2796"), type)).ok).toBe(takes67);
   });
 });
 
-describe("error sentences today, verbatim", () => {
-  it("[G1 FLIPS] iphone/, a Dynamic Island (medium) image", async () => {
-    expect((await validateScreenshot(png("1179x2556"), "iphone")).errors).toEqual([
-      "Resolution: got 1179×2556 — expected one of: 1284×2778, 2778×1284, 1242×2688, 2688×1242",
-    ]);
+const VALID_IPHONE =
+  "Valid iPhone sizes — " +
+  "Dynamic Island (large): 1260×2736, 2736×1260, 1290×2796, 2796×1290, 1320×2868, 2868×1320 · " +
+  "Face ID (large): 1284×2778, 2778×1284, 1242×2688, 2688×1242 · " +
+  "Dynamic Island (medium): 1179×2556, 2556×1179, 1206×2622, 2622×1206 · " +
+  "Face ID (medium): 1170×2532, 2532×1170, 1125×2436, 2436×1125, 1080×2340, 2340×1080 · " +
+  "Home Button (large): 1242×2208, 2208×1242 · " +
+  "Home Button (medium): 750×1334, 1334×750 · " +
+  'Home Button (4"): 640×1096, 640×1136, 1136×600, 1136×640 · ' +
+  'Home Button (3.5"): 640×920, 640×960, 960×600, 960×640';
+
+describe("error sentences, verbatim", () => {
+  it("[G1 FLIPPED] iphone/, a Dynamic Island (medium) image ⇒ accepted (was: \"Resolution: got 1179×2556 — expected one of: <4 sizes>\")", async () => {
+    expect(await validateScreenshot(png("1179x2556"), "iphone")).toEqual({ ok: true, errors: [], warnings: [] });
   });
 
-  it("[G1 FLIPS] iphone/, an iPad image — no hint today (D8 adds one)", async () => {
+  it("[G1 FLIPPED] iphone/, an iPad image ⇒ §4.3 sentence + D8 hint (was: no hint)", async () => {
     expect((await validateScreenshot(png("2064x2752"), "iphone")).errors).toEqual([
-      "Resolution: got 2064×2752 — expected one of: 1284×2778, 2778×1284, 1242×2688, 2688×1242",
+      `2064×2752 is not a valid iPhone screenshot size — this looks like an iPad screenshot; move it to screenshots/ipad/. ${VALID_IPHONE}`,
     ]);
   });
 
@@ -88,9 +120,9 @@ describe("error sentences today, verbatim", () => {
     );
   });
 
-  it("[G1: Manager Q-A] ipad/, a Dynamic Island (medium) image ⇒ NO hint today (hint covers only the four 6.5\" sizes)", async () => {
+  it("[G1 FLIPPED: Manager Q-A] ipad/, a Dynamic Island (medium) image ⇒ the move-it hint (was: no hint — only the four 6.5\" sizes had it)", async () => {
     expect((await validateScreenshot(png("1179x2556"), "ipad")).errors[0]).toMatch(
-      /^1179×2556 is not a valid iPad screenshot size\. Valid iPad sizes — /,
+      /^1179×2556 is not a valid iPad screenshot size — this looks like an iPhone screenshot; move it to screenshots\/iphone\/\. Valid iPad sizes — /,
     );
   });
 });

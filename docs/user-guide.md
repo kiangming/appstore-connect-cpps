@@ -125,6 +125,12 @@ Quản lý screenshot và app preview (video) cho từng locale.
 3. Kéo thả file MP4 vào ô **App Previews**
 4. Mỗi file upload lần lượt, hiển thị tiến trình
 
+**Lưu ý — editor kiểm ảnh theo set đích:**
+- Editor chỉ hiện các loại màn hình (set) mà locale **đã có**, mỗi set một ô, tên theo bảng kích thước ở [Phần 6](#6-bulk-import-assets-1-cpp) (ví dụ `iPhone Face ID (large)`). Mỗi ô chỉ nhận đúng kích thước của loại màn hình đó.
+- Locale **chưa có set iPhone nào** ⇒ editor hiện "There's no screenshot of this device type." và một ô thả ảnh. Ảnh thả vào ô này đi vào set **iPhone Dynamic Island (large)**, nên chỉ nhận kích thước của nhóm này: 1260×2736 · 2736×1260 · 1290×2796 · 2796×1290 · 1320×2868 · 2868×1320. (iPad tương tự: locale chưa có set iPad ⇒ chỉ nhận ảnh iPad 13".) Locale có set iPhone **rỗng** (vd set 6.5" còn lại sau lần upload bị ngắt) ⇒ editor hiện khối của set đó với "No screenshots yet", và khối đó nhận kích thước của set đó.
+- Muốn thêm ảnh iPhone cỡ khác (ví dụ **Face ID (large)** 1284×2778) cho locale đó, hoặc thêm một loại màn hình locale chưa có ⇒ dùng **Bulk Import** ([Phần 6](#6-bulk-import-assets-1-cpp)) — tool tự đưa ảnh vào đúng loại màn hình theo kích thước. Thả ảnh 1284×2778 vào ô Dynamic Island (large) sẽ bị từ chối với câu:
+  `Resolution: got 1284×2778 — expected one of: 1260×2736, 2736×1260, 1290×2796, 2796×1290, 1320×2868, 2868×1320 — this is an iPhone Face ID (large) size, not iPhone Dynamic Island (large)`
+
 **Bulk Import — upload nhiều file cùng lúc:**
 Xem [Phần 6 — Bulk Import Assets](#6-bulk-import-assets-1-cpp)
 
@@ -170,7 +176,27 @@ ten-folder-bat-ky/
   | 10.5" | 1668×2224 · 2224×1668 |
   | 9.7" | 1536×2008 · 1536×2048 · 2048×1496 · 2048×1536 · 768×1004 · 768×1024 · 1024×748 · 1024×768 |
 
-  Ảnh iPhone (giữ nguyên): 1284×2778 · 2778×1284 · 1242×2688 · 2688×1242.
+- **Ảnh iPhone cũng tự vào đúng loại màn hình theo kích thước ảnh** (từ 2026-11-13) — để chung mọi cỡ trong `screenshots/iphone/`. Tối đa 10 ảnh mỗi loại màn hình, tính cả ảnh đã có sẵn trên Apple (**chặn**). **Cảnh báo (không chặn — vẫn bấm Import được):** khi ảnh iPhone **hợp lệ** của lần import này không có **Dynamic Island (large)** lẫn **Face ID (large)**, **và** locale cũng chưa có set nào của hai loại đó trên Apple (Apple bắt buộc một trong hai nếu app chạy trên iPhone). Tool không đọc được set có sẵn của locale ⇒ bỏ qua cảnh báo thay vì đoán.
+
+  | Loại màn hình iPhone (tên hiển thị trong tool) | Kích thước ảnh (dọc · ngang) |
+  |---|---|
+  | iPhone Dynamic Island (large) | 1260×2736 · 2736×1260 · 1290×2796 · 2796×1290 · 1320×2868 · 2868×1320 |
+  | iPhone Face ID (large) | 1284×2778 · 2778×1284 · 1242×2688 · 2688×1242 |
+  | iPhone Dynamic Island (medium) | 1179×2556 · 2556×1179 · 1206×2622 · 2622×1206 |
+  | iPhone Face ID (medium) | 1170×2532 · 2532×1170 · 1125×2436 · 2436×1125 · 1080×2340 · 2340×1080 |
+  | iPhone Home Button (large) | 1242×2208 · 2208×1242 |
+  | iPhone Home Button (medium) | 750×1334 · 1334×750 |
+  | iPhone Home Button (4") | 640×1096 · 640×1136 · 1136×600 · 1136×640 |
+  | iPhone Home Button (3.5") | 640×920 · 640×960 · 960×600 · 960×640 |
+  | iPhone Duo (không hỗ trợ) | 1398×2034 · 2034×1398 · 2007×2853 · 2853×2007 — **bị từ chối và CHẶN cả lần import** (Import All bị khoá): App Store Connect API chưa hỗ trợ iPhone Duo ⇒ bỏ ảnh Duo khỏi thư mục rồi chọn lại (hoặc Remove locale đó), và upload tay ảnh Duo trên App Store Connect |
+
+  Ở bước preview, mỗi loại màn hình hiện một dòng, ví dụ `iPhone Face ID (large): 01_home.png, 02_detail.png`. Các câu tool hiển thị (giữ nguyên tiếng Anh như trên màn hình; mỗi câu lỗi về ảnh có `<tên file>: ` phía trước):
+  - Ảnh Duo (**chặn** — Import All bị khoá): `1398×2034 is an iPhone Duo screenshot size — iPhone Duo is not supported by the App Store Connect API yet; upload it manually on App Store Connect.`
+  - Thiếu loại màn hình bắt buộc (cảnh báo, không chặn): `No required iPhone screenshots — Apple requires Dynamic Island (large) or Face ID (large) screenshots for apps that run on iPhone. Import is not blocked.` Cuối dialog có đếm số locale bị cảnh báo này (`… without required iPhone screenshots`).
+  - Ảnh sai cỡ trong `iphone/` (**chặn** — Import All bị khoá): `<W>×<H> is not a valid iPhone screenshot size. Valid iPhone sizes — …` (liệt kê đủ 8 loại màn hình). Nếu đó là ảnh iPad, gợi ý chen vào **trước dấu chấm**, ví dụ nguyên văn: `98-ipad.png: 2064×2752 is not a valid iPhone screenshot size — this looks like an iPad screenshot; move it to screenshots/ipad/. Valid iPhone sizes — Dynamic Island (large): 1260×2736, …`. Ngược lại, ảnh iPhone (mọi cỡ trong bảng trên, trừ Duo) để nhầm trong `ipad/` ⇒ `… is not a valid iPad screenshot size — this looks like an iPhone screenshot; move it to screenshots/iphone/. Valid iPad sizes — …`.
+  - Quá 10 ảnh một loại màn hình (chặn): `Too many screenshots for <tên loại màn hình>: <tổng> — max 10`; khi locale đã có ảnh trên Apple, ngay sau số tổng có thêm ` (<n> already on Apple + <m> new)`.
+
+  Hai bảng trên áp dụng cho cả **Bulk Import Assets** (phần này) và **CPP Bulk Import** ([Phần 7](#7-cpp-bulk-import-nhiều-cpp-cùng-lúc)). Video preview (`previews/`) không đổi.
 
 ### Bước 2 — Tiến hành import
 
@@ -534,7 +560,7 @@ Batch gồm 3 CPP, 3 locale (English, Vietnamese, Japanese):
 A: Theo thứ tự tên file (a → z). Đặt số ở đầu tên file để kiểm soát: `01_home.png`, `02_feature.png`, `03_checkout.png`.
 
 **Q: Có thể upload riêng ảnh iPhone và iPad không?**
-A: Có. Đặt ảnh iPhone vào `screenshots/iphone/`, iPad vào `screenshots/ipad/`. Nếu chỉ có `iphone/` thì chỉ upload cho iPhone. Ảnh iPad mọi cỡ để chung trong `ipad/` — tool tự chia vào 13" / 11" / 10.5" / 9.7" theo kích thước.
+A: Có. Đặt ảnh iPhone vào `screenshots/iphone/`, iPad vào `screenshots/ipad/`. Nếu chỉ có `iphone/` thì chỉ upload cho iPhone. Ảnh iPad mọi cỡ để chung trong `ipad/` — tool tự chia vào 13" / 11" / 10.5" / 9.7" theo kích thước. Ảnh iPhone mọi cỡ cũng để chung trong `iphone/` — tool tự chia vào 8 loại màn hình iPhone (Dynamic Island, Face ID, Home Button — xem bảng ở [Phần 6](#6-bulk-import-assets-1-cpp)) theo kích thước. Ảnh iPhone Duo bị từ chối (App Store Connect API chưa hỗ trợ) — upload tay trên App Store Connect. Trong CPP Editor, locale chưa có set iPhone nào chỉ nhận ảnh Dynamic Island (large); cỡ iPhone khác ⇒ dùng Bulk Import.
 
 **Q: Tôi vừa upload nhầm ảnh, có xóa được không?**
 A: CPP Manager chưa hỗ trợ xóa ảnh đơn lẻ qua UI. Vui lòng đăng nhập trực tiếp vào App Store Connect để xóa.

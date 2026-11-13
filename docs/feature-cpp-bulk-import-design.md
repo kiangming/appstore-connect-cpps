@@ -92,6 +92,9 @@ interface LocaleCppImportPlan {
   previewFiles: { iphone: File[]; ipad: File[] };
   localizationId: string | null;
   excluded: boolean;
+  // ảnh đã phân loại theo display type ứng với KÍCH THƯỚC (lib/cpp/screenshot-upload.ts):
+  iphoneScreenshotGroups: ScreenshotGroup[];   // từ 2026-11-13 (arc iPhone)
+  ipadScreenshotGroups: ScreenshotGroup[];     // từ 2026-11-06 (arc iPad)
 }
 
 // ── Progress tracking ───────────────────────────────────────────
@@ -201,11 +204,13 @@ Step 2 — Lấy versionId:
 
 Step 3 — Detect CPP-wide device types (kế thừa từ BulkImportDialog):
   → Tìm locale "ready" đầu tiên có localizationId
-  → fetch GET /api/asc/screenshot-sets?localizationId=...
+  → fetch GET /api/asc/screenshot-sets?localizationId=...      [BỎ 2026-11-13 — arc iPhone]
   → fetch GET /api/asc/preview-sets?localizationId=...
-  → extract cppIphoneSS, cppIphonePV, cppIpadPV
-  → Fallback: APP_IPHONE_65
+  → extract cppIphoneSS, cppIphonePV, cppIpadPV                [2026-11-13: chỉ còn cppIphonePV, cppIpadPV]
+  → Fallback: APP_IPHONE_65                                    [2026-11-13: preview fallback IPHONE_65 / IPAD_PRO_3GEN_129;
+                                                                screenshot không còn fallback]
   ⚠ Từ arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06: screenshot iPad theo KÍCH THƯỚC ảnh (mỗi display type một set), không còn cppIpadSS
+  ⚠ Từ arc `[CPP-bulkimport-iphone-screenshot-sizes]`, 2026-11-13: screenshot iPhone cũng theo KÍCH THƯỚC ảnh (cùng hàm phân loại + chọn/tạo set với iPad, `lib/cpp/screenshot-upload.ts`), không còn cppIphoneSS / DEFAULT_IPHONE_SCREENSHOT. Preview (video) types vẫn dò từ preview set có sẵn
 
 Step 4 — Upload từng locale (sequential trong CPP):
   → Gọi uploadLocale(locale, deviceDefaults, onFile)
@@ -347,6 +352,8 @@ async function fetchWithBackoff(fn: () => Promise<Response>, maxRetries = 3): Pr
 └─────────────────────────────────────────────────────┘
 ```
 
+⚠ 2026-11-13 (arc `[CPP-bulkimport-iphone-screenshot-sizes]`): dòng `└ iPhone: …` trong mockup trên nay hiện **mỗi loại màn hình một dòng**, ví dụ `iPhone Face ID (large): 01.png, …` (label từ `lib/cpp/screenshot-specs.ts`; iPad cũng vậy từ 2026-11-06).
+
 **Chi tiết preview tree:**
 - **CPP row:** chevron expand/collapse | tên CPP | status badge | số locales | nút Remove
 - **Expanded CPP:** primary locale (+ warning nếu fallback) + danh sách locale rows
@@ -485,7 +492,7 @@ User                  CppBulkImportDialog      API Routes         ASC API
 | A4 | CPP existing → không tạo lại, chỉ merge locale + assets | ✅ |
 | A5 | **Concurrency = 2** CPPs song song; từng CPP xử lý locale tuần tự bên trong | ✅ |
 | A6 | Modal dialog, không navigate away | ✅ |
-| A7 | Device type defaults: `APP_IPHONE_65`; iPad screenshot theo kích thước ảnh (arc iPad sizes 2026-11-06) | ✅ |
+| A7 | Device type defaults: ~~`APP_IPHONE_65`~~; iPad screenshot theo kích thước ảnh (arc iPad sizes 2026-11-06); **iPhone screenshot theo kích thước ảnh (arc `[CPP-bulkimport-iphone-screenshot-sizes]`, 2026-11-13) — không còn mặc định screenshot**. Preview (video) default giữ `IPHONE_65` / `IPAD_PRO_3GEN_129` | ✅ |
 | A8 | Không submit CPP for review — chỉ tạo ở trạng thái `PREPARE_FOR_SUBMISSION` | ✅ |
 | A9 | Folder bắt đầu bằng `_` hoặc `.` bị skip tự động | ✅ |
 | A10 | **[MỚI]** `primary-locale.txt` đặt ở root folder, không phải trong từng CPP folder | ✅ Thay đổi so với design v1 |

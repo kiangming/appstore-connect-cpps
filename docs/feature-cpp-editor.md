@@ -94,6 +94,8 @@ Mỗi locale có một `LocalizationRow`:
 
   Screenshots section:
     [Device type dropdown]  ← chọn APP_IPHONE_65, APP_IPHONE_67, etc.
+                            (sketch cũ — hiện tại: không có dropdown; mỗi set ĐÃ CÓ của locale một khối,
+                             label từ lib/cpp/screenshot-specs.ts; chưa có set ⇒ một ô thả vào set mặc định)
     [Existing screenshots grid] (thumbnails 80×160)
     [Dropzone] "Drop PNG files here"
     [Staged files list] + [Upload N screenshots] button
@@ -137,7 +139,8 @@ useEffect(() => {
 ### Upload trong LocalizationRow
 ```typescript
 // User chọn device tab (iphone/ipad)
-// Chọn device type từ dropdown
+// Chọn device type từ dropdown  (cũ — editor không có dropdown: thả ảnh vào khối của set đích,
+//   hoặc vào ô fallback khi locale chưa có set: APP_IPHONE_67 / iPad 13")
 // Stage files qua Dropzone
 // Click "Upload N screenshots":
 //   → getOrCreateScreenshotSet(type) → setId
@@ -148,10 +151,20 @@ useEffect(() => {
 ### Screenshot/Preview type constants
 ```typescript
 // Screenshots (ScreenshotDisplayType):
-APP_IPHONE_67  APP_IPHONE_65  APP_IPHONE_61  APP_IPHONE_55  APP_IPHONE_47
+APP_IPHONE_67  APP_IPHONE_65  APP_IPHONE_61  APP_IPHONE_58  APP_IPHONE_55  APP_IPHONE_47  APP_IPHONE_40  APP_IPHONE_35
 APP_IPAD_PRO_3GEN_129  APP_IPAD_PRO_3GEN_11  APP_IPAD_PRO_129  APP_IPAD_105  APP_IPAD_97
-// Label + kích thước hợp lệ của từng type: lib/cpp/screenshot-specs.ts (arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06).
-// Editor kiểm ảnh theo SET ĐÍCH (validateScreenshotForDisplayType), không theo thiết bị.
+// APP_IPHONE_58 thêm vào union types/asc.ts ở arc `[CPP-bulkimport-iphone-screenshot-sizes]` (2026-11-13).
+// ⚠ Map iPhone → display type là SUY LUẬN, chờ UAT iPhone; Face ID (medium) → APP_IPHONE_58 là SUY LUẬN THEO LOẠI TRỪ
+//   (ứng viên thay thế APP_IPHONE_61). Xem docs/cpp-management/uat-iphone-screenshot-sizes.md.
+// Label + kích thước hợp lệ của từng type: lib/cpp/screenshot-specs.ts (arc `[CPP-bulkimport-ipad-screenshot-sizes]`, 2026-11-06;
+// iPhone thêm ở arc `[CPP-bulkimport-iphone-screenshot-sizes]`, 2026-11-13 — label iPhone = tên nhóm Apple, ví dụ
+// APP_IPHONE_67 → "iPhone Dynamic Island (large)", APP_IPHONE_65 → "iPhone Face ID (large)").
+// Editor kiểm ảnh theo SET ĐÍCH (validateScreenshotForDisplayType), không theo thiết bị — cho cả iPad và iPhone
+// (iPhone từ 2026-11-13; trước đó mọi set iPhone nhận cùng 4 cỡ 6.5").
+// Locale chưa có set của thiết bị đang chọn ⇒ ô thả ảnh dùng set mặc định từ bảng:
+//   iPhone: IPHONE_DEFAULT_DISPLAY_TYPE = APP_IPHONE_67 (Dynamic Island (large)) — chỉ nhận cỡ của nhóm này;
+//           ảnh iPhone cỡ khác cho locale đó ⇒ Bulk Import (Manager Q-B)
+//   iPad:   IPAD_REQUIRED_DISPLAY_TYPE  = APP_IPAD_PRO_3GEN_129 (iPad 13")
 
 // Previews (PreviewType):
 IPHONE_67  IPHONE_65  IPHONE_61  IPHONE_58  IPHONE_55  IPHONE_47  IPHONE_40

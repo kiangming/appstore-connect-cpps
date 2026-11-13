@@ -24,15 +24,14 @@ import { localeNameFromCode } from "@/lib/locale-utils";
 import { checkScreenshot, validateVideo } from "@/lib/asset-validator";
 import { displayTypeLabel } from "@/lib/cpp/screenshot-specs";
 import {
-  checkIpadGroups,
+  checkScreenshotGroups,
   fetchExistingScreenshotCounts,
-  groupIpadScreenshots,
+  groupScreenshots,
   uploadScreenshotGroups,
   type ScreenshotGroup,
 } from "@/lib/cpp/screenshot-upload";
 
 // ── Defaults ────────────────────────────────────────────────────────────────
-const DEFAULT_IPHONE_SCREENSHOT: ScreenshotDisplayType = "APP_IPHONE_65";
 const DEFAULT_IPHONE_PREVIEW: PreviewType = "IPHONE_65";
 const DEFAULT_IPAD_PREVIEW: PreviewType = "IPAD_PRO_3GEN_129";
 
@@ -58,7 +57,8 @@ interface ImportPlan {
   localizationId: string | null;
   excluded: boolean;
   validation: { iphone: DeviceValidation; ipad: DeviceValidation };
-  /** iPad images grouped by the display type their SIZE maps to (shared lib/cpp/screenshot-upload.ts). */
+  /** iPhone / iPad images grouped by the display type their SIZE maps to (shared lib/cpp/screenshot-upload.ts). */
+  iphoneScreenshotGroups: ScreenshotGroup[];
   ipadScreenshotGroups: ScreenshotGroup[];
 }
 
@@ -184,7 +184,16 @@ export function BulkImportDialog({
         }
 
         // Validate assets per device
+        let iphoneScreenshotGroups: ScreenshotGroup[] = [];
         let ipadScreenshotGroups: ScreenshotGroup[] = [];
+        // Screenshots already on Apple, read at most ONCE per locale and shared
+        // by both devices. Known-empty for a locale not on Apple yet; null when
+        // the read fails.
+        let existingCountsP: Promise<Map<ScreenshotDisplayType, number> | null> | null = null;
+        const existingCounts = () =>
+          (existingCountsP ??= existing?.id
+            ? fetchExistingScreenshotCounts(existing.id)
+            : Promise.resolve(new Map<ScreenshotDisplayType, number>()));
         async function validateDevice(
           device: "iphone" | "ipad"
         ): Promise<DeviceValidation> {
@@ -207,17 +216,16 @@ export function BulkImportDialog({
             screenshotErrors.push(...r.errors.map((e) => `${ssFiles[i].name}: ${e}`));
           });
 
-          if (device === "ipad" && ssFiles.length > 0) {
-            ipadScreenshotGroups = groupIpadScreenshots(
+          if (ssFiles.length > 0) {
+            const groups = groupScreenshots(
+              device,
               ssChecks.flatMap((r, i) =>
                 r.displayType ? [{ file: ssFiles[i], displayType: r.displayType }] : []
               )
             );
-            // Known-empty for a locale not on Apple yet; null when the read fails.
-            const existingCounts = existing?.id
-              ? await fetchExistingScreenshotCounts(existing.id)
-              : new Map<ScreenshotDisplayType, number>();
-            const checks = checkIpadGroups(ipadScreenshotGroups, existingCounts);
+            if (device === "ipad") ipadScreenshotGroups = groups;
+            else iphoneScreenshotGroups = groups;
+            const checks = checkScreenshotGroups(device, groups, await existingCounts());
             screenshotErrors.push(...checks.errors);
             screenshotWarnings.push(...checks.warnings);
           }
@@ -244,6 +252,7 @@ export function BulkImportDialog({
           localizationId: existing?.id ?? null,
           excluded: status === "skip",
           validation: { iphone: iphoneVal, ipad: ipadVal },
+          iphoneScreenshotGroups,
           ipadScreenshotGroups,
         };
       })
@@ -285,25 +294,15 @@ export function BulkImportDialog({
     setProgress(active.map((p) => ({ locale: p.locale, status: "pending", currentFile: null, error: null })));
     setStep("uploading");
 
-    // Detect CPP-wide device types from an existing localization so new locales
-    // use the same screenshot/preview types instead of the hardcoded defaults.
-    let cppIphoneSS: ScreenshotDisplayType = DEFAULT_IPHONE_SCREENSHOT;
+    // Detect CPP-wide PREVIEW types from an existing localization so new locales
+    // use the same preview types instead of the hardcoded defaults (screenshot
+    // sets are chosen per image size — no CPP-wide default).
     let cppIphonePV: PreviewType = DEFAULT_IPHONE_PREVIEW;
     let cppIpadPV: PreviewType = DEFAULT_IPAD_PREVIEW;
     const readyPlan = active.find((p) => p.status === "ready" && p.localizationId);
     if (readyPlan?.localizationId) {
       try {
-        const [sRes, pRes] = await Promise.all([
-          fetch(`/api/asc/screenshot-sets?localizationId=${readyPlan.localizationId}`),
-          fetch(`/api/asc/preview-sets?localizationId=${readyPlan.localizationId}`),
-        ]);
-        if (sRes.ok) {
-          const d = (await sRes.json()) as AscApiResponse<AppScreenshotSet[]>;
-          for (const set of d.data ?? []) {
-            const t = set.attributes.screenshotDisplayType;
-            if (t.startsWith("APP_IPHONE")) cppIphoneSS = t;
-          }
-        }
+        const pRes = await fetch(`/api/asc/preview-sets?localizationId=${readyPlan.localizationId}`);
         if (pRes.ok) {
           const d = (await pRes.json()) as AscApiResponse<AppPreviewSet[]>;
           for (const set of d.data ?? []) {
@@ -315,7 +314,7 @@ export function BulkImportDialog({
       } catch { /* keep hardcoded defaults */ }
     }
 
-    const deviceDefaults = { cppIphoneSS, cppIphonePV, cppIpadPV };
+    const deviceDefaults = { cppIphonePV, cppIpadPV };
 
     for (const plan of active) {
       setProgress((prev) => prev.map((p) => p.locale === plan.locale ? { ...p, status: "running" } : p));
@@ -349,7 +348,7 @@ export function BulkImportDialog({
   // ── Per-locale upload logic ───────────────────────────────────────────────
   async function uploadLocale(
     plan: ImportPlan,
-    deviceDefaults: { cppIphoneSS: ScreenshotDisplayType; cppIphonePV: PreviewType; cppIpadPV: PreviewType },
+    deviceDefaults: { cppIphonePV: PreviewType; cppIpadPV: PreviewType },
     onFile: (name: string) => void
   ) {
     let localizationId = plan.localizationId;
@@ -399,11 +398,11 @@ export function BulkImportDialog({
       );
     }
 
-    // Step 2: Fetch existing sets to resolve device types
+    // Step 2: Fetch existing sets — screenshot sets to reuse by display type,
+    // preview sets to resolve the preview types (CPP-wide detected types as
+    // defaults, overridden if this locale already has preview sets)
     const ssCache = new Map<ScreenshotDisplayType, string>();
     const pvCache = new Map<PreviewType, string>();
-    // Use CPP-wide detected types as defaults (overridden if this locale already has sets)
-    let iphoneSS: ScreenshotDisplayType = deviceDefaults.cppIphoneSS;
     let iphonePV: PreviewType = deviceDefaults.cppIphonePV;
     let ipadPV: PreviewType = deviceDefaults.cppIpadPV;
 
@@ -417,7 +416,6 @@ export function BulkImportDialog({
         for (const set of d.data ?? []) {
           const t = set.attributes.screenshotDisplayType;
           ssCache.set(t, set.id);
-          if (t.startsWith("APP_IPHONE")) iphoneSS = t;
         }
       }
       if (pRes.ok) {
@@ -456,14 +454,11 @@ export function BulkImportDialog({
       return d.data.id;
     }
 
-    // Step 3: Upload screenshots — iPhone as one group (unchanged), iPad
-    // grouped by the display type each image's size maps to (shared helper).
+    // Step 3: Upload screenshots — iPhone then iPad, each image in the set of
+    // the display type its size maps to (shared helper).
     await uploadScreenshotGroups({
       localizationId,
-      groups: [
-        { displayType: iphoneSS, files: plan.screenshotFiles.iphone },
-        ...plan.ipadScreenshotGroups,
-      ],
+      groups: [...plan.iphoneScreenshotGroups, ...plan.ipadScreenshotGroups],
       setCache: ssCache,
       retry: fetchWithRetry,
       onFile,
@@ -504,6 +499,9 @@ export function BulkImportDialog({
   const validationBlockCount = plans.filter((p) => !p.excluded && planHasErrors(p)).length;
   const no13LocaleCount = plans.filter(
     (p) => !p.excluded && p.status !== "skip" && p.validation.ipad.screenshotWarnings.length > 0
+  ).length;
+  const noRequiredIphoneLocaleCount = plans.filter(
+    (p) => !p.excluded && p.status !== "skip" && p.validation.iphone.screenshotWarnings.length > 0
   ).length;
   const doneCount = progress.filter((p) => p.status === "done").length;
   const errorCount = progress.filter((p) => p.status === "error").length;
@@ -580,7 +578,7 @@ export function BulkImportDialog({
 ├── en-US/
 │   ├── promo.txt
 │   ├── screenshots/
-│   │   ├── iphone/   ← PNG files
+│   │   ├── iphone/   ← PNG files (sorted by size)
 │   │   └── ipad/     ← PNG files (sorted by size)
 │   └── previews/
 │       ├── iphone/   ← MP4 files
@@ -591,6 +589,7 @@ export function BulkImportDialog({
         └── iphone/`}</pre>
                   <p className="mt-2 text-xs text-slate-500">
                     iPad screenshots are sorted into iPad 13&quot; / 12.9&quot; / 11&quot; / 10.5&quot; / 9.7&quot; automatically by image size.
+                    iPhone screenshots are sorted the same way into the iPhone screen types (Dynamic Island, Face ID, Home Button).
                   </p>
                 </div>
 
@@ -706,12 +705,7 @@ export function BulkImportDialog({
                               <div>
                                 <p className="text-xs font-medium text-slate-400 mb-1">Screenshots</p>
                                 <div className="space-y-1">
-                                  {plan.screenshotFiles.iphone.length > 0 && (
-                                    <p className="text-xs text-slate-500">
-                                      iPhone: {plan.screenshotFiles.iphone.map((f) => f.name).join(", ")}
-                                    </p>
-                                  )}
-                                  {plan.ipadScreenshotGroups.map((g) => (
+                                  {[...plan.iphoneScreenshotGroups, ...plan.ipadScreenshotGroups].map((g) => (
                                     <p key={g.displayType} className="text-xs text-slate-500">
                                       {displayTypeLabel(g.displayType)}: {g.files.map((f) => f.name).join(", ")}
                                     </p>
@@ -840,6 +834,11 @@ export function BulkImportDialog({
                       {no13LocaleCount > 0 && (
                         <span className="text-amber-600 ml-1">
                           — {no13LocaleCount} without iPad 13&quot; screenshots
+                        </span>
+                      )}
+                      {noRequiredIphoneLocaleCount > 0 && (
+                        <span className="text-amber-600 ml-1">
+                          — {noRequiredIphoneLocaleCount} without required iPhone screenshots
                         </span>
                       )}
                     </span>

@@ -8,7 +8,7 @@ Nguồn chung của các mục dưới đây: census arc `[CPP-bulkimport-ipad-s
 
 ## `[CPP-iphone-screenshot-sizes]` — bảng iPhone chỉ có 4 kích thước 6.5"
 
-**→ ĐANG LÀM: arc `arc-cpp-bulkimport-iphone-screenshot-sizes`** (mở 2026-11-13; design `docs/cpp-management/design-cpp-bulkimport-iphone-screenshot-sizes.md`).
+**→ ĐANG LÀM: arc `arc-cpp-bulkimport-iphone-screenshot-sizes`** (mở 2026-11-13; design `docs/cpp-management/design-cpp-bulkimport-iphone-screenshot-sizes.md`). G1 (2026-11-13): 8 nhóm iPhone trong bảng spec, phân loại theo kích thước như iPad — chờ gate G1 + UAT iPhone.
 
 **⚠ ƯU TIÊN CAO** (Manager 2026-11-06, Q6).
 
@@ -18,7 +18,7 @@ Nguồn chung của các mục dưới đây: census arc `[CPP-bulkimport-ipad-s
 
 ## `[CPP-iphone-default-mismatch]` — mặc định iPhone lệch giữa editor và 2 dialog bulk
 
-**→ ĐANG LÀM: arc `arc-cpp-bulkimport-iphone-screenshot-sizes`** (cùng arc với `[CPP-iphone-screenshot-sizes]`). ĐÃ ĐO ở G0: cùng ảnh 6.5", locale chưa có set ⇒ bulk `APP_IPHONE_65`, editor `APP_IPHONE_67`.
+**→ ĐANG LÀM: arc `arc-cpp-bulkimport-iphone-screenshot-sizes`** (cùng arc với `[CPP-iphone-screenshot-sizes]`). ĐÃ ĐO ở G0: cùng ảnh 6.5", locale chưa có set ⇒ bulk `APP_IPHONE_65`, editor `APP_IPHONE_67`. **G1 (2026-11-13) đóng phần code:** bulk không còn mặc định (type đến từ kích thước); editor lấy `IPHONE_DEFAULT_DISPLAY_TYPE` (= `APP_IPHONE_67`, D5) từ bảng spec và chỉ nhận đúng kích thước của nhóm đó (Q-B) — test G0 ca lệch đã lật có khai.
 
 - **Hiện trạng (ĐỌC CODE):**
   - Editor dùng fallback `APP_IPHONE_67` (`components/cpp/LocalizationManager.tsx:857-858`).
@@ -52,6 +52,13 @@ Nguồn chung của các mục dưới đây: census arc `[CPP-bulkimport-ipad-s
   - Nhánh `res.status === 409` ở `CppBulkImportDialog.tsx:634-641` (+ preview `:659-666`) và `BulkImportDialog.tsx:417-424` (+ preview) là code chết.
   - OAS có khai 409 cho `POST /v1/appScreenshotSets` (`#/paths/~1v1~1appScreenshotSets/post/responses/409`).
 - **Đường đúng:** route trả đúng status của Apple. Lúc đó nhánh 409 mới có hiệu lực ⇒ cần test.
+- **2026-11-13 (review G1 arc iPhone):** nhánh 409 nay nằm ở hàm dùng chung `uploadScreenshotGroups` (`lib/cpp/screenshot-upload.ts`). Mức phơi nhiễm TĂNG: mỗi locale có thể tạo tới 8 set iPhone + 5 set iPad. Nếu GET set có sẵn ở `uploadLocale` thất bại (cache rỗng) thì POST một type đã tồn tại ⇒ ASC 409 ⇒ route 500 ⇒ locale lỗi "Failed to get screenshot set for APP_IPHONE_…". Hiếm (cần GET hỏng), không chặn arc.
+
+## `[CPP-preview-default-mismatch]` — mặc định type VIDEO preview lệch giữa bulk và editor
+
+GHI NHẬN 2026-11-13 (review G1 arc iPhone). Ngoài phạm vi (Manager: Preview video GIỮ NGUYÊN).
+- **Hiện trạng (ĐỌC CODE):** bulk đưa video iPhone vào `IPHONE_65` khi locale / locale ready chưa có preview set (`DEFAULT_IPHONE_PREVIEW`, `CppBulkImportDialog.tsx:42`, `BulkImportDialog.tsx:35`). Editor, khi locale chưa có preview set iPhone nào, đưa video vào `IPHONE_67` (`LocalizationManager.tsx` fallback `matchedIphonePreview?.value ?? "IPHONE_67"`). Cùng họ với `[CPP-iphone-default-mismatch]` (đã đóng cho screenshot).
+- **Đường đúng:** một mặc định preview lấy từ một chỗ (vd bảng spec), quyết theo đúng loại màn hình; cần Manager chốt type video mặc định.
 
 ## `[CPP-bulk-folder-silent-skip]` — thư mục con lạ dưới `screenshots/` bị bỏ qua im lặng
 
@@ -72,7 +79,7 @@ Nguồn chung của các mục dưới đây: census arc `[CPP-bulkimport-ipad-s
 ## `[CPP-types-asc-gaps]` — `types/asc.ts` thiếu so với OAS 4.4.1
 
 - `AppMediaAssetState` thiếu `warnings` (`types/asc.ts:146-149`, `:188-191`).
-- Union `ScreenshotDisplayType` thiếu `APP_IPHONE_58` (`types/asc.ts:102-114`).
+- ~~Union `ScreenshotDisplayType` thiếu `APP_IPHONE_58`~~ ⇒ **đã thêm** ở G1 arc iPhone (2026-11-13; Face ID (medium) map vào đây). Phần iPhone của mục này ĐÓNG; còn `warnings`.
 - **Đường đúng:** đồng bộ khi làm `[CPP-asset-delivery-state-unread]` / `[CPP-iphone-screenshot-sizes]`.
 
 ## `[CPP-two-folder-parsers]` — hai parser thư mục cho hai dialog bulk

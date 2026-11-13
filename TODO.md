@@ -4,7 +4,7 @@ Format: `- [ ] [PR-X] description — file path — rationale`
 
 ## From [CPP-bulkimport-iphone-screenshot-sizes] (Bulk Import CPP — screenshot iPhone theo danh sách Apple mới nhất, 2026-11-13)
 
-- [ ] ⏸ **ĐIỂM DỪNG 2026-11-13 — census xong (không có gì trái D1–D9), G0 xong, chờ gate G0; G1 chưa làm.** Nhánh `arc-cpp-bulkimport-iphone-screenshot-sizes` (từ `82cde53`). Thiết kế: `docs/cpp-management/design-cpp-bulkimport-iphone-screenshot-sizes.md`. Câu cho gate: Q-A (gợi ý `ipad/` mở rộng) · Q-B (fallback editor 67 + D2) · Q-C (label) · Q-D (câu Duo / cảnh báo). BACKLOG mới: `[CPP-iphone-duo-screenshots]` (hạn Apple 04/2027).
+- [ ] ⏸ **ĐIỂM DỪNG 2026-11-13 (2) — G0 PASS (`3d65f57`). G1 xong + G1c (sửa theo review đối kháng: editor preview fallback, đọc thất bại ⇒ null) — chờ gate G1. Sau gate: push `20d7822..G1c` một lượt; UAT iPhone ngay sau deploy (`docs/cpp-management/uat-iphone-screenshot-sizes.md`). ⚠ Khai ở gate: 7 ca iPhone trong 3 file test arc iPad đã lật (design §G1).** *(Trước đó:)* ⏸ **ĐIỂM DỪNG 2026-11-13 — census xong (không có gì trái D1–D9), G0 xong, chờ gate G0; G1 chưa làm.** Nhánh `arc-cpp-bulkimport-iphone-screenshot-sizes` (từ `82cde53`). Thiết kế: `docs/cpp-management/design-cpp-bulkimport-iphone-screenshot-sizes.md`. Câu cho gate: Q-A (gợi ý `ipad/` mở rộng) · Q-B (fallback editor 67 + D2) · Q-C (label) · Q-D (câu Duo / cảnh báo). BACKLOG mới: `[CPP-iphone-duo-screenshots]` (hạn Apple 04/2027).
 
 ## From [CPP-bulkimport-ipad-screenshot-sizes] (Bulk Import CPP — kích thước screenshot iPad mới, 2026-11-06)
 

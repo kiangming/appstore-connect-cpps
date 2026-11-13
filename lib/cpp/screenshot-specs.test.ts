@@ -6,6 +6,11 @@
  * ⚠ The expected table is written BY HAND from Manager's list (Apple docs,
  * 2026-11-06) — never derived from `IPAD_SCREENSHOT_SPECS`, so that a mutated
  * spec row turns this file red.
+ *
+ * iPhone arc `[CPP-bulkimport-iphone-screenshot-sizes]` G1 (Manager D1/D2/Q-C/
+ * Q-D): the cases tagged `[iPhone G1 FLIPPED]` pinned iPHONE behaviour of the
+ * iPad arc ("iPhone unchanged / out of scope") and were flipped on purpose,
+ * each title saying what it was. No iPad assertion of this file changed.
  */
 import { describe, it, expect } from "vitest";
 import {
@@ -83,11 +88,16 @@ describe("sizes accepted per TARGET set (editor)", () => {
     ["APP_IPAD_PRO_3GEN_11", ["1488x2266", "2266x1488", "1512x2316", "2316x1512", "1668x2420", "2420x1668", "1668x2388", "2388x1668", "1640x2360", "2360x1640"]],
     ["APP_IPAD_105", ["1668x2224", "2224x1668"]],
     ["APP_IPAD_97", ["1536x2008", "1536x2048", "2048x1496", "2048x1536", "768x1004", "768x1024", "1024x748", "1024x768"]],
-    // iPhone: unchanged — every iPhone set takes today's four 6.5" sizes.
+    // iPhone: unchanged by the iPhone arc for APP_IPHONE_65 (its own group = the four 6.5" sizes).
     ["APP_IPHONE_65", ["1284x2778", "2778x1284", "1242x2688", "2688x1242"]],
-    ["APP_IPHONE_67", ["1284x2778", "2778x1284", "1242x2688", "2688x1242"]],
   ] as const)("%s", (type, sizes) => {
     expect(sizesForDisplayType(type).map(([w, h]) => `${w}x${h}`)).toEqual(sizes);
+  });
+
+  it("[iPhone G1 FLIPPED] APP_IPHONE_67 takes its OWN group's sizes, D2 (was: the four 6.5\" sizes — every iPhone set took them)", () => {
+    expect(sizesForDisplayType("APP_IPHONE_67").map(([w, h]) => `${w}x${h}`)).toEqual([
+      "1260x2736", "2736x1260", "1290x2796", "2796x1290", "1320x2868", "2868x1320",
+    ]);
   });
 });
 
@@ -112,9 +122,14 @@ describe("error sentences, verbatim", () => {
     );
   });
 
-  it("bulk, iphone folder — unchanged sentence (iPhone out of scope)", () => {
+  it("[iPhone G1 FLIPPED] bulk, iphone folder, an iPad image ⇒ §4.3 sentence + D8 hint (was: \"Resolution: got 2064×2752 — expected one of: <four 6.5\" sizes>\", iPhone out of scope)", () => {
     expect(screenshotSizeError("iphone", 2064, 2752)).toBe(
-      "Resolution: got 2064×2752 — expected one of: 1284×2778, 2778×1284, 1242×2688, 2688×1242",
+      "2064×2752 is not a valid iPhone screenshot size — this looks like an iPad screenshot; move it to screenshots/ipad/. " +
+        "Valid iPhone sizes — Dynamic Island (large): 1260×2736, 2736×1260, 1290×2796, 2796×1290, 1320×2868, 2868×1320 · " +
+        "Face ID (large): 1284×2778, 2778×1284, 1242×2688, 2688×1242 · Dynamic Island (medium): 1179×2556, 2556×1179, 1206×2622, 2622×1206 · " +
+        "Face ID (medium): 1170×2532, 2532×1170, 1125×2436, 2436×1125, 1080×2340, 2340×1080 · Home Button (large): 1242×2208, 2208×1242 · " +
+        'Home Button (medium): 750×1334, 1334×750 · Home Button (4"): 640×1096, 640×1136, 1136×600, 1136×640 · ' +
+        'Home Button (3.5"): 640×920, 640×960, 960×600, 960×640',
     );
   });
 
@@ -156,9 +171,9 @@ describe("labels + required type come from the table", () => {
     });
   });
 
-  it("iPhone labels unchanged", () => {
-    expect(SCREENSHOT_DISPLAY_TYPE_LABELS.APP_IPHONE_65).toBe('iPhone 6.5"');
-    expect(SCREENSHOT_DISPLAY_TYPE_LABELS.APP_IPHONE_40).toBe('iPhone 4"');
+  it("[iPhone G1 FLIPPED] iPhone labels = Apple's group names, Q-C (was: 'iPhone 6.5\"', 'iPhone 4\"')", () => {
+    expect(SCREENSHOT_DISPLAY_TYPE_LABELS.APP_IPHONE_65).toBe("iPhone Face ID (large)");
+    expect(SCREENSHOT_DISPLAY_TYPE_LABELS.APP_IPHONE_40).toBe('iPhone Home Button (4")');
   });
 
   it("the required iPad type is 13\"", () => expect(IPAD_REQUIRED_DISPLAY_TYPE).toBe("APP_IPAD_PRO_3GEN_129"));

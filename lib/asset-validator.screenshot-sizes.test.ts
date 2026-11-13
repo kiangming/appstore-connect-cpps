@@ -13,6 +13,11 @@
  *     accepted for ipad (still rejected for iphone);
  *   - "error text — ipad, wrong size": the sentence is now design §4.3's.
  * Every other block is G0's, unchanged.
+ *
+ * iPhone arc `[CPP-bulkimport-iphone-screenshot-sizes]` G1 (Manager D1/D2/Q-C/
+ * Q-D): the cases tagged `[iPhone G1 FLIPPED]` pinned iPHONE behaviour of the
+ * iPad arc ("iPhone unchanged / out of scope") and were flipped on purpose,
+ * each title saying what it was. No iPad assertion of this file changed.
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { checkScreenshot, validateScreenshot } from "@/lib/asset-validator";
@@ -73,15 +78,15 @@ describe("[G1 FLIPPED] every other size on Apple's list — was REJECTED, now OK
   });
 });
 
-describe("G1 — checkScreenshot carries the display type for ipad, none for iphone", () => {
+describe("G1 — checkScreenshot carries the display type (ipad; iphone since the iPhone arc)", () => {
   it("ipad 1668×2388 → APP_IPAD_PRO_3GEN_11; ipad 2048×2732 → APP_IPAD_PRO_3GEN_129 (Q1)", async () => {
     expect((await checkScreenshot(png("a-1668x2388.png"), "ipad")).displayType).toBe("APP_IPAD_PRO_3GEN_11");
     expect((await checkScreenshot(png("a-2048x2732.png"), "ipad")).displayType).toBe("APP_IPAD_PRO_3GEN_129");
   });
 
-  it("iphone 1284×2778 → ok, displayType null (iPhone routing unchanged)", async () => {
+  it("[iPhone G1 FLIPPED] iphone 1284×2778 → ok, displayType APP_IPHONE_65 (was: null — iPhone routing by size, D1)", async () => {
     expect(await checkScreenshot(png("a-1284x2778.png"), "iphone")).toEqual({
-      ok: true, errors: [], warnings: [], displayType: null,
+      ok: true, errors: [], warnings: [], displayType: "APP_IPHONE_65",
     });
   });
 });
@@ -103,10 +108,15 @@ describe("G0 — error text, verbatim (design §1.4)", () => {
     });
   });
 
-  it("iphone, an iPad-sized image", async () => {
+  it("[iPhone G1 FLIPPED] iphone, an iPad-sized image ⇒ §4.3 sentence + D8 hint (was: \"Resolution: got 2064×2752 — expected one of: <four 6.5\" sizes>\")", async () => {
     const r = await validateScreenshot(png("13in-2064x2752.png"), "iphone");
     expect(r.errors).toEqual([
-      "Resolution: got 2064×2752 — expected one of: 1284×2778, 2778×1284, 1242×2688, 2688×1242",
+      "2064×2752 is not a valid iPhone screenshot size — this looks like an iPad screenshot; move it to screenshots/ipad/. " +
+        "Valid iPhone sizes — Dynamic Island (large): 1260×2736, 2736×1260, 1290×2796, 2796×1290, 1320×2868, 2868×1320 · " +
+        "Face ID (large): 1284×2778, 2778×1284, 1242×2688, 2688×1242 · Dynamic Island (medium): 1179×2556, 2556×1179, 1206×2622, 2622×1206 · " +
+        "Face ID (medium): 1170×2532, 2532×1170, 1125×2436, 2436×1125, 1080×2340, 2340×1080 · Home Button (large): 1242×2208, 2208×1242 · " +
+        'Home Button (medium): 750×1334, 1334×750 · Home Button (4"): 640×1096, 640×1136, 1136×600, 1136×640 · ' +
+        'Home Button (3.5"): 640×920, 640×960, 960×600, 960×640',
     ]);
   });
 

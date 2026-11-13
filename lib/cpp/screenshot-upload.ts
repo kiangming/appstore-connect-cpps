@@ -6,15 +6,20 @@
  * locale went into ONE set picked from existing sets; now each iPad image goes
  * to the set of the display type its SIZE maps to.
  *
- * iPhone is unchanged: the caller still resolves one iPhone display type
- * (existing set / default) and passes all iPhone files as one group.
+ * Arc `[CPP-bulkimport-iphone-screenshot-sizes]` (Manager D1): iPhone images
+ * take the SAME path — classified by size, one set per display type, an
+ * existing set of the same type reused. The old iPhone rule (last iPhone set /
+ * first ready locale's / APP_IPHONE_65) is gone.
  */
 import type { AppScreenshotSet, ScreenshotDisplayType } from "@/types/asc";
 import {
   IPAD_REQUIRED_DISPLAY_TYPE,
   IPAD_SCREENSHOT_SPECS,
+  IPHONE_REQUIRED_DISPLAY_TYPES,
+  IPHONE_SCREENSHOT_SPECS,
   MAX_SCREENSHOTS_PER_SET,
   displayTypeLabel,
+  type ScreenshotDevice,
 } from "@/lib/cpp/screenshot-specs";
 
 export interface ScreenshotGroup {
@@ -23,19 +28,38 @@ export interface ScreenshotGroup {
 }
 
 /**
- * Group classified iPad images by display type. Groups follow the spec order
- * (13" first); files keep the order they were given in (file-name order from
- * the folder parsers).
+ * Group classified images of one device folder by display type. Groups follow
+ * the spec order (iPad 13" first; iPhone Dynamic Island (large) first); files
+ * keep the order they were given in (file-name order from the folder parsers).
+ * Items of a display type not in `specs` are dropped. ONE group per display
+ * type even when several rows share it (merge-safe, see screenshot-specs.ts).
  */
-export function groupIpadScreenshots(
+export function groupBySpecs(
+  specs: ReadonlyArray<{ displayType: ScreenshotDisplayType }>,
   items: Array<{ file: File; displayType: ScreenshotDisplayType }>,
 ): ScreenshotGroup[] {
   const groups: ScreenshotGroup[] = [];
-  for (const spec of IPAD_SCREENSHOT_SPECS) {
-    const files = items.filter((i) => i.displayType === spec.displayType).map((i) => i.file);
-    if (files.length > 0) groups.push({ displayType: spec.displayType, files });
+  const seen = new Set<ScreenshotDisplayType>();
+  for (const { displayType } of specs) {
+    if (seen.has(displayType)) continue;
+    seen.add(displayType);
+    const files = items.filter((i) => i.displayType === displayType).map((i) => i.file);
+    if (files.length > 0) groups.push({ displayType, files });
   }
   return groups;
+}
+
+export function groupScreenshots(
+  device: ScreenshotDevice,
+  items: Array<{ file: File; displayType: ScreenshotDisplayType }>,
+): ScreenshotGroup[] {
+  return groupBySpecs(device === "ipad" ? IPAD_SCREENSHOT_SPECS : IPHONE_SCREENSHOT_SPECS, items);
+}
+
+export function groupIpadScreenshots(
+  items: Array<{ file: File; displayType: ScreenshotDisplayType }>,
+): ScreenshotGroup[] {
+  return groupScreenshots("ipad", items);
 }
 
 interface ScreenshotSetsResponse {
@@ -55,8 +79,8 @@ interface ScreenshotSetsResponse {
  *   - per set: max(its id list's length, `meta.paging.total` when Apple sends it);
  *   - included screenshots that NO set lists = the cut list's fingerprint:
  *     one set ⇒ they are all that set's (count = every included screenshot);
- *     several sets ⇒ which set is unknown ⇒ `null` — no count, no 13"
- *     warning, rather than a guess (KB P7).
+ *     several sets ⇒ which set is unknown ⇒ `null` — no count, no
+ *     required-set warning, rather than a guess (KB P7).
  */
 export function countScreenshotsPerSet(
   d: ScreenshotSetsResponse,
@@ -85,8 +109,8 @@ export function countScreenshotsPerSet(
 /**
  * Existing screenshot count per display type of a localization, read once at
  * Preview. `null` = could not be read or not attributable (the caller then
- * skips the 13" warning rather than guess — KB P7, prefer a missed signal over
- * a wrong one).
+ * skips the required-set warning rather than guess — KB P7, prefer a missed
+ * signal over a wrong one).
  */
 export async function fetchExistingScreenshotCounts(
   localizationId: string,
@@ -100,14 +124,30 @@ export async function fetchExistingScreenshotCounts(
   }
 }
 
+const REQUIRED_WARNING: Record<ScreenshotDevice, string> = {
+  ipad: `No iPad 13" screenshots — Apple requires iPad 13" screenshots for apps that run on iPad. Import is not blocked.`,
+  // Manager Q-D, verbatim.
+  iphone:
+    "No required iPhone screenshots — Apple requires Dynamic Island (large) or Face ID (large) screenshots for apps that run on iPhone. Import is not blocked.",
+};
+
+const REQUIRED_TYPES: Record<ScreenshotDevice, readonly ScreenshotDisplayType[]> = {
+  ipad: [IPAD_REQUIRED_DISPLAY_TYPE],
+  iphone: IPHONE_REQUIRED_DISPLAY_TYPES,
+};
+
 /**
- * Preview checks for a locale's iPad groups (Manager Q3 + Q4):
+ * Preview checks for a locale's groups of one device (iPad Q3 + Q4; iPhone
+ * D3 + D7):
  * - error (blocks): more than 10 screenshots for one display type, counting
  *   the ones already on Apple when known;
- * - warning (never blocks): the locale will have iPad screenshots but no 13"
- *   set after the import.
+ * - warning (never blocks): the locale will have screenshots of this device
+ *   but none of its REQUIRED set(s) after the import (iPad 13"; iPhone Dynamic
+ *   Island (large) or Face ID (large)). Skipped when the existing sets could
+ *   not be read (`null`) rather than guessed (KB P7).
  */
-export function checkIpadGroups(
+export function checkScreenshotGroups(
+  device: ScreenshotDevice,
   groups: ScreenshotGroup[],
   existing: Map<ScreenshotDisplayType, number> | null,
 ): { errors: string[]; warnings: string[] } {
@@ -123,15 +163,21 @@ export function checkIpadGroups(
       );
     }
   }
-  const has13 =
-    groups.some((g) => g.displayType === IPAD_REQUIRED_DISPLAY_TYPE) ||
-    (existing?.has(IPAD_REQUIRED_DISPLAY_TYPE) ?? false);
-  if (groups.length > 0 && existing !== null && !has13) {
-    warnings.push(
-      `No iPad 13" screenshots — Apple requires iPad 13" screenshots for apps that run on iPad. Import is not blocked.`,
-    );
+  const required = REQUIRED_TYPES[device];
+  const hasRequired = required.some(
+    (t) => groups.some((g) => g.displayType === t) || (existing?.has(t) ?? false),
+  );
+  if (groups.length > 0 && existing !== null && !hasRequired) {
+    warnings.push(REQUIRED_WARNING[device]);
   }
   return { errors, warnings };
+}
+
+export function checkIpadGroups(
+  groups: ScreenshotGroup[],
+  existing: Map<ScreenshotDisplayType, number> | null,
+): { errors: string[]; warnings: string[] } {
+  return checkScreenshotGroups("ipad", groups, existing);
 }
 
 /**
